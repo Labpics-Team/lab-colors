@@ -16,8 +16,10 @@ import {
 import {
   BrowserProofCleanupError,
   browserCleanup,
+  browserScenario,
   cleanupResources,
   packedBrowserFiles,
+  runBrowserProof,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -43,8 +45,41 @@ test("packed browser files include only the runtime's exact generated snippet", 
   }
 });
 
-test("cleanup fault matrix releases each acquired browser-proof resource in reverse order", async () => {
-  await assert.doesNotReject(verifyCleanupFaultMatrix);
+test("cleanup fault matrix requires actual-path evidence, not a synthetic release list", async () => {
+  let invoked = 0;
+  await assert.rejects(
+    verifyCleanupFaultMatrix(async () => { invoked += 1; return {}; }),
+    /fault|evidence/iu,
+  );
+  assert.equal(invoked, 1);
+});
+
+test("fault matrix demands all seven boundaries, real readback and typed secondary failure", async () => {
+  const names = ["temp-install", "browser", "browser-session", "server", "runtime", "snapshot", "host"];
+  const reports = await verifyCleanupFaultMatrix(async ({ after, cleanup }) => {
+    const acquired = names.slice(0, names.indexOf(after) + 1);
+    return {
+      acquired, released: acquired.toReversed(), readback: Object.fromEntries(acquired.map((name) => [name, true])),
+      error: `Error: fault after ${after}`, code: "BROWSER_PROOF_INJECTED", operation: after,
+      ...(cleanup ? { cleanupError: {
+        code: "BROWSER_PROOF_CLEANUP_FAILED", resources: [cleanup], errors: [{ code: "BROWSER_PROOF_INJECTED_CLEANUP" }],
+      } } : {}),
+    };
+  });
+  assert.equal(reports.length, 14);
+  for (const damage of [
+    (report) => { report.released.pop(); },
+    (report) => { report.readback["temp-install"] = false; },
+    (report) => { delete report.error; },
+    (report) => { report.cleanupError = { code: "untyped" }; },
+  ]) {
+    let index = 0;
+    await assert.rejects(verifyCleanupFaultMatrix(async () => {
+      const report = structuredClone(reports[index++]);
+      damage(report);
+      return report;
+    }), /fault.*evidence/u);
+  }
 });
 
 test("cleanup failure preserves the primary failure and exposes typed cleanup errors", async () => {
@@ -102,14 +137,126 @@ test("browser proof grants real-process termination a 2000 ms budget", () => {
   assert.match(source, /releaseChild\(child, childErrors, 2_000\)/u);
 });
 
-test("browser scenario records acquisition and derives reverse release order", () => {
-  const source = readFileSync(
-    new URL("../../../scripts/test-program-runtime-browser.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.match(source, /acquired\.push\(\{name:"runtime".*acquired\.push\(\{name:"snapshot".*acquired\.push\(\{name:"host"/su);
-  assert.match(source, /browserCleanup\(undefined,acquired\.toReversed\(\)\)/u);
-  assert.match(source, /\["host","snapshot","runtime"\]/u);
+async function executeScenario(fault, mutate = (source) => source) {
+  const events = [], handles = [], elements = [];
+  const snapshot = () => {
+    const value = {
+      __wbg_ptr: 1, state: "ready", outputCount: () => 1, outputSlot: () => 91,
+      outputRgb: () => [20, 20, 20], outputOpacity: () => 1,
+      free() { this.__wbg_ptr = 0; events.push("snapshot"); },
+    };
+    handles.push(value);
+    return value;
+  };
+  const api = {
+    init: async () => {}, isProgramError: (error) => error.code === "program_update",
+    compileProgramWire() {
+      const value = {
+        __wbg_ptr: 1,
+        updateObserved(revision) {
+          if (revision === 2n) throw Object.assign(new Error("rejected"), { code: "program_update", operation: "updateObserved" });
+          return snapshot();
+        },
+        free() { this.__wbg_ptr = 0; events.push("runtime"); },
+      };
+      handles.push(value);
+      return value;
+    },
+  };
+  const document = {
+    body: { append(element) { element.isConnected = true; } },
+    createElement() {
+      const properties = new Map();
+      const element = {
+        isConnected: false,
+        style: {
+          setProperty: (key, value) => properties.set(key, value),
+          removeProperty: (key) => properties.delete(key),
+          getPropertyValue: (key) => properties.get(key) ?? "",
+        },
+        remove() { this.isConnected = false; events.push("host"); },
+      };
+      elements.push(element);
+      return element;
+    },
+  };
+  const wire = await import("../program-wire/abi-v1.js");
+  const load = async (url) => url.endsWith("/index.js") ? api : wire;
+  // Заменяется только транспорт импорта и DOM/WASM окружение; cleanup исполняется из production script.
+  const source = mutate(browserScenario("https://proof.invalid", fault)).replaceAll("await import(", "await load(");
+  const execute = new Function("load", "document", "getComputedStyle", "fetch", source);
+  const envelope = await new Promise((done) => execute(load, document,
+    (element) => ({ color: element.style.getPropertyValue("--consumer-color") }), () => undefined, done));
+  assert.equal(envelope.error, undefined, "proof errors must not collide with WebDriver value.error");
+  return { report: envelope.proof, events, handles, elements };
+}
+
+function assertScenario({ report, events, handles, elements }, after, cleanup) {
+  const expected = ["runtime", "snapshot", "host"].slice(0, ["runtime", "snapshot", "host"].indexOf(after) + 1);
+  assert.deepEqual(report.acquired, expected);
+  assert.deepEqual(report.released, expected.toReversed());
+  assert.deepEqual(events, expected.toReversed());
+  assert.ok(handles.every((handle) => handle.__wbg_ptr === 0));
+  assert.ok(elements.every((element) => !element.isConnected));
+  assert.ok(expected.every((name) => report.readback[name] === true));
+  assert.equal(report.error, `Error: fault after ${after}`);
+  assert.equal(report.code, "BROWSER_PROOF_INJECTED");
+  assert.equal(report.operation, after);
+  if (cleanup) {
+    assert.equal(report.cleanupError.code, "BROWSER_PROOF_CLEANUP_FAILED");
+    assert.deepEqual(report.cleanupError.resources, [cleanup]);
+    assert.equal(report.cleanupError.errors[0].code, "BROWSER_PROOF_INJECTED_CLEANUP");
+  } else assert.equal(report.cleanupError, undefined);
+}
+
+for (const after of ["runtime", "snapshot", "host"]) {
+  test(`serialized actual browser acquisition path cleans up after ${after}`, async () => {
+    for (const cleanup of [undefined, after]) {
+      assertScenario(await executeScenario({ after, cleanup }), after, cleanup);
+    }
+  });
+}
+
+test("serialized normal browser path keeps the computed-color and rejection proof", async () => {
+  const { report, events } = await executeScenario();
+  assert.equal(report.error, undefined);
+  assert.equal(report.cleanupError, undefined);
+  assert.equal(report.state, "ready");
+  assert.equal(report.slot, 91);
+  assert.equal(report.rejected, true);
+  assert.deepEqual(report.before, [20, 20, 20, 1]);
+  assert.deepEqual(report.after, report.before);
+  assert.deepEqual(events, ["host", "snapshot", "runtime"]);
+});
+
+for (const [name, before, after] of [
+  ["missing release", "snapshot.free();", "void snapshot;"],
+  ["wrong order", "resources.toReversed()", "resources"],
+  ["primary masking", "browserCleanup(primary, resources.toReversed())", "browserCleanup(undefined, resources.toReversed())"],
+]) {
+  test(`actual browser path oracle kills ${name} sabotage`, async () => {
+    const execution = await executeScenario({ after: "host", cleanup: "host" }, (source) => {
+      assert.ok(source.includes(before), "sabotage must reach the serialized execution path");
+      return source.replace(before, after);
+    });
+    assert.throws(() => assertScenario(execution, "host", "host"), assert.AssertionError);
+  });
+}
+
+test("actual temp-install boundary removes its real directory and preserves combined failure", async () => {
+  for (const cleanup of [undefined, "temp-install"]) {
+    const report = await runBrowserProof({}, { after: "temp-install", cleanup });
+    assert.deepEqual(report.acquired, ["temp-install"]);
+    assert.deepEqual(report.released, ["temp-install"]);
+    assert.equal(report.readback["temp-install"], true);
+    assert.equal(report.error, "Error: fault after temp-install");
+    assert.equal(report.code, "BROWSER_PROOF_INJECTED");
+    if (cleanup) {
+      assert.equal(report.cleanupError.code, "BROWSER_PROOF_CLEANUP_FAILED");
+      assert.deepEqual(report.cleanupError.resources, [cleanup]);
+      assert.equal(report.cleanupError.errors[0].code, "BROWSER_PROOF_INJECTED_CLEANUP");
+    } else assert.equal(report.cleanupError, undefined);
+  }
 });
 
 test("driver startup propagates the actual asynchronous child error", async () => {
