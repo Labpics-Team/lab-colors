@@ -19,6 +19,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from ci_workflow_binding import verify_ci_binding
+
 
 SCRIPT = Path(__file__).with_name("mutation.py")
 SPEC = importlib.util.spec_from_file_location("mutation", SCRIPT)
@@ -1853,67 +1855,17 @@ class MutationTruthTest(unittest.TestCase):
                 "publish-worker.yml",
             )
         }
-        ci_caller = (workflows / "ci.yml").read_text(encoding="utf-8-sig")
-        # Extract the pinned SHA dynamically from ci.yml so this test does not
-        # break every time the worker reference is bumped.
-        ci_worker_ref_match = re.search(
-            r"uses:\s+Labpics-Team/lab-colors/\.github/workflows/ci-worker\.yml@([0-9a-f]{40})",
-            ci_caller,
-        )
-        self.assertIsNotNone(
-            ci_worker_ref_match,
-            "ci.yml must pin ci-worker.yml to a full 40-char commit SHA",
-        )
-        assert ci_worker_ref_match is not None
-        pinned_ci_worker_sha = ci_worker_ref_match.group(1)
-        assert self.git_binary is not None
-        pin_is_reachable = subprocess.run(
-            [
-                self.git_binary,
-                "-C",
-                str(repo),
-                "merge-base",
-                "--is-ancestor",
-                pinned_ci_worker_sha,
-                "HEAD",
-            ],
-            check=False,
-            env=self.git_env,
-            capture_output=True,
-        )
-        self.assertEqual(
-            pin_is_reachable.returncode,
-            0,
-            "ci.yml must not pin an orphaned reusable-workflow commit",
-        )
-        pinned_ci_worker = subprocess.run(
-            [
-                self.git_binary,
-                "-C",
-                str(repo),
-                "show",
-                f"{pinned_ci_worker_sha}:.github/workflows/ci-worker.yml",
-            ],
-            check=False,
-            env=self.git_env,
-            capture_output=True,
-        )
-        self.assertEqual(
-            pinned_ci_worker.returncode,
-            0,
-            "the pinned ci-worker.yml must be readable from the pinned commit",
-        )
-        self.assertEqual(
-            pinned_ci_worker.stdout,
-            (workflows / "ci-worker.yml").read_bytes(),
-            "the pinned worker must be byte-identical to the reviewed worker",
-        )
-        admitted_ci_worker = (
-            "uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@"
-            + pinned_ci_worker_sha
-        )
-        self.assertEqual(ci_caller.count("ci-worker.yml@"), 1)
-        self.assertIn(admitted_ci_worker, ci_caller)
+        verify_ci_binding(repo, os.environ)
+        for command in (
+            "python3 scripts/test_ci_peer_gate.py",
+            "python3 scripts/test_mutation.py",
+        ):
+            self.assertIn(
+                "        env:\n"
+                "          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}\n"
+                f"        run: {command}\n",
+                workers["ci-worker.yml"],
+            )
         for worker_name, source in workers.items():
             for job_name, block in workflow_job_blocks(source, worker_name).items():
                 with self.subTest(worker=worker_name, job=job_name):
@@ -2047,13 +1999,13 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
         self.assertIn(
-            'path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@'
-            '1461bc2ed60142aed3a8723e618b883be6418156"',
+            'path: `Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${expectedSha}`',
             workflow,
         )
+        self.assertIn("sha: expectedSha,", workflow)
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156"',
+            'native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07"',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
@@ -2068,6 +2020,124 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(canonical_worker_name("CI / test"), "test")
         self.assertEqual(canonical_worker_name("outer / CI / test"), "test")
         self.assertNotEqual(canonical_worker_name("CI / other"), "test")
+
+    def test_publish_receipt_guard_executes_exact_sha_and_hostile_runs(self) -> None:
+        workflow, _ = load_publish_worker()
+        anchor = "      - name: guard — canonical exact-SHA workflow runs and their own jobs\n"
+        self.assertEqual(workflow.count(anchor), 1)
+        step = workflow.split(anchor, 1)[1].split("\n      - name:", 1)[0]
+        body = step.split("          node <<'NODE'\n", 1)[1].split("          NODE", 1)[0]
+        script = "\n".join(line[10:] for line in body.splitlines())
+        repo = Path(__file__).resolve().parents[1]
+        native = (repo / ".github/workflows/native-conformance.yml").read_text(
+            encoding="utf-8"
+        )
+        native_calls = re.findall(
+            r"(?m)^    uses: Labpics-Team/lab-colors/\.github/workflows/"
+            r"native-conformance-worker\.yml@([0-9a-f]{40})$", native,
+        )
+        self.assertEqual(native_calls, ["1beda3770a990bb62d1b97e0188b1f2620e16c07"])
+        # Исполняем сам guard; сеть и запись outputs заменены на границе VM.
+        harness = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const sha = '0123456789abcdef0123456789abcdef01234567';
+const prefix = 'Labpics-Team/lab-colors/.github/workflows/';
+const names = [
+  ['Node 22 consumer floor', 'MSRV workspace check', 'clippy + rustfmt',
+   'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
+   'wasm build + headless test + size'],
+  ['swift conformance (self-hosted Linux, pinned toolchain)'],
+];
+const mutations = {
+  valid: () => {},
+  staleCIPath: (runs) => { runs[0].referenced_workflows[0].path = prefix + 'ci-worker.yml@' + 'a'.repeat(40); },
+  staleCISha: (runs) => { runs[0].referenced_workflows[0].sha = 'a'.repeat(40); },
+  staleNative: (runs) => { runs[1].referenced_workflows[0].sha = 'a'.repeat(40); },
+  missingRefs: (runs) => { delete runs[0].referenced_workflows; },
+  extraRefs: (runs) => { runs[0].referenced_workflows.push(runs[0].referenced_workflows[0]); },
+  foreignPath: (runs) => { runs[0].referenced_workflows[0].path = 'foreign/repo/ci-worker.yml@' + sha; },
+  wrongHead: (runs) => { runs[0].head_sha = 'a'.repeat(40); },
+  pullRequest: (runs) => { runs[0].event = 'pull_request'; },
+  tagBranch: (runs) => { runs[0].head_branch = 'colors-v1.2.3'; },
+  wrongWorkflow: (runs) => { runs[0].path = '.github/workflows/other.yml'; },
+  failedLatest: (runs) => { runs[0].conclusion = 'failure'; },
+  pendingLatest: (runs) => { runs[0].status = 'in_progress'; },
+  invalidAttempt: (runs) => { runs[0].run_attempt = 0; },
+  foreignJob: (_runs, jobs) => { jobs[0][0].run_id = 999; },
+  failedJob: (_runs, jobs) => { jobs[0][0].conclusion = 'failure'; },
+  duplicateJob: (_runs, jobs) => { jobs[0].push(jobs[0][0]); },
+};
+(async () => {
+  for (const [label, mutate] of Object.entries(mutations)) {
+    const runs = ['ci', 'native-conformance'].map((name, index) => ({
+      id: index + 100, path: '.github/workflows/' + name + '.yml',
+      head_sha: sha, head_branch: 'main', event: 'push',
+      status: 'completed', conclusion: 'success', run_attempt: 2,
+      referenced_workflows: [{
+        path: prefix + name + '-worker.yml@' + (index ? input.nativeSha : sha),
+        sha: index ? input.nativeSha : sha,
+      }],
+    }));
+    const jobs = names.map((group, index) => group.map(name => ({
+      name: 'outer / caller / ' + name, run_id: index + 100,
+      status: 'completed', conclusion: 'success',
+    })));
+    const previous = structuredClone(runs[0]);
+    previous.id = 99;
+    mutate(runs, jobs);
+    let output = '';
+    const errors = [];
+    const process = { env: {
+      GITHUB_REPOSITORY: 'Labpics-Team/lab-colors', GITHUB_SHA: sha,
+      GITHUB_API_URL: 'https://api.example.invalid', GITHUB_OUTPUT: 'output',
+      GH_READ_TOKEN: 'fixture-only',
+    }, exitCode: 0 };
+    const context = {
+      process, URLSearchParams,
+      console: { log: () => {}, error: error => errors.push(String(error)) },
+      require: name => {
+        assert.equal(name, 'node:fs');
+        return { appendFileSync: (_path, bytes) => { output += bytes; } };
+      },
+      fetch: async url => {
+        const parsed = new URL(url);
+        let payload;
+        if (parsed.pathname.endsWith('/runs')) {
+          assert.equal(parsed.searchParams.get('head_sha'), sha);
+          assert.equal(parsed.searchParams.get('branch'), 'main');
+          assert.equal(parsed.searchParams.get('event'), 'push');
+          const ci = parsed.pathname.includes('/ci.yml/');
+          const ciRuns = label.endsWith('Latest') ? [previous, runs[0]] : [runs[0]];
+          payload = { workflow_runs: ci ? ciRuns : [runs[1]] };
+        } else {
+          assert.match(parsed.pathname, /\/actions\/runs\/(100|101)\/jobs$/);
+          payload = { jobs: jobs[parsed.pathname.includes('/100/') ? 0 : 1] };
+        }
+        return { ok: true, json: async () => payload };
+      },
+    };
+    await vm.runInNewContext(input.script, context, { timeout: 1000 });
+    if (label === 'valid') {
+      assert.equal(process.exitCode, 0, errors.join('\n'));
+      assert.equal(output, 'ci_run_id=100\nci_run_attempt=2\nnative_run_id=101\n');
+    } else {
+      assert.equal(process.exitCode, 1, label);
+      assert.equal(output, '', label + ' must not emit partial evidence');
+      assert.equal(errors.length, 1, label);
+    }
+  }
+  console.log('17 receipt scenarios passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(
+            ["node", "-e", harness],
+            input=json.dumps({"script": script, "nativeSha": native_calls[0]}),
+            text=True, capture_output=True, check=False, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("17 receipt scenarios passed", result.stdout)
 
     def test_publish_worker_secret_context_is_fail_closed(self) -> None:
         _, publish_job = load_publish_worker()
@@ -2372,17 +2442,54 @@ class MutationTruthTest(unittest.TestCase):
             "the publish script (they are bound once by the workflow env block)",
         )
 
-    def test_publish_caller_pins_admitted_worker(self) -> None:
+    def test_publish_caller_uses_exact_local_worker_binding(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         caller = (repo / ".github" / "workflows" / "publish.yml").read_text(
             encoding="utf-8"
         )
-        expected = (
-            "uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@"
-            "1461bc2ed60142aed3a8723e618b883be6418156"
+        active = "\n".join(
+            line for line in caller.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
         )
-        self.assertEqual(caller.count("publish-worker.yml@"), 1)
-        self.assertIn(expected, caller)
+        expected = """name: publish
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+on:
+  push:
+    tags: ["colors-v*"]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  worker:
+    name: publish
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/publish-worker.yml"""
+        self.assertEqual(active, expected)
+
+        hostile_bindings = (
+            "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main",
+            "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@" + "a" * 40,
+            "foreign/lab-colors/.github/workflows/publish-worker.yml@main",
+            "./.github/workflows/other.yml",
+            "$/github/workflows/publish-worker.yml",
+        )
+        for binding in hostile_bindings:
+            with self.subTest(binding=binding):
+                self.assertNotEqual(
+                    active.replace("./.github/workflows/publish-worker.yml", binding),
+                    expected,
+                )
+        for injection in (
+            "\n    uses: ./.github/workflows/publish-worker.yml",
+            "\n  duplicate:\n    uses: ./.github/workflows/publish-worker.yml",
+            "\njobs: {}",
+        ):
+            with self.subTest(injection=injection):
+                self.assertNotEqual(active + injection, expected)
 
     def test_swift_conformance_does_not_mutate_temp_root(self) -> None:
         repo = Path(__file__).resolve().parents[1]

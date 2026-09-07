@@ -21,8 +21,8 @@ name: publish worker
 # npm выдаёт sigstore provenance только публичным репозиториям. При открытии
 # репозитория вернуть provenance и короткоживущую аутентификацию.
 #
-# Неизменяемый worker: caller (publish.yml) закрепляет этот файл полным commit
-# SHA и не может изменить ни job graph, ни пины. Своих inputs у worker нет.
+# Caller (publish.yml) вызывает worker из того же коммита. Граф заданий и гейты
+# проверяются вместе с release snapshot; своих inputs у worker нет.
 
 on:
   workflow_call:
@@ -136,8 +136,8 @@ jobs:
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
               worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+                path: `Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${expectedSha}`,
+                sha: expectedSha,
               },
               requiredJobs: [
                 "Node 22 consumer floor",
@@ -154,8 +154,8 @@ jobs:
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
               worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156",
-                sha: "1461bc2ed60142aed3a8723e618b883be6418156",
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07",
+                sha: "1beda3770a990bb62d1b97e0188b1f2620e16c07",
               },
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",

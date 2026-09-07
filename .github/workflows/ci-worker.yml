@@ -1,10 +1,10 @@
 name: CI worker
 
-# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное).
-# Caller (ci.yml) закрепляет этот файл полным commit SHA: caller выбирает
-# revision для checkout, но не может изменить ни job graph, ни пины экшенов.
-# Своих inputs у worker нет by design — input стал бы каналом от недоверенного
-# caller к закреплённому определению.
+# Worker для эфемерных GitHub-hosted раннеров публичного репозитория.
+# Локальный uses в ci.yml выбирает определение из snapshot caller'а, не checkout.
+# Изменения графа и пинов проверяются в том же коммите; это не отдельный заранее
+# одобренный граф. Собственных inputs нет. Тесты связывают байты обоих файлов
+# с github.workflow_sha, который не следует подменять SHA исходников задания.
 
 on:
   workflow_call:
@@ -275,8 +275,12 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: CI peer gate hostile tests
+        env:
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
       - name: mutation evidence verifier hostile tests
+        env:
+          CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_mutation.py
       - name: cargo test
         run: cargo test --workspace --locked
@@ -664,8 +668,8 @@ jobs:
         # герметичным и не трогает системное состояние образа).
         # Strategy:
         #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
-        #     wasm-pack reads CHROME_PATH for the browser but ignores a CHROMEDRIVER
-        #     variable, so the matching driver is passed through --chromedriver.
+        #     Тест обязан использовать только проверенную пару CfT, а не Chrome
+        #     или ChromeDriver из изменяемого окружения раннера.
         #  2. Extract required shared libs (.so) from the runner's configured
         #     Debian/Ubuntu repository without sudo. Refresh package metadata in
         #     runner.temp first: образ ячейки может нести устаревшие списки,
@@ -841,19 +845,6 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
-          # -- Make Chrome discoverable by chromedriver without explicit binary path --
-          # chromedriver searches PATH for: google-chrome, google-chrome-stable, chromium
-          # When CHROME_PATH/binary is not passed by wasm-bindgen-test-runner, chromedriver
-          # needs to find Chrome in PATH. Add an isolated runner.temp bin directory
-          # with Chrome aliases; wasm-pack receives the driver path explicitly.
-          CHROME_BIN_DIR="$RUNNER_TEMP/chrome-bin-$GITHUB_JOB"
-          mkdir -p "$CHROME_BIN_DIR"
-          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome"
-          ln -sf "$CHROME_BIN" "$CHROME_BIN_DIR/google-chrome-stable"
-          # Use GITHUB_PATH (step-scoped prepend) rather than PATH in GITHUB_ENV
-          # (which leaks the full expanded PATH across jobs on shared self-hosted runners).
-          echo "$CHROME_BIN_DIR" >> "$GITHUB_PATH"
-          echo "Linked CfT Chrome under runner.temp"
       - name: terminal Program in real browser
         # Сначала проверяет crate-boundary, затем устанавливает exact verified
         # tarball и исполняет тот же Program path через публичный package root.
@@ -863,6 +854,27 @@ jobs:
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
         run: |
           set -euo pipefail
+          : "${CHROME_PATH:?}" "${CHROMEDRIVER_PATH:?}" "${RUNNER_TEMP:?}"
+          [[ "$CHROME_PATH" == /* && "$CHROMEDRIVER_PATH" == /* ]]
+          test -x "$CHROME_PATH"
+          test -x "$CHROMEDRIVER_PATH"
+          # ChromeDriver проверяет системные каталоги раньше PATH. Явный binary
+          # связывает тест с проверенным CfT, сохраняя остальные capabilities.
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON="$(mktemp "$RUNNER_TEMP/wasm-webdriver.XXXXXX.json")"
+          readonly WASM_BINDGEN_TEST_WEBDRIVER_JSON
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON
+          trap 'rm -f -- "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"' EXIT
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const capabilities = JSON.parse(readFileSync("crates/labcolors-wasm/webdriver.json", "utf8"));
+          const options = capabilities["goog:chromeOptions"];
+          if (capabilities.browserName !== "chrome" || !options ||
+              typeof options !== "object" || Array.isArray(options)) {
+            throw new Error("webdriver.json must declare Chrome capabilities");
+          }
+          capabilities["goog:chromeOptions"].binary = process.env.CHROME_PATH;
+          writeFileSync(process.env.WASM_BINDGEN_TEST_WEBDRIVER_JSON, `${JSON.stringify(capabilities)}\n`);
+          NODE
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
           node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
 
