@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -12,6 +13,26 @@ test("README describes the terminal Program runtime, not recipe roles", () => {
   for (const retired of ["RoleRecipe", "ThemeConfig", "resolveTheme", "applyTheme"]) {
     assert.doesNotMatch(readme, new RegExp(`\\b${retired}\\b`, "u"), retired);
   }
+});
+
+test("README first route emits the certified output through the public entrypoints", () => {
+  const example = read("README.md").match(/```ts\r?\n([\s\S]*?)\r?\n```/u)?.[1];
+  assert.equal(typeof example, "string");
+  const result = execFileSync(process.execPath, ["--input-type=module"], {
+    cwd: new URL("../", import.meta.url),
+    encoding: "utf8",
+    timeout: 30_000,
+    input: `
+      import { readFileSync } from "node:fs";
+      import { init as initialize } from "@labpics/colors";
+      await initialize({ module_or_path: readFileSync(new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm"))) });
+      const outputs = [];
+      console.log = (slot, rgb, opacity) => outputs.push({ slot, rgb: [...rgb], opacity });
+      ${example}
+      process.stdout.write(JSON.stringify(outputs));
+    `,
+  });
+  assert.deepEqual(JSON.parse(result), [{ slot: 91, rgb: [20, 20, 20], opacity: 1 }]);
 });
 
 test("package version marks the terminal major contract", () => {
