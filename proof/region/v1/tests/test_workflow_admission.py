@@ -176,9 +176,23 @@ exit 65
             with self.subTest(workflow=workflow):
                 text = (WORKFLOWS / workflow).read_text("utf-8")
                 admission = text.index("      - name: refuse a malformed lane run list before checkout")
-                job_start = text.rfind("\n  ", 0, admission)
-                checkout = text.index("actions/checkout@", job_start)
-                self.assertLess(admission, checkout, "run-list admission must precede checkout in its job")
+                # Границы job — заголовки второго уровня `  <job-id>:`; шаг обязан стоять
+                # до checkout именно своего job, а не любого checkout далее в файле.
+                headers = [m.start() for m in re.finditer(r"^  [a-z][a-z0-9_-]*:\s*$", text, re.MULTILINE)]
+                job_start = max(h for h in headers if h < admission)
+                job_end = min([h for h in headers if h > admission] + [len(text)])
+                job = text[job_start:job_end]
+                self.assertIn("actions/checkout@", job, "the admission job must perform a checkout")
+                self.assertLess(
+                    admission - job_start, job.index("actions/checkout@"),
+                    "run-list admission must precede checkout in its job",
+                )
+                # Каждый job, потребляющий lane_run_ids, обязан иметь этот шаг.
+                for other_start, other_end in zip(headers, headers[1:] + [len(text)]):
+                    body = text[other_start:other_end]
+                    if "inputs.lane_run_ids" in body:
+                        self.assertIn("refuse a malformed lane run list before checkout", body,
+                                      f"job at offset {other_start} consumes lane_run_ids without admission")
                 script = step_script(workflow, "refuse a malformed lane run list before checkout")
                 self.assertNotRegex(script, r"\$\{\{[^}]*inputs\.")
                 for value in ("-R", "0", "00123", "123,,456", "123,", "123, invalid", "123\n456", "'; touch pwned; #"):
