@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -183,10 +184,16 @@ class TestsRecordTests(unittest.TestCase):
         self.assertEqual(len(record["rust"]["enabled"]), record["rust"]["enabled_count"])
         self.assertEqual(len(record["rust"]["ignored"]), record["rust"]["ignored_count"])
         self.assertTrue(set(record["rust"]["ignored"]).isdisjoint(record["rust"]["enabled"]))
+        # Полы против вакуума: запись с пустыми ignored/skipped/suite после refresh
+        # означала бы, что инструмент перестал видеть класс, а не что класс исчез.
+        self.assertGreaterEqual(record["rust"]["ignored_count"], 1)
         self.assertEqual([s["start"] for s in record["python"]], [s for s, _ in matrix.PYTHON_SUITES])
         for suite in record["python"]:
             self.assertEqual(suite["load_errors"], [], suite["start"])
             self.assertEqual(suite["count"], len(suite["names"]))
+            self.assertEqual(suite["skipped_count"], len(suite["skipped"]))
+            self.assertGreaterEqual(suite["count"], 100, suite["start"])
+            self.assertTrue(set(suite["skipped"]).isdisjoint(suite["names"]))
         self.assertGreaterEqual(len(record["node_skip_sites"]), 1)
 
     def _with_mutated_extraction(self, mutate) -> subprocess.CompletedProcess | tuple[int, str]:
@@ -245,6 +252,116 @@ class TestsRecordTests(unittest.TestCase):
         code, err = self._with_mutated_extraction(lambda record: None)
         self.assertEqual(code, 0, err)
 
+    def test_statically_skipped_python_test_is_named_in_diff(self) -> None:
+        def mutate(record: dict) -> None:
+            suite = record["python"][0]
+            victim = suite["names"].pop(0)
+            suite["count"] -= 1
+            suite["skipped"].append(victim)
+            suite["skipped"].sort()
+            suite["skipped_count"] += 1
+            self.victim = victim
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn(f"- python: ", err)
+        self.assertIn(self.victim, err)
+
+    def test_tool_failure_is_typed_not_green(self) -> None:
+        # Инвентарь без исполнения инструмента — ровно тот вакуум, который закрывает ARTIFACT-01.
+        def boom() -> dict:
+            raise RuntimeError("cargo test --list: toolchain missing")
+        with mock.patch.object(matrix, "extract_tests", boom), \
+             mock.patch.object(matrix, "extract_tree", lambda: matrix.parse_record(
+                 (REPO_ROOT / "proof" / "artifact" / "tree.json").read_bytes(), "tree")):
+            import contextlib
+            import io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = matrix.check()
+        self.assertEqual(code, 65, err.getvalue())
+        self.assertIn("extractor failed for 'tests'", err.getvalue())
+
+    def test_refresh_refuses_tests_record_with_import_failures(self) -> None:
+        broken = json.loads(json.dumps(self.pinned()))
+        broken["python"][0]["load_errors"] = ["test_build"]
+        with mock.patch.object(matrix, "extract_tests", lambda: matrix.seal(broken)), \
+             mock.patch.dict(os.environ, {"ARTIFACT_MATRIX_ONLY": "tests"}, clear=False), \
+             mock.patch.object(matrix, "ARTIFACT_DIR", Path(tempfile.mkdtemp())) as tmp_dir:
+            os.environ.pop("GITHUB_ACTIONS", None)
+            matrix.RECORDS["tests"] = (tmp_dir / "tests.json", "extract_tests")
+            try:
+                import contextlib
+                import io
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = matrix.refresh()
+            finally:
+                matrix.RECORDS["tests"] = (REPO_ROOT / "proof" / "artifact" / "tests.json", "extract_tests")
+        self.assertEqual(code, 65, err.getvalue())
+        self.assertFalse((tmp_dir / "tests.json").exists())
+        self.assertIn("refusing to pin tests.json", err.getvalue())
+
+
+class RealExtractionTests(unittest.TestCase):
+    """Слой извлечения без mock: инструменты действительно различают отключённые тесты."""
+
+    def test_python_loader_separates_static_skips_from_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "test_fixture.py").write_text(
+                "import unittest\n"
+                "class Enabled(unittest.TestCase):\n"
+                "    def test_runs(self): pass\n"
+                "    @unittest.skip('static')\n"
+                "    def test_static_skip(self): pass\n"
+                "    @unittest.skipIf(False, 'conditional')\n"
+                "    def test_conditional_stays_enabled(self): pass\n"
+                "@unittest.skip('whole class')\n"
+                "class Disabled(unittest.TestCase):\n"
+                "    def test_hidden(self): pass\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(matrix, "REPO_ROOT", Path(directory)):
+                suite = matrix._python_inventory(".", "test_fixture.py")
+        self.assertEqual(suite["names"], ["test_fixture.Enabled.test_conditional_stays_enabled", "test_fixture.Enabled.test_runs"])
+        self.assertEqual(suite["skipped"], ["test_fixture.Disabled.test_hidden", "test_fixture.Enabled.test_static_skip"])
+        self.assertEqual(suite["load_errors"], [])
+
+    def test_python_loader_reports_import_failure_by_module_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "test_broken.py").write_text("import module_that_does_not_exist\n", encoding="utf-8")
+            with mock.patch.object(matrix, "REPO_ROOT", Path(directory)):
+                suite = matrix._python_inventory(".", "test_broken.py")
+        self.assertEqual(suite["load_errors"], ["test_broken"])
+
+    def test_node_skip_regex_covers_node_test_disable_forms(self) -> None:
+        positive = [
+            "t.skip('pkg not built');", "context.skip('windows');", "test.skip('x', () => {});",
+            "describe.skip('suite', () => {});", "test.todo('later');", "test('name', { skip: true }, () => {});",
+            "test('name', { todo: 'reason' }, () => {});",
+        ]
+        negative = ["skipWhitespace(x);", "const skipped = 1;", "// no skip here", "t.diagnostic('skip?');"]
+        for line in positive:
+            self.assertRegex(line, matrix.NODE_SKIP_RE, line)
+        for line in negative:
+            self.assertNotRegex(line, matrix.NODE_SKIP_RE, line)
+
+    @unittest.skipUnless(shutil.which("cargo"), "cargo toolchain required for the compiler-resolved inventory")
+    def test_cargo_inventory_separates_ignored_from_enabled_on_a_fixture_crate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[workspace]\n", encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "lib.rs").write_text(
+                "#[cfg(test)]\nmod tests {\n    #[test]\n    fn runs() {}\n    #[test]\n    #[ignore = \"slow\"]\n    fn slow() {}\n}\n",
+                encoding="utf-8")
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, capture_output=True, check=True)
+            with mock.patch.object(matrix, "REPO_ROOT", root):
+                listed = matrix._cargo_list()
+                ignored = matrix._cargo_list("--ignored")
+        self.assertEqual(listed, ["tests::runs: test", "tests::slow: test"])
+        self.assertEqual(ignored, ["tests::slow: test"])
+
 
 class ToolingTests(unittest.TestCase):
     def test_unknown_mode_exits_64(self) -> None:
@@ -260,12 +377,32 @@ class ToolingTests(unittest.TestCase):
     def test_required_ci_executes_gate_and_sabotage_suites(self) -> None:
         # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
         text = CI_WORKER.read_text("utf-8")
-        steps = [line for line in text.splitlines() if line.strip().startswith("run:")]
-        joined = "\n".join(steps)
+        joined = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("python3 scripts/artifact_matrix.py check", joined)
         self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", joined)
         self.assertIn("python3 scripts/test_artifact_matrix.py", joined)
         self.assertNotRegex(joined, r"extract_\w+\.py extract \| python3 scripts/extract_\w+\.py verify")
+
+    def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
+        # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый
+        # ни одним шагом, — ровно тот вакуум, который ARTIFACT-01 закрывает.
+        record = json.loads((REPO_ROOT / "proof" / "artifact" / "tests.json").read_bytes())
+        suite = next(s for s in record["python"] if s["start"] == "scripts")
+        modules = sorted({name.split(".", 1)[0] for name in suite["names"] + suite["skipped"]})
+        # Команды могут стоять в многострочных `run: |`; комментарии не считаются исполнением.
+        text = "\n".join(line for line in CI_WORKER.read_text("utf-8").splitlines() if not line.lstrip().startswith("#"))
+        discover_glob = "python3 -m unittest discover -s scripts -p 'test_extract_*.py'" in text
+        # Класс тестов, реэкспортируемый в исполняемый CI модуль, исполняется через него.
+        reexported = set()
+        for runner in (REPO_ROOT / "scripts").glob("test_*.py"):
+            if f"scripts/{runner.stem}.py" in text:
+                for m in re.finditer(r"^from (\w+) import ([^\n]+)", runner.read_text("utf-8"), re.MULTILINE):
+                    if re.search(r"\bTest\w+", m.group(2)):
+                        reexported.add(m.group(1))
+        missing = [m for m in modules
+                   if f"scripts/{m}.py" not in text and m not in reexported
+                   and not (discover_glob and m.startswith("test_extract_"))]
+        self.assertEqual(missing, [], f"pinned scripts test modules without a CI run step: {missing}")
 
 
 if __name__ == "__main__":

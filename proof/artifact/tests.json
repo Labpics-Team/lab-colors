@@ -39,7 +39,7 @@
  ],
  "python": [
   {
-   "count": 550,
+   "count": 549,
    "load_errors": [],
    "names": [
     "test_build.ArbBuildIdentityCharacterizationTests.test_arb_runtime_binding_propagates_to_downstream_identities",
@@ -293,7 +293,6 @@
     "test_executor.CapabilityAndExecutionTests.test_supported_probe_executes_every_required_mechanism",
     "test_executor.CapabilityAndExecutionTests.test_unadmitted_exact_request_never_reaches_the_backend",
     "test_executor.CapabilityAndExecutionTests.test_untrusted_backend_cannot_return_unbounded_output",
-    "test_executor.NativeLinuxIntegrationTests.test_real_kernel_success_output_timeout_signal_oom_and_cleanup",
     "test_executor.RequestAdmissionTests.test_argv_environment_cwd_and_stdin_are_strict_bytes",
     "test_executor.RequestAdmissionTests.test_combined_dynamic_fixture_points_after_its_full_header_table",
     "test_executor.RequestAdmissionTests.test_cross_module_verifiers_are_explicit_versioned_api",
@@ -594,10 +593,14 @@
     "test_workflow_inputs.WorkflowInputReferenceTests.test_the_gate_sees_a_misspelt_reference"
    ],
    "pattern": "test_*.py",
+   "skipped": [
+    "test_executor.NativeLinuxIntegrationTests.test_real_kernel_success_output_timeout_signal_oom_and_cleanup"
+   ],
+   "skipped_count": 1,
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 222,
+   "count": 230,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -611,12 +614,20 @@
     "ci_workflow_binding.TestCiWorkflowBinding.test_reports_invalid_utf8_caller_as_binding_error",
     "ci_workflow_binding.TestCiWorkflowBinding.test_reports_missing_workflow_files_as_binding_errors",
     "ci_workflow_binding.TestCiWorkflowBinding.test_workflow_sha_cannot_fall_back_to_matching_checkout",
+    "test_artifact_matrix.RealExtractionTests.test_cargo_inventory_separates_ignored_from_enabled_on_a_fixture_crate",
+    "test_artifact_matrix.RealExtractionTests.test_node_skip_regex_covers_node_test_disable_forms",
+    "test_artifact_matrix.RealExtractionTests.test_python_loader_reports_import_failure_by_module_name",
+    "test_artifact_matrix.RealExtractionTests.test_python_loader_separates_static_skips_from_enabled",
     "test_artifact_matrix.TestsRecordTests.test_new_node_skip_site_is_drift",
     "test_artifact_matrix.TestsRecordTests.test_newly_ignored_rust_test_is_named_in_diff",
     "test_artifact_matrix.TestsRecordTests.test_pinned_tests_record_is_well_formed_and_nonvacuous",
     "test_artifact_matrix.TestsRecordTests.test_python_module_that_fails_to_import_is_drift",
+    "test_artifact_matrix.TestsRecordTests.test_refresh_refuses_tests_record_with_import_failures",
     "test_artifact_matrix.TestsRecordTests.test_silently_dropped_rust_test_is_drift",
+    "test_artifact_matrix.TestsRecordTests.test_statically_skipped_python_test_is_named_in_diff",
+    "test_artifact_matrix.TestsRecordTests.test_tool_failure_is_typed_not_green",
     "test_artifact_matrix.TestsRecordTests.test_unchanged_inventory_is_green",
+    "test_artifact_matrix.ToolingTests.test_every_pinned_scripts_test_module_is_executed_by_ci",
     "test_artifact_matrix.ToolingTests.test_narrowing_knob_is_refused_in_ci",
     "test_artifact_matrix.ToolingTests.test_required_ci_executes_gate_and_sabotage_suites",
     "test_artifact_matrix.ToolingTests.test_unknown_mode_exits_64",
@@ -824,10 +835,12 @@
     "test_wcag22_source_binding.SourceBindingTests.test_unrelated_api_outside_capsules_does_not_change_binding"
    ],
    "pattern": "test_*.py",
+   "skipped": [],
+   "skipped_count": 0,
    "start": "scripts"
   }
  ],
- "record_sha256": "81fa1c3557859cadfee9370eb02ed0da0c37e40de496e2af079ddc7435694057",
+ "record_sha256": "ad1e549623530aea32051cc56d13b410c849b171cf56a2212f88abb051d533e9",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",

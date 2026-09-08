@@ -8,15 +8,18 @@
   Git с применением `.gitattributes`, поэтому CRLF-чекаут и порядок сортировки
   ОС не влияют. Добавленный, удалённый или изменённый файл — drift. Это
   закрывает omission/decoy/parser на уровне байтов без regex-парсеров.
-* `tests.json` — инвентарь тестов, разрешённый инструментами, а не текстом
-  (запись платформенная: закрепляется состояние Linux CI image, `refresh`
-  выполняется в нём; Windows даёт иной Python-инвентарь из-за Linux-only
-  модулей proof и потому не является источником записи):
-  Rust — `cargo test -- --list` и `-- --ignored --list` (компилятор решает,
-  какие тесты существуют и какие отключены); Python — unittest loader над
-  объявленными suites; Node — сайты `skip(` в тестах пакета. Новый
-  `#[ignore]`, `cfg`-скрытый модуль или `t.skip` меняет инвентарь и называет
-  тест в diff. Это закрывает disabled-test.
+* `tests.json` — инвентарь тестов (запись платформенная: закрепляется
+  состояние Linux CI toolchain, `refresh` выполняется в нём; Windows не
+  импортирует Linux-only модули proof и потому не является источником записи).
+  Сила по экосистемам различна и названа честно:
+  Rust — compiler-resolved: `cargo test -- --list` и `-- --ignored --list`;
+  новый `#[ignore]` или `cfg`-скрытый модуль меняет инвентарь и называет тест.
+  Python — loader-resolved: имена тестов и статические `@unittest.skip*`
+  (`__unittest_skip__` на классе/методе); условные skip решаются в рантайме и
+  инвентарём не являются; ошибка импорта модуля — отдельное поле.
+  Node — только текстовые сайты отключения (`x.skip(`, `x.todo(`,
+  `{ skip: … }`); инвентаря тестов Node нет. Это закрывает disabled-test для
+  Rust полностью, для Python — статически, для Node — по форме записи.
 
 Инвентарь — не семантическое доказательство (INV-03): матрица говорит, что
 существует и исполняется, а не что истинно. `refresh` переписывает записи
@@ -59,7 +62,8 @@ PYTHON_SUITES: tuple[tuple[str, str], ...] = (
     ("scripts", "test_*.py"),
 )
 NODE_TEST_GLOBS: tuple[str, ...] = ("packages/colors/test/*.test.mjs",)
-NODE_SKIP_RE = re.compile(r"\b(?:t|context|test|it)\.skip\(")
+# Формы отключения node:test: `x.skip(`, `x.todo(`, опция `{ skip: ... }` / `{ todo: ... }`.
+NODE_SKIP_RE = re.compile(r"\b(?:t|context|test|it|describe|suite)\.(?:skip|todo)\(|[{,]\s*(?:skip|todo)\s*:")
 
 EXIT_OK, EXIT_DRIFT, EXIT_USAGE, EXIT_TOOL = 0, 1, 64, 65
 
@@ -182,22 +186,27 @@ def _cargo_list(*extra: str) -> list[str]:
 
 
 def _python_inventory(start: str, pattern: str) -> dict:
-    """Имена тестов через unittest loader в подпроцессе: импорт тестовых модулей
-    остаётся изолированным от этого процесса. Ошибки загрузки — часть записи."""
+    """Инвентарь тестов через unittest loader в подпроцессе (импорт тестовых
+    модулей изолирован от этого процесса). Статически отключённые тесты —
+    `@unittest.skip*` на классе или методе — видны loader'у как
+    `__unittest_skip__` до исполнения и попадают в `skipped`; условные skip
+    (`skipIf/skipUnless` с ложным условием) остаются enabled: их решение
+    принимается в рантайме и инвентарём не является."""
     code = (
-        "import json, unittest\n"
+        "import json, re, unittest\n"
         "loader = unittest.defaultTestLoader\n"
         f"suite = loader.discover({start!r}, pattern={pattern!r}, top_level_dir={start!r})\n"
-        "names = []\n"
+        "names, skipped = [], []\n"
         "def walk(s):\n"
         "    for t in s:\n"
-        "        if isinstance(t, unittest.TestSuite): walk(t)\n"
-        "        else: names.append(t.id())\n"
+        "        if isinstance(t, unittest.TestSuite): walk(t); continue\n"
+        "        method = getattr(t, t._testMethodName, None)\n"
+        "        static = getattr(type(t), '__unittest_skip__', False) or getattr(method, '__unittest_skip__', False)\n"
+        "        (skipped if static else names).append(t.id())\n"
         "walk(suite)\n"
-        "import re\n"
         "# Только имя модуля: текст traceback зависит от платформы и версии Python.\n"
         "errors = sorted({m.group(1) for e in loader.errors for m in [re.search(r'Failed to import test module: (\\S+)', e)] if m})\n"
-        "print(json.dumps({'names': sorted(names), 'load_errors': errors}))\n"
+        "print(json.dumps({'names': sorted(names), 'skipped': sorted(skipped), 'load_errors': errors}))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, cwd=REPO_ROOT,
@@ -206,9 +215,9 @@ def _python_inventory(start: str, pattern: str) -> dict:
     if result.returncode != 0:
         raise RuntimeError(f"unittest discover {start}: {result.stderr.decode(errors='replace')[-800:]}")
     payload = json.loads(result.stdout.decode())
-    return {"start": start, "pattern": pattern, "count": len(payload["names"]),
-            "names": payload["names"], "load_errors": payload["load_errors"]}
-
+    return {"start": start, "pattern": pattern, "count": len(payload["names"]), "names": payload["names"],
+            "skipped_count": len(payload["skipped"]), "skipped": payload["skipped"],
+            "load_errors": payload["load_errors"]}
 
 def _node_skip_sites() -> list[dict]:
     sites = []
@@ -318,7 +327,8 @@ def check() -> int:
         for line in failures:
             print(line, file=sys.stderr)
         print(
-            "\nЕсли изменение артефактов намеренно: `python3 scripts/artifact_matrix.py refresh`, "
+            "\nЕсли изменение артефактов намеренно: `python3 scripts/artifact_matrix.py refresh` в Linux "
+            "с CI toolchain (tests.json платформенная; на Windows допустим `ARTIFACT_MATRIX_ONLY=tree`), "
             "закоммитьте proof/artifact/*.json в том же PR и объясните diff записей в описании.",
             file=sys.stderr,
         )
@@ -339,6 +349,11 @@ def refresh() -> int:
             record = globals()[extractor]()
         except RuntimeError as error:
             print(f"ARTIFACT-MATRIX: extractor failed for {name!r}: {error}", file=sys.stderr)
+            return EXIT_TOOL
+        if name == "tests" and any(suite["load_errors"] for suite in record["python"]):
+            broken = sorted({m for suite in record["python"] for m in suite["load_errors"]})
+            print(f"ARTIFACT-MATRIX: refusing to pin tests.json with import failures: {broken}; "
+                  "run refresh where every proof module imports (Linux CI toolchain)", file=sys.stderr)
             return EXIT_TOOL
         path.write_bytes(json.dumps(record, sort_keys=True, indent=1, ensure_ascii=False).encode() + b"\n")
         print(f"refreshed {path.relative_to(REPO_ROOT).as_posix()}: {record['record_sha256'][:16]}…", file=sys.stderr)
