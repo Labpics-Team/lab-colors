@@ -46,6 +46,7 @@ def make_repo_copy(destination: Path) -> None:
             (destination / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination / name)
     git(destination, "init", "-q")
+    git(destination, "config", "gc.auto", "0")
     git(destination, "config", "user.email", "t@example.invalid")
     git(destination, "config", "user.name", "t")
     git(destination, "add", "-A", ".")
@@ -90,9 +91,12 @@ class TreeRecordTests(unittest.TestCase):
     _counter = 0
 
     def fresh(self) -> Path:
+        # Клон, а не copytree: копирование .git наперегонки с фоновым `git gc --auto`
+        # базы теряет объекты (наблюдалось в CI). Клон читает объекты через Git.
         type(self)._counter += 1
         root = Path(self.tmp.name) / f"case-{self._counter}"
-        shutil.copytree(self.base, root, symlinks=True)
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(self.base), str(root)], capture_output=True, check=True)
+        git(root, "config", "gc.auto", "0")
         return root
 
     def test_pinned_tree_reproduces_on_current_tree(self) -> None:
