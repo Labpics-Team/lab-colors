@@ -9,20 +9,30 @@ const pkg = JSON.parse(read("package.json"));
 test("terminal tar inventory is exact and excludes retired roots", () => {
   const required = new Set([
     "LICENSE", "build-metadata.json", "index.js", "index.d.ts", "wcag22.d.ts",
+    "program-wire/abi-v1.js", "program-wire/abi-v1.d.ts",
     "evidence/wcag22-srgb8-v1.json", "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
     "pkg/labcolors.js", "pkg/labcolors.d.ts", "pkg/labcolors_bg.wasm",
-    "pkg/labcolors_bg.wasm.d.ts",
+    "pkg/labcolors_bg.wasm.d.ts", "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
   ]);
   assert.deepEqual(new Set(pkg.files), required);
+  const selector = "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js";
+  assert.equal(pkg.files.filter((path) => path === selector).length, 1);
+  assert.equal(pkg.files.filter((path) => path.includes("[0-9a-f]")).length, 1);
+  assert.equal(pkg.files.some((path) => path.includes("?") || path.includes("*")), false);
 });
 
 test("terminal package has one root and no legacy subpath", () => {
   assert.equal(pkg.version, "1.0.0");
   assert.deepEqual(Object.keys(pkg.exports).sort(), [
     ".", "./build-metadata.json", "./package.json", "./pkg/labcolors_bg.wasm",
+    "./program-wire/abi-v1.js",
   ]);
+  assert.deepEqual(pkg.exports["./program-wire/abi-v1.js"], {
+    types: "./program-wire/abi-v1.d.ts",
+    default: "./program-wire/abi-v1.js",
+  });
 });
 
 test("root source exports Program runtime and permanent capabilities only", () => {

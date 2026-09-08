@@ -1,10 +1,9 @@
 name: publish
 
-# Тонкий caller: только триггер по тегу, concurrency и права. Гейты каноничных
-# CI-прогонов, проверка byte-exact артефакта и сама публикация закреплены в
-# immutable publish-worker.yml на полном commit SHA — проверяемые job'ы
-# исполняются на одноразовых эфемерных GitHub-hosted VM без секретов и общего
-# состояния. Своих inputs у worker нет by design.
+# Тонкий caller: триггер по тегу, concurrency и права. Локальный uses выбирает
+# publish-worker.yml из того же коммита, поэтому squash не оставляет публикацию
+# на старом release-контракте. Гейты CI и byte-exact артефакта проверяются вместе
+# с этим snapshot; worker не принимает inputs и исполняется на эфемерной VM.
 #
 # `environment: npm-publish` объявлен НА JOB'Е ВНУТРИ worker'а, а не здесь: job с
 # `uses:` не поддерживает ключ `environment`; объявление внутри reusable-worker
@@ -29,4 +28,4 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156
+    uses: ./.github/workflows/publish-worker.yml
