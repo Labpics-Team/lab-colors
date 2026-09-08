@@ -410,21 +410,19 @@ jobs:
         run: python3 scripts/test_point_support_surplus_source_binding.py
       - name: prove point-support retained reference surplus over Q55 bounds
         run: python3 scripts/verify_point_support_surplus.py
-      # EXT artifact class extractors — r6 AUD-01 extension sabotage gates
-      - name: verify EXT-01 source files manifest
-        run: python3 scripts/extract_source_files.py extract | python3 scripts/extract_source_files.py verify
-      - name: verify EXT-02 public API manifest
-        run: python3 scripts/extract_public_api.py extract | python3 scripts/extract_public_api.py verify
-      - name: verify EXT-03 exports metadata manifest
-        run: python3 scripts/extract_exports_metadata.py extract | python3 scripts/extract_exports_metadata.py verify
-      - name: verify EXT-04 operations manifest
-        run: python3 scripts/extract_operations.py extract | python3 scripts/extract_operations.py verify
-      - name: verify EXT-06 claims manifest
-        run: python3 scripts/extract_claims.py extract | python3 scripts/extract_claims.py verify
-      - name: verify EXT-08 decisions manifest
-        run: python3 scripts/extract_decisions.py extract | python3 scripts/extract_decisions.py verify
-      - name: verify EXT-09 CI/build manifest
-        run: python3 scripts/extract_ci_build.py extract | python3 scripts/extract_ci_build.py verify
+      # Исполняемая матрица артефактов (ARTIFACT-01). Две закреплённые записи в
+      # proof/artifact/: tree.json (path -> blob id объявленных корней) и tests.json
+      # (инвентарь тестов, разрешённый cargo/unittest, включая #[ignore]). CI только
+      # пересчитывает и сравнивает; drift — red с названием файла/теста. Тавтология
+      # extract | verify в одном шаге удалена. Sabotage-suites extractors и
+      # anti-vacuum мутанты гейта исполняются здесь же, иначе их существование в
+      # дереве не является гейтом.
+      - name: artifact matrix - pinned records reproduce
+        run: python3 scripts/artifact_matrix.py check
+      - name: artifact matrix - extractor sabotage suites
+        run: python3 -m unittest discover -s scripts -p 'test_extract_*.py'
+      - name: artifact matrix - gate anti-vacuum mutants
+        run: python3 scripts/test_artifact_matrix.py
 
   audit:
     name: cargo audit (rustsec)

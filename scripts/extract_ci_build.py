@@ -6,7 +6,9 @@ Produces a finite manifest of all GitHub Actions workflow files in
 
 Sabotage controls:
 - Fails if any listed file is missing from disk.
-- Fails if computed digest does not match the pinned manifest.
+- This script pins nothing by itself: `extract | verify` in one run proves only
+  self-consistency. Drift against the repository is detected by
+  scripts/artifact_matrix.py (proof/artifact/tree.json), not here.
 - Fails if an unexpected .yml file appears (new file without manifest update).
 
 Exit evidence: JSON manifest on stdout with schema:
