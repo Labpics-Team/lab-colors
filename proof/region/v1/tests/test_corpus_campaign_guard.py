@@ -40,21 +40,11 @@ _INPUT_KEY_V1 = re.compile(r"^      [A-Za-z0-9_-]+:\s*$", re.MULTILINE)
 REFUSED_V1 = 64
 
 
-def _workflow_has_guard(text: str) -> bool:
-    """True when the workflow carries the full guard step, not a stub."""
-    return GUARD_STEP_V1 in text
-
-
 class CorpusCampaignContractTests(unittest.TestCase):
     """The lane's own campaign guard and the coordinator's command, together."""
 
     def setUp(self) -> None:
         self.text = WORKFLOW_V1.read_text(encoding="utf-8")
-        if not _workflow_has_guard(self.text):
-            self.skipTest(
-                "workflows truncated to stubs in 73c417b; "
-                "guard step not present in workflow YAML"
-            )
 
     # --- the declaration ------------------------------------------------
 
@@ -126,10 +116,12 @@ class CorpusCampaignContractTests(unittest.TestCase):
         window_points: str,
         expect_lanes: str,
         window_start: str = "0",
+        points: str = "65536",
+        shard_points: str = "16384",
     ) -> int:
         bash = shutil.which("bash")
         if bash is None:
-            self.skipTest("the lane guard is shell and needs a shell to run")
+            self.fail("bash is required to execute the lane guard contract tests")
         completed = subprocess.run(
             (bash, "-c", self._guard_script_v1()),
             capture_output=True,
@@ -139,9 +131,21 @@ class CorpusCampaignContractTests(unittest.TestCase):
                 "WINDOW_POINTS": window_points,
                 "EXPECT_LANES": expect_lanes,
                 "WINDOW_START": window_start,
+                "POINTS": points,
+                "SHARD_POINTS": shard_points,
             },
         )
         return completed.returncode
+
+    def test_probe_and_lane_reject_unsafe_replay_coordinates(self) -> None:
+        for window, lanes, start in (("", "0", ""), ("65536", "256", "0")):
+            for invalid in ("", "0", "-1", "1.0", "016384", "16384\r", "1;true", "'$(true)", "18446744073709551616"):
+                for field in ("points", "shard_points"):
+                    with self.subTest(window=window, field=field, value=invalid):
+                        self.assertEqual(
+                            self._run_guard_v1(window, lanes, start, **{field: invalid}),
+                            REFUSED_V1,
+                        )
 
     def test_the_guard_admits_every_seam_of_the_cover(self) -> None:
         # The whole plan has to survive its own guard, seam by seam: a guard
