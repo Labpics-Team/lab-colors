@@ -1,53 +1,56 @@
 # Lab Colors
 
-Production-grade color system with ProgramWire v1 runtime.
+![Lab Colors — один цвет в разном окружении](docs/assets/cover.svg)
 
-## Quick Start
+[Первый пример](packages/colors/README.md#первый-маршрут) · [Публичный API](packages/colors/README.md#контракт) · [Исходники ядра](crates)
 
-See [packages/colors/README.md](packages/colors/README.md) for the public API contract.
+Цвет в интерфейсе существует рядом с другими цветами: на поверхности, поверх
+изображения, в нескольких полупрозрачных слоях. Lab Colors позволяет описать
+эти связи и ограничения, а затем вычислять цветовые значения при изменении
+окружения.
 
-### Installation
+Вы задаёте исходные цвета и связи. Ядро проверяет граф, принимает наблюдения
+среды и возвращает вычисленные значения. Имена токенов и смысл состояний
+остаются у вашего приложения.
 
-`ash
+*На обложке все круги одного цвета. Это авторская композиция, а не вывод движка.*
+
+## Начать
+
+```sh
 npm install @labpics/colors
-`
+```
 
-### Usage
+[Первый рабочий пример](packages/colors/README.md#первый-маршрут) показывает
+путь от объявления графа до чтения результата. Там же описаны освобождение
+ресурсов и границы публичного контракта.
 
-`javascript
-import init, { compileProgramWire } from "@labpics/colors";
+## Как это устроено
 
-await init();
-const runtime = compileProgramWire(programBytes, 1);
-const snapshot = runtime.update(observed);
-`
+- **Описание.** `ProgramWireBuilderV1` собирает граф в канонические wire-байты.
+- **Вычисление.** `compileProgramWire` создаёт runtime; `updateObserved`
+  передаёт новое наблюдение среды.
+- **Результат.** Snapshot содержит выходные значения. Отказ не публикует
+  частично обновлённое состояние.
 
-## Architecture
+Применение цветов к DOM и CSS принадлежит приложению.
+Подробности — в [контракте пакета](packages/colors/README.md#контракт).
 
-- **ProgramWire v1**: Deterministic binary format (magic LCPW, version 1)
-- **Typed refusals**: Invalid declarations produce typed errors, not silent coercion
-- **Cross-language parity**: JS builder emits byte-identical output to Rust reference
-- **Fail-closed security**: Family graphs require explicit trust parameters
+## Работа с исходниками
 
-## Зависимости
+```sh
+cargo test --workspace
+npm test
+```
 
-labcolors-core имеет ноль рантайм-зависимостей. Проверяемый контракт:
+Зависимости ядра можно посмотреть командой:
 
-```bash
+```sh
 cargo tree -p labcolors-core --edges=no-dev
 ```
 
-## Development
+Состояние проверок — в [GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions).
 
-`ash
-cargo test --workspace
-npm test
-`
-
-## CI Status
-
-All workflows green on main. See [Actions](https://github.com/Labpics-Team/lab-colors/actions) for live status.
-
-## License
+## Лицензия
 
 MIT
