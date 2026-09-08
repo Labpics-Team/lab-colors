@@ -398,7 +398,7 @@
   "scripts/_regen_receipt_merge_tree.py": "789e886dd120ed910870e2df5a5073d397d1cf30",
   "scripts/_regen_receipt_wt.py": "759b8921918d76dfc18a91f240b2e2c8aee673bc",
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
-  "scripts/artifact_matrix.py": "7704ca082841dca66bde8bd915f0ff53ecfc1cfd",
+  "scripts/artifact_matrix.py": "4734f3e7fae97b1d2c6094b57e57d7363dcf97e5",
   "scripts/atomic-write.mjs": "34b72e0db2fd88ce9367fd12b3e88da2509b9686",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
@@ -425,7 +425,7 @@
   "scripts/prepare-npm-package.mjs": "e638bd5ae0d96eab39ee2c310958c83725ed76b5",
   "scripts/release-evidence.mjs": "0867419482af8aecd61026870a429ef90b4532a8",
   "scripts/test-program-runtime-browser.mjs": "7d80c6606bb32dc98910201699d945a0e80f0b2c",
-  "scripts/test_artifact_matrix.py": "d5277819252730af1c3bcc515ac70ebeb049bcb4",
+  "scripts/test_artifact_matrix.py": "800b22e5d678c1837a8b09bc6bc1766819c3a8f2",
   "scripts/test_ci_peer_gate.py": "b19a0d13e42f125f0db0e9438c6c3bba5c4af91b",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
   "scripts/test_extract_claims.py": "316f7c292f0330d138af063defa2c882e7366112",
@@ -448,7 +448,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "c97d7dc00424bd2b33ab43c8622827e641f95cbcd8001b3b52edc5b145378c5f",
+ "record_sha256": "3f3754fe722d1fd69e77877ab6f870845ae86d27fb216b1bb643049e4cf02ec3",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

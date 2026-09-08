@@ -243,7 +243,7 @@ class TestsRecordTests(unittest.TestCase):
             suite["count"] = len(suite["names"])
         code, err = self._with_mutated_extraction(mutate)
         self.assertEqual(code, 1, err)
-        self.assertIn("load_errors", err)
+        self.assertIn("+ python.proof/region/v1/tests.load_errors: \"test_build\"", err)
 
     def test_new_node_skip_site_is_drift(self) -> None:
         def mutate(record: dict) -> None:
@@ -257,18 +257,19 @@ class TestsRecordTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
     def test_statically_skipped_python_test_is_named_in_diff(self) -> None:
+        # Жертва из середины списка: diff обязан назвать тест независимо от позиции.
         def mutate(record: dict) -> None:
             suite = record["python"][0]
-            victim = suite["names"].pop(0)
+            victim = suite["names"].pop(len(suite["names"]) // 2)
             suite["count"] -= 1
             suite["skipped"].append(victim)
             suite["skipped"].sort()
             suite["skipped_count"] += 1
-            self.victim = victim
+            self.victim, self.start = victim, suite["start"]
         code, err = self._with_mutated_extraction(mutate)
         self.assertEqual(code, 1, err)
-        self.assertIn(f"- python: ", err)
-        self.assertIn(self.victim, err)
+        self.assertIn(f"- python.{self.start}.names: {json.dumps(self.victim)}", err)
+        self.assertIn(f"+ python.{self.start}.skipped: {json.dumps(self.victim)}", err)
 
     def test_tool_failure_is_typed_not_green(self) -> None:
         # Инвентарь без исполнения инструмента — ровно тот вакуум, который закрывает ARTIFACT-01.

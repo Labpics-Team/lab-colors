@@ -14,9 +14,10 @@
   Сила по экосистемам различна и названа честно:
   Rust — compiler-resolved: `cargo test -- --list` и `-- --ignored --list`;
   новый `#[ignore]` или `cfg`-скрытый модуль меняет инвентарь и называет тест.
-  Python — loader-resolved: имена тестов и статические `@unittest.skip*`
-  (`__unittest_skip__` на классе/методе); условные skip решаются в рантайме и
-  инвентарём не являются; ошибка импорта модуля — отдельное поле.
+  Python — loader-resolved: имена тестов и skip, истинные на момент импорта
+  в среде refresh (`__unittest_skip__` на классе/методе, включая `skipIf/
+  skipUnless` с истинным условием); `self.skipTest`, `SkipTest` в `setUp*`
+  и `load_tests` невидимы; ошибка импорта модуля — отдельное поле.
   Node — только текстовые сайты отключения (`x.skip(`, `x.todo(`,
   `{ skip: … }`); инвентаря тестов Node нет. Это закрывает disabled-test для
   Rust полностью, для Python — статически, для Node — по форме записи.
@@ -187,11 +188,12 @@ def _cargo_list(*extra: str) -> list[str]:
 
 def _python_inventory(start: str, pattern: str) -> dict:
     """Инвентарь тестов через unittest loader в подпроцессе (импорт тестовых
-    модулей изолирован от этого процесса). Статически отключённые тесты —
-    `@unittest.skip*` на классе или методе — видны loader'у как
-    `__unittest_skip__` до исполнения и попадают в `skipped`; условные skip
-    (`skipIf/skipUnless` с ложным условием) остаются enabled: их решение
-    принимается в рантайме и инвентарём не является."""
+    модулей изолирован от этого процесса). Тесты, чей skip истинен на момент
+    импорта в среде refresh — `@unittest.skip*` на классе или методе, включая
+    `skipIf/skipUnless` с истинным условием — видны loader'у как
+    `__unittest_skip__` и попадают в `skipped`; `skipIf/skipUnless` с ложным
+    условием остаются enabled; `self.skipTest` и `SkipTest` в `setUp*` — рантайм,
+    инвентарём не являются."""
     code = (
         "import json, re, unittest\n"
         "loader = unittest.defaultTestLoader\n"
@@ -259,6 +261,19 @@ def _diff_lines(pinned: object, actual: object, prefix: str = "") -> list[str]:
                 lines.append(f"  - {prefix}{key}: {json.dumps(pinned[key], ensure_ascii=False)[:160]}")
             elif pinned[key] != actual[key]:
                 lines.extend(_diff_lines(pinned[key], actual[key], f"{prefix}{key}."))
+    elif isinstance(pinned, list) and isinstance(actual, list) \
+            and all(isinstance(i, dict) and "start" in i for i in pinned + actual):
+        # Список suites (python): сравнивать по ключу `start`, чтобы diff называл тест,
+        # а не печатал усечённый blob целого suite.
+        before = {i["start"]: i for i in pinned}
+        after = {i["start"]: i for i in actual}
+        for start in sorted(set(before) | set(after)):
+            if start not in before:
+                lines.append(f"  + {prefix}{start}")
+            elif start not in after:
+                lines.append(f"  - {prefix}{start}")
+            elif before[start] != after[start]:
+                lines.extend(_diff_lines(before[start], after[start], f"{prefix}{start}."))
     elif isinstance(pinned, list) and isinstance(actual, list):
         def ident(item: object) -> str:
             return json.dumps(item, sort_keys=True, ensure_ascii=False)
