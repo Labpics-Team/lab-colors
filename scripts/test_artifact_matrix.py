@@ -368,6 +368,49 @@ class RealExtractionTests(unittest.TestCase):
         self.assertEqual(ignored, ["tests::slow: test"])
 
 
+def worker_jobs(workflow_text: str) -> list[str]:
+    lines = workflow_text.splitlines()
+    jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
+    return [m.group(1) for i in range(jobs_at + 1, len(lines))
+            for m in [re.match(r"^  ([A-Za-z0-9_-]+):\s*$", lines[i])] if m]
+
+
+def job_run_commands(workflow_text: str, job: str) -> list[str]:
+    """Команды `run:` одного job из workflow без YAML-зависимости.
+
+    Job — ключ второго уровня под `jobs:`; шаг — элемент списка `steps`;
+    `run:` — либо однострочный скаляр, либо блок `|`/`>` с большим отступом.
+    Комментарии не являются командами. Достаточно строго, чтобы команда в
+    другом job или в комментарии не засчитывалась.
+    """
+    lines = workflow_text.splitlines()
+    try:
+        jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
+        start = next(i for i in range(jobs_at + 1, len(lines)) if lines[i].rstrip() == f"  {job}:")
+    except StopIteration:
+        return []
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[i])), len(lines))
+    commands: list[str] = []
+    i = start + 1
+    while i < end:
+        stripped = lines[i].strip()
+        m = re.match(r"^(\s*)(?:- )?run:\s*(.*)$", lines[i])
+        if m and not stripped.startswith("#"):
+            indent, value = len(m.group(1)), m.group(2).strip()
+            if value in ("|", ">", "|-", ">-"):
+                block = []
+                i += 1
+                while i < end and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+                    if lines[i].strip() and not lines[i].strip().startswith("#"):
+                        block.append(lines[i].strip())
+                    i += 1
+                commands.append("\n".join(block))
+                continue
+            commands.append(value)
+        i += 1
+    return commands
+
+
 class ToolingTests(unittest.TestCase):
     def test_unknown_mode_exits_64(self) -> None:
         result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "artifact_matrix.py"), "bogus"],
@@ -381,31 +424,45 @@ class ToolingTests(unittest.TestCase):
 
     def test_required_ci_executes_gate_and_sabotage_suites(self) -> None:
         # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
-        text = CI_WORKER.read_text("utf-8")
-        joined = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        self.assertIn("python3 scripts/artifact_matrix.py check", joined)
-        self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", joined)
-        self.assertIn("python3 scripts/test_artifact_matrix.py", joined)
+        commands = job_run_commands(CI_WORKER.read_text("utf-8"), "test")
+        self.assertGreater(len(commands), 5, "test job run steps not found")
+        self.assertIn("python3 scripts/artifact_matrix.py check", commands)
+        self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", commands)
+        self.assertIn("python3 scripts/test_artifact_matrix.py", commands)
+        joined = "\n".join(commands)
         self.assertNotRegex(joined, r"extract_\w+\.py extract \| python3 scripts/extract_\w+\.py verify")
+        # Ни один шаг обязательного job не должен быть условным или неблокирующим.
+        text = CI_WORKER.read_text("utf-8")
+        start = text.index("\n  test:\n")
+        end = text.index("\n  audit:\n", start)
+        self.assertNotRegex(text[start:end], r"^\s+(if|continue-on-error):", "test job steps must be unconditional")
 
     def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
         # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый
         # ни одним шагом, — ровно тот вакуум, который ARTIFACT-01 закрывает.
         record = json.loads((REPO_ROOT / "proof" / "artifact" / "tests.json").read_bytes())
-        suite = next(s for s in record["python"] if s["start"] == "scripts")
+        suites = [s for s in record["python"] if s["start"] == "scripts"]
+        self.assertEqual(len(suites), 1, "pinned tests.json must carry exactly one scripts suite")
+        suite = suites[0]
         modules = sorted({name.split(".", 1)[0] for name in suite["names"] + suite["skipped"]})
-        # Команды могут стоять в многострочных `run: |`; комментарии не считаются исполнением.
-        text = "\n".join(line for line in CI_WORKER.read_text("utf-8").splitlines() if not line.lstrip().startswith("#"))
-        discover_glob = "python3 -m unittest discover -s scripts -p 'test_extract_*.py'" in text
-        # Класс тестов, реэкспортируемый в исполняемый CI модуль, исполняется через него.
-        reexported = set()
+        # Все jobs worker входят в обязательный `CI` через caller; исполнение в любом из них засчитывается.
+        workflow = CI_WORKER.read_text("utf-8")
+        commands = "\n".join(cmd for job in worker_jobs(workflow) for cmd in job_run_commands(workflow, job))
+        discover_glob = "python3 -m unittest discover -s scripts -p 'test_extract_*.py'" in commands
+        # Класс тестов, импортируемый в исполняемый CI модуль (`from X import TestY`),
+        # исполняется через него; импорт разбирается AST, не regex.
+        import ast
+        reexported: set[str] = set()
         for runner in (REPO_ROOT / "scripts").glob("test_*.py"):
-            if f"scripts/{runner.stem}.py" in text:
-                for m in re.finditer(r"^from (\w+) import ([^\n]+)", runner.read_text("utf-8"), re.MULTILINE):
-                    if re.search(r"\bTest\w+", m.group(2)):
-                        reexported.add(m.group(1))
+            if f"scripts/{runner.stem}.py" not in commands:
+                continue
+            tree = ast.parse(runner.read_text("utf-8"), str(runner))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and node.level == 0 \
+                        and any(alias.name.startswith("Test") for alias in node.names):
+                    reexported.add(node.module)
         missing = [m for m in modules
-                   if f"scripts/{m}.py" not in text and m not in reexported
+                   if f"scripts/{m}.py" not in commands and m not in reexported
                    and not (discover_glob and m.startswith("test_extract_"))]
         self.assertEqual(missing, [], f"pinned scripts test modules without a CI run step: {missing}")
 

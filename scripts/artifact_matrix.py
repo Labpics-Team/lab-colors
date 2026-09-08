@@ -105,6 +105,8 @@ def parse_record(raw: bytes, expected_class: str) -> dict:
         raise MalformedRecord(f"class {record['class']!r} != expected {expected_class!r}")
     if type(record["schema_version"]) is not int:
         raise MalformedRecord("schema_version must be an integer")
+    if not isinstance(record["record_sha256"], str):
+        raise MalformedRecord("record_sha256 must be a string")
     digest = hashlib.sha256(canonical(record)).hexdigest()
     if record["record_sha256"] != digest:
         raise MalformedRecord(f"record_sha256 {record['record_sha256'][:16]}… != body {digest[:16]}…")
@@ -216,7 +218,12 @@ def _python_inventory(start: str, pattern: str) -> dict:
     )
     if result.returncode != 0:
         raise RuntimeError(f"unittest discover {start}: {result.stderr.decode(errors='replace')[-800:]}")
-    payload = json.loads(result.stdout.decode())
+    # Импорт тестовых модулей может печатать диагностику в stdout; запись — последняя строка.
+    lines = [line for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
+    try:
+        payload = json.loads(lines[-1] if lines else "")
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"unittest discover {start}: inventory line is not JSON: {error}") from error
     return {"start": start, "pattern": pattern, "count": len(payload["names"]), "names": payload["names"],
             "skipped_count": len(payload["skipped"]), "skipped": payload["skipped"],
             "load_errors": payload["load_errors"]}
@@ -301,6 +308,8 @@ def selected() -> dict:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         raise MalformedRecord("ARTIFACT_MATRIX_ONLY is a local test knob; CI must check every record")
     chosen = {name.strip() for name in only.split(",") if name.strip()}
+    if not chosen:
+        raise MalformedRecord("ARTIFACT_MATRIX_ONLY is set but names no record")
     unknown = chosen - RECORDS.keys()
     if unknown:
         raise MalformedRecord(f"ARTIFACT_MATRIX_ONLY names unknown records: {sorted(unknown)}")
