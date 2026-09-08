@@ -168,6 +168,32 @@ exit 65
                 for run in ("123", "456"):
                     self.assertEqual((root / "lanes-in" / f"verification-lane-{run}" / "payload").read_text(), run)
 
+    def test_run_list_is_admitted_before_checkout(self) -> None:
+        # Отказ, который стоит checkout, загрузки source closures и OCI-образов,
+        # не является ранним отказом. Шаг admission обязан стоять до checkout
+        # в обоих потребителях lane_run_ids и сам отвергать hostile список.
+        for workflow in ("full-domain-corpus.yml", "dual-proof.yml"):
+            with self.subTest(workflow=workflow):
+                text = (WORKFLOWS / workflow).read_text("utf-8")
+                admission = text.index("      - name: refuse a malformed lane run list before checkout")
+                job_start = text.rfind("\n  ", 0, admission)
+                checkout = text.index("actions/checkout@", job_start)
+                self.assertLess(admission, checkout, "run-list admission must precede checkout in its job")
+                script = step_script(workflow, "refuse a malformed lane run list before checkout")
+                self.assertNotRegex(script, r"\$\{\{[^}]*inputs\.")
+                for value in ("-R", "0", "00123", "123,,456", "123,", "123, invalid", "123\n456", "'; touch pwned; #"):
+                    with self.subTest(value=value), tempfile.TemporaryDirectory() as directory:
+                        result = subprocess.run(
+                            ("bash", "-c", script), cwd=directory, capture_output=True,
+                            env={**os.environ, "LANE_RUN_IDS": value},
+                        )
+                        self.assertEqual(result.returncode, 64, result.stderr)
+                        self.assertEqual(list(Path(directory).iterdir()), [], "admission must not create files")
+                result = subprocess.run(
+                    ("bash", "-c", script), capture_output=True, env={**os.environ, "LANE_RUN_IDS": " 123, 456 "},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_cover_accepts_two_complete_engines(self) -> None:
         shell = step_script("dual-proof.yml", "refuse an incomplete cover before anything expensive is built")
         script = shell.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]

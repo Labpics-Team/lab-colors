@@ -213,6 +213,18 @@ jobs:
       PYTHONHASHSEED: "0"
       LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
     steps:
+      - name: refuse a malformed lane run list before checkout
+        # Read-only admission: некорректный список run id отклоняется до checkout
+        # и любого обращения к API. Проверка внутри download-шага остаётся как
+        # вторая линия для того же инварианта.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$LANE_RUN_IDS" =~ ^[[:blank:]]*[1-9][0-9]*[[:blank:]]*(,[[:blank:]]*[1-9][0-9]*[[:blank:]]*)*$ ]]; then
+            echo "lane run ids must be positive canonical decimals" >&2
+            exit 64
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
