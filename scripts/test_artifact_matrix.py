@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""Anti-vacuum для исполняемой матрицы артефактов.
+
+Каждый тест — мутант, который гейт обязан поймать. Гейт, не способный упасть
+на этих мутантах, доказывал бы лишь согласие инструмента с самим собой.
+
+Мутанты `tree` работают в копии дерева (git init + добавление), чтобы
+`hash-object --stdin-paths` и `ls-files` видели тот же набор атрибутов.
+Мутанты `tests` не запускают cargo: они подменяют инструментальные функции
+и проверяют, что гейт различает состояния инвентаря.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import artifact_matrix as matrix  # noqa: E402
+
+CI_WORKER = REPO_ROOT / ".github" / "workflows" / "ci-worker.yml"
+
+
+def git(cwd: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=True).stdout.decode()
+
+
+def make_repo_copy(destination: Path) -> None:
+    """Копия объявленных корней как отдельный Git-репозиторий с теми же атрибутами."""
+    destination.mkdir()
+    for name in (".gitattributes", *matrix.TREE_ROOTS):
+        source = REPO_ROOT / name
+        if source.is_dir():
+            shutil.copytree(source, destination / name, symlinks=True,
+                            ignore=shutil.ignore_patterns(*matrix.TREE_EXCLUDE_DIRS))
+        elif source.is_file():
+            (destination / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination / name)
+    git(destination, "init", "-q")
+    git(destination, "config", "gc.auto", "0")
+    git(destination, "config", "user.email", "t@example.invalid")
+    git(destination, "config", "user.name", "t")
+    git(destination, "add", "-A", ".")
+    git(destination, "commit", "-qm", "base")
+    # Запись `tree` закрепляется внутри копии: тесты проверяют закон гейта, а не
+    # совпадение копии с pinned записью репозитория (которая закрепляется в Linux CI).
+    env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+    env.update(PYTHONDONTWRITEBYTECODE="1", ARTIFACT_MATRIX_ONLY="tree")
+    subprocess.run([sys.executable, str(destination / "scripts" / "artifact_matrix.py"), "refresh"],
+                   capture_output=True, cwd=destination, env=env, check=True)
+    git(destination, "add", "-A", "proof/artifact")
+    # Копия, совпадающая с pinned записью репозитория, даёт пустой коммит — это норма.
+    subprocess.run(["git", "commit", "-qm", "pin tree", "--allow-empty"], cwd=destination, capture_output=True, check=True)
+
+
+def run_check(root: Path, only: str) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+    env.update(PYTHONDONTWRITEBYTECODE="1", ARTIFACT_MATRIX_ONLY=only)
+    return subprocess.run([sys.executable, str(root / "scripts" / "artifact_matrix.py"), "check"],
+                          capture_output=True, cwd=root, env=env)
+
+
+class TreeRecordTests(unittest.TestCase):
+    """Omission / decoy / parser на уровне байтов дерева."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.tmp.name) / "base"
+        make_repo_copy(cls.base)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        # Объекты .git на Windows read-only; снимаем флаг перед удалением.
+        for path in Path(cls.tmp.name).rglob("*"):
+            try:
+                path.chmod(0o700)
+            except OSError:
+                pass
+        cls.tmp.cleanup()
+
+    _counter = 0
+
+    def fresh(self) -> Path:
+        # Клон, а не copytree: копирование .git наперегонки с фоновым `git gc --auto`
+        # базы теряет объекты (наблюдалось в CI). Клон читает объекты через Git.
+        type(self)._counter += 1
+        root = Path(self.tmp.name) / f"case-{self._counter}"
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(self.base), str(root)], capture_output=True, check=True)
+        git(root, "config", "gc.auto", "0")
+        return root
+
+    def test_pinned_tree_reproduces_on_current_tree(self) -> None:
+        result = run_check(self.fresh(), "tree")
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+
+    def test_omission_of_the_pinned_record_is_red(self) -> None:
+        root = self.fresh()
+        (root / "proof" / "artifact" / "tree.json").unlink()
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(b"MISSING pinned record proof/artifact/tree.json", result.stderr)
+
+    def test_untracked_decoy_source_file_is_drift(self) -> None:
+        root = self.fresh()
+        (root / "crates" / "labcolors-core" / "src" / "zz_decoy.rs").write_text("// decoy\n")
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(b"+ files.crates/labcolors-core/src/zz_decoy.rs", result.stderr)
+
+    def test_deleted_workflow_is_drift(self) -> None:
+        root = self.fresh()
+        (root / ".github" / "workflows" / "ci.yml").unlink()
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(b"- files..github/workflows/ci.yml", result.stderr)
+
+    def test_one_byte_edit_is_drift_and_names_the_file(self) -> None:
+        root = self.fresh()
+        target = root / "scripts" / "extract_source_files.py"
+        target.write_bytes(target.read_bytes() + b"\n# mutant\n")
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(b"~ files.scripts/extract_source_files.py", result.stderr)
+
+    def test_crlf_checkout_of_lf_pinned_file_is_not_drift(self) -> None:
+        # Blob id считается с атрибутами: CRLF на диске у text eol=lf файла не меняет запись.
+        root = self.fresh()
+        target = root / "scripts" / "artifact_matrix.py"
+        target.write_bytes(target.read_bytes().replace(b"\n", b"\r\n"))
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+
+    def test_stale_record_with_valid_self_hash_is_drift_not_malformed(self) -> None:
+        root = self.fresh()
+        path = root / "proof" / "artifact" / "tree.json"
+        record = json.loads(path.read_bytes())
+        victim = sorted(record["files"])[0]
+        record["files"][victim] = "0" * 40
+        path.write_bytes(json.dumps(matrix.seal(record), sort_keys=True).encode())
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(f"~ files.{victim}".encode(), result.stderr)
+
+    def test_parser_corruption_is_usage_error_not_green(self) -> None:
+        good = json.loads((self.base / "proof" / "artifact" / "tree.json").read_bytes())
+        cases = {
+            "truncated": b'{"class": "tree", "schema_ver',
+            "array": b"[]",
+            "wrong-class": json.dumps(matrix.seal(dict(good, **{"class": "tests"}))).encode(),
+            "bad-self-hash": json.dumps(dict(good, record_sha256="0" * 64)).encode(),
+            "bool-schema": json.dumps(matrix.seal(dict(good, schema_version=True))).encode(),
+        }
+        for name, payload in cases.items():
+            with self.subTest(case=name):
+                root = self.fresh()
+                (root / "proof" / "artifact" / "tree.json").write_bytes(payload)
+                result = run_check(root, "tree")
+                self.assertEqual(result.returncode, 64, result.stderr.decode(errors="replace"))
+                self.assertIn(b"malformed", result.stderr)
+
+    def test_record_outside_registry_is_red(self) -> None:
+        root = self.fresh()
+        shutil.copy(root / "proof" / "artifact" / "tree.json", root / "proof" / "artifact" / "bonus.json")
+        result = run_check(root, "tree")
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn(b"UNLISTED record not in registry: proof/artifact/bonus.json", result.stderr)
+
+
+class TestsRecordTests(unittest.TestCase):
+    """Disabled-test мутанты: инвентарь тестов различает включённые и отключённые."""
+
+    def pinned(self) -> dict:
+        return json.loads((REPO_ROOT / "proof" / "artifact" / "tests.json").read_bytes())
+
+    def test_pinned_tests_record_is_well_formed_and_nonvacuous(self) -> None:
+        record = matrix.parse_record((REPO_ROOT / "proof" / "artifact" / "tests.json").read_bytes(), "tests")
+        self.assertGreater(record["rust"]["enabled_count"], 1000)
+        self.assertEqual(len(record["rust"]["enabled"]), record["rust"]["enabled_count"])
+        self.assertEqual(len(record["rust"]["ignored"]), record["rust"]["ignored_count"])
+        self.assertTrue(set(record["rust"]["ignored"]).isdisjoint(record["rust"]["enabled"]))
+        # Полы против вакуума: запись с пустыми ignored/skipped/suite после refresh
+        # означала бы, что инструмент перестал видеть класс, а не что класс исчез.
+        self.assertGreaterEqual(record["rust"]["ignored_count"], 1)
+        self.assertEqual([s["start"] for s in record["python"]], [s for s, _ in matrix.PYTHON_SUITES])
+        for suite in record["python"]:
+            self.assertEqual(suite["load_errors"], [], suite["start"])
+            self.assertEqual(suite["count"], len(suite["names"]))
+            self.assertEqual(suite["skipped_count"], len(suite["skipped"]))
+            self.assertGreaterEqual(suite["count"], 100, suite["start"])
+            self.assertTrue(set(suite["skipped"]).isdisjoint(suite["names"]))
+        self.assertGreaterEqual(len(record["node_skip_sites"]), 1)
+
+    def _with_mutated_extraction(self, mutate) -> subprocess.CompletedProcess | tuple[int, str]:
+        record = self.pinned()
+        mutated = json.loads(json.dumps(record))
+        mutate(mutated)
+        with mock.patch.object(matrix, "extract_tests", lambda: matrix.seal(mutated)), \
+             mock.patch.object(matrix, "extract_tree", lambda: matrix.parse_record(
+                 (REPO_ROOT / "proof" / "artifact" / "tree.json").read_bytes(), "tree")):
+            import io
+            import contextlib
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = matrix.check()
+        return code, err.getvalue()
+
+    def test_newly_ignored_rust_test_is_named_in_diff(self) -> None:
+        def mutate(record: dict) -> None:
+            victim = record["rust"]["enabled"].pop(0)
+            record["rust"]["enabled_count"] -= 1
+            record["rust"]["ignored"].append(victim)
+            record["rust"]["ignored"].sort()
+            record["rust"]["ignored_count"] += 1
+            self.victim = victim
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn(f"- rust.enabled: {json.dumps(self.victim)}", err)
+        self.assertIn(f"+ rust.ignored: {json.dumps(self.victim)}", err)
+
+    def test_silently_dropped_rust_test_is_drift(self) -> None:
+        def mutate(record: dict) -> None:
+            record["rust"]["enabled"].pop()
+            record["rust"]["enabled_count"] -= 1
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn("~ rust.enabled_count", err)
+
+    def test_python_module_that_fails_to_import_is_drift(self) -> None:
+        def mutate(record: dict) -> None:
+            suite = record["python"][0]
+            suite["load_errors"] = ["test_build"]
+            suite["names"] = [n for n in suite["names"] if not n.startswith("test_build.")]
+            suite["count"] = len(suite["names"])
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn("+ python.proof/region/v1/tests.load_errors: \"test_build\"", err)
+
+    def test_new_node_skip_site_is_drift(self) -> None:
+        def mutate(record: dict) -> None:
+            record["node_skip_sites"].append({"path": "packages/colors/test/zz.test.mjs", "line": 1, "text": "t.skip('x')"})
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn("+ node_skip_sites: ", err)
+
+    def test_unchanged_inventory_is_green(self) -> None:
+        code, err = self._with_mutated_extraction(lambda record: None)
+        self.assertEqual(code, 0, err)
+
+    def test_statically_skipped_python_test_is_named_in_diff(self) -> None:
+        # Жертва из середины списка: diff обязан назвать тест независимо от позиции.
+        def mutate(record: dict) -> None:
+            suite = record["python"][0]
+            victim = suite["names"].pop(len(suite["names"]) // 2)
+            suite["count"] -= 1
+            suite["skipped"].append(victim)
+            suite["skipped"].sort()
+            suite["skipped_count"] += 1
+            self.victim, self.start = victim, suite["start"]
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn(f"- python.{self.start}.names: {json.dumps(self.victim)}", err)
+        self.assertIn(f"+ python.{self.start}.skipped: {json.dumps(self.victim)}", err)
+
+    def test_tool_failure_is_typed_not_green(self) -> None:
+        # Инвентарь без исполнения инструмента — ровно тот вакуум, который закрывает ARTIFACT-01.
+        def boom() -> dict:
+            raise RuntimeError("cargo test --list: toolchain missing")
+        with mock.patch.object(matrix, "extract_tests", boom), \
+             mock.patch.object(matrix, "extract_tree", lambda: matrix.parse_record(
+                 (REPO_ROOT / "proof" / "artifact" / "tree.json").read_bytes(), "tree")):
+            import contextlib
+            import io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = matrix.check()
+        self.assertEqual(code, 65, err.getvalue())
+        self.assertIn("extractor failed for 'tests'", err.getvalue())
+
+    def test_refresh_refuses_tests_record_with_import_failures(self) -> None:
+        broken = json.loads(json.dumps(self.pinned()))
+        broken["python"][0]["load_errors"] = ["test_build"]
+        with mock.patch.object(matrix, "extract_tests", lambda: matrix.seal(broken)), \
+             mock.patch.dict(os.environ, {"ARTIFACT_MATRIX_ONLY": "tests"}, clear=False), \
+             mock.patch.object(matrix, "ARTIFACT_DIR", Path(tempfile.mkdtemp())) as tmp_dir:
+            os.environ.pop("GITHUB_ACTIONS", None)
+            matrix.RECORDS["tests"] = (tmp_dir / "tests.json", "extract_tests")
+            try:
+                import contextlib
+                import io
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = matrix.refresh()
+            finally:
+                matrix.RECORDS["tests"] = (REPO_ROOT / "proof" / "artifact" / "tests.json", "extract_tests")
+        self.assertEqual(code, 65, err.getvalue())
+        self.assertFalse((tmp_dir / "tests.json").exists())
+        self.assertIn("refusing to pin tests.json", err.getvalue())
+
+
+class RealExtractionTests(unittest.TestCase):
+    """Слой извлечения без mock: инструменты действительно различают отключённые тесты."""
+
+    def test_python_loader_separates_static_skips_from_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "test_fixture.py").write_text(
+                "import unittest\n"
+                "class Enabled(unittest.TestCase):\n"
+                "    def test_runs(self): pass\n"
+                "    @unittest.skip('static')\n"
+                "    def test_static_skip(self): pass\n"
+                "    @unittest.skipIf(False, 'conditional')\n"
+                "    def test_conditional_stays_enabled(self): pass\n"
+                "@unittest.skip('whole class')\n"
+                "class Disabled(unittest.TestCase):\n"
+                "    def test_hidden(self): pass\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(matrix, "REPO_ROOT", Path(directory)):
+                suite = matrix._python_inventory(".", "test_fixture.py")
+        self.assertEqual(suite["names"], ["test_fixture.Enabled.test_conditional_stays_enabled", "test_fixture.Enabled.test_runs"])
+        self.assertEqual(suite["skipped"], ["test_fixture.Disabled.test_hidden", "test_fixture.Enabled.test_static_skip"])
+        self.assertEqual(suite["load_errors"], [])
+
+    def test_python_loader_reports_import_failure_by_module_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "test_broken.py").write_text("import module_that_does_not_exist\n", encoding="utf-8")
+            with mock.patch.object(matrix, "REPO_ROOT", Path(directory)):
+                suite = matrix._python_inventory(".", "test_broken.py")
+        self.assertEqual(suite["load_errors"], ["test_broken"])
+
+    def test_node_skip_regex_covers_node_test_disable_forms(self) -> None:
+        positive = [
+            "t.skip('pkg not built');", "context.skip('windows');", "test.skip('x', () => {});",
+            "describe.skip('suite', () => {});", "test.todo('later');", "test('name', { skip: true }, () => {});",
+            "test('name', { todo: 'reason' }, () => {});",
+        ]
+        negative = ["skipWhitespace(x);", "const skipped = 1;", "// no skip here", "t.diagnostic('skip?');"]
+        for line in positive:
+            self.assertRegex(line, matrix.NODE_SKIP_RE, line)
+        for line in negative:
+            self.assertNotRegex(line, matrix.NODE_SKIP_RE, line)
+
+    @unittest.skipUnless(shutil.which("cargo"), "cargo toolchain required for the compiler-resolved inventory")
+    def test_cargo_inventory_separates_ignored_from_enabled_on_a_fixture_crate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "Cargo.toml").write_text(
+                "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[workspace]\n", encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "lib.rs").write_text(
+                "#[cfg(test)]\nmod tests {\n    #[test]\n    fn runs() {}\n    #[test]\n    #[ignore = \"slow\"]\n    fn slow() {}\n}\n",
+                encoding="utf-8")
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=root, capture_output=True, check=True)
+            with mock.patch.object(matrix, "REPO_ROOT", root):
+                listed = matrix._cargo_list()
+                ignored = matrix._cargo_list("--ignored")
+        self.assertEqual(listed, ["tests::runs: test", "tests::slow: test"])
+        self.assertEqual(ignored, ["tests::slow: test"])
+
+
+def worker_jobs(workflow_text: str) -> list[str]:
+    lines = workflow_text.splitlines()
+    jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
+    return [m.group(1) for i in range(jobs_at + 1, len(lines))
+            for m in [re.match(r"^  ([A-Za-z0-9_-]+):\s*$", lines[i])] if m]
+
+
+def job_run_commands(workflow_text: str, job: str) -> list[str]:
+    """Команды `run:` одного job из workflow без YAML-зависимости.
+
+    Job — ключ второго уровня под `jobs:`; шаг — элемент списка `steps`;
+    `run:` — либо однострочный скаляр, либо блок `|`/`>` с большим отступом.
+    Комментарии не являются командами. Достаточно строго, чтобы команда в
+    другом job или в комментарии не засчитывалась.
+    """
+    lines = workflow_text.splitlines()
+    try:
+        jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
+        start = next(i for i in range(jobs_at + 1, len(lines)) if lines[i].rstrip() == f"  {job}:")
+    except StopIteration:
+        return []
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[i])), len(lines))
+    commands: list[str] = []
+    i = start + 1
+    while i < end:
+        stripped = lines[i].strip()
+        m = re.match(r"^(\s*)(?:- )?run:\s*(.*)$", lines[i])
+        if m and not stripped.startswith("#"):
+            indent, value = len(m.group(1)), m.group(2).strip()
+            if value in ("|", ">", "|-", ">-"):
+                block = []
+                i += 1
+                while i < end and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+                    if lines[i].strip() and not lines[i].strip().startswith("#"):
+                        block.append(lines[i].strip())
+                    i += 1
+                commands.append("\n".join(block))
+                continue
+            commands.append(value)
+        i += 1
+    return commands
+
+
+class ToolingTests(unittest.TestCase):
+    def test_unknown_mode_exits_64(self) -> None:
+        result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "artifact_matrix.py"), "bogus"],
+                                capture_output=True, cwd=REPO_ROOT)
+        self.assertEqual(result.returncode, 64)
+
+    def test_narrowing_knob_is_refused_in_ci(self) -> None:
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "ARTIFACT_MATRIX_ONLY": "tree"}):
+            with self.assertRaises(matrix.MalformedRecord):
+                matrix.selected()
+
+    def test_required_ci_executes_gate_and_sabotage_suites(self) -> None:
+        # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
+        commands = job_run_commands(CI_WORKER.read_text("utf-8"), "test")
+        self.assertGreater(len(commands), 5, "test job run steps not found")
+        self.assertIn("python3 scripts/artifact_matrix.py check", commands)
+        self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", commands)
+        self.assertIn("python3 scripts/test_artifact_matrix.py", commands)
+        joined = "\n".join(commands)
+        self.assertNotRegex(joined, r"extract_\w+\.py extract \| python3 scripts/extract_\w+\.py verify")
+        # Ни один шаг обязательного job не должен быть условным или неблокирующим.
+        text = CI_WORKER.read_text("utf-8")
+        start = text.index("\n  test:\n")
+        end = text.index("\n  audit:\n", start)
+        self.assertNotRegex(text[start:end], r"^\s+(if|continue-on-error):", "test job steps must be unconditional")
+
+    def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
+        # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый
+        # ни одним шагом, — ровно тот вакуум, который ARTIFACT-01 закрывает.
+        record = json.loads((REPO_ROOT / "proof" / "artifact" / "tests.json").read_bytes())
+        suites = [s for s in record["python"] if s["start"] == "scripts"]
+        self.assertEqual(len(suites), 1, "pinned tests.json must carry exactly one scripts suite")
+        suite = suites[0]
+        modules = sorted({name.split(".", 1)[0] for name in suite["names"] + suite["skipped"]})
+        # Все jobs worker входят в обязательный `CI` через caller; исполнение в любом из них засчитывается.
+        workflow = CI_WORKER.read_text("utf-8")
+        commands = "\n".join(cmd for job in worker_jobs(workflow) for cmd in job_run_commands(workflow, job))
+        discover_glob = "python3 -m unittest discover -s scripts -p 'test_extract_*.py'" in commands
+        # Класс тестов, импортируемый в исполняемый CI модуль (`from X import TestY`),
+        # исполняется через него; импорт разбирается AST, не regex.
+        import ast
+        reexported: set[str] = set()
+        for runner in (REPO_ROOT / "scripts").glob("test_*.py"):
+            if f"scripts/{runner.stem}.py" not in commands:
+                continue
+            tree = ast.parse(runner.read_text("utf-8"), str(runner))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and node.level == 0 \
+                        and any(alias.name.startswith("Test") for alias in node.names):
+                    reexported.add(node.module)
+        missing = [m for m in modules
+                   if f"scripts/{m}.py" not in commands and m not in reexported
+                   and not (discover_glob and m.startswith("test_extract_"))]
+        self.assertEqual(missing, [], f"pinned scripts test modules without a CI run step: {missing}")
+
+
+if __name__ == "__main__":
+    unittest.main()

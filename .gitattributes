@@ -53,3 +53,11 @@ LICENSE text eol=lf
 scripts/generate_wcag22_q55.py text eol=lf
 scripts/verify_wcag22_q55.py text eol=lf
 packages/colors/bench/wasm.json text eol=lf
+
+# Исполняемая матрица артефактов: записи сравниваются каноническими байтами и
+# пересчитываются через git blob id (с атрибутами), поэтому eol чекаута на blob
+# не влияет. Pin нужен только самим записям и скриптам гейта: их байты читаются
+# напрямую, а не через Git.
+proof/artifact/*.json text eol=lf
+scripts/artifact_matrix.py text eol=lf
+scripts/test_artifact_matrix.py text eol=lf
