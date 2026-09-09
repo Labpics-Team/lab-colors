@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
+const readRoot = () => readFileSync(new URL("../../../README.md", import.meta.url), "utf8");
 
 test("README describes the terminal Program runtime, not recipe roles", () => {
   const readme = read("README.md");
@@ -13,6 +14,17 @@ test("README describes the terminal Program runtime, not recipe roles", () => {
   for (const retired of ["RoleRecipe", "ThemeConfig", "resolveTheme", "applyTheme"]) {
     assert.doesNotMatch(readme, new RegExp(`\\b${retired}\\b`, "u"), retired);
   }
+});
+
+test("root README delegates executable API guidance to the package contract", () => {
+  const root = readRoot();
+  assert.match(root, /\[packages\/colors\/README\.md\]\(packages\/colors\/README\.md\)/u);
+  for (const duplicateRuntimeSurface of [
+    "compileProgramWire", "ProgramWireBuilderV1", "updateObserved", "runtime.update",
+  ]) {
+    assert.doesNotMatch(root, new RegExp(duplicateRuntimeSurface.replace(".", "\\."), "u"));
+  }
+  assert.doesNotMatch(root, /All workflows green/iu);
 });
 
 test("README first route emits the session-verified output through the public entrypoints", () => {
