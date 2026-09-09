@@ -404,7 +404,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
-  "scripts/check-wasm-size-budget.mjs": "175188e64bf2b926da8e699de2089e131db441dd",
+  "scripts/check-wasm-size-budget.mjs": "e7b75e47a53996d93af61ac277da8eefa2c809de",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "7e691864e68ef130e589ce39144c705c44c14b0d",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
@@ -449,7 +449,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "420360626f386eab3d6d45325e76ece7243dde9c24f765594865ad09bd329b00",
+ "record_sha256": "501a2af5a67934939d5a0d6c290e87a1e0246b5e91365f52922cdd60faafb662",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
