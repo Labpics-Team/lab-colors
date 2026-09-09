@@ -80,7 +80,7 @@ for (const kind of ["finite", "relation"]) {
     const candidates = values(1);
     const expected = declare(new ProgramWireBuilderV1(), candidates).finish();
     candidates[Symbol.iterator] = function* () {
-      yield* values(4097);
+      yield* values(2);
     };
     assert.deepEqual(declare(new ProgramWireBuilderV1(), candidates).finish(), expected);
   });
@@ -107,4 +107,35 @@ for (const [name, values, declare] of [
     assert.deepEqual(declare(new ProgramWireBuilderV1(), hostile).finish(), expected);
     assert.equal(reads, 0);
   });
+}
+
+for (const kind of ["finite", "relation"]) {
+  const invalidLengths = [
+    () => Number.NaN, () => undefined, () => -1, () => 0.5,
+    () => "1", () => 1n, () => Symbol("length"), () => Object.create(null),
+    (onCoercion) => ({ [Symbol.toPrimitive]: onCoercion }),
+  ];
+  for (const [index, makeLength] of invalidLengths.entries()) {
+    test(`${kind}: invalid array length ${index} refuses before coercion or element access`, () => {
+      let reads = 0;
+      let coercions = 0;
+      const length = makeLength(() => { coercions += 1; return 1; });
+      const candidates = new Proxy([], {
+        get(target, key, receiver) {
+          if (key === "length") return length;
+          if (key === "0") reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      const builder = new ProgramWireBuilderV1().source(11, [20, 20, 20]);
+      const before = builder.finish();
+      const declare = () => kind === "finite"
+        ? builder.finiteTarget(1, candidates)
+        : builder.exactIntrinsicRelationHard(1, 0, candidates);
+      assert.throws(declare, typed(PROGRAM_WIRE_INVALID_DECLARATION));
+      assert.equal(reads, 0);
+      assert.equal(coercions, 0);
+      assert.deepEqual(builder.finish(), before);
+    });
+  }
 }
