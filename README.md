@@ -1,53 +1,34 @@
 # Lab Colors
 
-Production-grade color system with ProgramWire v1 runtime.
+Движок цветовых систем с ProgramWire v1 runtime. Публичный пакет строит и проверяет цветовые Program-графы; конкретное применение результата остаётся у потребителя.
 
-## Quick Start
+## Быстрый старт
 
-See [packages/colors/README.md](packages/colors/README.md) for the public API contract.
+Единственный исполняемый контракт публичного API, установка и актуальный пример находятся в [packages/colors/README.md](packages/colors/README.md). Корневой README намеренно не дублирует этот пример, чтобы у публичного маршрута не появлялся второй источник истины.
 
-### Installation
+## Архитектурные границы
 
-`ash
-npm install @labpics/colors
-`
+- ProgramWire v1 — канонический бинарный формат объявления Program-графа.
+- Невалидные декларации и неподдерживаемые состояния завершаются типизированным отказом без silent fallback.
+- Семантика графа принадлежит Core; адаптеры не вводят собственные правила решения.
+- DOM и CSS не принадлежат движку: потребитель материализует только допущенный результат.
+- Научные, продуктовые и инвентаризационные доказательства не подменяют друг друга.
 
-### Usage
+## Разработка
 
-`javascript
-import init, { compileProgramWire } from "@labpics/colors";
+```bash
+cargo test --workspace
+npm --prefix packages/colors test
+```
 
-await init();
-const runtime = compileProgramWire(programBytes, 1);
-const snapshot = runtime.update(observed);
-`
-
-## Architecture
-
-- **ProgramWire v1**: Deterministic binary format (magic LCPW, version 1)
-- **Typed refusals**: Invalid declarations produce typed errors, not silent coercion
-- **Cross-language parity**: JS builder emits byte-identical output to Rust reference
-- **Fail-closed security**: Family graphs require explicit trust parameters
-
-## Зависимости
-
-labcolors-core имеет ноль рантайм-зависимостей. Проверяемый контракт:
+`labcolors-core` не имеет runtime-зависимостей. Проверка:
 
 ```bash
 cargo tree -p labcolors-core --edges=no-dev
 ```
 
-## Development
+Текущее состояние CI следует читать в GitHub Actions, а не из статической фразы в документации.
 
-`ash
-cargo test --workspace
-npm test
-`
-
-## CI Status
-
-All workflows green on main. See [Actions](https://github.com/Labpics-Team/lab-colors/actions) for live status.
-
-## License
+## Лицензия
 
 MIT
