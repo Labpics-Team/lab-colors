@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 446,
+ "file_count": 447,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -253,7 +253,7 @@
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
-  "packages/colors/program-wire/abi-v1.js": "ff695e0c9b272ac1bd9caa5d896ab1c6ffad077a",
+  "packages/colors/program-wire/abi-v1.js": "1e1066ec81326b590cdc55b9a040d1457436871b",
   "packages/colors/sink.js": "f3c1a5b7b376504360e6ce95e15288c2b2960745",
   "packages/colors/smoke.consumer.ts": "d73036580de8e794baec7a4d510d07211022ebb5",
   "packages/colors/test/capability-manifest.test.mjs": "b82cad8968e3142a5a002be4924f27330a20fc32",
@@ -261,6 +261,7 @@
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/program-runtime-browser-harness.test.mjs": "653d5f153a1af45f2f546d53838955506cc09294",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
+  "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
   "packages/colors/test/program-wire.test.mjs": "d06cce8499a306390adc4a33a6d8e2e190b02e56",
   "packages/colors/test/public-api-cleanup.test.mjs": "ccafeae02d272b12da5aa82315513ac5f6052a23",
   "packages/colors/test/public-claims.test.mjs": "523a8b273d844336622252f30df2b49d0c4546b9",
@@ -449,7 +450,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "2fa5414d4ab080defa83a728577573f39018769ed1f07f7c79f92d05dd6a420c",
+ "record_sha256": "daf3377ff208de7f969cbd189fe27a19228006b7006df27ace543b4527051e48",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
