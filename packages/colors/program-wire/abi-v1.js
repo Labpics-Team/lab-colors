@@ -61,30 +61,31 @@ function invalid(message) {
   throw new ProgramWireError(PROGRAM_WIRE_INVALID_DECLARATION, message);
 }
 
+// Диагностика не преобразует отклонённое значение и не вызывает его hooks.
 function u32Value(value, what) {
   if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
-    invalid(`${what} must be a u32, got ${value}`);
+    invalid(`${what} must be a u32 (received type ${typeof value})`);
   }
   return value >>> 0;
 }
 
 function byteValue(value, what) {
   if (!Number.isInteger(value) || value < 0 || value > 0xff) {
-    invalid(`${what} must be a byte, got ${value}`);
+    invalid(`${what} must be a byte (received type ${typeof value})`);
   }
   return value;
 }
 
 function f64Value(value, what) {
   if (typeof value !== "number" || Number.isNaN(value)) {
-    invalid(`${what} must be a non-NaN number, got ${value}`);
+    invalid(`${what} must be a non-NaN number (received type ${typeof value})`);
   }
   return value;
 }
 
 function memberValue(value, allowed, what) {
   if (!allowed.includes(value)) {
-    invalid(`${what} must be one of ${allowed.join(", ")}, got ${value}`);
+    invalid(`${what} must be one of ${allowed.join(", ")} (received type ${typeof value})`);
   }
   return value;
 }
@@ -102,18 +103,37 @@ const WCAG22_CRITERIA_V1 = Object.freeze([
   WCAG22_SC1411_GRAPHICAL_OBJECT_V1,
 ]);
 
+// Объявление задаёт индексные элементы массива, а не его переопределяемый
+// iterator. Длина фиксируется до чтения элементов, чтобы snapshot и wire-count
+// описывали один ограниченный набор даже при пользовательском iterator.
+function indexedValues(values, length) {
+  return Array.from({ length }, (_, index) => values[index]);
+}
+
 function candidateList(candidates, what) {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
+  if (!Array.isArray(candidates)) {
     invalid(`${what} must be a non-empty array`);
   }
-  return Array.from(candidates);
+  const length = candidates.length;
+  if (length === 0) {
+    invalid(`${what} must be a non-empty array`);
+  }
+  // Вложенный счётчик имеет тот же wire-limit, что и секция. Проверка до
+  // копирования и чтения элементов сохраняет builder при отказе.
+  if (length > MAX_SECTION_ENTRIES_V1) {
+    throw new ProgramWireError(
+      PROGRAM_WIRE_TOO_MANY_ENTRIES,
+      `${what} exceeds the wire v1 count limit ${MAX_SECTION_ENTRIES_V1}`,
+    );
+  }
+  return indexedValues(candidates, length);
 }
 
 function rgbBytes(rgb, what) {
   if (!Array.isArray(rgb) || rgb.length !== 3) {
     invalid(`${what} must be an [r, g, b] triple`);
   }
-  return Array.from(rgb, (channel, index) => byteValue(channel, `${what}[${index}]`));
+  return indexedValues(rgb, 3).map((channel, index) => byteValue(channel, `${what}[${index}]`));
 }
 
 /** Растущий LE-байтовый буфер: те же представления, что у Rust-стороны. */
@@ -168,7 +188,7 @@ export class ProgramWireBuilderV1 {
 
   section(name) {
     const section = this.sections.get(name);
-    if (section === undefined) invalid(`unknown section ${name}`);
+    if (section === undefined) invalid("unknown section");
     return section;
   }
 
@@ -228,7 +248,7 @@ export class ProgramWireBuilderV1 {
     if (!Array.isArray(releaseBytes) || releaseBytes.length !== 32) {
       invalid("family release must be 32 bytes");
     }
-    const checkedRelease = Array.from(releaseBytes, (byte) => byteValue(byte, "family release byte"));
+    const checkedRelease = indexedValues(releaseBytes, 32).map((byte) => byteValue(byte, "family release byte"));
     const sink = this.entry("families");
     sink.u32(checkedId);
     for (const byte of checkedRelease) sink.u8(byte);
