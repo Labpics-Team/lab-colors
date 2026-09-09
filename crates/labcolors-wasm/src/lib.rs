@@ -138,9 +138,7 @@ fn to_program_js_error(
 // а u64::try_from дополнительно проверяет, что bigint не потерял старшие биты.
 fn checked_u32(value: JsValue) -> Option<u32> {
     let number = value.as_f64()?;
-    if number.is_finite()
-        && number.fract() == 0.0
-        && (0.0..=f64::from(u32::MAX)).contains(&number)
+    if number.is_finite() && number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number)
     {
         Some(number as u32)
     } else {
@@ -500,7 +498,10 @@ mod browser_tests {
         assert_eq!(snapshot.state(), "ready");
         assert_eq!(snapshot.output_count(), 1);
         assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
-        assert_eq!(snapshot.output_rgb(0.into()).unwrap().as_ref(), &[20, 20, 20]);
+        assert_eq!(
+            snapshot.output_rgb(0.into()).unwrap().as_ref(),
+            &[20, 20, 20]
+        );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
     }
 
@@ -508,7 +509,11 @@ mod browser_tests {
     fn rejected_surface_matrix_does_not_poison_the_next_atomic_update() {
         let mut runtime =
             compile_program_wire(&reference_wire(), 7.into()).expect("canonical wire");
-        assert!(runtime.update_observed(1_u64.into(), &[1], &[255, 255], 1.into()).is_err());
+        assert!(
+            runtime
+                .update_observed(1_u64.into(), &[1], &[255, 255], 1.into())
+                .is_err()
+        );
 
         let snapshot = runtime
             .update_observed(1_u64.into(), &[1], &[255, 255, 255], 1.into())
