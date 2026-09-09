@@ -1,53 +1,36 @@
 # Lab Colors
 
-Production-grade color system with ProgramWire v1 runtime.
+Движок цветовых систем с ProgramWire v1 runtime. Публичный пакет строит и проверяет цветовые Program-графы; конкретное применение результата остаётся у потребителя.
 
-## Quick Start
+## Публичный API
 
-See [packages/colors/README.md](packages/colors/README.md) for the public API contract.
+Установка, исполняемый Quick Start и актуальный контракт публичного API находятся только в [packages/colors/README.md](packages/colors/README.md).
 
-### Installation
+Корневой README намеренно не дублирует API-пример. Так изменение runtime-поверхности имеет одного владельца и не требует синхронно поддерживать второй фрагмент документации.
 
-`ash
-npm install @labpics/colors
-`
+## Архитектурные границы
 
-### Usage
+- ProgramWire v1 — канонический бинарный формат объявления Program-графа.
+- Невалидные декларации и неподдерживаемые состояния завершаются типизированным отказом без silent fallback.
+- Семантика графа принадлежит Core; адаптеры не вводят собственные правила решения.
+- DOM и CSS не принадлежат движку: потребитель материализует только допущенный результат.
+- Научные, продуктовые и инвентаризационные доказательства не подменяют друг друга.
 
-`javascript
-import init, { compileProgramWire } from "@labpics/colors";
+## Разработка
 
-await init();
-const runtime = compileProgramWire(programBytes, 1);
-const snapshot = runtime.update(observed);
-`
+```bash
+cargo test --workspace
+npm --prefix packages/colors test
+```
 
-## Architecture
-
-- **ProgramWire v1**: Deterministic binary format (magic LCPW, version 1)
-- **Typed refusals**: Invalid declarations produce typed errors, not silent coercion
-- **Cross-language parity**: JS builder emits byte-identical output to Rust reference
-- **Fail-closed security**: Family graphs require explicit trust parameters
-
-## Зависимости
-
-labcolors-core имеет ноль рантайм-зависимостей. Проверяемый контракт:
+`labcolors-core` не имеет runtime-зависимостей. Проверка:
 
 ```bash
 cargo tree -p labcolors-core --edges=no-dev
 ```
 
-## Development
+Текущее состояние CI следует читать в GitHub Actions, а не из статической фразы в документации.
 
-`ash
-cargo test --workspace
-npm test
-`
-
-## CI Status
-
-All workflows green on main. See [Actions](https://github.com/Labpics-Team/lab-colors/actions) for live status.
-
-## License
+## Лицензия
 
 MIT
