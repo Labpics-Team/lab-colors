@@ -115,7 +115,7 @@ function candidateList(candidates, what) {
     invalid(`${what} must be a non-empty array`);
   }
   const length = candidates.length;
-  if (length === 0) {
+  if (!Number.isInteger(length) || length <= 0) {
     invalid(`${what} must be a non-empty array`);
   }
   // Вложенный счётчик имеет тот же wire-limit, что и секция. Проверка до
