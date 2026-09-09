@@ -106,15 +106,32 @@ const WCAG22_CRITERIA_V1 = Object.freeze([
 // Объявление задаёт индексные элементы массива, а не его переопределяемый
 // iterator. Длина фиксируется до чтения элементов, чтобы snapshot и wire-count
 // описывали один ограниченный набор даже при пользовательском iterator.
-function indexedValues(values, length) {
-  return Array.from({ length }, (_, index) => values[index]);
+function inputProperty(value, key, what) {
+  try {
+    return value[key];
+  } catch {
+    invalid(`${what} could not be read`);
+  }
+}
+
+function inputArrayLength(values, what) {
+  // Array.isArray тоже бросает TypeError на отозванном Proxy: это отказ входа.
+  let isArray;
+  try {
+    isArray = Array.isArray(values);
+  } catch {
+    invalid(`${what} must be a readable array`);
+  }
+  if (!isArray) invalid(`${what} must be an array`);
+  return inputProperty(values, "length", what);
+}
+
+function indexedValues(values, length, what) {
+  return Array.from({ length }, (_, index) => inputProperty(values, index, what));
 }
 
 function candidateList(candidates, what) {
-  if (!Array.isArray(candidates)) {
-    invalid(`${what} must be a non-empty array`);
-  }
-  const length = candidates.length;
+  const length = inputArrayLength(candidates, what);
   if (!Number.isInteger(length) || length <= 0) {
     invalid(`${what} must be a non-empty array`);
   }
@@ -126,14 +143,14 @@ function candidateList(candidates, what) {
       `${what} exceeds the wire v1 count limit ${MAX_SECTION_ENTRIES_V1}`,
     );
   }
-  return indexedValues(candidates, length);
+  return indexedValues(candidates, length, what);
 }
 
 function rgbBytes(rgb, what) {
-  if (!Array.isArray(rgb) || rgb.length !== 3) {
+  if (inputArrayLength(rgb, what) !== 3) {
     invalid(`${what} must be an [r, g, b] triple`);
   }
-  return indexedValues(rgb, 3).map((channel, index) => byteValue(channel, `${what}[${index}]`));
+  return indexedValues(rgb, 3, what).map((channel, index) => byteValue(channel, `${what}[${index}]`));
 }
 
 /** Растущий LE-байтовый буфер: те же представления, что у Rust-стороны. */
@@ -225,9 +242,9 @@ export class ProgramWireBuilderV1 {
           invalid(`candidate[${index}] must be an object`);
         }
         return {
-          id: u32Value(candidate.id, "candidate[" + index + "] id"),
-          rgb: rgbBytes(candidate.rgb, "candidate[" + index + "] rgb"),
-          opacity: f64Value(candidate.opacity, "candidate[" + index + "] opacity"),
+          id: u32Value(inputProperty(candidate, "id", "candidate id"), "candidate[" + index + "] id"),
+          rgb: rgbBytes(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
+          opacity: f64Value(inputProperty(candidate, "opacity", "candidate opacity"), "candidate[" + index + "] opacity"),
         };
       },
     );
@@ -245,10 +262,10 @@ export class ProgramWireBuilderV1 {
 
   family(id, releaseBytes) {
     const checkedId = u32Value(id, "family id");
-    if (!Array.isArray(releaseBytes) || releaseBytes.length !== 32) {
+    if (inputArrayLength(releaseBytes, "family release") !== 32) {
       invalid("family release must be 32 bytes");
     }
-    const checkedRelease = indexedValues(releaseBytes, 32).map((byte) => byteValue(byte, "family release byte"));
+    const checkedRelease = indexedValues(releaseBytes, 32, "family release").map((byte) => byteValue(byte, "family release byte"));
     const sink = this.entry("families");
     sink.u32(checkedId);
     for (const byte of checkedRelease) sink.u8(byte);
