@@ -23,7 +23,9 @@ cargo test --workspace
 npm --prefix packages/colors test
 ```
 
-`labcolors-core` не имеет runtime-зависимостей. Проверка:
+## Зависимости
+
+У `labcolors-core` в конфигурации по умолчанию ноль рантайм-зависимостей. Необязательная capability `ext09-extractor` имеет отдельные зависимости, объявленные в [манифесте Core](crates/labcolors-core/Cargo.toml). Проверка конфигурации по умолчанию:
 
 ```bash
 cargo tree -p labcolors-core --edges=no-dev
