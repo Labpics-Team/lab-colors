@@ -255,7 +255,7 @@
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
   "packages/colors/program-wire/abi-v1.js": "1e1066ec81326b590cdc55b9a040d1457436871b",
   "packages/colors/sink.js": "f3c1a5b7b376504360e6ce95e15288c2b2960745",
-  "packages/colors/smoke.consumer.ts": "d73036580de8e794baec7a4d510d07211022ebb5",
+  "packages/colors/smoke.consumer.ts": "8e00fc824e50386d8ea5c8e0a7919b75446c192e",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
   "packages/colors/test/capability-manifest.test.mjs": "b82cad8968e3142a5a002be4924f27330a20fc32",
   "packages/colors/test/data/oklch-core-vectors.txt": "aed4ec31159ef7b6886e1316266aa9646370aa40",
@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "7f3c7f62b2b339849d1bcc261265ed9c70f1984e3eecf26fb914de108a22a298",
+ "record_sha256": "072034d074b9343288372352896c0ffb429ed89820727f153fcadb55b9006b01",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
