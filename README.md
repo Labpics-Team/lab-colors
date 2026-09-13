@@ -1,53 +1,40 @@
 # Lab Colors
 
-Production-grade color system with ProgramWire v1 runtime.
+Движок цветовых систем с ProgramWire v1 runtime. Публичный пакет строит и проверяет цветовые Program-графы; конкретное применение результата остаётся у потребителя.
 
-## Quick Start
+## Публичный API
 
-See [packages/colors/README.md](packages/colors/README.md) for the public API contract.
+Установка, исполняемый Quick Start и актуальный контракт публичного API находятся только в [packages/colors/README.md](packages/colors/README.md).
 
-### Installation
+Первый сценарий: установите пакет по инструкции и выполните [«Первый маршрут»](packages/colors/README.md#первый-маршрут), чтобы получить проверенный цвет одного output. Команды и код сценария поддерживаются только в этом разделе.
 
-`ash
-npm install @labpics/colors
-`
+Корневой README намеренно не дублирует API-пример. Так изменение runtime-поверхности имеет одного владельца и не требует синхронно поддерживать второй фрагмент документации.
 
-### Usage
+## Архитектурные границы
 
-`javascript
-import init, { compileProgramWire } from "@labpics/colors";
+- ProgramWire v1 — канонический бинарный формат объявления Program-графа.
+- Невалидные декларации и неподдерживаемые состояния завершаются типизированным отказом без silent fallback.
+- Семантика графа принадлежит Core; адаптеры не вводят собственные правила решения.
+- DOM и CSS не принадлежат движку: потребитель материализует только допущенный результат.
+- Научные, продуктовые и инвентаризационные доказательства не подменяют друг друга.
 
-await init();
-const runtime = compileProgramWire(programBytes, 1);
-const snapshot = runtime.update(observed);
-`
+## Разработка
 
-## Architecture
-
-- **ProgramWire v1**: Deterministic binary format (magic LCPW, version 1)
-- **Typed refusals**: Invalid declarations produce typed errors, not silent coercion
-- **Cross-language parity**: JS builder emits byte-identical output to Rust reference
-- **Fail-closed security**: Family graphs require explicit trust parameters
+```bash
+cargo test --workspace
+npm --prefix packages/colors test
+```
 
 ## Зависимости
 
-labcolors-core имеет ноль рантайм-зависимостей. Проверяемый контракт:
+У `labcolors-core` в конфигурации по умолчанию ноль рантайм-зависимостей. Необязательная capability `ext09-extractor` имеет отдельные зависимости, объявленные в [манифесте Core](crates/labcolors-core/Cargo.toml). Проверка конфигурации по умолчанию:
 
 ```bash
 cargo tree -p labcolors-core --edges=no-dev
 ```
 
-## Development
+Текущее состояние CI следует читать в [GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml), а не из статической фразы в документации.
 
-`ash
-cargo test --workspace
-npm test
-`
-
-## CI Status
-
-All workflows green on main. See [Actions](https://github.com/Labpics-Team/lab-colors/actions) for live status.
-
-## License
+## Лицензия
 
 MIT
