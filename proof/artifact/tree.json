@@ -261,7 +261,7 @@
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/program-error-admission.test.mjs": "ec00c0884c3147822ad6d2168974a1410f8238da",
   "packages/colors/test/program-runtime-browser-harness.test.mjs": "653d5f153a1af45f2f546d53838955506cc09294",
-  "packages/colors/test/program-scalar-admission.test.mjs": "f53412e68e4f11e5ddc2fe3524cc44d4ec1fba96",
+  "packages/colors/test/program-scalar-admission.test.mjs": "9d36e2196accfa3ea3d959bba9b6016999a35c49",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
   "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
   "packages/colors/test/program-wire.test.mjs": "d06cce8499a306390adc4a33a6d8e2e190b02e56",
@@ -452,7 +452,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "3870a9ca3157f0fc5ff3b40960f09a5b348fc72a510630e29d4365973be8ca69",
+ "record_sha256": "ace16e27c847e82628e8e91ec06da9470fc04acc64875bbd21e587bcd13631e0",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

@@ -11,7 +11,7 @@ const wire = new ProgramWireBuilderV1()
   .solidPaint(41, 21).inputSurface(51, 31).sourceOverOccurrence(61, 41, 51, 64, 0.2, 1)
   .presentationRoot(71, 61).presentationTarget(71, 61)
   .wcag22VisibleUnary(true, 81, 61, 3).output(91, 41).finish();
-const observe = (runtime, revision, count = 1) => runtime.updateObserved(
+const observe = (runtime, revision, count) => runtime.updateObserved(
   revision, new Uint32Array([1]), new Uint8Array([255, 255, 255]), count,
 );
 const read = (snapshot) => ({
@@ -50,6 +50,20 @@ const invalidRevisions = [
   ["undefined", undefined], ["symbol", Symbol("revision")],
 ];
 
+test("observation fixture forwards scalar inputs without defaults or coercion", () => {
+  for (const value of [...invalidNumbers.map(([, value]) => value), 0, 1, 0xffff_ffff]) {
+    const calls = [];
+    const runtime = { updateObserved(...args) { calls.push(args); } };
+    observe(runtime, value, value);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].length, 4);
+    assert.equal(calls[0][0], value);
+    assert.equal(calls[0][3], value);
+    assert.deepEqual([...calls[0][1]], [1]);
+    assert.deepEqual([...calls[0][2]], [255, 255, 255]);
+  }
+});
+
 for (const [label, value] of invalidNumbers) {
   test(`compile: ${label} stream id is not coerced`, () => {
     rejects(() => compileProgramWire(wire, value), programError("program_instantiate", "compileProgramWire"));
@@ -60,13 +74,13 @@ for (const [label, value] of invalidNumbers) {
       let previous;
       let retry;
       try {
-        previous = observe(runtime, 1n);
+        previous = observe(runtime, 1n, 1);
         rejects(
           () => operation === "updateObserved" ? observe(runtime, 2n, value) : runtime.updateUnknown(2n, value),
           programError("program_update", operation),
         );
         assert.deepEqual(read(previous), expected);
-        retry = observe(runtime, 2n);
+        retry = observe(runtime, 2n, 1);
         assert.deepEqual(read(retry), expected);
       } finally {
         retry?.free();
@@ -84,13 +98,13 @@ for (const [label, revision] of invalidRevisions) {
       let previous;
       let retry;
       try {
-        previous = observe(runtime, 1n);
+        previous = observe(runtime, 1n, 1);
         rejects(
-          () => operation === "updateObserved" ? observe(runtime, revision) : runtime.updateUnknown(revision, 1),
+          () => operation === "updateObserved" ? observe(runtime, revision, 1) : runtime.updateUnknown(revision, 1),
           programError("program_update", operation),
         );
         assert.deepEqual(read(previous), expected);
-        retry = observe(runtime, 2n);
+        retry = observe(runtime, 2n, 1);
         assert.deepEqual(read(retry), expected);
       } finally {
         retry?.free();
@@ -104,7 +118,7 @@ for (const [label, revision] of invalidRevisions) {
 for (const method of ["outputSlot", "outputRgb", "outputOpacity"]) {
   test(`${method}: invalid indices cannot alias output zero`, () => {
     const runtime = compileProgramWire(wire, 1);
-    const snapshot = observe(runtime, 1n);
+    const snapshot = observe(runtime, 1n, 1);
     try {
       for (const value of [-0.5, 0.5, 2 ** 32, -(2 ** 32), "0", null, false, NaN]) {
         assert.throws(() => snapshot[method](value), Error);
@@ -122,12 +136,12 @@ for (const field of ["stream", "observed-revision", "unknown-revision", "surface
     let calls = 0;
     const value = { [Symbol.toPrimitive]() { calls += 1; return field.includes("revision") ? 2n : 1; } };
     const runtime = compileProgramWire(wire, 1);
-    const previous = observe(runtime, 1n);
+    const previous = observe(runtime, 1n, 1);
     let retry;
     try {
       const operations = {
         stream: () => compileProgramWire(wire, value),
-        "observed-revision": () => observe(runtime, value),
+        "observed-revision": () => observe(runtime, value, 1),
         "unknown-revision": () => runtime.updateUnknown(value, 1),
         "surface-count": () => observe(runtime, 2n, value),
         reason: () => runtime.updateUnknown(2n, value),
@@ -136,7 +150,7 @@ for (const field of ["stream", "observed-revision", "unknown-revision", "surface
       rejects(operations[field], Error);
       assert.equal(calls, 0);
       assert.deepEqual(read(previous), expected);
-      retry = observe(runtime, 2n);
+      retry = observe(runtime, 2n, 1);
       assert.deepEqual(read(retry), expected);
     } finally {
       retry?.free();
@@ -152,12 +166,12 @@ test("exact u32 stream and u64 revision endpoints remain usable", () => {
     const held = [];
     try {
       for (const revision of [0n, (1n << 64n) - 2n, (1n << 64n) - 1n]) {
-        const snapshot = observe(runtime, revision);
+        const snapshot = observe(runtime, revision, 1);
         held.push(snapshot);
         assert.deepEqual(read(snapshot), expected);
       }
       // Настоящий предел автомата не обходится: меньшая ревизия всё ещё ошибка.
-      rejects(() => observe(runtime, 1n), programError("program_update", "updateObserved"));
+      rejects(() => observe(runtime, 1n, 1), programError("program_update", "updateObserved"));
       for (const snapshot of held) assert.deepEqual(read(snapshot), expected);
     } finally {
       for (const snapshot of held.reverse()) snapshot.free();
@@ -168,14 +182,14 @@ test("exact u32 stream and u64 revision endpoints remain usable", () => {
 
 test("unknown with the u32 reason endpoint retains lifecycle semantics", () => {
   const runtime = compileProgramWire(wire, 1);
-  const previous = observe(runtime, 0n);
+  const previous = observe(runtime, 0n, 1);
   let unknown;
   let recovered;
   try {
     unknown = runtime.updateUnknown(1n, 0xffff_ffff);
     assert.equal(unknown.state, "stale");
     assert.deepEqual(read(previous), expected);
-    recovered = observe(runtime, 2n);
+    recovered = observe(runtime, 2n, 1);
     assert.deepEqual(read(recovered), expected);
   } finally {
     recovered?.free();
