@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 449,
+ "file_count": 450,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -256,6 +256,7 @@
   "packages/colors/program-wire/abi-v1.js": "1e1066ec81326b590cdc55b9a040d1457436871b",
   "packages/colors/sink.js": "f3c1a5b7b376504360e6ce95e15288c2b2960745",
   "packages/colors/smoke.consumer.ts": "d73036580de8e794baec7a4d510d07211022ebb5",
+  "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
   "packages/colors/test/capability-manifest.test.mjs": "b82cad8968e3142a5a002be4924f27330a20fc32",
   "packages/colors/test/data/oklch-core-vectors.txt": "aed4ec31159ef7b6886e1316266aa9646370aa40",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
@@ -403,7 +404,7 @@
   "scripts/_regen_receipt_wt.py": "759b8921918d76dfc18a91f240b2e2c8aee673bc",
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
   "scripts/artifact_matrix.py": "240efc32cc7fef61933c2fa3148c8d6b28a2215e",
-  "scripts/atomic-write.mjs": "34b72e0db2fd88ce9367fd12b3e88da2509b9686",
+  "scripts/atomic-write.mjs": "9be42c1a81abf3220c0bd181e9d7b33507b8428d",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
