@@ -1,0 +1,45 @@
+name: FV-01 behavior GREEN patch
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Connect public revalidation to the private authority SSOT
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/labcolors-core/src/program_wire/attached.rs')
+          text = path.read_text()
+          old = '''    /// Atomically publish that the observation is unavailable.\n'''
+          if text.count(old) != 1:
+              raise SystemExit('public update anchor changed')
+          method = '''    /// Revalidate a previously minted authority against this exact live attachment.\n    ///\n    /// Validation is ordered and typed: Program identity, owner generation,\n    /// host binding epoch, then published revision. No detached snapshot can\n    /// satisfy this check.\n    pub fn validate_authority(\n        &self,\n        authority: &AttachedMaterializationAuthorityV1,\n    ) -> Result<(), AttachedMaterializationAuthorityErrorV1> {\n        validate_authority(\n            &self.attachment,\n            &self.owner_pin,\n            self.content_identity,\n            authority,\n        )\n    }\n\n'''
+          text = text.replace(old, method + old, 1)
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fv01-behavior-green.yml
+      - name: Commit behavior GREEN patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/labcolors-core/src/program_wire/attached.rs crates/labcolors-core/src/program_wire/attached_tests.rs .github/workflows/fv01-behavior-green.yml
+          git diff --cached --check
+          git commit -m "feat(fv-01): expose live authority revalidation"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
