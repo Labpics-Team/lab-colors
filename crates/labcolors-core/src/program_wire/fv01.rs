@@ -144,7 +144,7 @@ impl AttachedMaterializationAuthorityV1 {
     /// Конструктор authority обязан отвергать `Empty`, поэтому эта проекция
     /// total для любого публично достижимого значения capability.
     #[must_use]
-    pub const fn composite(&self) -> Srgb8 {
+    pub fn composite(&self) -> Srgb8 {
         match self.point_domain {
             crate::appearance::ExactFinalOwnedPointDomainV1::Singleton { visible } => {
                 Srgb8::new(visible)
