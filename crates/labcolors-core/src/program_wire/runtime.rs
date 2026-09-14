@@ -259,6 +259,18 @@ impl ProgramScenarioV1 {
     pub fn new(id: u32, surfaces: Vec<crate::Srgb8>) -> Self {
         Self { id, surfaces }
     }
+
+    /// Opaque scenario provenance ID.
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Surface values in compiled schema order.
+    #[must_use]
+    pub fn surfaces(&self) -> &[crate::Srgb8] {
+        &self.surfaces
+    }
 }
 
 /// Lifecycle-РєР»Р°СЃСЃ РѕРґРЅРѕРіРѕ РѕРїСѓР±Р»РёРєРѕРІР°РЅРЅРѕРіРѕ snapshot.
