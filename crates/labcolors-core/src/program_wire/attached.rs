@@ -7,7 +7,7 @@
 use crate::family_artifact::FamilyArtifactBundleV2;
 use crate::program::attachment::fv01::{
     AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,
-    mint_authorities, owner_pin, validate_authority,
+    mint_authorities, owner_pin, validate_authority as validate_attached_authority,
 };
 use crate::program::attachment::{
     AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentUpdateErrorV1,
@@ -329,6 +329,23 @@ where
         })
     }
 
+    /// Revalidate a previously minted authority against this exact live
+    /// attachment, Program generation, host binding epoch and committed revision.
+    ///
+    /// This is the only public freshness check for owned authority values. The
+    /// validation rules remain owned by the private attachment implementation.
+    pub fn validate_authority(
+        &self,
+        authority: &AttachedMaterializationAuthorityV1,
+    ) -> Result<(), AttachedMaterializationAuthorityErrorV1> {
+        validate_attached_authority(
+            &self.attachment,
+            &self.owner_pin,
+            self.content_identity,
+            authority,
+        )
+    }
+
     fn apply_update(
         &mut self,
         update: UpdateV1<'_>,
@@ -355,7 +372,7 @@ where
                 return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
             }
             for authority in &authorities {
-                validate_authority(
+                validate_attached_authority(
                     &self.attachment,
                     &self.owner_pin,
                     self.content_identity,
