@@ -7,8 +7,9 @@ use crate::program::wire::ProgramWireBuilderV1;
 use super::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1, AttachedPointSinkErrorV1,
     AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1, AttachedProgramEmissionBindingV1,
-    AttachedProgramPresentationBindingV1, AttachedProgramUpdateErrorV1, AttachedProgramUpdateStateV1,
-    ProgramScenarioV1, RendererProvenanceV1, compile_attached_program_wire_v1,
+    AttachedProgramPresentationBindingV1, AttachedProgramUpdateErrorV1,
+    AttachedProgramUpdateStateV1, ProgramScenarioV1, RendererProvenanceV1,
+    compile_attached_program_wire_v1,
 };
 
 const OUTPUT: u32 = 17;
@@ -223,8 +224,14 @@ fn ready_authority_is_bound_to_the_atomic_host_install_and_revoked_on_unknown() 
     assert_eq!(case.composite(), COMPOSITE);
     assert_eq!(authority.adapting_luminance_cd_m2(), 64.0);
     assert_eq!(authority.background_luminance_ratio_yb_yw(), 0.2);
-    assert_eq!(authority.appearance_surround(), AppearanceSurroundV1::Average);
-    assert_eq!(authority.renderer_provenance(), RendererProvenanceV1::Unverified);
+    assert_eq!(
+        authority.appearance_surround(),
+        AppearanceSurroundV1::Average
+    );
+    assert_eq!(
+        authority.renderer_provenance(),
+        RendererProvenanceV1::Unverified
+    );
     assert_eq!(runtime.validate_authority(authority), Ok(()));
 
     {
@@ -320,7 +327,10 @@ fn rejected_host_install_preserves_the_previous_live_authority_and_sequence() {
     };
     assert_eq!(retry.state(), AttachedProgramUpdateStateV1::Ready);
     let new_authority = &retry.authorities()[0];
-    assert_eq!(new_authority.sink_binding_epoch(), old_authority.sink_binding_epoch());
+    assert_eq!(
+        new_authority.sink_binding_epoch(),
+        old_authority.sink_binding_epoch()
+    );
     assert_eq!(new_authority.sink_sequence(), 2);
     assert_eq!(
         runtime.validate_authority(&old_authority),
@@ -378,10 +388,11 @@ fn authority_revalidation_distinguishes_identity_owner_generation_and_binding_ep
         Err(_) => panic!("same bytes must compile again"),
     };
     let probe_c = HostProbe::default();
-    let runtime_c = match same_identity_new_owner.attach(102, &emissions, &presentations, probe_c.host()) {
-        Ok(value) => value,
-        Err(_) => panic!("new owner attachment must bind"),
-    };
+    let runtime_c =
+        match same_identity_new_owner.attach(102, &emissions, &presentations, probe_c.host()) {
+            Ok(value) => value,
+            Err(_) => panic!("new owner attachment must bind"),
+        };
     assert_eq!(
         runtime_c.validate_authority(authority),
         Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration)
