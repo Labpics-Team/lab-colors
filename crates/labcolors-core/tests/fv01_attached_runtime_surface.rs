@@ -6,8 +6,8 @@
 
 use labcolors_core::program_wire::{
     AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1, AttachedProgramCompileErrorV1,
-    AttachedProgramEmissionBindingV1, AttachedProgramPresentationBindingV1, AttachedProgramV1,
-    AttachedProgramUpdateStateV1, CompiledAttachedProgramV1, ProgramScenarioV1,
+    AttachedProgramEmissionBindingV1, AttachedProgramPresentationBindingV1,
+    AttachedProgramUpdateStateV1, AttachedProgramV1, CompiledAttachedProgramV1, ProgramScenarioV1,
     compile_attached_program_wire_v1,
 };
 
