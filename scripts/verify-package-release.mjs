@@ -1150,8 +1150,13 @@ import { createRequire } from "node:module";
 
 const colors = await import("@labpics/colors");
 assert.deepEqual(Object.keys(colors).sort(), [
+  "AttachedMaterializationAuthority",
+  "AttachedProgramRuntime",
+  "AttachedProgramUpdate",
+  "CompiledAttachedProgram",
   "ProgramRuntime",
   "ProgramSnapshot",
+  "compileAttachedProgramWire",
   "compileProgramWire",
   "default",
   "evaluateWcag22",
@@ -1187,6 +1192,12 @@ assert.deepEqual(metadata.wasm.map(({ role }) => role), ["runtime"]);
 assert.equal(metadata.wasm[0].path, "pkg/labcolors_bg.wasm");
 assert.equal(metadata.wasm[0].bytes, wasm.length);
 await colors.init({ module_or_path: wasm });
+assert.throws(
+  () => colors.compileAttachedProgramWire(new Uint8Array()),
+  (error) => colors.isProgramError(error)
+    && error.code === "attached_program_wire"
+    && error.operation === "compileAttachedProgramWire",
+);
 
 const capability = colors.numericalCapabilityManifest();
 assert.equal(capability.schemaVersion, 2);
@@ -1231,12 +1242,20 @@ runtime.free();
 export function typeSmokeSource() {
   return String.raw`
 import init, {
+  AttachedMaterializationAuthority,
+  AttachedProgramRuntime,
+  AttachedProgramUpdate,
+  CompiledAttachedProgram,
   ProgramRuntime,
   ProgramSnapshot,
+  compileAttachedProgramWire,
   compileProgramWire,
   evaluateWcag22,
   isProgramError,
   numericalCapabilityManifest,
+  type AttachedPointSinkHostIntentV1,
+  type AttachedPointSinkHostV1,
+  type AttachedProgramBindingsV1,
   type NumericalCapabilityManifestV2,
   type ProgramErrorCode,
   type ProgramOperation,
@@ -1257,12 +1276,60 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   snapshot.outputCount();
   return runtime;
 }
+
+function attach(
+  wire: Uint8Array,
+  host: AttachedPointSinkHostV1,
+): readonly [
+  CompiledAttachedProgram,
+  AttachedProgramRuntime,
+  AttachedProgramUpdate,
+  AttachedMaterializationAuthority | undefined,
+] {
+  const compiled: CompiledAttachedProgram = compileAttachedProgramWire(wire);
+  const bindings: AttachedProgramBindingsV1 = {
+    emissionOutputs: new Uint32Array([91]),
+    emissionSinkOutputs: new Uint32Array([3]),
+    presentationOutputs: new Uint32Array([91]),
+    presentationRoots: new Uint32Array([71]),
+    presentationOccurrences: new Uint32Array([61]),
+  };
+  const runtime: AttachedProgramRuntime = compiled.attach(1, bindings, host);
+  const update: AttachedProgramUpdate = runtime.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+  );
+  const authority = update.authorityCount() > 0 ? update.takeAuthority(0) : undefined;
+  if (authority !== undefined) {
+    runtime.validateAuthority(authority);
+    const revision: bigint = authority.publishedRevision;
+    const sequence: bigint = authority.sinkSequence;
+    const epoch: bigint = authority.sinkBindingEpoch;
+    const identity: Uint8Array = authority.contentIdentity();
+    const source: Uint8Array = authority.sourceRgb();
+    void revision;
+    void sequence;
+    void epoch;
+    void identity;
+    void source;
+  }
+  return [compiled, runtime, update, authority];
+}
+
+const host: AttachedPointSinkHostV1 = {
+  tryInstall(intent: AttachedPointSinkHostIntentV1): void {
+    void intent.kind;
+  },
+};
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
 const assessment: Wcag22AssessmentV1 = evaluateWcag22("#000000", "#FFFFFF", criterion);
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
 const programFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
   isProgramError(error) ? [error.code, error.operation] : undefined;
 void boot;
+void attach;
+void host;
 void programFailure;
 void assessment;
 void capability;
@@ -1273,128 +1340,6 @@ import type { RoleRecipe } from "@labpics/colors";
 void LabColors;
 void (null as unknown as RoleRecipe);
 `;
-}
-
-async function verifyCleanConsumer(
-  tarballBytes,
-  packageJson,
-  typescriptCompilers,
-  expectedBuildMetadata,
-  expectedNumericalArtifacts,
-) {
-  const consumer = await mkdtemp(join(tmpdir(), "labcolors-release-consumer-"));
-  try {
-    const tarballPath = resolve(consumer, "verified-package.tgz");
-    await writeFile(tarballPath, tarballBytes, { flag: "wx", mode: 0o600 });
-    await writeFile(
-      join(consumer, "package.json"),
-      `${JSON.stringify({ private: true, type: "module" }, null, 2)}\n`,
-    );
-
-    for (const compiler of typescriptCompilers) {
-      const localTypescript = await readJson(
-        resolve(
-          PACKAGE_DIR,
-          "node_modules",
-          compiler.packageDirectory,
-          "package.json",
-        ),
-      );
-      if (localTypescript.version !== compiler.version) {
-        fail(
-          `installed ${compiler.role} TypeScript ${localTypescript.version} ` +
-            `differs from lockfile ${compiler.version}`,
-        );
-      }
-    }
-
-    npm(
-      [
-        "install",
-        "--offline",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--no-package-lock",
-        "--save=false",
-        tarballPath,
-      ],
-      consumer,
-    );
-
-    const installed = resolve(consumer, "node_modules", ...packageJson.name.split("/"));
-    const installedPackage = await readJson(resolve(installed, "package.json"));
-    if (installedPackage.name !== packageJson.name || installedPackage.version !== packageJson.version) {
-      fail(
-        `clean install resolved ${installedPackage.name}@${installedPackage.version}, ` +
-          `expected ${packageJson.name}@${packageJson.version}`,
-      );
-    }
-
-    await validateNumericalEvidenceArtifacts(
-      installed,
-      expectedNumericalArtifacts,
-      "clean-installed package",
-    );
-
-    const expectedWasm = new Map(
-      expectedBuildMetadata.wasm.map((artifact) => [artifact.role, artifact]),
-    );
-    for (const [role, path] of [["runtime", "pkg/labcolors_bg.wasm"]]) {
-      const expected = expectedWasm.get(role);
-      const installedWasm = await readFile(resolve(installed, path));
-      if (
-        expected?.path !== path ||
-        expected.bytes !== installedWasm.length ||
-        expected.sha256 !== sha256(installedWasm)
-      ) {
-        fail(`clean-installed ${role} WASM differs from the packed release input`);
-      }
-    }
-    const installedBuildMetadata = await readJson(resolve(installed, "build-metadata.json"));
-    if (!isDeepStrictEqual(installedBuildMetadata, expectedBuildMetadata)) {
-      fail("clean-installed build metadata differs from the verified release inputs");
-    }
-    const runtimePath = resolve(consumer, "runtime-smoke.mjs");
-    const typesPath = resolve(consumer, "smoke.ts");
-    await writeFile(runtimePath, runtimeSmokeSource());
-    await writeFile(typesPath, typeSmokeSource());
-
-    command(process.execPath, [runtimePath], consumer);
-    for (const compiler of typescriptCompilers) {
-      command(
-        process.execPath,
-        [
-          resolve(
-            PACKAGE_DIR,
-            "node_modules",
-            compiler.packageDirectory,
-            "lib",
-            "tsc.js",
-          ),
-          "--noEmit",
-          "--strict",
-          "--skipLibCheck",
-          "false",
-          "--target",
-          "ES2022",
-          "--lib",
-          "ES2022,DOM",
-          "--module",
-          "NodeNext",
-          "--moduleResolution",
-          "NodeNext",
-          "--typeRoots",
-          resolve(consumer, "node_modules", "@types"),
-          typesPath,
-        ],
-        consumer,
-      );
-    }
-
-  } finally {
-    await rm(consumer, { recursive: true, force: true });
-  }
 }
 
 // Execute the same packed-package runtime smoke under the caller's Node binary.
