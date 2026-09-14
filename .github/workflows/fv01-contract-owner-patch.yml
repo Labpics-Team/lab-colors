@@ -21,148 +21,29 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
+          from base64 import b64decode
           from pathlib import Path
-
+          decode = lambda value: b64decode(value).decode()
           path = Path('crates/labcolors-core/src/program/attachment/fv01.rs')
           text = path.read_text()
-
-          old_imports = '''use crate::Srgb8;
-use crate::appearance::{EncodedPointPaintV1, ExactFinalOwnedPointDomainV1};
-use crate::program::{
-    AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,
-};
-use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
-'''
-          new_imports = '''use crate::program::{AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1};
-use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
-use crate::program_wire::{
-    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
-    AttachedMaterializationCaseProofV1, AttachedPointSinkAdmissionErrorV1,
-    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
-    AttachedPointSinkHostV1,
-};
-'''
+          old_imports = decode('dXNlIGNyYXRlOjpTcmdiODsKdXNlIGNyYXRlOjphcHBlYXJhbmNlOjp7RW5jb2RlZFBvaW50UGFpbnRWMSwgRXhhY3RGaW5hbE93bmVkUG9pbnREb21haW5WMX07CnVzZSBjcmF0ZTo6cHJvZ3JhbTo6ewogICAgQXBwZWFyYW5jZUNvbnRleHRWMSwgQ29udGVudElkZW50aXR5VjksIE9jY3VycmVuY2VJZFYxLCBQcmVzZW50YXRpb25Sb290SWRWMSwgU3Vycm91bmRWMSwKfTsKdXNlIGNyYXRlOjpwcm9ncmFtX3Nlc3Npb246OntDb3JlUHJvZ3JhbUV2YWx1YXRvcnNWMSwgUHJvZ3JhbU93bmVyTGVhc2VWMX07Cg==')
+          new_imports = decode('dXNlIGNyYXRlOjpwcm9ncmFtOjp7QXBwZWFyYW5jZUNvbnRleHRWMSwgQ29udGVudElkZW50aXR5VjksIE9jY3VycmVuY2VJZFYxfTsKdXNlIGNyYXRlOjpwcm9ncmFtX3Nlc3Npb246OntDb3JlUHJvZ3JhbUV2YWx1YXRvcnNWMSwgUHJvZ3JhbU93bmVyTGVhc2VWMX07CnVzZSBjcmF0ZTo6cHJvZ3JhbV93aXJlOjp7CiAgICBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjEsIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5VjEsCiAgICBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkNhc2VQcm9vZlYxLCBBdHRhY2hlZFBvaW50U2lua0FkbWlzc2lvbkVycm9yVjEsCiAgICBBdHRhY2hlZFBvaW50U2lua0Vycm9yVjEsIEF0dGFjaGVkUG9pbnRTaW5rSG9zdEludGVudFYxLCBBdHRhY2hlZFBvaW50U2lua0hvc3RQYXRjaEVudHJ5VjEsCiAgICBBdHRhY2hlZFBvaW50U2lua0hvc3RWMSwKfTsK')
           if text.count(old_imports) != 1:
               raise SystemExit('attachment public-contract import anchor changed')
           text = text.replace(old_imports, new_imports, 1)
-
-          start_marker = '/// One complete host patch entry after compiler admission.\n'
-          end_marker = 'pub(crate) type AttachedProgramAttachmentV1<H> =\n'
-          start = text.find(start_marker)
-          end = text.find(end_marker)
-          if start < 0 or end < 0 or end <= start:
+          start = text.find('/// One complete host patch entry after compiler admission.\n')
+          end = text.find('pub(crate) type AttachedProgramAttachmentV1<H> =\n')
+          if start < 0 or end <= start:
               raise SystemExit('attachment public-contract range anchors changed')
           text = text[:start] + text[end:]
-
           mint_start = text.find('pub(crate) fn mint_authorities(\n')
           validate_start = text.find('pub(crate) fn validate_authority<W>(\n')
-          if mint_start < 0 or validate_start < 0 or validate_start <= mint_start:
+          if mint_start < 0 or validate_start <= mint_start:
               raise SystemExit('attachment mint anchors changed')
-          new_mint = '''pub(crate) fn mint_authorities(
-    commit: AttachmentCommitV1<'_, AttachedPointSinkOutputIdV1>,
-    owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-) -> Result<Vec<AttachedMaterializationAuthorityV1>, AttachedMaterializationAuthorityErrorV1> {
-    let render_outputs = commit.render_outputs();
-    let mut authorities = Vec::new();
-    authorities
-        .try_reserve(render_outputs.len())
-        .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
-
-    for render in render_outputs {
-        authorities.push(mint_render_output_authority(render, owner_pin)?);
-    }
-    Ok(authorities)
-}
-
-fn mint_render_output_authority(
-    render: AttachedRenderOutputV1<'_, AttachedPointSinkOutputIdV1>,
-    owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-) -> Result<AttachedMaterializationAuthorityV1, AttachedMaterializationAuthorityErrorV1> {
-    let certificate = render.certificate();
-    let published = render.published_stamp();
-    if certificate.observation().revision() != published.revision() {
-        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
-    }
-
-    let content_identity = certificate.content_identity();
-    let compiled = render.patch.presentation.compiled;
-    let mut cases = Vec::new();
-    for causal in certificate
-        .inner
-        .point_causal_certificates()
-        .filter(|causal| {
-            causal.presentation_root().value() == render.root().value()
-                && causal.target().value() == render.occurrence().value()
-        })
-    {
-        if causal.content_identity().as_bytes() != content_identity.as_bytes() {
-            return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
-        }
-        if causal.observation().revision().value() != published.revision() {
-            return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
-        }
-        if causal.modeled_terminal_occurrence() != compiled.terminal() {
-            return Err(AttachedMaterializationAuthorityErrorV1::NonTerminalRoot);
-        }
-        cases
-            .try_reserve(1)
-            .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
-        cases.push(AttachedMaterializationCaseProofV1::from_domain(
-            causal.case_index(),
-            causal.domain(),
-        )?);
-    }
-    if cases.is_empty() {
-        return Err(AttachedMaterializationAuthorityErrorV1::MissingExactPointAbsenceProof);
-    }
-
-    let sink_stamp = published.sink_stamp();
-    AttachedMaterializationAuthorityV1::from_attached_parts(
-        content_identity,
-        published.revision(),
-        sink_stamp,
-        sink_stamp.binding_epoch().0.get(),
-        render.root(),
-        render.occurrence(),
-        OccurrenceIdV1::from_core(compiled.terminal()),
-        AppearanceContextV1::from_core(compiled.terminal_context()),
-        render.paint(),
-        cases.into_boxed_slice(),
-        owner_pin.clone(),
-    )
-}
-
-'''
+          new_mint = decode('cHViKGNyYXRlKSBmbiBtaW50X2F1dGhvcml0aWVzKAogICAgY29tbWl0OiBBdHRhY2htZW50Q29tbWl0VjE8J18sIEF0dGFjaGVkUG9pbnRTaW5rT3V0cHV0SWRWMT4sCiAgICBvd25lcl9waW46ICZQcm9ncmFtT3duZXJMZWFzZVYxPENvcmVQcm9ncmFtRXZhbHVhdG9yc1YxPiwKKSAtPiBSZXN1bHQ8VmVjPEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5VjE+LCBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE+IHsKICAgIGxldCByZW5kZXJfb3V0cHV0cyA9IGNvbW1pdC5yZW5kZXJfb3V0cHV0cygpOwogICAgbGV0IG11dCBhdXRob3JpdGllcyA9IFZlYzo6bmV3KCk7CiAgICBhdXRob3JpdGllcwogICAgICAgIC50cnlfcmVzZXJ2ZShyZW5kZXJfb3V0cHV0cy5sZW4oKSkKICAgICAgICAubWFwX2Vycih8X3wgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpSZXNvdXJjZUV4aGF1c3RlZCk/OwoKICAgIGZvciByZW5kZXIgaW4gcmVuZGVyX291dHB1dHMgewogICAgICAgIGF1dGhvcml0aWVzLnB1c2gobWludF9yZW5kZXJfb3V0cHV0X2F1dGhvcml0eShyZW5kZXIsIG93bmVyX3Bpbik/KTsKICAgIH0KICAgIE9rKGF1dGhvcml0aWVzKQp9CgpmbiBtaW50X3JlbmRlcl9vdXRwdXRfYXV0aG9yaXR5KAogICAgcmVuZGVyOiBBdHRhY2hlZFJlbmRlck91dHB1dFYxPCdfLCBBdHRhY2hlZFBvaW50U2lua091dHB1dElkVjE+LAogICAgb3duZXJfcGluOiAmUHJvZ3JhbU93bmVyTGVhc2VWMTxDb3JlUHJvZ3JhbUV2YWx1YXRvcnNWMT4sCikgLT4gUmVzdWx0PEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5VjEsIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMT4gewogICAgbGV0IGNlcnRpZmljYXRlID0gcmVuZGVyLmNlcnRpZmljYXRlKCk7CiAgICBsZXQgcHVibGlzaGVkID0gcmVuZGVyLnB1Ymxpc2hlZF9zdGFtcCgpOwogICAgaWYgY2VydGlmaWNhdGUub2JzZXJ2YXRpb24oKS5yZXZpc2lvbigpICE9IHB1Ymxpc2hlZC5yZXZpc2lvbigpIHsKICAgICAgICByZXR1cm4gRXJyKEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMTo6UHVibGlzaGVkUmV2aXNpb25NaXNtYXRjaCk7CiAgICB9CgogICAgbGV0IGNvbnRlbnRfaWRlbnRpdHkgPSBjZXJ0aWZpY2F0ZS5jb250ZW50X2lkZW50aXR5KCk7CiAgICBsZXQgY29tcGlsZWQgPSByZW5kZXIucGF0Y2gucHJlc2VudGF0aW9uLmNvbXBpbGVkOwogICAgbGV0IG11dCBjYXNlcyA9IFZlYzo6bmV3KCk7CiAgICBmb3IgY2F1c2FsIGluIGNlcnRpZmljYXRlCiAgICAgICAgLmlubmVyCiAgICAgICAgLnBvaW50X2NhdXNhbF9jZXJ0aWZpY2F0ZXMoKQogICAgICAgIC5maWx0ZXIofGNhdXNhbHwgewogICAgICAgICAgICBjYXVzYWwucHJlc2VudGF0aW9uX3Jvb3QoKS52YWx1ZSgpID09IHJlbmRlci5yb290KCkudmFsdWUoKQogICAgICAgICAgICAgICAgJiYgY2F1c2FsLnRhcmdldCgpLnZhbHVlKCkgPT0gcmVuZGVyLm9jY3VycmVuY2UoKS52YWx1ZSgpCiAgICAgICAgfSkKICAgIHsKICAgICAgICBpZiBjYXVzYWwuY29udGVudF9pZGVudGl0eSgpLmFzX2J5dGVzKCkgIT0gY29udGVudF9pZGVudGl0eS5hc19ieXRlcygpIHsKICAgICAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE6OlByb2dyYW1JZGVudGl0eU1pc21hdGNoKTsKICAgICAgICB9CiAgICAgICAgaWYgY2F1c2FsLm9ic2VydmF0aW9uKCkucmV2aXNpb24oKS52YWx1ZSgpICE9IHB1Ymxpc2hlZC5yZXZpc2lvbigpIHsKICAgICAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE6OlB1Ymxpc2hlZFJldmlzaW9uTWlzbWF0Y2gpOwogICAgICAgIH0KICAgICAgICBpZiBjYXVzYWwubW9kZWxlZF90ZXJtaW5hbF9vY2N1cnJlbmNlKCkgIT0gY29tcGlsZWQudGVybWluYWwoKSB7CiAgICAgICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpOb25UZXJtaW5hbFJvb3QpOwogICAgICAgIH0KICAgICAgICBjYXNlcwogICAgICAgICAgICAudHJ5X3Jlc2VydmUoMSkKICAgICAgICAgICAgLm1hcF9lcnIofF98IEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMTo6UmVzb3VyY2VFeGhhdXN0ZWQpPzsKICAgICAgICBjYXNlcy5wdXNoKEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQ2FzZVByb29mVjE6OmZyb21fZG9tYWluKAogICAgICAgICAgICBjYXVzYWwuY2FzZV9pbmRleCgpLAogICAgICAgICAgICBjYXVzYWwuZG9tYWluKCksCiAgICAgICAgKT8pOwogICAgfQogICAgaWYgY2FzZXMuaXNfZW1wdHkoKSB7CiAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE6Ok1pc3NpbmdFeGFjdFBvaW50QWJzZW5jZVByb29mKTsKICAgIH0KCiAgICBsZXQgc2lua19zdGFtcCA9IHB1Ymxpc2hlZC5zaW5rX3N0YW1wKCk7CiAgICBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eVYxOjpmcm9tX2F0dGFjaGVkX3BhcnRzKAogICAgICAgIGNvbnRlbnRfaWRlbnRpdHksCiAgICAgICAgcHVibGlzaGVkLnJldmlzaW9uKCksCiAgICAgICAgc2lua19zdGFtcCwKICAgICAgICBzaW5rX3N0YW1wLmJpbmRpbmdfZXBvY2goKS4wLmdldCgpLAogICAgICAgIHJlbmRlci5yb290KCksCiAgICAgICAgcmVuZGVyLm9jY3VycmVuY2UoKSwKICAgICAgICBPY2N1cnJlbmNlSWRWMTo6ZnJvbV9jb3JlKGNvbXBpbGVkLnRlcm1pbmFsKCkpLAogICAgICAgIEFwcGVhcmFuY2VDb250ZXh0VjE6OmZyb21fY29yZShjb21waWxlZC50ZXJtaW5hbF9jb250ZXh0KCkpLAogICAgICAgIHJlbmRlci5wYWludCgpLAogICAgICAgIGNhc2VzLmludG9fYm94ZWRfc2xpY2UoKSwKICAgICAgICBvd25lcl9waW4uY2xvbmUoKSwKICAgICkKfQoK')
           text = text[:mint_start] + new_mint + text[validate_start:]
-
-          old_validate = '''    if authority.content_identity != expected_content_identity {
-        return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
-    }
-    if !authority.owner_pin.same_generation(owner_pin) {
-        return Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration);
-    }
-    let current_stamp = attachment.state.expected_sink_stamp;
-    if authority.sink_stamp.binding_epoch() != current_stamp.binding_epoch() {
-        return Err(AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch);
-    }
-    if attachment.state.committed_revision != Some(authority.published_revision) {
-        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
-    }
-'''
-          new_validate = '''    if authority.stored_content_identity() != expected_content_identity {
-        return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
-    }
-    if !authority.same_owner_generation(owner_pin) {
-        return Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration);
-    }
-    let current_stamp = attachment.state.expected_sink_stamp;
-    if authority.stored_sink_stamp().binding_epoch() != current_stamp.binding_epoch() {
-        return Err(AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch);
-    }
-    if attachment.state.committed_revision != Some(authority.published_revision()) {
-        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
-    }
-'''
+          old_validate = decode('ICAgIGlmIGF1dGhvcml0eS5jb250ZW50X2lkZW50aXR5ICE9IGV4cGVjdGVkX2NvbnRlbnRfaWRlbnRpdHkgewogICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpQcm9ncmFtSWRlbnRpdHlNaXNtYXRjaCk7CiAgICB9CiAgICBpZiAhYXV0aG9yaXR5Lm93bmVyX3Bpbi5zYW1lX2dlbmVyYXRpb24ob3duZXJfcGluKSB7CiAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE6OkZvcmVpZ25Pd25lckdlbmVyYXRpb24pOwogICAgfQogICAgbGV0IGN1cnJlbnRfc3RhbXAgPSBhdHRhY2htZW50LnN0YXRlLmV4cGVjdGVkX3Npbmtfc3RhbXA7CiAgICBpZiBhdXRob3JpdHkuc2lua19zdGFtcC5iaW5kaW5nX2Vwb2NoKCkgIT0gY3VycmVudF9zdGFtcC5iaW5kaW5nX2Vwb2NoKCkgewogICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpGb3JlaWduQmluZGluZ0Vwb2NoKTsKICAgIH0KICAgIGlmIGF0dGFjaG1lbnQuc3RhdGUuY29tbWl0dGVkX3JldmlzaW9uICE9IFNvbWUoYXV0aG9yaXR5LnB1Ymxpc2hlZF9yZXZpc2lvbikgewogICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpQdWJsaXNoZWRSZXZpc2lvbk1pc21hdGNoKTsKICAgIH0K')
+          new_validate = decode('ICAgIGlmIGF1dGhvcml0eS5zdG9yZWRfY29udGVudF9pZGVudGl0eSgpICE9IGV4cGVjdGVkX2NvbnRlbnRfaWRlbnRpdHkgewogICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxOjpQcm9ncmFtSWRlbnRpdHlNaXNtYXRjaCk7CiAgICB9CiAgICBpZiAhYXV0aG9yaXR5LnNhbWVfb3duZXJfZ2VuZXJhdGlvbihvd25lcl9waW4pIHsKICAgICAgICByZXR1cm4gRXJyKEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMTo6Rm9yZWlnbk93bmVyR2VuZXJhdGlvbik7CiAgICB9CiAgICBsZXQgY3VycmVudF9zdGFtcCA9IGF0dGFjaG1lbnQuc3RhdGUuZXhwZWN0ZWRfc2lua19zdGFtcDsKICAgIGlmIGF1dGhvcml0eS5zdG9yZWRfc2lua19zdGFtcCgpLmJpbmRpbmdfZXBvY2goKSAhPSBjdXJyZW50X3N0YW1wLmJpbmRpbmdfZXBvY2goKSB7CiAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eUVycm9yVjE6OkZvcmVpZ25CaW5kaW5nRXBvY2gpOwogICAgfQogICAgaWYgYXR0YWNobWVudC5zdGF0ZS5jb21taXR0ZWRfcmV2aXNpb24gIT0gU29tZShhdXRob3JpdHkucHVibGlzaGVkX3JldmlzaW9uKCkpIHsKICAgICAgICByZXR1cm4gRXJyKEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMTo6UHVibGlzaGVkUmV2aXNpb25NaXNtYXRjaCk7CiAgICB9Cg==')
           if text.count(old_validate) != 1:
               raise SystemExit('attachment authority validation anchor changed')
           text = text.replace(old_validate, new_validate, 1)
