@@ -20,11 +20,11 @@ jobs:
         run: |
           set -euo pipefail
           git rev-parse HEAD > SOURCE_SHA
-          tar --exclude=.git --exclude=source-snapshot.tgz -czf source-snapshot.tgz .
+          tar --exclude=.git -czf "$RUNNER_TEMP/source-snapshot.tgz" .
       - name: Upload exact source snapshot
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: source-snapshot-${{ github.sha }}
-          path: source-snapshot.tgz
+          path: ${{ runner.temp }}/source-snapshot.tgz
           if-no-files-found: error
           retention-days: 1
