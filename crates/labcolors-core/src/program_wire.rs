@@ -9,6 +9,8 @@ mod attached;
 mod attached_tests;
 mod fv01;
 mod runtime;
+#[cfg(test)]
+mod runtime_regression_tests;
 
 pub use attached::*;
 pub use fv01::{
