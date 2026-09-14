@@ -5,7 +5,8 @@
 //! Program wire seam, while the host owns only the synchronous effect port.
 
 use labcolors_core::program_wire::{
-    AttachedMaterializationAuthorityV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
+    AttachedMaterializationAuthorityV1, AttachedMaterializationCaseV1,
+    AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
 };
 
 struct ExternalHost;
@@ -55,6 +56,18 @@ impl AttachedPointSinkHostV1 for ExternalHost {
 fn attached_materialization_authority_is_a_public_opaque_capability() {
     fn accepts_capability(_: &AttachedMaterializationAuthorityV1) {}
     let _ = accepts_capability as fn(&AttachedMaterializationAuthorityV1);
+}
+
+#[test]
+fn one_authority_projects_many_exact_physical_cases_without_minting_more_authorities() {
+    fn accepts_case(_: AttachedMaterializationCaseV1) {}
+    fn visits_cases(authority: &AttachedMaterializationAuthorityV1) {
+        assert_eq!(authority.case_count(), authority.cases().len());
+        for case in authority.cases() {
+            accepts_case(case);
+        }
+    }
+    let _ = visits_cases as fn(&AttachedMaterializationAuthorityV1);
 }
 
 #[test]
