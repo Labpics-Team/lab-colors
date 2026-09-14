@@ -9,6 +9,7 @@ mod runtime;
 
 pub use fv01::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1,
-    AttachedMaterializationAuthorityV1, RendererProvenanceV1,
+    AttachedMaterializationAuthorityV1, AttachedMaterializationCaseV1,
+    RendererProvenanceV1,
 };
 pub use runtime::*;
