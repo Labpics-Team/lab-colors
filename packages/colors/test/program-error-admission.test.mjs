@@ -1,19 +1,50 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, isProgramError } from "../index.js";
+import init, { compileAttachedProgramWire, compileProgramWire, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
-const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"];
-const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
+
+const acceptedPairs = new Set([
+  ...["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"]
+    .map((code) => `${code}\0compileProgramWire`),
+  "program_update\0updateObserved",
+  "program_update\0updateUnknown",
+  ...["attached_program_wire", "attached_program_compile", "attached_root_consumed_downstream", "attached_family_artifacts_required"]
+    .map((code) => `${code}\0compileAttachedProgramWire`),
+  ...["attached_resource_exhausted", "attached_instantiate", "attached_invalid_bindings", "attached_scope_changed", "attached_epoch_exhausted", "attached_attach"]
+    .map((code) => `${code}\0attachAttachedProgram`),
+  ...[
+    "attached_resource_exhausted", "attached_update", "attached_patch_scope_mismatch",
+    "attached_stamp_mismatch", "attached_revision_mismatch", "attached_already_installed",
+    "attached_host", "attached_sink", "attached_internal_invariant", "attached_non_terminal_root",
+    "attached_root_consumed_downstream", "attached_published_revision_mismatch",
+    "attached_program_identity_mismatch", "attached_foreign_owner_generation",
+    "attached_foreign_binding_epoch", "attached_missing_exact_point_absence_proof",
+    "attached_empty_final_owned_domain", "attached_authority",
+  ].flatMap((code) => [
+    `${code}\0updateAttachedObserved`,
+    `${code}\0updateAttachedUnknown`,
+  ]),
+  ...[
+    "attached_non_terminal_root", "attached_root_consumed_downstream",
+    "attached_published_revision_mismatch", "attached_program_identity_mismatch",
+    "attached_foreign_owner_generation", "attached_foreign_binding_epoch",
+    "attached_missing_exact_point_absence_proof", "attached_empty_final_owned_domain",
+    "attached_resource_exhausted", "attached_authority",
+  ].map((code) => `${code}\0validateAttachedAuthority`),
+  "attached_authority_unavailable\0takeAttachedAuthority",
+]);
+const allCodes = [...new Set([...acceptedPairs].map((pair) => pair.split("\0")[0]))];
+const allOperations = [...new Set([...acceptedPairs].map((pair) => pair.split("\0")[1]))];
 
 test("error admission recognizes exactly the operation/code relation", () => {
-  for (const code of [...compileCodes, "program_update", "other", undefined, 0, {}]) {
-    for (const operation of operations) {
-      const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
-        : (operation === "updateObserved" || operation === "updateUnknown") && code === "program_update";
-      assert.equal(isProgramError(errorWith(code, operation)), expected);
+  for (const code of [...allCodes, "other", undefined, 0, {}]) {
+    for (const operation of [...allOperations, "other", undefined]) {
+      const expected = typeof code === "string" && typeof operation === "string"
+        && acceptedPairs.has(`${code}\0${operation}`);
+      assert.equal(isProgramError(errorWith(code, operation)), expected, `${String(code)} @ ${String(operation)}`);
     }
   }
   for (const value of [null, undefined, false, 0, "error", Symbol("error"), 1n,
@@ -57,8 +88,15 @@ test("operation is observed once, so an unstable getter cannot splice branches",
 });
 
 test("readable accessor and inherited contracts remain valid", () => {
-  for (const operation of operations.slice(0, 3)) {
-    const code = operation === "compileProgramWire" ? "program_wire" : "program_update";
+  for (const [code, operation] of [
+    ["program_wire", "compileProgramWire"],
+    ["program_update", "updateObserved"],
+    ["program_update", "updateUnknown"],
+    ["attached_program_wire", "compileAttachedProgramWire"],
+    ["attached_host", "updateAttachedObserved"],
+    ["attached_foreign_binding_epoch", "validateAttachedAuthority"],
+    ["attached_authority_unavailable", "takeAttachedAuthority"],
+  ]) {
     const counts = { operation: 0, code: 0 };
     const prototype = Object.create(Error.prototype, {
       operation: { get() { counts.operation += 1; return operation; } },
@@ -78,10 +116,14 @@ test("classification never converts field values", () => {
   assert.equal(conversions, 0);
 });
 
-test("real WASM errors stay identifiable and a rejected update stays retryable", async () => {
+test("real WASM detached and attached errors remain distinguishable", async () => {
   await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
   assert.throws(() => compileProgramWire(new Uint8Array(), 1), (error) =>
     isProgramError(error) && error.code === "program_wire" && error.operation === "compileProgramWire");
+  assert.throws(() => compileAttachedProgramWire(new Uint8Array()), (error) =>
+    isProgramError(error) && error.code === "attached_program_wire"
+      && error.operation === "compileAttachedProgramWire");
+
   const wire = new ProgramWireBuilderV1().source(11, [20, 20, 20]).fixedTarget(21, 11)
     .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
     .sourceOverOccurrence(61, 41, 51, 64, 0.2, 1).presentationRoot(71, 61)
