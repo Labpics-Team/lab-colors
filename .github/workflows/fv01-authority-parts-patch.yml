@@ -1,0 +1,56 @@
+name: FV-01 guarded authority-parts patch
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Replace positional mint args with one typed parts object
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from base64 import b64decode
+          from pathlib import Path
+          d = lambda value: b64decode(value).decode()
+
+          def once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one guarded anchor, found {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
+
+          facade = 'crates/labcolors-core/src/program_wire/fv01.rs'
+          once(facade, d('aW1wbCBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eVYxIHsK'), d('cHViKGNyYXRlKSBzdHJ1Y3QgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlQYXJ0c1YxIHsKICAgIHB1YihjcmF0ZSkgY29udGVudF9pZGVudGl0eTogQ29udGVudElkZW50aXR5VjksCiAgICBwdWIoY3JhdGUpIHB1Ymxpc2hlZF9yZXZpc2lvbjogdTY0LAogICAgcHViKGNyYXRlKSBzaW5rX3N0YW1wOiBQb2ludFNpbmtTdGFtcFYxLAogICAgcHViKGNyYXRlKSBzaW5rX2JpbmRpbmdfZXBvY2g6IHU2NCwKICAgIHB1YihjcmF0ZSkgcHJlc2VudGF0aW9uX3Jvb3Q6IFByZXNlbnRhdGlvblJvb3RJZFYxLAogICAgcHViKGNyYXRlKSBwcmVzZW50YXRpb25fb2NjdXJyZW5jZTogT2NjdXJyZW5jZUlkVjEsCiAgICBwdWIoY3JhdGUpIHRlcm1pbmFsX29jY3VycmVuY2U6IE9jY3VycmVuY2VJZFYxLAogICAgcHViKGNyYXRlKSBhcHBlYXJhbmNlX2NvbnRleHQ6IEFwcGVhcmFuY2VDb250ZXh0VjEsCiAgICBwdWIoY3JhdGUpIHBhaW50OiBFbmNvZGVkUG9pbnRQYWludFYxLAogICAgcHViKGNyYXRlKSBjYXNlczogQm94PFtBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkNhc2VQcm9vZlYxXT4sCiAgICBwdWIoY3JhdGUpIG93bmVyX3BpbjogUHJvZ3JhbU93bmVyTGVhc2VWMTxDb3JlUHJvZ3JhbUV2YWx1YXRvcnNWMT4sCn0KCmltcGwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlWMSB7Cg=='))
+          once(facade, d('ICAgIHB1YihjcmF0ZSkgZm4gZnJvbV9hdHRhY2hlZF9wYXJ0cygKICAgICAgICBjb250ZW50X2lkZW50aXR5OiBDb250ZW50SWRlbnRpdHlWOSwKICAgICAgICBwdWJsaXNoZWRfcmV2aXNpb246IHU2NCwKICAgICAgICBzaW5rX3N0YW1wOiBQb2ludFNpbmtTdGFtcFYxLAogICAgICAgIHNpbmtfYmluZGluZ19lcG9jaDogdTY0LAogICAgICAgIHByZXNlbnRhdGlvbl9yb290OiBQcmVzZW50YXRpb25Sb290SWRWMSwKICAgICAgICBwcmVzZW50YXRpb25fb2NjdXJyZW5jZTogT2NjdXJyZW5jZUlkVjEsCiAgICAgICAgdGVybWluYWxfb2NjdXJyZW5jZTogT2NjdXJyZW5jZUlkVjEsCiAgICAgICAgYXBwZWFyYW5jZV9jb250ZXh0OiBBcHBlYXJhbmNlQ29udGV4dFYxLAogICAgICAgIHBhaW50OiBFbmNvZGVkUG9pbnRQYWludFYxLAogICAgICAgIGNhc2VzOiBCb3g8W0F0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQ2FzZVByb29mVjFdPiwKICAgICAgICBvd25lcl9waW46IFByb2dyYW1Pd25lckxlYXNlVjE8Q29yZVByb2dyYW1FdmFsdWF0b3JzVjE+LAogICAgKSAtPiBSZXN1bHQ8U2VsZiwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxPiB7Cg=='), d('ICAgIHB1YihjcmF0ZSkgZm4gZnJvbV9hdHRhY2hlZF9wYXJ0cygKICAgICAgICBwYXJ0czogQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlQYXJ0c1YxLAogICAgKSAtPiBSZXN1bHQ8U2VsZiwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxPiB7CiAgICAgICAgbGV0IEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5UGFydHNWMSB7CiAgICAgICAgICAgIGNvbnRlbnRfaWRlbnRpdHksCiAgICAgICAgICAgIHB1Ymxpc2hlZF9yZXZpc2lvbiwKICAgICAgICAgICAgc2lua19zdGFtcCwKICAgICAgICAgICAgc2lua19iaW5kaW5nX2Vwb2NoLAogICAgICAgICAgICBwcmVzZW50YXRpb25fcm9vdCwKICAgICAgICAgICAgcHJlc2VudGF0aW9uX29jY3VycmVuY2UsCiAgICAgICAgICAgIHRlcm1pbmFsX29jY3VycmVuY2UsCiAgICAgICAgICAgIGFwcGVhcmFuY2VfY29udGV4dCwKICAgICAgICAgICAgcGFpbnQsCiAgICAgICAgICAgIGNhc2VzLAogICAgICAgICAgICBvd25lcl9waW4sCiAgICAgICAgfSA9IHBhcnRzOwo='))
+
+          root = 'crates/labcolors-core/src/program_wire.rs'
+          once(root, d('cHViKGNyYXRlKSB1c2UgZnYwMTo6QXR0YWNoZWRNYXRlcmlhbGl6YXRpb25DYXNlUHJvb2ZWMTsK'), d('cHViKGNyYXRlKSB1c2UgZnYwMTo6ewogICAgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlQYXJ0c1YxLCBBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkNhc2VQcm9vZlYxLAp9Owo='))
+
+          implp = 'crates/labcolors-core/src/program/attachment/fv01.rs'
+          once(implp, d('ICAgIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMSwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlWMSwKICAgIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQ2FzZVByb29mVjEsIEF0dGFjaGVkUG9pbnRTaW5rQWRtaXNzaW9uRXJyb3JWMSwK'), d('ICAgIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5RXJyb3JWMSwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlQYXJ0c1YxLAogICAgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlWMSwgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25DYXNlUHJvb2ZWMSwKICAgIEF0dGFjaGVkUG9pbnRTaW5rQWRtaXNzaW9uRXJyb3JWMSwK'))
+          once(implp, d('ICAgIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5VjE6OmZyb21fYXR0YWNoZWRfcGFydHMoCiAgICAgICAgY29udGVudF9pZGVudGl0eSwKICAgICAgICBwdWJsaXNoZWQucmV2aXNpb24oKSwKICAgICAgICBzaW5rX3N0YW1wLAogICAgICAgIHNpbmtfc3RhbXAuYmluZGluZ19lcG9jaCgpLjAuZ2V0KCksCiAgICAgICAgcmVuZGVyLnJvb3QoKSwKICAgICAgICByZW5kZXIub2NjdXJyZW5jZSgpLAogICAgICAgIE9jY3VycmVuY2VJZFYxOjpmcm9tX2NvcmUoY29tcGlsZWQudGVybWluYWwoKSksCiAgICAgICAgQXBwZWFyYW5jZUNvbnRleHRWMTo6ZnJvbV9jb3JlKGNvbXBpbGVkLnRlcm1pbmFsX2NvbnRleHQoKSksCiAgICAgICAgcmVuZGVyLnBhaW50KCksCiAgICAgICAgY2FzZXMuaW50b19ib3hlZF9zbGljZSgpLAogICAgICAgIG93bmVyX3Bpbi5jbG9uZSgpLAogICAgKQo='), d('ICAgIEF0dGFjaGVkTWF0ZXJpYWxpemF0aW9uQXV0aG9yaXR5VjE6OmZyb21fYXR0YWNoZWRfcGFydHMoCiAgICAgICAgQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlQYXJ0c1YxIHsKICAgICAgICAgICAgY29udGVudF9pZGVudGl0eSwKICAgICAgICAgICAgcHVibGlzaGVkX3JldmlzaW9uOiBwdWJsaXNoZWQucmV2aXNpb24oKSwKICAgICAgICAgICAgc2lua19zdGFtcCwKICAgICAgICAgICAgc2lua19iaW5kaW5nX2Vwb2NoOiBzaW5rX3N0YW1wLmJpbmRpbmdfZXBvY2goKS4wLmdldCgpLAogICAgICAgICAgICBwcmVzZW50YXRpb25fcm9vdDogcmVuZGVyLnJvb3QoKSwKICAgICAgICAgICAgcHJlc2VudGF0aW9uX29jY3VycmVuY2U6IHJlbmRlci5vY2N1cnJlbmNlKCksCiAgICAgICAgICAgIHRlcm1pbmFsX29jY3VycmVuY2U6IE9jY3VycmVuY2VJZFYxOjpmcm9tX2NvcmUoY29tcGlsZWQudGVybWluYWwoKSksCiAgICAgICAgICAgIGFwcGVhcmFuY2VfY29udGV4dDogQXBwZWFyYW5jZUNvbnRleHRWMTo6ZnJvbV9jb3JlKGNvbXBpbGVkLnRlcm1pbmFsX2NvbnRleHQoKSksCiAgICAgICAgICAgIHBhaW50OiByZW5kZXIucGFpbnQoKSwKICAgICAgICAgICAgY2FzZXM6IGNhc2VzLmludG9fYm94ZWRfc2xpY2UoKSwKICAgICAgICAgICAgb3duZXJfcGluOiBvd25lcl9waW4uY2xvbmUoKSwKICAgICAgICB9LAogICAgKQo='))
+          PY
+          cargo fmt --all
+          rm .github/workflows/fv01-authority-parts-patch.yml
+      - name: Commit guarded patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/labcolors-core/src/program_wire/fv01.rs crates/labcolors-core/src/program_wire.rs crates/labcolors-core/src/program/attachment/fv01.rs .github/workflows/fv01-authority-parts-patch.yml
+          git diff --cached --check
+          git commit -m "refactor(fv-01): group authority mint inputs"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
