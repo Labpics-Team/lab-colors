@@ -6,12 +6,12 @@
 
 use crate::Srgb8;
 use crate::family_artifact::FamilyArtifactBundleV2;
+use crate::program::attachment::fv01::{
+    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,
+};
 use crate::program::attachment::{
     AttachmentCreateErrorV1, AttachmentCreateFailureV2, AuthoredPointEmissionBindingV1,
     AuthoredPointPresentationBindingV1,
-};
-use crate::program::attachment::fv01::{
-    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,
 };
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
 use crate::program::{
@@ -256,9 +256,8 @@ where
 pub fn compile_attached_program_wire_v1(
     bytes: &[u8],
 ) -> Result<CompiledAttachedProgramV1, AttachedProgramCompileErrorV1> {
-    let draft = decode_program_wire_v1(bytes).map_err(|_error: ProgramWireErrorV1| {
-        AttachedProgramCompileErrorV1::Wire
-    })?;
+    let draft = decode_program_wire_v1(bytes)
+        .map_err(|_error: ProgramWireErrorV1| AttachedProgramCompileErrorV1::Wire)?;
     let owner = draft.compile().map_err(|error| match error {
         CompileErrorV1::PresentationRootConsumedDownstream { .. } => {
             AttachedProgramCompileErrorV1::RootConsumedDownstream
@@ -271,7 +270,11 @@ pub fn compile_attached_program_wire_v1(
     Ok(CompiledAttachedProgramV1 { owner })
 }
 
-fn map_attach_failure<H>(failure: AttachmentCreateFailureV2<crate::program::attachment::fv01::AttachedPointSinkWriterV1<H>>) -> AttachedProgramAttachErrorV1
+fn map_attach_failure<H>(
+    failure: AttachmentCreateFailureV2<
+        crate::program::attachment::fv01::AttachedPointSinkWriterV1<H>,
+    >,
+) -> AttachedProgramAttachErrorV1
 where
     H: AttachedPointSinkHostV1,
 {
