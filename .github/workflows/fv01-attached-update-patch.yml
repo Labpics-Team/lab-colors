@@ -21,13 +21,16 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
+          import base64
           from pathlib import Path
+
+          def decoded(value):
+              return base64.b64decode(value).decode()
 
           runtime_path = Path('crates/labcolors-core/src/program_wire/runtime.rs')
           runtime = runtime_path.read_text()
           impl_start = runtime.find('impl ProgramScenarioV1 {')
-          state_marker = '\n/// Lifecycle-'
-          state_start = runtime.find(state_marker, impl_start)
+          state_start = runtime.find('\n/// Lifecycle-', impl_start)
           if impl_start < 0 or state_start < 0:
               raise SystemExit('ProgramScenarioV1 anchors changed')
           impl_end = runtime.rfind('\n}', impl_start, state_start)
@@ -36,76 +39,21 @@ jobs:
           impl_body = runtime[impl_start:impl_end]
           if 'pub const fn id(&self)' in impl_body or 'pub fn surfaces(&self)' in impl_body:
               raise SystemExit('ProgramScenarioV1 getters already exist')
-          getters = '''
-
-    /// Opaque scenario provenance ID.
-    #[must_use]
-    pub const fn id(&self) -> u32 {
-        self.id
-    }
-
-    /// Surface values in compiled schema order.
-    #[must_use]
-    pub fn surfaces(&self) -> &[crate::Srgb8] {
-        &self.surfaces
-    }
-'''
-          runtime = runtime[:impl_end] + getters + runtime[impl_end:]
+          runtime = runtime[:impl_end] + decoded('CgovLy8gT3BhcXVlIHNjZW5hcmlvIHByb3ZlbmFuY2UgSUQuCiNbbXVzdF91c2VdCnB1YiBjb25zdCBmbiBpZCgmc2VsZikgLT4gdTMyIHsKICAgIHNlbGYuaWQKfQoKLy8vIFN1cmZhY2UgdmFsdWVzIGluIGNvbXBpbGVkIHNjaGVtYSBvcmRlci4KI1ttdXN0X3VzZV0KcHViIGZuIHN1cmZhY2VzKCZzZWxmKSAtPiAmW2NyYXRlOjpTcmdiOF0gewogICAgJnNlbGYuc3VyZmFjZXMKfQo=') + runtime[impl_end:]
           runtime_path.write_text(runtime)
 
           path = Path('crates/labcolors-core/src/program_wire/attached.rs')
           text = path.read_text()
-
-          old_fv_import = '''use crate::program::attachment::fv01::{
-    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,
-};
-'''
-          new_fv_import = '''use crate::program::attachment::fv01::{
-    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,
-    mint_authorities, owner_pin, validate_authority,
-};
-'''
-          if text.count(old_fv_import) != 1:
-              raise SystemExit('FV import anchor changed')
-          text = text.replace(old_fv_import, new_fv_import, 1)
-
-          old_attachment_import = '''use crate::program::attachment::{
-    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AuthoredPointEmissionBindingV1,
-    AuthoredPointPresentationBindingV1,
-};
-'''
-          new_attachment_import = '''use crate::program::attachment::{
-    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentUpdateErrorV1,
-    AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,
-};
-'''
-          if text.count(old_attachment_import) != 1:
-              raise SystemExit('attachment import anchor changed')
-          text = text.replace(old_attachment_import, new_attachment_import, 1)
-
-          old_program_import = '''use crate::program::{
-    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1,
-};
-'''
-          new_program_import = '''use crate::program::{
-    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1, ScenarioV1,
-    StateKindV1, UpdateV1,
-};
-'''
-          if text.count(old_program_import) != 1:
-              raise SystemExit('program import anchor changed')
-          text = text.replace(old_program_import, new_program_import, 1)
-
-          old_super_import = 'use super::{AttachedPointSinkAdmissionErrorV1, AttachedPointSinkHostV1};\n'
-          new_super_import = '''use super::{
-    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
-    AttachedPointSinkAdmissionErrorV1, AttachedPointSinkErrorV1, AttachedPointSinkHostV1,
-    ProgramScenarioV1,
-};
-'''
-          if text.count(old_super_import) != 1:
-              raise SystemExit('super import anchor changed')
-          text = text.replace(old_super_import, new_super_import, 1)
+          replacements = [
+              ('use crate::program::attachment::fv01::{\n    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,\n};\n', 'use crate::program::attachment::fv01::{\n    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,\n    mint_authorities, owner_pin, validate_authority,\n};\n'),
+              ('use crate::program::attachment::{\n    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AuthoredPointEmissionBindingV1,\n    AuthoredPointPresentationBindingV1,\n};\n', 'use crate::program::attachment::{\n    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentUpdateErrorV1,\n    AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,\n};\n'),
+              ('use crate::program::{\n    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1,\n};\n', 'use crate::program::{\n    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1, ScenarioV1,\n    StateKindV1, UpdateV1,\n};\n'),
+              ('use super::{AttachedPointSinkAdmissionErrorV1, AttachedPointSinkHostV1};\n', 'use super::{\n    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,\n    AttachedPointSinkAdmissionErrorV1, AttachedPointSinkErrorV1, AttachedPointSinkHostV1,\n    ProgramScenarioV1,\n};\n'),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit('attached import anchor changed')
+              text = text.replace(old, new, 1)
 
           scenario_start = text.find('/// One observed physical scenario in compiled surface-input order.\n')
           compiled_marker = '/// One fully compiled Program generation capable of minting attached runtimes.\n'
@@ -120,179 +68,11 @@ jobs:
           compile_start = text.find(compile_marker, live_start)
           if live_start < 0 or compile_start < 0:
               raise SystemExit('live runtime anchors changed')
-          existing_live = text[live_start:compile_start]
-          if 'pub fn update_observed' in existing_live:
+          if 'pub fn update_observed' in text[live_start:compile_start]:
               raise SystemExit('attached update already exists')
-
-          update_contract = '''/// Lifecycle class after one atomically published attached update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AttachedProgramUpdateStateV1 {
-    /// No certified observation exists yet.
-    Waiting,
-    /// Current revision is certified and carries materialization authority.
-    Ready,
-    /// Current observation is unavailable; the previous certificate is diagnostic only.
-    Stale,
-    /// Current revision is exhaustively infeasible and the host scope is revoked.
-    Failed,
-}
-
-/// Owned result of one attached update.
-pub struct AttachedProgramUpdateV1 {
-    state: AttachedProgramUpdateStateV1,
-    authorities: Vec<AttachedMaterializationAuthorityV1>,
-}
-
-impl AttachedProgramUpdateV1 {
-    /// Lifecycle class committed by the same transaction as the host effect.
-    #[must_use]
-    pub const fn state(&self) -> AttachedProgramUpdateStateV1 {
-        self.state
-    }
-
-    /// Authorities minted from this exact post-commit `Ready` state.
-    /// Non-`Ready` outcomes always expose an empty slice.
-    #[must_use]
-    pub fn authorities(&self) -> &[AttachedMaterializationAuthorityV1] {
-        &self.authorities
-    }
-
-    /// Consume the outcome and take ownership of all minted authorities.
-    #[must_use]
-    pub fn into_authorities(self) -> Vec<AttachedMaterializationAuthorityV1> {
-        self.authorities
-    }
-}
-
-/// Typed refusal of an attached update.
-#[non_exhaustive]
-pub enum AttachedProgramUpdateErrorV1<HostError> {
-    /// Temporary descriptor storage for the borrowed scenarios could not be reserved.
-    ResourceExhausted,
-    /// Core rejected the observation update before any host effect was committed.
-    Update,
-    /// The admitted sink rejected preparation before installation.
-    SinkPrepare(AttachedPointSinkErrorV1<HostError>),
-    /// The host rejected the atomic installation; previous materialization remains intact.
-    SinkInstall(AttachedPointSinkErrorV1<HostError>),
-    /// Post-commit authority proof could not be minted or revalidated.
-    Authority(AttachedMaterializationAuthorityErrorV1),
-    /// A sealed Core invariant was violated.
-    InternalInvariant,
-}
-
-'''
-          text = text[:live_start] + update_contract + text[live_start:]
-
+          text = text[:live_start] + decoded('Ci8vLyBMaWZlY3ljbGUgY2xhc3MgYWZ0ZXIgb25lIGF0b21pY2FsbHkgcHVibGlzaGVkIGF0dGFjaGVkIHVwZGF0ZS4KI1tkZXJpdmUoRGVidWcsIENsb25lLCBDb3B5LCBQYXJ0aWFsRXEsIEVxKV0KI1tub25fZXhoYXVzdGl2ZV0KcHViIGVudW0gQXR0YWNoZWRQcm9ncmFtVXBkYXRlU3RhdGVWMSB7CiAgICAvLy8gTm8gY2VydGlmaWVkIG9ic2VydmF0aW9uIGV4aXN0cyB5ZXQuCiAgICBXYWl0aW5nLAogICAgLy8vIEN1cnJlbnQgcmV2aXNpb24gaXMgY2VydGlmaWVkIGFuZCBjYXJyaWVzIG1hdGVyaWFsaXphdGlvbiBhdXRob3JpdHkuCiAgICBSZWFkeSwKICAgIC8vLyBDdXJyZW50IG9ic2VydmF0aW9uIGlzIHVuYXZhaWxhYmxlOyB0aGUgcHJldmlvdXMgY2VydGlmaWNhdGUgaXMgZGlhZ25vc3RpYyBvbmx5LgogICAgU3RhbGUsCiAgICAvLy8gQ3VycmVudCByZXZpc2lvbiBpcyBleGhhdXN0aXZlbHkgaW5mZWFzaWJsZSBhbmQgdGhlIGhvc3Qgc2NvcGUgaXMgcmV2b2tlZC4KICAgIEZhaWxlZCwKfQoKLy8vIE93bmVkIHJlc3VsdCBvZiBvbmUgYXR0YWNoZWQgdXBkYXRlLgpwdWIgc3RydWN0IEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZVYxIHsKICAgIHN0YXRlOiBBdHRhY2hlZFByb2dyYW1VcGRhdGVTdGF0ZVYxLAogICAgYXV0aG9yaXRpZXM6IFZlYzxBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eVYxPiwKfQoKaW1wbCBBdHRhY2hlZFByb2dyYW1VcGRhdGVWMSB7CiAgICAvLy8gTGlmZWN5Y2xlIGNsYXNzIGNvbW1pdHRlZCBieSB0aGUgc2FtZSB0cmFuc2FjdGlvbiBhcyB0aGUgaG9zdCBlZmZlY3QuCiAgICAjW211c3RfdXNlXQogICAgcHViIGNvbnN0IGZuIHN0YXRlKCZzZWxmKSAtPiBBdHRhY2hlZFByb2dyYW1VcGRhdGVTdGF0ZVYxIHsKICAgICAgICBzZWxmLnN0YXRlCiAgICB9CgogICAgLy8vIEF1dGhvcml0aWVzIG1pbnRlZCBmcm9tIHRoaXMgZXhhY3QgcG9zdC1jb21taXQgYFJlYWR5YCBzdGF0ZS4KICAgIC8vLyBOb24tYFJlYWR5YCBvdXRjb21lcyBhbHdheXMgZXhwb3NlIGFuIGVtcHR5IHNsaWNlLgogICAgI1ttdXN0X3VzZV0KICAgIHB1YiBmbiBhdXRob3JpdGllcygmc2VsZikgLT4gJltBdHRhY2hlZE1hdGVyaWFsaXphdGlvbkF1dGhvcml0eVYxXSB7CiAgICAgICAgJnNlbGYuYXV0aG9yaXRpZXMKICAgIH0KCiAgICAvLy8gQ29uc3VtZSB0aGUgb3V0Y29tZSBhbmQgdGFrZSBvd25lcnNoaXAgb2YgYWxsIG1pbnRlZCBhdXRob3JpdGllcy4KICAgICNbbXVzdF91c2VdCiAgICBwdWIgZm4gaW50b19hdXRob3JpdGllcyhzZWxmKSAtPiBWZWM8QXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlWMT4gewogICAgICAgIHNlbGYuYXV0aG9yaXRpZXMKICAgIH0KfQoKLy8vIFR5cGVkIHJlZnVzYWwgb2YgYW4gYXR0YWNoZWQgdXBkYXRlLgojW25vbl9leGhhdXN0aXZlXQpwdWIgZW51bSBBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxPEhvc3RFcnJvcj4gewogICAgLy8vIFRlbXBvcmFyeSBkZXNjcmlwdG9yIHN0b3JhZ2UgZm9yIHRoZSBib3Jyb3dlZCBzY2VuYXJpb3MgY291bGQgbm90IGJlIHJlc2VydmVkLgogICAgUmVzb3VyY2VFeGhhdXN0ZWQsCiAgICAvLy8gQ29yZSByZWplY3RlZCB0aGUgb2JzZXJ2YXRpb24gdXBkYXRlIGJlZm9yZSBhbnkgaG9zdCBlZmZlY3Qgd2FzIGNvbW1pdHRlZC4KICAgIFVwZGF0ZSwKICAgIC8vLyBUaGUgYWRtaXR0ZWQgc2luayByZWplY3RlZCBwcmVwYXJhdGlvbiBiZWZvcmUgaW5zdGFsbGF0aW9uLgogICAgU2lua1ByZXBhcmUoQXR0YWNoZWRQb2ludFNpbmtFcnJvclYxPEhvc3RFcnJvcj4pLAogICAgLy8vIFRoZSBob3N0IHJlamVjdGVkIHRoZSBhdG9taWMgaW5zdGFsbGF0aW9uOyBwcmV2aW91cyBtYXRlcmlhbGl6YXRpb24gcmVtYWlucyBpbnRhY3QuCiAgICBTaW5rSW5zdGFsbChBdHRhY2hlZFBvaW50U2lua0Vycm9yVjE8SG9zdEVycm9yPiksCiAgICAvLy8gUG9zdC1jb21taXQgYXV0aG9yaXR5IHByb29mIGNvdWxkIG5vdCBiZSBtaW50ZWQgb3IgcmV2YWxpZGF0ZWQuCiAgICBBdXRob3JpdHkoQXR0YWNoZWRNYXRlcmlhbGl6YXRpb25BdXRob3JpdHlFcnJvclYxKSwKICAgIC8vLyBBIHNlYWxlZCBDb3JlIGludmFyaWFudCB3YXMgdmlvbGF0ZWQuCiAgICBJbnRlcm5hbEludmFyaWFudCwKfQoK') + text[live_start:]
           compile_start = text.find(compile_marker)
-          impl_code = '''impl<H> AttachedProgramV1<H>
-where
-    H: AttachedPointSinkHostV1,
-{
-    /// Atomically evaluate and publish one observed revision.
-    ///
-    /// Scenario values are borrowed; only compact descriptors are allocated in
-    /// this first facade slice. Authority is minted exclusively from the
-    /// successful post-commit attachment view.
-    pub fn update_observed(
-        &mut self,
-        revision: u64,
-        scenarios: &[ProgramScenarioV1],
-    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
-        let mut projected = Vec::new();
-        projected
-            .try_reserve_exact(scenarios.len())
-            .map_err(|_| AttachedProgramUpdateErrorV1::ResourceExhausted)?;
-        projected.extend(
-            scenarios
-                .iter()
-                .map(|scenario| ScenarioV1::new(scenario.id(), scenario.surfaces())),
-        );
-        self.apply_update(UpdateV1::Observed {
-            revision,
-            scenarios: &projected,
-        })
-    }
-
-    /// Atomically publish that the observation is unavailable.
-    /// A previously installed materialization is revoked by the same attachment
-    /// transaction before the returned lifecycle can become `Stale`.
-    pub fn update_unknown(
-        &mut self,
-        revision: u64,
-        reason_id: u32,
-    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
-        self.apply_update(UpdateV1::Unknown {
-            revision,
-            reason_id,
-        })
-    }
-
-    fn apply_update(
-        &mut self,
-        update: UpdateV1<'_>,
-    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
-        let (state, authorities) = {
-            let commit = self
-                .attachment
-                .update(update)
-                .map_err(map_update_failure)?;
-            let state = match commit.evidence().kind() {
-                StateKindV1::Waiting => AttachedProgramUpdateStateV1::Waiting,
-                StateKindV1::Ready => AttachedProgramUpdateStateV1::Ready,
-                StateKindV1::Stale => AttachedProgramUpdateStateV1::Stale,
-                StateKindV1::Failed => AttachedProgramUpdateStateV1::Failed,
-            };
-            let authorities = if state == AttachedProgramUpdateStateV1::Ready {
-                mint_authorities(commit, &self.owner_pin)
-                    .map_err(AttachedProgramUpdateErrorV1::Authority)?
-            } else {
-                Vec::new()
-            };
-            (state, authorities)
-        };
-
-        if state == AttachedProgramUpdateStateV1::Ready {
-            if authorities.is_empty() {
-                return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
-            }
-            for authority in &authorities {
-                validate_authority(
-                    &self.attachment,
-                    &self.owner_pin,
-                    self.content_identity,
-                    authority,
-                )
-                .map_err(AttachedProgramUpdateErrorV1::Authority)?;
-            }
-        } else if !authorities.is_empty() {
-            return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
-        }
-
-        Ok(AttachedProgramUpdateV1 { state, authorities })
-    }
-}
-
-fn map_update_failure<HostError>(
-    failure: AttachmentUpdateErrorV1<AttachedPointSinkErrorV1<HostError>>,
-) -> AttachedProgramUpdateErrorV1<HostError> {
-    match failure {
-        AttachmentUpdateErrorV1::Update(_) => AttachedProgramUpdateErrorV1::Update,
-        AttachmentUpdateErrorV1::SinkPrepare(error) => {
-            AttachedProgramUpdateErrorV1::SinkPrepare(error)
-        }
-        AttachmentUpdateErrorV1::SinkInstall(error) => {
-            AttachedProgramUpdateErrorV1::SinkInstall(error)
-        }
-        AttachmentUpdateErrorV1::InternalInvariant(_) => {
-            AttachedProgramUpdateErrorV1::InternalInvariant
-        }
-    }
-}
-
-'''
-          text = text[:compile_start] + impl_code + text[compile_start:]
+          text = text[:compile_start] + decoded('CmltcGw8SD4gQXR0YWNoZWRQcm9ncmFtVjE8SD4Kd2hlcmUKICAgIEg6IEF0dGFjaGVkUG9pbnRTaW5rSG9zdFYxLAp7CiAgICAvLy8gQXRvbWljYWxseSBldmFsdWF0ZSBhbmQgcHVibGlzaCBvbmUgb2JzZXJ2ZWQgcmV2aXNpb24uCiAgICAvLy8KICAgIC8vLyBTY2VuYXJpbyB2YWx1ZXMgYXJlIGJvcnJvd2VkOyBvbmx5IGNvbXBhY3QgZGVzY3JpcHRvcnMgYXJlIGFsbG9jYXRlZCBpbgogICAgLy8vIHRoaXMgZmlyc3QgZmFjYWRlIHNsaWNlLiBBdXRob3JpdHkgaXMgbWludGVkIGV4Y2x1c2l2ZWx5IGZyb20gdGhlCiAgICAvLy8gc3VjY2Vzc2Z1bCBwb3N0LWNvbW1pdCBhdHRhY2htZW50IHZpZXcuCiAgICBwdWIgZm4gdXBkYXRlX29ic2VydmVkKAogICAgICAgICZtdXQgc2VsZiwKICAgICAgICByZXZpc2lvbjogdTY0LAogICAgICAgIHNjZW5hcmlvczogJltQcm9ncmFtU2NlbmFyaW9WMV0sCiAgICApIC0+IFJlc3VsdDxBdHRhY2hlZFByb2dyYW1VcGRhdGVWMSwgQXR0YWNoZWRQcm9ncmFtVXBkYXRlRXJyb3JWMTxIOjpFcnJvcj4+IHsKICAgICAgICBsZXQgbXV0IHByb2plY3RlZCA9IFZlYzo6bmV3KCk7CiAgICAgICAgcHJvamVjdGVkCiAgICAgICAgICAgIC50cnlfcmVzZXJ2ZV9leGFjdChzY2VuYXJpb3MubGVuKCkpCiAgICAgICAgICAgIC5tYXBfZXJyKHxffCBBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxOjpSZXNvdXJjZUV4aGF1c3RlZCk/OwogICAgICAgIHByb2plY3RlZC5leHRlbmQoCiAgICAgICAgICAgIHNjZW5hcmlvcwogICAgICAgICAgICAgICAgLml0ZXIoKQogICAgICAgICAgICAgICAgLm1hcCh8c2NlbmFyaW98IFNjZW5hcmlvVjE6Om5ldyhzY2VuYXJpby5pZCgpLCBzY2VuYXJpby5zdXJmYWNlcygpKSksCiAgICAgICAgKTsKICAgICAgICBzZWxmLmFwcGx5X3VwZGF0ZShVcGRhdGVWMTo6T2JzZXJ2ZWQgewogICAgICAgICAgICByZXZpc2lvbiwKICAgICAgICAgICAgc2NlbmFyaW9zOiAmcHJvamVjdGVkLAogICAgICAgIH0pCiAgICB9CgogICAgLy8vIEF0b21pY2FsbHkgcHVibGlzaCB0aGF0IHRoZSBvYnNlcnZhdGlvbiBpcyB1bmF2YWlsYWJsZS4KICAgIC8vLyBBIHByZXZpb3VzbHkgaW5zdGFsbGVkIG1hdGVyaWFsaXphdGlvbiBpcyByZXZva2VkIGJ5IHRoZSBzYW1lIGF0dGFjaG1lbnQKICAgIC8vLyB0cmFuc2FjdGlvbiBiZWZvcmUgdGhlIHJldHVybmVkIGxpZmVjeWNsZSBjYW4gYmVjb21lIGBTdGFsZWAuCiAgICBwdWIgZm4gdXBkYXRlX3Vua25vd24oCiAgICAgICAgJm11dCBzZWxmLAogICAgICAgIHJldmlzaW9uOiB1NjQsCiAgICAgICAgcmVhc29uX2lkOiB1MzIsCiAgICApIC0+IFJlc3VsdDxBdHRhY2hlZFByb2dyYW1VcGRhdGVWMSwgQXR0YWNoZWRQcm9ncmFtVXBkYXRlRXJyb3JWMTxIOjpFcnJvcj4+IHsKICAgICAgICBzZWxmLmFwcGx5X3VwZGF0ZShVcGRhdGVWMTo6VW5rbm93biB7CiAgICAgICAgICAgIHJldmlzaW9uLAogICAgICAgICAgICByZWFzb25faWQsCiAgICAgICAgfSkKICAgIH0KCiAgICBmbiBhcHBseV91cGRhdGUoCiAgICAgICAgJm11dCBzZWxmLAogICAgICAgIHVwZGF0ZTogVXBkYXRlVjE8J18+LAogICAgKSAtPiBSZXN1bHQ8QXR0YWNoZWRQcm9ncmFtVXBkYXRlVjEsIEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZUVycm9yVjE8SDo6RXJyb3I+PiB7CiAgICAgICAgbGV0IChzdGF0ZSwgYXV0aG9yaXRpZXMpID0gewogICAgICAgICAgICBsZXQgY29tbWl0ID0gc2VsZgogICAgICAgICAgICAgICAgLmF0dGFjaG1lbnQKICAgICAgICAgICAgICAgIC51cGRhdGUodXBkYXRlKQogICAgICAgICAgICAgICAgLm1hcF9lcnIobWFwX3VwZGF0ZV9mYWlsdXJlKT87CiAgICAgICAgICAgIGxldCBzdGF0ZSA9IG1hdGNoIGNvbW1pdC5ldmlkZW5jZSgpLmtpbmQoKSB7CiAgICAgICAgICAgICAgICBTdGF0ZUtpbmRWMTo6V2FpdGluZyA9PiBBdHRhY2hlZFByb2dyYW1VcGRhdGVTdGF0ZVYxOjpXYWl0aW5nLAogICAgICAgICAgICAgICAgU3RhdGVLaW5kVjE6OlJlYWR5ID0+IEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZVN0YXRlVjE6OlJlYWR5LAogICAgICAgICAgICAgICAgU3RhdGVLaW5kVjE6OlN0YWxlID0+IEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZVN0YXRlVjE6OlN0YWxlLAogICAgICAgICAgICAgICAgU3RhdGVLaW5kVjE6OkZhaWxlZCA9PiBBdHRhY2hlZFByb2dyYW1VcGRhdGVTdGF0ZVYxOjpGYWlsZWQsCiAgICAgICAgICAgIH07CiAgICAgICAgICAgIGxldCBhdXRob3JpdGllcyA9IGlmIHN0YXRlID09IEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZVN0YXRlVjE6OlJlYWR5IHsKICAgICAgICAgICAgICAgIG1pbnRfYXV0aG9yaXRpZXMoY29tbWl0LCAmc2VsZi5vd25lcl9waW4pCiAgICAgICAgICAgICAgICAgICAgLm1hcF9lcnIoQXR0YWNoZWRQcm9ncmFtVXBkYXRlRXJyb3JWMTo6QXV0aG9yaXR5KT8KICAgICAgICAgICAgfSBlbHNlIHsKICAgICAgICAgICAgICAgIFZlYzo6bmV3KCkKICAgICAgICAgICAgfTsKICAgICAgICAgICAgKHN0YXRlLCBhdXRob3JpdGllcykKICAgICAgICB9OwoKICAgICAgICBpZiBzdGF0ZSA9PSBBdHRhY2hlZFByb2dyYW1VcGRhdGVTdGF0ZVYxOjpSZWFkeSB7CiAgICAgICAgICAgIGlmIGF1dGhvcml0aWVzLmlzX2VtcHR5KCkgewogICAgICAgICAgICAgICAgcmV0dXJuIEVycihBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxOjpJbnRlcm5hbEludmFyaWFudCk7CiAgICAgICAgICAgIH0KICAgICAgICAgICAgZm9yIGF1dGhvcml0eSBpbiAmYXV0aG9yaXRpZXMgewogICAgICAgICAgICAgICAgdmFsaWRhdGVfYXV0aG9yaXR5KAogICAgICAgICAgICAgICAgICAgICZzZWxmLmF0dGFjaG1lbnQsCiAgICAgICAgICAgICAgICAgICAgJnNlbGYub3duZXJfcGluLAogICAgICAgICAgICAgICAgICAgIHNlbGYuY29udGVudF9pZGVudGl0eSwKICAgICAgICAgICAgICAgICAgICBhdXRob3JpdHksCiAgICAgICAgICAgICAgICApCiAgICAgICAgICAgICAgICAubWFwX2VycihBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxOjpBdXRob3JpdHkpPzsKICAgICAgICAgICAgfQogICAgICAgIH0gZWxzZSBpZiAhYXV0aG9yaXRpZXMuaXNfZW1wdHkoKSB7CiAgICAgICAgICAgIHJldHVybiBFcnIoQXR0YWNoZWRQcm9ncmFtVXBkYXRlRXJyb3JWMSI6OkludGVybmFsSW52YXJpYW50KTsKICAgICAgICB9CgogICAgICAgIE9rKEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZVYxIHsgc3RhdGUsIGF1dGhvcml0aWVzIH0pCiAgICB9Cn0KCmZuIG1hcF91cGRhdGVfZmFpbHVyZTxIb3N0RXJyb3I+KAogICAgZmFpbHVyZTogQXR0YWNobWVudFVwZGF0ZUVycm9yVjE8QXR0YWNoZWRQb2ludFNpbmtFcnJvclYxPEhvc3RFcnJvcj4+LAopIC0+IEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZUVycm9yVjE8SG9zdEVycm9yPiB7CiAgICBtYXRjaCBmYWlsdXJlIHsKICAgICAgICBBdHRhY2htZW50VXBkYXRlRXJyb3JWMSI6OlVwZGF0ZShfKSA9PiBBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxOjpVcGRhdGUsCiAgICAgICAgQXR0YWNobWVudFVwZGF0ZUVycm9yVjE8Ok1TaW5rUHJlcGFyZShlcnJvcikgPT4gewogICAgICAgICAgICBBdHRhY2hlZFByb2dyYW1VcGRhdGVFcnJvclYxOjpTaW5rUHJlcGFyZShlcnJvcikKICAgICAgICB9CiAgICAgICAgQXR0YWNobWVudFVwZGF0ZUVycm9yVjE6OlNpbmtJbnN0YWxsKGVycm9yKSA9PiB7CiAgICAgICAgICAgIEF0dGFjaGVkUHJvZ3JhbVVwZGF0ZUVycm9yVjE6OlNpbmtJbnN0YWxsKGVycm9yKQogICAgICAgIH0KICAgICAgICBBdHRhY2htZW50VXBkYXRlRXJyb3JWMSI6OkludGVybmFsSW52YXJpYW50KF8pID0+IHsKICAgICAgICAgICAgQXR0YWNoZWRQcm9ncmFtVXBkYXRlRXJyb3JWMSI6OkludGVybmFsSW52YXJpYW50CiAgICAgICAgfQogICAgfQp9Cg==') + text[compile_start:]
           path.write_text(text)
           PY
           cargo fmt --all
