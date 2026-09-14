@@ -10,7 +10,7 @@ mod runtime;
 pub use fv01::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1,
     AttachedMaterializationAuthorityV1, AttachedPointSinkAdmissionErrorV1,
-    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1,
-    AttachedPointSinkHostPatchEntryV1, AttachedPointSinkHostV1, RendererProvenanceV1,
+    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
+    AttachedPointSinkHostV1, RendererProvenanceV1,
 };
 pub use runtime::*;

@@ -7,8 +7,7 @@ use core::{
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, ExactFinalOwnedPointDomainV1};
 use crate::program::{
-    AppearanceContextV1, ContentIdentityV9, CoreVerifiedV1, OccurrenceIdV1, OutputSlotIdV1,
-    PresentationRootIdV1, SurroundV1,
+    AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,
 };
 use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
 
@@ -199,7 +198,7 @@ pub enum AttachedMaterializationAuthorityErrorV1 {
 /// one certified physical case.
 ///
 /// There is intentionally no public constructor. Values are minted only from
-/// `Ready` [`AttachmentCommitV1::render_outputs`] plus the matching
+/// a successful `Ready` attachment commit plus the matching
 /// point-causal replay owned by that exact certificate.
 pub struct AttachedMaterializationAuthorityV1 {
     content_identity: ContentIdentityV9,
@@ -758,9 +757,4 @@ fn next_attached_point_sink_epoch_v1() -> Option<PointSinkBindingEpochV1> {
         .ok()
         .and_then(NonZeroU64::new)
         .map(PointSinkBindingEpochV1::new)
-}
-
-#[allow(dead_code)]
-fn _type_anchor(_: &CoreVerifiedV1) -> (OutputSlotIdV1, AppearanceContextV1) {
-    unreachable!()
 }
