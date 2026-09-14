@@ -19,6 +19,14 @@ function cleanConsumerBody(source) {
   return source.slice(start, end);
 }
 
+function functionBody(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.notEqual(start, -1, `${startMarker} owner is absent`);
+  assert.notEqual(end, -1, `${startMarker} boundary is unterminated`);
+  return source.slice(start, end);
+}
+
 test("release verification owns exactly one clean consumer and invokes it", () => {
   const source = releaseVerifierSource();
   assert.equal(source.match(/async function verifyCleanConsumer\(/gu)?.length, 1);
@@ -35,14 +43,30 @@ test("release verification owns exactly one clean consumer and invokes it", () =
   }
 });
 
-test("clean consumer remains downstream of the exact verified tarball", () => {
+test("clean consumer receives bytes only from an inspected canonical pack", () => {
   const source = releaseVerifierSource();
-  const call = source.indexOf("await verifyCleanConsumer(");
-  const tarballRead = source.indexOf("const tarballBytes = await readFile(tarballPath)");
-  const tarballVerification = source.indexOf("await inspectNpmTarball(");
-  assert.notEqual(call, -1);
-  assert.notEqual(tarballRead, -1);
-  assert.notEqual(tarballVerification, -1);
-  assert.ok(tarballRead < call, "clean consumer ran before the packed bytes were bound");
-  assert.ok(tarballVerification < call, "clean consumer ran before tarball inspection");
+  const packBody = functionBody(
+    source,
+    "export async function packInto(destination, packageJson)",
+    "export function runtimeSmokeSource()",
+  );
+  assert.match(
+    packBody,
+    /const inspected = await inspectNpmTarball\(path, expected, packResult\);/u,
+  );
+  assert.match(packBody, /return \{[\s\S]*bytes: inspected\.bytes,[\s\S]*inspection: inspected\.inspection/u);
+
+  const releaseBody = functionBody(
+    source,
+    "export async function verifyPackageRelease()",
+    "async function writeGithubOutputs(",
+  );
+  const pack = releaseBody.indexOf("const canonicalPack = await packInto(RELEASE_DIR, packageJson);");
+  const consumer = releaseBody.indexOf("await verifyCleanConsumer(\n    canonicalPack.bytes,");
+  const snapshot = releaseBody.indexOf("const verifiedTarball = await materializeVerifiedTarballSnapshot(canonicalPack);");
+  assert.notEqual(pack, -1);
+  assert.notEqual(consumer, -1);
+  assert.notEqual(snapshot, -1);
+  assert.ok(pack < consumer, "clean consumer ran before the canonical pack was produced and inspected");
+  assert.ok(consumer < snapshot, "verified tarball snapshot was materialized before clean-consumer admission");
 });
