@@ -75,7 +75,11 @@ fn live_attachment_exposes_post_commit_lifecycle_authority_and_revalidation_only
     }
 
     let _ = drive::<Host>
-        as fn(&mut AttachedProgramV1<Host>, &ProgramScenarioV1, &AttachedMaterializationAuthorityV1);
+        as fn(
+            &mut AttachedProgramV1<Host>,
+            &ProgramScenarioV1,
+            &AttachedMaterializationAuthorityV1,
+        );
     let _ = AttachedProgramUpdateStateV1::Waiting;
     let _ = AttachedProgramUpdateStateV1::Ready;
     let _ = AttachedProgramUpdateStateV1::Stale;

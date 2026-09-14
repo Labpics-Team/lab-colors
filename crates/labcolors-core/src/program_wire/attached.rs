@@ -314,23 +314,6 @@ where
         })
     }
 
-    /// Revalidate a previously minted authority against this exact live attachment.
-    ///
-    /// Validation is ordered and typed: Program identity, owner generation,
-    /// host binding epoch, then published revision. No detached snapshot can
-    /// satisfy this check.
-    pub fn validate_authority(
-        &self,
-        authority: &AttachedMaterializationAuthorityV1,
-    ) -> Result<(), AttachedMaterializationAuthorityErrorV1> {
-        validate_authority(
-            &self.attachment,
-            &self.owner_pin,
-            self.content_identity,
-            authority,
-        )
-    }
-
     /// Atomically publish that the observation is unavailable.
     ///
     /// A previously installed materialization is revoked by the same attachment
