@@ -1,0 +1,308 @@
+name: FV-01 guarded attached update patch
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Connect public attached update to the existing transaction
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          runtime_path = Path('crates/labcolors-core/src/program_wire/runtime.rs')
+          runtime = runtime_path.read_text()
+          impl_start = runtime.find('impl ProgramScenarioV1 {')
+          state_marker = '\n/// Lifecycle-'
+          state_start = runtime.find(state_marker, impl_start)
+          if impl_start < 0 or state_start < 0:
+              raise SystemExit('ProgramScenarioV1 anchors changed')
+          impl_end = runtime.rfind('\n}', impl_start, state_start)
+          if impl_end < 0:
+              raise SystemExit('ProgramScenarioV1 impl end changed')
+          impl_body = runtime[impl_start:impl_end]
+          if 'pub const fn id(&self)' in impl_body or 'pub fn surfaces(&self)' in impl_body:
+              raise SystemExit('ProgramScenarioV1 getters already exist')
+          getters = '''
+
+    /// Opaque scenario provenance ID.
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Surface values in compiled schema order.
+    #[must_use]
+    pub fn surfaces(&self) -> &[crate::Srgb8] {
+        &self.surfaces
+    }
+'''
+          runtime = runtime[:impl_end] + getters + runtime[impl_end:]
+          runtime_path.write_text(runtime)
+
+          path = Path('crates/labcolors-core/src/program_wire/attached.rs')
+          text = path.read_text()
+
+          old_fv_import = '''use crate::program::attachment::fv01::{
+    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,
+};
+'''
+          new_fv_import = '''use crate::program::attachment::fv01::{
+    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,
+    mint_authorities, owner_pin, validate_authority,
+};
+'''
+          if text.count(old_fv_import) != 1:
+              raise SystemExit('FV import anchor changed')
+          text = text.replace(old_fv_import, new_fv_import, 1)
+
+          old_attachment_import = '''use crate::program::attachment::{
+    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AuthoredPointEmissionBindingV1,
+    AuthoredPointPresentationBindingV1,
+};
+'''
+          new_attachment_import = '''use crate::program::attachment::{
+    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentUpdateErrorV1,
+    AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,
+};
+'''
+          if text.count(old_attachment_import) != 1:
+              raise SystemExit('attachment import anchor changed')
+          text = text.replace(old_attachment_import, new_attachment_import, 1)
+
+          old_program_import = '''use crate::program::{
+    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1,
+};
+'''
+          new_program_import = '''use crate::program::{
+    CompileErrorV1, OccurrenceIdV1, OutputSlotIdV1, OwnerV1, PresentationRootIdV1, ScenarioV1,
+    StateKindV1, UpdateV1,
+};
+'''
+          if text.count(old_program_import) != 1:
+              raise SystemExit('program import anchor changed')
+          text = text.replace(old_program_import, new_program_import, 1)
+
+          old_super_import = 'use super::{AttachedPointSinkAdmissionErrorV1, AttachedPointSinkHostV1};\n'
+          new_super_import = '''use super::{
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
+    AttachedPointSinkAdmissionErrorV1, AttachedPointSinkErrorV1, AttachedPointSinkHostV1,
+    ProgramScenarioV1,
+};
+'''
+          if text.count(old_super_import) != 1:
+              raise SystemExit('super import anchor changed')
+          text = text.replace(old_super_import, new_super_import, 1)
+
+          scenario_start = text.find('/// One observed physical scenario in compiled surface-input order.\n')
+          compiled_marker = '/// One fully compiled Program generation capable of minting attached runtimes.\n'
+          compiled_start = text.find(compiled_marker, scenario_start)
+          if scenario_start < 0 or compiled_start < 0:
+              raise SystemExit('duplicate scenario range anchors changed')
+          text = text[:scenario_start] + text[compiled_start:]
+
+          live_marker = '/// Live attached Program runtime for one exact host binding epoch.\n'
+          live_start = text.find(live_marker)
+          compile_marker = '/// Compile canonical Program wire into an owner that can create attached\n'
+          compile_start = text.find(compile_marker, live_start)
+          if live_start < 0 or compile_start < 0:
+              raise SystemExit('live runtime anchors changed')
+          existing_live = text[live_start:compile_start]
+          if 'pub fn update_observed' in existing_live:
+              raise SystemExit('attached update already exists')
+
+          update_contract = '''/// Lifecycle class after one atomically published attached update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AttachedProgramUpdateStateV1 {
+    /// No certified observation exists yet.
+    Waiting,
+    /// Current revision is certified and carries materialization authority.
+    Ready,
+    /// Current observation is unavailable; the previous certificate is diagnostic only.
+    Stale,
+    /// Current revision is exhaustively infeasible and the host scope is revoked.
+    Failed,
+}
+
+/// Owned result of one attached update.
+pub struct AttachedProgramUpdateV1 {
+    state: AttachedProgramUpdateStateV1,
+    authorities: Vec<AttachedMaterializationAuthorityV1>,
+}
+
+impl AttachedProgramUpdateV1 {
+    /// Lifecycle class committed by the same transaction as the host effect.
+    #[must_use]
+    pub const fn state(&self) -> AttachedProgramUpdateStateV1 {
+        self.state
+    }
+
+    /// Authorities minted from this exact post-commit `Ready` state.
+    /// Non-`Ready` outcomes always expose an empty slice.
+    #[must_use]
+    pub fn authorities(&self) -> &[AttachedMaterializationAuthorityV1] {
+        &self.authorities
+    }
+
+    /// Consume the outcome and take ownership of all minted authorities.
+    #[must_use]
+    pub fn into_authorities(self) -> Vec<AttachedMaterializationAuthorityV1> {
+        self.authorities
+    }
+}
+
+/// Typed refusal of an attached update.
+#[non_exhaustive]
+pub enum AttachedProgramUpdateErrorV1<HostError> {
+    /// Temporary descriptor storage for the borrowed scenarios could not be reserved.
+    ResourceExhausted,
+    /// Core rejected the observation update before any host effect was committed.
+    Update,
+    /// The admitted sink rejected preparation before installation.
+    SinkPrepare(AttachedPointSinkErrorV1<HostError>),
+    /// The host rejected the atomic installation; previous materialization remains intact.
+    SinkInstall(AttachedPointSinkErrorV1<HostError>),
+    /// Post-commit authority proof could not be minted or revalidated.
+    Authority(AttachedMaterializationAuthorityErrorV1),
+    /// A sealed Core invariant was violated.
+    InternalInvariant,
+}
+
+'''
+          text = text[:live_start] + update_contract + text[live_start:]
+
+          compile_start = text.find(compile_marker)
+          impl_code = '''impl<H> AttachedProgramV1<H>
+where
+    H: AttachedPointSinkHostV1,
+{
+    /// Atomically evaluate and publish one observed revision.
+    ///
+    /// Scenario values are borrowed; only compact descriptors are allocated in
+    /// this first facade slice. Authority is minted exclusively from the
+    /// successful post-commit attachment view.
+    pub fn update_observed(
+        &mut self,
+        revision: u64,
+        scenarios: &[ProgramScenarioV1],
+    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
+        let mut projected = Vec::new();
+        projected
+            .try_reserve_exact(scenarios.len())
+            .map_err(|_| AttachedProgramUpdateErrorV1::ResourceExhausted)?;
+        projected.extend(
+            scenarios
+                .iter()
+                .map(|scenario| ScenarioV1::new(scenario.id(), scenario.surfaces())),
+        );
+        self.apply_update(UpdateV1::Observed {
+            revision,
+            scenarios: &projected,
+        })
+    }
+
+    /// Atomically publish that the observation is unavailable.
+    /// A previously installed materialization is revoked by the same attachment
+    /// transaction before the returned lifecycle can become `Stale`.
+    pub fn update_unknown(
+        &mut self,
+        revision: u64,
+        reason_id: u32,
+    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
+        self.apply_update(UpdateV1::Unknown {
+            revision,
+            reason_id,
+        })
+    }
+
+    fn apply_update(
+        &mut self,
+        update: UpdateV1<'_>,
+    ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
+        let (state, authorities) = {
+            let commit = self
+                .attachment
+                .update(update)
+                .map_err(map_update_failure)?;
+            let state = match commit.evidence().kind() {
+                StateKindV1::Waiting => AttachedProgramUpdateStateV1::Waiting,
+                StateKindV1::Ready => AttachedProgramUpdateStateV1::Ready,
+                StateKindV1::Stale => AttachedProgramUpdateStateV1::Stale,
+                StateKindV1::Failed => AttachedProgramUpdateStateV1::Failed,
+            };
+            let authorities = if state == AttachedProgramUpdateStateV1::Ready {
+                mint_authorities(commit, &self.owner_pin)
+                    .map_err(AttachedProgramUpdateErrorV1::Authority)?
+            } else {
+                Vec::new()
+            };
+            (state, authorities)
+        };
+
+        if state == AttachedProgramUpdateStateV1::Ready {
+            if authorities.is_empty() {
+                return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
+            }
+            for authority in &authorities {
+                validate_authority(
+                    &self.attachment,
+                    &self.owner_pin,
+                    self.content_identity,
+                    authority,
+                )
+                .map_err(AttachedProgramUpdateErrorV1::Authority)?;
+            }
+        } else if !authorities.is_empty() {
+            return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
+        }
+
+        Ok(AttachedProgramUpdateV1 { state, authorities })
+    }
+}
+
+fn map_update_failure<HostError>(
+    failure: AttachmentUpdateErrorV1<AttachedPointSinkErrorV1<HostError>>,
+) -> AttachedProgramUpdateErrorV1<HostError> {
+    match failure {
+        AttachmentUpdateErrorV1::Update(_) => AttachedProgramUpdateErrorV1::Update,
+        AttachmentUpdateErrorV1::SinkPrepare(error) => {
+            AttachedProgramUpdateErrorV1::SinkPrepare(error)
+        }
+        AttachmentUpdateErrorV1::SinkInstall(error) => {
+            AttachedProgramUpdateErrorV1::SinkInstall(error)
+        }
+        AttachmentUpdateErrorV1::InternalInvariant(_) => {
+            AttachedProgramUpdateErrorV1::InternalInvariant
+        }
+    }
+}
+
+'''
+          text = text[:compile_start] + impl_code + text[compile_start:]
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fv01-attached-update-patch.yml
+      - name: Commit guarded attached update patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/labcolors-core/src/program_wire/runtime.rs crates/labcolors-core/src/program_wire/attached.rs .github/workflows/fv01-attached-update-patch.yml
+          git diff --cached --check
+          git commit -m "feat(fv-01): publish attached post-commit update"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
