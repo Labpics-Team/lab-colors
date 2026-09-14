@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::Srgb8;
+use crate::program::attachment::fv01::fail_next_attached_authority_reservation_for_test;
 use crate::program::wire::ProgramWireBuilderV1;
 
 use super::{
@@ -288,6 +289,43 @@ fn ready_authority_is_bound_to_the_atomic_host_install_and_revoked_on_unknown() 
         }
         ref other => panic!("second host event must be RevokeAll, got {other:?}"),
     }
+}
+
+#[test]
+fn authority_reservation_failure_precedes_any_host_install_and_preserves_retry() {
+    let compiled = match compile_attached_program_wire_v1(&program_wire(64.0)) {
+        Ok(value) => value,
+        Err(_) => panic!("fixture Program must compile"),
+    };
+    let (emissions, presentations) = bindings();
+    let probe = HostProbe::default();
+    let mut runtime = match compiled.attach(100, &emissions, &presentations, probe.host()) {
+        Ok(value) => value,
+        Err(_) => panic!("fixture attachment must bind"),
+    };
+    let observed = scenario();
+
+    {
+        let _failure = fail_next_attached_authority_reservation_for_test();
+        match runtime.update_observed(1, core::slice::from_ref(&observed)) {
+            Err(AttachedProgramUpdateErrorV1::Authority(
+                AttachedMaterializationAuthorityErrorV1::ResourceExhausted,
+            )) => {}
+            _ => panic!("authority reservation failure must remain typed"),
+        }
+        assert!(
+            probe.0.borrow().events.is_empty(),
+            "fallible authority preparation must precede every observable host install",
+        );
+    }
+
+    let retry = match runtime.update_observed(1, core::slice::from_ref(&observed)) {
+        Ok(value) => value,
+        Err(_) => panic!("same revision must remain retryable after authority preflight failure"),
+    };
+    assert_eq!(retry.state(), AttachedProgramUpdateStateV1::Ready);
+    assert_eq!(retry.authorities().len(), 1);
+    assert_eq!(probe.0.borrow().events.len(), 1);
 }
 
 #[test]

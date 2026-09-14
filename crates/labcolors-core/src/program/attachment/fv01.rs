@@ -22,6 +22,45 @@ use super::{
 
 static NEXT_ATTACHED_POINT_SINK_EPOCH_V1: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
+std::thread_local! {
+    static AUTHORITY_RESERVATION_FAILURE_ARMED: core::cell::Cell<bool> = const {
+        core::cell::Cell::new(false)
+    };
+}
+
+#[cfg(test)]
+pub(crate) struct AttachedAuthorityReservationFailureGuardV1;
+
+#[cfg(test)]
+impl Drop for AttachedAuthorityReservationFailureGuardV1 {
+    fn drop(&mut self) {
+        AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| armed.set(false));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_attached_authority_reservation_for_test(
+) -> AttachedAuthorityReservationFailureGuardV1 {
+    AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| {
+        assert!(!armed.replace(true), "an authority reservation failure is already armed");
+    });
+    AttachedAuthorityReservationFailureGuardV1
+}
+
+fn try_reserve_authority<T>(
+    values: &mut Vec<T>,
+    additional: usize,
+) -> Result<(), AttachedMaterializationAuthorityErrorV1> {
+    #[cfg(test)]
+    if AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| armed.replace(false)) {
+        return Err(AttachedMaterializationAuthorityErrorV1::ResourceExhausted);
+    }
+    values
+        .try_reserve(additional)
+        .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)
+}
+
 /// Opaque host-owned output identity used by the FV-01 attachment sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AttachedPointSinkOutputIdV1(u32);
@@ -361,9 +400,7 @@ pub(crate) fn mint_authorities(
 ) -> Result<Vec<AttachedMaterializationAuthorityV1>, AttachedMaterializationAuthorityErrorV1> {
     let render_outputs = commit.render_outputs();
     let mut authorities = Vec::new();
-    authorities
-        .try_reserve(render_outputs.len())
-        .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
+    try_reserve_authority(&mut authorities, render_outputs.len())?;
 
     for render in render_outputs {
         authorities.push(mint_render_output_authority(render, owner_pin)?);
