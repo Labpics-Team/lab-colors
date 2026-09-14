@@ -1,0 +1,42 @@
+name: FV-01 finalize exact evidence
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.96.0
+      - name: Refresh exact final evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/fv01-core-behavior.yml .github/workflows/fv01-finalize-evidence.yml
+          python3 scripts/_regen_receipt_wt.py
+          python3 scripts/verify_clean_set_receipt.py product --product-root "$PWD"
+          python3 scripts/artifact_matrix.py refresh
+          python3 scripts/artifact_matrix.py check
+          git diff --check
+      - name: Commit final evidence tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "chore(fv-01): bind final evidence tree"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
