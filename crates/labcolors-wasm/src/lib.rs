@@ -4,8 +4,11 @@
 //! Legacy recipe engine (`LabColors.resolveTheme/loadConfig`) удалён. DOM/CSS
 //! effects принадлежат npm-приложению, не WASM.
 
+mod attached;
 mod error;
 mod terminal_projection;
+
+pub use attached::*;
 
 use wasm_bindgen::prelude::*;
 

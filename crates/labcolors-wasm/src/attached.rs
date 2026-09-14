@@ -5,11 +5,10 @@ use labcolors_core::program_wire::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1,
     AttachedMaterializationAuthorityV1 as CoreAuthority, AttachedPointSinkErrorV1,
     AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1, AttachedPointSinkHostV1,
-    AttachedProgramAttachErrorV1, AttachedProgramCompileErrorV1,
-    AttachedProgramEmissionBindingV1, AttachedProgramPresentationBindingV1,
-    AttachedProgramUpdateErrorV1, AttachedProgramUpdateStateV1,
-    CompiledAttachedProgramV1 as CoreCompiledAttachedProgram, ProgramScenarioV1,
-    RendererProvenanceV1, compile_attached_program_wire_v1,
+    AttachedProgramAttachErrorV1, AttachedProgramCompileErrorV1, AttachedProgramEmissionBindingV1,
+    AttachedProgramPresentationBindingV1, AttachedProgramUpdateErrorV1,
+    AttachedProgramUpdateStateV1, CompiledAttachedProgramV1 as CoreCompiledAttachedProgram,
+    ProgramScenarioV1, RendererProvenanceV1, compile_attached_program_wire_v1,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -121,9 +120,7 @@ fn map_authority_error(error: AttachedMaterializationAuthorityErrorV1, operation
         AttachedMaterializationAuthorityErrorV1::EmptyFinalOwnedDomain => {
             "attached_empty_final_owned_domain"
         }
-        AttachedMaterializationAuthorityErrorV1::ResourceExhausted => {
-            "attached_resource_exhausted"
-        }
+        AttachedMaterializationAuthorityErrorV1::ResourceExhausted => "attached_resource_exhausted",
         _ => "attached_authority",
     };
     attached_error(code, operation)
@@ -181,11 +178,7 @@ fn project_patch(patch: &[AttachedPointSinkHostPatchEntryV1]) -> Result<Array, J
         set_property(&value, "output", JsValue::from(entry.output()))?;
         set_property(&value, "sinkOutput", JsValue::from(entry.sink_output()))?;
         let source = entry.source().bytes();
-        set_property(
-            &value,
-            "source",
-            Uint8Array::from(source.as_slice()).into(),
-        )?;
+        set_property(&value, "source", Uint8Array::from(source.as_slice()).into())?;
         set_property(&value, "opacity", JsValue::from_f64(entry.opacity()))?;
         projected.push(&value);
     }
@@ -205,11 +198,7 @@ fn project_host_intent(intent: AttachedPointSinkHostIntentV1<'_>) -> Result<JsVa
             set_property(&value, "kind", JsValue::from_str("set-all"))?;
             set_property(&value, "revision", JsValue::from(revision))?;
             set_property(&value, "bindingEpoch", JsValue::from(binding_epoch))?;
-            set_property(
-                &value,
-                "expectedSequence",
-                JsValue::from(expected_sequence),
-            )?;
+            set_property(&value, "expectedSequence", JsValue::from(expected_sequence))?;
             set_property(&value, "desiredSequence", JsValue::from(desired_sequence))?;
             set_property(&value, "patch", project_patch(patch)?.into())?;
         }
@@ -222,11 +211,7 @@ fn project_host_intent(intent: AttachedPointSinkHostIntentV1<'_>) -> Result<JsVa
             set_property(&value, "kind", JsValue::from_str("revoke-all"))?;
             set_property(&value, "revision", JsValue::from(revision))?;
             set_property(&value, "bindingEpoch", JsValue::from(binding_epoch))?;
-            set_property(
-                &value,
-                "expectedSequence",
-                JsValue::from(expected_sequence),
-            )?;
+            set_property(&value, "expectedSequence", JsValue::from(expected_sequence))?;
             set_property(&value, "desiredSequence", JsValue::from(desired_sequence))?;
         }
         AttachedPointSinkHostIntentV1::ConfirmExact {
@@ -281,7 +266,9 @@ pub(super) fn project_program_scenarios(
     }
 
     let mut scenarios = Vec::new();
-    scenarios.try_reserve_exact(scenario_ids.len()).map_err(|_| ())?;
+    scenarios
+        .try_reserve_exact(scenario_ids.len())
+        .map_err(|_| ())?;
     for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
         let start = row.checked_mul(row_bytes).ok_or(())?;
         let mut values = Vec::new();
@@ -408,12 +395,8 @@ impl AttachedProgramRuntime {
     ) -> Result<AttachedProgramUpdate, JsValue> {
         let revision = u64::try_from(revision)
             .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
-        let scenarios = project_program_scenarios(
-            scenario_ids,
-            surfaces,
-            self.surface_input_count,
-        )
-        .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
+        let scenarios = project_program_scenarios(scenario_ids, surfaces, self.surface_input_count)
+            .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
         self.inner
             .update_observed(revision, &scenarios)
             .map(AttachedProgramUpdate::from_core)
