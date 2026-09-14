@@ -28,12 +28,18 @@ const COMPILE_PROGRAM_ERROR_CODES = new Set([
 ]);
 
 export function isProgramError(error) {
-  if (!(error instanceof Error)) return false;
-  if (error.operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(error.code);
-  if (error.operation === "updateObserved" || error.operation === "updateUnknown") {
-    return error.code === "program_update";
+  // A caught value may be a revoked Proxy or expose throwing/stateful getters.
+  // Classify one observation; never replace the original failure with a probe error.
+  try {
+    if (!(error instanceof Error)) return false;
+    const operation = error.operation;
+    const code = error.code;
+    if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
+    return (operation === "updateObserved" || operation === "updateUnknown")
+      && code === "program_update";
+  } catch {
+    return false;
   }
-  return false;
 }
 
 export function init(input) {

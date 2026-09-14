@@ -133,6 +133,29 @@ fn to_program_js_error(
     program_error("Program runtime operation failed", code, operation.key()).into()
 }
 
+// На JS-границе integer ABI усекал/оборачивал вход ДО проверки Core.
+// Проверяем исходный JsValue: as_f64 не вызывает пользовательское coercion,
+// а u64::try_from дополнительно проверяет, что bigint не потерял старшие биты.
+fn checked_u32(value: JsValue) -> Option<u32> {
+    let number = value.as_f64()?;
+    if number.is_finite() && number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number)
+    {
+        Some(number as u32)
+    } else {
+        None
+    }
+}
+
+fn checked_output_index(value: JsValue) -> Result<usize, JsError> {
+    checked_u32(value)
+        .map(|index| index as usize)
+        .ok_or_else(|| {
+            to_js_error(BindingError::Internal {
+                reason: "program output index must be a u32 number".to_string(),
+            })
+        })
+}
+
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsError> {
@@ -216,7 +239,11 @@ impl ProgramSnapshot {
     }
 
     #[wasm_bindgen(js_name = outputSlot)]
-    pub fn output_slot(&self, index: usize) -> Result<u32, JsError> {
+    pub fn output_slot(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
+    ) -> Result<u32, JsError> {
+        let index = checked_output_index(index)?;
         self.inner
             .outputs()
             .get(index)
@@ -229,7 +256,11 @@ impl ProgramSnapshot {
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
-    pub fn output_rgb(&self, index: usize) -> Result<Box<[u8]>, JsError> {
+    pub fn output_rgb(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
+    ) -> Result<Box<[u8]>, JsError> {
+        let index = checked_output_index(index)?;
         self.inner
             .outputs()
             .get(index)
@@ -242,7 +273,11 @@ impl ProgramSnapshot {
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
-    pub fn output_opacity(&self, index: usize) -> Result<f64, JsError> {
+    pub fn output_opacity(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
+    ) -> Result<f64, JsError> {
+        let index = checked_output_index(index)?;
         self.inner
             .outputs()
             .get(index)
@@ -257,7 +292,13 @@ impl ProgramSnapshot {
 
 /// Компилирует canonical Program wire bytes и создаёт одну runtime Session.
 #[wasm_bindgen(js_name = compileProgramWire)]
-pub fn compile_program_wire(bytes: &[u8], stream_id: u32) -> Result<ProgramRuntime, JsValue> {
+pub fn compile_program_wire(
+    bytes: &[u8],
+    #[wasm_bindgen(unchecked_param_type = "number")] stream_id: JsValue,
+) -> Result<ProgramRuntime, JsValue> {
+    use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+    let stream_id = checked_u32(stream_id)
+        .ok_or_else(|| to_program_js_error(E::Instantiate, ProgramOperation::CompileProgramWire))?;
     let compiled = labcolors_core::program_wire::compile_program_wire_v1(bytes)
         .map_err(|error| to_program_js_error(error, ProgramOperation::CompileProgramWire))?;
     let session = compiled
@@ -273,12 +314,17 @@ impl ProgramRuntime {
     #[wasm_bindgen(js_name = updateObserved)]
     pub fn update_observed(
         &mut self,
-        revision: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
         scenario_ids: &[u32],
         surfaces: &[u8],
-        surface_count: usize,
+        #[wasm_bindgen(unchecked_param_type = "number")] surface_count: JsValue,
     ) -> Result<ProgramSnapshot, JsValue> {
         use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let revision = u64::try_from(revision)
+            .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+        let surface_count = checked_u32(surface_count)
+            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
+            as usize;
         let row_bytes = surface_count
             .checked_mul(3)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
@@ -324,9 +370,14 @@ impl ProgramRuntime {
     #[wasm_bindgen(js_name = updateUnknown)]
     pub fn update_unknown(
         &mut self,
-        revision: u64,
-        reason_id: u32,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] reason_id: JsValue,
     ) -> Result<ProgramSnapshot, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let revision = u64::try_from(revision)
+            .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateUnknown))?;
+        let reason_id = checked_u32(reason_id)
+            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateUnknown))?;
         self.inner
             .update_unknown(revision, reason_id)
             .map(|inner| ProgramSnapshot { inner })
@@ -415,20 +466,21 @@ mod browser_tests {
 
     #[wasm_bindgen_test]
     fn terminal_program_wire_and_update_failures_keep_operation_context() {
-        let wire_error = match compile_program_wire(&[], 1) {
+        let wire_error = match compile_program_wire(&[], 1.into()) {
             Ok(_) => panic!("empty wire must fail"),
             Err(error) => error,
         };
         assert_program_error(wire_error, "program_wire", "compileProgramWire");
 
-        let mut runtime = compile_program_wire(&reference_wire(), 7).expect("canonical wire");
-        let update_error = match runtime.update_observed(1, &[], &[], 1) {
+        let mut runtime =
+            compile_program_wire(&reference_wire(), 7.into()).expect("canonical wire");
+        let update_error = match runtime.update_observed(1_u64.into(), &[], &[], 1.into()) {
             Ok(_) => panic!("empty scenario set must fail"),
             Err(error) => error,
         };
         assert_program_error(update_error, "program_update", "updateObserved");
 
-        let shape_error = match runtime.update_observed(1, &[1], &[255, 255], 1) {
+        let shape_error = match runtime.update_observed(1_u64.into(), &[1], &[255, 255], 1.into()) {
             Ok(_) => panic!("incomplete surface matrix must fail"),
             Err(error) => error,
         };
@@ -437,25 +489,34 @@ mod browser_tests {
 
     #[wasm_bindgen_test]
     fn terminal_program_compiles_updates_and_projects_one_snapshot() {
-        let mut runtime = compile_program_wire(&reference_wire(), 1).expect("canonical wire");
+        let mut runtime =
+            compile_program_wire(&reference_wire(), 1.into()).expect("canonical wire");
         let snapshot = runtime
-            .update_observed(1, &[1], &[255, 255, 255], 1)
+            .update_observed(1_u64.into(), &[1], &[255, 255, 255], 1.into())
             .expect("observed update");
 
         assert_eq!(snapshot.state(), "ready");
         assert_eq!(snapshot.output_count(), 1);
-        assert_eq!(snapshot.output_slot(0).unwrap(), 91);
-        assert_eq!(snapshot.output_rgb(0).unwrap().as_ref(), &[20, 20, 20]);
-        assert_eq!(snapshot.output_opacity(0).unwrap(), 1.0);
+        assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
+        assert_eq!(
+            snapshot.output_rgb(0.into()).unwrap().as_ref(),
+            &[20, 20, 20]
+        );
+        assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
     }
 
     #[wasm_bindgen_test]
     fn rejected_surface_matrix_does_not_poison_the_next_atomic_update() {
-        let mut runtime = compile_program_wire(&reference_wire(), 7).expect("canonical wire");
-        assert!(runtime.update_observed(1, &[1], &[255, 255], 1).is_err());
+        let mut runtime =
+            compile_program_wire(&reference_wire(), 7.into()).expect("canonical wire");
+        assert!(
+            runtime
+                .update_observed(1_u64.into(), &[1], &[255, 255], 1.into())
+                .is_err()
+        );
 
         let snapshot = runtime
-            .update_observed(1, &[1], &[255, 255, 255], 1)
+            .update_observed(1_u64.into(), &[1], &[255, 255, 255], 1.into())
             .expect("valid update after refusal");
         assert_eq!(snapshot.state(), "ready");
         assert_eq!(snapshot.output_count(), 1);

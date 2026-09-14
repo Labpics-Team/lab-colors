@@ -64,3 +64,55 @@ void (null as unknown as RoleRecipe);
 void (null as unknown as ThemeConfig);
 void LabColors;
 void applyTheme;
+
+// Проверяется только компилятором: JsValue на Rust-границе не расширяет
+// generated API до any/unknown и не делает обязательные аргументы optional.
+function scalarInputTypes(
+  bytes: Uint8Array,
+  runtime: ProgramRuntime,
+  snapshot: ProgramSnapshot,
+): void {
+  const scenarios = new Uint32Array([1]);
+  const surfaces = new Uint8Array([255, 255, 255]);
+  const revision: bigint = 1n;
+  const count: number = 1;
+
+  compileProgramWire(bytes, 1);
+  runtime.updateObserved(revision, scenarios, surfaces, count);
+  runtime.updateUnknown(revision, 1);
+  snapshot.outputSlot(0);
+  snapshot.outputRgb(0);
+  snapshot.outputOpacity(0);
+
+  // @ts-expect-error stream ID остаётся number, не bigint.
+  compileProgramWire(bytes, 1n);
+  // @ts-expect-error observed revision остаётся bigint, не number.
+  runtime.updateObserved(1, scenarios, surfaces, count);
+  // @ts-expect-error surface count остаётся number, не bigint.
+  runtime.updateObserved(revision, scenarios, surfaces, 1n);
+  // @ts-expect-error unknown revision остаётся bigint, не number.
+  runtime.updateUnknown(1, 1);
+  // @ts-expect-error reason ID остаётся number, не bigint.
+  runtime.updateUnknown(revision, 1n);
+  // @ts-expect-error slot index остаётся number, не bigint.
+  snapshot.outputSlot(0n);
+  // @ts-expect-error RGB index остаётся number, не bigint.
+  snapshot.outputRgb(0n);
+  // @ts-expect-error opacity index остаётся number, не bigint.
+  snapshot.outputOpacity(0n);
+
+  // @ts-expect-error stream ID обязателен.
+  compileProgramWire(bytes);
+  // @ts-expect-error surface count обязателен.
+  runtime.updateObserved(revision, scenarios, surfaces);
+  // @ts-expect-error reason ID обязателен.
+  runtime.updateUnknown(revision);
+  // @ts-expect-error slot index обязателен.
+  snapshot.outputSlot();
+  // @ts-expect-error RGB index обязателен.
+  snapshot.outputRgb();
+  // @ts-expect-error opacity index обязателен.
+  snapshot.outputOpacity();
+}
+
+void scalarInputTypes;
