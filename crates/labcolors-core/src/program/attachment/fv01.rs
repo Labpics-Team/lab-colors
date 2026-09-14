@@ -4,12 +4,14 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::Srgb8;
-use crate::appearance::{EncodedPointPaintV1, ExactFinalOwnedPointDomainV1};
-use crate::program::{
-    AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,
-};
+use crate::program::{AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1};
 use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
+use crate::program_wire::{
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
+    AttachedMaterializationCaseProofV1, AttachedPointSinkAdmissionErrorV1,
+    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
+    AttachedPointSinkHostV1,
+};
 
 use super::{
     AttachedRenderOutputV1, AttachmentCommitV1, BoundPointSinkScopePermitV1,
@@ -32,291 +34,6 @@ impl AttachedPointSinkOutputIdV1 {
     pub(crate) const fn value(self) -> u32 {
         self.0
     }
-}
-
-/// One complete host patch entry after compiler admission.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AttachedPointSinkHostPatchEntryV1 {
-    output: u32,
-    sink_output: u32,
-    source: Srgb8,
-    opacity: f64,
-}
-
-impl AttachedPointSinkHostPatchEntryV1 {
-    /// Authored Program output slot.
-    #[must_use]
-    pub const fn output(self) -> u32 {
-        self.output
-    }
-
-    /// Host-owned sink output identity.
-    #[must_use]
-    pub const fn sink_output(self) -> u32 {
-        self.sink_output
-    }
-
-    /// Encoded-sRGB8 source written by the host.
-    #[must_use]
-    pub const fn source(self) -> Srgb8 {
-        self.source
-    }
-
-    /// Straight alpha written by the host.
-    #[must_use]
-    pub const fn opacity(self) -> f64 {
-        self.opacity
-    }
-}
-
-/// One synchronous atomic host command.
-///
-/// `try_install` must publish the complete command or leave the previously
-/// published scope, revision and sequence unchanged.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AttachedPointSinkHostIntentV1<'a> {
-    /// Replace the complete admitted scope.
-    SetAll {
-        /// Observation revision being published.
-        revision: u64,
-        /// Process-local incarnation of this exact host binding.
-        binding_epoch: u64,
-        /// Sequence that must still be published.
-        expected_sequence: u64,
-        /// Sequence that becomes visible on success.
-        desired_sequence: u64,
-        /// Complete canonical output patch.
-        patch: &'a [AttachedPointSinkHostPatchEntryV1],
-    },
-    /// Atomically remove the complete admitted scope.
-    RevokeAll {
-        /// Observation revision causing revocation.
-        revision: u64,
-        /// Process-local incarnation of this exact host binding.
-        binding_epoch: u64,
-        /// Sequence that must still be published.
-        expected_sequence: u64,
-        /// Sequence that becomes visible on success.
-        desired_sequence: u64,
-    },
-    /// Confirm that the host still exposes the exact published snapshot.
-    ConfirmExact {
-        /// Revision that must already be published.
-        revision: u64,
-        /// Process-local incarnation of this exact host binding.
-        binding_epoch: u64,
-        /// Sequence that must already be published.
-        published_sequence: u64,
-        /// Exact complete patch expected to remain visible.
-        patch: &'a [AttachedPointSinkHostPatchEntryV1],
-    },
-}
-
-/// Host-owned synchronous effect boundary for attached Program materialization.
-pub trait AttachedPointSinkHostV1 {
-    /// Host-specific typed failure.
-    type Error;
-
-    /// Atomically apply or confirm one complete command.
-    fn try_install(&mut self, intent: AttachedPointSinkHostIntentV1<'_>)
-    -> Result<(), Self::Error>;
-}
-
-/// Failure before a host writer becomes bound to the compiled output scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AttachedPointSinkAdmissionErrorV1 {
-    /// Host-owned scope differs from the compiler-minted attachment scope.
-    ScopeChanged,
-    /// A fresh process-local binding epoch could not be minted.
-    EpochExhausted,
-    /// Pre-install reusable storage could not be reserved.
-    ResourceExhausted,
-}
-
-/// Failure of the post-admission host stamp protocol.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum AttachedPointSinkErrorV1<HostError> {
-    /// Patch cardinality or sink identities differ from the admitted scope.
-    PatchScopeMismatch,
-    /// Expected sequence or binding epoch differs from the committed stamp.
-    StampMismatch,
-    /// Confirmed revision differs from the committed revision.
-    RevisionMismatch,
-    /// One prepared command was installed more than once.
-    AlreadyInstalled,
-    /// The synchronous host rejected the atomic command.
-    Host(HostError),
-}
-
-/// Renderer provenance carried by the first FV authority slice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum RendererProvenanceV1 {
-    /// Host materialization succeeded, but no renderer observation is claimed.
-    Unverified,
-}
-
-/// Public projection of the registered appearance surround.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AppearanceSurroundV1 {
-    /// Average surround.
-    Average,
-    /// Dim surround.
-    Dim,
-    /// Dark surround.
-    Dark,
-}
-
-/// Typed refusal to issue or reuse an attached materialization authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum AttachedMaterializationAuthorityErrorV1 {
-    /// Requested presentation metadata is not compiler-minted terminal data.
-    NonTerminalRoot,
-    /// A candidate root is consumed downstream and cannot be terminal.
-    RootConsumedDownstream,
-    /// Published sink revision differs from the certificate/current attachment.
-    PublishedRevisionMismatch,
-    /// Program content identity differs, including occurrence appearance context.
-    ProgramIdentityMismatch,
-    /// Capability belongs to a different live compiled owner generation.
-    ForeignOwnerGeneration,
-    /// Capability belongs to another host binding incarnation.
-    ForeignBindingEpoch,
-    /// No exact point-causal replay exists for the attached presentation.
-    MissingExactPointAbsenceProof,
-    /// Exact replay proves that the target owns no final terminal contribution.
-    EmptyFinalOwnedDomain,
-    /// Authority storage could not be allocated after a successful commit.
-    ResourceExhausted,
-}
-
-/// Provisional pre-1.0 capability for one installed point materialization and
-/// one certified physical case.
-///
-/// There is intentionally no public constructor. Values are minted only from
-/// a successful `Ready` attachment commit plus the matching
-/// point-causal replay owned by that exact certificate.
-pub struct AttachedMaterializationAuthorityV1 {
-    content_identity: ContentIdentityV9,
-    published_revision: u64,
-    sink_stamp: PointSinkStampV1,
-    presentation_root: PresentationRootIdV1,
-    presentation_occurrence: OccurrenceIdV1,
-    terminal_occurrence: OccurrenceIdV1,
-    appearance_context: AppearanceContextV1,
-    _point_domain_proof: ExactFinalOwnedPointDomainV1,
-    composite: Srgb8,
-    paint: EncodedPointPaintV1,
-    case_index: usize,
-    renderer_provenance: RendererProvenanceV1,
-    owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-}
-
-impl AttachedMaterializationAuthorityV1 {
-    /// Canonical Program content identity.
-    #[must_use]
-    pub const fn content_identity(&self) -> [u8; 32] {
-        *self.content_identity.as_bytes()
-    }
-
-    /// Revision atomically installed by the attachment.
-    #[must_use]
-    pub const fn published_revision(&self) -> u64 {
-        self.published_revision
-    }
-
-    /// Published sink sequence.
-    #[must_use]
-    pub const fn sink_sequence(&self) -> u64 {
-        self.sink_stamp.sequence()
-    }
-
-    /// Process-local host binding incarnation.
-    #[must_use]
-    pub fn sink_binding_epoch(&self) -> u64 {
-        self.sink_stamp.binding_epoch().0.get()
-    }
-
-    /// Compiler-minted presentation root.
-    #[must_use]
-    pub const fn presentation_root(&self) -> u32 {
-        self.presentation_root.value()
-    }
-
-    /// Presentation target occurrence whose contribution was replayed.
-    #[must_use]
-    pub const fn presentation_occurrence(&self) -> u32 {
-        self.presentation_occurrence.value()
-    }
-
-    /// Compiler-minted terminal occurrence of the presentation root.
-    #[must_use]
-    pub const fn terminal_occurrence(&self) -> u32 {
-        self.terminal_occurrence.value()
-    }
-
-    /// Canonical physical-case index inside the certified observation.
-    #[must_use]
-    pub const fn case_index(&self) -> usize {
-        self.case_index
-    }
-
-    /// Admitted CIECAM16 adapting luminance in cd/m².
-    #[must_use]
-    pub fn adapting_luminance_cd_m2(&self) -> f64 {
-        self.appearance_context.adapting_luminance_cd_m2()
-    }
-
-    /// Admitted background luminance ratio `Y_b/Y_w`.
-    #[must_use]
-    pub fn background_luminance_ratio_yb_yw(&self) -> f64 {
-        self.appearance_context.background_luminance_ratio_yb_yw()
-    }
-
-    /// Registered surround of the exact terminal occurrence.
-    #[must_use]
-    pub const fn appearance_surround(&self) -> AppearanceSurroundV1 {
-        match self.appearance_context.surround() {
-            SurroundV1::Average => AppearanceSurroundV1::Average,
-            SurroundV1::Dim => AppearanceSurroundV1::Dim,
-            SurroundV1::Dark => AppearanceSurroundV1::Dark,
-        }
-    }
-
-    /// Encoded-sRGB8 source installed in the host before backdrop composition.
-    #[must_use]
-    pub const fn source(&self) -> Srgb8 {
-        self.paint.value().source()
-    }
-
-    /// Installed straight alpha.
-    #[must_use]
-    pub fn opacity(&self) -> f64 {
-        self.paint.value().opacity().value()
-    }
-
-    /// Exact final-owned composite proven by counterfactual replay.
-    #[must_use]
-    pub const fn composite(&self) -> Srgb8 {
-        self.composite
-    }
-
-    /// Renderer provenance of this first slice.
-    #[must_use]
-    pub const fn renderer_provenance(&self) -> RendererProvenanceV1 {
-        self.renderer_provenance
-    }
-}
-
-pub(crate) fn same_authority_owner_generation(
-    left: &AttachedMaterializationAuthorityV1,
-    right: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-) -> bool {
-    left.owner_pin.same_generation(right)
 }
 
 pub(crate) type AttachedProgramAttachmentV1<H> =
@@ -644,30 +361,29 @@ pub(crate) fn mint_authorities(
 ) -> Result<Vec<AttachedMaterializationAuthorityV1>, AttachedMaterializationAuthorityErrorV1> {
     let render_outputs = commit.render_outputs();
     let mut authorities = Vec::new();
-    let estimated = render_outputs.len();
     authorities
-        .try_reserve(estimated)
+        .try_reserve(render_outputs.len())
         .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
 
     for render in render_outputs {
-        mint_render_output_authorities(render, owner_pin, &mut authorities)?;
+        authorities.push(mint_render_output_authority(render, owner_pin)?);
     }
     Ok(authorities)
 }
 
-fn mint_render_output_authorities(
+fn mint_render_output_authority(
     render: AttachedRenderOutputV1<'_, AttachedPointSinkOutputIdV1>,
     owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-    authorities: &mut Vec<AttachedMaterializationAuthorityV1>,
-) -> Result<(), AttachedMaterializationAuthorityErrorV1> {
+) -> Result<AttachedMaterializationAuthorityV1, AttachedMaterializationAuthorityErrorV1> {
     let certificate = render.certificate();
     let published = render.published_stamp();
     if certificate.observation().revision() != published.revision() {
         return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
     }
+
     let content_identity = certificate.content_identity();
     let compiled = render.patch.presentation.compiled;
-    let mut matched = 0_usize;
+    let mut cases = Vec::new();
     for causal in certificate
         .inner
         .point_causal_certificates()
@@ -676,7 +392,6 @@ fn mint_render_output_authorities(
                 && causal.target().value() == render.occurrence().value()
         })
     {
-        matched += 1;
         if causal.content_identity().as_bytes() != content_identity.as_bytes() {
             return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
         }
@@ -686,36 +401,32 @@ fn mint_render_output_authorities(
         if causal.modeled_terminal_occurrence() != compiled.terminal() {
             return Err(AttachedMaterializationAuthorityErrorV1::NonTerminalRoot);
         }
-        let domain = causal.domain();
-        let visible = match domain {
-            ExactFinalOwnedPointDomainV1::Singleton { visible } => visible,
-            ExactFinalOwnedPointDomainV1::Empty => {
-                return Err(AttachedMaterializationAuthorityErrorV1::EmptyFinalOwnedDomain);
-            }
-        };
-        authorities
+        cases
             .try_reserve(1)
             .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
-        authorities.push(AttachedMaterializationAuthorityV1 {
-            content_identity,
-            published_revision: published.revision(),
-            sink_stamp: published.sink_stamp(),
-            presentation_root: render.root(),
-            presentation_occurrence: render.occurrence(),
-            terminal_occurrence: OccurrenceIdV1::from_core(compiled.terminal()),
-            appearance_context: AppearanceContextV1::from_core(compiled.terminal_context()),
-            _point_domain_proof: domain,
-            composite: Srgb8::new(visible),
-            paint: render.paint(),
-            case_index: causal.case_index(),
-            renderer_provenance: RendererProvenanceV1::Unverified,
-            owner_pin: owner_pin.clone(),
-        });
+        cases.push(AttachedMaterializationCaseProofV1::from_domain(
+            causal.case_index(),
+            causal.domain(),
+        )?);
     }
-    if matched == 0 {
+    if cases.is_empty() {
         return Err(AttachedMaterializationAuthorityErrorV1::MissingExactPointAbsenceProof);
     }
-    Ok(())
+
+    let sink_stamp = published.sink_stamp();
+    AttachedMaterializationAuthorityV1::from_attached_parts(
+        content_identity,
+        published.revision(),
+        sink_stamp,
+        sink_stamp.binding_epoch().0.get(),
+        render.root(),
+        render.occurrence(),
+        OccurrenceIdV1::from_core(compiled.terminal()),
+        AppearanceContextV1::from_core(compiled.terminal_context()),
+        render.paint(),
+        cases.into_boxed_slice(),
+        owner_pin.clone(),
+    )
 }
 
 pub(crate) fn validate_authority<W>(
@@ -727,17 +438,17 @@ pub(crate) fn validate_authority<W>(
 where
     W: PointSinkWriterV1<OutputId = AttachedPointSinkOutputIdV1>,
 {
-    if authority.content_identity != expected_content_identity {
+    if authority.stored_content_identity() != expected_content_identity {
         return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
     }
-    if !authority.owner_pin.same_generation(owner_pin) {
+    if !authority.same_owner_generation(owner_pin) {
         return Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration);
     }
     let current_stamp = attachment.state.expected_sink_stamp;
-    if authority.sink_stamp.binding_epoch() != current_stamp.binding_epoch() {
+    if authority.stored_sink_stamp().binding_epoch() != current_stamp.binding_epoch() {
         return Err(AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch);
     }
-    if attachment.state.committed_revision != Some(authority.published_revision) {
+    if attachment.state.committed_revision != Some(authority.published_revision()) {
         return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
     }
     Ok(())

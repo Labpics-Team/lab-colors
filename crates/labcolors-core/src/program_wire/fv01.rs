@@ -8,10 +8,10 @@ use core::iter::FusedIterator;
 
 use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintV1, ExactFinalOwnedPointDomainV1};
+use crate::program::attachment::PointSinkStampV1;
 use crate::program::{
     AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,
 };
-use crate::program::attachment::PointSinkStampV1;
 use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
 
 /// One complete host patch entry after compiler admission.
@@ -98,10 +98,8 @@ pub trait AttachedPointSinkHostV1 {
     type Error;
 
     /// Atomically apply or confirm one complete command.
-    fn try_install(
-        &mut self,
-        intent: AttachedPointSinkHostIntentV1<'_>,
-    ) -> Result<(), Self::Error>;
+    fn try_install(&mut self, intent: AttachedPointSinkHostIntentV1<'_>)
+    -> Result<(), Self::Error>;
 }
 
 /// Failure before a host writer becomes bound to the compiled output scope.
@@ -340,7 +338,9 @@ impl AttachedMaterializationAuthorityV1 {
     pub fn cases(
         &self,
     ) -> impl ExactSizeIterator<Item = AttachedMaterializationCaseV1> + FusedIterator + '_ {
-        self.cases.iter().map(AttachedMaterializationCaseProofV1::public)
+        self.cases
+            .iter()
+            .map(AttachedMaterializationCaseProofV1::public)
     }
 
     /// Admitted CIECAM16 adapting luminance in cd/m².
