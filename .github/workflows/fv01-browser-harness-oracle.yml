@@ -1,0 +1,31 @@
+name: FV-01 attached harness oracle migration
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Apply attached harness oracle migration
+        run: |
+          python3 scripts/fv01-browser-harness-test.py
+          rm scripts/fv01-browser-harness-test.py .github/workflows/fv01-browser-harness-oracle.yml
+      - name: Commit harness oracle
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add packages/colors/test/program-runtime-browser-harness.test.mjs scripts/fv01-browser-harness-test.py .github/workflows/fv01-browser-harness-oracle.yml
+          git diff --cached --check
+          git commit -m "test(fv-01): align browser harness oracle with authority"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
