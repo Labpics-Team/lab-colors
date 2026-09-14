@@ -5,10 +5,10 @@
 //! CSS string appears as an authority constructor.
 
 use labcolors_core::program_wire::{
-    AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1, AttachedProgramCompileErrorV1,
-    AttachedProgramEmissionBindingV1, AttachedProgramPresentationBindingV1,
-    AttachedProgramUpdateStateV1, AttachedProgramV1, CompiledAttachedProgramV1, ProgramScenarioV1,
-    compile_attached_program_wire_v1,
+    AttachedMaterializationAuthorityV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
+    AttachedProgramCompileErrorV1, AttachedProgramEmissionBindingV1,
+    AttachedProgramPresentationBindingV1, AttachedProgramUpdateStateV1, AttachedProgramV1,
+    CompiledAttachedProgramV1, ProgramScenarioV1, compile_attached_program_wire_v1,
 };
 
 struct Host;
@@ -60,19 +60,22 @@ fn compiled_program_attaches_only_through_the_typed_host_port() {
 }
 
 #[test]
-fn live_attachment_exposes_post_commit_lifecycle_and_authority_only() {
+fn live_attachment_exposes_post_commit_lifecycle_authority_and_revalidation_only() {
     fn drive<H: AttachedPointSinkHostV1>(
         runtime: &mut AttachedProgramV1<H>,
         scenario: &ProgramScenarioV1,
+        authority: &AttachedMaterializationAuthorityV1,
     ) {
         if let Ok(update) = runtime.update_observed(1, core::slice::from_ref(scenario)) {
             let _ = update.state();
             let _ = update.authorities();
         }
+        let _ = runtime.validate_authority(authority);
         let _ = runtime.update_unknown(2, 7);
     }
 
-    let _ = drive::<Host> as fn(&mut AttachedProgramV1<Host>, &ProgramScenarioV1);
+    let _ = drive::<Host>
+        as fn(&mut AttachedProgramV1<Host>, &ProgramScenarioV1, &AttachedMaterializationAuthorityV1);
     let _ = AttachedProgramUpdateStateV1::Waiting;
     let _ = AttachedProgramUpdateStateV1::Ready;
     let _ = AttachedProgramUpdateStateV1::Stale;
