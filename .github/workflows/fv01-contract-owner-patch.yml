@@ -1,0 +1,181 @@
+name: FV-01 guarded contract ownership patch
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Move public contract ownership without changing attachment physics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/labcolors-core/src/program/attachment/fv01.rs')
+          text = path.read_text()
+
+          old_imports = '''use crate::Srgb8;
+use crate::appearance::{EncodedPointPaintV1, ExactFinalOwnedPointDomainV1};
+use crate::program::{
+    AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,
+};
+use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
+'''
+          new_imports = '''use crate::program::{AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1};
+use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
+use crate::program_wire::{
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
+    AttachedMaterializationCaseProofV1, AttachedPointSinkAdmissionErrorV1,
+    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
+    AttachedPointSinkHostV1,
+};
+'''
+          if text.count(old_imports) != 1:
+              raise SystemExit('attachment public-contract import anchor changed')
+          text = text.replace(old_imports, new_imports, 1)
+
+          start_marker = '/// One complete host patch entry after compiler admission.\n'
+          end_marker = 'pub(crate) type AttachedProgramAttachmentV1<H> =\n'
+          start = text.find(start_marker)
+          end = text.find(end_marker)
+          if start < 0 or end < 0 or end <= start:
+              raise SystemExit('attachment public-contract range anchors changed')
+          text = text[:start] + text[end:]
+
+          mint_start = text.find('pub(crate) fn mint_authorities(\n')
+          validate_start = text.find('pub(crate) fn validate_authority<W>(\n')
+          if mint_start < 0 or validate_start < 0 or validate_start <= mint_start:
+              raise SystemExit('attachment mint anchors changed')
+          new_mint = '''pub(crate) fn mint_authorities(
+    commit: AttachmentCommitV1<'_, AttachedPointSinkOutputIdV1>,
+    owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+) -> Result<Vec<AttachedMaterializationAuthorityV1>, AttachedMaterializationAuthorityErrorV1> {
+    let render_outputs = commit.render_outputs();
+    let mut authorities = Vec::new();
+    authorities
+        .try_reserve(render_outputs.len())
+        .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
+
+    for render in render_outputs {
+        authorities.push(mint_render_output_authority(render, owner_pin)?);
+    }
+    Ok(authorities)
+}
+
+fn mint_render_output_authority(
+    render: AttachedRenderOutputV1<'_, AttachedPointSinkOutputIdV1>,
+    owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+) -> Result<AttachedMaterializationAuthorityV1, AttachedMaterializationAuthorityErrorV1> {
+    let certificate = render.certificate();
+    let published = render.published_stamp();
+    if certificate.observation().revision() != published.revision() {
+        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
+    }
+
+    let content_identity = certificate.content_identity();
+    let compiled = render.patch.presentation.compiled;
+    let mut cases = Vec::new();
+    for causal in certificate
+        .inner
+        .point_causal_certificates()
+        .filter(|causal| {
+            causal.presentation_root().value() == render.root().value()
+                && causal.target().value() == render.occurrence().value()
+        })
+    {
+        if causal.content_identity().as_bytes() != content_identity.as_bytes() {
+            return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
+        }
+        if causal.observation().revision().value() != published.revision() {
+            return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
+        }
+        if causal.modeled_terminal_occurrence() != compiled.terminal() {
+            return Err(AttachedMaterializationAuthorityErrorV1::NonTerminalRoot);
+        }
+        cases
+            .try_reserve(1)
+            .map_err(|_| AttachedMaterializationAuthorityErrorV1::ResourceExhausted)?;
+        cases.push(AttachedMaterializationCaseProofV1::from_domain(
+            causal.case_index(),
+            causal.domain(),
+        )?);
+    }
+    if cases.is_empty() {
+        return Err(AttachedMaterializationAuthorityErrorV1::MissingExactPointAbsenceProof);
+    }
+
+    let sink_stamp = published.sink_stamp();
+    AttachedMaterializationAuthorityV1::from_attached_parts(
+        content_identity,
+        published.revision(),
+        sink_stamp,
+        sink_stamp.binding_epoch().0.get(),
+        render.root(),
+        render.occurrence(),
+        OccurrenceIdV1::from_core(compiled.terminal()),
+        AppearanceContextV1::from_core(compiled.terminal_context()),
+        render.paint(),
+        cases.into_boxed_slice(),
+        owner_pin.clone(),
+    )
+}
+
+'''
+          text = text[:mint_start] + new_mint + text[validate_start:]
+
+          old_validate = '''    if authority.content_identity != expected_content_identity {
+        return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
+    }
+    if !authority.owner_pin.same_generation(owner_pin) {
+        return Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration);
+    }
+    let current_stamp = attachment.state.expected_sink_stamp;
+    if authority.sink_stamp.binding_epoch() != current_stamp.binding_epoch() {
+        return Err(AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch);
+    }
+    if attachment.state.committed_revision != Some(authority.published_revision) {
+        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
+    }
+'''
+          new_validate = '''    if authority.stored_content_identity() != expected_content_identity {
+        return Err(AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch);
+    }
+    if !authority.same_owner_generation(owner_pin) {
+        return Err(AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration);
+    }
+    let current_stamp = attachment.state.expected_sink_stamp;
+    if authority.stored_sink_stamp().binding_epoch() != current_stamp.binding_epoch() {
+        return Err(AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch);
+    }
+    if attachment.state.committed_revision != Some(authority.published_revision()) {
+        return Err(AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch);
+    }
+'''
+          if text.count(old_validate) != 1:
+              raise SystemExit('attachment authority validation anchor changed')
+          text = text.replace(old_validate, new_validate, 1)
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fv01-contract-owner-patch.yml
+      - name: Commit guarded contract ownership patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/labcolors-core/src/program/attachment/fv01.rs crates/labcolors-core/src/program_wire.rs crates/labcolors-core/src/program_wire/fv01.rs .github/workflows/fv01-contract-owner-patch.yml
+          git diff --cached --check
+          git commit -m "refactor(fv-01): keep public contract outside staged Program"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
