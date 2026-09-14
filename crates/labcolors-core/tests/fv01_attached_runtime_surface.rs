@@ -5,10 +5,11 @@
 //! CSS string appears as an authority constructor.
 
 use labcolors_core::program_wire::{
-    AttachedMaterializationAuthorityV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
-    AttachedProgramCompileErrorV1, AttachedProgramEmissionBindingV1,
-    AttachedProgramPresentationBindingV1, AttachedProgramUpdateStateV1, AttachedProgramV1,
-    CompiledAttachedProgramV1, ProgramScenarioV1, compile_attached_program_wire_v1,
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
+    AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1, AttachedProgramCompileErrorV1,
+    AttachedProgramEmissionBindingV1, AttachedProgramPresentationBindingV1,
+    AttachedProgramUpdateStateV1, AttachedProgramV1, CompiledAttachedProgramV1, ProgramScenarioV1,
+    compile_attached_program_wire_v1,
 };
 
 struct Host;
@@ -84,4 +85,9 @@ fn live_attachment_exposes_post_commit_lifecycle_authority_and_revalidation_only
     let _ = AttachedProgramUpdateStateV1::Ready;
     let _ = AttachedProgramUpdateStateV1::Stale;
     let _ = AttachedProgramUpdateStateV1::Failed;
+
+    let _ = AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch;
+    let _ = AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration;
+    let _ = AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch;
+    let _ = AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch;
 }
