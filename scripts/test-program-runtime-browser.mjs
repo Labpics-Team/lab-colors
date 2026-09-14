@@ -398,6 +398,25 @@ async function browserConsumer(origin, fault) {
     }
     const invalidBindingsAfter = host.snapshot();
 
+    const throwingBindings = Object.create(bindings, {
+      emissionOutputs: {
+        get() { throw new Error("binding getter trap"); },
+      },
+    });
+    const throwingBindingsBefore = host.snapshot();
+    let throwingBindingsError;
+    try {
+      const unexpected = compiled.attach(0, throwingBindings, host);
+      runtimeHandles.push(unexpected);
+    } catch (error) {
+      throwingBindingsError = {
+        rejected: api.isProgramError(error),
+        code: error?.code,
+        operation: error?.operation,
+      };
+    }
+    const throwingBindingsAfter = host.snapshot();
+
     const runtime = compiled.attach(1, bindings, host);
     runtimeHandles.push(runtime);
     resources.push({
@@ -539,6 +558,11 @@ async function browserConsumer(origin, fault) {
         before: invalidBindingsBefore,
         after: invalidBindingsAfter,
       },
+      throwingBindings: {
+        error: throwingBindingsError,
+        before: throwingBindingsBefore,
+        after: throwingBindingsAfter,
+      },
       consumedRoot,
     };
   } catch (error) {
@@ -672,6 +696,7 @@ export function verifyBrowserConsumer(result) {
   const stale = result.stale;
   const foreign = result.foreign;
   const invalidBindings = result.invalidBindings;
+  const throwingBindings = result.throwingBindings;
   const epochIsNonZero = typeof ready?.sinkBindingEpoch === "string" && /^[1-9][0-9]*$/u.test(ready.sinkBindingEpoch);
   if (result.error || result.cleanupError
     || ready?.state !== "ready" || ready.authorityCount !== 1
@@ -708,6 +733,10 @@ export function verifyBrowserConsumer(result) {
     || invalidBindings.error.code !== "attached_invalid_bindings"
     || invalidBindings.error.operation !== "attachAttachedProgram"
     || !equal(invalidBindings.before, invalidBindings.after)
+    || throwingBindings?.error?.rejected !== true
+    || throwingBindings.error.code !== "attached_invalid_bindings"
+    || throwingBindings.error.operation !== "attachAttachedProgram"
+    || !equal(throwingBindings.before, throwingBindings.after)
     || result.consumedRoot?.rejected !== true
     || result.consumedRoot.code !== "attached_root_consumed_downstream"
     || result.consumedRoot.operation !== "compileAttachedProgramWire") {

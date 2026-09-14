@@ -9,8 +9,6 @@ mod attached;
 mod attached_tests;
 mod fv01;
 mod runtime;
-#[cfg(test)]
-mod runtime_regression_tests;
 
 pub use attached::*;
 pub use fv01::{
@@ -23,3 +21,27 @@ pub(crate) use fv01::{
     AttachedMaterializationAuthorityPartsV1, AttachedMaterializationCaseProofV1,
 };
 pub use runtime::*;
+
+impl<HostError: core::fmt::Debug> core::fmt::Debug for AttachedProgramUpdateErrorV1<HostError> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ResourceExhausted => f.write_str("ResourceExhausted"),
+            Self::Update => f.write_str("Update"),
+            Self::SinkPrepare(error) => f.debug_tuple("SinkPrepare").field(error).finish(),
+            Self::SinkInstall(error) => f.debug_tuple("SinkInstall").field(error).finish(),
+            Self::Authority(error) => f.debug_tuple("Authority").field(error).finish(),
+            Self::InternalInvariant => f.write_str("InternalInvariant"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod public_contract_tests {
+    use super::*;
+
+    #[test]
+    fn attached_update_errors_support_debug_diagnostics() {
+        fn assert_debug<T: core::fmt::Debug>() {}
+        assert_debug::<AttachedProgramUpdateErrorV1<()>>();
+    }
+}

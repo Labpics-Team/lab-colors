@@ -279,7 +279,8 @@ struct ExactBindingArray(Uint32Array);
 
 impl ExactBindingArray {
     fn property(bindings: &JsValue, key: &str, expected: usize) -> Result<Self, JsValue> {
-        let value = Reflect::get(bindings, &JsValue::from_str(key))?;
+        let value = Reflect::get(bindings, &JsValue::from_str(key))
+            .map_err(|_| attached_error("attached_invalid_bindings", OP_ATTACH))?;
         let array = value
             .dyn_into::<Uint32Array>()
             .map_err(|_| attached_error("attached_invalid_bindings", OP_ATTACH))?;
