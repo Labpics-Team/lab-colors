@@ -7,10 +7,11 @@
 mod fv01;
 mod runtime;
 
+pub(crate) use fv01::AttachedMaterializationCaseProofV1;
 pub use fv01::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1,
-    AttachedMaterializationAuthorityV1, AttachedPointSinkAdmissionErrorV1,
-    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
-    AttachedPointSinkHostV1, RendererProvenanceV1,
+    AttachedMaterializationAuthorityV1, AttachedMaterializationCaseV1,
+    AttachedPointSinkAdmissionErrorV1, AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1,
+    AttachedPointSinkHostPatchEntryV1, AttachedPointSinkHostV1, RendererProvenanceV1,
 };
 pub use runtime::*;
