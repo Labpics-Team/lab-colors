@@ -5,8 +5,8 @@
 //! Program wire seam, while the host owns only the synchronous effect port.
 
 use labcolors_core::program_wire::{
-    AttachedMaterializationAuthorityV1, AttachedMaterializationCaseV1,
-    AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
+    AttachedMaterializationCaseV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostV1,
 };
 
 struct ExternalHost;
@@ -68,6 +68,25 @@ fn one_authority_projects_many_exact_physical_cases_without_minting_more_authori
         }
     }
     let _ = visits_cases as fn(&AttachedMaterializationAuthorityV1);
+}
+
+#[test]
+fn authority_refusals_are_typed_and_the_family_remains_open_for_pre_1_0_evolution() {
+    fn classifies(error: AttachedMaterializationAuthorityErrorV1) -> &'static str {
+        match error {
+            AttachedMaterializationAuthorityErrorV1::PublishedRevisionMismatch => "revision",
+            AttachedMaterializationAuthorityErrorV1::ProgramIdentityMismatch => "identity",
+            AttachedMaterializationAuthorityErrorV1::ForeignOwnerGeneration => "owner",
+            AttachedMaterializationAuthorityErrorV1::ForeignBindingEpoch => "epoch",
+            AttachedMaterializationAuthorityErrorV1::MissingExactPointAbsenceProof
+            | AttachedMaterializationAuthorityErrorV1::EmptyFinalOwnedDomain => "absence-proof",
+            AttachedMaterializationAuthorityErrorV1::NonTerminalRoot
+            | AttachedMaterializationAuthorityErrorV1::RootConsumedDownstream => "terminality",
+            AttachedMaterializationAuthorityErrorV1::ResourceExhausted => "resource",
+            _ => "future",
+        }
+    }
+    let _ = classifies as fn(AttachedMaterializationAuthorityErrorV1) -> &'static str;
 }
 
 #[test]
