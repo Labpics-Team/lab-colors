@@ -246,20 +246,37 @@ pub struct AttachedMaterializationAuthorityV1 {
     owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 }
 
+pub(crate) struct AttachedMaterializationAuthorityPartsV1 {
+    pub(crate) content_identity: ContentIdentityV9,
+    pub(crate) published_revision: u64,
+    pub(crate) sink_stamp: PointSinkStampV1,
+    pub(crate) sink_binding_epoch: u64,
+    pub(crate) presentation_root: PresentationRootIdV1,
+    pub(crate) presentation_occurrence: OccurrenceIdV1,
+    pub(crate) terminal_occurrence: OccurrenceIdV1,
+    pub(crate) appearance_context: AppearanceContextV1,
+    pub(crate) paint: EncodedPointPaintV1,
+    pub(crate) cases: Box<[AttachedMaterializationCaseProofV1]>,
+    pub(crate) owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+}
+
 impl AttachedMaterializationAuthorityV1 {
     pub(crate) fn from_attached_parts(
-        content_identity: ContentIdentityV9,
-        published_revision: u64,
-        sink_stamp: PointSinkStampV1,
-        sink_binding_epoch: u64,
-        presentation_root: PresentationRootIdV1,
-        presentation_occurrence: OccurrenceIdV1,
-        terminal_occurrence: OccurrenceIdV1,
-        appearance_context: AppearanceContextV1,
-        paint: EncodedPointPaintV1,
-        cases: Box<[AttachedMaterializationCaseProofV1]>,
-        owner_pin: ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
+        parts: AttachedMaterializationAuthorityPartsV1,
     ) -> Result<Self, AttachedMaterializationAuthorityErrorV1> {
+        let AttachedMaterializationAuthorityPartsV1 {
+            content_identity,
+            published_revision,
+            sink_stamp,
+            sink_binding_epoch,
+            presentation_root,
+            presentation_occurrence,
+            terminal_occurrence,
+            appearance_context,
+            paint,
+            cases,
+            owner_pin,
+        } = parts;
         if cases.is_empty() {
             return Err(AttachedMaterializationAuthorityErrorV1::MissingExactPointAbsenceProof);
         }

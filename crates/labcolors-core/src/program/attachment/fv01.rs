@@ -7,10 +7,10 @@ use core::{
 use crate::program::{AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1};
 use crate::program_session::{CoreProgramEvaluatorsV1, ProgramOwnerLeaseV1};
 use crate::program_wire::{
-    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityV1,
-    AttachedMaterializationCaseProofV1, AttachedPointSinkAdmissionErrorV1,
-    AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1, AttachedPointSinkHostPatchEntryV1,
-    AttachedPointSinkHostV1,
+    AttachedMaterializationAuthorityErrorV1, AttachedMaterializationAuthorityPartsV1,
+    AttachedMaterializationAuthorityV1, AttachedMaterializationCaseProofV1,
+    AttachedPointSinkAdmissionErrorV1, AttachedPointSinkErrorV1, AttachedPointSinkHostIntentV1,
+    AttachedPointSinkHostPatchEntryV1, AttachedPointSinkHostV1,
 };
 
 use super::{
@@ -415,17 +415,19 @@ fn mint_render_output_authority(
 
     let sink_stamp = published.sink_stamp();
     AttachedMaterializationAuthorityV1::from_attached_parts(
-        content_identity,
-        published.revision(),
-        sink_stamp,
-        sink_stamp.binding_epoch().0.get(),
-        render.root(),
-        render.occurrence(),
-        OccurrenceIdV1::from_core(compiled.terminal()),
-        AppearanceContextV1::from_core(compiled.terminal_context()),
-        render.paint(),
-        cases.into_boxed_slice(),
-        owner_pin.clone(),
+        AttachedMaterializationAuthorityPartsV1 {
+            content_identity,
+            published_revision: published.revision(),
+            sink_stamp,
+            sink_binding_epoch: sink_stamp.binding_epoch().0.get(),
+            presentation_root: render.root(),
+            presentation_occurrence: render.occurrence(),
+            terminal_occurrence: OccurrenceIdV1::from_core(compiled.terminal()),
+            appearance_context: AppearanceContextV1::from_core(compiled.terminal_context()),
+            paint: render.paint(),
+            cases: cases.into_boxed_slice(),
+            owner_pin: owner_pin.clone(),
+        },
     )
 }
 
