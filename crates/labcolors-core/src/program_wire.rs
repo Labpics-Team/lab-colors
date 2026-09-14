@@ -4,9 +4,11 @@
 //! wire/runtime implementation from the provisional attached-authority slice.
 //! Internal modules remain private; consumers only see the re-exported contract.
 
+mod attached;
 mod fv01;
 mod runtime;
 
+pub use attached::*;
 pub use fv01::{
     AppearanceSurroundV1, AttachedMaterializationAuthorityErrorV1,
     AttachedMaterializationAuthorityV1, AttachedMaterializationCaseV1,
