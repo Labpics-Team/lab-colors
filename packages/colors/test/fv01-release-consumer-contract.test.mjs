@@ -54,7 +54,10 @@ test("clean consumer receives bytes only from an inspected canonical pack", () =
     packBody,
     /const inspected = await inspectNpmTarball\(path, expected, packResult\);/u,
   );
-  assert.match(packBody, /return \{[\s\S]*bytes: inspected\.bytes,[\s\S]*inspection: inspected\.inspection/u);
+  assert.match(
+    packBody,
+    /return \{ path, tarballName, expected, packResult, \.\.\.inspected \};/u,
+  );
 
   const releaseBody = functionBody(
     source,
