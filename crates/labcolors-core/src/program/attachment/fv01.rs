@@ -119,10 +119,8 @@ pub trait AttachedPointSinkHostV1 {
     type Error;
 
     /// Atomically apply or confirm one complete command.
-    fn try_install(
-        &mut self,
-        intent: AttachedPointSinkHostIntentV1<'_>,
-    ) -> Result<(), Self::Error>;
+    fn try_install(&mut self, intent: AttachedPointSinkHostIntentV1<'_>)
+    -> Result<(), Self::Error>;
 }
 
 /// Failure before a host writer becomes bound to the compiled output scope.
@@ -405,14 +403,20 @@ where
             ));
         };
         let mut committed_patch = Vec::new();
-        if committed_patch.try_reserve_exact(self.owned_scope.len()).is_err() {
+        if committed_patch
+            .try_reserve_exact(self.owned_scope.len())
+            .is_err()
+        {
             return Err(PointSinkAdmissionFailureV1::new(
                 AttachedPointSinkAdmissionErrorV1::ResourceExhausted,
                 self,
             ));
         }
         let mut scratch_patch = Vec::new();
-        if scratch_patch.try_reserve_exact(self.owned_scope.len()).is_err() {
+        if scratch_patch
+            .try_reserve_exact(self.owned_scope.len())
+            .is_err()
+        {
             return Err(PointSinkAdmissionFailureV1::new(
                 AttachedPointSinkAdmissionErrorV1::ResourceExhausted,
                 self,

@@ -1583,6 +1583,7 @@ where
     }
 }
 
+pub(crate) mod fv01;
 #[cfg(feature = "private-fixture")]
 pub(crate) mod handoff;
 #[cfg(test)]
