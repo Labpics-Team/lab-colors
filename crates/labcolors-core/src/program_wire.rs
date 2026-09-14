@@ -5,6 +5,8 @@
 //! Internal modules remain private; consumers only see the re-exported contract.
 
 mod attached;
+#[cfg(test)]
+mod attached_tests;
 mod fv01;
 mod runtime;
 
