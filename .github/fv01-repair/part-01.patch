@@ -1,0 +1,214 @@
+diff --git a/crates/labcolors-core/src/program.rs b/crates/labcolors-core/src/program.rs
+index c4798b4..c7ee2ca 100644
+--- a/crates/labcolors-core/src/program.rs
++++ b/crates/labcolors-core/src/program.rs
+@@ -1949,6 +1949,11 @@ impl OwnerV1 {
+         self.compiled.surface_input_ports().len()
+     }
+ 
++    /// Число канонических выходов, для которых host обязан предоставить emission binding.
++    pub(crate) fn output_count(&self) -> usize {
++        self.compiled.output_count()
++    }
++
+     /// Число допущенных компилятором связей между целью и корнем представления точки.
+     pub(crate) fn point_presentation_count(&self) -> usize {
+         self.compiled.point_presentation_count()
+diff --git a/crates/labcolors-core/src/program/attachment.rs b/crates/labcolors-core/src/program/attachment.rs
+index f110af2..41ed188 100644
+--- a/crates/labcolors-core/src/program/attachment.rs
++++ b/crates/labcolors-core/src/program/attachment.rs
+@@ -6,7 +6,7 @@
+ 
+ #[cfg(test)]
+ use core::ops::{Deref, DerefMut};
+-use core::{fmt, iter::FusedIterator, mem, num::NonZeroU64};
++use core::{convert::Infallible, fmt, iter::FusedIterator, mem, num::NonZeroU64};
+ 
+ use crate::appearance::EncodedPointPaintV1;
+ use crate::family_artifact::{FamilyArtifactBundleV2, FamilyExecutionBindingsV2};
+@@ -591,6 +591,13 @@ pub(crate) enum AttachmentUpdateErrorV1<SinkError> {
+     InternalInvariant(AttachmentInvariantV1),
+ }
+ 
++/// Failure from either the attachment transaction or caller-owned fallible
++/// preparation that must complete before the first observable host effect.
++pub(crate) enum AttachmentPreinstallErrorV1<SinkError, PreinstallError> {
++    Attachment(AttachmentUpdateErrorV1<SinkError>),
++    Preinstall(PreinstallError),
++}
++
+ type AttachmentUpdateResultV1<'a, L> = Result<
+     AttachmentCommitV1<'a, <L as PointSinkWriterV1>::OutputId>,
+     AttachmentUpdateErrorV1<<L as PointSinkWriterV1>::Error>,
+@@ -600,12 +607,14 @@ type AttachmentUpdateResultV1<'a, L> = Result<
+ pub(super) enum PreparedDispositionV1<'a> {
+     ConfirmExact {
+         revision: u64,
++        certificate: Option<VerifiedCertificateV1<'a>>,
+     },
+     RevokeAll {
+         revision: u64,
+     },
+     SetAll {
+         revision: u64,
++        certificate: VerifiedCertificateV1<'a>,
+         outputs: &'a [ProgramPaintOutputV1],
+     },
+ }
+@@ -614,17 +623,27 @@ fn prepared_disposition<'prepared>(
+     transition: &'prepared CorePreparedSessionTransitionV1<'_>,
+ ) -> Result<PreparedDispositionV1<'prepared>, AttachmentInvariantV1> {
+     match transition.disposition() {
+-        PreparedSessionDispositionV1::Idempotent { raw_head, .. } => raw_head
+-            .revision()
+-            .map(|revision| PreparedDispositionV1::ConfirmExact {
+-                revision: revision.value(),
+-            })
+-            .ok_or(AttachmentInvariantV1::EmptyIdempotentHead),
++        PreparedSessionDispositionV1::Idempotent { raw_head, state } => {
++            let certificate = match state {
++                SessionState::Ready { current } => Some(VerifiedCertificateV1 { inner: current }),
++                SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
++                    None
++                }
++            };
++            raw_head
++                .revision()
++                .map(|revision| PreparedDispositionV1::ConfirmExact {
++                    revision: revision.value(),
++                    certificate,
++                })
++                .ok_or(AttachmentInvariantV1::EmptyIdempotentHead)
++        }
+         PreparedSessionDispositionV1::Unknown(unknown) => Ok(PreparedDispositionV1::RevokeAll {
+             revision: unknown.revision().value(),
+         }),
+         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
+             revision: verified.report().observation().revision().value(),
++            certificate: VerifiedCertificateV1 { inner: verified },
+             outputs: verified.outputs(),
+         }),
+         PreparedSessionDispositionV1::Violation(violation) => {
+@@ -652,28 +671,37 @@ impl PreparedPatchActionV1 {
+     }
+ }
+ 
+-/// Компактное заимствованное представление exact stamp одного Attachment.
++/// Компактное value-представление exact stamp одного Attachment.
++///
++/// Stamp копируется до host install и становится опубликованным только если
++/// последующий install + Session commit завершаются успешно. Это позволяет
++/// закончить всю fallible authority-подготовку до внешнего эффекта.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub(crate) struct AttachedPublishedStampV1<'a> {
++pub(crate) struct AttachedPublishedStampV1 {
+     revision: u64,
+-    sink: &'a PointSinkStampV1,
++    sink: PointSinkStampV1,
+ }
+ 
+-impl AttachedPublishedStampV1<'_> {
++impl AttachedPublishedStampV1 {
++    pub(crate) const fn new(revision: u64, sink: PointSinkStampV1) -> Self {
++        Self { revision, sink }
++    }
++
+     pub(crate) const fn revision(self) -> u64 {
+         self.revision
+     }
+ 
+     pub(crate) const fn sink_stamp(self) -> PointSinkStampV1 {
+-        *self.sink
++        self.sink
+     }
+ }
+ 
+-/// Один элемент final render-authority после commit sink и Session.
++/// Один элемент exact render-authority. До host install он является только
++/// prospective доказательством; наружу значение может выйти лишь после commit.
+ pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId> {
+     certificate: VerifiedCertificateV1<'a>,
+     patch: AttachedRenderPatchEntryV1<SinkOutputId>,
+-    published_stamp: AttachedPublishedStampV1<'a>,
++    published_stamp: AttachedPublishedStampV1,
+ }
+ 
+ impl<SinkOutputId: Copy> Copy for AttachedRenderOutputV1<'_, SinkOutputId> {}
+@@ -709,7 +737,7 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
+         self.patch.presentation.sink_output()
+     }
+ 
+-    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1<'a> {
++    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1 {
+         self.published_stamp
+     }
+ }
+@@ -749,31 +777,46 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
+                 None
+             }
+         };
+-        AttachedRenderOutputsV1 {
++        AttachedRenderOutputsV1::new(
+             certificate,
+-            committed_render_patch: self.committed_render_patch,
+-            published_stamp: AttachedPublishedStampV1 {
+-                revision: self.committed_revision,
+-                sink: self.committed_sink_stamp,
+-            },
+-            index: 0,
+-        }
++            self.committed_render_patch,
++            AttachedPublishedStampV1::new(self.committed_revision, *self.committed_sink_stamp),
++        )
+     }
+ }
+ 
+ pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId> {
+     certificate: Option<VerifiedCertificateV1<'a>>,
+-    committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
+-    published_stamp: AttachedPublishedStampV1<'a>,
++    render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
++    published_stamp: AttachedPublishedStampV1,
+     index: usize,
+ }
+ 
++impl<'a, SinkOutputId> AttachedRenderOutputsV1<'a, SinkOutputId> {
++    fn new(
++        certificate: Option<VerifiedCertificateV1<'a>>,
++        render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
++        published_stamp: AttachedPublishedStampV1,
++    ) -> Self {
++        Self {
++            certificate,
++            render_patch,
++            published_stamp,
++            index: 0,
++        }
++    }
++
++    pub(crate) const fn has_certificate(&self) -> bool {
++        self.certificate.is_some()
++    }
++}
++
+ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutputId> {
+     type Item = AttachedRenderOutputV1<'a, SinkOutputId>;
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+         let certificate = self.certificate?;
+-        let patch = *self.committed_render_patch.get(self.index)?;
++        let patch = *self.render_patch.get(self.index)?;
+         self.index += 1;
+         Some(AttachedRenderOutputV1 {
+             certificate,
+@@ -784,7 +827,7 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
+ 
+     fn size_hint(&self) -> (usize, Option<usize>) {
+         let remaining = if self.certificate.is_some() {
+-            self.committed_render_patch.len().saturating_sub(self.index)
++            self.render_patch.len().saturating_sub(self.index)
+         } else {
+             0
+         };
+@@ -1274,31 +1317,67 @@ where
