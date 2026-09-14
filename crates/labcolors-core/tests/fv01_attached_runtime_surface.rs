@@ -42,7 +42,10 @@ fn attachment_bindings_and_observations_are_typed_public_inputs() {
 
     let scenario = AttachedProgramScenarioV1::new(7, vec![labcolors_core::Srgb8::new([0x80; 3])]);
     assert_eq!(scenario.id(), 7);
-    assert_eq!(scenario.surfaces(), &[labcolors_core::Srgb8::new([0x80; 3])]);
+    assert_eq!(
+        scenario.surfaces(),
+        &[labcolors_core::Srgb8::new([0x80; 3])]
+    );
 }
 
 #[test]
