@@ -1,0 +1,37 @@
+name: FV-01 release oracle refresh
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Refresh exact attached release oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/_fv01_refresh_release_oracle.py
+          node --check scripts/verify-package-release.mjs
+          git diff --check
+          rm scripts/_fv01_refresh_release_oracle.py .github/workflows/fv01-release-oracle-refresh.yml
+      - name: Commit release oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/verify-package-release.mjs scripts/_fv01_refresh_release_oracle.py .github/workflows/fv01-release-oracle-refresh.yml
+          git diff --cached --check
+          git commit -m "test(fv-01): bind attached surface in release consumer"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
