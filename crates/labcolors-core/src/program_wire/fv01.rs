@@ -24,6 +24,31 @@ pub enum AppearanceSurroundV1 {
     Dark,
 }
 
+/// Один exact physical-case результата attached materialization.
+///
+/// `composite` не вычисляется из Paint повторно: production mint получает его
+/// только из `ExactFinalOwnedPointDomainV1::Singleton`, доказанного causal
+/// replay той же revision и того же presentation root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachedMaterializationCaseV1 {
+    case_index: usize,
+    composite: Srgb8,
+}
+
+impl AttachedMaterializationCaseV1 {
+    /// Канонический индекс physical case внутри revision-bound observation.
+    #[must_use]
+    pub const fn case_index(self) -> usize {
+        self.case_index
+    }
+
+    /// Exact final-owned composite этого physical case.
+    #[must_use]
+    pub const fn composite(self) -> Srgb8 {
+        self.composite
+    }
+}
+
 /// Типизированный отказ mint-а attached materialization authority.
 ///
 /// Варианты намеренно не схлопываются в `None`: отсутствие authority всегда
@@ -43,8 +68,21 @@ pub enum AttachedMaterializationAuthorityErrorV1 {
     ForeignOwnerGeneration,
     /// Sink stamp относится к другой binding epoch.
     ForeignBindingEpoch,
-    /// Exact counterfactual-domain для point contribution отсутствует.
+    /// Для ожидаемого physical case нет exact counterfactual replay proof.
     MissingExactPointAbsenceProof,
+    /// Exact replay доказал отсутствие final-owned вклада для physical case.
+    NoFinalOwnedPointContribution,
+    /// Causal proof относится к другому presentation root/target.
+    CausalPresentationMismatch,
+}
+
+/// Внутренний owned proof одного physical case.
+///
+/// Хранится как typed causal-domain, а не только как RGB-проекция, чтобы
+/// публичный capability не переживал потерю происхождения данных.
+pub(super) struct AttachedMaterializationCaseProofV1 {
+    pub(super) case_index: usize,
+    pub(super) domain: crate::appearance::ExactFinalOwnedPointDomainV1,
 }
 
 /// Provisional pre-1.0 authority одной установленной point-materialization.
@@ -53,17 +91,18 @@ pub enum AttachedMaterializationAuthorityErrorV1 {
 /// сохраняют typed Core proofs, а не повторно сериализованные DTO. Поэтому
 /// detached snapshot, Paint, sRGB8 и CSS-строка структурно не могут стать
 /// входом mint-а. Production mint добавляется только на `Ready` attachment
-/// commit seam и обязан валидировать revision, identity и sink binding epoch
-/// до создания значения этого типа.
+/// commit seam и обязан валидировать revision, identity, owner generation и
+/// sink binding epoch до создания значения этого типа.
 pub struct AttachedMaterializationAuthorityV1 {
     pub(super) content_identity: crate::program::ContentIdentityV9,
     pub(super) published_revision: u64,
+    // `PointSinkStampV1` уже включает typed `PointSinkBindingEpochV1`.
+    // Отдельное числовое поле здесь создало бы второй источник истины.
     pub(super) sink_stamp: crate::program::attachment::PointSinkStampV1,
-    pub(super) sink_binding_epoch: u64,
     pub(super) presentation_root: crate::program::PresentationRootIdV1,
     pub(super) terminal_occurrence: crate::program::OccurrenceIdV1,
     pub(super) appearance_context: crate::program::AppearanceContextV1,
-    pub(super) point_domain: crate::appearance::ExactFinalOwnedPointDomainV1,
+    pub(super) cases: Box<[AttachedMaterializationCaseProofV1]>,
     pub(super) paint: crate::appearance::EncodedPointPaintV1,
     pub(super) renderer_provenance: RendererProvenanceV1,
 }
@@ -85,12 +124,6 @@ impl AttachedMaterializationAuthorityV1 {
     #[must_use]
     pub const fn sink_sequence(&self) -> u64 {
         self.sink_stamp.sequence()
-    }
-
-    /// Непрозрачная binding epoch sink-а, проверенная при mint-е.
-    #[must_use]
-    pub const fn sink_binding_epoch(&self) -> u64 {
-        self.sink_binding_epoch
     }
 
     /// Скомпилированный terminal presentation root.
@@ -139,20 +172,32 @@ impl AttachedMaterializationAuthorityV1 {
         self.paint.value().opacity().value()
     }
 
-    /// Exact final-owned composite, доказанный counterfactual replay.
-    ///
-    /// Конструктор authority обязан отвергать `Empty`, поэтому эта проекция
-    /// total для любого публично достижимого значения capability.
+    /// Количество exact physical-case proofs, связанных с authority.
     #[must_use]
-    pub fn composite(&self) -> Srgb8 {
-        match self.point_domain {
-            crate::appearance::ExactFinalOwnedPointDomainV1::Singleton { visible } => {
-                Srgb8::new(visible)
+    pub const fn case_count(&self) -> usize {
+        self.cases.len()
+    }
+
+    /// Exact causal projections в каноническом порядке physical cases.
+    ///
+    /// Production mint допускает только `Singleton`, поэтому `Empty` здесь
+    /// означает нарушение внутреннего конструктора, а не пользовательский
+    /// отказ. Пользовательские отказы происходят до создания authority.
+    pub fn cases(&self) -> impl ExactSizeIterator<Item = AttachedMaterializationCaseV1> + '_ {
+        self.cases.iter().map(|case| {
+            let composite = match case.domain {
+                crate::appearance::ExactFinalOwnedPointDomainV1::Singleton { visible } => {
+                    Srgb8::new(visible)
+                }
+                crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
+                    unreachable!("authority cannot retain an empty final-owned point domain")
+                }
+            };
+            AttachedMaterializationCaseV1 {
+                case_index: case.case_index,
+                composite,
             }
-            crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
-                unreachable!("authority cannot be minted without exact point contribution")
-            }
-        }
+        })
     }
 
     /// Renderer provenance первого FV-среза.
