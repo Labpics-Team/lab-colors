@@ -379,6 +379,25 @@ async function browserConsumer(origin, fault) {
     const bytes = buildWire();
     const compiled = api.compileAttachedProgramWire(bytes);
     runtimeHandles.push(compiled);
+
+    const invalidBindings = {
+      ...bindings,
+      emissionOutputs: new Uint32Array([91, 92]),
+    };
+    const invalidBindingsBefore = host.snapshot();
+    let invalidBindingsError;
+    try {
+      const unexpected = compiled.attach(0, invalidBindings, host);
+      runtimeHandles.push(unexpected);
+    } catch (error) {
+      invalidBindingsError = {
+        rejected: api.isProgramError(error),
+        code: error?.code,
+        operation: error?.operation,
+      };
+    }
+    const invalidBindingsAfter = host.snapshot();
+
     const runtime = compiled.attach(1, bindings, host);
     runtimeHandles.push(runtime);
     resources.push({
@@ -515,6 +534,11 @@ async function browserConsumer(origin, fault) {
         host: staleHost,
       },
       foreign: { epoch: foreignEpoch, owner: foreignOwner, identity: changedIdentity },
+      invalidBindings: {
+        error: invalidBindingsError,
+        before: invalidBindingsBefore,
+        after: invalidBindingsAfter,
+      },
       consumedRoot,
     };
   } catch (error) {
@@ -647,6 +671,7 @@ export function verifyBrowserConsumer(result) {
   const retry = result.retry;
   const stale = result.stale;
   const foreign = result.foreign;
+  const invalidBindings = result.invalidBindings;
   const epochIsNonZero = typeof ready?.sinkBindingEpoch === "string" && /^[1-9][0-9]*$/u.test(ready.sinkBindingEpoch);
   if (result.error || result.cleanupError
     || ready?.state !== "ready" || ready.authorityCount !== 1
@@ -679,6 +704,10 @@ export function verifyBrowserConsumer(result) {
     || foreign.owner.operation !== "validateAttachedAuthority"
     || foreign?.identity?.code !== "attached_program_identity_mismatch"
     || foreign.identity.operation !== "validateAttachedAuthority"
+    || invalidBindings?.error?.rejected !== true
+    || invalidBindings.error.code !== "attached_invalid_bindings"
+    || invalidBindings.error.operation !== "attachAttachedProgram"
+    || !equal(invalidBindings.before, invalidBindings.after)
     || result.consumedRoot?.rejected !== true
     || result.consumedRoot.code !== "attached_root_consumed_downstream"
     || result.consumedRoot.operation !== "compileAttachedProgramWire") {

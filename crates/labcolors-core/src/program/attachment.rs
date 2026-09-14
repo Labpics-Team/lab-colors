@@ -6,7 +6,7 @@
 
 #[cfg(test)]
 use core::ops::{Deref, DerefMut};
-use core::{fmt, iter::FusedIterator, mem, num::NonZeroU64};
+use core::{convert::Infallible, fmt, iter::FusedIterator, mem, num::NonZeroU64};
 
 use crate::appearance::EncodedPointPaintV1;
 use crate::family_artifact::{FamilyArtifactBundleV2, FamilyExecutionBindingsV2};
@@ -591,6 +591,13 @@ pub(crate) enum AttachmentUpdateErrorV1<SinkError> {
     InternalInvariant(AttachmentInvariantV1),
 }
 
+/// Failure from either the attachment transaction or caller-owned fallible
+/// preparation that must complete before the first observable host effect.
+pub(crate) enum AttachmentPreinstallErrorV1<SinkError, PreinstallError> {
+    Attachment(AttachmentUpdateErrorV1<SinkError>),
+    Preinstall(PreinstallError),
+}
+
 type AttachmentUpdateResultV1<'a, L> = Result<
     AttachmentCommitV1<'a, <L as PointSinkWriterV1>::OutputId>,
     AttachmentUpdateErrorV1<<L as PointSinkWriterV1>::Error>,
@@ -600,12 +607,14 @@ type AttachmentUpdateResultV1<'a, L> = Result<
 pub(super) enum PreparedDispositionV1<'a> {
     ConfirmExact {
         revision: u64,
+        certificate: Option<VerifiedCertificateV1<'a>>,
     },
     RevokeAll {
         revision: u64,
     },
     SetAll {
         revision: u64,
+        certificate: VerifiedCertificateV1<'a>,
         outputs: &'a [ProgramPaintOutputV1],
     },
 }
@@ -614,17 +623,27 @@ fn prepared_disposition<'prepared>(
     transition: &'prepared CorePreparedSessionTransitionV1<'_>,
 ) -> Result<PreparedDispositionV1<'prepared>, AttachmentInvariantV1> {
     match transition.disposition() {
-        PreparedSessionDispositionV1::Idempotent { raw_head, .. } => raw_head
-            .revision()
-            .map(|revision| PreparedDispositionV1::ConfirmExact {
-                revision: revision.value(),
-            })
-            .ok_or(AttachmentInvariantV1::EmptyIdempotentHead),
+        PreparedSessionDispositionV1::Idempotent { raw_head, state } => {
+            let certificate = match state {
+                SessionState::Ready { current } => Some(VerifiedCertificateV1 { inner: current }),
+                SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
+                    None
+                }
+            };
+            raw_head
+                .revision()
+                .map(|revision| PreparedDispositionV1::ConfirmExact {
+                    revision: revision.value(),
+                    certificate,
+                })
+                .ok_or(AttachmentInvariantV1::EmptyIdempotentHead)
+        }
         PreparedSessionDispositionV1::Unknown(unknown) => Ok(PreparedDispositionV1::RevokeAll {
             revision: unknown.revision().value(),
         }),
         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
             revision: verified.report().observation().revision().value(),
+            certificate: VerifiedCertificateV1 { inner: verified },
             outputs: verified.outputs(),
         }),
         PreparedSessionDispositionV1::Violation(violation) => {
@@ -652,28 +671,37 @@ impl PreparedPatchActionV1 {
     }
 }
 
-/// Компактное заимствованное представление exact stamp одного Attachment.
+/// Компактное value-представление exact stamp одного Attachment.
+///
+/// Stamp копируется до host install и становится опубликованным только если
+/// последующий install + Session commit завершаются успешно. Это позволяет
+/// закончить всю fallible authority-подготовку до внешнего эффекта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AttachedPublishedStampV1<'a> {
+pub(crate) struct AttachedPublishedStampV1 {
     revision: u64,
-    sink: &'a PointSinkStampV1,
+    sink: PointSinkStampV1,
 }
 
-impl AttachedPublishedStampV1<'_> {
+impl AttachedPublishedStampV1 {
+    pub(crate) const fn new(revision: u64, sink: PointSinkStampV1) -> Self {
+        Self { revision, sink }
+    }
+
     pub(crate) const fn revision(self) -> u64 {
         self.revision
     }
 
     pub(crate) const fn sink_stamp(self) -> PointSinkStampV1 {
-        *self.sink
+        self.sink
     }
 }
 
-/// Один элемент final render-authority после commit sink и Session.
+/// Один элемент exact render-authority. До host install он является только
+/// prospective доказательством; наружу значение может выйти лишь после commit.
 pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId> {
     certificate: VerifiedCertificateV1<'a>,
     patch: AttachedRenderPatchEntryV1<SinkOutputId>,
-    published_stamp: AttachedPublishedStampV1<'a>,
+    published_stamp: AttachedPublishedStampV1,
 }
 
 impl<SinkOutputId: Copy> Copy for AttachedRenderOutputV1<'_, SinkOutputId> {}
@@ -709,7 +737,7 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
         self.patch.presentation.sink_output()
     }
 
-    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1<'a> {
+    pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1 {
         self.published_stamp
     }
 }
@@ -749,23 +777,38 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
                 None
             }
         };
-        AttachedRenderOutputsV1 {
+        AttachedRenderOutputsV1::new(
             certificate,
-            committed_render_patch: self.committed_render_patch,
-            published_stamp: AttachedPublishedStampV1 {
-                revision: self.committed_revision,
-                sink: self.committed_sink_stamp,
-            },
-            index: 0,
-        }
+            self.committed_render_patch,
+            AttachedPublishedStampV1::new(self.committed_revision, *self.committed_sink_stamp),
+        )
     }
 }
 
 pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId> {
     certificate: Option<VerifiedCertificateV1<'a>>,
-    committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
-    published_stamp: AttachedPublishedStampV1<'a>,
+    render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
+    published_stamp: AttachedPublishedStampV1,
     index: usize,
+}
+
+impl<'a, SinkOutputId> AttachedRenderOutputsV1<'a, SinkOutputId> {
+    fn new(
+        certificate: Option<VerifiedCertificateV1<'a>>,
+        render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
+        published_stamp: AttachedPublishedStampV1,
+    ) -> Self {
+        Self {
+            certificate,
+            render_patch,
+            published_stamp,
+            index: 0,
+        }
+    }
+
+    pub(crate) const fn has_certificate(&self) -> bool {
+        self.certificate.is_some()
+    }
 }
 
 impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutputId> {
@@ -773,7 +816,7 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
 
     fn next(&mut self) -> Option<Self::Item> {
         let certificate = self.certificate?;
-        let patch = *self.committed_render_patch.get(self.index)?;
+        let patch = *self.render_patch.get(self.index)?;
         self.index += 1;
         Some(AttachedRenderOutputV1 {
             certificate,
@@ -784,7 +827,7 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = if self.certificate.is_some() {
-            self.committed_render_patch.len().saturating_sub(self.index)
+            self.render_patch.len().saturating_sub(self.index)
         } else {
             0
         };
@@ -1274,31 +1317,67 @@ where
 {
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
+        match self.update_with_preinstall(update, |_| Ok::<(), Infallible>(())) {
+            Ok((commit, ())) => Ok(commit),
+            Err(AttachmentPreinstallErrorV1::Attachment(error)) => Err(error),
+            Err(AttachmentPreinstallErrorV1::Preinstall(never)) => match never {},
+        }
+    }
+
+    /// Единая транзакционная граница для caller-owned fallible подготовки.
+    ///
+    /// `preinstall` видит exact prospective certificate/render patch и desired
+    /// sink stamp, но вызывается до `sink.prepare`/`try_install`. Поэтому любой
+    /// его отказ оставляет host, Session, revision и stamp неизменными. После
+    /// успешного `preinstall` наружу уже не допускается fallible работа между
+    /// host install и Session commit.
+    fn update_with_preinstall<R, E, F>(
+        &mut self,
+        update: UpdateV1<'_>,
+        preinstall: F,
+    ) -> Result<
+        (AttachmentCommitV1<'_, W::OutputId>, R),
+        AttachmentPreinstallErrorV1<W::Error, E>,
+    >
+    where
+        F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
+    {
         let transition = self
             .session
             .prepare_update(update)
-            .map_err(AttachmentUpdateErrorV1::Update)?;
+            .map_err(AttachmentUpdateErrorV1::Update)
+            .map_err(AttachmentPreinstallErrorV1::Attachment)?;
         let disposition = prepared_disposition(&transition)
-            .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
+            .map_err(AttachmentUpdateErrorV1::InternalInvariant)
+            .map_err(AttachmentPreinstallErrorV1::Attachment)?;
 
         match &disposition {
-            PreparedDispositionV1::ConfirmExact { revision } => {
-                let published_revision =
-                    self.committed_revision
-                        .ok_or(AttachmentUpdateErrorV1::InternalInvariant(
+            PreparedDispositionV1::ConfirmExact { revision, .. } => {
+                let published_revision = self.committed_revision.ok_or_else(|| {
+                    AttachmentPreinstallErrorV1::Attachment(
+                        AttachmentUpdateErrorV1::InternalInvariant(
                             AttachmentInvariantV1::MissingCommittedRevision,
-                        ))?;
+                        ),
+                    )
+                })?;
                 if published_revision != *revision {
-                    return Err(AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::PublishedRevisionMismatch,
+                    return Err(AttachmentPreinstallErrorV1::Attachment(
+                        AttachmentUpdateErrorV1::InternalInvariant(
+                            AttachmentInvariantV1::PublishedRevisionMismatch,
+                        ),
                     ));
                 }
             }
             PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => {}
         }
 
+        let mut certificate = None;
         let action = match disposition {
-            PreparedDispositionV1::SetAll { revision, outputs } => {
+            PreparedDispositionV1::SetAll {
+                revision,
+                certificate: verified,
+                outputs,
+            } => {
                 stage_complete_patches(
                     &self.emissions,
                     &self.presentations,
@@ -1306,7 +1385,9 @@ where
                     &mut self.scratch_sink_patch,
                     &mut self.scratch_render_patch,
                 )
-                .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
+                .map_err(AttachmentUpdateErrorV1::InternalInvariant)
+                .map_err(AttachmentPreinstallErrorV1::Attachment)?;
+                certificate = Some(verified);
                 PreparedPatchActionV1::SetAll { revision }
             }
             PreparedDispositionV1::RevokeAll { revision } => {
@@ -1314,18 +1395,24 @@ where
                 self.scratch_render_patch.clear();
                 PreparedPatchActionV1::RevokeAll { revision }
             }
-            PreparedDispositionV1::ConfirmExact { revision } => {
+            PreparedDispositionV1::ConfirmExact {
+                revision,
+                certificate: current,
+            } => {
+                certificate = current;
                 PreparedPatchActionV1::ConfirmExact { revision }
             }
         };
 
         let (intent, desired_sink_stamp) = match action {
             PreparedPatchActionV1::SetAll { revision } => {
-                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
-                    AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::SinkStampExhausted,
-                    ),
-                )?;
+                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
+                    AttachmentPreinstallErrorV1::Attachment(
+                        AttachmentUpdateErrorV1::InternalInvariant(
+                            AttachmentInvariantV1::SinkStampExhausted,
+                        ),
+                    )
+                })?;
                 (
                     PointSinkIntentV1::SetAll {
                         revision,
@@ -1336,11 +1423,13 @@ where
                 )
             }
             PreparedPatchActionV1::RevokeAll { revision } => {
-                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
-                    AttachmentUpdateErrorV1::InternalInvariant(
-                        AttachmentInvariantV1::SinkStampExhausted,
-                    ),
-                )?;
+                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
+                    AttachmentPreinstallErrorV1::Attachment(
+                        AttachmentUpdateErrorV1::InternalInvariant(
+                            AttachmentInvariantV1::SinkStampExhausted,
+                        ),
+                    )
+                })?;
                 (
                     PointSinkIntentV1::RevokeAll { revision, stamp },
                     stamp.desired(),
@@ -1354,16 +1443,35 @@ where
                 self.expected_sink_stamp,
             ),
         };
+
+        let preinstall_value = {
+            let render_patch = match action {
+                PreparedPatchActionV1::SetAll { .. } => self.scratch_render_patch.as_slice(),
+                PreparedPatchActionV1::ConfirmExact { .. } => {
+                    self.committed_render_patch.as_slice()
+                }
+                PreparedPatchActionV1::RevokeAll { .. } => self.scratch_render_patch.as_slice(),
+            };
+            preinstall(AttachedRenderOutputsV1::new(
+                certificate,
+                render_patch,
+                AttachedPublishedStampV1::new(action.revision(), desired_sink_stamp),
+            ))
+            .map_err(AttachmentPreinstallErrorV1::Preinstall)?
+        };
+
         let sink_prepared = self
             .sink
             .prepare(intent)
-            .map_err(AttachmentUpdateErrorV1::SinkPrepare)?;
+            .map_err(AttachmentUpdateErrorV1::SinkPrepare)
+            .map_err(AttachmentPreinstallErrorV1::Attachment)?;
         let mut prepared: PreparedAttachmentUpdateV1<'_, '_, W> =
             PreparedAttachmentUpdateV1::new(transition, sink_prepared);
 
         prepared
             .try_install()
-            .map_err(AttachmentUpdateErrorV1::SinkInstall)?;
+            .map_err(AttachmentUpdateErrorV1::SinkInstall)
+            .map_err(AttachmentPreinstallErrorV1::Attachment)?;
 
         // Ниже только moves/swaps/writes в заранее пустые retirement-слоты.
         let installed_sink = prepared.commit_session();
@@ -1381,14 +1489,18 @@ where
         self.committed_revision = Some(action.revision());
         installed_sink.finish_after_session();
 
-        Ok(AttachmentCommitV1 {
-            evidence: self.session.evidence(),
-            session: &self.session,
-            committed_render_patch: &self.committed_render_patch,
-            committed_revision: action.revision(),
-            committed_sink_stamp: &self.expected_sink_stamp,
-        })
+        Ok((
+            AttachmentCommitV1 {
+                evidence: self.session.evidence(),
+                session: &self.session,
+                committed_render_patch: &self.committed_render_patch,
+                committed_revision: action.revision(),
+                committed_sink_stamp: &self.expected_sink_stamp,
+            },
+            preinstall_value,
+        ))
     }
+
 }
 
 impl<L> Attachment<L>
@@ -1441,6 +1553,20 @@ where
 
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
         self.state.update(update)
+    }
+
+    pub(crate) fn update_with_preinstall<R, E, F>(
+        &mut self,
+        update: UpdateV1<'_>,
+        preinstall: F,
+    ) -> Result<
+        (AttachmentCommitV1<'_, W::OutputId>, R),
+        AttachmentPreinstallErrorV1<W::Error, E>,
+    >
+    where
+        F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
+    {
+        self.state.update_with_preinstall(update, preinstall)
     }
 
     /// Confirms and consumes one externally managed attachment as one

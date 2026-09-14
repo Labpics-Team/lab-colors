@@ -14,7 +14,7 @@ use crate::program_wire::{
 };
 
 use super::{
-    AttachedRenderOutputV1, AttachmentCommitV1, BoundPointSinkScopePermitV1,
+    AttachedRenderOutputV1, AttachedRenderOutputsV1, BoundPointSinkScopePermitV1,
     ExternallyManagedAttachmentV1, PointSinkAdmissionFailureV1, PointSinkBindingEpochV1,
     PointSinkIntentV1, PointSinkStampV1, PointSinkWriterAdmissionV1, PointSinkWriterV1,
     PreparedPointSinkWriteV1, UnboundPointSinkWriterV1, sink_private,
@@ -53,7 +53,7 @@ fn try_reserve_authority<T>(
     additional: usize,
 ) -> Result<(), AttachedMaterializationAuthorityErrorV1> {
     #[cfg(test)]
-    if AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| armed.replace(false)) {
+    if additional != 0 && AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| armed.replace(false)) {
         return Err(AttachedMaterializationAuthorityErrorV1::ResourceExhausted);
     }
     values
@@ -394,21 +394,38 @@ where
     fn finish_after_session(self) {}
 }
 
-pub(crate) fn mint_authorities(
-    commit: AttachmentCommitV1<'_, AttachedPointSinkOutputIdV1>,
+/// Fallible proof material prepared before host installation. The contained
+/// capability values remain sealed inside this private batch until the exact
+/// attachment transition commits successfully.
+pub(crate) struct PreparedAttachedAuthoritiesV1 {
+    authorities: Vec<AttachedMaterializationAuthorityV1>,
+}
+
+impl PreparedAttachedAuthoritiesV1 {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.authorities.is_empty()
+    }
+
+    /// Capability publication is intentionally an infallible move after commit.
+    pub(crate) fn seal_after_commit(self) -> Vec<AttachedMaterializationAuthorityV1> {
+        self.authorities
+    }
+}
+
+pub(crate) fn prepare_authorities(
+    render_outputs: AttachedRenderOutputsV1<'_, AttachedPointSinkOutputIdV1>,
     owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
-) -> Result<Vec<AttachedMaterializationAuthorityV1>, AttachedMaterializationAuthorityErrorV1> {
-    let render_outputs = commit.render_outputs();
+) -> Result<PreparedAttachedAuthoritiesV1, AttachedMaterializationAuthorityErrorV1> {
     let mut authorities = Vec::new();
     try_reserve_authority(&mut authorities, render_outputs.len())?;
 
     for render in render_outputs {
-        authorities.push(mint_render_output_authority(render, owner_pin)?);
+        authorities.push(prepare_render_output_authority(render, owner_pin)?);
     }
-    Ok(authorities)
+    Ok(PreparedAttachedAuthoritiesV1 { authorities })
 }
 
-fn mint_render_output_authority(
+fn prepare_render_output_authority(
     render: AttachedRenderOutputV1<'_, AttachedPointSinkOutputIdV1>,
     owner_pin: &ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
 ) -> Result<AttachedMaterializationAuthorityV1, AttachedMaterializationAuthorityErrorV1> {

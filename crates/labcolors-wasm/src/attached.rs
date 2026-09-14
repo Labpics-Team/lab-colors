@@ -275,12 +275,32 @@ pub fn compile_attached_program_wire(bytes: &[u8]) -> Result<CompiledAttachedPro
         .map_err(map_compile_error)
 }
 
-fn u32_array_property(bindings: &JsValue, key: &str) -> Result<Vec<u32>, JsValue> {
-    let value = Reflect::get(bindings, &JsValue::from_str(key))?;
-    let array = value
-        .dyn_into::<Uint32Array>()
-        .map_err(|_| attached_error("attached_invalid_bindings", OP_ATTACH))?;
-    Ok(array.to_vec())
+struct ExactBindingArray(Uint32Array);
+
+impl ExactBindingArray {
+    fn property(bindings: &JsValue, key: &str, expected: usize) -> Result<Self, JsValue> {
+        let value = Reflect::get(bindings, &JsValue::from_str(key))?;
+        let array = value
+            .dyn_into::<Uint32Array>()
+            .map_err(|_| attached_error("attached_invalid_bindings", OP_ATTACH))?;
+        if array.length() as usize != expected {
+            return Err(attached_error("attached_invalid_bindings", OP_ATTACH));
+        }
+        Ok(Self(array))
+    }
+
+    fn get(&self, index: usize) -> u32 {
+        debug_assert!(index < self.0.length() as usize);
+        self.0.get_index(index as u32)
+    }
+}
+
+fn try_binding_vec<T>(capacity: usize) -> Result<Vec<T>, JsValue> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| attached_error("attached_resource_exhausted", OP_ATTACH))?;
+    Ok(values)
 }
 
 #[wasm_bindgen]
@@ -304,46 +324,37 @@ impl CompiledAttachedProgram {
     ) -> Result<AttachedProgramRuntime, JsValue> {
         let stream_id = super::checked_u32(stream_id)
             .ok_or_else(|| attached_error("attached_instantiate", OP_ATTACH))?;
-        let emission_outputs = u32_array_property(&bindings, "emissionOutputs")?;
-        let emission_sink_outputs = u32_array_property(&bindings, "emissionSinkOutputs")?;
-        let presentation_outputs = u32_array_property(&bindings, "presentationOutputs")?;
-        let presentation_roots = u32_array_property(&bindings, "presentationRoots")?;
-        let presentation_occurrences = u32_array_property(&bindings, "presentationOccurrences")?;
-        if emission_outputs.len() != emission_sink_outputs.len()
-            || presentation_outputs.len() != presentation_roots.len()
-            || presentation_outputs.len() != presentation_occurrences.len()
-        {
-            return Err(attached_error("attached_invalid_bindings", OP_ATTACH));
+        // Read transport handles first. Their lengths are bounded against the compiled
+        // Program before any caller-owned Uint32Array is copied into native memory.
+        let emission_count = self.inner.emission_binding_count();
+        let presentation_count = self.inner.presentation_binding_count();
+        let emission_outputs =
+            ExactBindingArray::property(&bindings, "emissionOutputs", emission_count)?;
+        let emission_sink_outputs =
+            ExactBindingArray::property(&bindings, "emissionSinkOutputs", emission_count)?;
+        let presentation_outputs =
+            ExactBindingArray::property(&bindings, "presentationOutputs", presentation_count)?;
+        let presentation_roots =
+            ExactBindingArray::property(&bindings, "presentationRoots", presentation_count)?;
+        let presentation_occurrences =
+            ExactBindingArray::property(&bindings, "presentationOccurrences", presentation_count)?;
+
+        let mut emissions = try_binding_vec(emission_count)?;
+        for index in 0..emission_count {
+            emissions.push(AttachedProgramEmissionBindingV1::new(
+                emission_outputs.get(index),
+                emission_sink_outputs.get(index),
+            ));
         }
 
-        let mut emissions = Vec::new();
-        emissions
-            .try_reserve_exact(emission_outputs.len())
-            .map_err(|_| attached_error("attached_resource_exhausted", OP_ATTACH))?;
-        emissions.extend(
-            emission_outputs
-                .iter()
-                .copied()
-                .zip(emission_sink_outputs.iter().copied())
-                .map(|(output, sink_output)| {
-                    AttachedProgramEmissionBindingV1::new(output, sink_output)
-                }),
-        );
-
-        let mut presentations = Vec::new();
-        presentations
-            .try_reserve_exact(presentation_outputs.len())
-            .map_err(|_| attached_error("attached_resource_exhausted", OP_ATTACH))?;
-        presentations.extend(
-            presentation_outputs
-                .iter()
-                .copied()
-                .zip(presentation_roots.iter().copied())
-                .zip(presentation_occurrences.iter().copied())
-                .map(|((output, root), occurrence)| {
-                    AttachedProgramPresentationBindingV1::new(output, root, occurrence)
-                }),
-        );
+        let mut presentations = try_binding_vec(presentation_count)?;
+        for index in 0..presentation_count {
+            presentations.push(AttachedProgramPresentationBindingV1::new(
+                presentation_outputs.get(index),
+                presentation_roots.get(index),
+                presentation_occurrences.get(index),
+            ));
+        }
 
         let surface_input_count = self.inner.surface_input_count();
         self.inner

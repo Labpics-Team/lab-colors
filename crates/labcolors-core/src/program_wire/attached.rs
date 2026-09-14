@@ -7,10 +7,11 @@
 use crate::family_artifact::FamilyArtifactBundleV2;
 use crate::program::attachment::fv01::{
     AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,
-    mint_authorities, owner_pin, validate_authority as validate_attached_authority,
+    owner_pin, prepare_authorities, validate_authority as validate_attached_authority,
 };
 use crate::program::attachment::{
-    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentUpdateErrorV1,
+    AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentPreinstallErrorV1,
+    AttachmentUpdateErrorV1,
     AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,
 };
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
@@ -143,6 +144,24 @@ impl CompiledAttachedProgramV1 {
         self.owner.surface_input_port_count()
     }
 
+    /// Exact emission binding count required by this compiled Program.
+    ///
+    /// Host adapters can reject impossible binding payloads before copying any
+    /// caller-owned transport buffers into native memory.
+    #[must_use]
+    pub fn emission_binding_count(&self) -> usize {
+        self.owner.output_count()
+    }
+
+    /// Exact presentation binding count required by this compiled Program.
+    ///
+    /// This is an admission bound, not a second source of binding semantics;
+    /// core attachment validation still owns IDs, scope, and ordering laws.
+    #[must_use]
+    pub fn presentation_binding_count(&self) -> usize {
+        self.owner.point_presentation_count()
+    }
+
     /// Bind one host-owned output scope to this exact compiled generation.
     ///
     /// The compiled owner is borrowed, not consumed, so two attachments can
@@ -270,7 +289,7 @@ pub enum AttachedProgramUpdateErrorV1<HostError> {
     SinkPrepare(AttachedPointSinkErrorV1<HostError>),
     /// The host rejected the atomic installation; previous materialization remains intact.
     SinkInstall(AttachedPointSinkErrorV1<HostError>),
-    /// Post-commit authority proof could not be minted or revalidated.
+    /// Authority proof could not be prepared before any host installation.
     Authority(AttachedMaterializationAuthorityErrorV1),
     /// A sealed Core invariant was violated.
     InternalInvariant,
@@ -292,8 +311,9 @@ where
 {
     /// Atomically evaluate and publish one observed revision.
     ///
-    /// Scenario values are borrowed. Authority is minted exclusively from the
-    /// successful post-commit attachment view, never from a detached snapshot.
+    /// Scenario values are borrowed. Authority is fully prepared from the exact
+    /// prospective attachment transition before host installation, then exposed
+    /// only if that same transition commits successfully.
     pub fn update_observed(
         &mut self,
         revision: u64,
@@ -350,42 +370,31 @@ where
         &mut self,
         update: UpdateV1<'_>,
     ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
-        let (state, authorities) = {
-            let commit = self.attachment.update(update).map_err(map_update_failure)?;
-            let state = match commit.evidence().kind() {
-                StateKindV1::Waiting => AttachedProgramUpdateStateV1::Waiting,
-                StateKindV1::Ready => AttachedProgramUpdateStateV1::Ready,
-                StateKindV1::Stale => AttachedProgramUpdateStateV1::Stale,
-                StateKindV1::Failed => AttachedProgramUpdateStateV1::Failed,
-            };
-            let authorities = if state == AttachedProgramUpdateStateV1::Ready {
-                mint_authorities(commit, &self.owner_pin)
-                    .map_err(AttachedProgramUpdateErrorV1::Authority)?
-            } else {
-                Vec::new()
-            };
-            (state, authorities)
+        let owner_pin = &self.owner_pin;
+        let (commit, authorities) = self
+            .attachment
+            .update_with_preinstall(update, |render_outputs| {
+                let expects_authority = render_outputs.has_certificate();
+                let prepared = prepare_authorities(render_outputs, owner_pin)
+                    .map_err(AttachedProgramAuthorityPreinstallErrorV1::Authority)?;
+                if expects_authority && prepared.is_empty() {
+                    return Err(AttachedProgramAuthorityPreinstallErrorV1::InternalInvariant);
+                }
+                Ok(prepared)
+            })
+            .map_err(map_preinstall_update_failure)?;
+
+        let state = match commit.evidence().kind() {
+            StateKindV1::Waiting => AttachedProgramUpdateStateV1::Waiting,
+            StateKindV1::Ready => AttachedProgramUpdateStateV1::Ready,
+            StateKindV1::Stale => AttachedProgramUpdateStateV1::Stale,
+            StateKindV1::Failed => AttachedProgramUpdateStateV1::Failed,
         };
 
-        if state == AttachedProgramUpdateStateV1::Ready {
-            if authorities.is_empty() {
-                return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
-            }
-            for authority in &authorities {
-                validate_attached_authority(
-                    &self.attachment,
-                    &self.owner_pin,
-                    self.content_identity,
-                    authority,
-                )
-                .map_err(AttachedProgramUpdateErrorV1::Authority)?;
-            }
-        } else if !authorities.is_empty() {
-            return Err(AttachedProgramUpdateErrorV1::InternalInvariant);
-        }
-
+        let authorities = authorities.seal_after_commit();
         Ok(AttachedProgramUpdateV1 { state, authorities })
     }
+
 }
 
 /// Compile canonical Program wire into an owner that can create attached
@@ -434,6 +443,28 @@ where
                 AttachedProgramAttachErrorV1::ResourceExhausted
             }
         },
+    }
+}
+
+enum AttachedProgramAuthorityPreinstallErrorV1 {
+    Authority(AttachedMaterializationAuthorityErrorV1),
+    InternalInvariant,
+}
+
+fn map_preinstall_update_failure<HostError>(
+    failure: AttachmentPreinstallErrorV1<
+        AttachedPointSinkErrorV1<HostError>,
+        AttachedProgramAuthorityPreinstallErrorV1,
+    >,
+) -> AttachedProgramUpdateErrorV1<HostError> {
+    match failure {
+        AttachmentPreinstallErrorV1::Attachment(error) => map_update_failure(error),
+        AttachmentPreinstallErrorV1::Preinstall(
+            AttachedProgramAuthorityPreinstallErrorV1::Authority(error),
+        ) => AttachedProgramUpdateErrorV1::Authority(error),
+        AttachmentPreinstallErrorV1::Preinstall(
+            AttachedProgramAuthorityPreinstallErrorV1::InternalInvariant,
+        ) => AttachedProgramUpdateErrorV1::InternalInvariant,
     }
 }
 
