@@ -334,10 +334,7 @@ where
         update: UpdateV1<'_>,
     ) -> Result<AttachedProgramUpdateV1, AttachedProgramUpdateErrorV1<H::Error>> {
         let (state, authorities) = {
-            let commit = self
-                .attachment
-                .update(update)
-                .map_err(map_update_failure)?;
+            let commit = self.attachment.update(update).map_err(map_update_failure)?;
             let state = match commit.evidence().kind() {
                 StateKindV1::Waiting => AttachedProgramUpdateStateV1::Waiting,
                 StateKindV1::Ready => AttachedProgramUpdateStateV1::Ready,
