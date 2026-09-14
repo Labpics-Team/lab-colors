@@ -149,6 +149,43 @@ fn checked_u32(value: JsValue) -> Option<u32> {
     }
 }
 
+fn project_program_scenarios(
+    scenario_ids: &[u32],
+    surfaces: &[u8],
+    surface_count: usize,
+) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, ()> {
+    let row_bytes = surface_count.checked_mul(3).ok_or(())?;
+    let expected = scenario_ids.len().checked_mul(row_bytes).ok_or(())?;
+    if expected != surfaces.len() {
+        return Err(());
+    }
+
+    let mut scenarios = Vec::new();
+    scenarios
+        .try_reserve_exact(scenario_ids.len())
+        .map_err(|_| ())?;
+    for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
+        let start = row.checked_mul(row_bytes).ok_or(())?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(surface_count).map_err(|_| ())?;
+        for offset in 0..surface_count {
+            let byte = start
+                .checked_add(offset.checked_mul(3).ok_or(())?)
+                .ok_or(())?;
+            values.push(labcolors_core::Srgb8::new([
+                surfaces[byte],
+                surfaces[byte + 1],
+                surfaces[byte + 2],
+            ]));
+        }
+        scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
+            scenario_id,
+            values,
+        ));
+    }
+    Ok(scenarios)
+}
+
 fn checked_output_index(value: JsValue) -> Result<usize, JsError> {
     checked_u32(value)
         .map(|index| index as usize)
@@ -328,42 +365,8 @@ impl ProgramRuntime {
         let surface_count = checked_u32(surface_count)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
             as usize;
-        let row_bytes = surface_count
-            .checked_mul(3)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        let expected = scenario_ids
-            .len()
-            .checked_mul(row_bytes)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        if expected != surfaces.len() {
-            return Err(to_program_js_error(
-                E::Update,
-                ProgramOperation::UpdateObserved,
-            ));
-        }
-        let mut scenarios = Vec::new();
-        scenarios
-            .try_reserve_exact(scenario_ids.len())
+        let scenarios = project_program_scenarios(scenario_ids, surfaces, surface_count)
             .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-            let start = row * row_bytes;
-            let mut values = Vec::new();
-            values
-                .try_reserve_exact(surface_count)
-                .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-            for offset in 0..surface_count {
-                let byte = start + offset * 3;
-                values.push(labcolors_core::Srgb8::new([
-                    surfaces[byte],
-                    surfaces[byte + 1],
-                    surfaces[byte + 2],
-                ]));
-            }
-            scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
-                scenario_id,
-                values,
-            ));
-        }
         self.inner
             .update_observed(revision, &scenarios)
             .map(|inner| ProgramSnapshot { inner })

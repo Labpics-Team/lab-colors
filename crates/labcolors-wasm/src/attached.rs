@@ -1,4 +1,4 @@
-use js_sys::{Array, Function, Object, Reflect, Uint8Array};
+use js_sys::{Array, Function, Object, Reflect, Uint8Array, Uint32Array};
 use wasm_bindgen::{JsCast, prelude::*};
 
 use labcolors_core::program_wire::{
@@ -8,7 +8,7 @@ use labcolors_core::program_wire::{
     AttachedProgramAttachErrorV1, AttachedProgramCompileErrorV1, AttachedProgramEmissionBindingV1,
     AttachedProgramPresentationBindingV1, AttachedProgramUpdateErrorV1,
     AttachedProgramUpdateStateV1, CompiledAttachedProgramV1 as CoreCompiledAttachedProgram,
-    ProgramScenarioV1, RendererProvenanceV1, compile_attached_program_wire_v1,
+    RendererProvenanceV1, compile_attached_program_wire_v1,
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -45,6 +45,15 @@ export type AttachedPointSinkHostIntentV1 =
       publishedSequence: bigint;
       patch: ReadonlyArray<AttachedPointSinkHostPatchEntryV1>;
     }>;
+
+/** Exact authored bindings for one attachment. */
+export interface AttachedProgramBindingsV1 {
+  readonly emissionOutputs: Uint32Array;
+  readonly emissionSinkOutputs: Uint32Array;
+  readonly presentationOutputs: Uint32Array;
+  readonly presentationRoots: Uint32Array;
+  readonly presentationOccurrences: Uint32Array;
+}
 
 /** Synchronous host transaction boundary. The implementation lives in the consumer harness. */
 export interface AttachedPointSinkHostV1 {
@@ -254,40 +263,6 @@ impl AttachedPointSinkHostV1 for JsPointSinkHost {
     }
 }
 
-pub(super) fn project_program_scenarios(
-    scenario_ids: &[u32],
-    surfaces: &[u8],
-    surface_count: usize,
-) -> Result<Vec<ProgramScenarioV1>, ()> {
-    let row_bytes = surface_count.checked_mul(3).ok_or(())?;
-    let expected = scenario_ids.len().checked_mul(row_bytes).ok_or(())?;
-    if expected != surfaces.len() {
-        return Err(());
-    }
-
-    let mut scenarios = Vec::new();
-    scenarios
-        .try_reserve_exact(scenario_ids.len())
-        .map_err(|_| ())?;
-    for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-        let start = row.checked_mul(row_bytes).ok_or(())?;
-        let mut values = Vec::new();
-        values.try_reserve_exact(surface_count).map_err(|_| ())?;
-        for offset in 0..surface_count {
-            let byte = start
-                .checked_add(offset.checked_mul(3).ok_or(())?)
-                .ok_or(())?;
-            values.push(labcolors_core::Srgb8::new([
-                surfaces[byte],
-                surfaces[byte + 1],
-                surfaces[byte + 2],
-            ]));
-        }
-        scenarios.push(ProgramScenarioV1::new(scenario_id, values));
-    }
-    Ok(scenarios)
-}
-
 #[wasm_bindgen]
 pub struct CompiledAttachedProgram {
     inner: CoreCompiledAttachedProgram,
@@ -298,6 +273,14 @@ pub fn compile_attached_program_wire(bytes: &[u8]) -> Result<CompiledAttachedPro
     compile_attached_program_wire_v1(bytes)
         .map(|inner| CompiledAttachedProgram { inner })
         .map_err(map_compile_error)
+}
+
+fn u32_array_property(bindings: &JsValue, key: &str) -> Result<Vec<u32>, JsValue> {
+    let value = Reflect::get(bindings, &JsValue::from_str(key))?;
+    let array = value
+        .dyn_into::<Uint32Array>()
+        .map_err(|_| attached_error("attached_invalid_bindings", OP_ATTACH))?;
+    Ok(array.to_vec())
 }
 
 #[wasm_bindgen]
@@ -313,19 +296,19 @@ impl CompiledAttachedProgram {
     }
 
     #[wasm_bindgen(js_name = attach)]
-    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] stream_id: JsValue,
-        emission_outputs: &[u32],
-        emission_sink_outputs: &[u32],
-        presentation_outputs: &[u32],
-        presentation_roots: &[u32],
-        presentation_occurrences: &[u32],
+        #[wasm_bindgen(unchecked_param_type = "AttachedProgramBindingsV1")] bindings: JsValue,
         #[wasm_bindgen(unchecked_param_type = "AttachedPointSinkHostV1")] host: JsValue,
     ) -> Result<AttachedProgramRuntime, JsValue> {
         let stream_id = super::checked_u32(stream_id)
             .ok_or_else(|| attached_error("attached_instantiate", OP_ATTACH))?;
+        let emission_outputs = u32_array_property(&bindings, "emissionOutputs")?;
+        let emission_sink_outputs = u32_array_property(&bindings, "emissionSinkOutputs")?;
+        let presentation_outputs = u32_array_property(&bindings, "presentationOutputs")?;
+        let presentation_roots = u32_array_property(&bindings, "presentationRoots")?;
+        let presentation_occurrences = u32_array_property(&bindings, "presentationOccurrences")?;
         if emission_outputs.len() != emission_sink_outputs.len()
             || presentation_outputs.len() != presentation_roots.len()
             || presentation_outputs.len() != presentation_occurrences.len()
@@ -395,8 +378,9 @@ impl AttachedProgramRuntime {
     ) -> Result<AttachedProgramUpdate, JsValue> {
         let revision = u64::try_from(revision)
             .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
-        let scenarios = project_program_scenarios(scenario_ids, surfaces, self.surface_input_count)
-            .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
+        let scenarios =
+            super::project_program_scenarios(scenario_ids, surfaces, self.surface_input_count)
+                .map_err(|_| attached_error("attached_update", OP_UPDATE_OBSERVED))?;
         self.inner
             .update_observed(revision, &scenarios)
             .map(AttachedProgramUpdate::from_core)
