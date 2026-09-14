@@ -1,0 +1,58 @@
+name: FV-01 guarded cleanup patch
+
+on:
+  push:
+    branches:
+      - r12/fv-01-attached-materialization-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: r12/fv-01-attached-materialization-authority
+          fetch-depth: 2
+      - name: Apply exact guarded cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/labcolors-core/src/program/attachment/fv01.rs')
+          text = path.read_text()
+          replacements = [
+              (
+                  '    AppearanceContextV1, ContentIdentityV9, CoreVerifiedV1, OccurrenceIdV1, OutputSlotIdV1,\n    PresentationRootIdV1, SurroundV1,\n',
+                  '    AppearanceContextV1, ContentIdentityV9, OccurrenceIdV1, PresentationRootIdV1, SurroundV1,\n',
+              ),
+              (
+                  '/// `Ready` [`AttachmentCommitV1::render_outputs`] plus the matching\n',
+                  '/// a successful `Ready` attachment commit plus the matching\n',
+              ),
+              (
+                  '\n#[allow(dead_code)]\nfn _type_anchor(_: &CoreVerifiedV1) -> (OutputSlotIdV1, AppearanceContextV1) {\n    unreachable!()\n}\n',
+                  '\n',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one cleanup anchor, found {count}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fv01-cleanup-patch.yml
+      - name: Commit guarded cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/labcolors-core/src/program/attachment/fv01.rs crates/labcolors-core/src/program_wire.rs crates/labcolors-core/src/program_wire/fv01.rs .github/workflows/fv01-cleanup-patch.yml
+          git diff --cached --check
+          git commit -m "fix(fv-01): satisfy public docs and formatting gates"
+          git push origin HEAD:r12/fv-01-attached-materialization-authority
