@@ -249,7 +249,7 @@
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "60275c88234293e112eb666945410889d2541d9f",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
-  "packages/colors/index.js": "153391c4917c20f8bc902ed2ec951de75acc3194",
+  "packages/colors/index.js": "4caf1c580fc7bea4b1bd04e5f51696b7b4eebd13",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
   "crates/labcolors-core/src/certificate.rs": "fd0df919fdaa4f1faaf648526a55911b381c455a",
-  "packages/colors/test/certificate-envelope.test.mjs": "90229bc4b9c6b9e0b0b271180a8f69845e075893"
+  "packages/colors/test/certificate-envelope.test.mjs": "6ce5d852dd610571ca22b1f38ad758e8682d2e8a"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "e213e45b9090a9771f107806ce2031f86990bf2897906f81c00dc5170446590a"
+ "record_sha256": "fb431c13b2204970d28e98912450e352d374901e144cf9d7dc4c8f0e410e6b13"
 }

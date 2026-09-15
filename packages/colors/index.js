@@ -80,6 +80,7 @@ function certificateIngressError(code) {
 function checkCertificateIngress(bytes) {
   let byteLength;
   let normalized = bytes;
+  let needsNormalization;
   try {
     if (!(bytes instanceof Uint8Array)) {
       throw certificateIngressError("certificate_invalid_input");
@@ -98,13 +99,7 @@ function checkCertificateIngress(bytes) {
       throw certificateIngressError("certificate_invalid_input");
     }
     byteLength = intrinsicByteLength;
-    if (Object.getPrototypeOf(bytes) !== Uint8Array.prototype) {
-      if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
-        throw certificateIngressError("certificate_resource_limit_exceeded");
-      }
-      normalized = new Uint8Array(byteLength);
-      Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
-    }
+    needsNormalization = Object.getPrototypeOf(bytes) !== Uint8Array.prototype;
   } catch {
     throw certificateIngressError("certificate_invalid_input");
   }
@@ -113,6 +108,14 @@ function checkCertificateIngress(bytes) {
   }
   if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
     throw certificateIngressError("certificate_resource_limit_exceeded");
+  }
+  if (needsNormalization) {
+    try {
+      normalized = new Uint8Array(byteLength);
+      Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
+    } catch {
+      throw certificateIngressError("certificate_invalid_input");
+    }
   }
   return normalized;
 }

@@ -124,6 +124,17 @@ test("WASM ingress refuses oversized input before linear-memory copy", () => {
       return true;
     },
   );
+  const oversizedSubclass = new (class extends Uint8Array {})(
+    MAX_CERTIFICATE_ENVELOPE_BYTES + 1,
+  );
+  assert.throws(
+    () => decodeCertificateEnvelope(oversizedSubclass),
+    (error) => {
+      assert.equal(isCertificateError(error), true);
+      assert.equal(error.code, "certificate_resource_limit_exceeded");
+      return true;
+    },
+  );
   assert.throws(
     () => decodeCertificateEnvelope({ byteLength: 1 }),
     (error) => {
