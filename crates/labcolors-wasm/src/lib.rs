@@ -1032,14 +1032,7 @@ impl ProgramAttachedRender {
 
     #[wasm_bindgen(js_name = physicalIdentity)]
     pub fn physical_identity(&self) -> String {
-        match self.inner.physical_identity() {
-            Some(
-                labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
-            ) => "encoded-srgb8-source-over-v1",
-            None => "unknown",
-            Some(_) => "unsupported",
-        }
-        .to_string()
+        physical_identity_string(self.inner.physical_identity())
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
