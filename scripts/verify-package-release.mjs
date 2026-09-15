@@ -1149,6 +1149,7 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 const colors = await import("@labpics/colors");
+const wireApi = await import("@labpics/colors/program-wire/abi-v1.js");
 assert.deepEqual(Object.keys(colors).sort(), [
   "AttachedMaterializationAuthority",
   "ProgramAttachedRender",
@@ -1231,9 +1232,15 @@ assert.equal(snapshot.outputOpacity(0), 1);
 snapshot.free();
 runtime.free();
 
+const attachmentWire = new wireApi.ProgramWireBuilderV1();
+attachmentWire.source(1, [64, 64, 64]).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, 0.5)
+  .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
+  .sourceOverOccurrence(8, 4, 7, 64, 0.2, wireApi.SURROUND_AVERAGE_V1)
+  .presentationRoot(9, 8).presentationTarget(9, 8)
+  .exactVisibleUnary(false, 10, 8, [96, 96, 96]).output(17, 4);
 const attachmentIntents = [];
 const attachment = colors.attachProgramWire(
-  wire,
+  attachmentWire.finish(),
   7,
   17,
   91,
