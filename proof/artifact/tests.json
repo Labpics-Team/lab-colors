@@ -840,7 +840,6 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f54d11d9eeea94bd422643336dd2295bddc59ee694be6451fb15cc0099eed4d3",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -924,6 +923,17 @@
    "cam16_module_header_cites_sources: test",
    "cam16_viewing_conditions_derivation: test",
    "canonical_wcag22_criterion_is_total_and_non_vacuous_across_the_hue_circle: test",
+   "certificate::tests::canonical_producer_revision_rejects_uppercase_and_abbreviated_values: test",
+   "certificate::tests::canonical_wire_round_trips_and_is_positional: test",
+   "certificate::tests::capacity_refuses_without_eviction_and_exact_duplicate_still_noops: test",
+   "certificate::tests::expected_tuple_mismatches_are_typed_and_state_preserving: test",
+   "certificate::tests::forged_attestation_cannot_be_recomputed_from_a_different_tuple: test",
+   "certificate::tests::independent_reference_decoder_agrees_with_wire_prefix: test",
+   "certificate::tests::malformed_and_resource_inputs_are_bounded_and_redacted: test",
+   "certificate::tests::payload_replacement_and_binding_omission_fail_closed: test",
+   "certificate::tests::producer_capability_is_required_and_matching: test",
+   "certificate::tests::selector_length_and_version_mutants_never_fallback: test",
+   "certificate::tests::single_writer_model_has_one_accept_and_duplicate_replays: test",
    "cfg_test_module_exclusion_covers_the_relocated_oracles: test",
    "characterization_counters_are_non_vacuous: test",
    "check_returns_32_byte_identity_for_valid_bytes: test",
@@ -2273,7 +2283,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1429,
+  "enabled_count": 1440,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
@@ -2287,5 +2297,6 @@
   ],
   "ignored_count": 9
  },
- "schema_version": 1
+ "schema_version": 1,
+ "record_sha256": "102d3b12b1f5d7a5841cbec4f35fcbf02994daf17a905e2e0035dc64d9cd4556"
 }
