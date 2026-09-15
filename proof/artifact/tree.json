@@ -247,7 +247,7 @@
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
-  "packages/colors/bench/wasm.json": "60275c88234293e112eb666945410889d2541d9f",
+  "packages/colors/bench/wasm.json": "716e2e618988c3adef297805c6e5b9efb6e1c3b6",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
   "packages/colors/index.js": "4caf1c580fc7bea4b1bd04e5f51696b7b4eebd13",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
@@ -408,7 +408,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
-  "scripts/check-wasm-size-budget.mjs": "85ab01f4d276f947d6ee4419a8ec140636d2ba9d",
+  "scripts/check-wasm-size-budget.mjs": "bbb91b0fb58e1f81434d6976657cefbad808350d",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "7e691864e68ef130e589ce39144c705c44c14b0d",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "ef6ef7306632652e2e935618df4b4e025bdbff19dd185977ed445767c0b70f22"
+ "record_sha256": "feb3a2c34d9e7232f4f1a5e6d620dcb9dc5c2b089c630df2fa403506d1156228"
 }
