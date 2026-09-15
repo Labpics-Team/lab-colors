@@ -1962,12 +1962,15 @@ impl OwnerV1 {
     /// эпохе, но использует тот же compiled-инвариант terminal target.
     pub(crate) fn bind_terminal_point_output_presentation(
         &self,
-        output: OutputSlotId,
-        root: PresentationRootId,
-        occurrence: OccurrenceId,
+        output: OutputSlotIdV1,
+        root: PresentationRootIdV1,
+        occurrence: OccurrenceIdV1,
     ) -> Result<CompiledPointOutputPresentationV1, PointOutputPresentationBindErrorV1> {
-        self.compiled
-            .bind_terminal_point_output_presentation(output, root, occurrence)
+        self.compiled.bind_terminal_point_output_presentation(
+            output.into_core(),
+            root.into_core(),
+            occurrence.into_core(),
+        )
     }
 
     #[cfg(test)]
