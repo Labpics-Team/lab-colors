@@ -45,6 +45,7 @@ pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
 pub mod claims_manifest;
+pub mod certificate;
 #[expect(
     dead_code,
     reason = "R-07 G4: config module staged before consumer wiring"

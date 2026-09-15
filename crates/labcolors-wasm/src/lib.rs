@@ -109,6 +109,15 @@ extern "C" {
     fn unsupported_physical_identity_error() -> js_sys::Error;
 }
 
+fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
+    program_error(
+        "Certificate envelope operation failed",
+        &format!("certificate_{}", error.code()),
+        "decodeCertificateEnvelope",
+    )
+    .into()
+}
+
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
@@ -309,6 +318,115 @@ pub fn evaluate_wcag22(
                 reason: "WCAG22 projection не распарсился как JSON".to_string(),
             })
         })
+}
+
+/// Structurally decoded certificate envelope.  The value is explicitly
+/// untrusted: it exposes framing metadata for inspection but cannot create an
+/// attestation or enter Core admission from JavaScript.
+#[wasm_bindgen]
+pub struct UntrustedCertificateEnvelopeV1 {
+    inner: labcolors_core::certificate::UntrustedEnvelopeV1,
+}
+
+#[wasm_bindgen]
+impl UntrustedCertificateEnvelopeV1 {
+    /// Schema version of the decoded envelope.
+    #[wasm_bindgen(js_name = schemaVersion)]
+    pub fn schema_version(&self) -> u16 {
+        labcolors_core::certificate::CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1
+    }
+
+    /// Operation selector.
+    pub fn operation(&self) -> String {
+        self.inner.admission_key().operation().key().to_string()
+    }
+
+    /// Authority framing selector.
+    #[wasm_bindgen(js_name = authorityKind)]
+    pub fn authority_kind(&self) -> String {
+        self.inner
+            .admission_key()
+            .authority_kind()
+            .key()
+            .to_string()
+    }
+
+    /// Authority framing version.
+    #[wasm_bindgen(js_name = authorityVersion)]
+    pub fn authority_version(&self) -> u16 {
+        self.inner.admission_key().authority_version()
+    }
+
+    /// Runtime artifact identity.
+    #[wasm_bindgen(js_name = runtimeArtifactId)]
+    pub fn runtime_artifact_id(&self) -> String {
+        self.inner.admission_key().runtime_artifact_id().to_string()
+    }
+
+    /// Full immutable producer revision.
+    #[wasm_bindgen(js_name = producerRevision)]
+    pub fn producer_revision(&self) -> String {
+        self.inner.admission_key().producer_revision().to_string()
+    }
+
+    /// Raw 32-byte producer content identity.
+    #[wasm_bindgen(js_name = producerContentIdentity)]
+    pub fn producer_content_identity(&self) -> Box<[u8]> {
+        self.inner
+            .admission_key()
+            .producer_content_identity()
+            .to_vec()
+            .into_boxed_slice()
+    }
+
+    /// Explicit context identity.
+    #[wasm_bindgen(js_name = contextId)]
+    pub fn context_id(&self) -> String {
+        self.inner.admission_key().context_id().to_string()
+    }
+
+    /// Payload framing selector.
+    #[wasm_bindgen(js_name = payloadType)]
+    pub fn payload_type(&self) -> String {
+        self.inner.admission_key().payload_type().key().to_string()
+    }
+
+    /// Payload framing version.
+    #[wasm_bindgen(js_name = payloadVersion)]
+    pub fn payload_version(&self) -> u16 {
+        self.inner.admission_key().payload_version()
+    }
+
+    /// Opaque payload length; the body itself is not projected to JS.
+    #[wasm_bindgen(js_name = payloadLength)]
+    pub fn payload_length(&self) -> u32 {
+        self.inner
+            .payload_len()
+            .try_into()
+            .expect("payload length is bounded by the certificate contract")
+    }
+
+    /// SHA-256 of the domain-separated opaque payload.
+    #[wasm_bindgen(js_name = payloadSha256)]
+    pub fn payload_sha256(&self) -> Box<[u8]> {
+        self.inner.payload_sha256().to_vec().into_boxed_slice()
+    }
+
+    /// SHA-256 of the domain-separated canonical prefix.
+    #[wasm_bindgen(js_name = bindingSha256)]
+    pub fn binding_sha256(&self) -> Box<[u8]> {
+        self.inner.binding_sha256().to_vec().into_boxed_slice()
+    }
+}
+
+/// Decodes untrusted certificate bytes for inspection only.
+#[wasm_bindgen(js_name = decodeCertificateEnvelope)]
+pub fn decode_certificate_envelope(
+    bytes: &[u8],
+) -> Result<UntrustedCertificateEnvelopeV1, JsValue> {
+    let inner = labcolors_core::certificate::UntrustedEnvelopeV1::decode(bytes)
+        .map_err(to_certificate_js_error)?;
+    Ok(UntrustedCertificateEnvelopeV1 { inner })
 }
 
 /// Публичный runtime одного скомпилированного Program.

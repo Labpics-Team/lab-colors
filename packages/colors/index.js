@@ -7,6 +7,7 @@
 import initWasm, {
   initSync as initWasmSync,
   attachProgramWire as attachProgramWireWasm,
+  decodeCertificateEnvelope as decodeCertificateEnvelopeWasm,
   ProgramAttachment,
 } from "./pkg/labcolors.js";
 
@@ -23,7 +24,78 @@ export {
   ProgramAttachedSnapshot,
   ProgramAttachedRender,
   AttachedMaterializationAuthority,
+  UntrustedCertificateEnvelopeV1,
 } from "./pkg/labcolors.js";
+
+export const MAX_CERTIFICATE_ENVELOPE_BYTES = 2_097_152;
+
+const CERTIFICATE_ERROR_CODES = new Set([
+  "certificate_invalid_magic",
+  "certificate_unsupported_schema",
+  "certificate_unknown_operation",
+  "certificate_unknown_authority_kind",
+  "certificate_unsupported_authority_version",
+  "certificate_invalid_utf8",
+  "certificate_invalid_length",
+  "certificate_truncated_input",
+  "certificate_trailing_bytes",
+  "certificate_non_canonical_revision",
+  "certificate_invalid_payload_type",
+  "certificate_unsupported_payload_version",
+  "certificate_payload_digest_mismatch",
+  "certificate_binding_digest_mismatch",
+  "certificate_missing_producer_attestation",
+  "certificate_producer_binding_mismatch",
+  "certificate_runtime_artifact_mismatch",
+  "certificate_producer_revision_mismatch",
+  "certificate_content_identity_mismatch",
+  "certificate_context_mismatch",
+  "certificate_resource_limit_exceeded",
+  "certificate_admission_capacity_exceeded",
+  "certificate_unsupported_opaque",
+  "certificate_binding_conflict",
+  "certificate_invalid_input",
+]);
+
+function certificateIngressError(code) {
+  const error = new Error("Certificate envelope input was refused");
+  error.code = code;
+  error.operation = "decodeCertificateEnvelope";
+  return error;
+}
+
+function checkCertificateIngress(bytes) {
+  if (
+    bytes === null ||
+    (typeof bytes !== "object" && typeof bytes !== "function") ||
+    !Number.isSafeInteger(bytes.byteLength) ||
+    bytes.byteLength < 0
+  ) {
+    throw certificateIngressError("certificate_invalid_input");
+  }
+  if (bytes.byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
+    throw certificateIngressError("certificate_resource_limit_exceeded");
+  }
+  return bytes;
+}
+
+export function decodeCertificateEnvelope(bytes) {
+  // This check is deliberately in the package facade: wasm-bindgen copies a
+  // typed-array argument into linear memory before Rust can observe it.
+  return decodeCertificateEnvelopeWasm(checkCertificateIngress(bytes));
+}
+
+export function isCertificateError(error) {
+  try {
+    return (
+      error instanceof Error &&
+      error.operation === "decodeCertificateEnvelope" &&
+      CERTIFICATE_ERROR_CODES.has(error.code)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // wasm-bindgen выставляет `free()` как потребляющий метод JavaScript.
 // Синхронный host callback может повторно войти в тот же объект, поэтому

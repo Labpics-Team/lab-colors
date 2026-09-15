@@ -115,6 +115,25 @@ binding epoch и отсутствием downstream point, а не доказат
 пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
 отзывается владельцем host до `dispose(true)`.
 
+## Инспекция certificate envelope
+
+`decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
+transport envelope и возвращает `UntrustedCertificateEnvelopeV1`. Результат —
+метаданные framing и проверенные digest, а не authority result и не доказательство
+истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
+
+До вызова WASM-функции фасад проверяет `bytes.byteLength` и отвергает размер больше
+`MAX_CERTIFICATE_ENVELOPE_BYTES` (`2097152`), поскольку `wasm-bindgen` копирует
+typed array в linear memory до входа Rust. Неизвестная schema, authority,
+operation, payload type/version, неканоничные строки, trailing bytes и digest
+mismatch дают typed error; `isCertificateError(value)` проверяет только
+допустимую пару `operation`/`code`.
+
+Создать envelope из произвольных JS-байтов, `ProgramSnapshot`, Paint, CSS, DOM или
+materialization authority нельзя. Producer capability и admission ledger остаются
+владением Rust Core; в r13 нет persistence, network relay, CLI, science authority
+или registry publication.
+
 ## Контракт
 
 - Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
