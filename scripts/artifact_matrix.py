@@ -150,16 +150,28 @@ def extract_tree() -> dict:
             modes[path] = "untracked"
     files: dict[str, str] = {}
     to_hash: list[str] = []
+    worktree_changed = set(
+        git("diff", "--name-only", "--", *TREE_ROOTS)
+        .decode("utf-8")
+        .splitlines()
+    )
     for path, mode in sorted(modes.items()):
         if mode == "120000":
             files[path] = index_blob[path]
-        elif (REPO_ROOT / path).is_file():
+        elif mode == "untracked" or path in worktree_changed:
             to_hash.append(path)
+        else:
+            # Для tracked-файла без unstaged diff index уже содержит точный
+            # blob. Это сохраняет Linux blob semantics на checkout с CRLF и
+            # не позволяет core.autocrlf превратить неизменённый файл в drift.
+            files[path] = index_blob[path]
     if to_hash:
-        blobs = git("hash-object", "--stdin-paths", stdin="\n".join(to_hash).encode("utf-8")).decode().split()
-        if len(blobs) != len(to_hash):
-            raise RuntimeError(f"hash-object returned {len(blobs)} ids for {len(to_hash)} paths")
-        for path, blob in zip(to_hash, blobs):
+        for path in to_hash:
+            if not (REPO_ROOT / path).is_file():
+                continue
+            blob = git("hash-object", f"--path={path}", path).decode().strip()
+            if not blob:
+                raise RuntimeError(f"hash-object returned no id for {path}")
             files[path] = blob
     if not files:
         raise RuntimeError("no files under declared roots")

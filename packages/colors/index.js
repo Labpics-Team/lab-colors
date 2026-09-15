@@ -11,10 +11,15 @@ let initFlight;
 
 export {
   compileProgramWire,
+  attachProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachment,
+  ProgramAttachedSnapshot,
+  ProgramAttachedRender,
+  AttachedMaterializationAuthority,
 } from "./pkg/labcolors.js";
 
 // wasm-bindgen returns every raw export from its loaders. The public facade

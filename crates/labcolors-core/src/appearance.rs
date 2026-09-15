@@ -2078,6 +2078,20 @@ impl CompiledAppearanceGraph {
         self.occurrences.iter().map(|occurrence| occurrence.id)
     }
 
+    /// Возвращает закреплённый физический профиль одного скомпилированного
+    /// Occurrence. Поиск остаётся во владении compiler: профиль выдаётся только
+    /// для ID, проверенного этим же compiled graph.
+    pub(crate) fn occurrence_profile(&self, id: OccurrenceId) -> Option<CompositionProfileV1> {
+        self.occurrences
+            .binary_search_by_key(&id, |occurrence| occurrence.id)
+            .ok()
+            .and_then(|index| {
+                self.occurrences
+                    .get(index)
+                    .map(|occurrence| occurrence.profile)
+            })
+    }
+
     /// Canonical physical Surface-input schema accepted by this program.
     pub(crate) fn surface_input_ports(
         &self,

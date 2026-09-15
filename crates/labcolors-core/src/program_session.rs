@@ -34,9 +34,9 @@ use crate::appearance::{
     CompiledOccurrenceSlotV1, CompiledPaintInputSlotV1, CompiledPaintSlotV1,
     CompiledPointPresentationPathV1, EncodedPointPaintV1, EncodedPointPaintValueV1,
     ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
-    PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1,
-    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
-    SurfaceSpec,
+    PaintInputId, PaintSpec, PhysicalProgramIdentityV1, PointOccurrenceAbsenceReleaseV1,
+    PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1,
+    SurfaceId, SurfaceInputPortId, SurfaceSpec,
 };
 use crate::clean_set::{
     ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
@@ -1850,6 +1850,8 @@ pub(crate) struct CompiledPointOutputPresentationV1 {
     presentation_ordinal: usize,
     root: PresentationRootId,
     occurrence: OccurrenceId,
+    context: AppearanceContextId,
+    physical_identity: PhysicalProgramIdentityV1,
 }
 
 impl CompiledPointOutputPresentationV1 {
@@ -1875,6 +1877,14 @@ impl CompiledPointOutputPresentationV1 {
 
     pub(crate) const fn occurrence(self) -> OccurrenceId {
         self.occurrence
+    }
+
+    pub(crate) const fn context(self) -> AppearanceContextId {
+        self.context
+    }
+
+    pub(crate) const fn physical_identity(self) -> PhysicalProgramIdentityV1 {
+        self.physical_identity
     }
 }
 
@@ -2127,6 +2137,9 @@ where
     binding_template: AdmittedAppearanceBindings,
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
+    // Полная таблица контекстов Occurrence сохраняется для presentation binding;
+    // расположенная выше `occurrence_contexts` уплотнена для индексации constraint-cell.
+    presentation_occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
     point_presentations: CompiledPointPresentationsV1,
@@ -2246,6 +2259,28 @@ where
             });
         }
 
+        let occurrence_context = self
+            .owner_generation
+            .presentation_occurrence_contexts
+            .binary_search_by_key(&occurrence, |candidate| candidate.occurrence)
+            .ok()
+            .and_then(|index| {
+                self.owner_generation
+                    .presentation_occurrence_contexts
+                    .get(index)
+            })
+            .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?;
+        let physical_identity = match self
+            .owner_generation
+            .graph
+            .occurrence_profile(occurrence)
+            .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?
+        {
+            CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
+                PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
+            }
+        };
+
         Ok(CompiledPointOutputPresentationV1 {
             output_ordinal,
             output,
@@ -2253,6 +2288,8 @@ where
             presentation_ordinal,
             root,
             occurrence,
+            context: occurrence_context.context,
+            physical_identity,
         })
     }
 
@@ -5270,6 +5307,7 @@ where
             schema: observation_schema,
         },
         occurrence_contexts,
+        presentation_occurrence_contexts: all_occurrence_contexts,
         constraints,
         constraint_phases,
         point_presentations,

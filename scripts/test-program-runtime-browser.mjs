@@ -284,7 +284,215 @@ async function browserConsumer(origin, fault) {
   return { ...result, ...outcome, ...evidence };
 }
 
-export async function runBrowserProof({ tarball, timeout, chrome, driver }, fault) {
+export function browserAttachmentScenario(origin, fault) {
+  return `const done=arguments[arguments.length-1];
+    const browserCleanup=${browserCleanup.toString()};
+    const acquisition=${acquisition.toString()};
+    const released=${released.toString()};
+    (${browserAttachmentConsumer.toString()})(${JSON.stringify(origin)},${JSON.stringify(fault)})
+      .then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));`;
+}
+
+async function browserAttachmentConsumer(origin, fault) {
+  const resources = [];
+  const evidence = { acquired: [], released: [], readback: {} };
+  let primary, result, attachment, snapshot, secondSnapshot, render, secondRender,
+    authority, secondAuthority, preservedAuthority, element;
+  let hostDisposed = false;
+  let hostAcquired = false;
+  try {
+    const api = await import(`${origin}/index.js`);
+    const wire = await import(`${origin}/program-wire/abi-v1.js`);
+    await api.init({ module_or_path: fetch(`${origin}/pkg/labcolors_bg.wasm`) });
+    const builder = new wire.ProgramWireBuilderV1();
+    builder.source(1, [64, 64, 64]).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, 0.5)
+      .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
+      .sourceOverOccurrence(8, 4, 7, 64, .2, wire.SURROUND_AVERAGE_V1)
+      .presentationRoot(9, 8).presentationTarget(9, 8)
+      .exactVisibleUnary(false, 10, 8, [96, 96, 96]).output(17, 4);
+    element = document.createElement("div");
+    element.style.background = "rgb(128 128 128)";
+    document.body.append(element);
+    const hostState = { sequence: 0n, epoch: null, point: null, intents: [], reject: false };
+    const host = (intent) => {
+      if (hostState.reject) return false;
+      if (intent.sinkOutput !== 91
+        || intent.expectedSequence !== hostState.sequence
+        || (hostState.epoch !== null && intent.bindingEpoch !== hostState.epoch)) return false;
+      let nextPoint = hostState.point;
+      if (intent.operation === "setAll") {
+        if (intent.point === null || intent.point.slot !== 17
+          || intent.point.source.length !== 3 || intent.point.opacity !== 0.5) return false;
+        nextPoint = { slot: intent.point.slot, source: Array.from(intent.point.source), opacity: intent.point.opacity };
+      } else if (intent.operation === "revokeAll") {
+        nextPoint = null;
+      } else if (intent.operation === "confirmExact") {
+        if (intent.desiredSequence !== intent.expectedSequence) return 0;
+      } else return false;
+      // Все проверки выполняются до одной DOM-мутации и локальной смены stamp.
+      if (intent.operation === "revokeAll") element.style.removeProperty("color");
+      else if (intent.point !== null) {
+        const [r, g, b] = intent.point.source;
+        element.style.color = `rgb(${r} ${g} ${b} / ${intent.point.opacity})`;
+      }
+      hostState.sequence = intent.desiredSequence;
+      hostState.epoch = intent.bindingEpoch;
+      hostState.point = nextPoint;
+      hostState.intents.push({
+        operation: intent.operation,
+        revision: intent.revision.toString(),
+        expectedSequence: intent.expectedSequence.toString(),
+        desiredSequence: intent.desiredSequence.toString(),
+        bindingEpoch: intent.bindingEpoch.toString(),
+        sinkOutput: intent.sinkOutput,
+        point: nextPoint,
+      });
+      return true;
+    };
+    const hostResource = {
+      name: "attachment-host",
+      release() {
+        if (hostDisposed) return;
+        element.style.removeProperty("color");
+        element.remove();
+        hostDisposed = true;
+        if (hostAcquired) released(evidence, "attachment-host", fault);
+      },
+    };
+    try {
+      attachment = api.attachProgramWire(builder.finish(), 7, 17, 91, 9, 8, host);
+    } catch (error) {
+      hostResource.release();
+      throw error;
+    }
+    resources.push({
+      name: "attachment",
+      release() {
+        // Внешний владелец отзывает свой DOM scope до подтверждения освобождения.
+        hostResource.release();
+        attachment.dispose(true);
+        attachment.free();
+        released(evidence, "attachment", fault);
+      },
+    });
+    acquisition(evidence, "attachment", fault);
+    resources.push(hostResource);
+    hostAcquired = true;
+    acquisition(evidence, "attachment-host", fault);
+    snapshot = attachment.updateObserved(1n, new Uint32Array([1]), new Uint8Array([128, 128, 128]), 1);
+    const firstStatus = {
+      state: snapshot.state,
+      hasRender: snapshot.hasRender(),
+    };
+    resources.push({ name: "attachment-snapshot", release() { snapshot.free(); released(evidence, "attachment-snapshot", fault); } });
+    acquisition(evidence, "attachment-snapshot", fault);
+    render = snapshot.render();
+    resources.push({ name: "attachment-render", release() { render?.free(); released(evidence, "attachment-render", fault); } });
+    acquisition(evidence, "attachment-render", fault);
+    authority = attachment.materializationAuthority();
+    resources.push({ name: "attachment-authority", release() { authority.free(); released(evidence, "attachment-authority", fault); } });
+    acquisition(evidence, "attachment-authority", fault);
+    element.style.background = "rgb(160 160 160)";
+    secondSnapshot = attachment.updateObserved(2n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
+    resources.push({ name: "attachment-second-snapshot", release() { secondSnapshot.free(); released(evidence, "attachment-second-snapshot", fault); } });
+    acquisition(evidence, "attachment-second-snapshot", fault);
+    const secondStatus = {
+      state: secondSnapshot.state,
+      hasRender: secondSnapshot.hasRender(),
+    };
+    secondRender = secondSnapshot.render();
+    resources.push({ name: "attachment-second-render", release() { secondRender?.free(); released(evidence, "attachment-second-render", fault); } });
+    acquisition(evidence, "attachment-second-render", fault);
+    secondAuthority = attachment.materializationAuthority();
+    resources.push({ name: "attachment-second-authority", release() { secondAuthority.free(); released(evidence, "attachment-second-authority", fault); } });
+    acquisition(evidence, "attachment-second-authority", fault);
+    hostState.reject = true;
+    let hostRejection;
+    try {
+      attachment.updateObserved(3n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
+      hostRejection = { rejected: false };
+    } catch (error) {
+      hostRejection = { rejected: true, code: error.code, operation: error.operation };
+    }
+    preservedAuthority = attachment.materializationAuthority();
+    resources.push({ name: "attachment-preserved-authority", release() { preservedAuthority.free(); released(evidence, "attachment-preserved-authority", fault); } });
+    acquisition(evidence, "attachment-preserved-authority", fault);
+    let stale;
+    try {
+      attachment.materializationAuthorityFor(
+        1n,
+        authority.contentIdentity(),
+        authority.bindingEpoch(),
+      );
+      stale = { rejected: false };
+    } catch (error) {
+      stale = { rejected: true, code: error.code, operation: error.operation };
+    }
+    let staleIdentity;
+    try {
+      attachment.materializationAuthorityFor(
+        2n,
+        new Uint8Array(32).fill(0xA5),
+        secondAuthority.bindingEpoch(),
+      );
+      staleIdentity = { rejected: false };
+    } catch (error) {
+      staleIdentity = { rejected: true, code: error.code, operation: error.operation };
+    }
+    const parseComputed = (value) => {
+      const channels = value.match(/[\d.]+/g)?.map(Number);
+      if (!channels || channels.length < 3) throw new Error("computed color was not RGB");
+      return [channels[0], channels[1], channels[2], channels[3] ?? 1];
+    };
+    const computed = parseComputed(getComputedStyle(element).color);
+    result = {
+      hostIntents: hostState.intents,
+      first: {
+        ...firstStatus,
+        output: Array.from(snapshot.outputRgb(0)),
+        opacity: snapshot.outputOpacity(0),
+        renderComposite: Array.from(render.terminalCompositeRgb() ?? []),
+        authorityComposite: Array.from(authority.terminalCompositeRgb()),
+        rendererProvenance: authority.rendererProvenance(),
+      },
+      second: {
+        state: secondSnapshot.state,
+        hasRender: secondSnapshot.hasRender(),
+        renderComposite: Array.from(secondRender.terminalCompositeRgb() ?? []),
+        authorityComposite: Array.from(secondAuthority.terminalCompositeRgb()),
+      },
+      computed,
+      independentComposite: Math.round(160 + 0.5 * (64 - 160)),
+      stale,
+      staleSnapshotHasAuthority: typeof snapshot.materializationAuthority === "function",
+      cssBefore: element.style.color,
+      staleIdentity,
+      hostRejection,
+      preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
+      cssAfterRejection: element.style.color,
+    };
+  } catch (error) {
+    primary = error;
+    result = {};
+  }
+  const outcome = browserCleanup(primary, resources.toReversed());
+  if (attachment) evidence.readback.attachment = attachment.__wbg_ptr === 0;
+  if (snapshot) evidence.readback["attachment-snapshot"] = snapshot.__wbg_ptr === 0;
+  if (render) evidence.readback["attachment-render"] = render.__wbg_ptr === 0;
+  if (authority) evidence.readback["attachment-authority"] = authority.__wbg_ptr === 0;
+  if (secondSnapshot) evidence.readback["attachment-second-snapshot"] = secondSnapshot.__wbg_ptr === 0;
+  if (secondRender) evidence.readback["attachment-second-render"] = secondRender.__wbg_ptr === 0;
+  if (secondAuthority) evidence.readback["attachment-second-authority"] = secondAuthority.__wbg_ptr === 0;
+  if (preservedAuthority) evidence.readback["attachment-preserved-authority"] = preservedAuthority.__wbg_ptr === 0;
+  if (element) evidence.readback["attachment-host"] = !element.isConnected && element.style.getPropertyValue("color") === "";
+  return { ...result, ...outcome, ...evidence };
+}
+
+export async function runBrowserAttachmentProof(options) {
+  return runBrowserProof({ ...options, scenario: browserAttachmentScenario }, {});
+}
+
+export async function runBrowserProof({ tarball, timeout, chrome, driver, scenario = browserScenario }, fault) {
   const resources = [];
   const evidence = { acquired: [], released: [], readback: {} };
   let primary, result, root, child, childErrors, server, base;
@@ -341,7 +549,7 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver }, faul
     acquisition(evidence, "server", fault);
     const origin = `http://${LOOPBACK}:${port}`;
     await request(base, "/url", "POST", { url: origin }, controller.signal);
-    const response = await request(base, "/execute/async", "POST", { script: browserScenario(origin, fault), args: [] }, controller.signal);
+    const response = await request(base, "/execute/async", "POST", { script: scenario(origin, fault), args: [] }, controller.signal);
     result = response.proof;
     evidence.acquired.push(...result.acquired);
     evidence.released.push(...result.released);
@@ -404,6 +612,62 @@ export function verifyBrowserConsumer(result) {
   }
 }
 
+export function verifyBrowserAttachmentConsumer(result) {
+  const equal = isDeepStrictEqual;
+  const intents = result.hostIntents ?? [];
+  const resources = [
+    "temp-install", "browser", "browser-session", "server", "attachment", "attachment-host",
+    "attachment-snapshot", "attachment-render", "attachment-authority", "attachment-second-snapshot",
+    "attachment-second-render", "attachment-second-authority", "attachment-preserved-authority",
+  ];
+  if (result.error || result.cleanupError
+    || !equal(result.first?.output, [64, 64, 64])
+    || result.first?.opacity !== 0.5
+    || !equal(result.first?.renderComposite, [96, 96, 96])
+    || !equal(result.first?.authorityComposite, [96, 96, 96])
+    || result.first?.rendererProvenance !== "unverified"
+    || result.first?.state !== "ready"
+    || result.first?.hasRender !== true
+    || !equal(result.second?.renderComposite, [112, 112, 112])
+    || !equal(result.second?.authorityComposite, [112, 112, 112])
+    || result.second?.state !== "ready"
+    || result.second?.hasRender !== true
+    || !equal(result.computed, [64, 64, 64, 0.5])
+    || result.independentComposite !== 112
+    || result.stale?.rejected !== true
+    || result.stale.code !== "program_materialization_stale_revision"
+    || result.stale.operation !== "materializationAuthority"
+    || result.staleIdentity?.rejected !== true
+    || result.staleIdentity.code !== "program_materialization_stale_identity"
+    || result.staleIdentity.operation !== "materializationAuthority"
+    || result.staleSnapshotHasAuthority !== false
+    || result.hostRejection?.rejected !== true
+    || result.hostRejection.code !== "program_attachment_host_rejected"
+    || result.hostRejection.operation !== "attachmentUpdateObserved"
+    || !equal(result.preservedAuthorityComposite, [112, 112, 112])
+    || result.cssAfterRejection !== result.cssBefore
+    || typeof result.cssBefore !== "string" || result.cssBefore === ""
+    || intents.length !== 2
+    || intents.some((intent) => intent.operation !== "setAll" || intent.sinkOutput !== 91
+      || intent.point?.slot !== 17 || intent.point?.opacity !== 0.5)
+    || intents[0]?.expectedSequence !== "0"
+    || intents[0]?.desiredSequence !== "1"
+    || intents[1]?.expectedSequence !== "1"
+    || intents[1]?.desiredSequence !== "2"
+    || intents[0]?.bindingEpoch === "0"
+    || intents[0]?.bindingEpoch !== intents[1]?.bindingEpoch
+    || result.readback?.["attachment-host"] !== true
+    || result.readback?.attachment !== true
+    || result.readback?.["attachment-snapshot"] !== true
+    || result.readback?.["attachment-second-snapshot"] !== true
+    || result.readback?.["attachment-preserved-authority"] !== true
+    || !equal(result.acquired, resources)
+    || !equal(result.released, resources.toReversed())
+    || resources.some((name) => result.readback?.[name] !== true)) {
+    fail(`browser attachment consumer result drifted: ${JSON.stringify(result)}`);
+  }
+}
+
 async function main() {
   const { tarball, digest } = parseArgs();
   const timeout = positiveIntegerEnv("LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS");
@@ -419,6 +683,9 @@ async function main() {
     fail(`browser consumer result drifted: ${JSON.stringify(result)}`);
   }
   console.log(`LAB_COLORS_PROGRAM_BROWSER_RESULT ${JSON.stringify(result)}`);
+  const attachmentResult = await runBrowserAttachmentProof({ tarball, timeout, chrome, driver });
+  verifyBrowserAttachmentConsumer(attachmentResult);
+  console.log(`LAB_COLORS_PROGRAM_ATTACHMENT_BROWSER_RESULT ${JSON.stringify(attachmentResult)}`);
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);

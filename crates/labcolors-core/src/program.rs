@@ -2408,6 +2408,15 @@ impl<'a> VerifiedCertificateV1<'a> {
             .iter()
             .map(CertifiedPaintOutputV1::from_core)
     }
+
+    /// Причинные evidence point-presentation выбранного состояния. Это
+    /// модельная проверка отсутствия downstream у terminal root, не browser observation.
+    pub(crate) fn point_causal_certificates(
+        self,
+    ) -> impl ExactSizeIterator<Item = crate::program_session::ProgramPointCausalCertificateV1<'a>> + 'a
+    {
+        self.inner.point_causal_certificates()
+    }
 }
 
 /// Исчерпывающее доказательство, что каждое состояние нарушает hard-клетку.
