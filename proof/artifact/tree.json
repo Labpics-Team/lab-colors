@@ -236,7 +236,7 @@
   "crates/labcolors-wasm/src/dto.rs": "40e2aef4a1b00927621cd3985543e639a24b4af9",
   "crates/labcolors-wasm/src/engine.rs": "58c105da2e2eed6d8695c76efde6e99a43001342",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
-  "crates/labcolors-wasm/src/lib.rs": "ebc2db15f7cdb459461d84bd0bc76afaf0e32572",
+  "crates/labcolors-wasm/src/lib.rs": "fbe7ee4472f57289c7459bd606ea78393dbe1167",
   "crates/labcolors-wasm/src/projection.rs": "c87dbc55f733ccfc456fe74d4b6c5e18ed99b231",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
   "crates/labcolors-wasm/tests/data/labui.config.json": "8c6b9b17d2ff0b00fed0a3e4bc1aaab4316378da",
@@ -249,7 +249,7 @@
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "fd4a528eb323e5a855c120c57fae3e46dc05b4a2",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
-  "packages/colors/index.js": "dc130e75eca26e4e36de276503e36f124635db67",
+  "packages/colors/index.js": "3c02f938a5a3f15ef39413f5040c8af0d7ade11b",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -452,8 +452,8 @@
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
-  "crates/labcolors-core/src/certificate.rs": "f488f3fd7c9cab439a0439563e381055e20f4b06",
-  "packages/colors/test/certificate-envelope.test.mjs": "fcabdc8e3587050fe9ecd5977687fd06aedddb1c"
+  "crates/labcolors-core/src/certificate.rs": "5c19b151b7b746ca271a5be07b7ddf93c47e9cbd",
+  "packages/colors/test/certificate-envelope.test.mjs": "999b15151eab02f8564797c0ef3e5ec898769543"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "9bd951c0e8a7c23e45d65833e321cd354dcb90580af8172951dddc9289618f27"
+ "record_sha256": "ffb841711b2136057fa3d69f613c359e0304bddd6a3ddee32c2cb13d23271a8f"
 }
