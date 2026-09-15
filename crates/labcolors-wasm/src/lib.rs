@@ -153,12 +153,12 @@ fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -
 
 fn physical_identity_string(
     identity: Option<labcolors_core::program_wire::ProgramPhysicalIdentityV1>,
-) -> Result<String, JsValue> {
+) -> Result<js_sys::JsString, JsValue> {
     match identity {
         Some(labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => {
-            Ok("encoded-srgb8-source-over-v1".to_string())
+            Ok(js_sys::JsString::from("encoded-srgb8-source-over-v1"))
         }
-        None => Ok("unknown".to_string()),
+        None => Ok(js_sys::JsString::from("unknown")),
         Some(_) => Err(attachment_js_error(
             "Program physical identity variant is unsupported by this package",
             "program_attachment_unsupported_physical_identity",
@@ -1024,7 +1024,7 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> Result<String, JsValue> {
+    pub fn physical_identity(&self) -> Result<js_sys::JsString, JsValue> {
         physical_identity_string(self.inner.physical_identity())
     }
 
@@ -1103,7 +1103,7 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> Result<String, JsValue> {
+    pub fn physical_identity(&self) -> Result<js_sys::JsString, JsValue> {
         physical_identity_string(self.inner.physical_identity())
     }
 
