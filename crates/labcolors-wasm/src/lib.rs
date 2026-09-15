@@ -7,7 +7,7 @@
 mod error;
 mod terminal_projection;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use wasm_bindgen::prelude::*;
 
@@ -670,14 +670,16 @@ pub fn attach_program_wire(
         )
         .map_err(|error| to_attachment_error(error, ProgramOperation::AttachProgramWire))?;
     Ok(ProgramAttachment {
-        inner,
+        inner: RefCell::new(inner),
         busy: Cell::new(false),
     })
 }
 
 #[wasm_bindgen(js_name = ProgramAttachment)]
 pub struct ProgramAttachment {
-    inner: labcolors_core::program_wire::ProgramAttachmentV1<JsPointSinkHostV1>,
+    // Общий JS receiver позволяет допустить busy на уровне Rust внутри host
+    // callback; изменяемое Core attachment остаётся за этой WASM-only ячейкой.
+    inner: RefCell<labcolors_core::program_wire::ProgramAttachmentV1<JsPointSinkHostV1>>,
     busy: Cell<bool>,
 }
 
@@ -713,7 +715,7 @@ impl ProgramAttachment {
     /// Атомарно применяет observed revision через host sink.
     #[wasm_bindgen(js_name = updateObserved)]
     pub fn update_observed(
-        &mut self,
+        &self,
         #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
         scenario_ids: &[u32],
         surfaces: &[u8],
@@ -728,8 +730,11 @@ impl ProgramAttachment {
             surface_count,
             ProgramOperation::AttachmentUpdateObserved,
         )?;
-        self.inner
-            .update_observed(revision, &scenarios)
+        let result = self
+            .inner
+            .borrow_mut()
+            .update_observed(revision, &scenarios);
+        result
             .map(|inner| ProgramAttachedSnapshot { inner })
             .map_err(|error| {
                 to_attachment_update_error(error, ProgramOperation::AttachmentUpdateObserved)
@@ -739,7 +744,7 @@ impl ProgramAttachment {
     /// Атомарно отзывает owned sink для недоступной revision.
     #[wasm_bindgen(js_name = updateUnknown)]
     pub fn update_unknown(
-        &mut self,
+        &self,
         #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
         #[wasm_bindgen(unchecked_param_type = "number")] reason_id: JsValue,
     ) -> Result<ProgramAttachedSnapshot, JsValue> {
@@ -748,8 +753,8 @@ impl ProgramAttachment {
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateUnknown))?;
         let reason_id = checked_u32(reason_id)
             .ok_or_else(|| attachment_snapshot_error(ProgramOperation::AttachmentUpdateUnknown))?;
-        self.inner
-            .update_unknown(revision, reason_id)
+        let result = self.inner.borrow_mut().update_unknown(revision, reason_id);
+        result
             .map(|inner| ProgramAttachedSnapshot { inner })
             .map_err(|error| {
                 to_attachment_update_error(error, ProgramOperation::AttachmentUpdateUnknown)
@@ -760,8 +765,8 @@ impl ProgramAttachment {
     #[wasm_bindgen(js_name = materializationAuthority)]
     pub fn materialization_authority(&self) -> Result<AttachedMaterializationAuthority, JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
-        self.inner
-            .current_materialization_authority()
+        let result = self.inner.borrow().current_materialization_authority();
+        result
             .map(|inner| AttachedMaterializationAuthority { inner })
             .map_err(to_authority_error)
     }
@@ -775,7 +780,7 @@ impl ProgramAttachment {
         #[wasm_bindgen(unchecked_param_type = "bigint")] binding_epoch: JsValue,
     ) -> Result<AttachedMaterializationAuthority, JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
-        let render = self.inner.current_render().ok_or_else(|| {
+        let render = self.inner.borrow().current_render().ok_or_else(|| {
             to_authority_error(
                 labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::NotReady,
             )
@@ -802,42 +807,44 @@ impl ProgramAttachment {
             .with_content_identity(content_identity)
             .with_revision(revision)
             .with_binding_epoch(binding_epoch);
-        self.inner
-            .materialization_authority(
-                labcolors_core::program_wire::ProgramMaterializationCandidateV1::AttachedCommit,
-                expected,
-            )
+        let result = self.inner.borrow().materialization_authority(
+            labcolors_core::program_wire::ProgramMaterializationCandidateV1::AttachedCommit,
+            expected,
+        );
+        result
             .map(|inner| AttachedMaterializationAuthority { inner })
             .map_err(to_authority_error)
     }
 
     /// Потребляет attachment только после подтверждения внешнего revoke caller-ом.
     #[wasm_bindgen]
-    pub fn dispose(&mut self, confirmed: bool) -> Result<(), JsValue> {
+    pub fn dispose(&self, confirmed: bool) -> Result<(), JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentDispose)?;
-        self.inner
-            .dispose(|| if confirmed { Ok(()) } else { Err(()) })
-            .map_err(|error| match error {
-                labcolors_core::program_wire::ProgramDisposeErrorV1::AlreadyDisposed => {
-                    attachment_js_error(
-                        "Program attachment is already disposed",
-                        "program_attachment_already_disposed",
-                        ProgramOperation::AttachmentDispose,
-                    )
-                }
-                labcolors_core::program_wire::ProgramDisposeErrorV1::Confirmation(()) => {
-                    attachment_js_error(
-                        "External sink revoke was not confirmed",
-                        "program_attachment_revoke_unconfirmed",
-                        ProgramOperation::AttachmentDispose,
-                    )
-                }
-                _ => attachment_js_error(
-                    "Program attachment disposal failed",
-                    "program_attachment_dispose",
+        let result = self
+            .inner
+            .borrow_mut()
+            .dispose(|| if confirmed { Ok(()) } else { Err(()) });
+        result.map_err(|error| match error {
+            labcolors_core::program_wire::ProgramDisposeErrorV1::AlreadyDisposed => {
+                attachment_js_error(
+                    "Program attachment is already disposed",
+                    "program_attachment_already_disposed",
                     ProgramOperation::AttachmentDispose,
-                ),
-            })
+                )
+            }
+            labcolors_core::program_wire::ProgramDisposeErrorV1::Confirmation(()) => {
+                attachment_js_error(
+                    "External sink revoke was not confirmed",
+                    "program_attachment_revoke_unconfirmed",
+                    ProgramOperation::AttachmentDispose,
+                )
+            }
+            _ => attachment_js_error(
+                "Program attachment disposal failed",
+                "program_attachment_dispose",
+                ProgramOperation::AttachmentDispose,
+            ),
+        })
     }
 }
 
