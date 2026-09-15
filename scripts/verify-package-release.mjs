@@ -1277,7 +1277,7 @@ try {
   try {
     assert.deepEqual(Array.from(attachmentAuthority.terminalCompositeRgb()), [96, 96, 96]);
     assert.equal(attachmentAuthority.revision(), 1n);
-    assert.equal(attachmentAuthority.bindingEpoch() > 0, true);
+    assert.equal(attachmentAuthority.bindingEpoch() > 0n, true);
     let foreignEpoch;
     try {
       attachment.materializationAuthorityFor(
