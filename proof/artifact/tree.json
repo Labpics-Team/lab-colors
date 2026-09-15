@@ -236,7 +236,7 @@
   "crates/labcolors-wasm/src/dto.rs": "40e2aef4a1b00927621cd3985543e639a24b4af9",
   "crates/labcolors-wasm/src/engine.rs": "58c105da2e2eed6d8695c76efde6e99a43001342",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
-  "crates/labcolors-wasm/src/lib.rs": "33cdd7b4c48ef9fd8635bea869d0c02079e73281",
+  "crates/labcolors-wasm/src/lib.rs": "e271524bd9314edb3b83f500d800a35d43c6d9b9",
   "crates/labcolors-wasm/src/projection.rs": "c87dbc55f733ccfc456fe74d4b6c5e18ed99b231",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
   "crates/labcolors-wasm/tests/data/labui.config.json": "8c6b9b17d2ff0b00fed0a3e4bc1aaab4316378da",
@@ -249,7 +249,7 @@
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "622e62c93b2f3507e2262493c021fd6792c5b86c",
   "packages/colors/index.d.ts": "e6e35dff9d39445d835b2e6a296914af328381e6",
-  "packages/colors/index.js": "d5165a3551d686167d30c22a0b300a806c55ef09",
+  "packages/colors/index.js": "f6164b733bb49cd8689af380a4e407f8264f3b38",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -452,7 +452,7 @@
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
-  "crates/labcolors-core/src/certificate.rs": "03476cda01bc6bf67e7ba183fb5fa4b2392c74f5",
+  "crates/labcolors-core/src/certificate.rs": "6a57fb9be76284a77ad3aa6110342dbe77f7feae",
   "packages/colors/test/certificate-envelope.test.mjs": "6d7b3e119bee6cee43908b6e77ecf7d27e75aad8"
  },
  "roots": [
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "2885039980da4e7f0663692048b875b5b4f24e9db1ddb121ec178f6322336fe7"
+ "record_sha256": "4ee47b30e279a3df58ff90e65ee22b53e3ee92139f2c6e77616532de21177a32"
 }

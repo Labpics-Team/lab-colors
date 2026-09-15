@@ -400,10 +400,7 @@ impl UntrustedCertificateEnvelopeV1 {
     /// Opaque payload length; the body itself is not projected to JS.
     #[wasm_bindgen(js_name = payloadLength)]
     pub fn payload_length(&self) -> u32 {
-        self.inner
-            .payload_len()
-            .try_into()
-            .expect("payload length is bounded by the certificate contract")
+        self.inner.payload_len()
     }
 
     /// SHA-256 of the domain-separated opaque payload.

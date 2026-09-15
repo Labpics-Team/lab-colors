@@ -588,8 +588,10 @@ impl UntrustedEnvelopeV1 {
     }
 
     /// Opaque payload byte length.
-    pub fn payload_len(&self) -> usize {
-        self.payload.len()
+    pub fn payload_len(&self) -> u32 {
+        // The decoder and sealed constructor both enforce MAX_PAYLOAD_BYTES_V1,
+        // which is intentionally below u32::MAX.
+        self.payload.len() as u32
     }
 
     /// Payload digest after structural verification.
@@ -706,6 +708,9 @@ impl AdmissionStateV1 {
             return Err(CertificateErrorV1::AdmissionCapacityExceeded);
         }
 
+        self.records
+            .try_reserve(1)
+            .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
         self.records.insert(
             expected.clone(),
             AdmissionRecord {
@@ -972,7 +977,7 @@ mod tests {
             "labcolors-core-test"
         );
         assert_eq!(decoded.admission_key().context_id(), "context-v1");
-        assert_eq!(decoded.payload_len(), b"producer-body-v1".len());
+        assert_eq!(decoded.payload_len(), b"producer-body-v1".len() as u32);
         assert_eq!(decoded.canonical_bytes(), envelope.as_bytes());
         assert!(UntrustedEnvelopeV1::decode(&[envelope.as_bytes(), &[0]].concat()).is_err());
     }

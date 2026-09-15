@@ -65,15 +65,21 @@ function certificateIngressError(code) {
 }
 
 function checkCertificateIngress(bytes) {
+  let byteLength;
+  try {
+    byteLength = bytes?.byteLength;
+  } catch {
+    throw certificateIngressError("certificate_invalid_input");
+  }
   if (
     bytes === null ||
     (typeof bytes !== "object" && typeof bytes !== "function") ||
-    !Number.isSafeInteger(bytes.byteLength) ||
-    bytes.byteLength < 0
+    !Number.isSafeInteger(byteLength) ||
+    byteLength < 0
   ) {
     throw certificateIngressError("certificate_invalid_input");
   }
-  if (bytes.byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
+  if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
     throw certificateIngressError("certificate_resource_limit_exceeded");
   }
   return bytes;
