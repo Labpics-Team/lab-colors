@@ -840,7 +840,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "c53e0faec13451346634c331b71be83d2d7114f9e27f070ad488e2d98f2cea23",
+ "record_sha256": "af75d77e45df0909719f7219418a862a0f61efb473a5b3d4733e5d4c23bd90ae",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1892,9 +1892,11 @@
    "program_v5_exit_gate_tests::v5_exit_gate_binds_semantics_to_the_release_not_the_transport_bytes: test",
    "program_v5_exit_gate_tests::v5_exit_gate_composes_every_layer_in_one_verified_program: test",
    "program_v5_exit_gate_tests::v5_exit_gate_fails_when_any_axis_is_omitted: test",
+   "program_wire::attached_tests::authority_reservation_failure_precedes_any_host_install_and_preserves_retry: test",
    "program_wire::attached_tests::authority_revalidation_distinguishes_identity_owner_generation_and_binding_epoch: test",
    "program_wire::attached_tests::ready_authority_is_bound_to_the_atomic_host_install_and_revoked_on_unknown: test",
    "program_wire::attached_tests::rejected_host_install_preserves_the_previous_live_authority_and_sequence: test",
+   "program_wire::public_contract_tests::attached_update_errors_support_debug_diagnostics: test",
    "program_wire::runtime::fixture_migration_tests::the_private_fixture_graph_is_expressible_in_the_public_grammar: test",
    "program_wire::runtime::runtime_tests::detached_snapshots_remain_readable_after_later_reuse_and_session_drop: test",
    "program_wire::runtime::runtime_tests::family_graphs_fail_closed_until_a_public_trust_parameter_exists: test",
@@ -2272,7 +2274,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1428,
+  "enabled_count": 1430,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
