@@ -1149,9 +1149,15 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 const colors = await import("@labpics/colors");
+const wireApi = await import("@labpics/colors/program-wire/abi-v1.js");
 assert.deepEqual(Object.keys(colors).sort(), [
+  "AttachedMaterializationAuthority",
+  "ProgramAttachedRender",
+  "ProgramAttachedSnapshot",
+  "ProgramAttachment",
   "ProgramRuntime",
   "ProgramSnapshot",
+  "attachProgramWire",
   "compileProgramWire",
   "default",
   "evaluateWcag22",
@@ -1225,6 +1231,78 @@ assert.deepEqual(Array.from(snapshot.outputRgb(0)), [20, 20, 20]);
 assert.equal(snapshot.outputOpacity(0), 1);
 snapshot.free();
 runtime.free();
+
+const attachmentWire = new wireApi.ProgramWireBuilderV1();
+attachmentWire.source(1, [64, 64, 64]).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, 0.5)
+  .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
+  .sourceOverOccurrence(8, 4, 7, 64, 0.2, wireApi.SURROUND_AVERAGE_V1)
+  .presentationRoot(9, 8).presentationTarget(9, 8)
+  .exactVisibleUnary(false, 10, 8, [96, 96, 96]).output(17, 4);
+const attachmentIntents = [];
+const attachment = colors.attachProgramWire(
+  attachmentWire.finish(),
+  7,
+  17,
+  91,
+  9,
+  8,
+  (intent) => {
+    attachmentIntents.push(intent);
+    assert.equal(intent.operation, "setAll");
+    assert.equal(typeof intent.revision, "bigint");
+    assert.equal(typeof intent.bindingEpoch, "bigint");
+    assert.equal(intent.sinkOutput, 91);
+    assert.equal(intent.point.slot, 17);
+    return true;
+  },
+);
+let attachmentSnapshot;
+try {
+  attachmentSnapshot = attachment.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([128, 128, 128]),
+    1,
+  );
+  assert.equal(attachmentSnapshot.state, "ready");
+  assert.equal(attachmentSnapshot.hasRender(), true);
+  const attachmentRender = attachmentSnapshot.render();
+  assert.ok(attachmentRender);
+  try {
+    assert.deepEqual(Array.from(attachmentRender.terminalCompositeRgb()), [96, 96, 96]);
+  } finally {
+    attachmentRender.free();
+  }
+  const attachmentAuthority = attachment.materializationAuthority();
+  try {
+    assert.deepEqual(Array.from(attachmentAuthority.terminalCompositeRgb()), [96, 96, 96]);
+    assert.equal(attachmentAuthority.revision(), 1n);
+    assert.equal(attachmentAuthority.bindingEpoch() > 0n, true);
+    let foreignEpoch;
+    try {
+      attachment.materializationAuthorityFor(
+        1n,
+        attachmentAuthority.contentIdentity(),
+        BigInt(attachmentAuthority.bindingEpoch()) + 1n,
+      );
+    } catch (error) {
+      foreignEpoch = error;
+    }
+    assert.equal(colors.isProgramError(foreignEpoch), true);
+    assert.equal(foreignEpoch.code, "program_materialization_foreign_binding_epoch");
+    assert.equal(foreignEpoch.operation, "materializationAuthority");
+  } finally {
+    attachmentAuthority.free();
+  }
+} finally {
+  attachmentSnapshot?.free();
+  try {
+    attachment.dispose(true);
+  } finally {
+    attachment.free();
+  }
+}
+assert.equal(attachmentIntents.length, 1);
 `;
 }
 
@@ -1233,6 +1311,10 @@ export function typeSmokeSource() {
 import init, {
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachment,
+  ProgramAttachedSnapshot,
+  AttachedMaterializationAuthority,
+  attachProgramWire,
   compileProgramWire,
   evaluateWcag22,
   isProgramError,
@@ -1242,6 +1324,7 @@ import init, {
   type ProgramOperation,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
+  type ProgramPointSinkHost,
 } from "@labpics/colors";
 
 async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<ProgramRuntime> {
@@ -1266,6 +1349,27 @@ void boot;
 void programFailure;
 void assessment;
 void capability;
+
+const attachmentHost: ProgramPointSinkHost = (intent) => {
+  intent.bindingEpoch;
+  intent.expectedSequence;
+  return true;
+};
+function attachTypes(wire: Uint8Array): ProgramAttachment {
+  const attachment: ProgramAttachment = attachProgramWire(wire, 7, 17, 91, 9, 8, attachmentHost);
+  const snapshot: ProgramAttachedSnapshot = attachment.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([128, 128, 128]),
+    1,
+  );
+  const authority: AttachedMaterializationAuthority = attachment.materializationAuthority();
+  snapshot.state;
+  authority.terminalCompositeRgb();
+  attachment.materializationAuthorityFor(1n, authority.contentIdentity(), authority.bindingEpoch());
+  return attachment;
+}
+void attachTypes;
 // @ts-expect-error C7c removed the recipe engine.
 import { LabColors } from "@labpics/colors";
 // @ts-expect-error C7c removed recipe DTOs.

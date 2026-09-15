@@ -106,6 +106,10 @@ impl<SinkOutputId: Copy> AttachedPointPresentationV1<SinkOutputId> {
     pub(crate) const fn sink_output(self) -> SinkOutputId {
         self.sink_output
     }
+
+    pub(crate) const fn context(self) -> crate::lcs_occurrence::AppearanceContextId {
+        self.compiled.context()
+    }
 }
 
 /// Непередаваемый compiler-side permit полного terminal scope.
@@ -142,6 +146,10 @@ pub(crate) struct PointSinkBindingEpochV1(NonZeroU64);
 impl PointSinkBindingEpochV1 {
     pub(crate) const fn new(value: NonZeroU64) -> Self {
         Self(value)
+    }
+
+    pub(crate) const fn value(self) -> NonZeroU64 {
+        self.0
     }
 }
 
@@ -550,6 +558,35 @@ where
     },
 }
 
+/// Сжатая классификация cold-отказа для внешней типизированной границы.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AttachmentCreateFailureKindV1 {
+    Binding,
+    Instantiate,
+    SinkAdmission,
+    ResourceExhausted,
+}
+
+impl<L> AttachmentCreateFailureV2<L>
+where
+    L: UnboundPointSinkWriterV1,
+{
+    pub(crate) const fn kind(&self) -> AttachmentCreateFailureKindV1 {
+        match self {
+            Self::Contract { cause, .. } => match cause {
+                AttachmentCreateErrorV1::ResourceExhausted => {
+                    AttachmentCreateFailureKindV1::ResourceExhausted
+                }
+                AttachmentCreateErrorV1::Instantiate(_) => {
+                    AttachmentCreateFailureKindV1::Instantiate
+                }
+                _ => AttachmentCreateFailureKindV1::Binding,
+            },
+            Self::SinkAdmission { .. } => AttachmentCreateFailureKindV1::SinkAdmission,
+        }
+    }
+}
+
 impl<L> fmt::Debug for AttachmentCreateFailureV2<L>
 where
     L: UnboundPointSinkWriterV1,
@@ -711,6 +748,10 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
 
     pub(crate) const fn published_stamp(self) -> AttachedPublishedStampV1<'a> {
         self.published_stamp
+    }
+
+    pub(crate) const fn context(self) -> crate::lcs_occurrence::AppearanceContextId {
+        self.patch.presentation.context()
     }
 }
 
@@ -1583,7 +1624,8 @@ where
     }
 }
 
-#[cfg(feature = "private-fixture")]
+// Handoff — единственный host writer, реализующий stamp-протокол. Публичная
+// граница program_wire переиспользует его; сам writer не становится sink пакета.
 pub(crate) mod handoff;
 #[cfg(test)]
 pub(crate) mod support;

@@ -1849,7 +1849,9 @@ pub(crate) struct CompiledPointOutputPresentationV1 {
     paint: PaintId,
     presentation_ordinal: usize,
     root: PresentationRootId,
+    terminal: OccurrenceId,
     occurrence: OccurrenceId,
+    context: AppearanceContextId,
 }
 
 impl CompiledPointOutputPresentationV1 {
@@ -1873,8 +1875,16 @@ impl CompiledPointOutputPresentationV1 {
         self.root
     }
 
+    pub(crate) const fn terminal(self) -> OccurrenceId {
+        self.terminal
+    }
+
     pub(crate) const fn occurrence(self) -> OccurrenceId {
         self.occurrence
+    }
+
+    pub(crate) const fn context(self) -> AppearanceContextId {
+        self.context
     }
 }
 
@@ -1908,6 +1918,15 @@ pub(crate) enum PointOutputPresentationBindErrorV1 {
     },
     /// Нарушен закрытый compiled-инвариант после успешной валидации Draft.
     InternalInvariant,
+    /// Публичный attachment запросил промежуточную, а не terminal occurrence.
+    NonTerminalTarget {
+        /// Root, относительно которого проверялась target.
+        root: PresentationRootId,
+        /// Терминальная occurrence этого root.
+        terminal: OccurrenceId,
+        /// Запрошенная промежуточная occurrence.
+        occurrence: OccurrenceId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2127,6 +2146,9 @@ where
     binding_template: AdmittedAppearanceBindings,
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
+    // Полная таблица контекстов Occurrence сохраняется для presentation binding;
+    // расположенная выше `occurrence_contexts` уплотнена для индексации constraint-cell.
+    presentation_occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
     point_presentations: CompiledPointPresentationsV1,
@@ -2246,14 +2268,50 @@ where
             });
         }
 
+        let occurrence_context = self
+            .owner_generation
+            .presentation_occurrence_contexts
+            .binary_search_by_key(&occurrence, |candidate| candidate.occurrence)
+            .ok()
+            .and_then(|index| {
+                self.owner_generation
+                    .presentation_occurrence_contexts
+                    .get(index)
+            })
+            .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?;
         Ok(CompiledPointOutputPresentationV1 {
             output_ordinal,
             output,
             paint: compiled_output.paint_id,
             presentation_ordinal,
             root,
+            terminal: self.owner_generation.point_presentations.entries[presentation_ordinal]
+                .terminal,
             occurrence,
+            context: occurrence_context.context,
         })
+    }
+
+    /// Минтит только terminal point binding для публичного attachment seam.
+    ///
+    /// Внутренний generic binding намеренно сохраняет поддержку выбранной
+    /// ancestor target; внешний attachment не может выдать её как terminal
+    /// materialization.
+    pub(crate) fn bind_terminal_point_output_presentation(
+        &self,
+        output: OutputSlotId,
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    ) -> Result<CompiledPointOutputPresentationV1, PointOutputPresentationBindErrorV1> {
+        let binding = self.bind_point_output_presentation(output, root, occurrence)?;
+        if binding.terminal() != binding.occurrence() {
+            return Err(PointOutputPresentationBindErrorV1::NonTerminalTarget {
+                root: binding.root,
+                terminal: binding.terminal(),
+                occurrence: binding.occurrence(),
+            });
+        }
+        Ok(binding)
     }
 
     /// Удерживает точную owner generation независимо от `CompiledProgram`.
@@ -5270,6 +5328,7 @@ where
             schema: observation_schema,
         },
         occurrence_contexts,
+        presentation_occurrence_contexts: all_occurrence_contexts,
         constraints,
         constraint_phases,
         point_presentations,

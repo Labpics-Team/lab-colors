@@ -4,6 +4,7 @@
 // and runtime root. Recipe DTOs and legacy theme helpers are not re-exported.
 
 import type { Wcag22AssessmentV1 } from "./pkg/labcolors.js";
+import type { ProgramAttachment } from "./pkg/labcolors.js";
 import type { Wcag22CriterionV1 } from "./wcag22.js";
 
 export {
@@ -11,6 +12,10 @@ export {
   numericalCapabilityManifest,
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachment,
+  ProgramAttachedSnapshot,
+  ProgramAttachedRender,
+  AttachedMaterializationAuthority,
 } from "./pkg/labcolors.js";
 
 export type {
@@ -27,14 +32,79 @@ export type ProgramCompileErrorCode =
   | "program_compile"
   | "program_family_artifacts_required"
   | "program_instantiate";
+export type ProgramAttachmentErrorCode =
+  | ProgramCompileErrorCode
+  | "program_attachment_binding"
+  | "program_attachment_instantiate"
+  | "program_attachment_sink_admission"
+  | "program_attachment_resource_exhausted"
+  | "program_attachment_non_terminal_target";
+export type ProgramAttachmentUpdateErrorCode =
+  | "program_attachment_update"
+  | "program_attachment_resource_exhausted"
+  | "program_attachment_internal_invariant"
+  | "program_attachment_already_disposed"
+  | "program_attachment_patch_scope_mismatch"
+  | "program_attachment_stamp_mismatch"
+  | "program_attachment_revision_mismatch"
+  | "program_attachment_already_installed"
+  | "program_attachment_host_rejected"
+  | "program_attachment_host_protocol"
+  | "program_attachment_busy";
+export type ProgramAttachmentDisposeErrorCode =
+  | "program_attachment_already_disposed"
+  | "program_attachment_revoke_unconfirmed"
+  | "program_attachment_dispose"
+  | "program_attachment_busy";
+export type ProgramAttachmentFreeErrorCode =
+  | "program_attachment_revoke_unconfirmed"
+  | "program_attachment_busy";
+export type ProgramPhysicalIdentityErrorCode = "program_physical_identity";
+export type ProgramMaterializationErrorCode =
+  | "program_materialization_not_ready"
+  | "program_materialization_paint_not_authority"
+  | "program_materialization_stale_revision"
+  | "program_materialization_stale_identity"
+  | "program_materialization_stale_sink_stamp"
+  | "program_materialization_foreign_binding_epoch"
+  | "program_materialization_terminal_binding_mismatch"
+  | "program_materialization_missing_point_absence_proof"
+  | "program_materialization_ambiguous_observation_cases"
+  | "program_attachment_busy";
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: "program_update"; operation: ProgramUpdateOperation }>
+  | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
+  | Readonly<{
+      code: ProgramAttachmentUpdateErrorCode;
+      operation: "attachmentUpdateObserved" | "attachmentUpdateUnknown";
+    }>
+  | Readonly<{ code: ProgramAttachmentDisposeErrorCode; operation: "attachmentDispose" }>
+  | Readonly<{ code: ProgramAttachmentFreeErrorCode; operation: "attachmentFree" }>
+  | Readonly<{ code: ProgramPhysicalIdentityErrorCode; operation: "physicalIdentity" }>
+  | Readonly<{ code: ProgramMaterializationErrorCode; operation: "materializationAuthority" }>
 );
 export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];
 export declare function isProgramError(error: unknown): error is ProgramError;
+
+export type ProgramPointSinkOperation = "setAll" | "revokeAll" | "confirmExact";
+export interface ProgramPointSinkPoint {
+  readonly slot: number;
+  readonly source: Uint8Array;
+  readonly opacity: number;
+}
+export interface ProgramPointSinkIntent {
+  readonly operation: ProgramPointSinkOperation;
+  readonly revision: bigint;
+  readonly expectedSequence: bigint;
+  readonly desiredSequence: bigint;
+  readonly bindingEpoch: bigint;
+  readonly sinkOutput: number;
+  readonly point: ProgramPointSinkPoint | null;
+}
+export type ProgramPointSinkHost = (intent: ProgramPointSinkIntent) => boolean;
 
 type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 type SyncInitInput = BufferSource | WebAssembly.Module;
@@ -50,3 +120,13 @@ export declare function evaluateWcag22(
   background: string,
   criterion: Wcag22CriterionV1,
 ): Wcag22AssessmentV1;
+
+export declare function attachProgramWire(
+  bytes: Uint8Array,
+  streamId: number,
+  outputSlot: number,
+  sinkOutput: number,
+  presentationRoot: number,
+  occurrence: number,
+  host: ProgramPointSinkHost,
+): ProgramAttachment;

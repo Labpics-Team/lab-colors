@@ -1,18 +1,98 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, isProgramError } from "../index.js";
+import init, { attachProgramWire, compileProgramWire, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
 const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"];
+const attachmentCodes = [
+  ...compileCodes,
+  "program_attachment_binding",
+  "program_attachment_instantiate",
+  "program_attachment_sink_admission",
+  "program_attachment_resource_exhausted",
+  "program_attachment_non_terminal_target",
+];
+const attachmentUpdateCodes = [
+  "program_attachment_update",
+  "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
+  "program_attachment_already_disposed",
+  "program_attachment_patch_scope_mismatch",
+  "program_attachment_stamp_mismatch",
+  "program_attachment_revision_mismatch",
+  "program_attachment_already_installed",
+  "program_attachment_host_rejected",
+  "program_attachment_host_protocol",
+  "program_attachment_busy",
+];
+const attachmentDisposeCodes = [
+  "program_attachment_already_disposed",
+  "program_attachment_revoke_unconfirmed",
+  "program_attachment_dispose",
+  "program_attachment_busy",
+];
+const attachmentFreeCodes = [
+  "program_attachment_revoke_unconfirmed",
+  "program_attachment_busy",
+];
+const materializationCodes = [
+  "program_materialization_not_ready",
+  "program_materialization_paint_not_authority",
+  "program_materialization_stale_revision",
+  "program_materialization_stale_identity",
+  "program_materialization_stale_sink_stamp",
+  "program_materialization_foreign_binding_epoch",
+  "program_materialization_terminal_binding_mismatch",
+  "program_materialization_missing_point_absence_proof",
+  "program_materialization_ambiguous_observation_cases",
+  "program_attachment_busy",
+];
+const physicalIdentityCodes = ["program_physical_identity"];
 const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
+const attachmentOperations = [
+  "attachProgramWire",
+  "attachmentUpdateObserved",
+  "attachmentUpdateUnknown",
+  "attachmentDispose",
+  "attachmentFree",
+  "materializationAuthority",
+  "physicalIdentity",
+  "other",
+  undefined,
+];
 
 test("error admission recognizes exactly the operation/code relation", () => {
-  for (const code of [...compileCodes, "program_update", "other", undefined, 0, {}]) {
+  for (const code of [
+    ...compileCodes,
+    "program_update",
+    ...attachmentCodes,
+    ...attachmentUpdateCodes,
+    ...attachmentDisposeCodes,
+    ...attachmentFreeCodes,
+    ...materializationCodes,
+    ...physicalIdentityCodes,
+    "program_attachment_update_unknown",
+    "other",
+    undefined,
+    0,
+    {},
+  ]) {
     for (const operation of operations) {
       const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
         : (operation === "updateObserved" || operation === "updateUnknown") && code === "program_update";
+      assert.equal(isProgramError(errorWith(code, operation)), expected);
+    }
+    for (const operation of attachmentOperations) {
+      const expected = operation === "attachProgramWire" ? attachmentCodes.includes(code)
+        : (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown")
+          ? attachmentUpdateCodes.includes(code)
+            : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
+              : operation === "attachmentFree" ? attachmentFreeCodes.includes(code)
+              : operation === "materializationAuthority" ? materializationCodes.includes(code)
+              : operation === "physicalIdentity" ? physicalIdentityCodes.includes(code)
+              : false;
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }
   }
@@ -82,6 +162,16 @@ test("real WASM errors stay identifiable and a rejected update stays retryable",
   await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
   assert.throws(() => compileProgramWire(new Uint8Array(), 1), (error) =>
     isProgramError(error) && error.code === "program_wire" && error.operation === "compileProgramWire");
+  assert.throws(() => attachProgramWire(
+    new Uint8Array(),
+    7,
+    17,
+    91,
+    9,
+    8,
+    () => true,
+  ), (error) =>
+    isProgramError(error) && error.code === "program_wire" && error.operation === "attachProgramWire");
   const wire = new ProgramWireBuilderV1().source(11, [20, 20, 20]).fixedTarget(21, 11)
     .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
     .sourceOverOccurrence(61, 41, 51, 64, 0.2, 1).presentationRoot(71, 61)

@@ -35,6 +35,7 @@ pub(crate) enum HandoffPointSinkHostIntentV1 {
         revision: u64,
         expected_sequence: u64,
         desired_sequence: u64,
+        binding_epoch: PointSinkBindingEpochV1,
         output: OutputSlotIdV1,
         sink_output: HandoffPointSinkOutputIdV1,
         paint: EncodedPointPaintV1,
@@ -43,10 +44,12 @@ pub(crate) enum HandoffPointSinkHostIntentV1 {
         revision: u64,
         expected_sequence: u64,
         desired_sequence: u64,
+        binding_epoch: PointSinkBindingEpochV1,
     },
     ConfirmExact {
         revision: u64,
         published_sequence: u64,
+        binding_epoch: PointSinkBindingEpochV1,
         point: Option<(
             OutputSlotIdV1,
             HandoffPointSinkOutputIdV1,
@@ -97,6 +100,14 @@ impl HandoffPointSinkHostIntentV1 {
             Self::ConfirmExact {
                 published_sequence, ..
             } => published_sequence,
+        }
+    }
+
+    pub(crate) const fn binding_epoch(self) -> PointSinkBindingEpochV1 {
+        match self {
+            Self::SetAll { binding_epoch, .. }
+            | Self::RevokeAll { binding_epoch, .. }
+            | Self::ConfirmExact { binding_epoch, .. } => binding_epoch,
         }
     }
 
@@ -357,6 +368,7 @@ where
                         revision,
                         expected_sequence: stamp.expected().sequence(),
                         desired_sequence: stamp.desired().sequence(),
+                        binding_epoch: stamp.expected().binding_epoch(),
                         output: published.output,
                         sink_output: published.sink_output,
                         paint: published.paint,
@@ -377,6 +389,7 @@ where
                         revision,
                         expected_sequence: stamp.expected().sequence(),
                         desired_sequence: stamp.desired().sequence(),
+                        binding_epoch: stamp.expected().binding_epoch(),
                     },
                 )
             }
@@ -395,6 +408,7 @@ where
                     HandoffPointSinkHostIntentV1::ConfirmExact {
                         revision,
                         published_sequence: published_stamp.sequence(),
+                        binding_epoch: published_stamp.binding_epoch(),
                         point: current
                             .point
                             .map(|point| (point.output, point.sink_output, point.paint)),
@@ -637,17 +651,26 @@ mod tests {
         };
         let state_after_publish = state.borrow();
         assert_eq!(state_after_publish.installs.len(), 1);
-        assert_eq!(
-            state_after_publish.published,
+        match state_after_publish.published {
             Some(HandoffPointSinkHostIntentV1::SetAll {
-                revision: 1,
-                expected_sequence: 0,
-                desired_sequence: 1,
-                output: rendered.0,
-                sink_output: rendered.1,
-                paint: rendered.2,
-            })
-        );
+                revision,
+                expected_sequence,
+                desired_sequence,
+                binding_epoch,
+                output,
+                sink_output,
+                paint,
+            }) => {
+                assert_eq!(revision, 1);
+                assert_eq!(expected_sequence, 0);
+                assert_eq!(desired_sequence, 1);
+                assert_ne!(binding_epoch.value().get(), 0);
+                assert_eq!(output, rendered.0);
+                assert_eq!(sink_output, rendered.1);
+                assert_eq!(paint, rendered.2);
+            }
+            other => panic!("unexpected host intent: {other:?}"),
+        }
         drop(state_after_publish);
 
         drop(attachment);

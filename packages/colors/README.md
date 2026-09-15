@@ -61,6 +61,60 @@ try {
 
 Канонические `LCPW` v1 bytes создаются `ProgramWireBuilderV1` или другим реализационно-независимым энкодером того же контракта.
 
+## Подключение к внешнему sink
+
+Для сценария, где приложение само владеет DOM или другим renderer-surface,
+используйте `attachProgramWire`. Синхронный `host` получает полный typed intent
+(`setAll`, `revokeAll` или `confirmExact`) и должен вернуть `true` только после
+атомарной установки всего принадлежащего ему scope; `false` отклоняет update.
+Пакет не пишет DOM и не выдаёт authority из исходного или промежуточного Paint.
+
+```ts
+const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
+  // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
+  // затем одним действием обновляет собственный renderer-surface.
+  return applyOwnedPointIntent(intent);
+});
+try {
+  const snapshot = attachment.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+    1,
+  );
+  try {
+    if (snapshot.state === "ready") {
+      const authority = attachment.materializationAuthority();
+      try {
+        console.log(authority.terminalCompositeRgb());
+      } finally {
+        authority.free();
+      }
+    }
+  } finally {
+    snapshot.free();
+  }
+} finally {
+  // Сначала отзовите scope у внешнего владельца, затем подтвердите dispose.
+  try {
+    attachment.dispose(true);
+  } finally {
+    attachment.free();
+  }
+}
+```
+
+`materializationAuthority()` читает только текущий успешно установленный
+attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —
+модельная terminal materialization с проверенными identity, revision, sink stamp,
+binding epoch и отсутствием downstream point, а не доказательство browser paint
+или человеческого восприятия. При отказе host предыдущий head сохраняется.
+Пока host callback исполняется синхронно, повторный вызов любой операции attachment,
+включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
+из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
+пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
+отзывается владельцем host до `dispose(true)`.
+
 ## Контракт
 
 - Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
