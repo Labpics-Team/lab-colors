@@ -123,13 +123,13 @@ export function certificateProjection(
     authorityVersion,
     runtimeArtifactId,
     producerRevision,
-    producerContentIdentity,
+    producerContentIdentity: Uint8Array.from(producerContentIdentity),
     contextId,
     payloadType,
     payloadVersion,
     payloadLength,
-    payloadSha256,
-    bindingSha256,
+    payloadSha256: Uint8Array.from(payloadSha256),
+    bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
 "#)]

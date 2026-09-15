@@ -117,6 +117,16 @@ test("WASM ingress refuses oversized input before linear-memory copy", () => {
       return true;
     },
   );
+  const revoked = Proxy.revocable(new Uint8Array(), {});
+  revoked.revoke();
+  assert.throws(
+    () => decodeCertificateEnvelope(revoked.proxy),
+    (error) => {
+      assert.equal(isCertificateError(error), true);
+      assert.equal(error.code, "certificate_invalid_input");
+      return true;
+    },
+  );
 });
 
 test("certificate error classifier is closed over operation and code", () => {

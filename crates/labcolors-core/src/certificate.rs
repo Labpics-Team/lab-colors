@@ -282,6 +282,20 @@ impl AdmissionKeyV1 {
         Ok(key)
     }
 
+    fn try_clone_for_admission(&self) -> Result<Self, CertificateErrorV1> {
+        Ok(Self {
+            runtime_artifact_id: try_clone_string(&self.runtime_artifact_id)?,
+            operation: self.operation,
+            context_id: try_clone_string(&self.context_id)?,
+            producer_revision: try_clone_string(&self.producer_revision)?,
+            producer_content_identity: self.producer_content_identity,
+            authority_kind: self.authority_kind,
+            authority_version: self.authority_version,
+            payload_type: self.payload_type,
+            payload_version: self.payload_version,
+        })
+    }
+
     /// Runtime artifact identity.
     pub fn runtime_artifact_id(&self) -> &str {
         &self.runtime_artifact_id
@@ -642,7 +656,7 @@ pub enum AdmissionOutcomeV1 {
 
 struct AdmissionRecord {
     binding_sha256: [u8; 32],
-    canonical_bytes: Box<[u8]>,
+    canonical_bytes: Vec<u8>,
 }
 
 /// Caller-owned, in-memory, single-writer replay ledger.
@@ -723,11 +737,13 @@ impl AdmissionStateV1 {
         self.records
             .try_reserve(1)
             .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+        let prepared_key = expected.try_clone_for_admission()?;
+        let prepared_canonical_bytes = try_clone_bytes(envelope.canonical_bytes())?;
         self.records.insert(
-            expected.clone(),
+            prepared_key,
             AdmissionRecord {
                 binding_sha256: *envelope.binding_sha256(),
-                canonical_bytes: envelope.canonical_bytes().to_vec().into_boxed_slice(),
+                canonical_bytes: prepared_canonical_bytes,
             },
         );
         self.accounted_bytes = next_bytes;
@@ -770,6 +786,24 @@ fn compare_expected(
         return Err(CertificateErrorV1::ProducerBindingMismatch);
     }
     Ok(())
+}
+
+fn try_clone_string(value: &str) -> Result<String, CertificateErrorV1> {
+    let mut cloned = String::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+    cloned.push_str(value);
+    Ok(cloned)
+}
+
+fn try_clone_bytes(value: &[u8]) -> Result<Vec<u8>, CertificateErrorV1> {
+    let mut cloned = Vec::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+    cloned.extend_from_slice(value);
+    Ok(cloned)
 }
 
 fn validate_text(value: &str, max_bytes: usize) -> Result<(), CertificateErrorV1> {

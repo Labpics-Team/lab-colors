@@ -64,11 +64,11 @@ function certificateIngressError(code) {
 }
 
 function checkCertificateIngress(bytes) {
-  if (!(bytes instanceof Uint8Array)) {
-    throw certificateIngressError("certificate_invalid_input");
-  }
   let byteLength;
   try {
+    if (!(bytes instanceof Uint8Array)) {
+      throw certificateIngressError("certificate_invalid_input");
+    }
     byteLength = bytes.byteLength;
   } catch {
     throw certificateIngressError("certificate_invalid_input");
