@@ -6,13 +6,12 @@
 
 use crate::family_artifact::FamilyArtifactBundleV2;
 use crate::program::attachment::fv01::{
-    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink,
-    owner_pin, prepare_authorities, validate_authority as validate_attached_authority,
+    AttachedPointSinkOutputIdV1, AttachedProgramAttachmentV1, attached_point_sink, owner_pin,
+    prepare_authorities, validate_authority as validate_attached_authority,
 };
 use crate::program::attachment::{
     AttachmentCreateErrorV1, AttachmentCreateFailureV2, AttachmentPreinstallErrorV1,
-    AttachmentUpdateErrorV1,
-    AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,
+    AttachmentUpdateErrorV1, AuthoredPointEmissionBindingV1, AuthoredPointPresentationBindingV1,
 };
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
 use crate::program::{
@@ -394,7 +393,6 @@ where
         let authorities = authorities.seal_after_commit();
         Ok(AttachedProgramUpdateV1 { state, authorities })
     }
-
 }
 
 /// Compile canonical Program wire into an owner that can create attached

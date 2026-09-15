@@ -626,9 +626,9 @@ fn prepared_disposition<'prepared>(
         PreparedSessionDispositionV1::Idempotent { raw_head, state } => {
             let certificate = match state {
                 SessionState::Ready { current } => Some(VerifiedCertificateV1 { inner: current }),
-                SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
-                    None
-                }
+                SessionState::Waiting
+                | SessionState::Stale { .. }
+                | SessionState::Failed { .. } => None,
             };
             raw_head
                 .revision()
@@ -1335,10 +1335,7 @@ where
         &mut self,
         update: UpdateV1<'_>,
         preinstall: F,
-    ) -> Result<
-        (AttachmentCommitV1<'_, W::OutputId>, R),
-        AttachmentPreinstallErrorV1<W::Error, E>,
-    >
+    ) -> Result<(AttachmentCommitV1<'_, W::OutputId>, R), AttachmentPreinstallErrorV1<W::Error, E>>
     where
         F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
     {
@@ -1406,13 +1403,14 @@ where
 
         let (intent, desired_sink_stamp) = match action {
             PreparedPatchActionV1::SetAll { revision } => {
-                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
-                    AttachmentPreinstallErrorV1::Attachment(
-                        AttachmentUpdateErrorV1::InternalInvariant(
-                            AttachmentInvariantV1::SinkStampExhausted,
-                        ),
-                    )
-                })?;
+                let stamp =
+                    PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
+                        AttachmentPreinstallErrorV1::Attachment(
+                            AttachmentUpdateErrorV1::InternalInvariant(
+                                AttachmentInvariantV1::SinkStampExhausted,
+                            ),
+                        )
+                    })?;
                 (
                     PointSinkIntentV1::SetAll {
                         revision,
@@ -1423,13 +1421,14 @@ where
                 )
             }
             PreparedPatchActionV1::RevokeAll { revision } => {
-                let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
-                    AttachmentPreinstallErrorV1::Attachment(
-                        AttachmentUpdateErrorV1::InternalInvariant(
-                            AttachmentInvariantV1::SinkStampExhausted,
-                        ),
-                    )
-                })?;
+                let stamp =
+                    PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or_else(|| {
+                        AttachmentPreinstallErrorV1::Attachment(
+                            AttachmentUpdateErrorV1::InternalInvariant(
+                                AttachmentInvariantV1::SinkStampExhausted,
+                            ),
+                        )
+                    })?;
                 (
                     PointSinkIntentV1::RevokeAll { revision, stamp },
                     stamp.desired(),
@@ -1500,7 +1499,6 @@ where
             preinstall_value,
         ))
     }
-
 }
 
 impl<L> Attachment<L>
@@ -1559,10 +1557,7 @@ where
         &mut self,
         update: UpdateV1<'_>,
         preinstall: F,
-    ) -> Result<
-        (AttachmentCommitV1<'_, W::OutputId>, R),
-        AttachmentPreinstallErrorV1<W::Error, E>,
-    >
+    ) -> Result<(AttachmentCommitV1<'_, W::OutputId>, R), AttachmentPreinstallErrorV1<W::Error, E>>
     where
         F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
     {

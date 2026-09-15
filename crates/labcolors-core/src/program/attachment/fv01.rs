@@ -40,10 +40,13 @@ impl Drop for AttachedAuthorityReservationFailureGuardV1 {
 }
 
 #[cfg(test)]
-pub(crate) fn fail_next_attached_authority_reservation_for_test(
-) -> AttachedAuthorityReservationFailureGuardV1 {
+pub(crate) fn fail_next_attached_authority_reservation_for_test()
+-> AttachedAuthorityReservationFailureGuardV1 {
     AUTHORITY_RESERVATION_FAILURE_ARMED.with(|armed| {
-        assert!(!armed.replace(true), "an authority reservation failure is already armed");
+        assert!(
+            !armed.replace(true),
+            "an authority reservation failure is already armed"
+        );
     });
     AttachedAuthorityReservationFailureGuardV1
 }
