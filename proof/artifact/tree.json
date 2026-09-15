@@ -408,7 +408,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
-  "scripts/check-wasm-size-budget.mjs": "afc2f467f804f486a9f00e9b4ac444ee037c2d3e",
+  "scripts/check-wasm-size-budget.mjs": "85ab01f4d276f947d6ee4419a8ec140636d2ba9d",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "7e691864e68ef130e589ce39144c705c44c14b0d",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "e66060af3aba1fa9df66431350244498dda65752f42e2b258a92b53edb299a36"
+ "record_sha256": "e213e45b9090a9771f107806ce2031f86990bf2897906f81c00dc5170446590a"
 }
