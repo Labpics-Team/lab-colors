@@ -112,6 +112,7 @@ enum ProgramOperation {
     AttachmentUpdateUnknown,
     AttachmentDispose,
     MaterializationAuthority,
+    PhysicalIdentity,
 }
 
 impl ProgramOperation {
@@ -125,6 +126,7 @@ impl ProgramOperation {
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
+            Self::PhysicalIdentity => "physicalIdentity",
         }
     }
 }
@@ -1006,15 +1008,18 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> String {
+    pub fn physical_identity(&self) -> Result<String, JsValue> {
         match self.inner.physical_identity() {
             Some(
                 labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
-            ) => "encoded-srgb8-source-over-v1",
-            None => "unknown",
-            Some(_) => "unknown",
+            ) => Ok("encoded-srgb8-source-over-v1".to_string()),
+            None => Ok("unknown".to_string()),
+            Some(_) => Err(attachment_js_error(
+                "Program physical identity variant is unsupported by this package",
+                "program_attachment_unsupported_physical_identity",
+                ProgramOperation::PhysicalIdentity,
+            )),
         }
-        .to_string()
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
@@ -1092,15 +1097,18 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> String {
+    pub fn physical_identity(&self) -> Result<String, JsValue> {
         match self.inner.physical_identity() {
             Some(
                 labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
-            ) => "encoded-srgb8-source-over-v1",
-            None => "unknown",
-            Some(_) => "unknown",
+            ) => Ok("encoded-srgb8-source-over-v1".to_string()),
+            None => Ok("unknown".to_string()),
+            Some(_) => Err(attachment_js_error(
+                "Program physical identity variant is unsupported by this package",
+                "program_attachment_unsupported_physical_identity",
+                ProgramOperation::PhysicalIdentity,
+            )),
         }
-        .to_string()
     }
 
     #[wasm_bindgen(js_name = rendererProvenance)]

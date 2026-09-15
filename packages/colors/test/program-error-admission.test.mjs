@@ -44,6 +44,7 @@ const materializationCodes = [
   "program_materialization_ambiguous_observation_cases",
   "program_attachment_busy",
 ];
+const physicalIdentityCodes = ["program_attachment_unsupported_physical_identity"];
 const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
 const attachmentOperations = [
   "attachProgramWire",
@@ -52,6 +53,7 @@ const attachmentOperations = [
   "attachmentDispose",
   "attachmentFree",
   "materializationAuthority",
+  "physicalIdentity",
   "other",
   undefined,
 ];
@@ -64,6 +66,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
     ...attachmentUpdateCodes,
     ...attachmentDisposeCodes,
     ...materializationCodes,
+    ...physicalIdentityCodes,
     "program_attachment_update_unknown",
     "other",
     undefined,
@@ -80,8 +83,9 @@ test("error admission recognizes exactly the operation/code relation", () => {
         : (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown")
           ? attachmentUpdateCodes.includes(code)
             : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
-            : operation === "attachmentFree" ? code === "program_attachment_busy"
+              : operation === "attachmentFree" ? code === "program_attachment_busy"
               : operation === "materializationAuthority" ? materializationCodes.includes(code)
+              : operation === "physicalIdentity" ? physicalIdentityCodes.includes(code)
               : false;
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }

@@ -132,6 +132,9 @@ const MATERIALIZATION_ERROR_CODES = new Set([
   "program_materialization_ambiguous_observation_cases",
   "program_attachment_busy",
 ]);
+const PHYSICAL_IDENTITY_ERROR_CODES = new Set([
+  "program_attachment_unsupported_physical_identity",
+]);
 
 export function isProgramError(error) {
   // A caught value may be a revoked Proxy or expose throwing/stateful getters.
@@ -151,6 +154,7 @@ export function isProgramError(error) {
     if (operation === "attachmentDispose") return ATTACHMENT_DISPOSE_ERROR_CODES.has(code);
     if (operation === "attachmentFree") return code === "program_attachment_busy";
     if (operation === "materializationAuthority") return MATERIALIZATION_ERROR_CODES.has(code);
+    if (operation === "physicalIdentity") return PHYSICAL_IDENTITY_ERROR_CODES.has(code);
     return false;
   } catch {
     return false;
