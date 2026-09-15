@@ -110,10 +110,6 @@ impl<SinkOutputId: Copy> AttachedPointPresentationV1<SinkOutputId> {
     pub(crate) const fn context(self) -> crate::lcs_occurrence::AppearanceContextId {
         self.compiled.context()
     }
-
-    pub(crate) const fn physical_identity(self) -> crate::appearance::PhysicalProgramIdentityV1 {
-        self.compiled.physical_identity()
-    }
 }
 
 /// Непередаваемый compiler-side permit полного terminal scope.
@@ -752,10 +748,6 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
 
     pub(crate) const fn context(self) -> crate::lcs_occurrence::AppearanceContextId {
         self.patch.presentation.context()
-    }
-
-    pub(crate) const fn physical_identity(self) -> crate::appearance::PhysicalProgramIdentityV1 {
-        self.patch.presentation.physical_identity()
     }
 }
 

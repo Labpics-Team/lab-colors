@@ -512,24 +512,20 @@ impl labcolors_core::program_wire::ProgramPointSinkHostV1 for JsPointSinkHostV1 
                 let point_value: JsValue = point_object.clone().into();
                 let rgb = point.source().bytes();
                 let rgb = js_sys::Uint8Array::from(&rgb[..]);
-                if !js_sys::Reflect::set(
+                if js_sys::Reflect::set(
                     &point_value,
                     &JsValue::from_str("slot"),
                     &JsValue::from_f64(f64::from(point.slot())),
                 )
-                .is_ok()
-                    || !js_sys::Reflect::set(
-                        &point_value,
-                        &JsValue::from_str("source"),
-                        &rgb.into(),
-                    )
-                    .is_ok()
-                    || !js_sys::Reflect::set(
+                .is_err()
+                    || js_sys::Reflect::set(&point_value, &JsValue::from_str("source"), &rgb.into())
+                        .is_err()
+                    || js_sys::Reflect::set(
                         &point_value,
                         &JsValue::from_str("opacity"),
                         &JsValue::from_f64(point.opacity()),
                     )
-                    .is_ok()
+                    .is_err()
                 {
                     return Err(
                         labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol,

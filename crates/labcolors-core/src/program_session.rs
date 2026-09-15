@@ -34,14 +34,13 @@ use crate::appearance::{
     CompiledOccurrenceSlotV1, CompiledPaintInputSlotV1, CompiledPaintSlotV1,
     CompiledPointPresentationPathV1, EncodedPointPaintV1, EncodedPointPaintValueV1,
     ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
-    PaintInputId, PaintSpec, PhysicalProgramIdentityV1, PointOccurrenceAbsenceReleaseV1,
-    PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1,
-    SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1,
+    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
+    SurfaceSpec,
 };
 use crate::clean_set::{
     ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
 };
-use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
     CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
@@ -1851,7 +1850,6 @@ pub(crate) struct CompiledPointOutputPresentationV1 {
     root: PresentationRootId,
     occurrence: OccurrenceId,
     context: AppearanceContextId,
-    physical_identity: PhysicalProgramIdentityV1,
 }
 
 impl CompiledPointOutputPresentationV1 {
@@ -1881,10 +1879,6 @@ impl CompiledPointOutputPresentationV1 {
 
     pub(crate) const fn context(self) -> AppearanceContextId {
         self.context
-    }
-
-    pub(crate) const fn physical_identity(self) -> PhysicalProgramIdentityV1 {
-        self.physical_identity
     }
 }
 
@@ -2270,17 +2264,6 @@ where
                     .get(index)
             })
             .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?;
-        let physical_identity = match self
-            .owner_generation
-            .graph
-            .occurrence_profile(occurrence)
-            .ok_or(PointOutputPresentationBindErrorV1::InternalInvariant)?
-        {
-            CompositionProfileV1::EncodedSrgb8SourceOverV1 => {
-                PhysicalProgramIdentityV1::InputOpacityOverSurfaceEncodedSrgb8V1
-            }
-        };
-
         Ok(CompiledPointOutputPresentationV1 {
             output_ordinal,
             output,
@@ -2289,7 +2272,6 @@ where
             root,
             occurrence,
             context: occurrence_context.context,
-            physical_identity,
         })
     }
 

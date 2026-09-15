@@ -1423,12 +1423,11 @@ fn attachment_snapshot_from_commit(
             presentation_root: render.root().value(),
             occurrence: render.occurrence().value(),
             context: ProgramAppearanceContextIdV1::from_core(render.context()),
-            physical_identity: Some(match render.physical_identity() {
-                crate::appearance::PhysicalProgramIdentityV1::
-                    InputOpacityOverSurfaceEncodedSrgb8V1 => {
-                    ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1
-                }
-            }),
+            // Этот seam принимает произвольный скомпилированный Program; без
+            // доказательства точной статической топологии необязательная
+            // структурная идентичность должна отсутствовать, чтобы не
+            // выдавать канонический профиль однослойной композиции за факт.
+            physical_identity: None,
             terminal_composite,
         }
     });
