@@ -692,16 +692,19 @@ impl Drop for AttachmentBusyGuard<'_> {
 }
 
 impl ProgramAttachment {
-    fn enter(&self, operation: ProgramOperation) -> Result<AttachmentBusyGuard<'_>, JsValue> {
-        if self.busy.get() {
+    fn enter(
+        busy: &Cell<bool>,
+        operation: ProgramOperation,
+    ) -> Result<AttachmentBusyGuard<'_>, JsValue> {
+        if busy.get() {
             return Err(attachment_js_error(
                 "Program attachment operation is already in progress",
                 "program_attachment_busy",
                 operation,
             ));
         }
-        self.busy.set(true);
-        Ok(AttachmentBusyGuard { busy: &self.busy })
+        busy.set(true);
+        Ok(AttachmentBusyGuard { busy })
     }
 }
 
@@ -716,7 +719,7 @@ impl ProgramAttachment {
         surfaces: &[u8],
         #[wasm_bindgen(unchecked_param_type = "number")] surface_count: JsValue,
     ) -> Result<ProgramAttachedSnapshot, JsValue> {
-        let _busy = self.enter(ProgramOperation::AttachmentUpdateObserved)?;
+        let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentUpdateObserved)?;
         let revision = u64::try_from(revision)
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateObserved))?;
         let scenarios = decode_attachment_scenarios(
@@ -740,7 +743,7 @@ impl ProgramAttachment {
         #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
         #[wasm_bindgen(unchecked_param_type = "number")] reason_id: JsValue,
     ) -> Result<ProgramAttachedSnapshot, JsValue> {
-        let _busy = self.enter(ProgramOperation::AttachmentUpdateUnknown)?;
+        let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentUpdateUnknown)?;
         let revision = u64::try_from(revision)
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateUnknown))?;
         let reason_id = checked_u32(reason_id)
@@ -756,7 +759,7 @@ impl ProgramAttachment {
     /// Допускает authority только из текущего committed head attachment.
     #[wasm_bindgen(js_name = materializationAuthority)]
     pub fn materialization_authority(&self) -> Result<AttachedMaterializationAuthority, JsValue> {
-        let _busy = self.enter(ProgramOperation::MaterializationAuthority)?;
+        let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
         self.inner
             .current_materialization_authority()
             .map(|inner| AttachedMaterializationAuthority { inner })
@@ -771,7 +774,7 @@ impl ProgramAttachment {
         content_identity: &[u8],
         #[wasm_bindgen(unchecked_param_type = "bigint")] binding_epoch: JsValue,
     ) -> Result<AttachedMaterializationAuthority, JsValue> {
-        let _busy = self.enter(ProgramOperation::MaterializationAuthority)?;
+        let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
         let render = self.inner.current_render().ok_or_else(|| {
             to_authority_error(
                 labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::NotReady,
@@ -811,7 +814,7 @@ impl ProgramAttachment {
     /// Потребляет attachment только после подтверждения внешнего revoke caller-ом.
     #[wasm_bindgen]
     pub fn dispose(&mut self, confirmed: bool) -> Result<(), JsValue> {
-        let _busy = self.enter(ProgramOperation::AttachmentDispose)?;
+        let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentDispose)?;
         self.inner
             .dispose(|| if confirmed { Ok(()) } else { Err(()) })
             .map_err(|error| match error {
