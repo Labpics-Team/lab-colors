@@ -603,6 +603,14 @@ type AttachmentUpdateResultV1<'a, L> = Result<
     AttachmentUpdateErrorV1<<L as PointSinkWriterV1>::Error>,
 >;
 
+type AttachmentPreinstallResultV1<'a, L, R, E> = Result<
+    (
+        AttachmentCommitV1<'a, <L as PointSinkWriterV1>::OutputId>,
+        R,
+    ),
+    AttachmentPreinstallErrorV1<<L as PointSinkWriterV1>::Error, E>,
+>;
+
 /// Prospective sink-смысл одного полностью вычисленного перехода Session.
 pub(super) enum PreparedDispositionV1<'a> {
     ConfirmExact {
@@ -1335,7 +1343,7 @@ where
         &mut self,
         update: UpdateV1<'_>,
         preinstall: F,
-    ) -> Result<(AttachmentCommitV1<'_, W::OutputId>, R), AttachmentPreinstallErrorV1<W::Error, E>>
+    ) -> AttachmentPreinstallResultV1<'_, W, R, E>
     where
         F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
     {
@@ -1557,7 +1565,7 @@ where
         &mut self,
         update: UpdateV1<'_>,
         preinstall: F,
-    ) -> Result<(AttachmentCommitV1<'_, W::OutputId>, R), AttachmentPreinstallErrorV1<W::Error, E>>
+    ) -> AttachmentPreinstallResultV1<'_, W, R, E>
     where
         F: FnOnce(AttachedRenderOutputsV1<'_, W::OutputId>) -> Result<R, E>,
     {
