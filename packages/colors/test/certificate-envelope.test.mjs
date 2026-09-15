@@ -82,6 +82,7 @@ test("WASM decodes an independently constructed envelope as untrusted metadata",
   assert.equal(envelope.payloadLength, Buffer.byteLength("reference-body"));
   assert.equal(envelope.payloadSha256.length, 32);
   assert.equal(envelope.bindingSha256.length, 32);
+  assert.equal(Object.isFrozen(envelope), true);
   assert.equal("admit" in envelope, false);
 });
 

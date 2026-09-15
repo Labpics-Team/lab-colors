@@ -570,10 +570,10 @@ impl UntrustedEnvelopeV1 {
         }
 
         let key = AdmissionKeyV1::try_new(
-            &runtime_artifact_id,
+            runtime_artifact_id,
             CertificateOperationV1::IssueCertificate,
-            &context_id,
-            &producer_revision,
+            context_id,
+            producer_revision,
             producer_content_identity,
         )?;
         Ok(Self {
