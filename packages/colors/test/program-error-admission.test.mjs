@@ -64,6 +64,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
     ...attachmentUpdateCodes,
     ...attachmentDisposeCodes,
     ...materializationCodes,
+    "program_attachment_update_unknown",
     "other",
     undefined,
     0,

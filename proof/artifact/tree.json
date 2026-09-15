@@ -260,7 +260,7 @@
   "packages/colors/test/capability-manifest.test.mjs": "b82cad8968e3142a5a002be4924f27330a20fc32",
   "packages/colors/test/data/oklch-core-vectors.txt": "aed4ec31159ef7b6886e1316266aa9646370aa40",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
-  "packages/colors/test/program-error-admission.test.mjs": "c7fe45e43e115bd73625cfdcf58e5e42dd5ce7c0",
+  "packages/colors/test/program-error-admission.test.mjs": "ddcdc82767a455c9c58c860dd032b869d8102646",
   "packages/colors/test/program-runtime-browser-harness.test.mjs": "653d5f153a1af45f2f546d53838955506cc09294",
   "packages/colors/test/program-scalar-admission.test.mjs": "9d36e2196accfa3ea3d959bba9b6016999a35c49",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "4bbd37524ff15e634962485abf51b85c34eefb90d376aceab0815807a3191889",
+ "record_sha256": "ba07ce5553ece5196829f41e84b5a1f32cc29c782bb0a730ab90a884f65c89cb",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
