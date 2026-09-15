@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, isProgramError } from "../index.js";
+import init, { attachProgramWire, compileProgramWire, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
 const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"];
 const attachmentCodes = [
+  ...compileCodes,
   "program_attachment_binding",
   "program_attachment_instantiate",
   "program_attachment_sink_admission",
@@ -161,6 +162,16 @@ test("real WASM errors stay identifiable and a rejected update stays retryable",
   await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
   assert.throws(() => compileProgramWire(new Uint8Array(), 1), (error) =>
     isProgramError(error) && error.code === "program_wire" && error.operation === "compileProgramWire");
+  assert.throws(() => attachProgramWire(
+    new Uint8Array(),
+    7,
+    17,
+    91,
+    9,
+    8,
+    () => true,
+  ), (error) =>
+    isProgramError(error) && error.code === "program_wire" && error.operation === "attachProgramWire");
   const wire = new ProgramWireBuilderV1().source(11, [20, 20, 20]).fixedTarget(21, 11)
     .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
     .sourceOverOccurrence(61, 41, 51, 64, 0.2, 1).presentationRoot(71, 61)
