@@ -123,12 +123,16 @@ transport envelope и возвращает замороженный metadata-obj
 а не authority result и не доказательство
 истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
 
-До вызова WASM-функции фасад проверяет `bytes.byteLength` и отвергает размер больше
-`MAX_CERTIFICATE_ENVELOPE_BYTES` (`2097152`), поскольку `wasm-bindgen` копирует
-typed array в linear memory до входа Rust. Неизвестная schema, authority,
+До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array` и отвергает
+subclass, Proxy и подменённые `length`/`byteLength`; размер больше
+`MAX_CERTIFICATE_ENVELOPE_BYTES` (`2097152`) отвергается до копирования, поскольку
+`wasm-bindgen` копирует typed array в linear memory до входа Rust. Неизвестная schema, authority,
 operation, payload type/version, неканоничные строки, trailing bytes и digest
 mismatch дают typed error; `isCertificateError(value)` проверяет только
 допустимую пару `operation`/`code`.
+
+Заморожен внешний metadata-object; его три byte-поля — отдельные detached snapshots,
+поэтому изменение буфера результата не меняет состояние WASM или следующий decode.
 
 Создать envelope из произвольных JS-байтов, `ProgramSnapshot`, Paint, CSS, DOM или
 materialization authority нельзя. Producer capability и admission ledger остаются

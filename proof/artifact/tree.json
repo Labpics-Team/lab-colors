@@ -243,13 +243,13 @@
   "crates/labcolors-wasm/tests/data/labui.config.prod.json": "e147e4ae1e5d55d74ddec31435af201d1d2a4347",
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
-  "packages/colors/README.md": "573978708bd49b25866d001db6bfe0f3e26e2976",
+  "packages/colors/README.md": "ffcdb395c52b6e1e7b5507ccab7d8ab1a6f0ad23",
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "fd4a528eb323e5a855c120c57fae3e46dc05b4a2",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
-  "packages/colors/index.js": "3c02f938a5a3f15ef39413f5040c8af0d7ade11b",
+  "packages/colors/index.js": "60421a83e96305344ad55d72b8dc7203186c2e6d",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -452,8 +452,8 @@
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
-  "crates/labcolors-core/src/certificate.rs": "5c19b151b7b746ca271a5be07b7ddf93c47e9cbd",
-  "packages/colors/test/certificate-envelope.test.mjs": "6e1593237fe4e13c3c908718fb4c0910d3a529fd"
+  "crates/labcolors-core/src/certificate.rs": "c8d683ca937cc24ce78233bf2a881e20eb78f68d",
+  "packages/colors/test/certificate-envelope.test.mjs": "90229bc4b9c6b9e0b0b271180a8f69845e075893"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "54bc6bd31a788759a4e94e130f610596d5b4303493f6c6214243c36e429ab7ce"
+ "record_sha256": "8e67b05efbb2a6fbce5c6fd6f6b32f4a0e7d9556fac613ad478d5d3a00ec0075"
 }

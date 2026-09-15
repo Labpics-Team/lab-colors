@@ -28,6 +28,16 @@ export {
 
 export const MAX_CERTIFICATE_ENVELOPE_BYTES = 2_097_152;
 
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const intrinsicByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+).get;
+const intrinsicLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "length",
+).get;
+
 const CERTIFICATE_ERROR_CODES = new Set([
   "certificate_invalid_magic",
   "certificate_unsupported_schema",
@@ -69,7 +79,21 @@ function checkCertificateIngress(bytes) {
     if (!(bytes instanceof Uint8Array)) {
       throw certificateIngressError("certificate_invalid_input");
     }
-    byteLength = bytes.byteLength;
+    if (Object.getPrototypeOf(bytes) !== Uint8Array.prototype) {
+      throw certificateIngressError("certificate_invalid_input");
+    }
+    const intrinsicByteLength = Reflect.apply(intrinsicByteLengthGetter, bytes, []);
+    const intrinsicLength = Reflect.apply(intrinsicLengthGetter, bytes, []);
+    if (
+      !Number.isSafeInteger(intrinsicByteLength) ||
+      intrinsicByteLength < 0 ||
+      intrinsicLength !== intrinsicByteLength ||
+      bytes.byteLength !== intrinsicByteLength ||
+      bytes.length !== intrinsicLength
+    ) {
+      throw certificateIngressError("certificate_invalid_input");
+    }
+    byteLength = intrinsicByteLength;
   } catch {
     throw certificateIngressError("certificate_invalid_input");
   }
