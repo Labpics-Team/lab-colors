@@ -70,23 +70,24 @@ use crate::observation::{
 #[cfg(test)]
 use crate::program_session::DeclaredJointSelectionV1;
 use crate::program_session::{
-    CompiledCoreProgramV1, CompositionProfile, ConstraintId, ConstraintInvocation,
-    CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1, CoreProgramDraftV1,
-    CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1,
-    CoreProgramViolationEvidenceV1, DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
+    CompiledCoreProgramV1, CompiledPointOutputPresentationV1, CompositionProfile, ConstraintId,
+    ConstraintInvocation, CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1,
+    CoreProgramDraftV1, CoreProgramEvaluatorErrorV1, CoreProgramEvaluatorsV1,
+    CoreProgramPassEvidenceV1, CoreProgramViolationEvidenceV1,
+    DeclaredSrgb8CleanSetPassV1 as CoreDeclaredSrgb8CleanSetPassV1,
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
     FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
     JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    PointPresentationRootV1, PointPresentationTargetV1, PresentationRootId, ProgramCompileError,
-    ProgramConflictV1, ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1,
-    ProgramConstraintResultV1, ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1,
-    ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
-    ProgramIntrinsicUnaryViolationEvidenceV1, ProgramPaintOutputV1,
-    ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
-    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
-    ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId, Surface, Target,
-    TargetCandidateChoiceV1, TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1,
-    TargetId,
+    PointOutputPresentationBindErrorV1, PointPresentationRootV1, PointPresentationTargetV1,
+    PresentationRootId, ProgramCompileError, ProgramConflictV1, ProgramConstraintCellV1,
+    ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
+    ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1,
+    ProgramIntrinsicUnaryPassEvidenceV1, ProgramIntrinsicUnaryViolationEvidenceV1,
+    ProgramPaintOutputV1, ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1,
+    ProgramReportV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
+    ProgramSessionPlan, ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId,
+    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
+    TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 #[cfg(test)]
 pub(crate) use crate::relation::DirectedRelationErrorV1;
@@ -1952,6 +1953,21 @@ impl OwnerV1 {
     /// Число допущенных компилятором связей между целью и корнем представления точки.
     pub(crate) fn point_presentation_count(&self) -> usize {
         self.compiled.point_presentation_count()
+    }
+
+    /// Проверяет и минтит terminal point binding для внешнего attachment seam.
+    ///
+    /// `OwnerV1` сохраняет границу между публичным wire wrapper и generic
+    /// compiled graph: внешний слой не получает прямого доступа к внутренней
+    /// эпохе, но использует тот же compiled-инвариант terminal target.
+    pub(crate) fn bind_terminal_point_output_presentation(
+        &self,
+        output: OutputSlotId,
+        root: PresentationRootId,
+        occurrence: OccurrenceId,
+    ) -> Result<CompiledPointOutputPresentationV1, PointOutputPresentationBindErrorV1> {
+        self.compiled
+            .bind_terminal_point_output_presentation(output, root, occurrence)
     }
 
     #[cfg(test)]
