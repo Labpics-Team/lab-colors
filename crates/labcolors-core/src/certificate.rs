@@ -266,10 +266,16 @@ impl AdmissionKeyV1 {
             return Err(CertificateErrorV1::NonCanonicalRevision);
         }
         let key = Self {
-            runtime_artifact_id: runtime_artifact_id.to_owned(),
+            runtime_artifact_id: try_clone_string(
+                runtime_artifact_id,
+                CertificateErrorV1::ResourceLimitExceeded,
+            )?,
             operation,
-            context_id: context_id.to_owned(),
-            producer_revision: producer_revision.to_owned(),
+            context_id: try_clone_string(context_id, CertificateErrorV1::ResourceLimitExceeded)?,
+            producer_revision: try_clone_string(
+                producer_revision,
+                CertificateErrorV1::ResourceLimitExceeded,
+            )?,
             producer_content_identity,
             authority_kind: CertificateAuthorityKindV1::GenericTypedCertificate,
             authority_version: CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
@@ -284,10 +290,19 @@ impl AdmissionKeyV1 {
 
     fn try_clone_for_admission(&self) -> Result<Self, CertificateErrorV1> {
         Ok(Self {
-            runtime_artifact_id: try_clone_string(&self.runtime_artifact_id)?,
+            runtime_artifact_id: try_clone_string(
+                &self.runtime_artifact_id,
+                CertificateErrorV1::AdmissionCapacityExceeded,
+            )?,
             operation: self.operation,
-            context_id: try_clone_string(&self.context_id)?,
-            producer_revision: try_clone_string(&self.producer_revision)?,
+            context_id: try_clone_string(
+                &self.context_id,
+                CertificateErrorV1::AdmissionCapacityExceeded,
+            )?,
+            producer_revision: try_clone_string(
+                &self.producer_revision,
+                CertificateErrorV1::AdmissionCapacityExceeded,
+            )?,
             producer_content_identity: self.producer_content_identity,
             authority_kind: self.authority_kind,
             authority_version: self.authority_version,
@@ -528,7 +543,7 @@ pub struct UntrustedEnvelopeV1 {
     payload_len: u32,
     payload_sha256: [u8; 32],
     binding_sha256: [u8; 32],
-    canonical_bytes: Box<[u8]>,
+    canonical_bytes: Vec<u8>,
 }
 
 impl UntrustedEnvelopeV1 {
@@ -606,7 +621,7 @@ impl UntrustedEnvelopeV1 {
             payload_len: payload_length as u32,
             payload_sha256,
             binding_sha256,
-            canonical_bytes: bytes.to_vec().into_boxed_slice(),
+            canonical_bytes: try_clone_bytes(bytes, CertificateErrorV1::ResourceLimitExceeded)?,
         })
     }
 
@@ -738,7 +753,10 @@ impl AdmissionStateV1 {
             .try_reserve(1)
             .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
         let prepared_key = expected.try_clone_for_admission()?;
-        let prepared_canonical_bytes = try_clone_bytes(envelope.canonical_bytes())?;
+        let prepared_canonical_bytes = try_clone_bytes(
+            envelope.canonical_bytes(),
+            CertificateErrorV1::AdmissionCapacityExceeded,
+        )?;
         self.records.insert(
             prepared_key,
             AdmissionRecord {
@@ -788,20 +806,26 @@ fn compare_expected(
     Ok(())
 }
 
-fn try_clone_string(value: &str) -> Result<String, CertificateErrorV1> {
+fn try_clone_string(
+    value: &str,
+    allocation_error: CertificateErrorV1,
+) -> Result<String, CertificateErrorV1> {
     let mut cloned = String::new();
     cloned
         .try_reserve_exact(value.len())
-        .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+        .map_err(|_| allocation_error)?;
     cloned.push_str(value);
     Ok(cloned)
 }
 
-fn try_clone_bytes(value: &[u8]) -> Result<Vec<u8>, CertificateErrorV1> {
+fn try_clone_bytes(
+    value: &[u8],
+    allocation_error: CertificateErrorV1,
+) -> Result<Vec<u8>, CertificateErrorV1> {
     let mut cloned = Vec::new();
     cloned
         .try_reserve_exact(value.len())
-        .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+        .map_err(|_| allocation_error)?;
     cloned.extend_from_slice(value);
     Ok(cloned)
 }
