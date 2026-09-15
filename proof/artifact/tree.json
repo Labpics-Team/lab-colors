@@ -66,7 +66,7 @@
   "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.pin": "9c32f67baa37cb0481ca7d5554443aad022d745f",
   "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256": "f4ab6b561a5ce49f328e608fb87cebde774dd99d",
   "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir": "bc286907faf86f6d4761ba098edf1e0a2ea02911",
-  "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json": "c1b10715fac6667c1ef8456dac715754b1f77ae5",
+  "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json": "5edc0ad3e81a09f36596ddc3ad3129eea16a9364",
   "crates/labcolors-core/contracts/solve-characterization-v1-linux-x64.json": "44b0e289763d4457c7aae0a8ffd44c77cebb69ba",
   "crates/labcolors-core/contracts/solve-characterization-v1-macos-aarch64.json": "44b0e289763d4457c7aae0a8ffd44c77cebb69ba",
   "crates/labcolors-core/contracts/solve-characterization-v1-windows-x64.json": "9692dc65b7a7c1012339cd9e7677617832173257",
@@ -448,7 +448,7 @@
   "scripts/test_wcag22_source_binding.py": "52105b0bfec1a2d5cb9620e68e3684a5f9e6aa56",
   "scripts/verify-package-release.mjs": "ad26d19392cbcd93443139ff1d2db13b3de8066d",
   "scripts/verify_clean_set_receipt.py": "05fbd7254d592b8cb4d87bc53297ab4f47429e77",
-  "scripts/verify_point_support_surplus.py": "e4d0c752a8c0165c9c73066a19b3d43da20fb301",
+  "scripts/verify_point_support_surplus.py": "a4f4061d3d64aeacb4bf13d577cfad6c044acfaa",
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "fb431c13b2204970d28e98912450e352d374901e144cf9d7dc4c8f0e410e6b13"
+ "record_sha256": "ef6ef7306632652e2e935618df4b4e025bdbff19dd185977ed445767c0b70f22"
 }
