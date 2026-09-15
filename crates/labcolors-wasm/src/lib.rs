@@ -184,7 +184,9 @@ fn to_attachment_update_error(
         E::Sink(Sink::AlreadyInstalled) => "program_attachment_already_installed",
         E::Sink(Sink::Host(Host::Rejected)) => "program_attachment_host_rejected",
         E::Sink(Sink::Host(Host::Protocol)) => "program_attachment_host_protocol",
-        _ => "program_attachment_update",
+        // Будущий non_exhaustive-вариант не должен маскироваться под
+        // известный `Update`: package classifier обязан отказать ему.
+        _ => "program_attachment_update_unknown",
     };
     attachment_js_error("Program attachment update failed", code, operation)
 }
