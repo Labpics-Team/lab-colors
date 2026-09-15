@@ -39,6 +39,13 @@ function attachmentBusyError(operation) {
   return error;
 }
 
+function attachmentFreeBeforeDisposeError() {
+  const error = new Error("Program attachment must be disposed after external revoke before free");
+  error.code = "program_attachment_revoke_unconfirmed";
+  error.operation = "attachmentFree";
+  return error;
+}
+
 function withAttachmentOperation(attachment, operation, callback) {
   const state = attachmentStates.get(attachment);
   if (state === undefined) return callback();
@@ -60,7 +67,12 @@ for (const [method, operation] of [
 ]) {
   const original = ProgramAttachment.prototype[method];
   ProgramAttachment.prototype[method] = function guardedAttachmentOperation(...args) {
-    return withAttachmentOperation(this, operation, () => original.apply(this, args));
+    const result = withAttachmentOperation(this, operation, () => original.apply(this, args));
+    if (method === "dispose") {
+      const state = attachmentStates.get(this);
+      if (state !== undefined) state.disposed = true;
+    }
+    return result;
   };
 }
 
@@ -69,6 +81,7 @@ ProgramAttachment.prototype.free = function guardedAttachmentFree(...args) {
   const state = attachmentStates.get(this);
   if (state === undefined) return originalAttachmentFree.apply(this, args);
   if (state.busy) throw attachmentBusyError("attachmentFree");
+  if (!state.disposed) throw attachmentFreeBeforeDisposeError();
   state.busy = true;
   try {
     const result = originalAttachmentFree.apply(this, args);
@@ -81,7 +94,7 @@ ProgramAttachment.prototype.free = function guardedAttachmentFree(...args) {
 
 export function attachProgramWire(...args) {
   const attachment = attachProgramWireWasm(...args);
-  attachmentStates.set(attachment, { busy: false });
+  attachmentStates.set(attachment, { busy: false, disposed: false });
   return attachment;
 }
 
@@ -120,6 +133,10 @@ const ATTACHMENT_DISPOSE_ERROR_CODES = new Set([
   "program_attachment_dispose",
   "program_attachment_busy",
 ]);
+const ATTACHMENT_FREE_ERROR_CODES = new Set([
+  "program_attachment_revoke_unconfirmed",
+  "program_attachment_busy",
+]);
 const MATERIALIZATION_ERROR_CODES = new Set([
   "program_materialization_not_ready",
   "program_materialization_paint_not_authority",
@@ -152,7 +169,7 @@ export function isProgramError(error) {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);
     }
     if (operation === "attachmentDispose") return ATTACHMENT_DISPOSE_ERROR_CODES.has(code);
-    if (operation === "attachmentFree") return code === "program_attachment_busy";
+    if (operation === "attachmentFree") return ATTACHMENT_FREE_ERROR_CODES.has(code);
     if (operation === "materializationAuthority") return MATERIALIZATION_ERROR_CODES.has(code);
     if (operation === "physicalIdentity") return PHYSICAL_IDENTITY_ERROR_CODES.has(code);
     return false;

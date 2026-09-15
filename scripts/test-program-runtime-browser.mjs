@@ -298,6 +298,7 @@ async function browserAttachmentConsumer(origin, fault) {
   const evidence = { acquired: [], released: [], readback: {} };
   let primary, result, attachment, snapshot, secondSnapshot, render, secondRender,
     authority, secondAuthority, preservedAuthority, element;
+  let freeBeforeDispose, cssBeforeFree, cssAfterFree;
   let hostDisposed = false;
   let hostAcquired = false;
   try {
@@ -424,6 +425,19 @@ async function browserAttachmentConsumer(origin, fault) {
     authority = attachment.materializationAuthority();
     resources.push({ name: "attachment-authority", release() { authority.free(); released(evidence, "attachment-authority", fault); } });
     acquisition(evidence, "attachment-authority", fault);
+    cssBeforeFree = element.style.color;
+    try {
+      attachment.free();
+      freeBeforeDispose = { rejected: false };
+    } catch (error) {
+      freeBeforeDispose = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
+    }
+    cssAfterFree = element.style.color;
     element.style.background = "rgb(160 160 160)";
     secondSnapshot = attachment.updateObserved(2n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
     resources.push({ name: "attachment-second-snapshot", release() { secondSnapshot.free(); released(evidence, "attachment-second-snapshot", fault); } });
@@ -572,6 +586,7 @@ async function browserAttachmentConsumer(origin, fault) {
         authorityRoot: secondAuthority.presentationRoot(),
         authorityOccurrence: secondAuthority.occurrence(),
         authorityPhysicalIdentity: secondAuthority.physicalIdentity(),
+        rendererProvenance: secondAuthority.rendererProvenance(),
       },
       computed,
       independentFirstComposite: independentComposite([128, 128, 128], [64, 64, 64], 0.5),
@@ -584,6 +599,9 @@ async function browserAttachmentConsumer(origin, fault) {
       cssAfterForeignEpoch: element.style.color,
       reentrant: { outer: reentrant, nested: hostState.reentrant },
       reentrantFree: hostState.reentrantFree,
+      freeBeforeDispose,
+      cssBeforeFree,
+      cssAfterFree,
       hostRejection,
       preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
       cssAfterRejection: element.style.color,
@@ -805,6 +823,13 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.reentrantFree.recognized !== true
     || result.reentrantFree.code !== "program_attachment_busy"
     || result.reentrantFree.operation !== "attachmentFree"
+    || result.freeBeforeDispose?.rejected !== true
+    || result.freeBeforeDispose.code !== "program_attachment_revoke_unconfirmed"
+    || result.freeBeforeDispose.operation !== "attachmentFree"
+    || result.freeBeforeDispose.recognized !== true
+    || result.cssAfterFree !== result.cssBeforeFree
+    || typeof result.cssBeforeFree !== "string" || result.cssBeforeFree === ""
+    || result.second?.rendererProvenance !== "unverified"
     || result.staleSnapshotHasAuthority !== false
     || result.hostRejection?.rejected !== true
     || result.hostRejection.recognized !== true

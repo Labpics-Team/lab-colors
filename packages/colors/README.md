@@ -111,7 +111,9 @@ binding epoch и отсутствием downstream point, а не доказат
 или человеческого восприятия. При отказе host предыдущий head сохраняется.
 Пока host callback исполняется синхронно, повторный вызов любой операции attachment,
 включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
-из callback. Внешний scope отзывается владельцем host до `dispose(true)`.
+из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
+пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
+отзывается владельцем host до `dispose(true)`.
 
 ## Контракт
 

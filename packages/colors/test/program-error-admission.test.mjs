@@ -32,6 +32,10 @@ const attachmentDisposeCodes = [
   "program_attachment_dispose",
   "program_attachment_busy",
 ];
+const attachmentFreeCodes = [
+  "program_attachment_revoke_unconfirmed",
+  "program_attachment_busy",
+];
 const materializationCodes = [
   "program_materialization_not_ready",
   "program_materialization_paint_not_authority",
@@ -65,6 +69,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
     ...attachmentCodes,
     ...attachmentUpdateCodes,
     ...attachmentDisposeCodes,
+    ...attachmentFreeCodes,
     ...materializationCodes,
     ...physicalIdentityCodes,
     "program_attachment_update_unknown",
@@ -83,7 +88,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
         : (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown")
           ? attachmentUpdateCodes.includes(code)
             : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
-              : operation === "attachmentFree" ? code === "program_attachment_busy"
+              : operation === "attachmentFree" ? attachmentFreeCodes.includes(code)
               : operation === "materializationAuthority" ? materializationCodes.includes(code)
               : operation === "physicalIdentity" ? physicalIdentityCodes.includes(code)
               : false;
