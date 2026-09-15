@@ -50,6 +50,7 @@ const attachmentOperations = [
   "attachmentUpdateObserved",
   "attachmentUpdateUnknown",
   "attachmentDispose",
+  "attachmentFree",
   "materializationAuthority",
   "other",
   undefined,
@@ -77,8 +78,9 @@ test("error admission recognizes exactly the operation/code relation", () => {
       const expected = operation === "attachProgramWire" ? attachmentCodes.includes(code)
         : (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown")
           ? attachmentUpdateCodes.includes(code)
-          : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
-            : operation === "materializationAuthority" ? materializationCodes.includes(code)
+            : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
+            : operation === "attachmentFree" ? code === "program_attachment_busy"
+              : operation === "materializationAuthority" ? materializationCodes.includes(code)
               : false;
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }
