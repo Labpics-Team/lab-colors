@@ -30,24 +30,24 @@ jobs:
           path = Path('packages/colors/test/program-runtime-browser-harness.test.mjs')
           source = path.read_text()
           old = '''      attach(_streamId, _bindings, host) {
-                const epoch = ++nextEpoch;
+        const epoch = ++nextEpoch;
           '''
           new = '''      attach(_streamId, bindings, host) {
-                for (const key of [
-                  "emissionOutputs",
-                  "emissionSinkOutputs",
-                  "presentationOutputs",
-                  "presentationRoots",
-                  "presentationOccurrences",
-                ]) {
-                  let value;
-                  try { value = bindings[key]; }
-                  catch { throw typedError("attached_invalid_bindings", "attachAttachedProgram"); }
-                  if (!(value instanceof Uint32Array) || value.length !== 1) {
-                    throw typedError("attached_invalid_bindings", "attachAttachedProgram");
-                  }
-                }
-                const epoch = ++nextEpoch;
+        for (const key of [
+          "emissionOutputs",
+          "emissionSinkOutputs",
+          "presentationOutputs",
+          "presentationRoots",
+          "presentationOccurrences",
+        ]) {
+          let value;
+          try { value = bindings[key]; }
+          catch { throw typedError("attached_invalid_bindings", "attachAttachedProgram"); }
+          if (!(value instanceof Uint32Array) || value.length !== 1) {
+            throw typedError("attached_invalid_bindings", "attachAttachedProgram");
+          }
+        }
+        const epoch = ++nextEpoch;
           '''
           if source.count(old) != 1:
               raise SystemExit(f'guard failed: expected one mock attach seam, found {source.count(old)}')
