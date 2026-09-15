@@ -711,7 +711,7 @@ impl AdmissionStateV1 {
 
         if let Some(record) = self.records.get(expected) {
             if record.binding_sha256 == *envelope.binding_sha256()
-                && record.canonical_bytes.as_ref() == envelope.canonical_bytes()
+                && record.canonical_bytes.as_slice() == envelope.canonical_bytes()
             {
                 return Ok(AdmissionOutcomeV1::DuplicateNoop);
             }
