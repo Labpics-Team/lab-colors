@@ -118,8 +118,9 @@ binding epoch и отсутствием downstream point, а не доказат
 ## Инспекция certificate envelope
 
 `decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
-transport envelope и возвращает `UntrustedCertificateEnvelopeV1`. Результат —
-метаданные framing и проверенные digest, а не authority result и не доказательство
+transport envelope и возвращает замороженный metadata-object
+`UntrustedCertificateEnvelopeV1`. Результат — метаданные framing и проверенные digest,
+а не authority result и не доказательство
 истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
 
 До вызова WASM-функции фасад проверяет `bytes.byteLength` и отвергает размер больше

@@ -118,6 +118,58 @@ fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV
     .into()
 }
 
+#[wasm_bindgen(inline_js = r#"
+export function certificateProjection(
+  schemaVersion,
+  operation,
+  authorityKind,
+  authorityVersion,
+  runtimeArtifactId,
+  producerRevision,
+  producerContentIdentity,
+  contextId,
+  payloadType,
+  payloadVersion,
+  payloadLength,
+  payloadSha256,
+  bindingSha256,
+) {
+  return Object.freeze({
+    schemaVersion,
+    operation,
+    authorityKind,
+    authorityVersion,
+    runtimeArtifactId,
+    producerRevision,
+    producerContentIdentity,
+    contextId,
+    payloadType,
+    payloadVersion,
+    payloadLength,
+    payloadSha256,
+    bindingSha256,
+  });
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = certificateProjection)]
+    fn certificate_projection(
+        schema_version: u16,
+        operation: &str,
+        authority_kind: &str,
+        authority_version: u16,
+        runtime_artifact_id: &str,
+        producer_revision: &str,
+        producer_content_identity: &[u8],
+        context_id: &str,
+        payload_type: &str,
+        payload_version: u16,
+        payload_length: u32,
+        payload_sha256: &[u8],
+        binding_sha256: &[u8],
+    ) -> JsValue;
+}
+
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
@@ -320,110 +372,29 @@ pub fn evaluate_wcag22(
         })
 }
 
-/// Structurally decoded certificate envelope.  The value is explicitly
-/// untrusted: it exposes framing metadata for inspection but cannot create an
-/// attestation or enter Core admission from JavaScript.
-#[wasm_bindgen]
-pub struct UntrustedCertificateEnvelopeV1 {
-    inner: labcolors_core::certificate::UntrustedEnvelopeV1,
-}
-
-#[wasm_bindgen]
-impl UntrustedCertificateEnvelopeV1 {
-    /// Schema version of the decoded envelope.
-    #[wasm_bindgen(js_name = schemaVersion)]
-    pub fn schema_version(&self) -> u16 {
-        labcolors_core::certificate::CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1
-    }
-
-    /// Operation selector.
-    pub fn operation(&self) -> String {
-        self.inner.admission_key().operation().key().to_string()
-    }
-
-    /// Authority framing selector.
-    #[wasm_bindgen(js_name = authorityKind)]
-    pub fn authority_kind(&self) -> String {
-        self.inner
-            .admission_key()
-            .authority_kind()
-            .key()
-            .to_string()
-    }
-
-    /// Authority framing version.
-    #[wasm_bindgen(js_name = authorityVersion)]
-    pub fn authority_version(&self) -> u16 {
-        self.inner.admission_key().authority_version()
-    }
-
-    /// Runtime artifact identity.
-    #[wasm_bindgen(js_name = runtimeArtifactId)]
-    pub fn runtime_artifact_id(&self) -> String {
-        self.inner.admission_key().runtime_artifact_id().to_string()
-    }
-
-    /// Full immutable producer revision.
-    #[wasm_bindgen(js_name = producerRevision)]
-    pub fn producer_revision(&self) -> String {
-        self.inner.admission_key().producer_revision().to_string()
-    }
-
-    /// Raw 32-byte producer content identity.
-    #[wasm_bindgen(js_name = producerContentIdentity)]
-    pub fn producer_content_identity(&self) -> Box<[u8]> {
-        self.inner
-            .admission_key()
-            .producer_content_identity()
-            .to_vec()
-            .into_boxed_slice()
-    }
-
-    /// Explicit context identity.
-    #[wasm_bindgen(js_name = contextId)]
-    pub fn context_id(&self) -> String {
-        self.inner.admission_key().context_id().to_string()
-    }
-
-    /// Payload framing selector.
-    #[wasm_bindgen(js_name = payloadType)]
-    pub fn payload_type(&self) -> String {
-        self.inner.admission_key().payload_type().key().to_string()
-    }
-
-    /// Payload framing version.
-    #[wasm_bindgen(js_name = payloadVersion)]
-    pub fn payload_version(&self) -> u16 {
-        self.inner.admission_key().payload_version()
-    }
-
-    /// Opaque payload length; the body itself is not projected to JS.
-    #[wasm_bindgen(js_name = payloadLength)]
-    pub fn payload_length(&self) -> u32 {
-        self.inner.payload_len()
-    }
-
-    /// SHA-256 of the domain-separated opaque payload.
-    #[wasm_bindgen(js_name = payloadSha256)]
-    pub fn payload_sha256(&self) -> Box<[u8]> {
-        self.inner.payload_sha256().to_vec().into_boxed_slice()
-    }
-
-    /// SHA-256 of the domain-separated canonical prefix.
-    #[wasm_bindgen(js_name = bindingSha256)]
-    pub fn binding_sha256(&self) -> Box<[u8]> {
-        self.inner.binding_sha256().to_vec().into_boxed_slice()
-    }
-}
-
-/// Decodes untrusted certificate bytes for inspection only.
+/// Decodes untrusted certificate bytes into immutable metadata for inspection
+/// only. The opaque body, producer capability, and admission state stay in
+/// Core and are not projected to JavaScript.
 #[wasm_bindgen(js_name = decodeCertificateEnvelope)]
-pub fn decode_certificate_envelope(
-    bytes: &[u8],
-) -> Result<UntrustedCertificateEnvelopeV1, JsValue> {
+pub fn decode_certificate_envelope(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let inner = labcolors_core::certificate::UntrustedEnvelopeV1::decode(bytes)
         .map_err(to_certificate_js_error)?;
-    Ok(UntrustedCertificateEnvelopeV1 { inner })
+    let key = inner.admission_key();
+    Ok(certificate_projection(
+        labcolors_core::certificate::CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
+        key.operation().key(),
+        key.authority_kind().key(),
+        key.authority_version(),
+        key.runtime_artifact_id(),
+        key.producer_revision(),
+        key.producer_content_identity(),
+        key.context_id(),
+        key.payload_type().key(),
+        key.payload_version(),
+        inner.payload_len(),
+        inner.payload_sha256(),
+        inner.binding_sha256(),
+    ))
 }
 
 /// Публичный runtime одного скомпилированного Program.

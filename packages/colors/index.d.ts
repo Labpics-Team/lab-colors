@@ -16,7 +16,6 @@ export {
   ProgramAttachedSnapshot,
   ProgramAttachedRender,
   AttachedMaterializationAuthority,
-  UntrustedCertificateEnvelopeV1,
 } from "./pkg/labcolors.js";
 
 export type {
@@ -120,6 +119,21 @@ export type CertificateError = Error & Readonly<{
   code: CertificateErrorCode;
   operation: "decodeCertificateEnvelope";
 }>;
+export interface UntrustedCertificateEnvelopeV1 {
+  readonly schemaVersion: 1;
+  readonly operation: "issue-certificate";
+  readonly authorityKind: "generic-typed-certificate";
+  readonly authorityVersion: 1;
+  readonly runtimeArtifactId: string;
+  readonly producerRevision: string;
+  readonly producerContentIdentity: Uint8Array;
+  readonly contextId: string;
+  readonly payloadType: "non-semantic-transport-v1";
+  readonly payloadVersion: 1;
+  readonly payloadLength: number;
+  readonly payloadSha256: Uint8Array;
+  readonly bindingSha256: Uint8Array;
+}
 export declare const MAX_CERTIFICATE_ENVELOPE_BYTES: 2097152;
 export declare function decodeCertificateEnvelope(
   bytes: Uint8Array,

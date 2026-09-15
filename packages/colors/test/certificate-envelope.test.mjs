@@ -69,19 +69,19 @@ function referenceEnvelope() {
 
 test("WASM decodes an independently constructed envelope as untrusted metadata", () => {
   const envelope = decodeCertificateEnvelope(referenceEnvelope());
-  assert.equal(envelope.schemaVersion(), 1);
-  assert.equal(envelope.operation(), "issue-certificate");
-  assert.equal(envelope.authorityKind(), "generic-typed-certificate");
-  assert.equal(envelope.authorityVersion(), 1);
-  assert.equal(envelope.runtimeArtifactId(), "labcolors-wasm-test");
-  assert.equal(envelope.producerRevision(), revision);
-  assert.deepEqual([...envelope.producerContentIdentity()], Array(32).fill(0x11));
-  assert.equal(envelope.contextId(), "context-v1");
-  assert.equal(envelope.payloadType(), "non-semantic-transport-v1");
-  assert.equal(envelope.payloadVersion(), 1);
-  assert.equal(envelope.payloadLength(), Buffer.byteLength("reference-body"));
-  assert.equal(envelope.payloadSha256().length, 32);
-  assert.equal(envelope.bindingSha256().length, 32);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.operation, "issue-certificate");
+  assert.equal(envelope.authorityKind, "generic-typed-certificate");
+  assert.equal(envelope.authorityVersion, 1);
+  assert.equal(envelope.runtimeArtifactId, "labcolors-wasm-test");
+  assert.equal(envelope.producerRevision, revision);
+  assert.deepEqual([...envelope.producerContentIdentity], Array(32).fill(0x11));
+  assert.equal(envelope.contextId, "context-v1");
+  assert.equal(envelope.payloadType, "non-semantic-transport-v1");
+  assert.equal(envelope.payloadVersion, 1);
+  assert.equal(envelope.payloadLength, Buffer.byteLength("reference-body"));
+  assert.equal(envelope.payloadSha256.length, 32);
+  assert.equal(envelope.bindingSha256.length, 32);
   assert.equal("admit" in envelope, false);
 });
 

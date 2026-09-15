@@ -236,20 +236,20 @@
   "crates/labcolors-wasm/src/dto.rs": "40e2aef4a1b00927621cd3985543e639a24b4af9",
   "crates/labcolors-wasm/src/engine.rs": "58c105da2e2eed6d8695c76efde6e99a43001342",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
-  "crates/labcolors-wasm/src/lib.rs": "e271524bd9314edb3b83f500d800a35d43c6d9b9",
+  "crates/labcolors-wasm/src/lib.rs": "73b55bed461fe233a683aba4634a351cfcc9834b",
   "crates/labcolors-wasm/src/projection.rs": "c87dbc55f733ccfc456fe74d4b6c5e18ed99b231",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
   "crates/labcolors-wasm/tests/data/labui.config.json": "8c6b9b17d2ff0b00fed0a3e4bc1aaab4316378da",
   "crates/labcolors-wasm/tests/data/labui.config.prod.json": "e147e4ae1e5d55d74ddec31435af201d1d2a4347",
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
-  "packages/colors/README.md": "4b373c926cbd90f0d06627271d17d8f22f5fcdbb",
+  "packages/colors/README.md": "573978708bd49b25866d001db6bfe0f3e26e2976",
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "622e62c93b2f3507e2262493c021fd6792c5b86c",
-  "packages/colors/index.d.ts": "e6e35dff9d39445d835b2e6a296914af328381e6",
-  "packages/colors/index.js": "f6164b733bb49cd8689af380a4e407f8264f3b38",
+  "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
+  "packages/colors/index.js": "28707a4bcb3d811e307c43a21503853c3f42d146",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
   "crates/labcolors-core/src/certificate.rs": "124d1d4d45bc6f4e956f03d51e7afb864e628bce",
-  "packages/colors/test/certificate-envelope.test.mjs": "6d7b3e119bee6cee43908b6e77ecf7d27e75aad8"
+  "packages/colors/test/certificate-envelope.test.mjs": "0d57cdca29c2b7bfb93f7f3acbb08121bbd0f373"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "782349202aa7793114786016b109a6dee4aab0f3439dc916a5b7424675ca1383"
+ "record_sha256": "47fdbac391bd624292b816e429d645e602753f7782a2c9cc27feb168fa88e818"
 }

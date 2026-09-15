@@ -24,7 +24,6 @@ export {
   ProgramAttachedSnapshot,
   ProgramAttachedRender,
   AttachedMaterializationAuthority,
-  UntrustedCertificateEnvelopeV1,
 } from "./pkg/labcolors.js";
 
 export const MAX_CERTIFICATE_ENVELOPE_BYTES = 2_097_152;
