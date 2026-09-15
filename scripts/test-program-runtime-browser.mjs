@@ -328,6 +328,17 @@ async function browserAttachmentConsumer(origin, fault) {
             recognized: api.isProgramError(error),
           };
         }
+        try {
+          attachment.free();
+          hostState.reentrantFree = { rejected: false };
+        } catch (error) {
+          hostState.reentrantFree = {
+            rejected: true,
+            code: error.code,
+            operation: error.operation,
+            recognized: api.isProgramError(error),
+          };
+        }
         return false;
       }
       if (hostState.reject) return false;
@@ -489,6 +500,24 @@ async function browserAttachmentConsumer(origin, fault) {
         recognized: api.isProgramError(error),
       };
     }
+    let foreignEpoch;
+    try {
+      attachment.materializationAuthorityFor(
+        2n,
+        secondAuthority.contentIdentity(),
+        BigInt(secondAuthority.bindingEpoch()) + 1n,
+      );
+      foreignEpoch = { rejected: false };
+    } catch (error) {
+      foreignEpoch = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
+    }
+    const independentComposite = (backdrop, source, opacity) => backdrop.map((channel, index) =>
+      Math.round(channel + opacity * (source[index] - channel)));
     const parseComputed = (value) => {
       const channels = value.match(/[\d.]+/g)?.map(Number);
       if (!channels || channels.length < 3) throw new Error("computed color was not RGB");
@@ -545,12 +574,16 @@ async function browserAttachmentConsumer(origin, fault) {
         authorityPhysicalIdentity: secondAuthority.physicalIdentity(),
       },
       computed,
-      independentComposite: Math.round(160 + 0.5 * (64 - 160)),
+      independentFirstComposite: independentComposite([128, 128, 128], [64, 64, 64], 0.5),
+      independentSecondComposite: independentComposite([160, 160, 160], [64, 64, 64], 0.5),
       stale,
       staleSnapshotHasAuthority: typeof snapshot.materializationAuthority === "function",
       cssBefore,
       staleIdentity,
+      foreignEpoch,
+      cssAfterForeignEpoch: element.style.color,
       reentrant: { outer: reentrant, nested: hostState.reentrant },
+      reentrantFree: hostState.reentrantFree,
       hostRejection,
       preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
       cssAfterRejection: element.style.color,
@@ -740,7 +773,8 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.second?.state !== "ready"
     || result.second?.hasRender !== true
     || !equal(result.computed, [64, 64, 64, 0.5])
-    || result.independentComposite !== 112
+    || !equal(result.independentFirstComposite, [96, 96, 96])
+    || !equal(result.independentSecondComposite, [112, 112, 112])
     || result.stale?.rejected !== true
     || result.stale.recognized !== true
     || result.stale.code !== "program_materialization_stale_revision"
@@ -749,6 +783,11 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.staleIdentity.recognized !== true
     || result.staleIdentity.code !== "program_materialization_stale_identity"
     || result.staleIdentity.operation !== "materializationAuthority"
+    || result.foreignEpoch?.rejected !== true
+    || result.foreignEpoch.recognized !== true
+    || result.foreignEpoch.code !== "program_materialization_foreign_binding_epoch"
+    || result.foreignEpoch.operation !== "materializationAuthority"
+    || result.cssAfterForeignEpoch !== result.cssBefore
     || result.reentrant?.outer?.rejected !== true
     || result.reentrant.outer.code !== "program_attachment_host_rejected"
     || result.reentrant.outer.operation !== "attachmentUpdateObserved"
@@ -757,6 +796,10 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.reentrant.nested.code !== "program_attachment_busy"
     || result.reentrant.nested.operation !== "attachmentUpdateObserved"
     || result.reentrant.nested.recognized !== true
+    || result.reentrantFree?.rejected !== true
+    || result.reentrantFree.recognized !== true
+    || result.reentrantFree.code !== "program_attachment_busy"
+    || result.reentrantFree.operation !== "attachmentFree"
     || result.staleSnapshotHasAuthority !== false
     || result.hostRejection?.rejected !== true
     || result.hostRejection.recognized !== true

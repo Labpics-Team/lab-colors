@@ -55,6 +55,7 @@ export type ProgramAttachmentDisposeErrorCode =
   | "program_attachment_revoke_unconfirmed"
   | "program_attachment_dispose"
   | "program_attachment_busy";
+export type ProgramAttachmentFreeErrorCode = "program_attachment_busy";
 export type ProgramMaterializationErrorCode =
   | "program_materialization_not_ready"
   | "program_materialization_paint_not_authority"
@@ -76,6 +77,7 @@ export type ProgramError = Error & (
       operation: "attachmentUpdateObserved" | "attachmentUpdateUnknown";
     }>
   | Readonly<{ code: ProgramAttachmentDisposeErrorCode; operation: "attachmentDispose" }>
+  | Readonly<{ code: ProgramAttachmentFreeErrorCode; operation: "attachmentFree" }>
   | Readonly<{ code: ProgramMaterializationErrorCode; operation: "materializationAuthority" }>
 );
 export type ProgramErrorCode = ProgramError["code"];

@@ -109,6 +109,9 @@ attachment head. Его `rendererProvenance` остаётся `"unverified"`: р
 модельная terminal materialization с проверенными identity, revision, sink stamp,
 binding epoch и отсутствием downstream point, а не доказательство browser paint
 или человеческого восприятия. При отказе host предыдущий head сохраняется.
+Пока host callback исполняется синхронно, повторный вызов любой операции attachment,
+включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
+из callback. Внешний scope отзывается владельцем host до `dispose(true)`.
 
 ## Контракт
 

@@ -4,14 +4,17 @@
 // Retired recipe engines and browser helper
 // roots are intentionally not exported.
 
-import initWasm, { initSync as initWasmSync } from "./pkg/labcolors.js";
+import initWasm, {
+  initSync as initWasmSync,
+  attachProgramWire as attachProgramWireWasm,
+  ProgramAttachment,
+} from "./pkg/labcolors.js";
 
 let initState = "idle";
 let initFlight;
 
 export {
   compileProgramWire,
-  attachProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
   ProgramRuntime,
@@ -21,6 +24,66 @@ export {
   ProgramAttachedRender,
   AttachedMaterializationAuthority,
 } from "./pkg/labcolors.js";
+
+// wasm-bindgen выставляет `free()` как потребляющий метод JavaScript.
+// Синхронный host callback может повторно войти в тот же объект, поэтому
+// facade пакета держит небольшой JS-шлюз для каждой публичной операции
+// attachment, включая освобождение. Rust-шлюз остаётся авторитетной
+// отказоустойчивой границей внутри WASM.
+const attachmentStates = new WeakMap();
+
+function attachmentBusyError(operation) {
+  const error = new Error("Program attachment operation is already in progress");
+  error.code = "program_attachment_busy";
+  error.operation = operation;
+  return error;
+}
+
+function withAttachmentOperation(attachment, operation, callback) {
+  const state = attachmentStates.get(attachment);
+  if (state === undefined) return callback();
+  if (state.busy) throw attachmentBusyError(operation);
+  state.busy = true;
+  try {
+    return callback();
+  } finally {
+    state.busy = false;
+  }
+}
+
+for (const [method, operation] of [
+  ["updateObserved", "attachmentUpdateObserved"],
+  ["updateUnknown", "attachmentUpdateUnknown"],
+  ["materializationAuthority", "materializationAuthority"],
+  ["materializationAuthorityFor", "materializationAuthority"],
+  ["dispose", "attachmentDispose"],
+]) {
+  const original = ProgramAttachment.prototype[method];
+  ProgramAttachment.prototype[method] = function guardedAttachmentOperation(...args) {
+    return withAttachmentOperation(this, operation, () => original.apply(this, args));
+  };
+}
+
+const originalAttachmentFree = ProgramAttachment.prototype.free;
+ProgramAttachment.prototype.free = function guardedAttachmentFree(...args) {
+  const state = attachmentStates.get(this);
+  if (state === undefined) return originalAttachmentFree.apply(this, args);
+  if (state.busy) throw attachmentBusyError("attachmentFree");
+  state.busy = true;
+  try {
+    const result = originalAttachmentFree.apply(this, args);
+    attachmentStates.delete(this);
+    return result;
+  } finally {
+    state.busy = false;
+  }
+};
+
+export function attachProgramWire(...args) {
+  const attachment = attachProgramWireWasm(...args);
+  attachmentStates.set(attachment, { busy: false });
+  return attachment;
+}
 
 // wasm-bindgen returns every raw export from its loaders. The public facade
 // deliberately erases that value: initialization is an effect, not a second
@@ -86,6 +149,7 @@ export function isProgramError(error) {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);
     }
     if (operation === "attachmentDispose") return ATTACHMENT_DISPOSE_ERROR_CODES.has(code);
+    if (operation === "attachmentFree") return code === "program_attachment_busy";
     if (operation === "materializationAuthority") return MATERIALIZATION_ERROR_CODES.has(code);
     return false;
   } catch {
