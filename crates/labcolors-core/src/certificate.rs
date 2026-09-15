@@ -683,7 +683,7 @@ impl AdmissionStateV1 {
 
         if let Some(record) = self.records.get(expected) {
             if record.binding_sha256 == *envelope.binding_sha256()
-                && record.canonical_bytes == envelope.canonical_bytes()
+                && record.canonical_bytes.as_ref() == envelope.canonical_bytes()
             {
                 return Ok(AdmissionOutcomeV1::DuplicateNoop);
             }
@@ -878,7 +878,7 @@ impl<'a> Reader<'a> {
 
     fn read_text(&mut self, max_bytes: usize) -> Result<String, CertificateErrorV1> {
         let bytes = self.read_exact_length(max_bytes)?;
-        let value = core::str::from_utf8(bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
+        let value = core::str::from_utf8(&bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
         validate_text(value, max_bytes)?;
         Ok(value.to_owned())
     }
