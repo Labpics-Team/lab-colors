@@ -770,6 +770,11 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.second?.renderOccurrence !== 8 || result.second?.authorityOccurrence !== 8
     || result.second?.renderPhysicalIdentity !== "unknown"
     || result.second?.authorityPhysicalIdentity !== "unknown"
+    || result.second?.authorityRevision !== "2"
+    || result.second?.authoritySinkSequence !== "2"
+    || result.second?.authorityBindingEpoch !== result.second?.renderBindingEpoch
+    || !equal(result.second?.authorityContentIdentity, result.second?.renderContentIdentity)
+    || !equal(result.second?.authorityContextIdentity, result.second?.renderContextIdentity)
     || result.second?.state !== "ready"
     || result.second?.hasRender !== true
     || !equal(result.computed, [64, 64, 64, 0.5])

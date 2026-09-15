@@ -125,18 +125,29 @@ def _within_roots(path: str) -> bool:
     return any(path == root or path.startswith(root + "/") for root in TREE_ROOTS)
 
 
+def _hash_symlink(path: Path) -> str:
+    """Хеширует собственную строку цели symlink как Git blob без referent."""
+    target = os.readlink(path)
+    blob = git("hash-object", "--stdin", "--no-filters", stdin=os.fsencode(target)).decode().strip()
+    if not blob:
+        raise RuntimeError(f"hash-object returned no id for symlink {path}")
+    return blob
+
+
 def extract_tree() -> dict:
     """path -> blob id для файлов рабочего дерева под корнями.
 
     Набор путей — индекс плюс untracked (не ignored): decoy-файл, ещё не
-    добавленный в индекс, обязан быть drift, а не невидимкой. Blob id всегда
-    Для tracked-файла без изменений берётся blob из индекса, а изменённый или
-    untracked-файл хешируется через `hash-object` с учётом пути. Поэтому
-    checkout-CRLF не превращает неизменённый индекс в ложный drift, а реальная
-    правка всё ещё получает Git-совместимый blob; tracked файл, удалённый из
-    рабочего дерева, исчезает из записи (drift). Symlink записывается blob цели
-    из индекса: рабочее дерево на Windows его не воспроизводит. Режим файла в
-    запись не входит: он зависит от файловой системы чекаута, а не от содержимого.
+    добавленный в индекс, обязан быть drift, а не невидимкой. Для tracked-файла
+    без изменений берётся blob из индекса, а изменённый или untracked-файл
+    хешируется через `hash-object` с учётом пути. Поэтому checkout-CRLF не
+    превращает неизменённый индекс в ложный drift, а реальная правка всё ещё
+    получает Git-совместимый blob; tracked файл, удалённый из рабочего дерева,
+    исчезает из записи (drift). Неизменённый symlink также берётся из индекса,
+    потому что Windows может не воспроизводить его в checkout; изменённый или
+    untracked symlink хешируется как его собственные `readlink`-байты через
+    `hash-object --stdin --no-filters`, не через referent. Режим файла в запись
+    не входит: он зависит от файловой системы чекаута, а не от содержимого.
     """
     modes: dict[str, str] = {}
     index_blob: dict[str, str] = {}
@@ -155,10 +166,25 @@ def extract_tree() -> dict:
     worktree_diff = git("diff", "--name-only", "-z", "--", *TREE_ROOTS).decode("utf-8")
     worktree_changed = {path for path in worktree_diff.split("\0") if path}
     for path, mode in sorted(modes.items()):
-        if mode == "120000":
+        worktree_path = REPO_ROOT / path
+        if mode == "120000" and path not in worktree_changed:
+            # Windows checkout может представить неизменённый symlink как
+            # обычный файл; индекс всё равно остаётся авторитетным blob.
             files[path] = index_blob[path]
+        elif mode == "120000":
+            # Для изменённого symlink нельзя следовать за referent. Удалённый
+            # путь не попадает в files и тем самым остаётся видимым как drift.
+            if not os.path.lexists(worktree_path):
+                continue
+            if worktree_path.is_symlink():
+                files[path] = _hash_symlink(worktree_path)
+            else:
+                to_hash.append(path)
         elif mode == "untracked" or path in worktree_changed:
-            to_hash.append(path)
+            if worktree_path.is_symlink():
+                files[path] = _hash_symlink(worktree_path)
+            else:
+                to_hash.append(path)
         else:
             # Для tracked-файла без unstaged diff index уже содержит точный
             # blob. Это сохраняет Linux blob semantics на checkout с CRLF и
