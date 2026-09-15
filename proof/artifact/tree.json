@@ -255,7 +255,7 @@
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
   "packages/colors/program-wire/abi-v1.js": "1e1066ec81326b590cdc55b9a040d1457436871b",
   "packages/colors/sink.js": "f3c1a5b7b376504360e6ce95e15288c2b2960745",
-  "packages/colors/smoke.consumer.ts": "8e00fc824e50386d8ea5c8e0a7919b75446c192e",
+  "packages/colors/smoke.consumer.ts": "55d4fe5b48afa2abb3f6fa6e45c4d3570e3974f3",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
   "packages/colors/test/capability-manifest.test.mjs": "b82cad8968e3142a5a002be4924f27330a20fc32",
   "packages/colors/test/data/oklch-core-vectors.txt": "aed4ec31159ef7b6886e1316266aa9646370aa40",
@@ -446,7 +446,7 @@
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_verify_clean_set_receipt.py": "a8051388a28b68fc4fb984609814e79ddb45be53",
   "scripts/test_wcag22_source_binding.py": "52105b0bfec1a2d5cb9620e68e3684a5f9e6aa56",
-  "scripts/verify-package-release.mjs": "05f67031f0b850aba117103e4656ca1470930647",
+  "scripts/verify-package-release.mjs": "ad26d19392cbcd93443139ff1d2db13b3de8066d",
   "scripts/verify_clean_set_receipt.py": "05fbd7254d592b8cb4d87bc53297ab4f47429e77",
   "scripts/verify_point_support_surplus.py": "e4d0c752a8c0165c9c73066a19b3d43da20fb301",
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "f437aa355fa5b94b27fcccf345d9fd33ebc6f07ae1b70cff92dad232dbe08450"
+ "record_sha256": "9bd951c0e8a7c23e45d65833e321cd354dcb90580af8172951dddc9289618f27"
 }
