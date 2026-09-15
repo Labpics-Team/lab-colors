@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
   "crates/labcolors-core/src/certificate.rs": "5c19b151b7b746ca271a5be07b7ddf93c47e9cbd",
-  "packages/colors/test/certificate-envelope.test.mjs": "999b15151eab02f8564797c0ef3e5ec898769543"
+  "packages/colors/test/certificate-envelope.test.mjs": "6e1593237fe4e13c3c908718fb4c0910d3a529fd"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "ffb841711b2136057fa3d69f613c359e0304bddd6a3ddee32c2cb13d23271a8f"
+ "record_sha256": "54bc6bd31a788759a4e94e130f610596d5b4303493f6c6214243c36e429ab7ce"
 }

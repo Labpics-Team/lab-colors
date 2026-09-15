@@ -68,7 +68,8 @@ function referenceEnvelope() {
 }
 
 test("WASM decodes an independently constructed envelope as untrusted metadata", () => {
-  const envelope = decodeCertificateEnvelope(referenceEnvelope());
+  const bytes = referenceEnvelope();
+  const envelope = decodeCertificateEnvelope(bytes);
   assert.equal(envelope.schemaVersion, 1);
   assert.equal(envelope.operation, "issue-certificate");
   assert.equal(envelope.authorityKind, "generic-typed-certificate");
@@ -84,6 +85,20 @@ test("WASM decodes an independently constructed envelope as untrusted metadata",
   assert.equal(envelope.bindingSha256.length, 32);
   assert.equal(Object.isFrozen(envelope), true);
   assert.equal("admit" in envelope, false);
+
+  const contentIdentity = [...envelope.producerContentIdentity];
+  const payloadDigest = [...envelope.payloadSha256];
+  const bindingDigest = [...envelope.bindingSha256];
+  envelope.producerContentIdentity[0] ^= 0xff;
+  envelope.payloadSha256[0] ^= 0xff;
+  envelope.bindingSha256[0] ^= 0xff;
+  const reread = decodeCertificateEnvelope(bytes);
+  assert.notStrictEqual(envelope.producerContentIdentity, reread.producerContentIdentity);
+  assert.notStrictEqual(envelope.payloadSha256, reread.payloadSha256);
+  assert.notStrictEqual(envelope.bindingSha256, reread.bindingSha256);
+  assert.deepEqual([...reread.producerContentIdentity], contentIdentity);
+  assert.deepEqual([...reread.payloadSha256], payloadDigest);
+  assert.deepEqual([...reread.bindingSha256], bindingDigest);
 });
 
 test("WASM rejects malformed bytes with a typed, redacted error", () => {
