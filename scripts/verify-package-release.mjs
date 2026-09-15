@@ -1150,8 +1150,13 @@ import { createRequire } from "node:module";
 
 const colors = await import("@labpics/colors");
 assert.deepEqual(Object.keys(colors).sort(), [
+  "AttachedMaterializationAuthority",
+  "ProgramAttachedRender",
+  "ProgramAttachedSnapshot",
+  "ProgramAttachment",
   "ProgramRuntime",
   "ProgramSnapshot",
+  "attachProgramWire",
   "compileProgramWire",
   "default",
   "evaluateWcag22",
