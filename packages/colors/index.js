@@ -64,18 +64,16 @@ function certificateIngressError(code) {
 }
 
 function checkCertificateIngress(bytes) {
+  if (!(bytes instanceof Uint8Array)) {
+    throw certificateIngressError("certificate_invalid_input");
+  }
   let byteLength;
   try {
-    byteLength = bytes?.byteLength;
+    byteLength = bytes.byteLength;
   } catch {
     throw certificateIngressError("certificate_invalid_input");
   }
-  if (
-    bytes === null ||
-    (typeof bytes !== "object" && typeof bytes !== "function") ||
-    !Number.isSafeInteger(byteLength) ||
-    byteLength < 0
-  ) {
+  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
     throw certificateIngressError("certificate_invalid_input");
   }
   if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {

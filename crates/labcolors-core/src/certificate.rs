@@ -38,6 +38,11 @@ pub const MAX_ADMISSION_ENTRIES_V1: usize = 1_024;
 /// Maximum accounted canonical bytes and per-entry metadata.
 pub const MAX_ADMISSION_BYTES_V1: usize = 8_388_608;
 const ADMISSION_METADATA_BYTES_V1: usize = 128;
+const WIRE_MAGIC_BYTES_V1: usize = 4;
+const WIRE_U8_BYTES_V1: usize = 1;
+const WIRE_U16_BYTES_V1: usize = 2;
+const WIRE_U32_BYTES_V1: usize = 4;
+const WIRE_DIGEST_BYTES_V1: usize = 32;
 const PAYLOAD_DOMAIN_V1: &[u8] = b"labpics.colors/certificate-payload/v1\0";
 const BINDING_DOMAIN_V1: &[u8] = b"labpics.colors/certificate-envelope/v1\0";
 
@@ -322,20 +327,26 @@ impl AdmissionKeyV1 {
         self.payload_version
     }
 
+    // The non-payload portion of `encode_prefix`: every fixed field must be
+    // counted here, including the payload length and payload digest, because
+    // this value is the bounded admission tuple size.
     fn serialized_tuple_bytes(&self) -> usize {
-        4 + 2
-            + 1
-            + 1
-            + 2
-            + 2
+        WIRE_MAGIC_BYTES_V1
+            + WIRE_U16_BYTES_V1
+            + WIRE_U8_BYTES_V1
+            + WIRE_U8_BYTES_V1
+            + WIRE_U16_BYTES_V1
+            + WIRE_U16_BYTES_V1
             + self.runtime_artifact_id.len()
-            + 2
+            + WIRE_U16_BYTES_V1
             + self.producer_revision.len()
-            + 32
-            + 2
+            + WIRE_DIGEST_BYTES_V1
+            + WIRE_U16_BYTES_V1
             + self.context_id.len()
-            + 1
-            + 2
+            + WIRE_U8_BYTES_V1
+            + WIRE_U16_BYTES_V1
+            + WIRE_U32_BYTES_V1
+            + WIRE_DIGEST_BYTES_V1
     }
 }
 

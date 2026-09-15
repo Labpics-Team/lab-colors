@@ -100,12 +100,20 @@ test("WASM rejects malformed bytes with a typed, redacted error", () => {
 });
 
 test("WASM ingress refuses oversized input before linear-memory copy", () => {
-  const input = { byteLength: MAX_CERTIFICATE_ENVELOPE_BYTES + 1 };
+  const input = new Uint8Array(MAX_CERTIFICATE_ENVELOPE_BYTES + 1);
   assert.throws(
     () => decodeCertificateEnvelope(input),
     (error) => {
       assert.equal(isCertificateError(error), true);
       assert.equal(error.code, "certificate_resource_limit_exceeded");
+      return true;
+    },
+  );
+  assert.throws(
+    () => decodeCertificateEnvelope({ byteLength: 1 }),
+    (error) => {
+      assert.equal(isCertificateError(error), true);
+      assert.equal(error.code, "certificate_invalid_input");
       return true;
     },
   );
