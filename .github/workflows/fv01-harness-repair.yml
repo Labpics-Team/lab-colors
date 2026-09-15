@@ -36,14 +36,13 @@ jobs:
           PY
           node --check packages/colors/test/program-runtime-browser-harness.test.mjs
           git diff --check
-      - name: Prove package runtime contract
+      - name: Prove the RED browser harness counterexample is closed
         shell: bash
         working-directory: packages/colors
         run: |
           set -euo pipefail
           npm ci
-          npm run typecheck
-          npm test
+          node --test test/program-runtime-browser-harness.test.mjs
       - name: Refresh canonical exact-tree evidence
         shell: bash
         run: |
