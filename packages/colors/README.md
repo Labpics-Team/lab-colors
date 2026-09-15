@@ -123,10 +123,11 @@ transport envelope и возвращает замороженный metadata-obj
 а не authority result и не доказательство
 истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
 
-До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array` и отвергает
-subclass, Proxy и подменённые `length`/`byteLength`; размер больше
-`MAX_CERTIFICATE_ENVELOPE_BYTES` (`2097152`) отвергается до копирования, поскольку
-`wasm-bindgen` копирует typed array в linear memory до входа Rust. Неизвестная schema, authority,
+До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array`, безопасно
+нормализует честный subclass (включая Node `Buffer`) и отвергает Proxy либо
+подменённые `length`/`byteLength`; размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
+(`2097152`) отвергается до копирования, поскольку `wasm-bindgen` копирует typed array
+в linear memory до входа Rust. Неизвестная schema, authority,
 operation, payload type/version, неканоничные строки, trailing bytes и digest
 mismatch дают typed error; `isCertificateError(value)` проверяет только
 допустимую пару `operation`/`code`.

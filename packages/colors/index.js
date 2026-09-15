@@ -37,6 +37,10 @@ const intrinsicLengthGetter = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   "length",
 ).get;
+const intrinsicSet = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "set",
+).value;
 
 const CERTIFICATE_ERROR_CODES = new Set([
   "certificate_invalid_magic",
@@ -75,11 +79,9 @@ function certificateIngressError(code) {
 
 function checkCertificateIngress(bytes) {
   let byteLength;
+  let normalized = bytes;
   try {
     if (!(bytes instanceof Uint8Array)) {
-      throw certificateIngressError("certificate_invalid_input");
-    }
-    if (Object.getPrototypeOf(bytes) !== Uint8Array.prototype) {
       throw certificateIngressError("certificate_invalid_input");
     }
     const intrinsicByteLength = Reflect.apply(intrinsicByteLengthGetter, bytes, []);
@@ -88,12 +90,21 @@ function checkCertificateIngress(bytes) {
       !Number.isSafeInteger(intrinsicByteLength) ||
       intrinsicByteLength < 0 ||
       intrinsicLength !== intrinsicByteLength ||
+      Object.getOwnPropertyDescriptor(bytes, "byteLength") !== undefined ||
+      Object.getOwnPropertyDescriptor(bytes, "length") !== undefined ||
       bytes.byteLength !== intrinsicByteLength ||
       bytes.length !== intrinsicLength
     ) {
       throw certificateIngressError("certificate_invalid_input");
     }
     byteLength = intrinsicByteLength;
+    if (Object.getPrototypeOf(bytes) !== Uint8Array.prototype) {
+      if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
+        throw certificateIngressError("certificate_resource_limit_exceeded");
+      }
+      normalized = new Uint8Array(byteLength);
+      Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
+    }
   } catch {
     throw certificateIngressError("certificate_invalid_input");
   }
@@ -103,7 +114,7 @@ function checkCertificateIngress(bytes) {
   if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
     throw certificateIngressError("certificate_resource_limit_exceeded");
   }
-  return bytes;
+  return normalized;
 }
 
 export function decodeCertificateEnvelope(bytes) {

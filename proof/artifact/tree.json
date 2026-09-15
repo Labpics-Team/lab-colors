@@ -243,13 +243,13 @@
   "crates/labcolors-wasm/tests/data/labui.config.prod.json": "e147e4ae1e5d55d74ddec31435af201d1d2a4347",
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
-  "packages/colors/README.md": "ffcdb395c52b6e1e7b5507ccab7d8ab1a6f0ad23",
+  "packages/colors/README.md": "66551e500c20935206833ef64a71e205c05c0862",
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
   "packages/colors/bench/wasm.json": "fd4a528eb323e5a855c120c57fae3e46dc05b4a2",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
-  "packages/colors/index.js": "60421a83e96305344ad55d72b8dc7203186c2e6d",
+  "packages/colors/index.js": "153391c4917c20f8bc902ed2ec951de75acc3194",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "8e67b05efbb2a6fbce5c6fd6f6b32f4a0e7d9556fac613ad478d5d3a00ec0075"
+ "record_sha256": "ef4dc9eb96b240ff6809d40ccd3914c0b4fbe0af3d7c1bba09dbc3142eb06d39"
 }
