@@ -26,29 +26,10 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('packages/colors/test/program-runtime-browser-harness.test.mjs')
           source = path.read_text()
-          old = '''      attach(_streamId, _bindings, host) {
-        const epoch = ++nextEpoch;
-          '''
-          new = '''      attach(_streamId, bindings, host) {
-        for (const key of [
-          "emissionOutputs",
-          "emissionSinkOutputs",
-          "presentationOutputs",
-          "presentationRoots",
-          "presentationOccurrences",
-        ]) {
-          let value;
-          try { value = bindings[key]; }
-          catch { throw typedError("attached_invalid_bindings", "attachAttachedProgram"); }
-          if (!(value instanceof Uint32Array) || value.length !== 1) {
-            throw typedError("attached_invalid_bindings", "attachAttachedProgram");
-          }
-        }
-        const epoch = ++nextEpoch;
-          '''
+          old = "      attach(_streamId, _bindings, host) {\n        const epoch = ++nextEpoch;\n"
+          new = "      attach(_streamId, bindings, host) {\n        for (const key of [\n          \"emissionOutputs\",\n          \"emissionSinkOutputs\",\n          \"presentationOutputs\",\n          \"presentationRoots\",\n          \"presentationOccurrences\",\n        ]) {\n          let value;\n          try { value = bindings[key]; }\n          catch { throw typedError(\"attached_invalid_bindings\", \"attachAttachedProgram\"); }\n          if (!(value instanceof Uint32Array) || value.length !== 1) {\n            throw typedError(\"attached_invalid_bindings\", \"attachAttachedProgram\");\n          }\n        }\n        const epoch = ++nextEpoch;\n"
           if source.count(old) != 1:
               raise SystemExit(f'guard failed: expected one mock attach seam, found {source.count(old)}')
           path.write_text(source.replace(old, new, 1))
