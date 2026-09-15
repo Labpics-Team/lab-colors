@@ -385,6 +385,9 @@ async function browserAttachmentConsumer(origin, fault) {
       release() {
         try {
           // Внешний владелец отзывает свой DOM scope до подтверждения освобождения.
+          // Fault-инъекции относятся к проверенному update, а не к cleanup revoke.
+          hostState.reenter = false;
+          hostState.reject = false;
           hostResource.release();
           attachment.dispose(true);
         } finally {
@@ -493,7 +496,8 @@ async function browserAttachmentConsumer(origin, fault) {
     };
     const computed = parseComputed(getComputedStyle(element).color);
     result = {
-      hostIntents: hostState.intents,
+      // Cleanup revokeAll — lifecycle readback, не часть двух update oracle.
+      hostIntents: hostState.intents.slice(),
       first: {
         ...firstStatus,
         output: Array.from(snapshot.outputRgb(0)),
