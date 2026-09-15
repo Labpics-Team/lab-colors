@@ -1949,6 +1949,11 @@ impl OwnerV1 {
         self.compiled.surface_input_ports().len()
     }
 
+    /// Число канонических выходов, для которых host обязан предоставить emission binding.
+    pub(crate) fn output_count(&self) -> usize {
+        self.compiled.output_count()
+    }
+
     /// Число допущенных компилятором связей между целью и корнем представления точки.
     pub(crate) fn point_presentation_count(&self) -> usize {
         self.compiled.point_presentation_count()

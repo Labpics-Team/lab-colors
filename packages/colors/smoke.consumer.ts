@@ -1,12 +1,23 @@
 import init, {
+  AttachedMaterializationAuthority,
+  AttachedProgramRuntime,
+  AttachedProgramUpdate,
+  CompiledAttachedProgram,
   ProgramRuntime,
   ProgramSnapshot,
+  compileAttachedProgramWire,
   compileProgramWire,
   evaluateWcag22,
   isProgramError,
   numericalCapabilityManifest,
 } from "@labpics/colors";
-import type { ProgramErrorCode, ProgramOperation } from "@labpics/colors";
+import type {
+  AttachedPointSinkHostIntentV1,
+  AttachedPointSinkHostV1,
+  AttachedProgramBindingsV1,
+  ProgramErrorCode,
+  ProgramOperation,
+} from "@labpics/colors";
 import {
   PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
@@ -115,4 +126,61 @@ function scalarInputTypes(
   snapshot.outputOpacity();
 }
 
+const attachedHost: AttachedPointSinkHostV1 = {
+  tryInstall(intent: AttachedPointSinkHostIntentV1): void {
+    void intent.kind;
+  },
+};
+
+function attachedInputTypes(bytes: Uint8Array): AttachedMaterializationAuthority | undefined {
+  const compiled: CompiledAttachedProgram = compileAttachedProgramWire(bytes);
+  const bindings: AttachedProgramBindingsV1 = {
+    emissionOutputs: new Uint32Array([91]),
+    emissionSinkOutputs: new Uint32Array([3]),
+    presentationOutputs: new Uint32Array([91]),
+    presentationRoots: new Uint32Array([71]),
+    presentationOccurrences: new Uint32Array([61]),
+  };
+  const runtime: AttachedProgramRuntime = compiled.attach(1, bindings, attachedHost);
+  const scenarios = new Uint32Array([1]);
+  const surfaces = new Uint8Array([255, 255, 255]);
+  const revision: bigint = 1n;
+  const update: AttachedProgramUpdate = runtime.updateObserved(revision, scenarios, surfaces);
+  runtime.updateUnknown(2n, 1);
+  const authority = update.authorityCount() > 0 ? update.takeAuthority(0) : undefined;
+  if (authority !== undefined) {
+    runtime.validateAuthority(authority);
+    const publishedRevision: bigint = authority.publishedRevision;
+    const sinkSequence: bigint = authority.sinkSequence;
+    const sinkBindingEpoch: bigint = authority.sinkBindingEpoch;
+    const identity: Uint8Array = authority.contentIdentity();
+    const source: Uint8Array = authority.sourceRgb();
+    void publishedRevision;
+    void sinkSequence;
+    void sinkBindingEpoch;
+    void identity;
+    void source;
+  }
+
+  // @ts-expect-error attached stream ID остаётся number, не bigint.
+  compiled.attach(1n, bindings, attachedHost);
+  // @ts-expect-error host обязателен.
+  compiled.attach(1, bindings);
+  // @ts-expect-error bindings используют Uint32Array, не number[].
+  compiled.attach(1, { ...bindings, emissionOutputs: [91] }, attachedHost);
+  // @ts-expect-error attached observed revision остаётся bigint, не number.
+  runtime.updateObserved(1, scenarios, surfaces);
+  // @ts-expect-error surfaces обязательны.
+  runtime.updateObserved(revision, scenarios);
+  // @ts-expect-error attached unknown reason остаётся number, не bigint.
+  runtime.updateUnknown(2n, 1n);
+  // @ts-expect-error authority index остаётся number, не bigint.
+  update.takeAuthority(0n);
+  // @ts-expect-error authority обязателен.
+  runtime.validateAuthority();
+  return authority;
+}
+
 void scalarInputTypes;
+void attachedInputTypes;
+void attachedHost;

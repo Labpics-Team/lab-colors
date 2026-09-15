@@ -217,13 +217,6 @@ mod observation_differential_oracle_tests;
 #[cfg(test)]
 mod point_support_tests;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the generic Session engine is used only through the staged Program owner"
-    )
-)]
 pub(crate) mod session;
 
 #[cfg(test)]

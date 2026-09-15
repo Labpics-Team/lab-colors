@@ -1850,6 +1850,8 @@ pub(crate) struct CompiledPointOutputPresentationV1 {
     presentation_ordinal: usize,
     root: PresentationRootId,
     occurrence: OccurrenceId,
+    terminal: OccurrenceId,
+    terminal_context: AppearanceContextId,
 }
 
 impl CompiledPointOutputPresentationV1 {
@@ -1875,6 +1877,14 @@ impl CompiledPointOutputPresentationV1 {
 
     pub(crate) const fn occurrence(self) -> OccurrenceId {
         self.occurrence
+    }
+
+    pub(crate) const fn terminal(self) -> OccurrenceId {
+        self.terminal
+    }
+
+    pub(crate) const fn terminal_context(self) -> AppearanceContextId {
+        self.terminal_context
     }
 }
 
@@ -1947,6 +1957,7 @@ struct CompiledObservationGroupV1 {
 struct CompiledPointPresentationV1 {
     root: PresentationRootId,
     terminal: OccurrenceId,
+    terminal_context: AppearanceContextId,
     target: OccurrenceId,
     absence_release: PointOccurrenceAbsenceReleaseV1,
     path: CompiledPointPresentationPathV1,
@@ -2153,6 +2164,26 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy;
 
+impl<Evaluation> Clone for ProgramOwnerLeaseV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
+impl<Evaluation> ProgramOwnerLeaseV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    pub(crate) fn same_generation(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// Fully validated immutable Program, not yet attached to runtime.
 pub struct CompiledProgram<Evaluation>
 where
@@ -2246,6 +2277,8 @@ where
             });
         }
 
+        let compiled_presentation =
+            &self.owner_generation.point_presentations.entries[presentation_ordinal];
         Ok(CompiledPointOutputPresentationV1 {
             output_ordinal,
             output,
@@ -2253,6 +2286,8 @@ where
             presentation_ordinal,
             root,
             occurrence,
+            terminal: compiled_presentation.terminal,
+            terminal_context: compiled_presentation.terminal_context,
         })
     }
 
@@ -5224,6 +5259,7 @@ where
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
         &graph,
+        &all_occurrence_contexts,
         &mut program.presentation_roots,
         &mut program.presentation_targets,
     )?;
@@ -6514,6 +6550,7 @@ fn compact_constraint_contexts<Invocation>(
 
 fn compile_point_presentations(
     graph: &CompiledAppearanceGraph,
+    occurrence_contexts: &[CompiledOccurrenceContextV1],
     roots: &mut [PointPresentationRootV1],
     targets: &mut [PointPresentationTargetV1],
 ) -> Result<CompiledPointPresentationsV1, ProgramCompileError> {
@@ -6582,6 +6619,10 @@ fn compile_point_presentations(
             .map_err(|_| ProgramCompileError::MissingPointPresentationRoot { root: target.root })?;
         let compiled_root = &compiled_roots[root_index].1;
         let terminal = compiled_root.terminal();
+        let terminal_context_index = occurrence_contexts
+            .binary_search_by_key(&terminal, |binding| binding.occurrence)
+            .map_err(|_| ProgramCompileError::InternalInvariant)?;
+        let terminal_context = occurrence_contexts[terminal_context_index].context;
         let path = graph
             .compile_point_presentation_path(target.occurrence, compiled_root)
             .map_err(|error| match error {
@@ -6614,6 +6655,7 @@ fn compile_point_presentations(
         compiled.push(CompiledPointPresentationV1 {
             root: target.root,
             terminal,
+            terminal_context,
             target: target.occurrence,
             absence_release: target.absence_release,
             path,
