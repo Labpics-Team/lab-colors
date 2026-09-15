@@ -92,10 +92,21 @@ export function programError(message, code, operation) {
     return new Error("Program error projection failed");
   }
 }
+
+export function unsupportedPhysicalIdentityError() {
+  return programError(
+    "Unsupported program physical identity",
+    "program_physical_identity",
+    "physicalIdentity",
+  );
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
+
+    #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
+    fn unsupported_physical_identity_error() -> js_sys::Error;
 }
 
 fn to_js_error(error: BindingError) -> JsError {
@@ -112,7 +123,6 @@ enum ProgramOperation {
     AttachmentUpdateUnknown,
     AttachmentDispose,
     MaterializationAuthority,
-    PhysicalIdentity,
 }
 
 impl ProgramOperation {
@@ -126,7 +136,6 @@ impl ProgramOperation {
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
-            Self::PhysicalIdentity => "physicalIdentity",
         }
     }
 }
@@ -159,11 +168,7 @@ fn physical_identity_string(
             Ok(js_sys::JsString::from("encoded-srgb8-source-over-v1"))
         }
         None => Ok(js_sys::JsString::from("unknown")),
-        Some(_) => Err(attachment_js_error(
-            "Unsupported program physical identity",
-            "program_physical_identity",
-            ProgramOperation::PhysicalIdentity,
-        )),
+        Some(_) => Err(unsupported_physical_identity_error().into()),
     }
 }
 
