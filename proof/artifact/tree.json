@@ -236,7 +236,7 @@
   "crates/labcolors-wasm/src/dto.rs": "40e2aef4a1b00927621cd3985543e639a24b4af9",
   "crates/labcolors-wasm/src/engine.rs": "58c105da2e2eed6d8695c76efde6e99a43001342",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
-  "crates/labcolors-wasm/src/lib.rs": "73b55bed461fe233a683aba4634a351cfcc9834b",
+  "crates/labcolors-wasm/src/lib.rs": "ebc2db15f7cdb459461d84bd0bc76afaf0e32572",
   "crates/labcolors-wasm/src/projection.rs": "c87dbc55f733ccfc456fe74d4b6c5e18ed99b231",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
   "crates/labcolors-wasm/tests/data/labui.config.json": "8c6b9b17d2ff0b00fed0a3e4bc1aaab4316378da",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "434815ce4aeaf828e7074182f9ac408beb40a86c0c9ad0a1db4e8dd2f3ad2128"
+ "record_sha256": "f437aa355fa5b94b27fcccf345d9fd33ebc6f07ae1b70cff92dad232dbe08450"
 }
