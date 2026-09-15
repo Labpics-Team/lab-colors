@@ -151,6 +151,22 @@ fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -
     program_error(message, code, operation.key()).into()
 }
 
+fn physical_identity_string(
+    identity: Option<labcolors_core::program_wire::ProgramPhysicalIdentityV1>,
+) -> Result<String, JsValue> {
+    match identity {
+        Some(labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => {
+            Ok("encoded-srgb8-source-over-v1".to_string())
+        }
+        None => Ok("unknown".to_string()),
+        Some(_) => Err(attachment_js_error(
+            "Program physical identity variant is unsupported by this package",
+            "program_attachment_unsupported_physical_identity",
+            ProgramOperation::PhysicalIdentity,
+        )),
+    }
+}
+
 fn to_attachment_error(
     error: labcolors_core::program_wire::ProgramAttachErrorV1,
     operation: ProgramOperation,
@@ -1009,17 +1025,7 @@ impl ProgramAttachedRender {
 
     #[wasm_bindgen(js_name = physicalIdentity)]
     pub fn physical_identity(&self) -> Result<String, JsValue> {
-        match self.inner.physical_identity() {
-            Some(
-                labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
-            ) => Ok("encoded-srgb8-source-over-v1".to_string()),
-            None => Ok("unknown".to_string()),
-            Some(_) => Err(attachment_js_error(
-                "Program physical identity variant is unsupported by this package",
-                "program_attachment_unsupported_physical_identity",
-                ProgramOperation::PhysicalIdentity,
-            )),
-        }
+        physical_identity_string(self.inner.physical_identity())
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
@@ -1098,17 +1104,7 @@ impl AttachedMaterializationAuthority {
 
     #[wasm_bindgen(js_name = physicalIdentity)]
     pub fn physical_identity(&self) -> Result<String, JsValue> {
-        match self.inner.physical_identity() {
-            Some(
-                labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
-            ) => Ok("encoded-srgb8-source-over-v1".to_string()),
-            None => Ok("unknown".to_string()),
-            Some(_) => Err(attachment_js_error(
-                "Program physical identity variant is unsupported by this package",
-                "program_attachment_unsupported_physical_identity",
-                ProgramOperation::PhysicalIdentity,
-            )),
-        }
+        physical_identity_string(self.inner.physical_identity())
     }
 
     #[wasm_bindgen(js_name = rendererProvenance)]
