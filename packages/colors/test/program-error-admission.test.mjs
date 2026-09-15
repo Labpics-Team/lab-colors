@@ -44,7 +44,7 @@ const materializationCodes = [
   "program_materialization_ambiguous_observation_cases",
   "program_attachment_busy",
 ];
-const physicalIdentityCodes = ["program_attachment_unsupported_physical_identity"];
+const physicalIdentityCodes = ["program_physical_identity"];
 const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
 const attachmentOperations = [
   "attachProgramWire",

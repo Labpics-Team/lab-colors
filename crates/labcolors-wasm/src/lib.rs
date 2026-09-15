@@ -160,8 +160,8 @@ fn physical_identity_string(
         }
         None => Ok(js_sys::JsString::from("unknown")),
         Some(_) => Err(attachment_js_error(
-            "Program physical identity variant is unsupported by this package",
-            "program_attachment_unsupported_physical_identity",
+            "Unsupported program physical identity",
+            "program_physical_identity",
             ProgramOperation::PhysicalIdentity,
         )),
     }
@@ -1024,8 +1024,15 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> Result<js_sys::JsString, JsValue> {
-        physical_identity_string(self.inner.physical_identity())
+    pub fn physical_identity(&self) -> String {
+        match self.inner.physical_identity() {
+            Some(
+                labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
+            ) => "encoded-srgb8-source-over-v1",
+            None => "unknown",
+            Some(_) => "unsupported",
+        }
+        .to_string()
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]

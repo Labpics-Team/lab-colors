@@ -133,7 +133,7 @@ const MATERIALIZATION_ERROR_CODES = new Set([
   "program_attachment_busy",
 ]);
 const PHYSICAL_IDENTITY_ERROR_CODES = new Set([
-  "program_attachment_unsupported_physical_identity",
+  "program_physical_identity",
 ]);
 
 export function isProgramError(error) {

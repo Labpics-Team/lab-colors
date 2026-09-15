@@ -56,7 +56,7 @@ export type ProgramAttachmentDisposeErrorCode =
   | "program_attachment_dispose"
   | "program_attachment_busy";
 export type ProgramAttachmentFreeErrorCode = "program_attachment_busy";
-export type ProgramPhysicalIdentityErrorCode = "program_attachment_unsupported_physical_identity";
+export type ProgramPhysicalIdentityErrorCode = "program_physical_identity";
 export type ProgramMaterializationErrorCode =
   | "program_materialization_not_ready"
   | "program_materialization_paint_not_authority"
