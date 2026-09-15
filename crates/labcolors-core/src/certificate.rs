@@ -1002,9 +1002,11 @@ mod tests {
         let revision_length = usize::from(u16::from_be_bytes([bytes[offset], bytes[offset + 1]]));
         offset += 2;
         assert_eq!(revision_length, 40);
-        assert!(bytes[offset..offset + revision_length]
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)));
+        assert!(
+            bytes[offset..offset + revision_length]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        );
         offset += revision_length;
         assert_eq!(&bytes[offset..offset + 32], &[0x11; 32]);
         offset += 32;
