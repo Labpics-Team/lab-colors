@@ -376,6 +376,11 @@ impl NonSemanticTransportPayloadV1 {
         &self.bytes
     }
 
+    // This constructor is intentionally dormant until a canonical producer is
+    // wired in by a later node; exposing it publicly would cross the sealed
+    // producer boundary, while removing it would leave the contract without
+    // its only approved construction point.
+    #[allow(dead_code)]
     pub(crate) fn from_canonical_producer_bytes(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
         if bytes.is_empty() {
             return Err(CertificateErrorV1::InvalidLength);
@@ -674,14 +679,14 @@ impl AdmissionStateV1 {
         expected: &AdmissionKeyV1,
         attestation: Option<&TrustedProducerAttestationV1>,
     ) -> Result<AdmissionOutcomeV1, CertificateErrorV1> {
-        compare_expected(envelope.admission_key(), expected)?;
         let attestation = attestation.ok_or(CertificateErrorV1::MissingProducerAttestation)?;
-        if attestation.key != *expected
+        if attestation.key != *envelope.admission_key()
             || attestation.payload_sha256 != *envelope.payload_sha256()
             || attestation.binding_sha256 != *envelope.binding_sha256()
         {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
         }
+        compare_expected(envelope.admission_key(), expected)?;
 
         if let Some(record) = self.records.get(expected) {
             if record.binding_sha256 == *envelope.binding_sha256()
@@ -906,6 +911,7 @@ impl<'a> Reader<'a> {
 /// This is `pub(crate)` so another canonical producer module in this crate can
 /// use the same sealed boundary without giving JS, serde, or external Rust a
 /// raw-byte constructor.
+#[allow(dead_code)]
 pub(crate) fn producer_payload_v1(
     bytes: &[u8],
 ) -> Result<NonSemanticTransportPayloadV1, CertificateErrorV1> {
@@ -914,6 +920,7 @@ pub(crate) fn producer_payload_v1(
 
 /// Producer-only attestation constructor.  It computes the exact two digests
 /// over the same fixed wire prefix that the consumer later verifies.
+#[allow(dead_code)]
 pub(crate) fn producer_attestation_v1(
     key: AdmissionKeyV1,
     payload: &NonSemanticTransportPayloadV1,
@@ -935,6 +942,16 @@ mod tests {
     use std::thread;
 
     const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn hex(bytes: &[u8]) -> String {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        }
+        output
+    }
 
     fn fixture(
         context: &str,
@@ -979,7 +996,14 @@ mod tests {
         assert_eq!(decoded.admission_key().context_id(), "context-v1");
         assert_eq!(decoded.payload_len(), b"producer-body-v1".len() as u32);
         assert_eq!(decoded.canonical_bytes(), envelope.as_bytes());
-        assert!(UntrustedEnvelopeV1::decode(&[envelope.as_bytes(), &[0]].concat()).is_err());
+        assert_eq!(
+            hex(envelope.as_bytes()),
+            "4c43454e00010100000100136c6162636f6c6f72732d636f72652d746573740028303132333435363738396162636465663031323334353637383961626364656630313233343536371111111111111111111111111111111111111111111111111111111111111111000363747801000100000004626f6479f478fc587248720033a34fede7ce76aa10daf6d0e3370032bf89d6d0b7d8701c5d4de35c4fbb1e16da14deafff75d4156bd075d4027b0e4d073fe62c70f3ca37"
+        );
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&[envelope.as_bytes(), &[0]].concat()),
+            Err(CertificateErrorV1::TrailingBytes)
+        );
     }
 
     #[test]
@@ -1157,12 +1181,34 @@ mod tests {
             Err(CertificateErrorV1::UnknownAuthorityKind)
         );
 
+        let mut unsupported_authority_version = envelope.to_bytes().into_vec();
+        unsupported_authority_version[8] = 0;
+        unsupported_authority_version[9] = 2;
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&unsupported_authority_version),
+            Err(CertificateErrorV1::UnsupportedAuthorityVersion)
+        );
+
         let mut future_schema = envelope.to_bytes().into_vec();
         future_schema[4] = 0;
         future_schema[5] = 2;
         assert_eq!(
             UntrustedEnvelopeV1::decode(&future_schema),
             Err(CertificateErrorV1::UnsupportedSchema)
+        );
+
+        let mut invalid_utf8 = envelope.to_bytes().into_vec();
+        invalid_utf8[12] = 0xff;
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&invalid_utf8),
+            Err(CertificateErrorV1::InvalidUtf8)
+        );
+
+        let mut nul_text = envelope.to_bytes().into_vec();
+        nul_text[12] = 0;
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&nul_text),
+            Err(CertificateErrorV1::InvalidLength)
         );
 
         let mut invalid_payload_type = envelope.to_bytes().into_vec();
@@ -1175,6 +1221,33 @@ mod tests {
         assert_eq!(
             UntrustedEnvelopeV1::decode(&invalid_payload_type),
             Err(CertificateErrorV1::InvalidPayloadType)
+        );
+
+        let mut unsupported_payload_version = envelope.to_bytes().into_vec();
+        unsupported_payload_version[payload_type_offset + 1] = 0;
+        unsupported_payload_version[payload_type_offset + 2] = 2;
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&unsupported_payload_version),
+            Err(CertificateErrorV1::UnsupportedPayloadVersion)
+        );
+
+        let mut zero_payload_length = envelope.to_bytes().into_vec();
+        zero_payload_length[payload_type_offset + 3..payload_type_offset + 7]
+            .copy_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&zero_payload_length),
+            Err(CertificateErrorV1::InvalidLength)
+        );
+
+        let mut non_canonical_revision = envelope.to_bytes().into_vec();
+        let revision_offset = non_canonical_revision
+            .windows(REVISION.len())
+            .position(|window| window == REVISION.as_bytes())
+            .unwrap();
+        non_canonical_revision[revision_offset] = b'A';
+        assert_eq!(
+            UntrustedEnvelopeV1::decode(&non_canonical_revision),
+            Err(CertificateErrorV1::NonCanonicalRevision)
         );
     }
 
@@ -1203,6 +1276,13 @@ mod tests {
             state.admit(&decoded, &key, Some(&attestation)),
             Ok(AdmissionOutcomeV1::Accepted)
         );
+        let (_, _, conflicting_attestation, conflicting_envelope) = fixture("ctx", b"other-body");
+        let conflicting = decode_fixture(&conflicting_envelope);
+        assert_eq!(
+            state.admit(&conflicting, &key, Some(&conflicting_attestation)),
+            Err(CertificateErrorV1::BindingConflict)
+        );
+        assert_eq!(state.len(), 1);
         state.accounted_bytes = MAX_ADMISSION_BYTES_V1;
         assert_eq!(
             state.admit(&decoded, &key, Some(&attestation)),
