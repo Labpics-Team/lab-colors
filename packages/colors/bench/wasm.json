@@ -27,12 +27,12 @@
     ]
   },
   "measurement": {
-    "source": "github-actions-run-34937977866",
+    "source": "github-actions-run-34940697670",
     "platform": "linux-x64",
-    "rawBytes": 429953
+    "rawBytes": 429817
   },
   "policy": {
-    "maxRawBytes": 429953,
+    "maxRawBytes": 429817,
     "basis": "c7c-terminal-program-runtime-fv01-attached-materialization-authority",
     "gzip": "diagnostic-only"
   }
