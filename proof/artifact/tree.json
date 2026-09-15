@@ -236,7 +236,7 @@
   "crates/labcolors-wasm/src/dto.rs": "40e2aef4a1b00927621cd3985543e639a24b4af9",
   "crates/labcolors-wasm/src/engine.rs": "58c105da2e2eed6d8695c76efde6e99a43001342",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
-  "crates/labcolors-wasm/src/lib.rs": "1ac7ecab659b9cc70329f8ed1bbb3cf2aff3b470",
+  "crates/labcolors-wasm/src/lib.rs": "108f8ca64a375425fad2e484a25fe4ce410c15f2",
   "crates/labcolors-wasm/src/projection.rs": "c87dbc55f733ccfc456fe74d4b6c5e18ed99b231",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
   "crates/labcolors-wasm/tests/data/labui.config.json": "8c6b9b17d2ff0b00fed0a3e4bc1aaab4316378da",
@@ -247,7 +247,7 @@
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
-  "packages/colors/bench/wasm.json": "f5eebb6882ee8a7355b57a2bb2b49b5c459361db",
+  "packages/colors/bench/wasm.json": "226b941f2768f5601cfdb4aa4bcabf9e65e222af",
   "packages/colors/index.d.ts": "36b5b50c0f3bbdfefef4878a0f89c54e530e9862",
   "packages/colors/index.js": "d7eeb04a3b15581cc88f47d3c76243d9edd78dc8",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
@@ -453,7 +453,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "ab1db6037cefec332c5999e0230b9c497cb6bcaa4c11f86e0f2a6070c1926df2",
+ "record_sha256": "771552737a35dbd1d6661a2d9d79b3d68fb4e3199592f23843de446d3d0f2176",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

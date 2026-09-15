@@ -168,6 +168,8 @@ fn physical_identity_string(
             "encoded-srgb8-source-over-v1".to_string()
         }
         None => "unknown".to_string(),
+        // Это чистый getter: при неизвестном варианте состояние attachment не
+        // меняется, поэтому typed throw сохраняет string ABI без Result glue.
         Some(_) => wasm_bindgen::throw_val(unsupported_physical_identity_error().into()),
     }
 }
