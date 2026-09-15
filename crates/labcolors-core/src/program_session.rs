@@ -41,6 +41,7 @@ use crate::appearance::{
 use crate::clean_set::{
     ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
 };
+use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
     CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
