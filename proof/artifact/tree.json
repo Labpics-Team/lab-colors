@@ -452,7 +452,7 @@
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
-  "crates/labcolors-core/src/certificate.rs": "124d1d4d45bc6f4e956f03d51e7afb864e628bce",
+  "crates/labcolors-core/src/certificate.rs": "34a2bd4bed86fca050459538171a101866dfe6c7",
   "packages/colors/test/certificate-envelope.test.mjs": "0d57cdca29c2b7bfb93f7f3acbb08121bbd0f373"
  },
  "roots": [
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "47fdbac391bd624292b816e429d645e602753f7782a2c9cc27feb168fa88e818"
+ "record_sha256": "1f3ae4bdcff5dc04141641f1d4b18ebbd1113555d91dd9a0363d5ef5cf41ca09"
 }

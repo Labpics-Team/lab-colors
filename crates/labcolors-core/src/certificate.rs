@@ -500,7 +500,7 @@ impl fmt::Debug for CertificateEnvelopeV1 {
 #[derive(PartialEq, Eq)]
 pub struct UntrustedEnvelopeV1 {
     key: AdmissionKeyV1,
-    payload: Box<[u8]>,
+    payload_len: u32,
     payload_sha256: [u8; 32],
     binding_sha256: [u8; 32],
     canonical_bytes: Box<[u8]>,
@@ -530,11 +530,12 @@ impl UntrustedEnvelopeV1 {
         }
 
         let runtime_artifact_id = reader.read_text(MAX_RUNTIME_ARTIFACT_ID_BYTES_V1)?;
-        let producer_revision_bytes = reader.read_exact_length(MAX_PRODUCER_REVISION_BYTES_V1)?;
-        if !is_canonical_revision(&producer_revision_bytes) {
+        let producer_revision_bytes =
+            reader.read_length_delimited(MAX_PRODUCER_REVISION_BYTES_V1)?;
+        if !is_canonical_revision(producer_revision_bytes) {
             return Err(CertificateErrorV1::NonCanonicalRevision);
         }
-        let producer_revision = String::from_utf8(producer_revision_bytes)
+        let producer_revision = core::str::from_utf8(producer_revision_bytes)
             .map_err(|_| CertificateErrorV1::InvalidUtf8)?;
         let producer_content_identity = reader.read_array::<32>()?;
         let context_id = reader.read_text(MAX_CONTEXT_ID_BYTES_V1)?;
@@ -554,12 +555,9 @@ impl UntrustedEnvelopeV1 {
         if payload_length > MAX_PAYLOAD_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
-        let payload = reader
-            .read_exact(payload_length)?
-            .to_vec()
-            .into_boxed_slice();
+        let payload = reader.read_exact(payload_length)?;
         let payload_sha256 = reader.read_array::<32>()?;
-        if payload_digest(&payload) != payload_sha256 {
+        if payload_digest(payload) != payload_sha256 {
             return Err(CertificateErrorV1::PayloadDigestMismatch);
         }
         let binding_start = reader.offset;
@@ -580,7 +578,7 @@ impl UntrustedEnvelopeV1 {
         )?;
         Ok(Self {
             key,
-            payload,
+            payload_len: payload_length as u32,
             payload_sha256,
             binding_sha256,
             canonical_bytes: bytes.to_vec().into_boxed_slice(),
@@ -594,9 +592,7 @@ impl UntrustedEnvelopeV1 {
 
     /// Opaque payload byte length.
     pub fn payload_len(&self) -> u32 {
-        // The decoder and sealed constructor both enforce MAX_PAYLOAD_BYTES_V1,
-        // which is intentionally below u32::MAX.
-        self.payload.len() as u32
+        self.payload_len
     }
 
     /// Payload digest after structural verification.
@@ -618,7 +614,7 @@ impl UntrustedEnvelopeV1 {
 impl fmt::Debug for UntrustedEnvelopeV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UntrustedEnvelopeV1")
-            .field("payload_length", &self.payload.len())
+            .field("payload_length", &self.payload_len)
             .field("envelope_length", &self.canonical_bytes.len())
             .finish()
     }
@@ -886,19 +882,19 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes(self.read_array::<4>()?))
     }
 
-    fn read_text(&mut self, max_bytes: usize) -> Result<String, CertificateErrorV1> {
-        let bytes = self.read_exact_length(max_bytes)?;
-        let value = core::str::from_utf8(&bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
+    fn read_text(&mut self, max_bytes: usize) -> Result<&'a str, CertificateErrorV1> {
+        let bytes = self.read_length_delimited(max_bytes)?;
+        let value = core::str::from_utf8(bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
         validate_text(value, max_bytes)?;
-        Ok(value.to_owned())
+        Ok(value)
     }
 
-    fn read_exact_length(&mut self, max_bytes: usize) -> Result<Vec<u8>, CertificateErrorV1> {
+    fn read_length_delimited(&mut self, max_bytes: usize) -> Result<&'a [u8], CertificateErrorV1> {
         let length = usize::from(self.read_u16()?);
         if length > max_bytes {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
-        Ok(self.read_exact(length)?.to_vec())
+        self.read_exact(length)
     }
 
     fn is_finished(&self) -> bool {
