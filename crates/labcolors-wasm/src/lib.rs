@@ -162,13 +162,13 @@ fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -
 
 fn physical_identity_string(
     identity: Option<labcolors_core::program_wire::ProgramPhysicalIdentityV1>,
-) -> Result<js_sys::JsString, JsValue> {
+) -> String {
     match identity {
         Some(labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => {
-            Ok(js_sys::JsString::from("encoded-srgb8-source-over-v1"))
+            "encoded-srgb8-source-over-v1".to_string()
         }
-        None => Ok(js_sys::JsString::from("unknown")),
-        Some(_) => Err(unsupported_physical_identity_error().into()),
+        None => "unknown".to_string(),
+        Some(_) => wasm_bindgen::throw_val(unsupported_physical_identity_error().into()),
     }
 }
 
@@ -1115,7 +1115,7 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = physicalIdentity)]
-    pub fn physical_identity(&self) -> Result<js_sys::JsString, JsValue> {
+    pub fn physical_identity(&self) -> String {
         physical_identity_string(self.inner.physical_identity())
     }
 
