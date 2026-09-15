@@ -100,25 +100,7 @@ export function unsupportedPhysicalIdentityError() {
     "physicalIdentity",
   );
 }
-"#)]
-extern "C" {
-    #[wasm_bindgen(js_name = programError)]
-    fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
-    #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
-    fn unsupported_physical_identity_error() -> js_sys::Error;
-}
-
-fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
-    program_error(
-        "Certificate envelope operation failed",
-        &format!("certificate_{}", error.code()),
-        "decodeCertificateEnvelope",
-    )
-    .into()
-}
-
-#[wasm_bindgen(inline_js = r#"
 export function certificateProjection(
   schemaVersion,
   operation,
@@ -152,6 +134,11 @@ export function certificateProjection(
 }
 "#)]
 extern "C" {
+    #[wasm_bindgen(js_name = programError)]
+    fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
+
+    #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
+    fn unsupported_physical_identity_error() -> js_sys::Error;
     #[wasm_bindgen(js_name = certificateProjection)]
     fn certificate_projection(
         schema_version: u16,
@@ -168,6 +155,15 @@ extern "C" {
         payload_sha256: &[u8],
         binding_sha256: &[u8],
     ) -> JsValue;
+}
+
+fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
+    program_error(
+        "Certificate envelope operation failed",
+        &format!("certificate_{}", error.code()),
+        "decodeCertificateEnvelope",
+    )
+    .into()
 }
 
 fn to_js_error(error: BindingError) -> JsError {
