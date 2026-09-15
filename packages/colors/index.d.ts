@@ -33,6 +33,7 @@ export type ProgramCompileErrorCode =
   | "program_family_artifacts_required"
   | "program_instantiate";
 export type ProgramAttachmentErrorCode =
+  | ProgramCompileErrorCode
   | "program_attachment_binding"
   | "program_attachment_instantiate"
   | "program_attachment_sink_admission"

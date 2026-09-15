@@ -108,6 +108,7 @@ const COMPILE_PROGRAM_ERROR_CODES = new Set([
   "program_instantiate",
 ]);
 const ATTACHMENT_ERROR_CODES = new Set([
+  ...COMPILE_PROGRAM_ERROR_CODES,
   "program_attachment_binding",
   "program_attachment_instantiate",
   "program_attachment_sink_admission",
