@@ -7,6 +7,8 @@
 mod error;
 mod terminal_projection;
 
+use std::cell::Cell;
+
 use wasm_bindgen::prelude::*;
 
 use crate::error::BindingError;
@@ -157,6 +159,7 @@ fn to_attachment_error(
         E::Instantiate => "program_attachment_instantiate",
         E::SinkAdmission => "program_attachment_sink_admission",
         E::ResourceExhausted => "program_attachment_resource_exhausted",
+        E::NonTerminalTarget => "program_attachment_non_terminal_target",
         _ => "program_attachment",
     };
     attachment_js_error("Program attachment admission failed", code, operation)
@@ -199,6 +202,7 @@ fn to_authority_error(
         E::ForeignBindingEpoch => "program_materialization_foreign_binding_epoch",
         E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
         E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
+        E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
         _ => "program_materialization_authority",
     };
     attachment_js_error(
@@ -665,12 +669,40 @@ pub fn attach_program_wire(
             },
         )
         .map_err(|error| to_attachment_error(error, ProgramOperation::AttachProgramWire))?;
-    Ok(ProgramAttachment { inner })
+    Ok(ProgramAttachment {
+        inner,
+        busy: Cell::new(false),
+    })
 }
 
 #[wasm_bindgen(js_name = ProgramAttachment)]
 pub struct ProgramAttachment {
     inner: labcolors_core::program_wire::ProgramAttachmentV1<JsPointSinkHostV1>,
+    busy: Cell<bool>,
+}
+
+struct AttachmentBusyGuard<'a> {
+    busy: &'a Cell<bool>,
+}
+
+impl Drop for AttachmentBusyGuard<'_> {
+    fn drop(&mut self) {
+        self.busy.set(false);
+    }
+}
+
+impl ProgramAttachment {
+    fn enter(&self, operation: ProgramOperation) -> Result<AttachmentBusyGuard<'_>, JsValue> {
+        if self.busy.get() {
+            return Err(attachment_js_error(
+                "Program attachment operation is already in progress",
+                "program_attachment_busy",
+                operation,
+            ));
+        }
+        self.busy.set(true);
+        Ok(AttachmentBusyGuard { busy: &self.busy })
+    }
 }
 
 #[wasm_bindgen]
@@ -684,6 +716,7 @@ impl ProgramAttachment {
         surfaces: &[u8],
         #[wasm_bindgen(unchecked_param_type = "number")] surface_count: JsValue,
     ) -> Result<ProgramAttachedSnapshot, JsValue> {
+        let _busy = self.enter(ProgramOperation::AttachmentUpdateObserved)?;
         let revision = u64::try_from(revision)
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateObserved))?;
         let scenarios = decode_attachment_scenarios(
@@ -707,6 +740,7 @@ impl ProgramAttachment {
         #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
         #[wasm_bindgen(unchecked_param_type = "number")] reason_id: JsValue,
     ) -> Result<ProgramAttachedSnapshot, JsValue> {
+        let _busy = self.enter(ProgramOperation::AttachmentUpdateUnknown)?;
         let revision = u64::try_from(revision)
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateUnknown))?;
         let reason_id = checked_u32(reason_id)
@@ -722,6 +756,7 @@ impl ProgramAttachment {
     /// Допускает authority только из текущего committed head attachment.
     #[wasm_bindgen(js_name = materializationAuthority)]
     pub fn materialization_authority(&self) -> Result<AttachedMaterializationAuthority, JsValue> {
+        let _busy = self.enter(ProgramOperation::MaterializationAuthority)?;
         self.inner
             .current_materialization_authority()
             .map(|inner| AttachedMaterializationAuthority { inner })
@@ -736,6 +771,7 @@ impl ProgramAttachment {
         content_identity: &[u8],
         #[wasm_bindgen(unchecked_param_type = "bigint")] binding_epoch: JsValue,
     ) -> Result<AttachedMaterializationAuthority, JsValue> {
+        let _busy = self.enter(ProgramOperation::MaterializationAuthority)?;
         let render = self.inner.current_render().ok_or_else(|| {
             to_authority_error(
                 labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::NotReady,
@@ -775,6 +811,7 @@ impl ProgramAttachment {
     /// Потребляет attachment только после подтверждения внешнего revoke caller-ом.
     #[wasm_bindgen]
     pub fn dispose(&mut self, confirmed: bool) -> Result<(), JsValue> {
+        let _busy = self.enter(ProgramOperation::AttachmentDispose)?;
         self.inner
             .dispose(|| if confirmed { Ok(()) } else { Err(()) })
             .map_err(|error| match error {
@@ -1040,6 +1077,18 @@ impl AttachedMaterializationAuthority {
     #[wasm_bindgen]
     pub fn occurrence(&self) -> u32 {
         self.inner.occurrence()
+    }
+
+    #[wasm_bindgen(js_name = physicalIdentity)]
+    pub fn physical_identity(&self) -> String {
+        match self.inner.physical_identity() {
+            Some(
+                labcolors_core::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1,
+            ) => "encoded-srgb8-source-over-v1",
+            None => "unknown",
+            Some(_) => "unknown",
+        }
+        .to_string()
     }
 
     #[wasm_bindgen(js_name = rendererProvenance)]

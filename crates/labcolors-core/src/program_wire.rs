@@ -258,6 +258,44 @@ mod fv01_red_tests {
         builder.finish().unwrap()
     }
 
+    fn non_terminal_target_wire() -> Vec<u8> {
+        let mut builder = crate::program::wire::ProgramWireBuilderV1::new();
+        builder
+            .source(1, Srgb8::new([0x40; 3]))
+            .fixed_target(2, 1)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .occurrence_surface(11, 8)
+            .source_over_occurrence(12, 4, 11, 64.0, 0.2, 2)
+            .presentation_root(ROOT, 12)
+            .presentation_target(ROOT, OCCURRENCE)
+            .exact_visible_unary(true, 10, 12, Srgb8::new([0x60; 3]))
+            .output(OUTPUT, 4);
+        builder.finish().unwrap()
+    }
+
+    fn multi_case_wire() -> Vec<u8> {
+        let mut builder = crate::program::wire::ProgramWireBuilderV1::new();
+        builder
+            .source(1, Srgb8::new([0; 3]))
+            .fixed_target(2, 1)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .presentation_root(ROOT, OCCURRENCE)
+            .presentation_target(ROOT, OCCURRENCE)
+            .wcag22_visible_unary(true, 10, OCCURRENCE, 3)
+            .output(OUTPUT, 4);
+        builder.finish().unwrap()
+    }
+
     #[derive(Default)]
     struct Host {
         stamp: Option<ProgramPointSinkStampV1>,
@@ -290,6 +328,16 @@ mod fv01_red_tests {
         compiled
             .attach(7, OUTPUT, SINK_OUTPUT, ROOT, OCCURRENCE, Host::default())
             .unwrap()
+    }
+
+    #[test]
+    fn public_attachment_rejects_an_intermediate_presentation_target() {
+        let compiled = compile_program_wire_v1(&non_terminal_target_wire()).unwrap();
+        let result = compiled.attach(7, OUTPUT, SINK_OUTPUT, ROOT, OCCURRENCE, Host::default());
+        assert!(matches!(
+            result,
+            Err(ProgramAttachErrorV1::NonTerminalTarget)
+        ));
     }
 
     #[test]
@@ -375,6 +423,28 @@ mod fv01_red_tests {
 
         let authority = attachment.current_materialization_authority().unwrap();
         assert_eq!(authority.terminal_composite(), Srgb8::new([0x70; 3]));
+    }
+
+    #[test]
+    fn authority_refuses_conflicting_terminal_composites_across_observation_cases() {
+        let compiled = compile_program_wire_v1(&multi_case_wire()).unwrap();
+        let mut attachment = compiled
+            .attach(7, OUTPUT, SINK_OUTPUT, ROOT, OCCURRENCE, Host::default())
+            .unwrap();
+        let snapshot = attachment
+            .update_observed(
+                1,
+                &[
+                    ProgramScenarioV1::new(1, vec![Srgb8::new([0xFF; 3])]),
+                    ProgramScenarioV1::new(2, vec![Srgb8::new([0xFE; 3])]),
+                ],
+            )
+            .unwrap();
+        assert_eq!(snapshot.render().unwrap().terminal_composite(), None);
+        assert!(matches!(
+            attachment.current_materialization_authority(),
+            Err(ProgramMaterializationAuthorityErrorV1::AmbiguousObservationCases)
+        ));
     }
 
     #[test]
@@ -689,6 +759,7 @@ pub enum ProgramAttachErrorV1 {
     Instantiate,
     SinkAdmission,
     ResourceExhausted,
+    NonTerminalTarget,
 }
 
 /// Типизированный отказ update. Любая ошибка сохраняет предыдущие Session и состояние host.
@@ -827,6 +898,7 @@ pub enum ProgramMaterializationAuthorityErrorV1 {
     ForeignBindingEpoch,
     TerminalBindingMismatch,
     MissingPointAbsenceProof,
+    AmbiguousObservationCases,
 }
 
 /// Материализация, полученная только из `Ready` commit attachment.
@@ -923,6 +995,7 @@ pub struct ProgramAttachedRenderV1 {
     context: ProgramAppearanceContextIdV1,
     physical_identity: Option<ProgramPhysicalIdentityV1>,
     terminal_composite: Option<Srgb8>,
+    terminal_composite_ambiguous: bool,
 }
 
 impl ProgramAttachedRenderV1 {
@@ -1051,6 +1124,9 @@ fn materialization_authority_from_render(
     {
         return Err(ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch);
     }
+    if render.terminal_composite_ambiguous {
+        return Err(ProgramMaterializationAuthorityErrorV1::AmbiguousObservationCases);
+    }
     let Some(terminal_composite) = render.terminal_composite else {
         return Err(ProgramMaterializationAuthorityErrorV1::MissingPointAbsenceProof);
     };
@@ -1168,6 +1244,18 @@ impl CompiledProgramV1 {
         if output_count != 1 {
             return Err(ProgramAttachErrorV1::Binding);
         }
+        self.owner
+            .bind_terminal_point_output_presentation(
+                crate::program::OutputSlotIdV1::new(output_slot),
+                crate::program::PresentationRootIdV1::new(presentation_root),
+                crate::program::OccurrenceIdV1::new(occurrence),
+            )
+            .map_err(|error| match error {
+                crate::program_session::PointOutputPresentationBindErrorV1::NonTerminalTarget {
+                    ..
+                } => ProgramAttachErrorV1::NonTerminalTarget,
+                _ => ProgramAttachErrorV1::Binding,
+            })?;
         let mut outputs_scratch = Vec::new();
         outputs_scratch
             .try_reserve_exact(output_count)
@@ -1213,6 +1301,9 @@ impl CompiledProgramV1 {
                 }
                 crate::program::attachment::AttachmentCreateFailureKindV1::SinkAdmission => {
                     ProgramAttachErrorV1::SinkAdmission
+                }
+                crate::program::attachment::AttachmentCreateFailureKindV1::ResourceExhausted => {
+                    ProgramAttachErrorV1::ResourceExhausted
                 }
             })?;
         Ok(ProgramAttachmentV1 {
@@ -1392,19 +1483,38 @@ fn attachment_snapshot_from_commit(
     let snapshot = snapshot_from_evidence_into(commit.evidence(), outputs_scratch)
         .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
     let render = commit.render_outputs().next().map(|render| {
-        let terminal_composite = render
+        let mut terminal_composite = None;
+        let mut saw_matching_certificate = false;
+        let mut saw_empty_domain = false;
+        let mut saw_conflicting_composite = false;
+        for certificate in render
             .certificate()
             .point_causal_certificates()
-            .find(|certificate| {
+            .filter(|certificate| {
                 certificate.presentation_root().value() == render.root().value()
                     && certificate.target().value() == render.occurrence().value()
             })
-            .and_then(|certificate| match certificate.domain() {
-                crate::appearance::ExactFinalOwnedPointDomainV1::Empty => None,
-                crate::appearance::ExactFinalOwnedPointDomainV1::Singleton { visible } => {
-                    Some(Srgb8::new(visible))
+        {
+            saw_matching_certificate = true;
+            match certificate.domain() {
+                crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
+                    saw_empty_domain = true;
                 }
-            });
+                crate::appearance::ExactFinalOwnedPointDomainV1::Singleton { visible } => {
+                    let observed = Srgb8::new(visible);
+                    if terminal_composite.is_some_and(|current| current != observed) {
+                        saw_conflicting_composite = true;
+                    } else if terminal_composite.is_none() {
+                        terminal_composite = Some(observed);
+                    }
+                }
+            }
+        }
+        let terminal_composite_ambiguous =
+            saw_matching_certificate && !saw_empty_domain && saw_conflicting_composite;
+        if !saw_matching_certificate || saw_empty_domain || terminal_composite_ambiguous {
+            terminal_composite = None;
+        }
         let paint = render.paint();
         let published = render.published_stamp();
         ProgramAttachedRenderV1 {
@@ -1429,6 +1539,7 @@ fn attachment_snapshot_from_commit(
             // выдавать канонический профиль однослойной композиции за факт.
             physical_identity: None,
             terminal_composite,
+            terminal_composite_ambiguous,
         }
     });
     Ok(ProgramAttachedSnapshotV1 { snapshot, render })
@@ -1494,6 +1605,9 @@ impl ProgramSessionV1 {
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        self.outputs_scratch
+            .try_reserve_exact(self.owner.output_slots().count())
+            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
         let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
@@ -1510,6 +1624,9 @@ impl ProgramSessionV1 {
         revision: u64,
         reason_id: u32,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        self.outputs_scratch
+            .try_reserve_exact(self.owner.output_slots().count())
+            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
         let transition = self
             .owner
             .prepare_update(

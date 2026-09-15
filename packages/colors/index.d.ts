@@ -36,7 +36,8 @@ export type ProgramAttachmentErrorCode =
   | "program_attachment_binding"
   | "program_attachment_instantiate"
   | "program_attachment_sink_admission"
-  | "program_attachment_resource_exhausted";
+  | "program_attachment_resource_exhausted"
+  | "program_attachment_non_terminal_target";
 export type ProgramAttachmentUpdateErrorCode =
   | "program_attachment_update"
   | "program_attachment_resource_exhausted"
@@ -47,11 +48,13 @@ export type ProgramAttachmentUpdateErrorCode =
   | "program_attachment_revision_mismatch"
   | "program_attachment_already_installed"
   | "program_attachment_host_rejected"
-  | "program_attachment_host_protocol";
+  | "program_attachment_host_protocol"
+  | "program_attachment_busy";
 export type ProgramAttachmentDisposeErrorCode =
   | "program_attachment_already_disposed"
   | "program_attachment_revoke_unconfirmed"
-  | "program_attachment_dispose";
+  | "program_attachment_dispose"
+  | "program_attachment_busy";
 export type ProgramMaterializationErrorCode =
   | "program_materialization_not_ready"
   | "program_materialization_paint_not_authority"
@@ -60,11 +63,20 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_stale_sink_stamp"
   | "program_materialization_foreign_binding_epoch"
   | "program_materialization_terminal_binding_mismatch"
-  | "program_materialization_missing_point_absence_proof";
+  | "program_materialization_missing_point_absence_proof"
+  | "program_materialization_ambiguous_observation_cases"
+  | "program_attachment_busy";
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: "program_update"; operation: ProgramUpdateOperation }>
+  | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
+  | Readonly<{
+      code: ProgramAttachmentUpdateErrorCode;
+      operation: "attachmentUpdateObserved" | "attachmentUpdateUnknown";
+    }>
+  | Readonly<{ code: ProgramAttachmentDisposeErrorCode; operation: "attachmentDispose" }>
+  | Readonly<{ code: ProgramMaterializationErrorCode; operation: "materializationAuthority" }>
 );
 export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];

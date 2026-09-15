@@ -6,13 +6,80 @@ import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
 const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"];
+const attachmentCodes = [
+  "program_attachment_binding",
+  "program_attachment_instantiate",
+  "program_attachment_sink_admission",
+  "program_attachment_resource_exhausted",
+  "program_attachment_non_terminal_target",
+];
+const attachmentUpdateCodes = [
+  "program_attachment_update",
+  "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
+  "program_attachment_already_disposed",
+  "program_attachment_patch_scope_mismatch",
+  "program_attachment_stamp_mismatch",
+  "program_attachment_revision_mismatch",
+  "program_attachment_already_installed",
+  "program_attachment_host_rejected",
+  "program_attachment_host_protocol",
+  "program_attachment_busy",
+];
+const attachmentDisposeCodes = [
+  "program_attachment_already_disposed",
+  "program_attachment_revoke_unconfirmed",
+  "program_attachment_dispose",
+  "program_attachment_busy",
+];
+const materializationCodes = [
+  "program_materialization_not_ready",
+  "program_materialization_paint_not_authority",
+  "program_materialization_stale_revision",
+  "program_materialization_stale_identity",
+  "program_materialization_stale_sink_stamp",
+  "program_materialization_foreign_binding_epoch",
+  "program_materialization_terminal_binding_mismatch",
+  "program_materialization_missing_point_absence_proof",
+  "program_materialization_ambiguous_observation_cases",
+  "program_attachment_busy",
+];
 const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
+const attachmentOperations = [
+  "attachProgramWire",
+  "attachmentUpdateObserved",
+  "attachmentUpdateUnknown",
+  "attachmentDispose",
+  "materializationAuthority",
+  "other",
+  undefined,
+];
 
 test("error admission recognizes exactly the operation/code relation", () => {
-  for (const code of [...compileCodes, "program_update", "other", undefined, 0, {}]) {
+  for (const code of [
+    ...compileCodes,
+    "program_update",
+    ...attachmentCodes,
+    ...attachmentUpdateCodes,
+    ...attachmentDisposeCodes,
+    ...materializationCodes,
+    "other",
+    undefined,
+    0,
+    {},
+  ]) {
     for (const operation of operations) {
       const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
         : (operation === "updateObserved" || operation === "updateUnknown") && code === "program_update";
+      assert.equal(isProgramError(errorWith(code, operation)), expected);
+    }
+    for (const operation of attachmentOperations) {
+      const expected = operation === "attachProgramWire" ? attachmentCodes.includes(code)
+        : (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown")
+          ? attachmentUpdateCodes.includes(code)
+          : operation === "attachmentDispose" ? attachmentDisposeCodes.includes(code)
+            : operation === "materializationAuthority" ? materializationCodes.includes(code)
+              : false;
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }
   }

@@ -96,8 +96,11 @@ try {
   }
 } finally {
   // Сначала отзовите scope у внешнего владельца, затем подтвердите dispose.
-  attachment.dispose(true);
-  attachment.free();
+  try {
+    attachment.dispose(true);
+  } finally {
+    attachment.free();
+  }
 }
 ```
 

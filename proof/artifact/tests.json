@@ -840,7 +840,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ad1e549623530aea32051cc56d13b410c849b171cf56a2212f88abb051d533e9",
+ "record_sha256": "f54d11d9eeea94bd422643336dd2295bddc59ee694be6451fb15cc0099eed4d3",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1589,6 +1589,13 @@
    "production_src_carries_no_retired_sentiment_physics_or_schema: test",
    "production_src_carries_no_single_observer_calibration: test",
    "production_src_defines_no_builtin_showcase_type: test",
+   "program::attachment::handoff::tests::admission_is_exact_and_unbound_drop_has_no_host_effect: test",
+   "program::attachment::handoff::tests::drop_before_install_does_not_publish_and_lease_can_retry: test",
+   "program::attachment::handoff::tests::external_registry_retains_exact_cleanup_capability_after_local_core_drop: test",
+   "program::attachment::handoff::tests::failed_host_install_leaves_sink_and_session_old_and_retryable: test",
+   "program::attachment::handoff::tests::host_success_through_session_commit_has_no_allocator_events: test",
+   "program::attachment::handoff::tests::set_revoke_confirm_empty_then_set_reuses_the_same_owned_lease: test",
+   "program::attachment::handoff::tests::wrong_stamp_revision_scope_and_stale_install_never_call_host: test",
    "program::attachment::tests::a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch: test",
    "program::attachment::tests::admitted_state_machine_never_exposes_ambient_fallback: test",
    "program::attachment::tests::alias_outputs_cannot_claim_the_same_compiled_presentation: test",
@@ -1885,6 +1892,12 @@
    "program_v5_exit_gate_tests::v5_exit_gate_composes_every_layer_in_one_verified_program: test",
    "program_v5_exit_gate_tests::v5_exit_gate_fails_when_any_axis_is_omitted: test",
    "program_wire::fixture_migration_tests::the_private_fixture_graph_is_expressible_in_the_public_grammar: test",
+   "program_wire::fv01_red_tests::authority_refuses_conflicting_terminal_composites_across_observation_cases: test",
+   "program_wire::fv01_red_tests::authority_uses_the_current_valid_render_not_a_constant_verdict: test",
+   "program_wire::fv01_red_tests::host_refusal_preserves_the_previous_materialization: test",
+   "program_wire::fv01_red_tests::paint_and_stale_binding_inputs_are_typed_refusals: test",
+   "program_wire::fv01_red_tests::public_attachment_rejects_an_intermediate_presentation_target: test",
+   "program_wire::fv01_red_tests::ready_attachment_is_the_only_materialization_authority_source: test",
    "program_wire::runtime_tests::detached_snapshots_remain_readable_after_later_reuse_and_session_drop: test",
    "program_wire::runtime_tests::family_graphs_fail_closed_until_a_public_trust_parameter_exists: test",
    "program_wire::runtime_tests::update_failure_preserves_previous_ready_snapshot: test",
@@ -2260,7 +2273,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1416,
+  "enabled_count": 1429,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

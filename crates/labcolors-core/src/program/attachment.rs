@@ -564,6 +564,7 @@ pub(crate) enum AttachmentCreateFailureKindV1 {
     Binding,
     Instantiate,
     SinkAdmission,
+    ResourceExhausted,
 }
 
 impl<L> AttachmentCreateFailureV2<L>
@@ -573,6 +574,9 @@ where
     pub(crate) const fn kind(&self) -> AttachmentCreateFailureKindV1 {
         match self {
             Self::Contract { cause, .. } => match cause {
+                AttachmentCreateErrorV1::ResourceExhausted => {
+                    AttachmentCreateFailureKindV1::ResourceExhausted
+                }
                 AttachmentCreateErrorV1::Instantiate(_) => {
                     AttachmentCreateFailureKindV1::Instantiate
                 }

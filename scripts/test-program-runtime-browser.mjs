@@ -315,6 +315,21 @@ async function browserAttachmentConsumer(origin, fault) {
     document.body.append(element);
     const hostState = { sequence: 0n, epoch: null, point: null, intents: [], reject: false };
     const host = (intent) => {
+      if (hostState.reenter) {
+        hostState.reenter = false;
+        try {
+          attachment.updateObserved(99n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
+          hostState.reentrant = { rejected: false };
+        } catch (error) {
+          hostState.reentrant = {
+            rejected: true,
+            code: error.code,
+            operation: error.operation,
+            recognized: api.isProgramError(error),
+          };
+        }
+        return false;
+      }
       if (hostState.reject) return false;
       if (intent.sinkOutput !== 91
         || intent.expectedSequence !== hostState.sequence
@@ -327,7 +342,7 @@ async function browserAttachmentConsumer(origin, fault) {
       } else if (intent.operation === "revokeAll") {
         nextPoint = null;
       } else if (intent.operation === "confirmExact") {
-        if (intent.desiredSequence !== intent.expectedSequence) return 0;
+        if (intent.desiredSequence !== intent.expectedSequence) return false;
       } else return false;
       // Все проверки выполняются до одной DOM-мутации и локальной смены stamp.
       if (intent.operation === "revokeAll") element.style.removeProperty("color");
@@ -368,11 +383,14 @@ async function browserAttachmentConsumer(origin, fault) {
     resources.push({
       name: "attachment",
       release() {
-        // Внешний владелец отзывает свой DOM scope до подтверждения освобождения.
-        hostResource.release();
-        attachment.dispose(true);
-        attachment.free();
-        released(evidence, "attachment", fault);
+        try {
+          // Внешний владелец отзывает свой DOM scope до подтверждения освобождения.
+          hostResource.release();
+          attachment.dispose(true);
+        } finally {
+          attachment.free();
+          released(evidence, "attachment", fault);
+        }
       },
     });
     acquisition(evidence, "attachment", fault);
@@ -406,13 +424,32 @@ async function browserAttachmentConsumer(origin, fault) {
     secondAuthority = attachment.materializationAuthority();
     resources.push({ name: "attachment-second-authority", release() { secondAuthority.free(); released(evidence, "attachment-second-authority", fault); } });
     acquisition(evidence, "attachment-second-authority", fault);
+    let reentrant;
+    hostState.reenter = true;
+    try {
+      attachment.updateObserved(3n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
+      reentrant = { rejected: false };
+    } catch (error) {
+      reentrant = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
+    }
     hostState.reject = true;
     let hostRejection;
+    const cssBefore = element.style.color;
     try {
       attachment.updateObserved(3n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
       hostRejection = { rejected: false };
     } catch (error) {
-      hostRejection = { rejected: true, code: error.code, operation: error.operation };
+      hostRejection = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
     }
     preservedAuthority = attachment.materializationAuthority();
     resources.push({ name: "attachment-preserved-authority", release() { preservedAuthority.free(); released(evidence, "attachment-preserved-authority", fault); } });
@@ -426,7 +463,12 @@ async function browserAttachmentConsumer(origin, fault) {
       );
       stale = { rejected: false };
     } catch (error) {
-      stale = { rejected: true, code: error.code, operation: error.operation };
+      stale = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
     }
     let staleIdentity;
     try {
@@ -437,7 +479,12 @@ async function browserAttachmentConsumer(origin, fault) {
       );
       staleIdentity = { rejected: false };
     } catch (error) {
-      staleIdentity = { rejected: true, code: error.code, operation: error.operation };
+      staleIdentity = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
     }
     const parseComputed = (value) => {
       const channels = value.match(/[\d.]+/g)?.map(Number);
@@ -452,21 +499,54 @@ async function browserAttachmentConsumer(origin, fault) {
         output: Array.from(snapshot.outputRgb(0)),
         opacity: snapshot.outputOpacity(0),
         renderComposite: Array.from(render.terminalCompositeRgb() ?? []),
+        renderRevision: render.revision().toString(),
+        renderSinkSequence: render.sinkSequence().toString(),
+        renderBindingEpoch: render.bindingEpoch().toString(),
+        renderContentIdentity: Array.from(render.contentIdentity()),
+        renderContextIdentity: Array.from(render.contextIdentity()),
+        renderRoot: render.presentationRoot(),
+        renderOccurrence: render.occurrence(),
+        renderPhysicalIdentity: render.physicalIdentity(),
         authorityComposite: Array.from(authority.terminalCompositeRgb()),
+        authorityRevision: authority.revision().toString(),
+        authoritySinkSequence: authority.sinkSequence().toString(),
+        authorityBindingEpoch: authority.bindingEpoch().toString(),
+        authorityContentIdentity: Array.from(authority.contentIdentity()),
+        authorityContextIdentity: Array.from(authority.contextIdentity()),
+        authorityRoot: authority.presentationRoot(),
+        authorityOccurrence: authority.occurrence(),
+        authorityPhysicalIdentity: authority.physicalIdentity(),
         rendererProvenance: authority.rendererProvenance(),
       },
       second: {
         state: secondSnapshot.state,
         hasRender: secondSnapshot.hasRender(),
         renderComposite: Array.from(secondRender.terminalCompositeRgb() ?? []),
+        renderRevision: secondRender.revision().toString(),
+        renderSinkSequence: secondRender.sinkSequence().toString(),
+        renderBindingEpoch: secondRender.bindingEpoch().toString(),
+        renderContentIdentity: Array.from(secondRender.contentIdentity()),
+        renderContextIdentity: Array.from(secondRender.contextIdentity()),
+        renderRoot: secondRender.presentationRoot(),
+        renderOccurrence: secondRender.occurrence(),
+        renderPhysicalIdentity: secondRender.physicalIdentity(),
         authorityComposite: Array.from(secondAuthority.terminalCompositeRgb()),
+        authorityRevision: secondAuthority.revision().toString(),
+        authoritySinkSequence: secondAuthority.sinkSequence().toString(),
+        authorityBindingEpoch: secondAuthority.bindingEpoch().toString(),
+        authorityContentIdentity: Array.from(secondAuthority.contentIdentity()),
+        authorityContextIdentity: Array.from(secondAuthority.contextIdentity()),
+        authorityRoot: secondAuthority.presentationRoot(),
+        authorityOccurrence: secondAuthority.occurrence(),
+        authorityPhysicalIdentity: secondAuthority.physicalIdentity(),
       },
       computed,
       independentComposite: Math.round(160 + 0.5 * (64 - 160)),
       stale,
       staleSnapshotHasAuthority: typeof snapshot.materializationAuthority === "function",
-      cssBefore: element.style.color,
+      cssBefore,
       staleIdentity,
+      reentrant: { outer: reentrant, nested: hostState.reentrant },
       hostRejection,
       preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
       cssAfterRejection: element.style.color,
@@ -626,22 +706,56 @@ export function verifyBrowserAttachmentConsumer(result) {
     || !equal(result.first?.renderComposite, [96, 96, 96])
     || !equal(result.first?.authorityComposite, [96, 96, 96])
     || result.first?.rendererProvenance !== "unverified"
+    || result.first?.renderRevision !== "1"
+    || result.first?.renderSinkSequence !== "1"
+    || result.first?.renderBindingEpoch === "0"
+    || result.first?.authorityRevision !== "1"
+    || result.first?.authoritySinkSequence !== "1"
+    || result.first?.authorityBindingEpoch !== result.first?.renderBindingEpoch
+    || !equal(result.first?.renderContentIdentity, result.first?.authorityContentIdentity)
+    || result.first?.renderContentIdentity?.length !== 32
+    || !equal(result.first?.renderContextIdentity, result.first?.authorityContextIdentity)
+    || result.first?.renderContextIdentity?.length !== 32
+    || result.first?.renderRoot !== 9 || result.first?.authorityRoot !== 9
+    || result.first?.renderOccurrence !== 8 || result.first?.authorityOccurrence !== 8
+    || result.first?.renderPhysicalIdentity !== "unknown"
+    || result.first?.authorityPhysicalIdentity !== "unknown"
     || result.first?.state !== "ready"
     || result.first?.hasRender !== true
     || !equal(result.second?.renderComposite, [112, 112, 112])
     || !equal(result.second?.authorityComposite, [112, 112, 112])
+    || result.second?.renderRevision !== "2"
+    || result.second?.renderSinkSequence !== "2"
+    || result.second?.renderBindingEpoch !== result.first?.renderBindingEpoch
+    || !equal(result.second?.renderContentIdentity, result.first?.renderContentIdentity)
+    || !equal(result.second?.renderContextIdentity, result.first?.renderContextIdentity)
+    || result.second?.renderRoot !== 9 || result.second?.authorityRoot !== 9
+    || result.second?.renderOccurrence !== 8 || result.second?.authorityOccurrence !== 8
+    || result.second?.renderPhysicalIdentity !== "unknown"
+    || result.second?.authorityPhysicalIdentity !== "unknown"
     || result.second?.state !== "ready"
     || result.second?.hasRender !== true
     || !equal(result.computed, [64, 64, 64, 0.5])
     || result.independentComposite !== 112
     || result.stale?.rejected !== true
+    || result.stale.recognized !== true
     || result.stale.code !== "program_materialization_stale_revision"
     || result.stale.operation !== "materializationAuthority"
     || result.staleIdentity?.rejected !== true
+    || result.staleIdentity.recognized !== true
     || result.staleIdentity.code !== "program_materialization_stale_identity"
     || result.staleIdentity.operation !== "materializationAuthority"
+    || result.reentrant?.outer?.rejected !== true
+    || result.reentrant.outer.code !== "program_attachment_host_rejected"
+    || result.reentrant.outer.operation !== "attachmentUpdateObserved"
+    || result.reentrant.outer.recognized !== true
+    || result.reentrant?.nested?.rejected !== true
+    || result.reentrant.nested.code !== "program_attachment_busy"
+    || result.reentrant.nested.operation !== "attachmentUpdateObserved"
+    || result.reentrant.nested.recognized !== true
     || result.staleSnapshotHasAuthority !== false
     || result.hostRejection?.rejected !== true
+    || result.hostRejection.recognized !== true
     || result.hostRejection.code !== "program_attachment_host_rejected"
     || result.hostRejection.operation !== "attachmentUpdateObserved"
     || !equal(result.preservedAuthorityComposite, [112, 112, 112])

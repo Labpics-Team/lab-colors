@@ -4,10 +4,11 @@
 Две закреплённые записи в `proof/artifact/`; обе коммитятся и в CI только
 пересчитываются и сравниваются каноническими байтами:
 
-* `tree.json` — `path -> git blob id` для объявленных корней. Blob id считает
-  Git с применением `.gitattributes`, поэтому CRLF-чекаут и порядок сортировки
-  ОС не влияют. Добавленный, удалённый или изменённый файл — drift. Это
-  закрывает omission/decoy/parser на уровне байтов без regex-парсеров.
+* `tree.json` — `path -> git blob id` для объявленных корней. Неизменённый
+  tracked-файл берёт blob из индекса, изменённый или untracked-файл получает
+  Git-совместимый hash с учётом пути; поэтому CRLF-чекаут не создаёт ложный
+  drift, а добавленный, удалённый или изменённый файл всё равно обнаруживается.
+  Это закрывает omission/decoy/parser на уровне байтов без regex-парсеров.
 * `tests.json` — инвентарь тестов (запись платформенная: закрепляется
   состояние Linux CI toolchain, `refresh` выполняется в нём; Windows не
   импортирует Linux-only модули proof и потому не является источником записи).
@@ -129,12 +130,13 @@ def extract_tree() -> dict:
 
     Набор путей — индекс плюс untracked (не ignored): decoy-файл, ещё не
     добавленный в индекс, обязан быть drift, а не невидимкой. Blob id всегда
-    считается по байтам рабочего дерева через `hash-object --stdin-paths` —
-    с применением `.gitattributes`, как при `git add`, поэтому eol-конверсия
-    чекаута не влияет; tracked файл, удалённый из рабочего дерева, исчезает из
-    записи (drift), а изменённый меняет blob. Symlink записывается blob цели из
-    индекса: рабочее дерево на Windows его не воспроизводит. Режим файла в запись
-    не входит: он зависит от файловой системы чекаута, а не от содержимого.
+    Для tracked-файла без изменений берётся blob из индекса, а изменённый или
+    untracked-файл хешируется через `hash-object` с учётом пути. Поэтому
+    checkout-CRLF не превращает неизменённый индекс в ложный drift, а реальная
+    правка всё ещё получает Git-совместимый blob; tracked файл, удалённый из
+    рабочего дерева, исчезает из записи (drift). Symlink записывается blob цели
+    из индекса: рабочее дерево на Windows его не воспроизводит. Режим файла в
+    запись не входит: он зависит от файловой системы чекаута, а не от содержимого.
     """
     modes: dict[str, str] = {}
     index_blob: dict[str, str] = {}
@@ -150,11 +152,8 @@ def extract_tree() -> dict:
             modes[path] = "untracked"
     files: dict[str, str] = {}
     to_hash: list[str] = []
-    worktree_changed = set(
-        git("diff", "--name-only", "--", *TREE_ROOTS)
-        .decode("utf-8")
-        .splitlines()
-    )
+    worktree_diff = git("diff", "--name-only", "-z", "--", *TREE_ROOTS).decode("utf-8")
+    worktree_changed = {path for path in worktree_diff.split("\0") if path}
     for path, mode in sorted(modes.items()):
         if mode == "120000":
             files[path] = index_blob[path]
