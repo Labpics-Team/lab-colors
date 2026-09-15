@@ -247,9 +247,9 @@
   "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
   "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm-boundary.bench.mjs": "78a8d10400d7b1379d14fc441fbdb05ff9a3090d",
-  "packages/colors/bench/wasm.json": "622e62c93b2f3507e2262493c021fd6792c5b86c",
+  "packages/colors/bench/wasm.json": "fd4a528eb323e5a855c120c57fae3e46dc05b4a2",
   "packages/colors/index.d.ts": "42e6c9691623540d8d611c82b3eca581cecb195d",
-  "packages/colors/index.js": "28707a4bcb3d811e307c43a21503853c3f42d146",
+  "packages/colors/index.js": "dc130e75eca26e4e36de276503e36f124635db67",
   "packages/colors/package-lock.json": "745b2c1b21baec01d28f3883e7ad0ad32913c3ad",
   "packages/colors/package.json": "01cb245bae7582e1d1bc6381538b17032e21f104",
   "packages/colors/program-wire/abi-v1.d.ts": "fa995d229427563c44c46a55aabfb848a0f177b7",
@@ -408,7 +408,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
-  "scripts/check-wasm-size-budget.mjs": "2009019a7fe6543fbfd20bc166d328b2752a9439",
+  "scripts/check-wasm-size-budget.mjs": "bfa3e95e2ca8b3bc6ccc89d013fce31334be5d98",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "7e691864e68ef130e589ce39144c705c44c14b0d",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
@@ -452,8 +452,8 @@
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108",
-  "crates/labcolors-core/src/certificate.rs": "34a2bd4bed86fca050459538171a101866dfe6c7",
-  "packages/colors/test/certificate-envelope.test.mjs": "0d57cdca29c2b7bfb93f7f3acbb08121bbd0f373"
+  "crates/labcolors-core/src/certificate.rs": "f488f3fd7c9cab439a0439563e381055e20f4b06",
+  "packages/colors/test/certificate-envelope.test.mjs": "fcabdc8e3587050fe9ecd5977687fd06aedddb1c"
  },
  "roots": [
   ".github/workflows",
@@ -467,5 +467,5 @@
   "scripts"
  ],
  "schema_version": 1,
- "record_sha256": "1f3ae4bdcff5dc04141641f1d4b18ebbd1113555d91dd9a0363d5ef5cf41ca09"
+ "record_sha256": "434815ce4aeaf828e7074182f9ac408beb40a86c0c9ad0a1db4e8dd2f3ad2128"
 }
