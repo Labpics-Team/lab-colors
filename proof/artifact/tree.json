@@ -271,7 +271,7 @@
   "packages/colors/test/fv01-release-consumer-contract.test.mjs": "aa62435b3d1a407cef769bdf9c6026ce1a75cac0",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/program-error-admission.test.mjs": "f16500d2b3be7bad68f802a3f9d539d8e9eed634",
-  "packages/colors/test/program-runtime-browser-harness.test.mjs": "178a973a74198ba2512dea0d7eda1ee8c03ba9f5",
+  "packages/colors/test/program-runtime-browser-harness.test.mjs": "1d251f431af350b82f7594a64716098c5034d1d2",
   "packages/colors/test/program-scalar-admission.test.mjs": "9d36e2196accfa3ea3d959bba9b6016999a35c49",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
   "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
@@ -463,7 +463,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "89b61be544202be8a4394d961faededf77b400c2d689a5253756fca0834e2759",
+ "record_sha256": "85bf0601566714e8527b3d2c236d4aae51bdc60c9b58b521fa2f88078ee7f753",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

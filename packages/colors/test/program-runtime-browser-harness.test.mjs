@@ -217,7 +217,21 @@ async function executeScenario(fault, mutate = (source) => source) {
   const makeCompiled = (owner, identity) => {
     const compiled = {
       __wbg_ptr: 1,
-      attach(_streamId, _bindings, host) {
+      attach(_streamId, bindings, host) {
+        for (const key of [
+          "emissionOutputs",
+          "emissionSinkOutputs",
+          "presentationOutputs",
+          "presentationRoots",
+          "presentationOccurrences",
+        ]) {
+          let value;
+          try { value = bindings[key]; }
+          catch { throw typedError("attached_invalid_bindings", "attachAttachedProgram"); }
+          if (!(value instanceof Uint32Array) || value.length !== 1) {
+            throw typedError("attached_invalid_bindings", "attachAttachedProgram");
+          }
+        }
         const epoch = ++nextEpoch;
         let revision = 0n;
         let sequence = 0n;
