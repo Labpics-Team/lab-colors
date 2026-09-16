@@ -24,4 +24,5 @@ if ($totalPassed -lt $minimumFloor) {
     exit 1
 }
 Write-Output "FLOOR OK: $totalPassed tests >= baseline $minimumFloor"
+python3 -c 'import json,sys; sys.path.insert(0,"scripts"); import artifact_matrix as a; print("TREE-RECORD-BEGIN"); print(json.dumps(a.extract_tree(), sort_keys=True, indent=1, ensure_ascii=False)); print("TREE-RECORD-END")'
 exit 0
