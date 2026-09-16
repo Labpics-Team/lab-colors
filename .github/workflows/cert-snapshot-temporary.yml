@@ -1,6 +1,6 @@
 name: Certificate source audit snapshot
 
-# Временный read-only снимок для аудита PR; удаляется до доставки изменения.
+# Временные read-only исходники и toolchain для аудита PR; удаляются до доставки.
 on:
   pull_request:
     paths:
@@ -11,23 +11,34 @@ jobs:
   snapshot:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/cert-envelope-v1-20260915'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Capture tracked source and history without checkout credentials
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: 1.96.0
+          components: rustfmt
+      - name: Capture tracked source, compiler and public dependencies
+        env:
+          CARGO_HOME: ${{ runner.temp }}/audit-cargo
         run: |
           git bundle create "$RUNNER_TEMP/lab-colors-audit.bundle" HEAD refs/remotes/origin/main
           git bundle verify "$RUNNER_TEMP/lab-colors-audit.bundle"
-          sha256sum "$RUNNER_TEMP/lab-colors-audit.bundle" > "$RUNNER_TEMP/lab-colors-audit.sha256"
+          cargo fetch --locked
+          tar -C "$(rustc --print sysroot)" -czf "$RUNNER_TEMP/lab-colors-rust.tar.gz" bin/rustc bin/cargo bin/rustfmt lib
+          tar -C "$CARGO_HOME" -czf "$RUNNER_TEMP/lab-colors-registry.tar.gz" registry
+          sha256sum "$RUNNER_TEMP"/lab-colors-{audit.bundle,rust.tar.gz,registry.tar.gz} > "$RUNNER_TEMP/lab-colors-audit.sha256"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: certificate-source-audit-${{ github.event.pull_request.head.sha }}
           path: |
             ${{ runner.temp }}/lab-colors-audit.bundle
+            ${{ runner.temp }}/lab-colors-rust.tar.gz
+            ${{ runner.temp }}/lab-colors-registry.tar.gz
             ${{ runner.temp }}/lab-colors-audit.sha256
           retention-days: 1
           if-no-files-found: error
