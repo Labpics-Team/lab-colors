@@ -1,0 +1,33 @@
+name: Certificate source audit snapshot
+
+# Временный read-only снимок для аудита PR; удаляется до доставки изменения.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/cert-snapshot-temporary.yml
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'feat/cert-envelope-v1-20260915'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Capture tracked source and history without checkout credentials
+        run: |
+          git bundle create "$RUNNER_TEMP/lab-colors-audit.bundle" HEAD refs/remotes/origin/main
+          git bundle verify "$RUNNER_TEMP/lab-colors-audit.bundle"
+          sha256sum "$RUNNER_TEMP/lab-colors-audit.bundle" > "$RUNNER_TEMP/lab-colors-audit.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: certificate-source-audit-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/lab-colors-audit.bundle
+            ${{ runner.temp }}/lab-colors-audit.sha256
+          retention-days: 1
+          if-no-files-found: error
