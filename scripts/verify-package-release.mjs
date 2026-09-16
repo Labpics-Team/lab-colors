@@ -1152,6 +1152,7 @@ const colors = await import("@labpics/colors");
 const wireApi = await import("@labpics/colors/program-wire/abi-v1.js");
 assert.deepEqual(Object.keys(colors).sort(), [
   "AttachedMaterializationAuthority",
+  "MAX_CERTIFICATE_ENVELOPE_BYTES",
   "ProgramAttachedRender",
   "ProgramAttachedSnapshot",
   "ProgramAttachment",
@@ -1159,10 +1160,12 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "ProgramSnapshot",
   "attachProgramWire",
   "compileProgramWire",
+  "decodeCertificateEnvelope",
   "default",
   "evaluateWcag22",
   "init",
   "initSync",
+  "isCertificateError",
   "isProgramError",
   "numericalCapabilityManifest",
 ]);
@@ -1193,6 +1196,16 @@ assert.deepEqual(metadata.wasm.map(({ role }) => role), ["runtime"]);
 assert.equal(metadata.wasm[0].path, "pkg/labcolors_bg.wasm");
 assert.equal(metadata.wasm[0].bytes, wasm.length);
 await colors.init({ module_or_path: wasm });
+
+assert.equal(colors.MAX_CERTIFICATE_ENVELOPE_BYTES, 2_097_152);
+assert.throws(
+  () => colors.decodeCertificateEnvelope(new Uint8Array([1, 2, 3])),
+  (error) => {
+    assert.equal(colors.isCertificateError(error), true);
+    assert.equal(error.code, "certificate_truncated_input");
+    return true;
+  },
+);
 
 const capability = colors.numericalCapabilityManifest();
 assert.equal(capability.schemaVersion, 2);
@@ -1309,6 +1322,7 @@ assert.equal(attachmentIntents.length, 1);
 export function typeSmokeSource() {
   return String.raw`
 import init, {
+  MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
   ProgramAttachment,
@@ -1316,12 +1330,16 @@ import init, {
   AttachedMaterializationAuthority,
   attachProgramWire,
   compileProgramWire,
+  decodeCertificateEnvelope,
   evaluateWcag22,
+  isCertificateError,
   isProgramError,
   numericalCapabilityManifest,
+  type CertificateErrorCode,
   type NumericalCapabilityManifestV2,
   type ProgramErrorCode,
   type ProgramOperation,
+  type UntrustedCertificateEnvelopeV1,
   type Wcag22AssessmentV1,
   type Wcag22CriterionV1,
   type ProgramPointSinkHost,
@@ -1349,6 +1367,12 @@ void boot;
 void programFailure;
 void assessment;
 void capability;
+const certificateMetadata: UntrustedCertificateEnvelopeV1 = decodeCertificateEnvelope(new Uint8Array());
+const certificateError = (error: unknown): CertificateErrorCode | undefined =>
+  isCertificateError(error) ? error.code : undefined;
+void MAX_CERTIFICATE_ENVELOPE_BYTES;
+void certificateMetadata;
+void certificateError;
 
 const attachmentHost: ProgramPointSinkHost = (intent) => {
   intent.bindingEpoch;

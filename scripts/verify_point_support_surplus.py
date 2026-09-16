@@ -68,6 +68,8 @@ ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
     "6758df8bf846a423adc27bec71035b0fa2e15db11aea1414beb4da923292cc11",
     # PR #691: local recomputation after proof payload refresh
     "62085a606a541329a898bb8de5a2e941de44c493c5a2e74d6ae0717804b48c3c",
+    # r13: CertificateEnvelopeV1 module export changes the bound lib.rs bytes
+    "eca48b78b0b66b8b067614ee2a829fab25f7b48ed5f60129ac8a51a1bf1a9dd3",
 })
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"

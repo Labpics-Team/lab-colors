@@ -89,6 +89,57 @@ export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];
 export declare function isProgramError(error: unknown): error is ProgramError;
 
+export type CertificateErrorCode =
+  | "certificate_invalid_magic"
+  | "certificate_unsupported_schema"
+  | "certificate_unknown_operation"
+  | "certificate_unknown_authority_kind"
+  | "certificate_unsupported_authority_version"
+  | "certificate_invalid_utf8"
+  | "certificate_invalid_length"
+  | "certificate_truncated_input"
+  | "certificate_trailing_bytes"
+  | "certificate_non_canonical_revision"
+  | "certificate_invalid_payload_type"
+  | "certificate_unsupported_payload_version"
+  | "certificate_payload_digest_mismatch"
+  | "certificate_binding_digest_mismatch"
+  | "certificate_missing_producer_attestation"
+  | "certificate_producer_binding_mismatch"
+  | "certificate_runtime_artifact_mismatch"
+  | "certificate_producer_revision_mismatch"
+  | "certificate_content_identity_mismatch"
+  | "certificate_context_mismatch"
+  | "certificate_resource_limit_exceeded"
+  | "certificate_admission_capacity_exceeded"
+  | "certificate_unsupported_opaque"
+  | "certificate_binding_conflict"
+  | "certificate_invalid_input";
+export type CertificateError = Error & Readonly<{
+  code: CertificateErrorCode;
+  operation: "decodeCertificateEnvelope";
+}>;
+export interface UntrustedCertificateEnvelopeV1 {
+  readonly schemaVersion: 1;
+  readonly operation: "issue-certificate";
+  readonly authorityKind: "generic-typed-certificate";
+  readonly authorityVersion: 1;
+  readonly runtimeArtifactId: string;
+  readonly producerRevision: string;
+  readonly producerContentIdentity: Uint8Array;
+  readonly contextId: string;
+  readonly payloadType: "non-semantic-transport-v1";
+  readonly payloadVersion: 1;
+  readonly payloadLength: number;
+  readonly payloadSha256: Uint8Array;
+  readonly bindingSha256: Uint8Array;
+}
+export declare const MAX_CERTIFICATE_ENVELOPE_BYTES: 2097152;
+export declare function decodeCertificateEnvelope(
+  bytes: Uint8Array,
+): UntrustedCertificateEnvelopeV1;
+export declare function isCertificateError(error: unknown): error is CertificateError;
+
 export type ProgramPointSinkOperation = "setAll" | "revokeAll" | "confirmExact";
 export interface ProgramPointSinkPoint {
   readonly slot: number;

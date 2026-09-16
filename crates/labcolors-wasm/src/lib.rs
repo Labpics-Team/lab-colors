@@ -100,6 +100,38 @@ export function unsupportedPhysicalIdentityError() {
     "physicalIdentity",
   );
 }
+
+export function certificateProjection(
+  schemaVersion,
+  operation,
+  authorityKind,
+  authorityVersion,
+  runtimeArtifactId,
+  producerRevision,
+  producerContentIdentity,
+  contextId,
+  payloadType,
+  payloadVersion,
+  payloadLength,
+  payloadSha256,
+  bindingSha256,
+) {
+  return Object.freeze({
+    schemaVersion,
+    operation,
+    authorityKind,
+    authorityVersion,
+    runtimeArtifactId,
+    producerRevision,
+    producerContentIdentity: Uint8Array.from(producerContentIdentity),
+    contextId,
+    payloadType,
+    payloadVersion,
+    payloadLength,
+    payloadSha256: Uint8Array.from(payloadSha256),
+    bindingSha256: Uint8Array.from(bindingSha256),
+  });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = programError)]
@@ -107,6 +139,31 @@ extern "C" {
 
     #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
     fn unsupported_physical_identity_error() -> js_sys::Error;
+    #[wasm_bindgen(js_name = certificateProjection)]
+    fn certificate_projection(
+        schema_version: u16,
+        operation: &str,
+        authority_kind: &str,
+        authority_version: u16,
+        runtime_artifact_id: &str,
+        producer_revision: &str,
+        producer_content_identity: &[u8],
+        context_id: &str,
+        payload_type: &str,
+        payload_version: u16,
+        payload_length: u32,
+        payload_sha256: &[u8],
+        binding_sha256: &[u8],
+    ) -> JsValue;
+}
+
+fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
+    program_error(
+        "Certificate envelope operation failed",
+        &format!("certificate_{}", error.code()),
+        "decodeCertificateEnvelope",
+    )
+    .into()
 }
 
 fn to_js_error(error: BindingError) -> JsError {
@@ -309,6 +366,31 @@ pub fn evaluate_wcag22(
                 reason: "WCAG22 projection не распарсился как JSON".to_string(),
             })
         })
+}
+
+/// Decodes untrusted certificate bytes into immutable metadata for inspection
+/// only. The opaque body, producer capability, and admission state stay in
+/// Core and are not projected to JavaScript.
+#[wasm_bindgen(js_name = decodeCertificateEnvelope)]
+pub fn decode_certificate_envelope(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let inner = labcolors_core::certificate::UntrustedEnvelopeV1::decode(bytes)
+        .map_err(to_certificate_js_error)?;
+    let key = inner.admission_key();
+    Ok(certificate_projection(
+        labcolors_core::certificate::CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
+        key.operation().key(),
+        key.authority_kind().key(),
+        key.authority_version(),
+        key.runtime_artifact_id(),
+        key.producer_revision(),
+        key.producer_content_identity(),
+        key.context_id(),
+        key.payload_type().key(),
+        key.payload_version(),
+        inner.payload_len(),
+        inner.payload_sha256(),
+        inner.binding_sha256(),
+    ))
 }
 
 /// Публичный runtime одного скомпилированного Program.

@@ -7,6 +7,7 @@
 import initWasm, {
   initSync as initWasmSync,
   attachProgramWire as attachProgramWireWasm,
+  decodeCertificateEnvelope as decodeCertificateEnvelopeWasm,
   ProgramAttachment,
 } from "./pkg/labcolors.js";
 
@@ -24,6 +25,118 @@ export {
   ProgramAttachedRender,
   AttachedMaterializationAuthority,
 } from "./pkg/labcolors.js";
+
+export const MAX_CERTIFICATE_ENVELOPE_BYTES = 2_097_152;
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const intrinsicByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+).get;
+const intrinsicLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "length",
+).get;
+const intrinsicSet = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "set",
+).value;
+
+const CERTIFICATE_ERROR_CODES = new Set([
+  "certificate_invalid_magic",
+  "certificate_unsupported_schema",
+  "certificate_unknown_operation",
+  "certificate_unknown_authority_kind",
+  "certificate_unsupported_authority_version",
+  "certificate_invalid_utf8",
+  "certificate_invalid_length",
+  "certificate_truncated_input",
+  "certificate_trailing_bytes",
+  "certificate_non_canonical_revision",
+  "certificate_invalid_payload_type",
+  "certificate_unsupported_payload_version",
+  "certificate_payload_digest_mismatch",
+  "certificate_binding_digest_mismatch",
+  "certificate_missing_producer_attestation",
+  "certificate_producer_binding_mismatch",
+  "certificate_runtime_artifact_mismatch",
+  "certificate_producer_revision_mismatch",
+  "certificate_content_identity_mismatch",
+  "certificate_context_mismatch",
+  "certificate_resource_limit_exceeded",
+  "certificate_admission_capacity_exceeded",
+  "certificate_unsupported_opaque",
+  "certificate_binding_conflict",
+  "certificate_invalid_input",
+]);
+
+function certificateIngressError(code) {
+  const error = new Error("Certificate envelope input was refused");
+  error.code = code;
+  error.operation = "decodeCertificateEnvelope";
+  return error;
+}
+
+function checkCertificateIngress(bytes) {
+  let byteLength;
+  let normalized = bytes;
+  let needsNormalization;
+  try {
+    if (!(bytes instanceof Uint8Array)) {
+      throw certificateIngressError("certificate_invalid_input");
+    }
+    const intrinsicByteLength = Reflect.apply(intrinsicByteLengthGetter, bytes, []);
+    const intrinsicLength = Reflect.apply(intrinsicLengthGetter, bytes, []);
+    if (
+      !Number.isSafeInteger(intrinsicByteLength) ||
+      intrinsicByteLength < 0 ||
+      intrinsicLength !== intrinsicByteLength ||
+      Object.getOwnPropertyDescriptor(bytes, "byteLength") !== undefined ||
+      Object.getOwnPropertyDescriptor(bytes, "length") !== undefined ||
+      bytes.byteLength !== intrinsicByteLength ||
+      bytes.length !== intrinsicLength
+    ) {
+      throw certificateIngressError("certificate_invalid_input");
+    }
+    byteLength = intrinsicByteLength;
+    needsNormalization = Object.getPrototypeOf(bytes) !== Uint8Array.prototype;
+  } catch {
+    throw certificateIngressError("certificate_invalid_input");
+  }
+  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+    throw certificateIngressError("certificate_invalid_input");
+  }
+  if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
+    throw certificateIngressError("certificate_resource_limit_exceeded");
+  }
+  if (needsNormalization) {
+    try {
+      normalized = new Uint8Array(byteLength);
+      Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
+    } catch {
+      throw certificateIngressError("certificate_invalid_input");
+    }
+  }
+  return normalized;
+}
+
+export function decodeCertificateEnvelope(bytes) {
+  // This check is deliberately in the package facade: wasm-bindgen copies a
+  // typed-array argument into linear memory before Rust can observe it.
+  return decodeCertificateEnvelopeWasm(checkCertificateIngress(bytes));
+}
+
+export function isCertificateError(error) {
+  try {
+    return (
+      error instanceof Error &&
+      error.operation === "decodeCertificateEnvelope" &&
+      CERTIFICATE_ERROR_CODES.has(error.code)
+    );
+  } catch {
+    return false;
+  }
+}
 
 // wasm-bindgen выставляет `free()` как потребляющий метод JavaScript.
 // Синхронный host callback может повторно войти в тот же объект, поэтому
