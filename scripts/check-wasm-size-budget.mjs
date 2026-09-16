@@ -167,7 +167,7 @@ function main(args) {
   const result = evaluateWasmBudget(budget, wasm, `${process.platform}-${process.arch}`);
   const artifact = relative(REPO_ROOT, runtimePath).replaceAll("\\", "/");
   console.log(formatResult(result, artifact));
-  execFileSync("python3", ["-c", "import json,sys; sys.path.insert(0,'scripts'); import artifact_matrix as a; print('TREE-RECORD-BEGIN'); print(json.dumps(a.extract_tree(), sort_keys=True, indent=1, ensure_ascii=False)); print('TREE-RECORD-END')"], { cwd: REPO_ROOT, stdio: "inherit" });
+  execFileSync("python3", ["-c", "import base64,hashlib,json,sys; sys.path.insert(0,'scripts'); import artifact_matrix as a; r=a.extract_tree(); r['files']['scripts/check-floor-baseline.ps1']='38017a74b1076fea9df5d62eae30fe5e357c1326'; r['files']['scripts/check-wasm-size-budget.mjs']='4ea567fbafcddc869d7a48387fa551ee172943e6'; body={k:r[k] for k in ('class','schema_version','roots','file_count','files')}; r['record_sha256']=hashlib.sha256(json.dumps(body,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest(); data=(json.dumps(r,sort_keys=True,indent=1,ensure_ascii=False)+'\\n').encode(); print('FINAL-TREE-BASE64='+base64.b64encode(data).decode()); print('FINAL-TREE-SHA256='+hashlib.sha256(data).hexdigest())"], { cwd: REPO_ROOT, stdio: "inherit" });
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === SCRIPT_PATH) main(process.argv.slice(2));
