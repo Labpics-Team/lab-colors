@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    { "id": "core", "prefixes": ["crates/labcolors-core"] },
+    { "id": "audit", "prefixes": ["crates/labcolors-audit"] },
+    { "id": "conformance", "prefixes": ["crates/labcolors-conformance"] },
+    { "id": "ffi", "prefixes": ["crates/labcolors-ffi"] },
+    { "id": "wasm", "prefixes": ["crates/labcolors-wasm"] },
+    { "id": "bindings", "prefixes": ["bindings"] },
+    { "id": "proof", "prefixes": ["proof"] },
+    { "id": "repository-tools", "prefixes": ["scripts"] }
+  ],
+  "rules": []
+}
