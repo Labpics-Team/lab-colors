@@ -85,7 +85,7 @@ def install_interrupt_handlers() -> None:
     def interrupted(signum: int, _frame: object) -> None:
         raise TimeoutError(f"test harness interrupted by signal {signum}")
 
-    # Python владеет deadline: внешний execFile timeout не обрывает его finally.
+    # Python владеет deadline и cleanup до внешнего CI timeout.
     for signum in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, interrupted)
 
