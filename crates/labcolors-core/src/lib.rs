@@ -44,6 +44,7 @@ pub use srgb8::Srgb8;
 pub(crate) mod accent_balance;
 pub mod alpha;
 pub(crate) mod appearance;
+pub mod certificate;
 pub mod claims_manifest;
 #[expect(
     dead_code,
