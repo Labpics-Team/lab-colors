@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 235,
+   "count": 247,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -640,6 +640,18 @@
     "test_artifact_matrix.TreeRecordTests.test_record_outside_registry_is_red",
     "test_artifact_matrix.TreeRecordTests.test_stale_record_with_valid_self_hash_is_drift_not_malformed",
     "test_artifact_matrix.TreeRecordTests.test_untracked_decoy_source_file_is_drift",
+    "test_certificate_source_build.HarnessLifetimeTests.test_all_cleanup_failures_remain_on_primary_timeout_traceback",
+    "test_certificate_source_build.HarnessLifetimeTests.test_outer_sigterm_unwinds_active_group_and_temporary_directory",
+    "test_certificate_source_build.HarnessLifetimeTests.test_secondary_cleanup_error_preserves_primary_exit",
+    "test_certificate_source_build.HarnessLifetimeTests.test_success_failure_and_timeout_close_descendants_and_temp_directory",
+    "test_certificate_source_build.SourceBuildTests.test_cache_raw_source_drift_and_outside_commits",
+    "test_certificate_source_build.SourceBuildTests.test_gitless_cache_refusal_and_metadata_reappearance",
+    "test_certificate_source_build.SourceBuildTests.test_missing_extra_filtered_and_unsupported_entries",
+    "test_certificate_source_build.SourceBuildTests.test_sha256_format_wrong_owner_and_non_tree_revision_unavailable",
+    "test_certificate_source_build.SourceBuildTests.test_shallow_packed_refs_and_linked_worktree_select_exact_tree",
+    "test_certificate_source_build.SourceBuildTests.test_symlinks_are_literal_entries_not_followed_targets",
+    "test_certificate_source_build.SourceBuildTests.test_tree_movement_during_observation_refuses",
+    "test_certificate_source_build.SourceBuildTests.test_warm_chmod_both_directions_and_committed_modes",
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_browser_setup_does_not_rely_on_driver_discovery",
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_failed_wasm_run_cleans_temp_and_prevents_product_probe",
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_missing_executable_and_invalid_options_fail_before_wasm_pack",
@@ -845,7 +857,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "547e6aec6627d6d269c0ba392ab165b22febc4acb66f5c44f7aed2b2d61221fd",
+ "record_sha256": "5bb0df0e8dd538f5cd436bd61bfaac6b436e2517e1501a002d134f1a95b63c93",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -939,6 +951,10 @@
    "certificate::contract_tests::reader_overflow_is_truncated_input_on_every_pointer_width: test",
    "certificate::contract_tests::structural_truncation_precedes_selector_text_and_digest_errors: test",
    "certificate::contract_tests::text_and_revision_precede_reserved_selectors: test",
+   "certificate::source::tests::issued_capability_requires_explicit_matching_expected_key_and_replays_once: test",
+   "certificate::source::tests::source_certificate_matches_independent_exact_wire_vector: test",
+   "certificate::source::tests::source_debug_and_errors_are_static_and_redacted: test",
+   "certificate::source::tests::unavailable_and_malformed_descriptors_never_issue: test",
    "certificate::tests::canonical_producer_revision_rejects_uppercase_and_abbreviated_values: test",
    "certificate::tests::canonical_wire_round_trips_and_is_positional: test",
    "certificate::tests::capacity_refuses_without_eviction_and_exact_duplicate_still_noops: test",
@@ -2301,7 +2317,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1452,
+  "enabled_count": 1456,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
