@@ -186,7 +186,10 @@ class SourceBuildTests(unittest.TestCase):
         return result
 
     def git(self, *args: str, root: Path | None = None) -> str:
-        return self.command(["git", "-C", str(root or self.root), *args]).stdout.strip()
+        # Fixture commands must finish all Git writes before metadata snapshots.
+        # Detached auto-maintenance would outlive their owned process group.
+        return self.command(["git", "-c", "maintenance.auto=false", "-C",
+                             str(root or self.root), *args]).stdout.strip()
 
     def make_source(self, root: Path) -> None:
         core = root / CORE
