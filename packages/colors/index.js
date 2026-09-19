@@ -79,8 +79,6 @@ function certificateIngressError(code) {
 
 function checkCertificateIngress(bytes) {
   let byteLength;
-  let normalized = bytes;
-  let needsNormalization;
   try {
     if (!(bytes instanceof Uint8Array)) {
       throw certificateIngressError("certificate_invalid_input");
@@ -99,7 +97,6 @@ function checkCertificateIngress(bytes) {
       throw certificateIngressError("certificate_invalid_input");
     }
     byteLength = intrinsicByteLength;
-    needsNormalization = Object.getPrototypeOf(bytes) !== Uint8Array.prototype;
   } catch {
     throw certificateIngressError("certificate_invalid_input");
   }
@@ -109,15 +106,23 @@ function checkCertificateIngress(bytes) {
   if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
     throw certificateIngressError("certificate_resource_limit_exceeded");
   }
-  if (needsNormalization) {
-    try {
-      normalized = new Uint8Array(byteLength);
-      Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
-    } catch {
+  // Размер caller-owned backing store мог измениться при чтении свойств.
+  // В generated copier входит только собственный snapshot фиксированной
+  // длины. Повторное чтение intrinsic lengths отвергает рост и усечение,
+  // чтобы копирование не дополнило укороченный packet нулевыми bytes.
+  try {
+    if (
+      Reflect.apply(intrinsicByteLengthGetter, bytes, []) !== byteLength ||
+      Reflect.apply(intrinsicLengthGetter, bytes, []) !== byteLength
+    ) {
       throw certificateIngressError("certificate_invalid_input");
     }
+    const normalized = new Uint8Array(byteLength);
+    Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
+    return normalized;
+  } catch {
+    throw certificateIngressError("certificate_invalid_input");
   }
-  return normalized;
 }
 
 export function decodeCertificateEnvelope(bytes) {

@@ -7,7 +7,6 @@
 //! capability kept inside this crate.
 
 use core::fmt;
-use std::collections::HashMap;
 
 use crate::sha256::Hasher;
 
@@ -238,7 +237,7 @@ impl fmt::Debug for CertificatePayloadTypeV1 {
 /// The fields are public only through checked construction and accessors.  The
 /// type is a selector, not proof of producer authenticity; authenticity comes
 /// from the private producer capability.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct AdmissionKeyV1 {
     runtime_artifact_id: String,
     operation: CertificateOperationV1,
@@ -288,27 +287,15 @@ impl AdmissionKeyV1 {
         Ok(key)
     }
 
-    fn try_clone_for_admission(&self) -> Result<Self, CertificateErrorV1> {
-        Ok(Self {
-            runtime_artifact_id: try_clone_string(
-                &self.runtime_artifact_id,
-                CertificateErrorV1::AdmissionCapacityExceeded,
-            )?,
-            operation: self.operation,
-            context_id: try_clone_string(
-                &self.context_id,
-                CertificateErrorV1::AdmissionCapacityExceeded,
-            )?,
-            producer_revision: try_clone_string(
-                &self.producer_revision,
-                CertificateErrorV1::AdmissionCapacityExceeded,
-            )?,
-            producer_content_identity: self.producer_content_identity,
-            authority_kind: self.authority_kind,
-            authority_version: self.authority_version,
-            payload_type: self.payload_type,
-            payload_version: self.payload_version,
-        })
+    /// Копирует exact tuple с типизированным отказом при нехватке памяти.
+    pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
+        Self::try_new(
+            &self.runtime_artifact_id,
+            self.operation,
+            &self.context_id,
+            &self.producer_revision,
+            self.producer_content_identity,
+        )
     }
 
     /// Runtime artifact identity.
@@ -381,10 +368,7 @@ impl AdmissionKeyV1 {
 
 impl fmt::Debug for AdmissionKeyV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AdmissionKeyV1")
-            .field("field_count", &9_u8)
-            .field("tuple_bytes", &self.serialized_tuple_bytes())
-            .finish()
+        f.write_str("AdmissionKeyV1 { .. }")
     }
 }
 
@@ -394,7 +378,7 @@ impl fmt::Debug for AdmissionKeyV1 {
 /// implementation, or conversion from Program/colour/materialization values.
 /// A canonical producer inside this crate must create it first.
 pub struct NonSemanticTransportPayloadV1 {
-    bytes: Box<[u8]>,
+    bytes: Vec<u8>,
 }
 
 impl NonSemanticTransportPayloadV1 {
@@ -429,16 +413,14 @@ impl NonSemanticTransportPayloadV1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
         Ok(Self {
-            bytes: bytes.to_vec().into_boxed_slice(),
+            bytes: try_clone_bytes(bytes, CertificateErrorV1::ResourceLimitExceeded)?,
         })
     }
 }
 
 impl fmt::Debug for NonSemanticTransportPayloadV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NonSemanticTransportPayloadV1")
-            .field("byte_length", &self.bytes.len())
-            .finish()
+        f.write_str("NonSemanticTransportPayloadV1 { .. }")
     }
 }
 
@@ -452,19 +434,16 @@ pub struct TrustedProducerAttestationV1 {
 
 impl fmt::Debug for TrustedProducerAttestationV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TrustedProducerAttestationV1")
-            .field("present", &true)
-            .finish()
+        f.write_str("TrustedProducerAttestationV1 { .. }")
     }
 }
 
 /// A trusted, fully canonical envelope created by the producer capability.
 pub struct CertificateEnvelopeV1 {
     key: AdmissionKeyV1,
-    payload: Box<[u8]>,
     payload_sha256: [u8; 32],
     binding_sha256: [u8; 32],
-    canonical_bytes: Box<[u8]>,
+    canonical_bytes: Vec<u8>,
 }
 
 impl CertificateEnvelopeV1 {
@@ -490,10 +469,9 @@ impl CertificateEnvelopeV1 {
         }
         Ok(Self {
             key: attestation.key,
-            payload: payload.bytes,
             payload_sha256,
             binding_sha256,
-            canonical_bytes: canonical_bytes.into_boxed_slice(),
+            canonical_bytes,
         })
     }
 
@@ -502,9 +480,12 @@ impl CertificateEnvelopeV1 {
         &self.canonical_bytes
     }
 
-    /// Copies the exact canonical wire bytes for a transport boundary.
-    pub fn to_bytes(&self) -> Box<[u8]> {
-        self.canonical_bytes.clone()
+    /// Копирует canonical wire bytes; нехватка памяти даёт typed refusal.
+    pub fn try_to_bytes(&self) -> Result<Vec<u8>, CertificateErrorV1> {
+        try_clone_bytes(
+            &self.canonical_bytes,
+            CertificateErrorV1::ResourceLimitExceeded,
+        )
     }
 
     /// Exact producer tuple bound by the envelope.
@@ -525,10 +506,7 @@ impl CertificateEnvelopeV1 {
 
 impl fmt::Debug for CertificateEnvelopeV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CertificateEnvelopeV1")
-            .field("payload_length", &self.payload.len())
-            .field("envelope_length", &self.canonical_bytes.len())
-            .finish()
+        f.write_str("CertificateEnvelopeV1 { .. }")
     }
 }
 
@@ -540,6 +518,7 @@ impl fmt::Debug for CertificateEnvelopeV1 {
 #[derive(PartialEq, Eq)]
 pub struct UntrustedEnvelopeV1 {
     key: AdmissionKeyV1,
+    key_prefix_len: usize,
     payload_len: u32,
     payload_sha256: [u8; 32],
     binding_sha256: [u8; 32],
@@ -559,54 +538,71 @@ impl UntrustedEnvelopeV1 {
         if reader.read_u16()? != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
             return Err(CertificateErrorV1::UnsupportedSchema);
         }
-        if reader.read_u8()? != ISSUE_CERTIFICATE_OPERATION_V1 {
-            return Err(CertificateErrorV1::UnknownOperation);
-        }
-        if reader.read_u8()? != GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1 {
-            return Err(CertificateErrorV1::UnknownAuthorityKind);
-        }
-        if reader.read_u16()? != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
-            return Err(CertificateErrorV1::UnsupportedAuthorityVersion);
-        }
-
-        let runtime_artifact_id = reader.read_text(MAX_RUNTIME_ARTIFACT_ID_BYTES_V1)?;
-        let producer_revision_bytes =
-            reader.read_length_delimited(MAX_PRODUCER_REVISION_BYTES_V1)?;
-        if !is_canonical_revision(producer_revision_bytes) {
-            return Err(CertificateErrorV1::NonCanonicalRevision);
-        }
-        let producer_revision = core::str::from_utf8(producer_revision_bytes)
-            .map_err(|_| CertificateErrorV1::InvalidUtf8)?;
+        // Полностью проверяем форму заимствованного пакета до содержимого.
+        // Иначе ранний selector или digest скрывает более приоритетный
+        // truncation/length error. На этой стадии нет выделения памяти.
+        let operation = reader.read_u8()?;
+        let authority_kind = reader.read_u8()?;
+        let authority_version = reader.read_u16()?;
+        let runtime_artifact_id_bytes = reader.read_length_delimited()?;
+        let producer_revision_bytes = reader.read_length_delimited()?;
         let producer_content_identity = reader.read_array::<32>()?;
-        let context_id = reader.read_text(MAX_CONTEXT_ID_BYTES_V1)?;
-
-        if reader.read_u8()? != NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1 {
-            return Err(CertificateErrorV1::InvalidPayloadType);
-        }
-        if reader.read_u16()? != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
-            return Err(CertificateErrorV1::UnsupportedPayloadVersion);
-        }
+        let context_id_bytes = reader.read_length_delimited()?;
+        let payload_type = reader.read_u8()?;
+        let payload_version = reader.read_u16()?;
+        let key_prefix_len = reader.offset;
         let payload_length = reader.read_u32()?;
         let payload_length = usize::try_from(payload_length)
             .map_err(|_| CertificateErrorV1::ResourceLimitExceeded)?;
+        let payload = reader.read_exact(payload_length)?;
+        let payload_sha256 = reader.read_array::<32>()?;
+        let binding_start = reader.offset;
+        let binding_sha256 = reader.read_array::<32>()?;
+
+        validate_length(
+            runtime_artifact_id_bytes.len(),
+            MAX_RUNTIME_ARTIFACT_ID_BYTES_V1,
+        )?;
+        if producer_revision_bytes.len() > MAX_PRODUCER_REVISION_BYTES_V1 {
+            return Err(CertificateErrorV1::ResourceLimitExceeded);
+        }
+        validate_length(context_id_bytes.len(), MAX_CONTEXT_ID_BYTES_V1)?;
         if payload_length == 0 {
             return Err(CertificateErrorV1::InvalidLength);
         }
         if payload_length > MAX_PAYLOAD_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
-        let payload = reader.read_exact(payload_length)?;
-        let payload_sha256 = reader.read_array::<32>()?;
+        if !reader.is_finished() {
+            return Err(CertificateErrorV1::TrailingBytes);
+        }
+        let runtime_artifact_id = decode_text(runtime_artifact_id_bytes)?;
+        let producer_revision = core::str::from_utf8(producer_revision_bytes)
+            .map_err(|_| CertificateErrorV1::InvalidUtf8)?;
+        if !is_canonical_revision(producer_revision_bytes) {
+            return Err(CertificateErrorV1::NonCanonicalRevision);
+        }
+        let context_id = decode_text(context_id_bytes)?;
+        if operation != ISSUE_CERTIFICATE_OPERATION_V1 {
+            return Err(CertificateErrorV1::UnknownOperation);
+        }
+        if authority_kind != GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1 {
+            return Err(CertificateErrorV1::UnknownAuthorityKind);
+        }
+        if authority_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
+            return Err(CertificateErrorV1::UnsupportedAuthorityVersion);
+        }
+        if payload_type != NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1 {
+            return Err(CertificateErrorV1::InvalidPayloadType);
+        }
+        if payload_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
+            return Err(CertificateErrorV1::UnsupportedPayloadVersion);
+        }
         if payload_digest(payload) != payload_sha256 {
             return Err(CertificateErrorV1::PayloadDigestMismatch);
         }
-        let binding_start = reader.offset;
-        let binding_sha256 = reader.read_array::<32>()?;
         if binding_digest(&bytes[..binding_start]) != binding_sha256 {
             return Err(CertificateErrorV1::BindingDigestMismatch);
-        }
-        if !reader.is_finished() {
-            return Err(CertificateErrorV1::TrailingBytes);
         }
 
         let key = AdmissionKeyV1::try_new(
@@ -618,6 +614,7 @@ impl UntrustedEnvelopeV1 {
         )?;
         Ok(Self {
             key,
+            key_prefix_len,
             payload_len: payload_length as u32,
             payload_sha256,
             binding_sha256,
@@ -649,14 +646,15 @@ impl UntrustedEnvelopeV1 {
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
+
+    fn canonical_key_bytes(&self) -> &[u8] {
+        &self.canonical_bytes[..self.key_prefix_len]
+    }
 }
 
 impl fmt::Debug for UntrustedEnvelopeV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UntrustedEnvelopeV1")
-            .field("payload_length", &self.payload_len)
-            .field("envelope_length", &self.canonical_bytes.len())
-            .finish()
+        f.write_str("UntrustedEnvelopeV1 { .. }")
     }
 }
 
@@ -670,8 +668,14 @@ pub enum AdmissionOutcomeV1 {
 }
 
 struct AdmissionRecord {
-    binding_sha256: [u8; 32],
+    key_prefix_len: usize,
     canonical_bytes: Vec<u8>,
+}
+
+impl AdmissionRecord {
+    fn canonical_key_bytes(&self) -> &[u8] {
+        &self.canonical_bytes[..self.key_prefix_len]
+    }
 }
 
 /// Caller-owned, in-memory, single-writer replay ledger.
@@ -680,15 +684,20 @@ struct AdmissionRecord {
 /// outside this type.  The insertion point is after all validation and the
 /// capacity check, so a refusal never changes prior state.
 pub struct AdmissionStateV1 {
-    records: HashMap<AdmissionKeyV1, AdmissionRecord>,
+    records: Vec<AdmissionRecord>,
     accounted_bytes: usize,
 }
+
+const _: () = assert!(
+    core::mem::size_of::<AdmissionStateV1>() + core::mem::size_of::<AdmissionRecord>()
+        <= ADMISSION_METADATA_BYTES_V1
+);
 
 impl AdmissionStateV1 {
     /// Creates an empty ledger for one runtime lifetime.
     pub fn new() -> Self {
         Self {
-            records: HashMap::new(),
+            records: Vec::new(),
             accounted_bytes: 0,
         }
     }
@@ -724,10 +733,15 @@ impl AdmissionStateV1 {
         }
         compare_expected(envelope.admission_key(), expected)?;
 
-        if let Some(record) = self.records.get(expected) {
-            if record.binding_sha256 == *envelope.binding_sha256()
-                && record.canonical_bytes.as_slice() == envelope.canonical_bytes()
-            {
+        // Canonical prefix содержит весь exact key, включая schema и все
+        // selectors. Храним его внутри wire-копии, без повторных String и
+        // hash-table buckets; lookup ограничен MAX_ADMISSION_ENTRIES_V1.
+        if let Some(record) = self
+            .records
+            .iter()
+            .find(|record| record.canonical_key_bytes() == envelope.canonical_key_bytes())
+        {
+            if record.canonical_bytes.as_slice() == envelope.canonical_bytes() {
                 return Ok(AdmissionOutcomeV1::DuplicateNoop);
             }
             return Err(CertificateErrorV1::BindingConflict);
@@ -749,21 +763,20 @@ impl AdmissionStateV1 {
             return Err(CertificateErrorV1::AdmissionCapacityExceeded);
         }
 
-        self.records
-            .try_reserve(1)
-            .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
-        let prepared_key = expected.try_clone_for_admission()?;
         let prepared_canonical_bytes = try_clone_bytes(
             envelope.canonical_bytes(),
             CertificateErrorV1::AdmissionCapacityExceeded,
         )?;
-        self.records.insert(
-            prepared_key,
-            AdmissionRecord {
-                binding_sha256: *envelope.binding_sha256(),
-                canonical_bytes: prepared_canonical_bytes,
-            },
-        );
+        // Не запрашиваем геометрический рост metadata buffer. Record
+        // содержит только Vec и offset (32 bytes на 64-bit), укладываясь в
+        // зарезервированные 128 metadata bytes на entry.
+        self.records
+            .try_reserve_exact(1)
+            .map_err(|_| CertificateErrorV1::AdmissionCapacityExceeded)?;
+        self.records.push(AdmissionRecord {
+            key_prefix_len: envelope.key_prefix_len,
+            canonical_bytes: prepared_canonical_bytes,
+        });
         self.accounted_bytes = next_bytes;
         Ok(AdmissionOutcomeV1::Accepted)
     }
@@ -777,10 +790,7 @@ impl Default for AdmissionStateV1 {
 
 impl fmt::Debug for AdmissionStateV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AdmissionStateV1")
-            .field("entry_count", &self.records.len())
-            .field("accounted_bytes", &self.accounted_bytes)
-            .finish()
+        f.write_str("AdmissionStateV1 { .. }")
     }
 }
 
@@ -831,16 +841,29 @@ fn try_clone_bytes(
 }
 
 fn validate_text(value: &str, max_bytes: usize) -> Result<(), CertificateErrorV1> {
-    if value.is_empty() {
-        return Err(CertificateErrorV1::InvalidLength);
-    }
-    if value.len() > max_bytes {
-        return Err(CertificateErrorV1::ResourceLimitExceeded);
-    }
+    validate_length(value.len(), max_bytes)?;
     if value.as_bytes().contains(&0) {
         return Err(CertificateErrorV1::InvalidLength);
     }
     Ok(())
+}
+
+fn validate_length(length: usize, max_bytes: usize) -> Result<(), CertificateErrorV1> {
+    if length == 0 {
+        return Err(CertificateErrorV1::InvalidLength);
+    }
+    if length > max_bytes {
+        return Err(CertificateErrorV1::ResourceLimitExceeded);
+    }
+    Ok(())
+}
+
+fn decode_text(bytes: &[u8]) -> Result<&str, CertificateErrorV1> {
+    let value = core::str::from_utf8(bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
+    if bytes.contains(&0) {
+        return Err(CertificateErrorV1::InvalidLength);
+    }
+    Ok(value)
 }
 
 fn is_canonical_revision(bytes: &[u8]) -> bool {
@@ -875,7 +898,20 @@ fn encode_prefix(
     if payload.len() > MAX_PAYLOAD_BYTES_V1 {
         return Err(CertificateErrorV1::ResourceLimitExceeded);
     }
-    let mut bytes = Vec::with_capacity(key.serialized_tuple_bytes() + payload.len() + 32);
+    let envelope_length = key
+        .serialized_tuple_bytes()
+        .checked_add(payload.len())
+        .and_then(|length| length.checked_add(WIRE_DIGEST_BYTES_V1))
+        .ok_or(CertificateErrorV1::ResourceLimitExceeded)?;
+    if envelope_length > MAX_ENVELOPE_BYTES_V1 {
+        return Err(CertificateErrorV1::ResourceLimitExceeded);
+    }
+    // Включаем завершающий binding digest: issuer допишет его без нового
+    // allocation. Все длины известны и ограничены до резервирования.
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(envelope_length)
+        .map_err(|_| CertificateErrorV1::ResourceLimitExceeded)?;
     bytes.extend_from_slice(&CERTIFICATE_ENVELOPE_MAGIC_V1);
     bytes.extend_from_slice(&CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1.to_be_bytes());
     bytes.push(key.operation.wire());
@@ -923,7 +959,7 @@ impl<'a> Reader<'a> {
         let end = self
             .offset
             .checked_add(length)
-            .ok_or(CertificateErrorV1::InvalidLength)?;
+            .ok_or(CertificateErrorV1::TruncatedInput)?;
         let value = self
             .bytes
             .get(self.offset..end)
@@ -951,18 +987,8 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes(self.read_array::<4>()?))
     }
 
-    fn read_text(&mut self, max_bytes: usize) -> Result<&'a str, CertificateErrorV1> {
-        let bytes = self.read_length_delimited(max_bytes)?;
-        let value = core::str::from_utf8(bytes).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
-        validate_text(value, max_bytes)?;
-        Ok(value)
-    }
-
-    fn read_length_delimited(&mut self, max_bytes: usize) -> Result<&'a [u8], CertificateErrorV1> {
+    fn read_length_delimited(&mut self) -> Result<&'a [u8], CertificateErrorV1> {
         let length = usize::from(self.read_u16()?);
-        if length > max_bytes {
-            return Err(CertificateErrorV1::ResourceLimitExceeded);
-        }
         self.read_exact(length)
     }
 
@@ -1001,6 +1027,10 @@ pub(crate) fn producer_attestation_v1(
 }
 
 #[cfg(test)]
+#[path = "certificate_contract_tests.rs"]
+mod contract_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -1036,11 +1066,14 @@ mod tests {
         )
         .unwrap();
         let payload = producer_payload_v1(payload_bytes).unwrap();
-        let attestation = producer_attestation_v1(key.clone(), &payload).unwrap();
+        let attestation = producer_attestation_v1(key.try_clone().unwrap(), &payload).unwrap();
         let envelope = CertificateEnvelopeV1::issue_from_trusted_producer(
             producer_payload_v1(payload_bytes).unwrap(),
-            producer_attestation_v1(key.clone(), &producer_payload_v1(payload_bytes).unwrap())
-                .unwrap(),
+            producer_attestation_v1(
+                key.try_clone().unwrap(),
+                &producer_payload_v1(payload_bytes).unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
         (key, payload, attestation, envelope)
@@ -1209,7 +1242,7 @@ mod tests {
     #[test]
     fn payload_replacement_and_binding_omission_fail_closed() {
         let (_, _, _, envelope) = fixture("ctx", b"body");
-        let mut payload_replacement = envelope.to_bytes().into_vec();
+        let mut payload_replacement = envelope.try_to_bytes().unwrap();
         let payload_offset = payload_replacement
             .windows(4)
             .position(|window| window == b"body")
@@ -1220,7 +1253,7 @@ mod tests {
             Err(CertificateErrorV1::PayloadDigestMismatch)
         );
 
-        let mut omitted_binding = envelope.to_bytes().into_vec();
+        let mut omitted_binding = envelope.try_to_bytes().unwrap();
         let binding_offset = omitted_binding.len() - 1;
         omitted_binding[binding_offset] ^= 1;
         assert_eq!(
@@ -1232,21 +1265,21 @@ mod tests {
     #[test]
     fn selector_length_and_version_mutants_never_fallback() {
         let (_, _, _, envelope) = fixture("ctx", b"body");
-        let mut unknown_operation = envelope.to_bytes().into_vec();
+        let mut unknown_operation = envelope.try_to_bytes().unwrap();
         unknown_operation[6] = 0x7f;
         assert_eq!(
             UntrustedEnvelopeV1::decode(&unknown_operation),
             Err(CertificateErrorV1::UnknownOperation)
         );
 
-        let mut reserved_authority = envelope.to_bytes().into_vec();
+        let mut reserved_authority = envelope.try_to_bytes().unwrap();
         reserved_authority[7] = 0x01;
         assert_eq!(
             UntrustedEnvelopeV1::decode(&reserved_authority),
             Err(CertificateErrorV1::UnknownAuthorityKind)
         );
 
-        let mut unsupported_authority_version = envelope.to_bytes().into_vec();
+        let mut unsupported_authority_version = envelope.try_to_bytes().unwrap();
         unsupported_authority_version[8] = 0;
         unsupported_authority_version[9] = 2;
         assert_eq!(
@@ -1254,7 +1287,7 @@ mod tests {
             Err(CertificateErrorV1::UnsupportedAuthorityVersion)
         );
 
-        let mut future_schema = envelope.to_bytes().into_vec();
+        let mut future_schema = envelope.try_to_bytes().unwrap();
         future_schema[4] = 0;
         future_schema[5] = 2;
         assert_eq!(
@@ -1262,21 +1295,21 @@ mod tests {
             Err(CertificateErrorV1::UnsupportedSchema)
         );
 
-        let mut invalid_utf8 = envelope.to_bytes().into_vec();
+        let mut invalid_utf8 = envelope.try_to_bytes().unwrap();
         invalid_utf8[12] = 0xff;
         assert_eq!(
             UntrustedEnvelopeV1::decode(&invalid_utf8),
             Err(CertificateErrorV1::InvalidUtf8)
         );
 
-        let mut nul_text = envelope.to_bytes().into_vec();
+        let mut nul_text = envelope.try_to_bytes().unwrap();
         nul_text[12] = 0;
         assert_eq!(
             UntrustedEnvelopeV1::decode(&nul_text),
             Err(CertificateErrorV1::InvalidLength)
         );
 
-        let mut invalid_payload_type = envelope.to_bytes().into_vec();
+        let mut invalid_payload_type = envelope.try_to_bytes().unwrap();
         let payload_type_offset = invalid_payload_type
             .windows(4)
             .position(|window| window == b"body")
@@ -1288,7 +1321,7 @@ mod tests {
             Err(CertificateErrorV1::InvalidPayloadType)
         );
 
-        let mut unsupported_payload_version = envelope.to_bytes().into_vec();
+        let mut unsupported_payload_version = envelope.try_to_bytes().unwrap();
         unsupported_payload_version[payload_type_offset + 1] = 0;
         unsupported_payload_version[payload_type_offset + 2] = 2;
         assert_eq!(
@@ -1296,7 +1329,7 @@ mod tests {
             Err(CertificateErrorV1::UnsupportedPayloadVersion)
         );
 
-        let mut zero_payload_length = envelope.to_bytes().into_vec();
+        let mut zero_payload_length = envelope.try_to_bytes().unwrap();
         zero_payload_length[payload_type_offset + 3..payload_type_offset + 7]
             .copy_from_slice(&0_u32.to_be_bytes());
         assert_eq!(
@@ -1304,7 +1337,7 @@ mod tests {
             Err(CertificateErrorV1::InvalidLength)
         );
 
-        let mut non_canonical_revision = envelope.to_bytes().into_vec();
+        let mut non_canonical_revision = envelope.try_to_bytes().unwrap();
         let revision_offset = non_canonical_revision
             .windows(REVISION.len())
             .position(|window| window == REVISION.as_bytes())

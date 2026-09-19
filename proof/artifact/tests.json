@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 230,
+   "count": 235,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -776,6 +776,11 @@
     "test_mutation.MutationTruthTest.test_v4_evidence_rejects_pre_failure_count_schemas",
     "test_mutation.MutationTruthTest.test_verification_reproves_physical_disjointness",
     "test_mutation.MutationTruthTest.test_workflow_and_scope_lock_the_truth_contract",
+    "test_point_support_surplus_source_binding.PointSupportSurplusCliTests.test_cli_rejects_a_changed_retention_law_with_the_old_receipt",
+    "test_point_support_surplus_source_binding.PointSupportSurplusCliTests.test_cli_rejects_a_self_consistent_but_false_numerical_receipt",
+    "test_point_support_surplus_source_binding.PointSupportSurplusCliTests.test_cli_rejects_verifier_revision_drift",
+    "test_point_support_surplus_source_binding.PointSupportSurplusCliTests.test_cli_replays_exact_source_without_writing_the_receipt",
+    "test_point_support_surplus_source_binding.PointSupportSurplusCliTests.test_cli_requires_the_recorded_source_files",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_claim_is_lower_bound_specific_and_q55_dependency_is_exact",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_committed_proof_is_canonical_and_replays",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_complete_files_fail_closed_on_addition_removal_and_unknown_override",
@@ -840,6 +845,7 @@
    "start": "scripts"
   }
  ],
+ "record_sha256": "547e6aec6627d6d269c0ba392ab165b22febc4acb66f5c44f7aed2b2d61221fd",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -923,6 +929,16 @@
    "cam16_module_header_cites_sources: test",
    "cam16_viewing_conditions_derivation: test",
    "canonical_wcag22_criterion_is_total_and_non_vacuous_across_the_hue_circle: test",
+   "certificate::contract_tests::byte_capacity_is_reached_by_real_admissions_without_eviction: test",
+   "certificate::contract_tests::debug_is_static_across_distinct_identifiers_sizes_and_ledger_counts: test",
+   "certificate::contract_tests::entry_capacity_is_reached_by_real_admissions_without_eviction: test",
+   "certificate::contract_tests::exact_packet_length_precedes_digest_validation: test",
+   "certificate::contract_tests::ledger_accounts_for_retained_tuple_and_collection_storage: test",
+   "certificate::contract_tests::lengths_precede_text_revision_and_selectors: test",
+   "certificate::contract_tests::maximum_producer_packet_reserves_its_binding_before_issue: test",
+   "certificate::contract_tests::reader_overflow_is_truncated_input_on_every_pointer_width: test",
+   "certificate::contract_tests::structural_truncation_precedes_selector_text_and_digest_errors: test",
+   "certificate::contract_tests::text_and_revision_precede_reserved_selectors: test",
    "certificate::tests::canonical_producer_revision_rejects_uppercase_and_abbreviated_values: test",
    "certificate::tests::canonical_wire_round_trips_and_is_positional: test",
    "certificate::tests::capacity_refuses_without_eviction_and_exact_duplicate_still_noops: test",
@@ -1917,6 +1933,8 @@
    "program_wire::tests::semantic_defects_surface_as_compile_refusals: test",
    "program_wire::tests::wire_defects_surface_the_section: test",
    "public_claim_floor_count: test",
+   "public_decoder_checks_total_cap_before_packet_contents: test",
+   "public_decoder_matches_independent_r13_corpus: test",
    "published_wcag_anchors_hold_in_pack: test",
    "python_candidate_selection_is_explicit_and_platform_complete: test",
    "readme_documents_zero_runtime_deps: test",
@@ -2283,7 +2301,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1440,
+  "enabled_count": 1452,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
@@ -2297,6 +2315,5 @@
   ],
   "ignored_count": 9
  },
- "schema_version": 1,
- "record_sha256": "58c310c5253b037f474304384f6610159dd2277c8f4027958c2482dc22ea8014"
+ "schema_version": 1
 }
