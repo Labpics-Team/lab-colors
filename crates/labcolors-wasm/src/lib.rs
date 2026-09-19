@@ -166,6 +166,17 @@ fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV
     .into()
 }
 
+fn to_certificate_producer_js_error(
+    error: labcolors_core::certificate::CertificateProducerErrorV1,
+) -> JsValue {
+    program_error(
+        "Certificate envelope operation failed",
+        &format!("certificate_{}", error.code()),
+        "issueSourceCertificateEnvelope",
+    )
+    .into()
+}
+
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
 }
@@ -366,6 +377,17 @@ pub fn evaluate_wcag22(
                 reason: "WCAG22 projection не распарсился как JSON".to_string(),
             })
         })
+}
+
+/// Выдаёт собственную копию байтов сертификата встроенного дескриптора исходников Core.
+/// Идентичность и маркер создаёт Core; capability и состояние приёма остаются внутри.
+#[wasm_bindgen(js_name = issueSourceCertificateEnvelope)]
+pub fn issue_source_certificate_envelope() -> Result<Vec<u8>, JsValue> {
+    let certificate = labcolors_core::certificate::issue_source_certificate_v1()
+        .map_err(to_certificate_producer_js_error)?;
+    certificate
+        .try_to_bytes()
+        .map_err(to_certificate_producer_js_error)
 }
 
 /// Decodes untrusted certificate bytes into immutable metadata for inspection
@@ -1257,6 +1279,31 @@ mod browser_tests {
                 .as_deref(),
             Some(operation)
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn source_producer_errors_keep_static_codes_and_operation() {
+        use labcolors_core::certificate::{CertificateErrorV1, CertificateProducerErrorV1 as E};
+
+        for (error, code) in [
+            (
+                E::ProducerIdentityUnavailable,
+                "certificate_producer_identity_unavailable",
+            ),
+            (
+                E::Envelope(CertificateErrorV1::ResourceLimitExceeded),
+                "certificate_resource_limit_exceeded",
+            ),
+        ] {
+            let projected = to_certificate_producer_js_error(error);
+            let message = js_sys::Reflect::get(&projected, &JsValue::from_str("message"))
+                .expect("message property")
+                .as_string()
+                .expect("static message");
+            assert_eq!(message, "Certificate envelope operation failed");
+            assert!(message.len() <= 256);
+            assert_program_error(projected, code, "issueSourceCertificateEnvelope");
+        }
     }
 
     #[wasm_bindgen_test]

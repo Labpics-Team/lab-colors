@@ -10,6 +10,9 @@ use core::fmt;
 
 use crate::sha256::Hasher;
 
+mod source;
+pub use source::{CertificateProducerErrorV1, SourceCertificateV1, issue_source_certificate_v1};
+
 /// Wire magic for `CertificateEnvelopeV1`.
 pub const CERTIFICATE_ENVELOPE_MAGIC_V1: [u8; 4] = *b"LCEN";
 /// The only schema version understood by this module.
@@ -400,11 +403,6 @@ impl NonSemanticTransportPayloadV1 {
         &self.bytes
     }
 
-    // This constructor is intentionally dormant until a canonical producer is
-    // wired in by a later node; exposing it publicly would cross the sealed
-    // producer boundary, while removing it would leave the contract without
-    // its only approved construction point.
-    #[allow(dead_code)]
     pub(crate) fn from_canonical_producer_bytes(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
         if bytes.is_empty() {
             return Err(CertificateErrorV1::InvalidLength);
@@ -1002,7 +1000,6 @@ impl<'a> Reader<'a> {
 /// This is `pub(crate)` so another canonical producer module in this crate can
 /// use the same sealed boundary without giving JS, serde, or external Rust a
 /// raw-byte constructor.
-#[allow(dead_code)]
 pub(crate) fn producer_payload_v1(
     bytes: &[u8],
 ) -> Result<NonSemanticTransportPayloadV1, CertificateErrorV1> {
@@ -1011,7 +1008,6 @@ pub(crate) fn producer_payload_v1(
 
 /// Producer-only attestation constructor.  It computes the exact two digests
 /// over the same fixed wire prefix that the consumer later verifies.
-#[allow(dead_code)]
 pub(crate) fn producer_attestation_v1(
     key: AdmissionKeyV1,
     payload: &NonSemanticTransportPayloadV1,

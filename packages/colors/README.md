@@ -115,7 +115,26 @@ binding epoch и отсутствием downstream point, а не доказат
 пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
 отзывается владельцем host до `dispose(true)`.
 
-## Инспекция certificate envelope
+## Создание и инспекция certificate envelope
+
+После инициализации WASM `issueSourceCertificateEnvelope()` возвращает новый
+`Uint8Array` с envelope встроенного source producer Core. Функция не принимает
+payload или identity. Например, после `await init()`:
+
+```ts
+const bytes = issueSourceCertificateEnvelope();
+const metadata = decodeCertificateEnvelope(bytes);
+```
+
+Обе функции импортируются из `@labpics/colors`. `metadata.producerRevision` —
+полный Git tree object ID исходников Core, а content identity адресует встроенный
+source descriptor. Эти данные не утверждают равенство исполняемых файлов,
+аутентичность удалённого отправителя или научные свойства цвета.
+
+Если при сборке проверенный source descriptor недоступен, issuance бросает
+ошибку с `operation: "issueSourceCertificateEnvelope"` и
+`code: "certificate_producer_identity_unavailable"`. Её распознаёт
+`isCertificateError`; untrusted decode и остальные операции остаются доступны.
 
 `decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
 transport envelope и возвращает замороженный metadata-object

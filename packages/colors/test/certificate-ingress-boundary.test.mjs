@@ -14,6 +14,7 @@ const instrumentedBinding = `
 export const copierEntries = [];
 export default async function init() {}
 export function initSync() {}
+export function issueSourceCertificateEnvelope() { throw new Error("Unexpected producer call in ingress test"); }
 export function decodeCertificateEnvelope(bytes) {
   copierEntries.push({ byteLength: bytes.byteLength, plain: Object.getPrototypeOf(bytes) === Uint8Array.prototype });
   if (bytes.byteLength > 2_097_152) {

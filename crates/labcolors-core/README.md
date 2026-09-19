@@ -61,6 +61,22 @@ producer-owned `NonSemanticTransportPayloadV1` и private
 CSS, DOM и materialization authority не конвертируются в certificate. Payload
 остаётся non-semantic и не является authority result.
 
+`issue_source_certificate_v1()` создаёт envelope без caller-owned payload или
+identity. Источник — встроенный descriptor проверенного Git-дерева
+`crates/labcolors-core`. `producer_revision` содержит полный tree object ID;
+content identity адресует descriptor. Это идентичность исходного артефакта Core,
+не hash исполняемого файла, remote authentication или научное доказательство.
+[Точный профиль и условия сборки](contracts/certificate-source-tree-v1.md)
+определяют bytes, область identity и отказ при недоступном источнике.
+
+`SourceCertificateV1` предоставляет canonical bytes через `as_bytes()` и
+fallible `try_to_bytes()`, а Rust consumer заимствует private capability через
+`attestation()`. Он передаёт собственный полный ожидаемый `AdmissionKeyV1`
+в `admit`; tuple из недоверенных bytes не заменяет это ожидание.
+`CertificateProducerErrorV1::ProducerIdentityUnavailable` означает, что сборка
+не получила проверенный descriptor. Остальные операции Core и untrusted decode
+при этом доступны; выдуманная revision не подставляется.
+
 `AdmissionStateV1` — caller-owned in-memory single-writer ledger: первый exact
 key даёт `Accepted`, повтор тех же bytes — `DuplicateNoop`, другой binding —
 `BindingConflict`. Missing/foreign attestation, tuple mismatch, future schema,

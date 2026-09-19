@@ -8,6 +8,7 @@ import initWasm, {
   initSync as initWasmSync,
   attachProgramWire as attachProgramWireWasm,
   decodeCertificateEnvelope as decodeCertificateEnvelopeWasm,
+  issueSourceCertificateEnvelope as issueSourceCertificateEnvelopeWasm,
   ProgramAttachment,
 } from "./pkg/labcolors.js";
 
@@ -131,13 +132,22 @@ export function decodeCertificateEnvelope(bytes) {
   return decodeCertificateEnvelopeWasm(checkCertificateIngress(bytes));
 }
 
+// Идентичность и тело принадлежат Core; аргументы вызывающего кода не передаются.
+export function issueSourceCertificateEnvelope() {
+  return issueSourceCertificateEnvelopeWasm();
+}
+
 export function isCertificateError(error) {
   try {
-    return (
-      error instanceof Error &&
-      error.operation === "decodeCertificateEnvelope" &&
-      CERTIFICATE_ERROR_CODES.has(error.code)
-    );
+    if (!(error instanceof Error)) return false;
+    const operation = error.operation;
+    const code = error.code;
+    if (operation === "decodeCertificateEnvelope") return CERTIFICATE_ERROR_CODES.has(code);
+    if (operation === "issueSourceCertificateEnvelope") {
+      return code === "certificate_producer_identity_unavailable" ||
+        (code !== "certificate_invalid_input" && CERTIFICATE_ERROR_CODES.has(code));
+    }
+    return false;
   } catch {
     return false;
   }

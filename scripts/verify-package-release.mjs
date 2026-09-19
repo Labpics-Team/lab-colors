@@ -1167,6 +1167,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "initSync",
   "isCertificateError",
   "isProgramError",
+  "issueSourceCertificateEnvelope",
   "numericalCapabilityManifest",
 ]);
 for (const retired of ["LabColors", "resolveTheme", "applyTheme", "watchTheme", "adaptTheme"]) {
@@ -1198,6 +1199,24 @@ assert.equal(metadata.wasm[0].bytes, wasm.length);
 await colors.init({ module_or_path: wasm });
 
 assert.equal(colors.MAX_CERTIFICATE_ENVELOPE_BYTES, 2_097_152);
+const issuedSource = colors.issueSourceCertificateEnvelope();
+assert.ok(issuedSource instanceof Uint8Array);
+assert.equal(issuedSource.byteLength, 283);
+const issuedSourceSnapshot = issuedSource.slice();
+const sourceCertificate = colors.decodeCertificateEnvelope(issuedSource);
+assert.match(sourceCertificate.producerRevision, /^[0-9a-f]{40}$/u);
+assert.equal(sourceCertificate.contextId, "core-source-tree-transport-v1");
+assert.equal(sourceCertificate.payloadType, "non-semantic-transport-v1");
+assert.equal(sourceCertificate.payloadLength, 1);
+assert.equal(
+  sourceCertificate.runtimeArtifactId,
+  "labcolors-core:source-tree-v1:" + Buffer.from(sourceCertificate.producerContentIdentity).toString("hex"),
+);
+issuedSource.fill(0);
+assert.deepEqual(colors.issueSourceCertificateEnvelope(), issuedSourceSnapshot);
+for (const forbidden of ["attestation", "admit", "payload"]) {
+  assert.equal(Object.hasOwn(sourceCertificate, forbidden), false);
+}
 assert.throws(
   () => colors.decodeCertificateEnvelope(new Uint8Array([1, 2, 3])),
   (error) => {
@@ -1334,8 +1353,11 @@ import init, {
   evaluateWcag22,
   isCertificateError,
   isProgramError,
+  issueSourceCertificateEnvelope,
   numericalCapabilityManifest,
+  type CertificateDecodeErrorCode,
   type CertificateErrorCode,
+  type CertificateProducerErrorCode,
   type NumericalCapabilityManifestV2,
   type ProgramErrorCode,
   type ProgramOperation,
@@ -1373,6 +1395,16 @@ const certificateError = (error: unknown): CertificateErrorCode | undefined =>
 void MAX_CERTIFICATE_ENVELOPE_BYTES;
 void certificateMetadata;
 void certificateError;
+const sourceCertificateBytes: Uint8Array = issueSourceCertificateEnvelope();
+const sourceCertificateError = (error: unknown): CertificateProducerErrorCode | undefined =>
+  isCertificateError(error) && error.operation === "issueSourceCertificateEnvelope" ? error.code : undefined;
+const certificateDecodeError = (error: unknown): CertificateDecodeErrorCode | undefined =>
+  isCertificateError(error) && error.operation === "decodeCertificateEnvelope" ? error.code : undefined;
+// @ts-expect-error Идентичность и payload не являются входом производителя.
+issueSourceCertificateEnvelope(new Uint8Array());
+void sourceCertificateBytes;
+void sourceCertificateError;
+void certificateDecodeError;
 
 const attachmentHost: ProgramPointSinkHost = (intent) => {
   intent.bindingEpoch;

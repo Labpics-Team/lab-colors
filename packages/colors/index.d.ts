@@ -89,7 +89,7 @@ export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];
 export declare function isProgramError(error: unknown): error is ProgramError;
 
-export type CertificateErrorCode =
+export type CertificateDecodeErrorCode =
   | "certificate_invalid_magic"
   | "certificate_unsupported_schema"
   | "certificate_unknown_operation"
@@ -115,10 +115,14 @@ export type CertificateErrorCode =
   | "certificate_unsupported_opaque"
   | "certificate_binding_conflict"
   | "certificate_invalid_input";
-export type CertificateError = Error & Readonly<{
-  code: CertificateErrorCode;
-  operation: "decodeCertificateEnvelope";
-}>;
+export type CertificateProducerErrorCode =
+  | Exclude<CertificateDecodeErrorCode, "certificate_invalid_input">
+  | "certificate_producer_identity_unavailable";
+export type CertificateErrorCode = CertificateDecodeErrorCode | CertificateProducerErrorCode;
+export type CertificateError = Error & (
+  | Readonly<{ code: CertificateDecodeErrorCode; operation: "decodeCertificateEnvelope" }>
+  | Readonly<{ code: CertificateProducerErrorCode; operation: "issueSourceCertificateEnvelope" }>
+);
 export interface UntrustedCertificateEnvelopeV1 {
   readonly schemaVersion: 1;
   readonly operation: "issue-certificate";
@@ -138,6 +142,12 @@ export declare const MAX_CERTIFICATE_ENVELOPE_BYTES: 2097152;
 export declare function decodeCertificateEnvelope(
   bytes: Uint8Array,
 ): UntrustedCertificateEnvelopeV1;
+/**
+ * Копия канонических байтов сертификата встроенного дескриптора исходников Core.
+ * Не выдаёт capability или полномочий на приём.
+ * При недоступной идентичности бросает certificate_producer_identity_unavailable.
+ */
+export declare function issueSourceCertificateEnvelope(): Uint8Array;
 export declare function isCertificateError(error: unknown): error is CertificateError;
 
 export type ProgramPointSinkOperation = "setAll" | "revokeAll" | "confirmExact";
