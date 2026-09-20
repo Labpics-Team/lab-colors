@@ -18,6 +18,12 @@ use crate::composition::AdmittedOpacityV1;
 pub(crate) struct RelationContextV1 {
     /// Alpha-окно occurrence. `None` = полностью прозрачный вход
     /// (сравнение по потенциальалу, не по видимому вкладу).
+    ///
+    /// `None` и `Some(AdmittedOpacityV1::TRANSPARENT)` — намеренно РАЗНЫЕ
+    /// ключи: `Some(TRANSPARENT)` фиксирует наблюдаемую фактическую
+    /// прозрачность occurrence, `None` — режим оценки по потенциалу без
+    /// наблюдаемого окна. Отношение, вставленное в одном режиме, не
+    /// наследуется другим.
     pub(crate) alpha: Option<AdmittedOpacityV1>,
     /// Идентификатор фона (например, hash контекста backdrop).
     pub(crate) backdrop_anchor: [u8; 32],
@@ -56,6 +62,9 @@ pub(crate) enum RelationCorpusErrorV1 {
     IncomparablePairForcedIntoTotalOrder,
     /// Пара заявленного порядка противоречит корпусу.
     ContradictsCorpus,
+    /// Новое Cleaner/Dirtier-ребро создаёт транзитивный путь между
+    /// парой, уже явно зафиксированной как несравнимая.
+    TransitiveIncomparableConflict,
 }
 
 /// Стабильный идентификатор вердикта в корпусе.
@@ -121,8 +130,69 @@ impl RelationCorpusV1 {
         if self.would_create_cycle(&entry) {
             return Err(RelationCorpusErrorV1::CycleDetected);
         }
+        if self.would_conflict_with_incomparable(&entry) {
+            return Err(RelationCorpusErrorV1::TransitiveIncomparableConflict);
+        }
         self.entries.push(entry);
         Ok(())
+    }
+
+    /// Новое направленное ребро не имеет права соединять пару, уже явно
+    /// зафиксированную как несравнимая в том же контексте: прямая запись
+    /// ловится как InconsistentMatrix, эта проверка — транзитивные пути.
+    fn would_conflict_with_incomparable(&self, candidate: &CorpusEntryV1) -> bool {
+        if candidate.relation == CleanRelationV1::Incomparable {
+            return false;
+        }
+        // Путь проверяется в графе «существующие рёбра + само новое ребро»:
+        // обход стартует с candidate, поэтому учитывает и пути через него.
+        self.entries.iter().any(|e| {
+            e.context == candidate.context
+                && e.relation == CleanRelationV1::Incomparable
+                && (self.reaches_with(candidate, e.a, e.b)
+                    || self.reaches_with(candidate, e.b, e.a))
+        })
+    }
+
+    /// DFS с временным включением candidate-ребра: нужен, чтобы увидеть
+    /// пути, которые становятся возможны только благодаря новой записи.
+    fn reaches_with(&self, candidate: &CorpusEntryV1, from: VerdictIdV1, to: VerdictIdV1) -> bool {
+        if from == to {
+            return true;
+        }
+        let mut stack = vec![from];
+        let mut seen = Vec::new();
+        while let Some(current) = stack.pop() {
+            if seen.contains(&current) {
+                continue;
+            }
+            seen.push(current);
+            let push_edge =
+                |edge_from: VerdictIdV1, edge_to: VerdictIdV1, stack: &mut Vec<VerdictIdV1>| {
+                    if edge_from == current {
+                        stack.push(edge_to);
+                    }
+                };
+            for e in &self.entries {
+                if e.context != candidate.context {
+                    continue;
+                }
+                match e.relation {
+                    CleanRelationV1::Cleaner => push_edge(e.a, e.b, &mut stack),
+                    CleanRelationV1::Dirtier => push_edge(e.b, e.a, &mut stack),
+                    CleanRelationV1::Incomparable => {}
+                }
+            }
+            match candidate.relation {
+                CleanRelationV1::Cleaner => push_edge(candidate.a, candidate.b, &mut stack),
+                CleanRelationV1::Dirtier => push_edge(candidate.b, candidate.a, &mut stack),
+                CleanRelationV1::Incomparable => {}
+            }
+            if stack.contains(&to) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Ребро «tail Cleaner head» замыкает цикл, если в том же контексте уже
@@ -367,6 +437,62 @@ mod tests {
             corpus.relation(ctx(Some(1.0), 0), V0, V0),
             CleanRelationV1::Incomparable
         );
+    }
+
+    #[test]
+    fn explicit_incomparable_blocks_later_transitive_path() {
+        // V0 Incomparable V2 явная запись; затем V0 Cleaner V1 и V1 Cleaner V2
+        // создают транзитивный путь между несравнимой парой — отвергается.
+        let c = ctx(Some(1.0), 0);
+        let mut corpus = RelationCorpusV1::new();
+        corpus
+            .insert(c, V0, V2, CleanRelationV1::Incomparable)
+            .expect("incomparable entry");
+        corpus
+            .insert(c, V0, V1, CleanRelationV1::Cleaner)
+            .expect("v0->v1");
+        let err = corpus
+            .insert(c, V1, V2, CleanRelationV1::Cleaner)
+            .expect_err("transitive path through an incomparable pair must be rejected");
+        assert_eq!(err, RelationCorpusErrorV1::TransitiveIncomparableConflict);
+    }
+
+    #[test]
+    fn explicit_incomparable_blocks_transitive_path_in_reverse_insert_order() {
+        // Тот же конфликт при обратном порядке вставки рёбер цепочки.
+        let c = ctx(Some(1.0), 0);
+        let mut corpus = RelationCorpusV1::new();
+        corpus
+            .insert(c, V0, V2, CleanRelationV1::Incomparable)
+            .expect("incomparable entry");
+        corpus
+            .insert(c, V1, V2, CleanRelationV1::Cleaner)
+            .expect("v1->v2");
+        let err = corpus
+            .insert(c, V0, V1, CleanRelationV1::Cleaner)
+            .expect_err("transitive path through an incomparable pair must be rejected");
+        assert_eq!(err, RelationCorpusErrorV1::TransitiveIncomparableConflict);
+    }
+
+    #[test]
+    fn some_transparent_and_none_alpha_are_distinct_context_keys() {
+        // `None` — режим оценки по потенциалу; `Some(TRANSPARENT)` — наблюдаемая
+        // фактическая прозрачность. Намеренно разные ключи: отношение одного
+        // режима не наследуется другим.
+        let mut corpus = RelationCorpusV1::new();
+        let none_ctx = ctx(None, 3);
+        let transparent_ctx = RelationContextV1 {
+            alpha: Some(AdmittedOpacityV1::TRANSPARENT),
+            backdrop_anchor: [3; 32],
+        };
+        corpus
+            .insert(none_ctx, V0, V1, CleanRelationV1::Cleaner)
+            .expect("insert");
+        assert_eq!(
+            corpus.relation(transparent_ctx, V0, V1),
+            CleanRelationV1::Incomparable
+        );
+        assert_eq!(corpus.relation(none_ctx, V0, V1), CleanRelationV1::Cleaner);
     }
 
     #[test]

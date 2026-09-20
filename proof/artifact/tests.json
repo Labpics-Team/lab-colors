@@ -840,7 +840,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "1c019384525e71a1726001888c470aced90a35ac0a84ce250735293430d61f75",
+ "record_sha256": "9e1ff036f31ce4bd1f7bd3f3663fe763c0d58836e7d2f4adb6ea904180be4f26",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -949,11 +949,14 @@
    "cleanliness::relation_corpus::tests::different_alpha_does_not_inherit_relations: test",
    "cleanliness::relation_corpus::tests::different_context_does_not_inherit_relations: test",
    "cleanliness::relation_corpus::tests::duplicate_consistent_insert_is_idempotent: test",
+   "cleanliness::relation_corpus::tests::explicit_incomparable_blocks_later_transitive_path: test",
+   "cleanliness::relation_corpus::tests::explicit_incomparable_blocks_transitive_path_in_reverse_insert_order: test",
    "cleanliness::relation_corpus::tests::explicit_incomparable_entry_also_blocks_total_order: test",
    "cleanliness::relation_corpus::tests::incomparable_pair_rejects_total_order: test",
    "cleanliness::relation_corpus::tests::inconsistent_matrix_entry_is_rejected: test",
    "cleanliness::relation_corpus::tests::missing_relation_means_incomparable_not_equality: test",
    "cleanliness::relation_corpus::tests::reversed_order_contradicts_corpus: test",
+   "cleanliness::relation_corpus::tests::some_transparent_and_none_alpha_are_distinct_context_keys: test",
    "cleanliness::relation_corpus::tests::transparent_alpha_is_a_distinct_context_key: test",
    "committed_files_are_lf_only: test",
    "compile_program_wire_is_deterministic: test",
@@ -2284,7 +2287,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1440,
+  "enabled_count": 1443,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
