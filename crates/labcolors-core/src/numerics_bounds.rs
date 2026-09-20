@@ -83,8 +83,8 @@ pub(crate) const SRGB_GAMMA_ROUNDTRIP_MAX_ULPS: u32 = 3;
 /// отображается ровно в граничный байт (0 или 255), а внутри-гамутные
 /// входы — в ближайший уровень сетки: ошибка encoded-канала не
 /// превышает половины шага сетки (0.5/255). Контрпример — линейный
-/// вход 1.5 (encoded ≈ 1.067 > 1): клампится к 1.0 → байт 255,
-/// encoded-ошибка строго больше нуля.
+/// вход 1.5 (encoded = srgb_gamma(1.5) ≈ 1.194 > 1): клампится к 1.0
+/// → байт 255, encoded-ошибка строго больше нуля.
 pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
 
 #[cfg(test)]
@@ -242,7 +242,7 @@ mod tests {
     /// → байт 255, encoded-ошибка строго больше нуля (vacuity guard).
     #[test]
     fn srgb_gamut_clamp_error_stays_within_bound() {
-        use crate::spaces::srgb::srgb_gamma;
+        use crate::spaces::srgb::{srgb_gamma, srgb8_from_linear};
         let linear_inputs = [
             1.5,   // контрпример: вне гамута сверху, encoded > 1 → байт 255
             -0.25, // вне гамута снизу, encoded < 0 → байт 0
@@ -250,8 +250,10 @@ mod tests {
             1.0 - 0.25 / 255.0,
         ];
         for v in linear_inputs {
+            // Production-квантизатор целиком: gamma + clamp + round.
+            let quantized = srgb8_from_linear([v, v, v]);
             let encoded = srgb_gamma(v).clamp(0.0, 1.0);
-            let grid = (encoded * 255.0).round() / 255.0;
+            let grid = f64::from(quantized.bytes()[0]) / 255.0;
             let error = (grid - encoded).abs();
             assert!(
                 error <= SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR,
@@ -260,8 +262,8 @@ mod tests {
                 SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR
             );
         }
-        // Vacuity guard: контрпример реально клампится к граничному байту.
-        let clamped_byte = (srgb_gamma(1.5).clamp(0.0, 1.0) * 255.0).round();
-        assert_eq!(clamped_byte, 255.0);
+        // Vacuity guard: оба контрпримера реально клампятся к граничным байтам.
+        assert_eq!(srgb8_from_linear([1.5, 1.5, 1.5]).bytes()[0], 255);
+        assert_eq!(srgb8_from_linear([-0.25, -0.25, -0.25]).bytes()[0], 0);
     }
 }
