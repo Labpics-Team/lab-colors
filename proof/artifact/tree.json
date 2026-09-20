@@ -66,7 +66,7 @@
   "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.pin": "9c32f67baa37cb0481ca7d5554443aad022d745f",
   "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256": "992bbe8dde17baf406e9d43aa5f84e2b7e018241",
   "crates/labcolors-core/contracts/contextual-region-formula-v1.lcir": "bc286907faf86f6d4761ba098edf1e0a2ea02911",
-  "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json": "e80455911db9b0e21dde632f2877d01369041e49",
+  "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json": "6e6854f4d26fe13cae2a2ad83677073a0b24107a",
   "crates/labcolors-core/contracts/solve-characterization-v1-linux-x64.json": "44b0e289763d4457c7aae0a8ffd44c77cebb69ba",
   "crates/labcolors-core/contracts/solve-characterization-v1-macos-aarch64.json": "44b0e289763d4457c7aae0a8ffd44c77cebb69ba",
   "crates/labcolors-core/contracts/solve-characterization-v1-windows-x64.json": "9692dc65b7a7c1012339cd9e7677617832173257",
@@ -455,7 +455,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "a4926487e2ee4c338a707cbbb81c39bab28537e3584f04e2decbd7c9badd87b3",
+ "record_sha256": "59053d7b1552c0018761f1c56e650fbfdb89a48ffbf08acad3abd7217c44c031",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
