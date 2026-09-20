@@ -188,8 +188,8 @@ jobs:
       - name: package labcolors-core and run extracted package doctests
         run: |
           set -euo pipefail
-          test -L crates/labcolors-core/LICENSE
-          test "$(readlink crates/labcolors-core/LICENSE)" = "../../LICENSE"
+          test -f crates/labcolors-core/LICENSE
+          test ! -L crates/labcolors-core/LICENSE
           cmp LICENSE crates/labcolors-core/LICENSE
           cargo package -p labcolors-core --locked
           crate_version="$(cargo pkgid -p labcolors-core | sed 's/.*#//')"
