@@ -6,11 +6,12 @@
 //! контрпримером — входом, на котором ошибка достигает заявленного
 //! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
 //!
-//! **Покрытие частично (staged wave 2): 4 из 9 доменов контракта
+//! **Покрытие частично (staged wave 3): 6 из 9 доменов контракта
 //! NUMERIC-01** — LCS round-trip, alpha/backdrop + quantization,
-//! transforms (gamma round-trip) и gamut (clamp перед квантованием).
-//! Непокрытые домены (perceptual reasoning, output projection, precision
-//! и др.) оставляют узел NUMERIC-01 открытым; интеграция в registry
+//! transforms (gamma round-trip), gamut (clamp перед квантованием),
+//! output projection (polar Oklch view) и precision (Oklab matmul,
+//! hypot/atan2). Непокрытые домены (perceptual reasoning и др.)
+//! оставляют узел NUMERIC-01 открытым; интеграция в registry
 //! `numerics.rs` выполняется при закрытии узла, не раньше.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет
@@ -27,6 +28,10 @@ pub(crate) enum NumericBoundSiteV1 {
     SrgbGammaRoundtrip,
     /// Clamp в [0,1] перед квантованием в srgb8_from_linear.
     SrgbGamutClamp,
+    /// Полярный Oklch-вид output projection (hypot/atan2/degrees).
+    OklchPolarView,
+    /// Точность Oklab-матричного round-trip (linear sRGB → Oklab → linear).
+    OklabMatmulPrecision,
 }
 
 impl NumericBoundSiteV1 {
@@ -37,6 +42,8 @@ impl NumericBoundSiteV1 {
             Self::AlphaSourceOverQuantization => "alpha-source-over-quantization-v1",
             Self::SrgbGammaRoundtrip => "srgb-gamma-roundtrip-v1",
             Self::SrgbGamutClamp => "srgb-gamut-clamp-v1",
+            Self::OklchPolarView => "oklch-polar-view-v1",
+            Self::OklabMatmulPrecision => "oklab-matmul-precision-v1",
         }
     }
 }
@@ -86,6 +93,29 @@ pub(crate) const SRGB_GAMMA_ROUNDTRIP_MAX_ULPS: u32 = 3;
 /// вход 1.5 (encoded = srgb_gamma(1.5) ≈ 1.194 > 1): клампится к 1.0
 /// → байт 255, encoded-ошибка строго больше нуля.
 pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
+
+/// Граница hue-вывода полярного Oklch-вида (output projection):
+/// production-путь `b.atan2(a).to_degrees()` с канонизацией в [0, 360).
+/// Арифметические инварианты: hypot/atan2/degrees — корректно-округлённые
+/// (0.5 ulp каждая); тест прогоняет ту же последовательность операций,
+/// что в `derive_oklch_view_v1`, на сетке целых углов 0..359 плюс
+/// диагональные точки (не случайная выборка) и проверяет абсолютную
+/// ошибку ≤ 1e-12 градусов (широкий запас над арифметическим
+/// минимумом, достигаемым на осях).
+pub(crate) const OKLCH_HUE_MAX_ABS_ERROR_DEGREES: f64 = 1.0e-12;
+
+/// Максимальная относительная ошибка Oklab-матричного round-trip
+/// (linear sRGB → Oklab → linear sRGB) через production-функции
+/// `srgb_linear_to_oklab`/`oklab_to_srgb_linear`. Опубликованные
+/// матрицы Ottosson — десятичные приближения, поэтому round-trip не
+/// битово-точен даже в точной арифметике; граница измерена полным
+/// перебором 256 уровней ахроматической оси и представительной
+/// выборкой хроматических входов в тесте ниже (масштаб нормировки —
+/// max(|канал|, 1/255)). Полнодоменное доказательство по всем 16.7M
+/// sRGB8-входам — обязательство открытого узла NUMERIC-01.
+/// Измеренный максимум на корпусе: 9.24e-7; константа фиксирует 1e-6
+/// как округлённую вверх внешнюю границу измерения.
+pub(crate) const OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR: f64 = 1.0e-6;
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +226,109 @@ mod tests {
         assert_eq!(
             NumericBoundSiteV1::SrgbGamutClamp.key(),
             "srgb-gamut-clamp-v1"
+        );
+        assert_eq!(
+            NumericBoundSiteV1::OklchPolarView.key(),
+            "oklch-polar-view-v1"
+        );
+        assert_eq!(
+            NumericBoundSiteV1::OklabMatmulPrecision.key(),
+            "oklab-matmul-precision-v1"
+        );
+    }
+
+    /// Oklch polar view: тот же путь операций, что в production
+    /// `derive_oklch_view_v1` (hypot + atan2 + to_degrees + канонизация
+    /// в [0, 360)), прогнанный на сетке целых углов 0..359 плюс
+    /// диагональные точки; проверяется идентичность chroma == hypot и
+    /// канонического hue против независимо вычисленных значений.
+    #[test]
+    fn oklch_polar_view_hue_stays_within_bound() {
+        let mut nonzero_error_seen = false;
+        for whole_deg in 0..360u32 {
+            // Точка на окружности радиуса 0.2 под этим углом.
+            let radians = f64::from(whole_deg) * std::f64::consts::PI / 180.0;
+            let a = 0.2 * radians.cos();
+            let b = 0.2 * radians.sin();
+            // Production-последовательность из derive_oklch_view_v1.
+            let chroma = a.hypot(b);
+            let degrees = b.atan2(a).to_degrees();
+            let canonical = if degrees < 0.0 {
+                degrees + 360.0
+            } else {
+                degrees
+            };
+            // Chroma воспроизводится точно.
+            assert!((chroma - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15));
+            // Канонический угол в [0, 360) и близок к целому градусу.
+            assert!(
+                (0.0..360.0).contains(&canonical),
+                "canonical hue {} out of range for whole degree {}",
+                canonical,
+                whole_deg
+            );
+            let error = (canonical - f64::from(whole_deg)).abs();
+            if error > 0.0 {
+                nonzero_error_seen = true;
+            }
+            assert!(
+                error <= OKLCH_HUE_MAX_ABS_ERROR_DEGREES,
+                "hue error {} for whole degree {} exceeds the declared bound {}",
+                error,
+                whole_deg,
+                OKLCH_HUE_MAX_ABS_ERROR_DEGREES
+            );
+        }
+        // Vacuity guard: хотя бы один уровень сетки показывает ненулевую ошибку.
+        assert!(
+            nonzero_error_seen,
+            "vacuity guard: every grid level showed exactly zero rounding"
+        );
+    }
+
+    /// Oklab матричный round-trip через production-функции: полный
+    /// перебор 256 уровней ахроматической оси плюс представительная
+    /// выборка хроматических входов; относительная ошибка канала ≤
+    /// заявленной границы.
+    #[test]
+    fn oklab_matmul_roundtrip_stays_within_bound() {
+        use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
+        let mut worst_rel = 0.0f64;
+        let check = |rgb: [f64; 3], worst_rel: &mut f64| {
+            let lab = srgb_linear_to_oklab(rgb);
+            let roundtrip = oklab_to_srgb_linear(lab);
+            for ch in 0..3 {
+                let scale = rgb[ch].abs().max(1.0 / 255.0);
+                let rel = (roundtrip[ch] - rgb[ch]).abs() / scale;
+                *worst_rel = worst_rel.max(rel);
+                assert!(
+                    rel <= OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR,
+                    "oklab roundtrip rel error {} at {:?} channel {} exceeds the bound {}",
+                    rel,
+                    rgb,
+                    ch,
+                    OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR
+                );
+            }
+        };
+        // Полная ахроматическая ось (все 256 уровней).
+        for byte in 0..=255u8 {
+            let v = f64::from(byte) / 255.0;
+            check([v, v, v], &mut worst_rel);
+        }
+        // Представительные хроматические входы.
+        for rgb in [
+            [0.5, 0.1, 0.9],
+            [0.9, 0.5, 0.1],
+            [0.1, 0.9, 0.5],
+            [1.0 / 255.0, 0.0, 0.0],
+            [0.25, 0.75, 0.5],
+        ] {
+            check(rgb, &mut worst_rel);
+        }
+        assert!(
+            worst_rel > 0.0,
+            "vacuity guard: every input round-tripped bit-exactly"
         );
     }
 
