@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 451,
+ "file_count": 452,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -137,12 +137,13 @@
   "crates/labcolors-core/src/lcs_hue_dimensionality_tests.rs": "baca309baa7b83b144449d32e93ab69b7b1e8754",
   "crates/labcolors-core/src/lcs_occurrence.rs": "81b845b4298f50b72b3bbe1aad0039c3ca1ffcd8",
   "crates/labcolors-core/src/lcs_occurrence_tests.rs": "d51ab4e4ef6459a7df598051c3de9880c7d8ca60",
-  "crates/labcolors-core/src/lib.rs": "11e168f6f09e7ad57ac6853ba6cfd4a8a5b22b65",
+  "crates/labcolors-core/src/lib.rs": "04766f6ac94e4de35343168a43182292c708f386",
   "crates/labcolors-core/src/lpc.rs": "e8e9ecb11a6e6c8f12688c98c6f76be986ec7b90",
   "crates/labcolors-core/src/material.rs": "2ad58f22f88c096c3f419ef22b57d41e654b8538",
   "crates/labcolors-core/src/neutral.rs": "ed71fd2592b1f6bf8cbc14ba45f0ef87e6776e5f",
   "crates/labcolors-core/src/numerical_plan.rs": "ab674f6d303e4e3c031c31fcba74990677a3c91f",
   "crates/labcolors-core/src/numerics.rs": "b8cdd04d1db45639dc9a3a06822073038bc52c4d",
+  "crates/labcolors-core/src/numerics_bounds.rs": "06491feebbd0e209240b845c62b9c0d55a535946",
   "crates/labcolors-core/src/observation.rs": "c396da852ca31bab9835bc5ecc99697d1ca00936",
   "crates/labcolors-core/src/observation_differential_oracle_tests.rs": "ee5c956630e524208b72ba0fbaac68821b2bf76b",
   "crates/labcolors-core/src/observation_tests.rs": "ef52a61991d2ca016dbac81912477b4d495e512a",
@@ -454,7 +455,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "c25f4f96ea2acc63df0a26b57225b928693ee43ddfd517ce466a5e94ab0981bb",
+ "record_sha256": "d8564b127b64a6bbeb73f0c73a07768085d4f0f010749a47f335e3b6df450a0a",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

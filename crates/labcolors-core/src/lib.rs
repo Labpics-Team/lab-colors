@@ -8,6 +8,7 @@ pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1
 
 pub(crate) mod clean_set;
+
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) mod composition;
 #[cfg_attr(
@@ -26,6 +27,13 @@ pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
 pub(crate) mod field_technical_quality;
+/// NUMERIC-01: independent numeric reference bounds with declared
+/// applicability, error bounds and counterexamples.
+#[allow(
+    dead_code,
+    reason = "NUMERIC-01 bounds staged before LOWER-01 consumer; validated by bound tests"
+)]
+pub(crate) mod numerics_bounds;
 pub(crate) mod spaces;
 
 #[cfg_attr(
