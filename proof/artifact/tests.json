@@ -840,7 +840,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "3b44a6ee987a51adafe8cd73ece7542d001c2fe7d5bd90ff70eb390e03f52525",
+ "record_sha256": "df716bf181493650fc9fb4752d8c9087587b9462a2c0c0cd3c63a50524b21d4a",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1515,6 +1515,8 @@
    "numerics_bounds::tests::alpha_midgrid_counterexample_hits_half_step: test",
    "numerics_bounds::tests::bound_site_keys_are_stable: test",
    "numerics_bounds::tests::lcs_roundtrip_error_stays_within_bound: test",
+   "numerics_bounds::tests::srgb_gamma_roundtrip_stays_within_bound: test",
+   "numerics_bounds::tests::srgb_gamut_clamp_error_stays_within_bound: test",
    "observation_differential_oracle_tests::adjacent_duplicate_detection_fires_for_any_duplicate_position: test",
    "observation_differential_oracle_tests::arena_integration_admission_works_across_slot_reuse_cycles: test",
    "observation_differential_oracle_tests::complexity_bound_scenario_id_reads_are_o_n_log_n: test",
@@ -2290,7 +2292,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1446,
+  "enabled_count": 1448,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
