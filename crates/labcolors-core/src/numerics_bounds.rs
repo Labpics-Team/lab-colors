@@ -39,8 +39,12 @@ impl NumericBoundSiteV1 {
 /// возвращается в то же место сетки либо в соседнее, поэтому сдвиг
 /// канала не превышает 1 уровня u8. Метод: round-trip через
 /// `LcsColor::from_hex`/`to_hex` (production-путь, включающий
-/// квантование `srgb8_from_linear`); контрпример ищется перебором
-/// off-grid входов в тесте ниже.
+/// квантование `srgb8_from_linear`).
+///
+/// Подтверждена только выбранным корпусом (324 комбинации уровней
+/// каналов в тесте ниже), а не всей областью sRGB8 (16 777 216 входов);
+/// полнодоменное доказательство — обязательство открытого узла
+/// NUMERIC-01, не этой staged-волны.
 pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 1;
 
 /// Квантование source-over до u8 использует округление к ближайшему,
@@ -141,7 +145,7 @@ mod tests {
             "midgrid input must actually exercise rounding, error was zero"
         );
         assert!(
-            error <= ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR + 1e-12,
+            error <= ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR,
             "midgrid error {} exceeds the declared bound {}",
             error,
             ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR
