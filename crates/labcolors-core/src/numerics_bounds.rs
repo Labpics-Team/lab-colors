@@ -61,7 +61,10 @@ pub(crate) const ALPHA_MIDGRID_BACKDROP: [u8; 3] = [255, 255, 255];
 mod tests {
     use super::*;
     use crate::alpha::composite_over_srgb8;
-    #[allow(deprecated, reason = "the bound targets the frozen V1 round-trip itself")]
+    #[allow(
+        deprecated,
+        reason = "the bound targets the frozen V1 round-trip itself"
+    )]
     use crate::lcs::LcsColor;
 
     /// Парсит `#rrggbb` в байты — вход теста обязан быть валиден по построению.
@@ -84,7 +87,10 @@ mod tests {
     /// (граница измеряет его дрейф); замена на `ModeledLcsOccurrenceV1`
     /// выполняется вместе с миграцией самого сайта.
     #[test]
-    #[allow(deprecated, reason = "the bound targets the frozen V1 round-trip itself")]
+    #[allow(
+        deprecated,
+        reason = "the bound targets the frozen V1 round-trip itself"
+    )]
     fn lcs_roundtrip_error_stays_within_bound() {
         // Широкий набор входов, включая не-угловые уровни всех каналов.
         for r in [0u8, 1, 17, 64, 100, 137, 200, 254, 255] {

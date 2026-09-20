@@ -68,6 +68,8 @@ ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
     "6758df8bf846a423adc27bec71035b0fa2e15db11aea1414beb4da923292cc11",
     # PR #691: local recomputation after proof payload refresh
     "62085a606a541329a898bb8de5a2e941de44c493c5a2e74d6ae0717804b48c3c",
+    # PR #752: NUMERIC-01 numerics_bounds registration shifted lib.rs hash
+    "0e15aa3cbdf0e44a01a7162a4834eb0ce0dccab827fc7747f57ae806d183aba9",
 })
 EXPECTED_Q55_PROOF_SHA256 = (
     "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
