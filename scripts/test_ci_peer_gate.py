@@ -29,6 +29,7 @@ SPEC.loader.exec_module(gate)
 SHA = "a" * 40
 CI = ".github/workflows/ci.yml"
 NATIVE = ".github/workflows/native-conformance.yml"
+ADMISSION = ".github/workflows/code-admission-public.yml"
 
 
 def run(
@@ -57,18 +58,18 @@ class PeerGateTest(unittest.TestCase):
         return gate.evaluate_runs(runs, head_sha=SHA, event=event)
 
     def test_exact_required_successes_are_the_only_green_state(self) -> None:
-        decision = self.evaluate([run(CI), run(NATIVE)])
+        decision = self.evaluate([run(CI), run(NATIVE), run(ADMISSION)])
         self.assertEqual(decision.state, "success")
 
     def test_empty_run_set_waits_and_can_never_turn_green(self) -> None:
         decision = self.evaluate([])
         self.assertEqual(decision.state, "wait")
-        self.assertEqual(len(decision.reasons), 2)
+        self.assertEqual(len(decision.reasons), 3)
 
     def test_wrong_head_and_wrong_event_do_not_satisfy_admission(self) -> None:
         for mutant in (
-            [run(CI, head_sha="b" * 40), run(NATIVE)],
-            [run(CI, event="merge_group"), run(NATIVE)],
+            [run(CI, head_sha="b" * 40), run(NATIVE), run(ADMISSION)],
+            [run(CI, event="merge_group"), run(NATIVE), run(ADMISSION)],
         ):
             with self.subTest(mutant=mutant):
                 self.assertEqual(self.evaluate(mutant).state, "wait")
@@ -77,19 +78,19 @@ class PeerGateTest(unittest.TestCase):
         for conclusion in ("skipped", "neutral", "cancelled", "failure", None):
             with self.subTest(conclusion=conclusion):
                 decision = self.evaluate(
-                    [run(CI, conclusion=conclusion), run(NATIVE)]
+                    [run(CI, conclusion=conclusion), run(NATIVE), run(ADMISSION)]
                 )
                 self.assertEqual(decision.state, "fail")
 
     def test_pending_required_run_waits(self) -> None:
         decision = self.evaluate(
-            [run(CI, status="in_progress", conclusion=None), run(NATIVE)]
+            [run(CI, status="in_progress", conclusion=None), run(NATIVE), run(ADMISSION)]
         )
         self.assertEqual(decision.state, "wait")
 
     def test_unknown_status_is_red_not_pending(self) -> None:
         decision = self.evaluate(
-            [run(CI, status="invented", conclusion=None), run(NATIVE)]
+            [run(CI, status="invented", conclusion=None), run(NATIVE), run(ADMISSION)]
         )
         self.assertEqual(decision.state, "fail")
 
@@ -99,6 +100,7 @@ class PeerGateTest(unittest.TestCase):
                 run(CI, conclusion="failure", run_id=10, run_attempt=1),
                 run(CI, run_id=10, run_attempt=2),
                 run(NATIVE),
+                run(ADMISSION),
             ]
         )
         self.assertEqual(decision.state, "success")
@@ -109,25 +111,26 @@ class PeerGateTest(unittest.TestCase):
                 run(CI, run_id=10, run_attempt=2),
                 run(CI, conclusion="failure", run_id=11, run_attempt=1),
                 run(NATIVE),
+                run(ADMISSION),
             ]
         )
         self.assertEqual(decision.state, "fail")
 
     def test_unadmitted_peer_is_red(self) -> None:
         decision = self.evaluate(
-            [run(CI), run(NATIVE), run(".github/workflows/new-peer.yml")]
+            [run(CI), run(NATIVE), run(ADMISSION), run(".github/workflows/new-peer.yml")]
         )
         self.assertEqual(decision.state, "fail")
 
     def test_gate_run_is_ignored_without_counting_as_evidence(self) -> None:
         decision = self.evaluate(
-            [run(gate.GATE_WORKFLOW), run(CI), run(NATIVE)]
+            [run(gate.GATE_WORKFLOW), run(CI), run(NATIVE), run(ADMISSION)]
         )
         self.assertEqual(decision.state, "success")
 
     def test_merge_queue_requires_the_same_complete_evidence(self) -> None:
         decision = self.evaluate(
-            [run(CI, event="merge_group"), run(NATIVE, event="merge_group")],
+            [run(CI, event="merge_group"), run(NATIVE, event="merge_group"), run(ADMISSION, event="merge_group")],
             event="merge_group",
         )
         self.assertEqual(decision.state, "success")
