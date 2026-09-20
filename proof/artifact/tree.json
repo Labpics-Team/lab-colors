@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 450,
+ "file_count": 451,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -87,7 +87,8 @@
   "crates/labcolors-core/src/clean_set_tests.rs": "d9ae4677faf1537e607d10ede3e3a70cacbc4253",
   "crates/labcolors-core/src/cleanliness/alpha_aggregation.rs": "61c69783093536cf186d95fb982d9e3637cb5b25",
   "crates/labcolors-core/src/cleanliness/alpha_assessment.rs": "10ff8bcac99d88c010d9db19e5446cf2ab9c2cc0",
-  "crates/labcolors-core/src/cleanliness/mod.rs": "14a220a32310c8c3ec071c62bfdefcbc58d79b18",
+  "crates/labcolors-core/src/cleanliness/mod.rs": "9d8f9f40e7fb00959e437f57f8a9bd0b4295bc82",
+  "crates/labcolors-core/src/cleanliness/relation_corpus.rs": "ea0f73e07bc8c7577c3a1289b0ebff4dd9270bc9",
   "crates/labcolors-core/src/compiled_dependency_plan.rs": "8cd4640b1c2921718f50255091d663280c221c51",
   "crates/labcolors-core/src/compiled_dependency_plan_tests.rs": "c2bc2d238710c76cb75df29d2684eb00a909c7f2",
   "crates/labcolors-core/src/composition.rs": "00614d59cd62f89083543ee07a3532c078cf8577",
@@ -453,7 +454,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "6b3f3b4c060e6bf29c06c1864712b4e1e52c8196e3b0f64ce690503365ea9907",
+ "record_sha256": "ff2953e30fc7f9b56ef1332f3bc1f7c4ec77290a07cd28cedc88676fece602e1",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
