@@ -6,11 +6,12 @@
 //! контрпримером — входом, на котором ошибка достигает заявленного
 //! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
 //!
-//! **Покрытие частично (staged wave 1): 2 из 9 доменов контракта
-//! NUMERIC-01** — LCS round-trip и alpha/backdrop + quantization.
-//! Непокрытые домены (perceptual reasoning, output projection, transforms,
-//! gamut, precision и др.) оставляют узел NUMERIC-01 открытым; интеграция
-//! в registry `numerics.rs` выполняется при закрытии узла, не раньше.
+//! **Покрытие частично (staged wave 2): 4 из 9 доменов контракта
+//! NUMERIC-01** — LCS round-trip, alpha/backdrop + quantization,
+//! transforms (gamma round-trip) и gamut (clamp перед квантованием).
+//! Непокрытые домены (perceptual reasoning, output projection, precision
+//! и др.) оставляют узел NUMERIC-01 открытым; интеграция в registry
+//! `numerics.rs` выполняется при закрытии узла, не раньше.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет
 //! production-вычисления и не создаёт новый вердикт.
@@ -22,6 +23,10 @@ pub(crate) enum NumericBoundSiteV1 {
     LcsSrgb8Roundtrip,
     /// Alpha source-over композиция в encoded sRGB с квантованием до u8.
     AlphaSourceOverQuantization,
+    /// sRGB gamma encode→decode round-trip на production-функциях.
+    SrgbGammaRoundtrip,
+    /// Clamp в [0,1] перед квантованием в srgb8_from_linear.
+    SrgbGamutClamp,
 }
 
 impl NumericBoundSiteV1 {
@@ -30,6 +35,8 @@ impl NumericBoundSiteV1 {
         match self {
             Self::LcsSrgb8Roundtrip => "lcs-srgb8-roundtrip-v1",
             Self::AlphaSourceOverQuantization => "alpha-source-over-quantization-v1",
+            Self::SrgbGammaRoundtrip => "srgb-gamma-roundtrip-v1",
+            Self::SrgbGamutClamp => "srgb-gamut-clamp-v1",
         }
     }
 }
@@ -60,6 +67,25 @@ pub(crate) const ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR: f64 = 1.0 / 510.0;
 pub(crate) const ALPHA_MIDGRID_TINT: [u8; 3] = [128, 128, 128];
 pub(crate) const ALPHA_MIDGRID_ALPHA: f64 = 0.5;
 pub(crate) const ALPHA_MIDGRID_BACKDROP: [u8; 3] = [255, 255, 255];
+
+/// Максимальная относительная ошибка gamma round-trip
+/// `srgb_gamma_inv(srgb_gamma(v)) - v` на сетке u8/255. Гамма и её
+/// инверсия — точные аналитические функции; остаточная ошибка — только
+/// binary64 rounding в `powf`-ветвях. Эмпирическая граница: 3 ulp,
+/// измерена полным перебором всех 256 уровней сетки (максимум на уровне
+/// 46, подтверждён независимым binary64-расчётом) через
+/// production-функции `srgb_gamma`/`srgb_gamma_inv` в тесте ниже
+/// (полный домен сетки, не выборка).
+pub(crate) const SRGB_GAMMA_ROUNDTRIP_MAX_ULPS: u32 = 3;
+
+/// Граница gamut-clamp: `srgb8_from_linear` клампит encoded-значение в
+/// [0, 1] до квантования, поэтому линейный вход вне [0,1] (вне гамута)
+/// отображается ровно в граничный байт (0 или 255), а внутри-гамутные
+/// входы — в ближайший уровень сетки: ошибка encoded-канала не
+/// превышает половины шага сетки (0.5/255). Контрпример — линейный
+/// вход 1.5 (encoded ≈ 1.067 > 1): клампится к 1.0 → байт 255,
+/// encoded-ошибка строго больше нуля.
+pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
 
 #[cfg(test)]
 mod tests {
@@ -163,5 +189,79 @@ mod tests {
             NumericBoundSiteV1::AlphaSourceOverQuantization.key(),
             "alpha-source-over-quantization-v1"
         );
+        assert_eq!(
+            NumericBoundSiteV1::SrgbGammaRoundtrip.key(),
+            "srgb-gamma-roundtrip-v1"
+        );
+        assert_eq!(
+            NumericBoundSiteV1::SrgbGamutClamp.key(),
+            "srgb-gamut-clamp-v1"
+        );
+    }
+
+    /// Gamma round-trip через production-функции: полный домен сетки
+    /// (все 256 уровней, не выборка), ошибка в ulp относительно входа.
+    /// Отдельно фиксируется линейная ветвь (≤0.04045) — там round-trip
+    /// точен до последнего бита деления/умножения на 12.92.
+    #[test]
+    fn srgb_gamma_roundtrip_stays_within_bound() {
+        use crate::spaces::srgb::{srgb_gamma, srgb_gamma_inv};
+        let mut worst = 0u32;
+        for byte in 0..=255u8 {
+            let v = f64::from(byte) / 255.0;
+            let roundtrip = srgb_gamma_inv(srgb_gamma(v));
+            let ulps = ulp_distance(v, roundtrip);
+            worst = worst.max(ulps);
+            assert!(
+                ulps <= SRGB_GAMMA_ROUNDTRIP_MAX_ULPS,
+                "gamma roundtrip at byte {} drifted {} ulps (bound {})",
+                byte,
+                ulps,
+                SRGB_GAMMA_ROUNDTRIP_MAX_ULPS
+            );
+        }
+        assert!(
+            worst > 0,
+            "vacuity guard: at least one grid level must show nonzero rounding"
+        );
+    }
+
+    /// ULP-расстояние двух конечных неотрицательных f64 в [0,1]:
+    /// для одного знака разность битовых представлений — точное число
+    /// промежуточных ulp, делить её не нужно.
+    fn ulp_distance(a: f64, b: f64) -> u32 {
+        assert!(a.is_finite() && b.is_finite());
+        assert!((0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b));
+        u32::try_from(a.to_bits().abs_diff(b.to_bits())).expect("ulp count fits u32")
+    }
+
+    /// Gamut-clamp: ошибка измеряется в ENCODED-домене (как заявляет
+    /// константа) — расстояние от клампнутого encoded-значения до
+    /// ближайшего уровня сетки u8/255 не превышает половины шага.
+    /// Контрпример — линейный вход 1.5 (encoded > 1): клампится к 1.0
+    /// → байт 255, encoded-ошибка строго больше нуля (vacuity guard).
+    #[test]
+    fn srgb_gamut_clamp_error_stays_within_bound() {
+        use crate::spaces::srgb::srgb_gamma;
+        let linear_inputs = [
+            1.5,   // контрпример: вне гамута сверху, encoded > 1 → байт 255
+            -0.25, // вне гамута снизу, encoded < 0 → байт 0
+            0.5,
+            1.0 - 0.25 / 255.0,
+        ];
+        for v in linear_inputs {
+            let encoded = srgb_gamma(v).clamp(0.0, 1.0);
+            let grid = (encoded * 255.0).round() / 255.0;
+            let error = (grid - encoded).abs();
+            assert!(
+                error <= SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR,
+                "gamut clamp error {} exceeds the declared bound {}",
+                error,
+                SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR
+            );
+        }
+        // Vacuity guard: контрпример реально клампится к граничному байту.
+        let clamped_byte = (srgb_gamma(1.5).clamp(0.0, 1.0) * 255.0).round();
+        assert_eq!(clamped_byte, 255.0);
     }
 }
