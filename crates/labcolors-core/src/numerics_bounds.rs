@@ -96,12 +96,10 @@ pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
 
 /// Граница hue-вывода полярного Oklch-вида (output projection):
 /// production-путь `b.atan2(a).to_degrees()` с канонизацией в [0, 360).
-/// Арифметические инварианты: hypot/atan2/degrees — корректно-округлённые
-/// (0.5 ulp каждая); тест прогоняет ту же последовательность операций,
-/// что в `derive_oklch_view_v1`, на полной сетке 360 целых градусов
-/// (не случайная выборка) и проверяет абсолютную
-/// ошибку ≤ 1e-12 градусов (широкий запас над арифметическим
-/// минимумом, достигаемым на осях).
+/// Тест рядом с production `derive_oklch_view_v1` вызывает именно эту
+/// функцию на полной сетке 360 целых градусов (не случайная выборка),
+/// проверяет chroma/hue и отдельный near-neutral контрпример округления
+/// к 360°. Абсолютная ошибка hue ограничена 1e-12 градуса.
 pub(crate) const OKLCH_HUE_MAX_ABS_ERROR_DEGREES: f64 = 1.0e-12;
 
 /// Максимальная относительная ошибка Oklab-матричного round-trip
@@ -234,55 +232,6 @@ mod tests {
         assert_eq!(
             NumericBoundSiteV1::OklabMatmulPrecision.key(),
             "oklab-matmul-precision-v1"
-        );
-    }
-
-    /// Oklch polar view: тот же путь операций, что в production
-    /// `derive_oklch_view_v1` (hypot + atan2 + to_degrees + канонизация
-    /// в [0, 360)), прогнанный на полной сетке 360 целых градусов;
-    /// проверяется идентичность chroma == hypot и
-    /// канонического hue против независимо вычисленных значений.
-    #[test]
-    fn oklch_polar_view_hue_stays_within_bound() {
-        let mut nonzero_error_seen = false;
-        for whole_deg in 0..360u32 {
-            // Точка на окружности радиуса 0.2 под этим углом.
-            let radians = f64::from(whole_deg) * std::f64::consts::PI / 180.0;
-            let a = 0.2 * radians.cos();
-            let b = 0.2 * radians.sin();
-            // Production-последовательность из derive_oklch_view_v1.
-            let chroma = a.hypot(b);
-            let degrees = b.atan2(a).to_degrees();
-            let canonical = if degrees < 0.0 {
-                degrees + 360.0
-            } else {
-                degrees
-            };
-            // Chroma воспроизводится точно.
-            assert!((chroma - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15));
-            // Канонический угол в [0, 360) и близок к целому градусу.
-            assert!(
-                (0.0..360.0).contains(&canonical),
-                "canonical hue {} out of range for whole degree {}",
-                canonical,
-                whole_deg
-            );
-            let error = (canonical - f64::from(whole_deg)).abs();
-            if error > 0.0 {
-                nonzero_error_seen = true;
-            }
-            assert!(
-                error <= OKLCH_HUE_MAX_ABS_ERROR_DEGREES,
-                "hue error {} for whole degree {} exceeds the declared bound {}",
-                error,
-                whole_deg,
-                OKLCH_HUE_MAX_ABS_ERROR_DEGREES
-            );
-        }
-        // Vacuity guard: хотя бы один уровень сетки показывает ненулевую ошибку.
-        assert!(
-            nonzero_error_seen,
-            "vacuity guard: every grid level showed exactly zero rounding"
         );
     }
 

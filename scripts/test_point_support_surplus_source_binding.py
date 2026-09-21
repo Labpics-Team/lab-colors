@@ -6,6 +6,9 @@ from __future__ import annotations
 import hashlib
 import json
 import runpy
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,24 +34,7 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
 
     def test_committed_proof_is_canonical_and_replays(self) -> None:
         replayed = self.verifier["canonical_proof"]()
-        # Merge-ref may contain stale source cone files, producing a different
-        # source_closure_sha256 than the committed proof. Accept either value
-        # as long as the rest of the proof structure matches exactly.
-        accepted_hashes = self.verifier.get("ACCEPTED_SOURCE_CAPSULE_SHA256")
-        if accepted_hashes is not None and replayed.get("source_closure_sha256") in accepted_hashes:
-            normalized_replayed = dict(replayed)
-            normalized_proof = dict(self.proof)
-            # Merge-ref may contain stale source files producing different
-            # per-file hashes, verifier bytes, and closure digest while the
-            # semantic content remains equivalent. Neutralize all
-            # environment-dependent fields so the comparison tests only the
-            # proof structure and numerical invariants.
-            for env_key in ("source_closure_sha256", "verifier_sha256", "source_files", "proof_payload_sha256"):
-                normalized_replayed[env_key] = "__accepted__"
-                normalized_proof[env_key] = "__accepted__"
-            self.assertEqual(normalized_replayed, normalized_proof)
-        else:
-            self.assertEqual(replayed, self.proof)
+        self.assertEqual(replayed, self.proof)
         payload = dict(self.proof)
         payload_digest = payload.pop("proof_payload_sha256")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -62,13 +48,7 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
         digest = self.verifier["source_closure_digest"]
         mutate = self.verifier["mutate_source"]
         baseline = digest(self.sources)
-        # Merge-ref may contain stale source cone files, producing a different
-        # source_closure_sha256 than the committed proof. Accept either value.
-        accepted_hashes = self.verifier.get("ACCEPTED_SOURCE_CAPSULE_SHA256")
-        if accepted_hashes is not None:
-            self.assertIn(baseline, accepted_hashes)
-        else:
-            self.assertEqual(baseline, self.proof["source_closure_sha256"])
+        self.assertEqual(baseline, self.proof["source_closure_sha256"])
 
         regressions = (
             (
@@ -170,6 +150,77 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             "a/b >= p*(B-drop)/(q*B) iff a*q*B >= p*(B-drop)*b",
             algebra["identities"],
         )
+
+
+class PointSupportSurplusCliTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        verifier = runpy.run_path(str(VERIFIER), run_name="point_support_cli_test")
+        cls.snapshot = {
+            path.relative_to(REPO_ROOT): path.read_bytes()
+            for path in (*verifier["SOURCE_CONE_PATHS"], VERIFIER, PROOF)
+        }
+
+    def assert_cli(
+        self,
+        expected_success: bool,
+        changes: dict[Path, bytes | None] | None = None,
+    ) -> None:
+        # Настоящий CLI читает изолированный filesystem snapshot: подмена
+        # digest-helper не обнаружила бы прежний обход проверки в main().
+        with tempfile.TemporaryDirectory(prefix="point-support-cli-") as directory:
+            root = Path(directory)
+            files = {**self.snapshot, **(changes or {})}
+            for relative, content in files.items():
+                if content is None:
+                    continue
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            proof_path = root / PROOF.relative_to(REPO_ROOT)
+            proof_before = proof_path.read_bytes()
+            result = subprocess.run(
+                [sys.executable, str(root / VERIFIER.relative_to(REPO_ROOT))],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(proof_path.read_bytes(), proof_before)
+            if expected_success:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.encode("utf-8"), proof_before)
+            else:
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("verification: PASS", result.stderr)
+
+    def test_cli_replays_exact_source_without_writing_the_receipt(self) -> None:
+        self.assert_cli(True)
+
+    def test_cli_rejects_a_changed_retention_law_with_the_old_receipt(self) -> None:
+        path = Path("crates/labcolors-core/src/point_support.rs")
+        original = self.snapshot[path]
+        old = b"DROP_BASIS_POINTS_SCALE - self.0"
+        self.assertEqual(original.count(old), 1)
+        self.assert_cli(False, {path: original.replace(old, b"self.0", 1)})
+
+    def test_cli_rejects_a_self_consistent_but_false_numerical_receipt(self) -> None:
+        path = PROOF.relative_to(REPO_ROOT)
+        forged = json.loads(self.snapshot[path])
+        forged["integer_replay_envelope"]["required_numerator_max"] = 0
+        forged.pop("proof_payload_sha256")
+        canonical = json.dumps(forged, sort_keys=True, separators=(",", ":"))
+        forged["proof_payload_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        encoded = json.dumps(forged, sort_keys=True, separators=(",", ":")) + "\n"
+        self.assert_cli(False, {path: encoded.encode("utf-8")})
+
+    def test_cli_rejects_verifier_revision_drift(self) -> None:
+        path = VERIFIER.relative_to(REPO_ROOT)
+        self.assert_cli(False, {path: self.snapshot[path] + b"\n# revision drift\n"})
+
+    def test_cli_requires_the_recorded_source_files(self) -> None:
+        self.assert_cli(False, {Path("crates/labcolors-core/src/point_support.rs"): None})
 
 
 if __name__ == "__main__":

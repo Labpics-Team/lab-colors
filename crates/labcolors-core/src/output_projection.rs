@@ -213,7 +213,12 @@ fn derive_oklch_view_v1(oklab: [f64; 3]) -> Result<OklchViewV1, OklchViewDerivat
     } else {
         let degrees = b.atan2(a).to_degrees();
         let canonical = if degrees < 0.0 {
-            degrees + 360.0
+            let wrapped = degrees + 360.0;
+            if wrapped >= 360.0 {
+                0.0
+            } else {
+                wrapped
+            }
         } else {
             degrees
         };
@@ -872,7 +877,46 @@ pub(crate) fn project_output_v1(
 #[cfg(test)]
 mod hdr_tests {
     use super::*;
+    use crate::numerics_bounds::OKLCH_HUE_MAX_ABS_ERROR_DEGREES;
     use crate::spaces::pq::AbsoluteLuminanceV1;
+
+    #[test]
+    fn oklch_polar_view_hue_stays_within_bound() {
+        let mut nonzero_error_seen = false;
+        for whole_deg in 0..360u32 {
+            let radians = f64::from(whole_deg) * std::f64::consts::PI / 180.0;
+            let a = 0.2 * radians.cos();
+            let b = 0.2 * radians.sin();
+            let view = derive_oklch_view_v1([0.5, a, b]).expect("finite Oklab view");
+            assert!(
+                (view.c() - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15)
+            );
+            let actual = match view.hue() {
+                HueState::Defined(hue) => hue.degrees(),
+                other => panic!("expected defined hue for {whole_deg}°, got {other:?}"),
+            };
+            let error = (actual - f64::from(whole_deg)).abs();
+            nonzero_error_seen |= error > 0.0;
+            assert!(
+                error <= OKLCH_HUE_MAX_ABS_ERROR_DEGREES,
+                "hue error {error} for whole degree {whole_deg} exceeds {}",
+                OKLCH_HUE_MAX_ABS_ERROR_DEGREES
+            );
+        }
+        assert!(
+            nonzero_error_seen,
+            "vacuity guard: every grid level showed exactly zero rounding"
+        );
+
+        // A tiny negative angle used to round degrees + 360 to exactly 360.0
+        // and fail HueAngle's half-open [0, 360) domain.
+        let near_zero_angle =
+            derive_oklch_view_v1([0.5, 0.2, -1.0e-18]).expect("near-zero negative hue is valid");
+        match near_zero_angle.hue() {
+            HueState::Defined(hue) => assert_eq!(hue.degrees(), 0.0),
+            other => panic!("near-zero-angle hue must remain defined, got {other:?}"),
+        }
+    }
 
     // ── Unit Tests (8) ──────────────────────────────────────────────────
 
