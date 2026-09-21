@@ -109,6 +109,17 @@ fn exact_packet_length_precedes_digest_validation() {
     );
 }
 
+#[test]
+fn complete_oversized_payload_hits_payload_resource_limit() {
+    let payload = vec![0x5a; MAX_PAYLOAD_BYTES_V1 + 1];
+    let bytes = wire(b"runtime", REVISION, b"context", &payload);
+    assert!(bytes.len() <= MAX_ENVELOPE_BYTES_V1);
+    assert_eq!(
+        UntrustedEnvelopeV1::decode(&bytes),
+        Err(CertificateErrorV1::ResourceLimitExceeded)
+    );
+}
+
 fn producer(
     runtime: &str,
     context: &str,

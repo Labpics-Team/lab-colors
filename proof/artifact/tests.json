@@ -857,7 +857,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "0883f872f725574abada6eacb82bd14a5068f5364a18ba090dbfbaf928194552",
+ "record_sha256": "addefa7cd4df9183307b864ad7252260b4062c26cb7e341587d314472a733d41",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -942,6 +942,7 @@
    "cam16_viewing_conditions_derivation: test",
    "canonical_wcag22_criterion_is_total_and_non_vacuous_across_the_hue_circle: test",
    "certificate::contract_tests::byte_capacity_is_reached_by_real_admissions_without_eviction: test",
+   "certificate::contract_tests::complete_oversized_payload_hits_payload_resource_limit: test",
    "certificate::contract_tests::debug_is_static_across_distinct_identifiers_sizes_and_ledger_counts: test",
    "certificate::contract_tests::entry_capacity_is_reached_by_real_admissions_without_eviction: test",
    "certificate::contract_tests::exact_packet_length_precedes_digest_validation: test",
@@ -2336,7 +2337,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1475,
+  "enabled_count": 1476,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
