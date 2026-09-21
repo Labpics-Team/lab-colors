@@ -282,6 +282,9 @@ jobs:
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_mutation.py
+      - name: Core source certificate build histories
+        timeout-minutes: 4
+        run: python3 scripts/test_certificate_source_build.py
       - name: cargo test
         run: cargo test --workspace --locked
       # Floor baseline gate: test count must never regress below the declared

@@ -1,12 +1,20 @@
 import init, {
+  MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
   compileProgramWire,
+  decodeCertificateEnvelope,
   evaluateWcag22,
+  isCertificateError,
   isProgramError,
   numericalCapabilityManifest,
 } from "@labpics/colors";
-import type { ProgramErrorCode, ProgramOperation } from "@labpics/colors";
+import type {
+  CertificateErrorCode,
+  ProgramErrorCode,
+  ProgramOperation,
+  UntrustedCertificateEnvelopeV1,
+} from "@labpics/colors";
 import {
   PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
@@ -50,6 +58,12 @@ void invalidCode;
 void readProgramFailure;
 void evaluateWcag22("#000000", "#FFFFFF", "sc-1.4.3-text-default");
 void numericalCapabilityManifest();
+void MAX_CERTIFICATE_ENVELOPE_BYTES;
+const certificateMetadata: UntrustedCertificateEnvelopeV1 = decodeCertificateEnvelope(new Uint8Array());
+const readCertificateError = (error: unknown): CertificateErrorCode | undefined =>
+  isCertificateError(error) ? error.code : undefined;
+void certificateMetadata;
+void readCertificateError;
 
 // Legacy recipe/browser roots are intentionally absent after atomic C7c.
 // @ts-expect-error removed: RoleRecipe
