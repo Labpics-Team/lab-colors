@@ -214,11 +214,7 @@ fn derive_oklch_view_v1(oklab: [f64; 3]) -> Result<OklchViewV1, OklchViewDerivat
         let degrees = b.atan2(a).to_degrees();
         let canonical = if degrees < 0.0 {
             let wrapped = degrees + 360.0;
-            if wrapped >= 360.0 {
-                0.0
-            } else {
-                wrapped
-            }
+            if wrapped >= 360.0 { 0.0 } else { wrapped }
         } else {
             degrees
         };
@@ -888,9 +884,7 @@ mod hdr_tests {
             let a = 0.2 * radians.cos();
             let b = 0.2 * radians.sin();
             let view = derive_oklch_view_v1([0.5, a, b]).expect("finite Oklab view");
-            assert!(
-                (view.c() - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15)
-            );
+            assert!((view.c() - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15));
             let actual = match view.hue() {
                 HueState::Defined(hue) => hue.degrees(),
                 other => panic!("expected defined hue for {whole_deg}°, got {other:?}"),
