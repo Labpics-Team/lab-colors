@@ -19,3 +19,12 @@ pub(crate) mod alpha_assessment;
     reason = "Staged for R-09 alpha backdrop; consumer lands in R-06 field attachment"
 )]
 pub(crate) mod alpha_aggregation;
+
+/// CLEAN-01: independent corpus of pairwise cleanliness relations.
+/// Partial order over verdicts with context keys (alpha, backdrop);
+/// total-order claims over incomparable pairs are rejected.
+#[allow(
+    dead_code,
+    reason = "CLEAN-01 corpus staged before LOWER-01 consumer; relations are validated by corpus tests"
+)]
+pub(crate) mod relation_corpus;
