@@ -49,16 +49,16 @@ impl NumericBoundSiteV1 {
 
 /// Максимальная ошибка round-trip sRGB8→LCS→sRGB8 по одному каналу,
 /// измеренная в шагах сетки sRGB8: после прямого пробега значение
-/// возвращается в то же место сетки либо в соседнее, поэтому сдвиг
-/// канала не превышает 1 уровня u8. Метод: round-trip через
+/// возвращается в тот же encoded sRGB8 байт на всём конечном домене,
+/// поэтому максимальный сдвиг канала равен 0. Метод: round-trip через
 /// `LcsColor::from_srgb8_with_vc`/`to_srgb8_with_vc` (тот же production-путь,
 /// но без строковых parse/format-аллокаций тестового harness). Тест ниже
 /// исчерпывающе перебирает весь конечный домен encoded sRGB8: 16 777 216
-/// стимулов при одной и той же `ViewingConditions::srgb()`. Любой сдвиг канала
-/// более чем на 1 уровень является falsifier; mismatched viewing conditions
+/// стимулов при одной и той же `ViewingConditions::srgb()`. Любой ненулевой
+/// сдвиг канала является falsifier; mismatched viewing conditions
 /// не входят в applicability envelope и отдельно дают отрицательный control в
 /// `lcs::tests::wrong_vc_roundtrip_drifts`.
-pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 1;
+pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 0;
 
 /// Квантование source-over до u8 использует округление к ближайшему,
 /// поэтому ошибка каждого канала результата не превышает половины шага
