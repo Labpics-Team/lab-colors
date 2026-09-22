@@ -11,6 +11,16 @@ labcolors-transport serialize [--format json|jsonl] [FILE|-]
 labcolors-transport inspect [--format json|jsonl] [FILE|-]
 ```
 
+## Первый рабочий сценарий
+
+Для валидного `envelope.lcen` проверьте lossless round-trip:
+
+```sh
+labcolors-transport parse envelope.lcen > envelope.json
+labcolors-transport serialize envelope.json > roundtrip.lcen
+cmp envelope.lcen roundtrip.lcen
+```
+
 `FILE` по умолчанию означает stdin. За один запуск обрабатывается ровно один
 bounded envelope. `parse` проверяет бинарный `LCEN` через Core и выдаёт lossless
 transport-document v1 с lowercase `wireHex`. `serialize` принимает этот документ,

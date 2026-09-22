@@ -857,7 +857,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "3809d60dad529af858dba1eeb73e3e76c1b451c5dfe3d69d03bb80d85c826f22",
+ "record_sha256": "54535d21f218018a01c1e38f7217dae6c9514ac2080d0ee60fe56621ecb6fc73",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -893,6 +893,7 @@
    "app::tests::certificate_rejection_keeps_static_typed_error_and_no_output: test",
    "app::tests::cli_argument_failures_are_closed_and_machine_readable: test",
    "app::tests::inspect_is_metadata_only_and_matches_core_projection: test",
+   "app::tests::json_writer_failure_is_reported_as_io: test",
    "app::tests::jsonl_input_rejects_multiple_records: test",
    "app::tests::jsonl_is_one_compact_record_and_round_trips: test",
    "app::tests::jsonl_transport_projection_is_byte_stable_on_reference_vector: test",
@@ -1254,7 +1255,7 @@
    "extractors::conformance_families::tests::results_are_deterministically_sorted: test",
    "extractors::conformance_families::tests::sabotage_phantom_entry_detected: test",
    "extractors::exports_manifest::tests::core_has_known_public_modules: test",
-   "extractors::exports_manifest::tests::extracts_all_five_workspace_crates: test",
+   "extractors::exports_manifest::tests::extracts_all_six_workspace_crates: test",
    "extractors::exports_manifest::tests::feature_gated_private_fixture_is_tracked: test",
    "extractors::exports_manifest::tests::pub_crate_items_excluded_from_surface: test",
    "extractors::exports_manifest::tests::reexports_include_solve_surface: test",
@@ -2348,7 +2349,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1487,
+  "enabled_count": 1488,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

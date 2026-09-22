@@ -417,7 +417,13 @@ fn write_document<W: Write, T: Serialize>(
         OutputFormat::Json => serde_json::to_writer_pretty(&mut *writer, value),
         OutputFormat::Jsonl => serde_json::to_writer(&mut *writer, value),
     }
-    .map_err(|_| AppError::Internal("projection_failed"))?;
+    .map_err(|error| {
+        if error.is_io() {
+            AppError::Io("write_failed")
+        } else {
+            AppError::Internal("projection_failed")
+        }
+    })?;
     writer
         .write_all(b"\n")
         .map_err(|_| AppError::Io("write_failed"))
@@ -441,7 +447,7 @@ fn finish_error<E: Write>(error: AppError, stderr: &mut E) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{self, Cursor};
 
     use labcolors_core::certificate::{
         MAX_ENVELOPE_BYTES_V1, UntrustedEnvelopeV1, issue_source_certificate_v1,
@@ -483,6 +489,34 @@ mod tests {
             &mut stderr,
         );
         (code, stdout, stderr)
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "test writer"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn json_writer_failure_is_reported_as_io() {
+        let wire = fixture();
+        let mut stderr = Vec::new();
+        let code = run(
+            [OsString::from("parse"), OsString::from("-")],
+            Cursor::new(&wire),
+            FailingWriter,
+            &mut stderr,
+        );
+        assert_eq!(code, 4);
+        let value: Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(value["error"]["domain"], "io");
+        assert_eq!(value["error"]["code"], "write_failed");
     }
 
     #[test]
