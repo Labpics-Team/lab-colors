@@ -1,24 +1,34 @@
-//! Independent numeric reference bounds (NUMERIC-01, staged wave 6).
+//! Independent numeric reference bounds for the NUMERIC-01 exit envelope.
 //!
 //! INV-03/INV-11: числовые границы — это проверяемые величины с областью
-//! применимости, а не молчаливые допуски. Каждая граница выведена из
-//! арифметики соответствующей формулы и зафиксирована вместе с
-//! контрпримером — входом, на котором ошибка достигает заявленного
-//! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
+//! применимости, а не молчаливые допуски. Источник формулы остаётся у
+//! owning-модуля (IEC 61966-2-1 для sRGB, Ottosson 2021 для Oklab, Li et al.
+//! 2017/CIE 248:2022 для CAM16); здесь живут только проверяемые error bounds,
+//! counterexamples и finite-domain evidence для фактически исполняемых путей.
 //!
-//! **Покрытие частично (staged wave 6).** LCS round-trip и Oklab precision
-//! проверяются на полном конечном домене encoded sRGB8 (16 777 216 цветов);
-//! alpha/backdrop + quantization, transforms, gamut и output projection имеют
-//! отдельные явные границы. Единственный branch-sensitive perceptual site реестра V1 — Glow: он
-//! не делает CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт
-//! BitExact, весь нетривиальный участок — typed Indeterminate. Исчерпывающий
-//! per-channel corpus в `glow::tests` проверяет все 65 536 endpoint-пар в
-//! каждой из трёх позиций канала под обоими объявленными execution modes
-//! (393 216 решений) и с невалидными viewing conditions как negative control;
-//! registry `numerics.rs` намеренно сохраняет `bound_status=Unavailable`.
+//! Перечень закрывает все численные категории, названные r13 для NUMERIC-01,
+//! не вводя искусственный счётчик «доменов»: LCS round-trip проверяется на всех
+//! 16 777 216 encoded-sRGB8 стимулах при фиксированных sRGB viewing conditions;
+//! alpha/backdrop и quantization имеют достигаемую half-step границу; transforms
+//! покрыты полным 256-level sRGB transfer grid; gamut проверяет clamp + emitted
+//! quantization; output projection имеет отдельные Oklch chroma/hue bounds и
+//! near-neutral wrap counterexample; Oklab precision проверяется на полном
+//! encoded-sRGB8 домене. Mismatched viewing conditions остаются отрицательным
+//! applicability-control, а не частью round-trip guarantee.
 //!
-//! Модуль — только константы-границы и проверочные тесты; он не меняет
-//! production-вычисления и не создаёт новый вердикт.
+//! Единственный branch-sensitive perceptual site реестра V1 — Glow — не делает
+//! CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт BitExact, весь
+//! нетривиальный участок — typed Indeterminate. Исчерпывающий per-channel corpus
+//! в `glow::tests` проверяет 65 536 endpoint-пар в каждой из трёх позиций канала
+//! под обоими execution modes (393 216 решений) и использует невалидные viewing
+//! conditions как negative control. Поэтому `numerics.rs` корректно сохраняет
+//! для Glow `bound_status=Unavailable`: отсутствие admitted perceptual bound не
+//! превращается в ложную численную или человеческую semantic truth.
+//!
+//! Этот модуль не создаёт второй runtime/registry и не меняет production verdicts.
+//! Завершение plan-node остаётся отдельным governance transition по merged/readback
+//! evidence; данный комментарий лишь устраняет прежнюю устаревшую маркировку
+//! staged/partial после интеграции последнего branch-sensitive proof.
 
 /// Категория числового сайта, к которому относится граница.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
