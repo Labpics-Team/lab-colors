@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_all_five_workspace_crates() {
+    fn extracts_all_six_workspace_crates() {
         let manifests = extract_exports_metadata(&workspace_root());
         let names: Vec<&str> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
         assert!(names.contains(&"labcolors-core"));
@@ -580,7 +580,8 @@ mod tests {
         assert!(names.contains(&"labcolors-conformance"));
         assert!(names.contains(&"labcolors-ffi"));
         assert!(names.contains(&"labcolors-wasm"));
-        assert_eq!(manifests.len(), 5);
+        assert!(names.contains(&"labcolors-transport-cli"));
+        assert_eq!(manifests.len(), 6);
     }
 
     #[test]
@@ -639,13 +640,13 @@ mod tests {
     #[test]
     fn sabotage_missing_crate_fails() {
         // This test documents the sabotage contract: if someone removes a crate
-        // from the workspace, the count assertion in extracts_all_five_workspace_crates
+        // from the workspace, the count assertion in extracts_all_six_workspace_crates
         // will fail. We assert the invariant here explicitly.
         let manifests = extract_exports_metadata(&workspace_root());
         assert_eq!(
             manifests.len(),
-            5,
-            "SABOTAGE: expected exactly 5 workspace crates; removal or addition breaks this"
+            6,
+            "SABOTAGE: expected exactly 6 workspace crates; removal or addition breaks this"
         );
     }
 

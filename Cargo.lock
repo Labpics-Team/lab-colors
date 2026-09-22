@@ -584,6 +584,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "labcolors-transport-cli"
+version = "0.3.0"
+dependencies = [
+ "labcolors-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "labcolors-wasm"
 version = "0.3.0"
 dependencies = [
