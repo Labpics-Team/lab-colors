@@ -94,6 +94,13 @@ pub(crate) const SRGB_GAMMA_ROUNDTRIP_MAX_ULPS: u32 = 3;
 /// → байт 255, encoded-ошибка строго больше нуля.
 pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
 
+/// Граница chroma полярного Oklch-вида (output projection), в единицах
+/// Oklab chroma. На полной сетке 360 целых углов тест строит rectangular
+/// `a`/`b` при nominal chroma 0.2 и проверяет production `hypot` через
+/// `derive_oklch_view_v1`. 1e-15 сохраняет прежний допустимый предел,
+/// но делает единицы и владельца допуска явными вместо смешивания с hue.
+pub(crate) const OKLCH_CHROMA_MAX_ABS_ERROR_OKLAB: f64 = 1.0e-15;
+
 /// Граница hue-вывода полярного Oklch-вида (output projection):
 /// production-путь `b.atan2(a).to_degrees()` с канонизацией в [0, 360).
 /// Тест рядом с production `derive_oklch_view_v1` вызывает именно эту

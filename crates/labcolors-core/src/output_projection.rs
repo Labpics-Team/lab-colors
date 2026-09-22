@@ -873,7 +873,9 @@ pub(crate) fn project_output_v1(
 #[cfg(test)]
 mod hdr_tests {
     use super::*;
-    use crate::numerics_bounds::OKLCH_HUE_MAX_ABS_ERROR_DEGREES;
+    use crate::numerics_bounds::{
+        OKLCH_CHROMA_MAX_ABS_ERROR_OKLAB, OKLCH_HUE_MAX_ABS_ERROR_DEGREES,
+    };
     use crate::spaces::pq::AbsoluteLuminanceV1;
 
     #[test]
@@ -884,7 +886,7 @@ mod hdr_tests {
             let a = 0.2 * radians.cos();
             let b = 0.2 * radians.sin();
             let view = derive_oklch_view_v1([0.5, a, b]).expect("finite Oklab view");
-            assert!((view.c() - 0.2).abs() < OKLCH_HUE_MAX_ABS_ERROR_DEGREES.max(1e-15));
+            assert!((view.c() - 0.2).abs() <= OKLCH_CHROMA_MAX_ABS_ERROR_OKLAB);
             let actual = match view.hue() {
                 HueState::Defined(hue) => hue.degrees(),
                 other => panic!("expected defined hue for {whole_deg}°, got {other:?}"),
