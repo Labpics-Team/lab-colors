@@ -12,8 +12,9 @@
 //! отдельные явные границы. Единственный branch-sensitive perceptual site V1-registry, Glow
 //! не делает CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт
 //! BitExact, весь нетривиальный участок — typed Indeterminate. Исчерпывающий
-//! one-channel corpus в `glow::tests` проверяет эту границу на всех 65 536
-//! endpoint-парах и с невалидными viewing conditions как negative control;
+//! per-channel corpus в `glow::tests` проверяет все 65 536 endpoint-пар в
+//! каждой из трёх позиций канала под обоими объявленными execution modes
+//! (393 216 решений) и с невалидными viewing conditions как negative control;
 //! registry `numerics.rs` намеренно сохраняет `bound_status=Unavailable`.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет

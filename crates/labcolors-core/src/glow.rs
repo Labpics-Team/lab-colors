@@ -1303,54 +1303,64 @@ mod tests {
         let mut determinate = 0u32;
         let mut indeterminate = 0u32;
 
-        for glow in 0..=u8::MAX {
-            for background in 0..=u8::MAX {
-                let tint_hex = format!("#{glow:02X}0000");
-                let bg_hex = format!("#{background:02X}0000");
-                let endpoint =
-                    screen_layer_over_srgb8([glow, 0, 0], 1.0, [background, 0, 0]).unwrap();
-                let exact_noop = endpoint == [background, 0, 0];
-                assert_eq!(
-                    screen_point_is_exact_noop(&tint_hex, &bg_hex).unwrap(),
-                    exact_noop,
-                    "glow={glow}, background={background}"
-                );
+        for channel in 0..3 {
+            for glow in 0..=u8::MAX {
+                for background in 0..=u8::MAX {
+                    let mut tint = [0u8; 3];
+                    let mut backdrop = [0u8; 3];
+                    tint[channel] = glow;
+                    backdrop[channel] = background;
+                    let tint_hex = composite_hex(tint);
+                    let bg_hex = composite_hex(backdrop);
+                    let endpoint = screen_layer_over_srgb8(tint, 1.0, backdrop).unwrap();
+                    let exact_noop = endpoint == backdrop;
+                    assert_eq!(
+                        screen_point_is_exact_noop(&tint_hex, &bg_hex).unwrap(),
+                        exact_noop,
+                        "channel={channel}, glow={glow}, background={background}"
+                    );
 
-                let decision = solve_screen_alpha_for_dj(
-                    &tint_hex,
-                    &bg_hex,
-                    GLOW_BASE_DJ,
-                    GlowDecisionProfileV1::StableV1.execution_mode(),
-                    &invalid_vc,
-                )
-                .expect("finite encoded endpoint must yield a typed numerical decision");
+                    for profile in [
+                        GlowDecisionProfileV1::StableV1,
+                        GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                    ] {
+                        let decision = solve_screen_alpha_for_dj(
+                            &tint_hex,
+                            &bg_hex,
+                            GLOW_BASE_DJ,
+                            profile.execution_mode(),
+                            &invalid_vc,
+                        )
+                        .expect("finite encoded endpoint must yield a typed numerical decision");
 
-                if exact_noop {
-                    determinate += 1;
-                    assert!(matches!(
-                        decision,
-                        NumericalDecisionV1::Determinate {
-                            value,
-                            evidence: NumericalDecisionEvidenceV1::BitExact { .. },
-                            ..
-                        } if value.status() == GlowTargetStatus::ExactNoopUnreachable
-                            && value.composite_hex() == bg_hex
-                            && value.selection_diagnostic_profile().is_none()
-                    ));
-                } else {
-                    indeterminate += 1;
-                    assert!(matches!(
-                        decision,
-                        NumericalDecisionV1::Indeterminate {
-                            site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
-                            evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                        if exact_noop {
+                            determinate += 1;
+                            assert!(matches!(
+                                decision,
+                                NumericalDecisionV1::Determinate {
+                                    value,
+                                    evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+                                    ..
+                                } if value.status() == GlowTargetStatus::ExactNoopUnreachable
+                                    && value.composite_hex() == bg_hex
+                                    && value.selection_diagnostic_profile().is_none()
+                            ));
+                        } else {
+                            indeterminate += 1;
+                            assert!(matches!(
+                                decision,
+                                NumericalDecisionV1::Indeterminate {
+                                    site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                                    evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                                }
+                            ));
                         }
-                    ));
+                    }
                 }
             }
         }
 
-        assert_eq!(determinate + indeterminate, 65_536);
+        assert_eq!(determinate + indeterminate, 393_216);
         assert!(determinate > 0, "corpus must exercise the exact branch");
         assert!(indeterminate > 0, "corpus must exercise abstention");
     }
