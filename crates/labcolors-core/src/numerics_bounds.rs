@@ -6,12 +6,11 @@
 //! контрпримером — входом, на котором ошибка достигает заявленного
 //! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
 //!
-//! **Покрытие частично (staged wave 4).** LCS round-trip,
-//! alpha/backdrop + quantization, transforms, gamut, output projection и
-//! precision имеют явные границы; Oklab precision теперь проверяется на полном
-//! конечном домене encoded sRGB8 (16 777 216 цветов), а не на выборке.
-//! Полнодоменный LCS round-trip и perceptual/branch-sensitive reasoning остаются
-//! открытыми обязательствами NUMERIC-01; registry `numerics.rs` не расширяется
+//! **Покрытие частично (staged wave 5).** LCS round-trip и Oklab precision
+//! проверяются на полном конечном домене encoded sRGB8 (16 777 216 цветов);
+//! alpha/backdrop + quantization, transforms, gamut и output projection имеют
+//! отдельные явные границы. Perceptual/branch-sensitive reasoning остаётся
+//! открытым обязательством NUMERIC-01; registry `numerics.rs` не расширяется
 //! до закрытия соответствующего доказательства.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет
@@ -50,16 +49,16 @@ impl NumericBoundSiteV1 {
 
 /// Максимальная ошибка round-trip sRGB8→LCS→sRGB8 по одному каналу,
 /// измеренная в шагах сетки sRGB8: после прямого пробега значение
-/// возвращается в то же место сетки либо в соседнее, поэтому сдвиг
-/// канала не превышает 1 уровня u8. Метод: round-trip через
-/// `LcsColor::from_hex`/`to_hex` (production-путь, включающий
-/// квантование `srgb8_from_linear`).
-///
-/// Подтверждена только выбранным корпусом (324 комбинации уровней
-/// каналов в тесте ниже), а не всей областью sRGB8 (16 777 216 входов);
-/// полнодоменное доказательство — обязательство открытого узла
-/// NUMERIC-01, не этой staged-волны.
-pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 1;
+/// возвращается в тот же encoded sRGB8 байт на всём конечном домене,
+/// поэтому максимальный сдвиг канала равен 0. Метод: round-trip через
+/// `LcsColor::from_srgb8_with_vc`/`to_srgb8_with_vc` (тот же production-путь,
+/// но без строковых parse/format-аллокаций тестового harness). Тест ниже
+/// исчерпывающе перебирает весь конечный домен encoded sRGB8: 16 777 216
+/// стимулов при одной и той же `ViewingConditions::srgb()`. Любой ненулевой
+/// сдвиг канала является falsifier; mismatched viewing conditions
+/// не входят в applicability envelope и отдельно дают отрицательный control в
+/// `lcs::tests::wrong_vc_roundtrip_drifts`.
+pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 0;
 
 /// Квантование source-over до u8 использует округление к ближайшему,
 /// поэтому ошибка каждого канала результата не превышает половины шага
@@ -132,56 +131,43 @@ mod tests {
     )]
     use crate::lcs::LcsColor;
 
-    /// Парсит `#rrggbb` в байты — вход теста обязан быть валиден по построению.
-    fn bytes_from_hex(hex: &str) -> [u8; 3] {
-        let body = hex.trim_start_matches('#');
-        let value = u32::from_str_radix(body, 16).expect("valid hex");
-        [
-            ((value >> 16) & 0xff) as u8,
-            ((value >> 8) & 0xff) as u8,
-            (value & 0xff) as u8,
-        ]
-    }
-
-    /// Реальный round-trip через production API: sRGB8 → LCS → sRGB8
-    /// (включая квантование). Входы off-grid по построению — LCS-каналы
-    /// после CAM16-преобразования не обязаны попадать в исходный байт,
-    /// поэтому тест способен упасть при деградации точности.
-    ///
-    /// Замороженный `LcsColor` — и есть текущий production round-trip
-    /// (граница измеряет его дрейф); замена на `ModeledLcsOccurrenceV1`
-    /// выполняется вместе с миграцией самого сайта.
+    /// Реальный round-trip через production API на полном конечном домене
+    /// encoded sRGB8. Строковая public-обёртка намеренно обходится: тест живёт
+    /// внутри crate и вызывает те же typed production-границы до/после LCS,
+    /// убирая 33,5 млн нерелевантных String-аллокаций из proof workload.
     #[test]
     #[allow(
         deprecated,
         reason = "the bound targets the frozen V1 round-trip itself"
     )]
     fn lcs_roundtrip_error_stays_within_bound() {
-        // Широкий набор входов, включая не-угловые уровни всех каналов.
-        for r in [0u8, 1, 17, 64, 100, 137, 200, 254, 255] {
-            for g in [0u8, 33, 90, 137, 201, 255] {
-                for b in [0u8, 7, 77, 137, 250, 255] {
-                    let hex = format!("#{:02x}{:02x}{:02x}", r, g, b);
-                    let color = LcsColor::from_hex(&hex).expect("valid sRGB8 hex");
-                    let roundtrip = &color.to_hex();
-                    // Обе стороны — валидные sRGB8-hex: байтовая разница
-                    // вычисляется напрямую из строк, без приватного доступа.
-                    let before = bytes_from_hex(&hex);
-                    let after = bytes_from_hex(roundtrip);
-                    for ch in 0..3 {
-                        let delta = (i16::from(before[ch]) - i16::from(after[ch])).unsigned_abs();
-                        assert!(
-                            delta <= u16::from(LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS),
-                            "roundtrip {} -> {} moved channel {} by {} steps",
-                            hex,
-                            roundtrip,
-                            ch,
-                            delta
-                        );
-                    }
-                }
-            }
+        use crate::Srgb8;
+        use crate::spaces::vc::ViewingConditions;
+
+        let vc = ViewingConditions::srgb();
+        let mut visited = 0u32;
+
+        assert_eq!(
+            LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS, 0,
+            "this proof claims byte-exact LCS roundtrip on its declared envelope",
+        );
+        for packed in 0u32..=0x00ff_ffff {
+            let source = [
+                ((packed >> 16) & 0xff) as u8,
+                ((packed >> 8) & 0xff) as u8,
+                (packed & 0xff) as u8,
+            ];
+            let roundtrip = LcsColor::from_srgb8_with_vc(Srgb8::new(source), &vc)
+                .to_srgb8_with_vc(&vc)
+                .bytes();
+            assert_eq!(
+                roundtrip, source,
+                "LCS roundtrip must preserve encoded sRGB8 exactly: {source:?} -> {roundtrip:?}",
+            );
+            visited += 1;
         }
+
+        assert_eq!(visited, 16_777_216, "full sRGB8 domain must be visited");
     }
 
     /// Контрпример mid-grid: ошибка реальной композиции достигает
