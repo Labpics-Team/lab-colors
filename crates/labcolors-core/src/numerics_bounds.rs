@@ -179,9 +179,10 @@ mod tests {
         }
 
         assert_eq!(visited, 16_777_216, "full sRGB8 domain must be visited");
-        assert!(
-            worst_steps <= u16::from(LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS),
-            "worst LCS roundtrip {worst_source:?} -> {worst_result:?} moved channel {worst_channel} by {worst_steps} steps",
+        assert_eq!(
+            worst_steps,
+            u16::from(LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS),
+            "tightness guard: worst LCS roundtrip {worst_source:?} -> {worst_result:?} moved channel {worst_channel} by {worst_steps} steps; ratchet the bound if the full domain improved",
         );
     }
 
