@@ -857,7 +857,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "addefa7cd4df9183307b864ad7252260b4062c26cb7e341587d314472a733d41",
+ "record_sha256": "11bb11f1e58d9ba57936f08113d3517b16889b1ba958a822dadecd2fc4696abe",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1558,6 +1558,7 @@
    "numerics_bounds::tests::alpha_midgrid_counterexample_hits_half_step: test",
    "numerics_bounds::tests::bound_site_keys_are_stable: test",
    "numerics_bounds::tests::lcs_roundtrip_error_stays_within_bound: test",
+   "numerics_bounds::tests::oklab_matmul_roundtrip_stays_within_bound: test",
    "numerics_bounds::tests::srgb_gamma_roundtrip_stays_within_bound: test",
    "numerics_bounds::tests::srgb_gamut_clamp_error_stays_within_bound: test",
    "observation_differential_oracle_tests::adjacent_duplicate_detection_fires_for_any_duplicate_position: test",
@@ -1602,6 +1603,7 @@
    "output_projection::hdr_tests::encode_out_of_range_luminance_returns_error: test",
    "output_projection::hdr_tests::encode_xyz_d65_white_produces_valid_pq: test",
    "output_projection::hdr_tests::golden_bt2100_table3_row1_d65_white_1000_nits: test",
+   "output_projection::hdr_tests::oklch_polar_view_hue_stays_within_bound: test",
    "output_projection::hdr_tests::property_compression_ratio_bounded: test",
    "output_projection::hdr_tests::property_encoder_roundtrip_fidelity: test",
    "output_projection::hdr_tests::property_tone_map_monotonicity_full_range: test",
@@ -2337,7 +2339,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1476,
+  "enabled_count": 1478,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
