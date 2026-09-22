@@ -150,7 +150,7 @@
   "crates/labcolors-core/src/neutral.rs": "ed71fd2592b1f6bf8cbc14ba45f0ef87e6776e5f",
   "crates/labcolors-core/src/numerical_plan.rs": "ab674f6d303e4e3c031c31fcba74990677a3c91f",
   "crates/labcolors-core/src/numerics.rs": "b8cdd04d1db45639dc9a3a06822073038bc52c4d",
-  "crates/labcolors-core/src/numerics_bounds.rs": "1b32fa5230df9ac612f5f394dd93e2e6761b1c59",
+  "crates/labcolors-core/src/numerics_bounds.rs": "f4ac9b0f8a52a7efefcea13eed1d5ab3ea17ffdf",
   "crates/labcolors-core/src/observation.rs": "c396da852ca31bab9835bc5ecc99697d1ca00936",
   "crates/labcolors-core/src/observation_differential_oracle_tests.rs": "ee5c956630e524208b72ba0fbaac68821b2bf76b",
   "crates/labcolors-core/src/observation_tests.rs": "ef52a61991d2ca016dbac81912477b4d495e512a",
@@ -472,7 +472,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "dcaac1df8ecb14847cfddfa20daa7f54e021347cddc708710632ae10181e6f1f",
+ "record_sha256": "8b98e6a76f0e1d68596f29ba5515b8f4c883bea9b3a359f38f4c14471d1e0b1f",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
