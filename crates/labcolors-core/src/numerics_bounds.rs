@@ -1,4 +1,4 @@
-//! Independent numeric reference bounds (NUMERIC-01, staged wave 1).
+//! Independent numeric reference bounds (NUMERIC-01, staged wave 6).
 //!
 //! INV-03/INV-11: числовые границы — это проверяемые величины с областью
 //! применимости, а не молчаливые допуски. Каждая граница выведена из
@@ -9,7 +9,7 @@
 //! **Покрытие частично (staged wave 6).** LCS round-trip и Oklab precision
 //! проверяются на полном конечном домене encoded sRGB8 (16 777 216 цветов);
 //! alpha/backdrop + quantization, transforms, gamut и output projection имеют
-//! отдельные явные границы. Единственный branch-sensitive perceptual site V1-registry, Glow
+//! отдельные явные границы. Единственный branch-sensitive perceptual site реестра V1 — Glow: он
 //! не делает CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт
 //! BitExact, весь нетривиальный участок — typed Indeterminate. Исчерпывающий
 //! per-channel corpus в `glow::tests` проверяет все 65 536 endpoint-пар в

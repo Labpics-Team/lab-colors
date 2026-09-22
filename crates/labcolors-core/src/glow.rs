@@ -1296,6 +1296,10 @@ mod tests {
         assert!(screen_point_is_exact_noop("not-a-colour", "#123456").is_err());
     }
 
+    /// No-op — конъюнкция трёх одинаковых независимых channel-laws. Поэтому
+    /// 65 536 пар на каждой позиции исчерпывают сам per-channel закон и ловят
+    /// index-specific drift; смешанный многоканальный fixture выше отдельно
+    /// защищает конъюнкцию.
     #[test]
     fn exact_noop_predicate_matches_every_one_channel_endpoint() {
         let mut invalid_vc = ViewingConditions::srgb();
