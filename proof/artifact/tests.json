@@ -857,7 +857,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "11bb11f1e58d9ba57936f08113d3517b16889b1ba958a822dadecd2fc4696abe",
+ "record_sha256": "51230e3c36068c62c460dcce96d3c441422ea6077721c2c7d3f897ec8d6d0599",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1558,7 +1558,7 @@
    "numerics_bounds::tests::alpha_midgrid_counterexample_hits_half_step: test",
    "numerics_bounds::tests::bound_site_keys_are_stable: test",
    "numerics_bounds::tests::lcs_roundtrip_error_stays_within_bound: test",
-   "numerics_bounds::tests::oklab_matmul_roundtrip_stays_within_bound: test",
+   "numerics_bounds::tests::oklab_matmul_roundtrip_full_srgb8_domain_stays_within_bound: test",
    "numerics_bounds::tests::srgb_gamma_roundtrip_stays_within_bound: test",
    "numerics_bounds::tests::srgb_gamut_clamp_error_stays_within_bound: test",
    "observation_differential_oracle_tests::adjacent_duplicate_detection_fires_for_any_duplicate_position: test",

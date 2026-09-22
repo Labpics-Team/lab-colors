@@ -6,13 +6,13 @@
 //! контрпримером — входом, на котором ошибка достигает заявленного
 //! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
 //!
-//! **Покрытие частично (staged wave 3): 6 из 9 доменов контракта
-//! NUMERIC-01** — LCS round-trip, alpha/backdrop + quantization,
-//! transforms (gamma round-trip), gamut (clamp перед квантованием),
-//! output projection (polar Oklch view) и precision (Oklab matmul,
-//! hypot/atan2). Непокрытые домены (perceptual reasoning и др.)
-//! оставляют узел NUMERIC-01 открытым; интеграция в registry
-//! `numerics.rs` выполняется при закрытии узла, не раньше.
+//! **Покрытие частично (staged wave 4).** LCS round-trip,
+//! alpha/backdrop + quantization, transforms, gamut, output projection и
+//! precision имеют явные границы; Oklab precision теперь проверяется на полном
+//! конечном домене encoded sRGB8 (16 777 216 цветов), а не на выборке.
+//! Полнодоменный LCS round-trip и perceptual/branch-sensitive reasoning остаются
+//! открытыми обязательствами NUMERIC-01; registry `numerics.rs` не расширяется
+//! до закрытия соответствующего доказательства.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет
 //! production-вычисления и не создаёт новый вердикт.
@@ -109,18 +109,18 @@ pub(crate) const OKLCH_CHROMA_MAX_ABS_ERROR_OKLAB: f64 = 1.0e-15;
 /// к 360°. Абсолютная ошибка hue ограничена 1e-12 градуса.
 pub(crate) const OKLCH_HUE_MAX_ABS_ERROR_DEGREES: f64 = 1.0e-12;
 
-/// Максимальная относительная ошибка Oklab-матричного round-trip
-/// (linear sRGB → Oklab → linear sRGB) через production-функции
-/// `srgb_linear_to_oklab`/`oklab_to_srgb_linear`. Опубликованные
-/// матрицы Ottosson — десятичные приближения, поэтому round-trip не
-/// битово-точен даже в точной арифметике; граница измерена полным
-/// перебором 256 уровней ахроматической оси и представительной
-/// выборкой хроматических входов в тесте ниже (масштаб нормировки —
-/// max(|канал|, 1/255)). Полнодоменное доказательство по всем 16.7M
-/// sRGB8-входам — обязательство открытого узла NUMERIC-01.
-/// Измеренный максимум на корпусе: 9.24e-7; константа фиксирует 1e-6
-/// как округлённую вверх внешнюю границу измерения.
-pub(crate) const OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR: f64 = 1.0e-6;
+/// Максимальная абсолютная ошибка одного linear-sRGB канала после
+/// production round-trip `encoded sRGB8 → linear sRGB → Oklab → linear sRGB`.
+///
+/// Относительная метрика предыдущей staged-волны была выборочной и оказалась
+/// непригодна как full-domain закон: production-контрпример `[255, 255, 12]`
+/// превышает прежний ceiling `1e-6`. Поэтому здесь остаётся более простая
+/// физическая величина в единицах linear-sRGB, без деления на произвольный
+/// scale floor. Production-тест ниже перебирает все 16 777 216 encoded-sRGB8
+/// стимулов после настоящего decode и требует максимум не выше `3e-7`.
+/// Опубликованные матрицы Ottosson — десятичные приближения, поэтому
+/// round-trip не заявляется bit-exact.
+pub(crate) const OKLAB_MATMUL_ROUNDTRIP_MAX_ABS_ERROR_LINEAR: f64 = 3.0e-7;
 
 #[cfg(test)]
 mod tests {
@@ -242,49 +242,64 @@ mod tests {
         );
     }
 
-    /// Oklab матричный round-trip через production-функции: полный
-    /// перебор 256 уровней ахроматической оси плюс представительная
-    /// выборка хроматических входов; относительная ошибка канала ≤
-    /// заявленной границы.
+    /// Oklab матричный round-trip через production-функции на полном конечном
+    /// домене encoded sRGB8. Каждый stimulus сначала проходит настоящий sRGB8
+    /// decode; затем измеряется абсолютный linear-sRGB drift каждого канала.
     #[test]
-    fn oklab_matmul_roundtrip_stays_within_bound() {
+    fn oklab_matmul_roundtrip_full_srgb8_domain_stays_within_bound() {
+        use crate::Srgb8;
         use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-        let mut worst_rel = 0.0f64;
-        let check = |rgb: [f64; 3], worst_rel: &mut f64| {
-            let lab = srgb_linear_to_oklab(rgb);
-            let roundtrip = oklab_to_srgb_linear(lab);
-            for ch in 0..3 {
-                let scale = rgb[ch].abs().max(1.0 / 255.0);
-                let rel = (roundtrip[ch] - rgb[ch]).abs() / scale;
-                *worst_rel = worst_rel.max(rel);
-                assert!(
-                    rel <= OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR,
-                    "oklab roundtrip rel error {} at {:?} channel {} exceeds the bound {}",
-                    rel,
-                    rgb,
-                    ch,
-                    OKLAB_MATMUL_ROUNDTRIP_MAX_REL_ERROR
-                );
-            }
-        };
-        // Полная ахроматическая ось (все 256 уровней).
-        for byte in 0..=255u8 {
-            let v = f64::from(byte) / 255.0;
-            check([v, v, v], &mut worst_rel);
-        }
-        // Представительные хроматические входы.
-        for rgb in [
-            [0.5, 0.1, 0.9],
-            [0.9, 0.5, 0.1],
-            [0.1, 0.9, 0.5],
-            [1.0 / 255.0, 0.0, 0.0],
-            [0.25, 0.75, 0.5],
-        ] {
-            check(rgb, &mut worst_rel);
-        }
+        use crate::spaces::srgb::srgb_linear_from_srgb8;
+
+        // RED/falsifier предыдущей выборочной relative-метрики: этот допустимый
+        // encoded stimulus не входил в старый корпус и пробивает ceiling 1e-6.
+        let old_metric_source = [255, 255, 12];
+        let old_rgb = srgb_linear_from_srgb8(Srgb8::new(old_metric_source));
+        let old_roundtrip = oklab_to_srgb_linear(srgb_linear_to_oklab(old_rgb));
+        let old_relative =
+            (old_roundtrip[2] - old_rgb[2]).abs() / old_rgb[2].abs().max(1.0 / 255.0);
         assert!(
-            worst_rel > 0.0,
-            "vacuity guard: every input round-tripped bit-exactly"
+            old_relative > 1.0e-6,
+            "full-domain falsifier must exceed the retired sampled relative ceiling; got {old_relative:e}",
+        );
+
+        let mut worst_abs = 0.0f64;
+        let mut worst_source = [0u8; 3];
+        let mut worst_channel = 0usize;
+        let mut visited = 0u32;
+
+        for packed in 0u32..=0x00ff_ffff {
+            let source = [
+                ((packed >> 16) & 0xff) as u8,
+                ((packed >> 8) & 0xff) as u8,
+                (packed & 0xff) as u8,
+            ];
+            let rgb = srgb_linear_from_srgb8(Srgb8::new(source));
+            let roundtrip = oklab_to_srgb_linear(srgb_linear_to_oklab(rgb));
+            for channel in 0..3 {
+                let error = (roundtrip[channel] - rgb[channel]).abs();
+                assert!(
+                    error.is_finite(),
+                    "non-finite Oklab round-trip error at {source:?} channel {channel}"
+                );
+                if error > worst_abs {
+                    worst_abs = error;
+                    worst_source = source;
+                    worst_channel = channel;
+                }
+            }
+            visited += 1;
+        }
+
+        assert_eq!(visited, 16_777_216, "full sRGB8 domain must be visited");
+        assert!(
+            worst_abs <= OKLAB_MATMUL_ROUNDTRIP_MAX_ABS_ERROR_LINEAR,
+            "Oklab round-trip worst abs error {worst_abs:e} at {worst_source:?} channel {worst_channel} exceeds bound {bound:e}",
+            bound = OKLAB_MATMUL_ROUNDTRIP_MAX_ABS_ERROR_LINEAR,
+        );
+        assert!(
+            worst_abs > 2.0e-7,
+            "anti-vacuity: expected published-matrix approximation drift, max was {worst_abs:e} at {worst_source:?} channel {worst_channel}",
         );
     }
 
