@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 469,
+ "file_count": 473,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -16,7 +16,7 @@
   ".github/workflows/publish-worker.yml": "9630b280fc276a86659bb83db35f5cb3dca370ba",
   ".github/workflows/publish.yml": "7578d2b2839d670543d85ab650731223558c6a58",
   ".github/workflows/verification-lanes.yml": "ae83870463f8ef5bc4e351e71a710c991cb2563b",
-  "Cargo.lock": "71592581dc797c38b23ae8ddba3fc04fcd898181",
+  "Cargo.lock": "322048f28be4a78b15d0f87f55e0a920a0d2cc3d",
   "Cargo.toml": "8b359932de31f097f2de1e6cc16c39b99e3c048f",
   "bindings/swift/.gitignore": "2ec0ad76ff72010cb0f1b1afa7239eebbda6e8a0",
   "bindings/swift/Package.swift": "30c744d4eef7dbf58ad7627f662a4ee8b859d157",
@@ -239,6 +239,10 @@
   "crates/labcolors-ffi/Cargo.toml": "31ab4e3a3c5201aa367d80918a45f3932fbc0ebc",
   "crates/labcolors-ffi/src/bin/uniffi_bindgen.rs": "9057c0265b0c7ce2c29dfe66c0915f392d083b69",
   "crates/labcolors-ffi/src/lib.rs": "d124b66de1f51425be671b5c08bc0c11b838d445",
+  "crates/labcolors-transport-cli/Cargo.toml": "1bea021ae67b59dc06c6aca70f6bfbf084cd0b77",
+  "crates/labcolors-transport-cli/README.md": "a1193d841dc0cfdeea69d2d871598e613fc371ee",
+  "crates/labcolors-transport-cli/src/app.rs": "8d5f0b336e468a0f02bb5970a51eabcfcc4586bf",
+  "crates/labcolors-transport-cli/src/main.rs": "2e4f8cc3321221893970004e9cb79df5ea2b442c",
   "crates/labcolors-wasm/Cargo.toml": "fec2f394f0c39fb2e91fe7520d0aa3590b65a0d2",
   "crates/labcolors-wasm/LICENSE": "30cff7403da04711c46979a06f6bf8eb10ee088a",
   "crates/labcolors-wasm/src/cache.rs": "f1b66345aa6fb7c4ebfb205bbd93793ffb2e1c92",
@@ -472,7 +476,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "8b98e6a76f0e1d68596f29ba5515b8f4c883bea9b3a359f38f4c14471d1e0b1f",
+ "record_sha256": "7316a31af0d3e9adbbf2c4ce1eb2d7d123205e80d564f1c06b07147255eaae37",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
