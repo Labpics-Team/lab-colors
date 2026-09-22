@@ -145,45 +145,29 @@ mod tests {
         use crate::spaces::vc::ViewingConditions;
 
         let vc = ViewingConditions::srgb();
-        let mut worst_steps = 0u16;
-        let mut worst_source = [0u8; 3];
-        let mut worst_result = [0u8; 3];
-        let mut worst_channel = 0usize;
         let mut visited = 0u32;
 
+        assert_eq!(
+            LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS, 0,
+            "this proof claims byte-exact LCS roundtrip on its declared envelope",
+        );
         for packed in 0u32..=0x00ff_ffff {
             let source = [
                 ((packed >> 16) & 0xff) as u8,
                 ((packed >> 8) & 0xff) as u8,
                 (packed & 0xff) as u8,
             ];
-            let encoded = Srgb8::new(source);
-            let roundtrip = LcsColor::from_srgb8_with_vc(encoded, &vc)
+            let roundtrip = LcsColor::from_srgb8_with_vc(Srgb8::new(source), &vc)
                 .to_srgb8_with_vc(&vc)
                 .bytes();
-            for channel in 0..3 {
-                let delta =
-                    (i16::from(source[channel]) - i16::from(roundtrip[channel])).unsigned_abs();
-                if delta > worst_steps {
-                    worst_steps = delta;
-                    worst_source = source;
-                    worst_result = roundtrip;
-                    worst_channel = channel;
-                }
-                assert!(
-                    delta <= u16::from(LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS),
-                    "LCS roundtrip {source:?} -> {roundtrip:?} moved channel {channel} by {delta} steps",
-                );
-            }
+            assert_eq!(
+                roundtrip, source,
+                "LCS roundtrip must preserve encoded sRGB8 exactly: {source:?} -> {roundtrip:?}",
+            );
             visited += 1;
         }
 
         assert_eq!(visited, 16_777_216, "full sRGB8 domain must be visited");
-        assert_eq!(
-            worst_steps,
-            u16::from(LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS),
-            "tightness guard: worst LCS roundtrip {worst_source:?} -> {worst_result:?} moved channel {worst_channel} by {worst_steps} steps; ratchet the bound if the full domain improved",
-        );
     }
 
     /// Контрпример mid-grid: ошибка реальной композиции достигает
