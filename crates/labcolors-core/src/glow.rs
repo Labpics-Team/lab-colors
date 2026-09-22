@@ -1296,21 +1296,77 @@ mod tests {
         assert!(screen_point_is_exact_noop("not-a-colour", "#123456").is_err());
     }
 
+    /// No-op — конъюнкция трёх одинаковых независимых channel-laws. Поэтому
+    /// 65 536 пар на каждой позиции исчерпывают сам per-channel закон и ловят
+    /// index-specific drift; смешанный многоканальный fixture выше отдельно
+    /// защищает конъюнкцию.
     #[test]
     fn exact_noop_predicate_matches_every_one_channel_endpoint() {
-        for glow in 0..=u8::MAX {
-            for background in 0..=u8::MAX {
-                let tint_hex = format!("#{glow:02X}0000");
-                let bg_hex = format!("#{background:02X}0000");
-                let endpoint =
-                    screen_layer_over_srgb8([glow, 0, 0], 1.0, [background, 0, 0]).unwrap();
-                assert_eq!(
-                    screen_point_is_exact_noop(&tint_hex, &bg_hex).unwrap(),
-                    endpoint == [background, 0, 0],
-                    "glow={glow}, background={background}"
-                );
+        let mut invalid_vc = ViewingConditions::srgb();
+        invalid_vc.n = f64::NAN;
+        let mut determinate = 0u32;
+        let mut indeterminate = 0u32;
+
+        for channel in 0..3 {
+            for glow in 0..=u8::MAX {
+                for background in 0..=u8::MAX {
+                    let mut tint = [0u8; 3];
+                    let mut backdrop = [0u8; 3];
+                    tint[channel] = glow;
+                    backdrop[channel] = background;
+                    let tint_hex = composite_hex(tint);
+                    let bg_hex = composite_hex(backdrop);
+                    let endpoint = screen_layer_over_srgb8(tint, 1.0, backdrop).unwrap();
+                    let exact_noop = endpoint == backdrop;
+                    assert_eq!(
+                        screen_point_is_exact_noop(&tint_hex, &bg_hex).unwrap(),
+                        exact_noop,
+                        "channel={channel}, glow={glow}, background={background}"
+                    );
+
+                    for profile in [
+                        GlowDecisionProfileV1::StableV1,
+                        GlowDecisionProfileV1::LegacyPlatformDependentV1,
+                    ] {
+                        let decision = solve_screen_alpha_for_dj(
+                            &tint_hex,
+                            &bg_hex,
+                            GLOW_BASE_DJ,
+                            profile.execution_mode(),
+                            &invalid_vc,
+                        )
+                        .expect("finite encoded endpoint must yield a typed numerical decision");
+
+                        if exact_noop {
+                            determinate += 1;
+                            assert!(matches!(
+                                decision,
+                                NumericalDecisionV1::Determinate {
+                                    value,
+                                    evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+                                    ..
+                                } if value.status() == GlowTargetStatus::ExactNoopUnreachable
+                                    && value.composite_hex() == bg_hex
+                                    && value.selection_diagnostic_profile().is_none()
+                            ));
+                        } else {
+                            indeterminate += 1;
+                            assert!(matches!(
+                                decision,
+                                NumericalDecisionV1::Indeterminate {
+                                    site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                                    evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                                }
+                            ));
+                        }
+                    }
+                }
             }
         }
+
+        assert_eq!(determinate + indeterminate, 393_216);
+        assert!(determinate > 0, "corpus must exercise the exact branch");
+        assert!(indeterminate > 0, "corpus must exercise abstention");
     }
 
     /// Независимый оракул не использует production cursor/boundary helper. Для
