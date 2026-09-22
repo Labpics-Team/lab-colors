@@ -6,12 +6,15 @@
 //! контрпримером — входом, на котором ошибка достигает заявленного
 //! максимума, чтобы «улучшение» точности не могло пройти незамеченным.
 //!
-//! **Покрытие частично (staged wave 5).** LCS round-trip и Oklab precision
+//! **Покрытие частично (staged wave 6).** LCS round-trip и Oklab precision
 //! проверяются на полном конечном домене encoded sRGB8 (16 777 216 цветов);
 //! alpha/backdrop + quantization, transforms, gamut и output projection имеют
-//! отдельные явные границы. Perceptual/branch-sensitive reasoning остаётся
-//! открытым обязательством NUMERIC-01; registry `numerics.rs` не расширяется
-//! до закрытия соответствующего доказательства.
+//! отдельные явные границы. Единственный branch-sensitive perceptual site V1-registry, Glow
+//! не делает CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт
+//! BitExact, весь нетривиальный участок — typed Indeterminate. Исчерпывающий
+//! one-channel corpus в `glow::tests` проверяет эту границу на всех 65 536
+//! endpoint-парах и с невалидными viewing conditions как negative control;
+//! registry `numerics.rs` намеренно сохраняет `bound_status=Unavailable`.
 //!
 //! Модуль — только константы-границы и проверочные тесты; он не меняет
 //! production-вычисления и не создаёт новый вердикт.

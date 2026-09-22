@@ -1298,19 +1298,61 @@ mod tests {
 
     #[test]
     fn exact_noop_predicate_matches_every_one_channel_endpoint() {
+        let mut invalid_vc = ViewingConditions::srgb();
+        invalid_vc.n = f64::NAN;
+        let mut determinate = 0u32;
+        let mut indeterminate = 0u32;
+
         for glow in 0..=u8::MAX {
             for background in 0..=u8::MAX {
                 let tint_hex = format!("#{glow:02X}0000");
                 let bg_hex = format!("#{background:02X}0000");
                 let endpoint =
                     screen_layer_over_srgb8([glow, 0, 0], 1.0, [background, 0, 0]).unwrap();
+                let exact_noop = endpoint == [background, 0, 0];
                 assert_eq!(
                     screen_point_is_exact_noop(&tint_hex, &bg_hex).unwrap(),
-                    endpoint == [background, 0, 0],
+                    exact_noop,
                     "glow={glow}, background={background}"
                 );
+
+                let decision = solve_screen_alpha_for_dj(
+                    &tint_hex,
+                    &bg_hex,
+                    GLOW_BASE_DJ,
+                    GlowDecisionProfileV1::StableV1.execution_mode(),
+                    &invalid_vc,
+                )
+                .expect("finite encoded endpoint must yield a typed numerical decision");
+
+                if exact_noop {
+                    determinate += 1;
+                    assert!(matches!(
+                        decision,
+                        NumericalDecisionV1::Determinate {
+                            value,
+                            evidence: NumericalDecisionEvidenceV1::BitExact { .. },
+                            ..
+                        } if value.status() == GlowTargetStatus::ExactNoopUnreachable
+                            && value.composite_hex() == bg_hex
+                            && value.selection_diagnostic_profile().is_none()
+                    ));
+                } else {
+                    indeterminate += 1;
+                    assert!(matches!(
+                        decision,
+                        NumericalDecisionV1::Indeterminate {
+                            site_id: NumericalSiteIdV1::GlowTargetOrMaximumV1,
+                            evidence: NumericalIndeterminacyV1::SoundBoundUnavailable,
+                        }
+                    ));
+                }
             }
         }
+
+        assert_eq!(determinate + indeterminate, 65_536);
+        assert!(determinate > 0, "corpus must exercise the exact branch");
+        assert!(indeterminate > 0, "corpus must exercise abstention");
     }
 
     /// Независимый оракул не использует production cursor/boundary helper. Для
