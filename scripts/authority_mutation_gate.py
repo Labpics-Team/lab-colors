@@ -57,13 +57,14 @@ MUTANTS = {
         "        if false && current.release != expected.release {",
     ),
     "unverified-as-observed": (
-        "                return Err(AuthorityPermitErrorV1::RendererObservationRequired);",
-        "                return Ok(AuthorityAdmissionPermitV1 { owner_current, descriptor: next });",
+        "        ) => return Err(AuthorityPermitErrorV1::RendererObservationRequired),",
+        "        ) => {},",
     ),
 }
 
 
 def run_mutant(name: str, before: str, after: str, original: str) -> None:
+    """Require one targeted source mutation to make the focused AUTH suite red."""
     count = original.count(before)
     if count != 1:
         raise SystemExit(f"{name}: mutation anchor count is {count}, expected 1")
@@ -86,6 +87,7 @@ def run_mutant(name: str, before: str, after: str, original: str) -> None:
 
 
 def main() -> None:
+    """Run the bounded AUTH-01 semantic mutation matrix and restore the source."""
     original = SOURCE.read_text(encoding="utf-8")
     for name, (before, after) in MUTANTS.items():
         run_mutant(name, before, after, original)

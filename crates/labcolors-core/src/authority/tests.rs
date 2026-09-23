@@ -1,6 +1,7 @@
 use super::*;
 use core::mem::size_of;
 
+/// Builds a test-only owner-verified descriptor with separated identity axes.
 fn descriptor(id: AuthorityIdV1, seed: u8) -> AuthorityDescriptorV1 {
     AuthorityDescriptorV1::from_verified_owner(
         id,
@@ -50,6 +51,32 @@ fn three_lanes_are_independent_and_missing_never_falls_back() {
     assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), Some(tq));
     assert_eq!(state.read(AuthorityIdV1::CleanConvention), None);
     assert_eq!(state.require(cc), Err(AuthorityRequireErrorV1::Missing));
+}
+
+#[test]
+fn all_three_lanes_remain_distinct_when_installed_together() {
+    let tq = descriptor(AuthorityIdV1::TechnicalQuality, 30);
+    let cc = descriptor(AuthorityIdV1::CleanConvention, 40);
+    let hce = descriptor(AuthorityIdV1::HumanCleanEvidence, 50);
+    let tq_owner = AuthorityOwnerCurrentV1::new(tq);
+    let cc_owner = AuthorityOwnerCurrentV1::new(cc);
+    let hce_owner = AuthorityOwnerCurrentV1::new(hce);
+    let mut state = AuthorityStateV1::new();
+
+    for (value, owner) in [(tq, &tq_owner), (cc, &cc_owner), (hce, &hce_owner)] {
+        assert_eq!(
+            state.admit(
+                value,
+                AuthorityExpectedCurrentV1::Vacant,
+                permit(owner, value),
+            ),
+            Ok(AuthorityAdmissionOutcomeV1::Installed)
+        );
+    }
+
+    assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), Some(tq));
+    assert_eq!(state.read(AuthorityIdV1::CleanConvention), Some(cc));
+    assert_eq!(state.read(AuthorityIdV1::HumanCleanEvidence), Some(hce));
 }
 
 #[test]
@@ -137,6 +164,55 @@ fn stale_expected_replacement_is_typed_and_non_mutating() {
         Err(AuthorityAdmissionErrorV1::ExpectedReleaseMismatch)
     );
     assert_eq!(state.read(first.id()), Some(current));
+}
+
+#[test]
+fn replacement_rejects_single_axis_expected_binding_mismatches() {
+    let current = descriptor(AuthorityIdV1::TechnicalQuality, 60);
+    let next = descriptor(AuthorityIdV1::TechnicalQuality, 61);
+    let mut owner = AuthorityOwnerCurrentV1::new(current);
+    let mut state = AuthorityStateV1::new();
+
+    state
+        .admit(
+            current,
+            AuthorityExpectedCurrentV1::Vacant,
+            permit(&owner, current),
+        )
+        .unwrap();
+    owner.advance_verified(next).unwrap();
+
+    let wrong_applicability = AuthorityDescriptorV1::from_verified_owner(
+        current.id,
+        *current.release.as_bytes(),
+        [62; 32],
+        *current.provenance.as_bytes(),
+    );
+    assert_eq!(
+        state.admit(
+            next,
+            AuthorityExpectedCurrentV1::Exact(wrong_applicability),
+            permit(&owner, next),
+        ),
+        Err(AuthorityAdmissionErrorV1::ExpectedApplicabilityMismatch)
+    );
+    assert_eq!(state.read(current.id()), Some(current));
+
+    let wrong_provenance = AuthorityDescriptorV1::from_verified_owner(
+        current.id,
+        *current.release.as_bytes(),
+        *current.applicability.as_bytes(),
+        [63; 32],
+    );
+    assert_eq!(
+        state.admit(
+            next,
+            AuthorityExpectedCurrentV1::Exact(wrong_provenance),
+            permit(&owner, next),
+        ),
+        Err(AuthorityAdmissionErrorV1::ExpectedProvenanceMismatch)
+    );
+    assert_eq!(state.read(current.id()), Some(current));
 }
 
 #[test]
