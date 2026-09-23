@@ -538,6 +538,7 @@ async function browserAttachmentConsumer(origin, fault) {
         recognized: api.isProgramError(error),
       };
     }
+    const cssAfterRejection = element.style.getPropertyValue(token.cssProperty);
     preservedAuthority = attachment.materializationAuthority();
     resources.push({ name: "attachment-preserved-authority", release() { preservedAuthority.free(); released(evidence, "attachment-preserved-authority", fault); } });
     acquisition(evidence, "attachment-preserved-authority", fault);
@@ -589,6 +590,7 @@ async function browserAttachmentConsumer(origin, fault) {
         recognized: api.isProgramError(error),
       };
     }
+    const cssAfterForeignEpoch = element.style.getPropertyValue(token.cssProperty);
     const independentComposite = (backdrop, source, opacity) => backdrop.map((channel, index) =>
       Math.round(channel + opacity * (source[index] - channel)));
     const parseComputed = (value) => {
@@ -697,7 +699,7 @@ async function browserAttachmentConsumer(origin, fault) {
       cssBefore,
       staleIdentity,
       foreignEpoch,
-      cssAfterForeignEpoch: element.style.getPropertyValue(token.cssProperty),
+      cssAfterForeignEpoch,
       reentrant: { outer: reentrant, nested: hostState.reentrant },
       reentrantFree: hostState.reentrantFree,
       freeBeforeDispose,
@@ -705,7 +707,7 @@ async function browserAttachmentConsumer(origin, fault) {
       cssAfterFree,
       hostRejection,
       preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
-      cssAfterRejection: element.style.getPropertyValue(token.cssProperty),
+      cssAfterRejection,
     };
   } catch (error) {
     primary = error;
