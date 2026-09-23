@@ -31,6 +31,7 @@ test("SBOM follows normal/build closure and excludes dev-only packages", () => {
   assert.deepEqual(sbom.components.map(({ name }) => name).sort(), ["labcolors-core", "labcolors-transport-cli", "serde"]);
   assert.equal(sbom.metadata.properties.find(({ name }) => name === "labpics:source-commit").value, source);
   assert.match(sbom.serialNumber, /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+  assert.equal(sbom.serialNumber, "urn:uuid:ef741685-4555-54bc-b355-6037cba081ec");
   assert.equal(buildSbom(metadataFixture(), source).serialNumber, sbom.serialNumber);
   assert.notEqual(buildSbom(metadataFixture(), "b".repeat(40)).serialNumber, sbom.serialNumber);
   assert.ok(sbom.components.every((component) => component.licenses?.length === 1));
