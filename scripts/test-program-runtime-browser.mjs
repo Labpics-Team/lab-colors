@@ -11,6 +11,8 @@ import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child
 import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
 
 const LOOPBACK = "127.0.0.1";
+const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const SOURCE_TREE_DOMAIN = "labpics.colors/core-source-tree-descriptor/v1\0";
 const RESOURCE_ORDER = [
   "temp-install",
   "browser",
@@ -32,6 +34,31 @@ export class BrowserProofCleanupError extends Error {
 
 function fail(message, options) {
   throw new Error(`Program browser proof: ${message}`, options);
+}
+
+function sourceEnvelopeIdentityAtCommit(sourceSha) {
+  if (!/^[0-9a-f]{40}$/u.test(sourceSha ?? "")) return null;
+  try {
+    const revision = execFileSync(
+      "git", ["rev-parse", `${sourceSha}:crates/labcolors-core`],
+      { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+    if (!/^[0-9a-f]{40}$/u.test(revision)) return null;
+    const descriptor = Buffer.alloc(47);
+    descriptor.write("LCST", 0, "ascii");
+    descriptor.writeUInt16BE(1, 4);
+    descriptor[6] = 1;
+    descriptor.write(revision, 7, "ascii");
+    return {
+      revision,
+      contentIdentityHex: createHash("sha256")
+        .update(SOURCE_TREE_DOMAIN, "utf8")
+        .update(descriptor)
+        .digest("hex"),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function cleanupResources(resources, primary) {
@@ -178,7 +205,7 @@ async function request(base, path, method, body, signal) {
 }
 
 export async function packedBrowserFiles(installed) {
-  const paths = ["index.js", "build-metadata.json", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
+  const paths = ["index.js", "package.json", "build-metadata.json", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
   const runtimeSource = await readFile(join(installed, "pkg/labcolors.js"), "utf8");
   paths.push(...await retainImportedRuntimeSnippets(installed, runtimeSource));
   return new Map(await Promise.all(
@@ -373,12 +400,16 @@ async function browserAttachmentConsumer(origin, fault) {
       if (intent.sinkOutput !== token.sinkOutput
         || intent.expectedSequence !== hostState.sequence
         || (hostState.epoch !== null && intent.bindingEpoch !== hostState.epoch)) return false;
+      const observedPoint = intent.point === null ? null : {
+        slot: intent.point.slot, source: Array.from(intent.point.source), opacity: intent.point.opacity,
+      };
       let nextPoint = hostState.point;
       if (intent.operation === "setAll") {
         if (intent.point === null || intent.point.slot !== token.outputSlot
           || intent.point.source.length !== 3 || intent.point.opacity !== 0.5) return false;
-        nextPoint = { slot: intent.point.slot, source: Array.from(intent.point.source), opacity: intent.point.opacity };
+        nextPoint = observedPoint;
       } else if (intent.operation === "revokeAll") {
+        if (intent.point !== null) return false;
         nextPoint = null;
       } else if (intent.operation === "confirmExact") {
         if (intent.desiredSequence !== intent.expectedSequence) return false;
@@ -399,7 +430,7 @@ async function browserAttachmentConsumer(origin, fault) {
         desiredSequence: intent.desiredSequence.toString(),
         bindingEpoch: intent.bindingEpoch.toString(),
         sinkOutput: intent.sinkOutput,
-        point: nextPoint,
+        point: observedPoint,
       });
       return true;
     };
@@ -739,6 +770,18 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver, scenar
     acquisition(evidence, "browser-session", fault);
     const installed = join(root, "node_modules", "@labpics", "colors");
     const files = await packedBrowserFiles(installed);
+    const packageBytes = files.get("/package.json");
+    const runtimeBytes = files.get("/pkg/labcolors_bg.wasm");
+    if (!packageBytes || !runtimeBytes) fail("served package evidence is incomplete");
+    const servedPackage = JSON.parse(packageBytes.toString("utf8"));
+    evidence.servedArtifact = {
+      package: { name: servedPackage.name, version: servedPackage.version },
+      runtime: {
+        path: "pkg/labcolors_bg.wasm",
+        bytes: runtimeBytes.length,
+        sha256: createHash("sha256").update(runtimeBytes).digest("hex"),
+      },
+    };
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? "/", `http://${LOOPBACK}`).pathname;
       if (pathname === "/") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><style>#proof{color:var(--consumer-color)}</style><div id=proof></div>"); return; }
@@ -839,6 +882,8 @@ export function verifyBrowserAttachmentConsumer(result) {
   const contentIdentityHex = Array.isArray(contentIdentity)
     ? contentIdentity.map((byte) => byte.toString(16).padStart(2, "0")).join("")
     : "";
+  const sourceProfile = sourceEnvelopeIdentityAtCommit(tuple?.sourceSha);
+  const servedArtifact = result.servedArtifact;
   if (result.error || result.cleanupError
     || consumer?.token?.id !== "consumer.foreground"
     || consumer.token.outputSlot !== 17
@@ -851,12 +896,19 @@ export function verifyBrowserAttachmentConsumer(result) {
     || tuple.runtime.path !== "pkg/labcolors_bg.wasm"
     || !Number.isSafeInteger(tuple.runtime.bytes) || tuple.runtime.bytes <= 0
     || !/^[0-9a-f]{64}$/u.test(tuple.runtime.sha256 ?? "")
+    || servedArtifact?.package?.name !== tuple.package.name
+    || servedArtifact.package.version !== tuple.package.version
+    || servedArtifact?.runtime?.path !== tuple.runtime.path
+    || servedArtifact.runtime.bytes !== tuple.runtime.bytes
+    || servedArtifact.runtime.sha256 !== tuple.runtime.sha256
     || envelope?.operation !== "issue-certificate"
     || envelope.authorityKind !== "generic-typed-certificate"
     || envelope.authorityVersion !== 1
     || !/^[0-9a-f]{40}$/u.test(envelope.producerRevision ?? "")
     || !Array.isArray(contentIdentity) || contentIdentity.length !== 32
     || contentIdentity.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    || sourceProfile?.revision !== envelope.producerRevision
+    || sourceProfile.contentIdentityHex !== contentIdentityHex
     || envelope.runtimeArtifactId !== `labcolors-core:source-tree-v1:${contentIdentityHex}`
     || envelope.contextId !== "core-source-tree-transport-v1"
     || envelope.payloadType !== "non-semantic-transport-v1"
