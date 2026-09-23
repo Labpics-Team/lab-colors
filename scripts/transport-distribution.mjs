@@ -264,6 +264,8 @@ function canonicalBinaryName(target) {
 export async function verifyBundle(directory, expectedSourceSha) {
   exactSha(expectedSourceSha, "expected source SHA");
   const attestationPath = resolve(directory, "transport.intoto.json");
+  const attestationStatus = await lstat(attestationPath);
+  if (!attestationStatus.isFile()) fail("transport.intoto.json must be a regular file");
   const attestationBytes = await readFile(attestationPath);
   const attestation = JSON.parse(attestationBytes);
   if (attestation._type !== ATTESTATION_TYPE || attestation.predicateType !== PREDICATE_TYPE) {

@@ -65,6 +65,14 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     };
     await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
     await assert.rejects(() => verifyBundle(dir, "c".repeat(40)), /source identity mismatch/);
+
+    await rm(join(dir, "transport.intoto.json"));
+    await writeFile(join(dir, "outside-attestation.json"), JSON.stringify(statement));
+    await symlink(join(dir, "outside-attestation.json"), join(dir, "transport.intoto.json"));
+    await assert.rejects(() => verifyBundle(dir, good), /transport\.intoto\.json must be a regular file/);
+    await rm(join(dir, "transport.intoto.json"));
+    await rm(join(dir, "outside-attestation.json"));
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
     const tamperCases = [
       ["labcolors-transport", /binary evidence bytes changed/],
       ["transport.sbom.cdx.json", /sbom evidence bytes changed/],
