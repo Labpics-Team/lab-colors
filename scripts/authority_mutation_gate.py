@@ -57,8 +57,8 @@ MUTANTS = {
         "        if false && current.release != expected.release {",
     ),
     "unverified-as-observed": (
-        "        ) => return Err(AuthorityPermitErrorV1::RendererObservationRequired),",
-        "        ) => {},",
+        "        (RendererObservationRequirementV1::Required, ProgramRendererProvenanceV1::Unverified) => {\n            return Err(AuthorityPermitErrorV1::RendererObservationRequired);\n        }",
+        "        (RendererObservationRequirementV1::Required, ProgramRendererProvenanceV1::Unverified) => {}",
     ),
 }
 

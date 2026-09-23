@@ -372,10 +372,9 @@ fn issue_permit<'a>(
     }
     match (renderer_requirement, renderer_provenance) {
         (RendererObservationRequirementV1::NotRequired, _) => {}
-        (
-            RendererObservationRequirementV1::Required,
-            ProgramRendererProvenanceV1::Unverified,
-        ) => return Err(AuthorityPermitErrorV1::RendererObservationRequired),
+        (RendererObservationRequirementV1::Required, ProgramRendererProvenanceV1::Unverified) => {
+            return Err(AuthorityPermitErrorV1::RendererObservationRequired);
+        }
     }
 
     Ok(AuthorityAdmissionPermitV1 {
