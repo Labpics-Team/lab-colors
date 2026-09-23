@@ -70,6 +70,17 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
     await assert.rejects(() => verifyBundle(dir, "c".repeat(40)), /source identity mismatch/);
 
+    const originalSbom = await readFile(join(dir, "transport.sbom.cdx.json"));
+    const serialMutant = JSON.parse(originalSbom);
+    serialMutant.serialNumber = "urn:uuid:00000000-0000-5000-8000-000000000000";
+    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify(serialMutant));
+    const serialStatement = structuredClone(statement);
+    serialStatement.predicate.evidence.sbom = await rec("transport.sbom.cdx.json");
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(serialStatement));
+    await assert.rejects(() => verifyBundle(dir, good), /not attestable CycloneDX 1\.6/);
+    await writeFile(join(dir, "transport.sbom.cdx.json"), originalSbom);
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
+
     await rm(join(dir, "transport.intoto.json"));
     await writeFile(join(dir, "outside-attestation.json"), JSON.stringify(statement));
     await symlink(join(dir, "outside-attestation.json"), join(dir, "transport.intoto.json"));
