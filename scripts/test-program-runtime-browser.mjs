@@ -178,7 +178,7 @@ async function request(base, path, method, body, signal) {
 }
 
 export async function packedBrowserFiles(installed) {
-  const paths = ["index.js", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
+  const paths = ["index.js", "build-metadata.json", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
   const runtimeSource = await readFile(join(installed, "pkg/labcolors.js"), "utf8");
   paths.push(...await retainImportedRuntimeSnippets(installed, runtimeSource));
   return new Map(await Promise.all(
@@ -296,7 +296,7 @@ export function browserAttachmentScenario(origin, fault) {
 async function browserAttachmentConsumer(origin, fault) {
   const resources = [];
   const evidence = { acquired: [], released: [], readback: {} };
-  let primary, result, attachment, snapshot, secondSnapshot, render, secondRender,
+  let primary, result, attachment, snapshot, secondSnapshot, abstentionSnapshot, render, secondRender,
     authority, secondAuthority, preservedAuthority, element;
   let freeBeforeDispose, cssBeforeFree, cssAfterFree;
   let hostDisposed = false;
@@ -305,14 +305,41 @@ async function browserAttachmentConsumer(origin, fault) {
     const api = await import(`${origin}/index.js`);
     const wire = await import(`${origin}/program-wire/abi-v1.js`);
     await api.init({ module_or_path: fetch(`${origin}/pkg/labcolors_bg.wasm`) });
+    const buildMetadataResponse = await fetch(`${origin}/build-metadata.json`, { cache: "no-store" });
+    if (!buildMetadataResponse.ok) throw new Error("installed producer metadata was unavailable");
+    const buildMetadata = await buildMetadataResponse.json();
+    const sourceEnvelope = api.decodeCertificateEnvelope(api.issueSourceCertificateEnvelope());
+    const producerTuple = {
+      package: buildMetadata.package,
+      sourceSha: buildMetadata.sourceSha,
+      runtime: buildMetadata.wasm?.find((entry) => entry.role === "runtime"),
+      envelope: {
+        runtimeArtifactId: sourceEnvelope.runtimeArtifactId,
+        operation: sourceEnvelope.operation,
+        authorityKind: sourceEnvelope.authorityKind,
+        authorityVersion: sourceEnvelope.authorityVersion,
+        producerRevision: sourceEnvelope.producerRevision,
+        producerContentIdentity: Array.from(sourceEnvelope.producerContentIdentity),
+        contextId: sourceEnvelope.contextId,
+        payloadType: sourceEnvelope.payloadType,
+        payloadVersion: sourceEnvelope.payloadVersion,
+      },
+    };
+    const token = Object.freeze({
+      id: "consumer.foreground",
+      outputSlot: 17,
+      sinkOutput: 91,
+      cssProperty: "--consumer-color",
+    });
     const builder = new wire.ProgramWireBuilderV1();
     builder.source(1, [64, 64, 64]).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, 0.5)
       .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
       .sourceOverOccurrence(8, 4, 7, 64, .2, wire.SURROUND_AVERAGE_V1)
       .presentationRoot(9, 8).presentationTarget(9, 8)
-      .exactVisibleUnary(false, 10, 8, [96, 96, 96]).output(17, 4);
+      .exactVisibleUnary(false, 10, 8, [96, 96, 96]).output(token.outputSlot, 4);
     element = document.createElement("div");
     element.style.background = "rgb(128 128 128)";
+    element.style.color = `var(${token.cssProperty})`;
     document.body.append(element);
     const hostState = { sequence: 0n, epoch: null, point: null, intents: [], reject: false };
     const host = (intent) => {
@@ -343,12 +370,12 @@ async function browserAttachmentConsumer(origin, fault) {
         return false;
       }
       if (hostState.reject) return false;
-      if (intent.sinkOutput !== 91
+      if (intent.sinkOutput !== token.sinkOutput
         || intent.expectedSequence !== hostState.sequence
         || (hostState.epoch !== null && intent.bindingEpoch !== hostState.epoch)) return false;
       let nextPoint = hostState.point;
       if (intent.operation === "setAll") {
-        if (intent.point === null || intent.point.slot !== 17
+        if (intent.point === null || intent.point.slot !== token.outputSlot
           || intent.point.source.length !== 3 || intent.point.opacity !== 0.5) return false;
         nextPoint = { slot: intent.point.slot, source: Array.from(intent.point.source), opacity: intent.point.opacity };
       } else if (intent.operation === "revokeAll") {
@@ -357,10 +384,10 @@ async function browserAttachmentConsumer(origin, fault) {
         if (intent.desiredSequence !== intent.expectedSequence) return false;
       } else return false;
       // Все проверки выполняются до одной DOM-мутации и локальной смены stamp.
-      if (intent.operation === "revokeAll") element.style.removeProperty("color");
+      if (intent.operation === "revokeAll") element.style.removeProperty(token.cssProperty);
       else if (intent.point !== null) {
         const [r, g, b] = intent.point.source;
-        element.style.color = `rgb(${r} ${g} ${b} / ${intent.point.opacity})`;
+        element.style.setProperty(token.cssProperty, `rgb(${r} ${g} ${b} / ${intent.point.opacity})`);
       }
       hostState.sequence = intent.desiredSequence;
       hostState.epoch = intent.bindingEpoch;
@@ -380,6 +407,7 @@ async function browserAttachmentConsumer(origin, fault) {
       name: "attachment-host",
       release() {
         if (hostDisposed) return;
+        element.style.removeProperty(token.cssProperty);
         element.style.removeProperty("color");
         element.remove();
         hostDisposed = true;
@@ -425,7 +453,7 @@ async function browserAttachmentConsumer(origin, fault) {
     authority = attachment.materializationAuthority();
     resources.push({ name: "attachment-authority", release() { authority.free(); released(evidence, "attachment-authority", fault); } });
     acquisition(evidence, "attachment-authority", fault);
-    cssBeforeFree = element.style.color;
+    cssBeforeFree = element.style.getPropertyValue(token.cssProperty);
     try {
       attachment.free();
       freeBeforeDispose = { rejected: false };
@@ -437,7 +465,7 @@ async function browserAttachmentConsumer(origin, fault) {
         recognized: api.isProgramError(error),
       };
     }
-    cssAfterFree = element.style.color;
+    cssAfterFree = element.style.getPropertyValue(token.cssProperty);
     element.style.background = "rgb(160 160 160)";
     secondSnapshot = attachment.updateObserved(2n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
     resources.push({ name: "attachment-second-snapshot", release() { secondSnapshot.free(); released(evidence, "attachment-second-snapshot", fault); } });
@@ -467,7 +495,7 @@ async function browserAttachmentConsumer(origin, fault) {
     }
     hostState.reject = true;
     let hostRejection;
-    const cssBefore = element.style.color;
+    const cssBefore = element.style.getPropertyValue(token.cssProperty);
     try {
       attachment.updateObserved(3n, new Uint32Array([1]), new Uint8Array([160, 160, 160]), 1);
       hostRejection = { rejected: false };
@@ -538,9 +566,51 @@ async function browserAttachmentConsumer(origin, fault) {
       return [channels[0], channels[1], channels[2], channels[3] ?? 1];
     };
     const computed = parseComputed(getComputedStyle(element).color);
+    hostState.reject = false;
+    const materializedBeforeAbstention = element.style.getPropertyValue(token.cssProperty);
+    abstentionSnapshot = attachment.updateUnknown(3n, 0xA11CE);
+    resources.push({
+      name: "attachment-abstention-snapshot",
+      release() { abstentionSnapshot.free(); released(evidence, "attachment-abstention-snapshot", fault); },
+    });
+    acquisition(evidence, "attachment-abstention-snapshot", fault);
+    let abstentionAuthority;
+    try {
+      const unexpected = attachment.materializationAuthority();
+      unexpected.free();
+      abstentionAuthority = { rejected: false };
+    } catch (error) {
+      abstentionAuthority = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
+    }
+    const materializedAfterAbstention = element.style.getPropertyValue(token.cssProperty);
     result = {
       // Cleanup revokeAll — lifecycle readback, не часть двух update oracle.
       hostIntents: hostState.intents.slice(),
+      declaredConsumer: {
+        token,
+        producerTuple,
+        values: {
+          materialized: materializedBeforeAbstention,
+          computed,
+        },
+        abstention: {
+          state: abstentionSnapshot.state,
+          hasRender: abstentionSnapshot.hasRender(),
+          outputCount: abstentionSnapshot.outputCount(),
+          before: materializedBeforeAbstention,
+          after: materializedAfterAbstention,
+          authority: abstentionAuthority,
+        },
+        errors: {
+          rejectedUpdate: hostRejection,
+          staleMaterialization: stale,
+        },
+      },
       first: {
         ...firstStatus,
         output: Array.from(snapshot.outputRgb(0)),
@@ -596,7 +666,7 @@ async function browserAttachmentConsumer(origin, fault) {
       cssBefore,
       staleIdentity,
       foreignEpoch,
-      cssAfterForeignEpoch: element.style.color,
+      cssAfterForeignEpoch: element.style.getPropertyValue(token.cssProperty),
       reentrant: { outer: reentrant, nested: hostState.reentrant },
       reentrantFree: hostState.reentrantFree,
       freeBeforeDispose,
@@ -604,7 +674,7 @@ async function browserAttachmentConsumer(origin, fault) {
       cssAfterFree,
       hostRejection,
       preservedAuthorityComposite: Array.from(preservedAuthority.terminalCompositeRgb()),
-      cssAfterRejection: element.style.color,
+      cssAfterRejection: element.style.getPropertyValue(token.cssProperty),
     };
   } catch (error) {
     primary = error;
@@ -616,10 +686,13 @@ async function browserAttachmentConsumer(origin, fault) {
   if (render) evidence.readback["attachment-render"] = render.__wbg_ptr === 0;
   if (authority) evidence.readback["attachment-authority"] = authority.__wbg_ptr === 0;
   if (secondSnapshot) evidence.readback["attachment-second-snapshot"] = secondSnapshot.__wbg_ptr === 0;
+  if (abstentionSnapshot) evidence.readback["attachment-abstention-snapshot"] = abstentionSnapshot.__wbg_ptr === 0;
   if (secondRender) evidence.readback["attachment-second-render"] = secondRender.__wbg_ptr === 0;
   if (secondAuthority) evidence.readback["attachment-second-authority"] = secondAuthority.__wbg_ptr === 0;
   if (preservedAuthority) evidence.readback["attachment-preserved-authority"] = preservedAuthority.__wbg_ptr === 0;
-  if (element) evidence.readback["attachment-host"] = !element.isConnected && element.style.getPropertyValue("color") === "";
+  if (element) evidence.readback["attachment-host"] = !element.isConnected
+    && element.style.getPropertyValue("color") === ""
+    && element.style.getPropertyValue("--consumer-color") === "";
   return { ...result, ...outcome, ...evidence };
 }
 
@@ -671,7 +744,10 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver, scenar
       if (pathname === "/") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><style>#proof{color:var(--consumer-color)}</style><div id=proof></div>"); return; }
       const bytes = files.get(pathname);
       if (!bytes) { res.writeHead(404).end(); return; }
-      res.writeHead(200, { "cache-control": "no-store", "content-type": pathname.endsWith(".wasm") ? "application/wasm" : "text/javascript; charset=utf-8", "x-content-type-options": "nosniff" }); res.end(bytes);
+      const contentType = pathname.endsWith(".wasm")
+        ? "application/wasm"
+        : pathname.endsWith(".json") ? "application/json; charset=utf-8" : "text/javascript; charset=utf-8";
+      res.writeHead(200, { "cache-control": "no-store", "content-type": contentType, "x-content-type-options": "nosniff" }); res.end(bytes);
     });
     resources.push({ name: "server", release: async () => {
       if (server.listening) {
@@ -754,8 +830,55 @@ export function verifyBrowserAttachmentConsumer(result) {
     "temp-install", "browser", "browser-session", "server", "attachment", "attachment-host",
     "attachment-snapshot", "attachment-render", "attachment-authority", "attachment-second-snapshot",
     "attachment-second-render", "attachment-second-authority", "attachment-preserved-authority",
+    "attachment-abstention-snapshot",
   ];
+  const consumer = result.declaredConsumer;
+  const tuple = consumer?.producerTuple;
+  const envelope = tuple?.envelope;
+  const contentIdentity = envelope?.producerContentIdentity;
+  const contentIdentityHex = Array.isArray(contentIdentity)
+    ? contentIdentity.map((byte) => byte.toString(16).padStart(2, "0")).join("")
+    : "";
   if (result.error || result.cleanupError
+    || consumer?.token?.id !== "consumer.foreground"
+    || consumer.token.outputSlot !== 17
+    || consumer.token.sinkOutput !== 91
+    || consumer.token.cssProperty !== "--consumer-color"
+    || tuple?.package?.name !== "@labpics/colors"
+    || typeof tuple.package.version !== "string" || tuple.package.version.length === 0
+    || !/^[0-9a-f]{40}$/u.test(tuple?.sourceSha ?? "")
+    || tuple?.runtime?.role !== "runtime"
+    || tuple.runtime.path !== "pkg/labcolors_bg.wasm"
+    || !Number.isSafeInteger(tuple.runtime.bytes) || tuple.runtime.bytes <= 0
+    || !/^[0-9a-f]{64}$/u.test(tuple.runtime.sha256 ?? "")
+    || envelope?.operation !== "issue-certificate"
+    || envelope.authorityKind !== "generic-typed-certificate"
+    || envelope.authorityVersion !== 1
+    || !/^[0-9a-f]{40}$/u.test(envelope.producerRevision ?? "")
+    || !Array.isArray(contentIdentity) || contentIdentity.length !== 32
+    || contentIdentity.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+    || envelope.runtimeArtifactId !== `labcolors-core:source-tree-v1:${contentIdentityHex}`
+    || envelope.contextId !== "core-source-tree-transport-v1"
+    || envelope.payloadType !== "non-semantic-transport-v1"
+    || envelope.payloadVersion !== 1
+    || typeof consumer.values?.materialized !== "string" || consumer.values.materialized === ""
+    || !equal(consumer.values.computed, [64, 64, 64, 0.5])
+    || consumer.abstention?.state !== "stale"
+    || consumer.abstention.hasRender !== false
+    || consumer.abstention.before !== consumer.values.materialized
+    || consumer.abstention.after !== ""
+    || consumer.abstention.authority?.rejected !== true
+    || consumer.abstention.authority.recognized !== true
+    || consumer.abstention.authority.code !== "program_materialization_not_ready"
+    || consumer.abstention.authority.operation !== "materializationAuthority"
+    || consumer.errors?.rejectedUpdate?.rejected !== true
+    || consumer.errors.rejectedUpdate.code !== "program_attachment_host_rejected"
+    || consumer.errors.rejectedUpdate.operation !== "attachmentUpdateObserved"
+    || consumer.errors.rejectedUpdate.recognized !== true
+    || consumer.errors?.staleMaterialization?.rejected !== true
+    || consumer.errors.staleMaterialization.code !== "program_materialization_stale_revision"
+    || consumer.errors.staleMaterialization.operation !== "materializationAuthority"
+    || consumer.errors.staleMaterialization.recognized !== true
     || !equal(result.first?.output, [64, 64, 64])
     || result.first?.opacity !== 0.5
     || !equal(result.first?.renderComposite, [96, 96, 96])
@@ -838,15 +961,21 @@ export function verifyBrowserAttachmentConsumer(result) {
     || !equal(result.preservedAuthorityComposite, [112, 112, 112])
     || result.cssAfterRejection !== result.cssBefore
     || typeof result.cssBefore !== "string" || result.cssBefore === ""
-    || intents.length !== 2
-    || intents.some((intent) => intent.operation !== "setAll" || intent.sinkOutput !== 91
+    || intents.length !== 3
+    || intents.slice(0, 2).some((intent) => intent.operation !== "setAll" || intent.sinkOutput !== 91
       || intent.point?.slot !== 17 || intent.point?.opacity !== 0.5)
+    || intents[2]?.operation !== "revokeAll"
+    || intents[2]?.sinkOutput !== 91
+    || intents[2]?.point !== null
     || intents[0]?.expectedSequence !== "0"
     || intents[0]?.desiredSequence !== "1"
     || intents[1]?.expectedSequence !== "1"
     || intents[1]?.desiredSequence !== "2"
+    || intents[2]?.expectedSequence !== "2"
+    || intents[2]?.desiredSequence !== "3"
     || intents[0]?.bindingEpoch === "0"
     || intents[0]?.bindingEpoch !== intents[1]?.bindingEpoch
+    || intents[1]?.bindingEpoch !== intents[2]?.bindingEpoch
     || result.readback?.["attachment-host"] !== true
     || result.readback?.attachment !== true
     || result.readback?.["attachment-snapshot"] !== true
