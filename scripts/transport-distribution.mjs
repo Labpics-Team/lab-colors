@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -233,6 +233,8 @@ function licenseInventory(sbom) {
 }
 
 async function fileEvidence(path, displayPath = basename(path)) {
+  const status = await lstat(path);
+  if (!status.isFile()) fail(`${displayPath} must be a regular file`);
   const bytes = await readFile(path);
   if (bytes.length === 0) fail(`${displayPath} is empty`);
   return { path: displayPath, bytes: bytes.length, sha256: sha256(bytes) };
@@ -284,6 +286,13 @@ export async function verifyBundle(directory, expectedSourceSha) {
     licenses: "transport.licenses.json",
     benchmark: "transport.benchmark.json",
   };
+  const expectedEntries = ["transport.intoto.json", ...Object.values(canonicalPaths)].sort();
+  const actualEntries = (await readdir(directory, { withFileTypes: true }))
+    .map((entry) => entry.name)
+    .sort();
+  if (actualEntries.length !== expectedEntries.length || actualEntries.some((name, index) => name !== expectedEntries[index])) {
+    fail("transport distribution directory is not the canonical closed file set");
+  }
   const seenPaths = new Set();
   for (const key of ["binary", "sbom", "licenses", "benchmark"]) {
     const record = files?.[key];

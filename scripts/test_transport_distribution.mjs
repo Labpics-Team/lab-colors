@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -92,6 +92,20 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     renamedMutant.predicate.evidence.licenses.path = "licenses.json";
     await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(renamedMutant));
     await assert.rejects(() => verifyBundle(dir, good), /non-canonical licenses evidence path/);
+
+    await writeFile(join(dir, "unexpected.txt"), "unexpected");
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
+    await assert.rejects(() => verifyBundle(dir, good), /canonical closed file set/);
+    await rm(join(dir, "unexpected.txt"));
+
+    const originalBinary = await readFile(join(dir, "labcolors-transport"));
+    await rm(join(dir, "labcolors-transport"));
+    await writeFile(join(dir, "outside-binary"), originalBinary);
+    await symlink(join(dir, "outside-binary"), join(dir, "labcolors-transport"));
+    await assert.rejects(() => verifyBundle(dir, good), /canonical closed file set|regular file/);
+    await rm(join(dir, "labcolors-transport"));
+    await rm(join(dir, "outside-binary"));
+    await writeFile(join(dir, "labcolors-transport"), originalBinary);
 
     const subjectMutant = structuredClone(statement);
     subjectMutant.subject[0].digest.sha256 = "0".repeat(64);
