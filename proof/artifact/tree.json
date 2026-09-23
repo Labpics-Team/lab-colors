@@ -4,8 +4,8 @@
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
-  ".github/workflows/ci-worker.yml": "c10fcd17601e1d08102fbb2720da57929b3c8a56",
-  ".github/workflows/ci.yml": "839a4837c347efe7babafb1ca63f69d904554bb2",
+  ".github/workflows/ci-worker.yml": "c6685d33b60176f3b396f50bed2ae7d030025fe9",
+  ".github/workflows/ci.yml": "23436ac760f9914e1777c50ae4750604e02c8d55",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
   ".github/workflows/full-domain-corpus.yml": "ce4a1ad54e0e947539dfe3cefb6b995ae816a867",
   ".github/workflows/full-domain-run.yml": "84b0957c9ff5eb89e48cc4007b67ea6c73f30d5a",
@@ -478,7 +478,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "74b218f175b459c1f3598c3181dc814e98685b954231b47ee9d5a104f8d08415",
+ "record_sha256": "71b156da2486debd5c3d8df00aa85b1246dc08343d03b15e58bbf2b690195f05",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
