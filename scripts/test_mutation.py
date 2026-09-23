@@ -1791,7 +1791,17 @@ class MutationTruthTest(unittest.TestCase):
         }
         self.assertEqual(
             set(ci_ephemeral),
-            {"node-consumer-floor", "msrv", "lint", "docs", "test", "audit", "wasm"},
+            {
+                "node-consumer-floor",
+                "msrv",
+                "lint",
+                "docs",
+                "test",
+                "transport-distribution",
+                "transport-distribution-attestation",
+                "audit",
+                "wasm",
+            },
         )
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
