@@ -40,13 +40,6 @@ macro_rules! identity_type {
                 &self.0
             }
 
-            #[cfg_attr(
-                not(test),
-                expect(
-                    dead_code,
-                    reason = "создание идентичности остаётся закрытым путём владельца"
-                )
-            )]
             const fn from_owner(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
@@ -307,13 +300,6 @@ fn ensure_expected_current(
 
 // Владелец-side часть остаётся закрытой внутри AUTH. TQ/CC/HCE добавят свои
 // конструкторы доказательств отдельными узлами и не получают общий публичный mint.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "AUTH-01 закрывает выпуск разрешений до конструкторов владельцев TQ/CC/HCE"
-    )
-)]
 struct AuthorityOwnerCurrentV1 {
     descriptor: AuthorityDescriptorV1,
 }
@@ -384,16 +370,12 @@ fn issue_permit<'a>(
     if owner_current.descriptor.provenance != next.provenance {
         return Err(AuthorityPermitErrorV1::ProvenanceMismatch);
     }
-    if matches!(
-        renderer_requirement,
-        RendererObservationRequirementV1::Required
-    ) {
-        match renderer_provenance {
-            ProgramRendererProvenanceV1::Unverified => {
-                return Err(AuthorityPermitErrorV1::RendererObservationRequired);
-            }
-            _ => return Err(AuthorityPermitErrorV1::RendererObservationRequired),
-        }
+    match (renderer_requirement, renderer_provenance) {
+        (RendererObservationRequirementV1::NotRequired, _) => {}
+        (
+            RendererObservationRequirementV1::Required,
+            ProgramRendererProvenanceV1::Unverified,
+        ) => return Err(AuthorityPermitErrorV1::RendererObservationRequired),
     }
 
     Ok(AuthorityAdmissionPermitV1 {
