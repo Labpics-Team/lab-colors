@@ -30,14 +30,19 @@ test("SBOM follows normal/build closure and excludes dev-only packages", () => {
   const sbom = buildSbom(metadataFixture(), source);
   assert.deepEqual(sbom.components.map(({ name }) => name).sort(), ["labcolors-core", "labcolors-transport-cli", "serde"]);
   assert.equal(sbom.metadata.properties.find(({ name }) => name === "labpics:source-commit").value, source);
+  assert.match(sbom.serialNumber, /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+  assert.equal(sbom.serialNumber, "urn:uuid:ef741685-4555-54bc-b355-6037cba081ec");
+  assert.equal(buildSbom(metadataFixture(), source).serialNumber, sbom.serialNumber);
+  assert.notEqual(buildSbom(metadataFixture(), "b".repeat(40)).serialNumber, sbom.serialNumber);
   assert.ok(sbom.components.every((component) => component.licenses?.length === 1));
 });
 
 test("verifier rejects tampered source identity before trusting digest metadata", async () => {
+  const good = "a".repeat(40);
   const dir = await mkdtemp(join(tmpdir(), "labcolors-transport-dist-test-"));
   try {
     await writeFile(join(dir, "labcolors-transport"), "binary");
-    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify({ bomFormat: "CycloneDX", specVersion: "1.6", components: [{ type: "application", name: "labcolors-transport-cli", licenses: [{ expression: "MIT" }] }] }));
+    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify(buildSbom(metadataFixture(), good)));
     await writeFile(join(dir, "transport.licenses.json"), JSON.stringify({ schemaVersion: 1, components: [{}] }));
     await writeFile(join(dir, "transport.benchmark.json"), JSON.stringify({ schemaVersion: 1, workload: { measuredRounds: 31 }, candidate: { parse: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 }, inspect: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 }, serialize: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 } } }));
     const crypto = await import("node:crypto");
@@ -51,7 +56,6 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       licenses: await rec("transport.licenses.json"),
       benchmark: await rec("transport.benchmark.json"),
     };
-    const good = "a".repeat(40);
     const statement = {
       _type: "https://in-toto.io/Statement/v1",
       subject: [{ name: "labcolors-transport", digest: { sha256: evidence.binary.sha256 } }],
@@ -65,6 +69,17 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     };
     await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
     await assert.rejects(() => verifyBundle(dir, "c".repeat(40)), /source identity mismatch/);
+
+    const originalSbom = await readFile(join(dir, "transport.sbom.cdx.json"));
+    const serialMutant = JSON.parse(originalSbom);
+    serialMutant.serialNumber = "urn:uuid:00000000-0000-5000-8000-000000000000";
+    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify(serialMutant));
+    const serialStatement = structuredClone(statement);
+    serialStatement.predicate.evidence.sbom = await rec("transport.sbom.cdx.json");
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(serialStatement));
+    await assert.rejects(() => verifyBundle(dir, good), /not attestable CycloneDX 1\.6/);
+    await writeFile(join(dir, "transport.sbom.cdx.json"), originalSbom);
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(statement));
 
     await rm(join(dir, "transport.intoto.json"));
     await writeFile(join(dir, "outside-attestation.json"), JSON.stringify(statement));
