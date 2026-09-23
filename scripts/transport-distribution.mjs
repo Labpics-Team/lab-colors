@@ -346,7 +346,7 @@ async function generate(options) {
   const head = command("git", ["rev-parse", "HEAD"]).trim();
   if (head !== sourceSha) fail(`checked-out HEAD ${head} != source SHA ${sourceSha}`);
   const treeSha = command("git", ["rev-parse", "HEAD^{tree}"]).trim();
-  const changes = command("git", ["status", "--porcelain=v1", "--untracked-files=no"]).trim();
+  const changes = command("git", ["status", "--porcelain=v1", "--untracked-files=all"]).trim();
   if (changes) fail(`tracked source is dirty and cannot attest ${sourceSha}`);
 
   const out = resolve(options.out);
