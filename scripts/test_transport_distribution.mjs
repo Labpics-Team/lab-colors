@@ -59,7 +59,7 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       predicate: {
         schemaVersion: 1,
         source: { repository: "https://github.com/Labpics-Team/lab-colors", commit: good, tree: "b".repeat(40) },
-        build: { noRebuild: true },
+        build: { noRebuild: true, target: "x86_64-unknown-linux-gnu" },
         evidence,
       },
     };
@@ -77,6 +77,21 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       await assert.rejects(() => verifyBundle(dir, good), expected);
       await writeFile(join(dir, path), original);
     }
+
+    const traversalMutant = structuredClone(statement);
+    traversalMutant.predicate.evidence.sbom.path = "../transport.sbom.cdx.json";
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(traversalMutant));
+    await assert.rejects(() => verifyBundle(dir, good), /non-canonical sbom evidence path/);
+
+    const absoluteMutant = structuredClone(statement);
+    absoluteMutant.predicate.evidence.benchmark.path = "/tmp/transport.benchmark.json";
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(absoluteMutant));
+    await assert.rejects(() => verifyBundle(dir, good), /non-canonical benchmark evidence path/);
+
+    const renamedMutant = structuredClone(statement);
+    renamedMutant.predicate.evidence.licenses.path = "licenses.json";
+    await writeFile(join(dir, "transport.intoto.json"), JSON.stringify(renamedMutant));
+    await assert.rejects(() => verifyBundle(dir, good), /non-canonical licenses evidence path/);
 
     const subjectMutant = structuredClone(statement);
     subjectMutant.subject[0].digest.sha256 = "0".repeat(64);

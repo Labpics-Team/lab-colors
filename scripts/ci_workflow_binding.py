@@ -71,6 +71,8 @@ def _parse_caller(source: str) -> None:
         ("jobs", "worker", "name"): "CI",
         ("jobs", "worker", "permissions"): None,
         ("jobs", "worker", "permissions", "contents"): "read",
+        ("jobs", "worker", "permissions", "id-token"): "write",
+        ("jobs", "worker", "permissions", "attestations"): "write",
         ("jobs", "worker", "uses"): LOCAL_WORKER,
     }
     if jobs != expected:

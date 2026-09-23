@@ -242,6 +242,23 @@ function exactSha(value, label) {
   if (!/^[0-9a-f]{40}$/u.test(value ?? "")) fail(`${label} must be a full lowercase Git SHA`);
 }
 
+function rustHostTriple(verbose) {
+  const match = /^host:\s*(\S+)$/mu.exec(verbose);
+  if (!match) fail("rustc -vV did not report a host triple");
+  const host = match[1];
+  if (!/^[A-Za-z0-9_.+]+(?:-[A-Za-z0-9_.+]+){2,}$/u.test(host)) {
+    fail("rustc -vV reported a malformed host triple");
+  }
+  return host;
+}
+
+function canonicalBinaryName(target) {
+  if (typeof target !== "string" || !/^[A-Za-z0-9_.+]+(?:-[A-Za-z0-9_.+]+){2,}$/u.test(target)) {
+    fail("transport attestation build target is malformed");
+  }
+  return target.split("-").includes("windows") ? "labcolors-transport.exe" : "labcolors-transport";
+}
+
 export async function verifyBundle(directory, expectedSourceSha) {
   exactSha(expectedSourceSha, "expected source SHA");
   const attestationPath = resolve(directory, "transport.intoto.json");
@@ -261,11 +278,23 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("transport attestation repository/build contract mismatch");
   }
   const files = predicate.evidence;
+  const canonicalPaths = {
+    binary: canonicalBinaryName(predicate.build?.target),
+    sbom: "transport.sbom.cdx.json",
+    licenses: "transport.licenses.json",
+    benchmark: "transport.benchmark.json",
+  };
+  const seenPaths = new Set();
   for (const key of ["binary", "sbom", "licenses", "benchmark"]) {
     const record = files?.[key];
     if (!record || !/^[0-9a-f]{64}$/u.test(record.sha256 ?? "") || !Number.isSafeInteger(record.bytes) || record.bytes <= 0) {
       fail(`transport attestation has malformed ${key} evidence`);
     }
+    if (record.path !== canonicalPaths[key] || record.path.includes("/") || record.path.includes("\\")) {
+      fail(`transport attestation has non-canonical ${key} evidence path`);
+    }
+    if (seenPaths.has(record.path)) fail("transport attestation reuses an evidence path");
+    seenPaths.add(record.path);
     const actual = await fileEvidence(resolve(directory, record.path), record.path);
     if (actual.bytes !== record.bytes || actual.sha256 !== record.sha256) {
       fail(`transport ${key} evidence bytes changed`);
@@ -316,7 +345,9 @@ async function generate(options) {
   await copyFile(resolve(options.binary), binaryPath);
   await chmod(binaryPath, 0o755);
 
-  const metadata = JSON.parse(command("cargo", ["metadata", "--locked", "--format-version", "1"]));
+  const rustcVerbose = command("rustc", ["-vV"]);
+  const rustHost = rustHostTriple(rustcVerbose);
+  const metadata = JSON.parse(command("cargo", ["metadata", "--locked", "--format-version", "1", "--filter-platform", rustHost]));
   const sbom = buildSbom(metadata, sourceSha);
   const sbomPath = resolve(out, "transport.sbom.cdx.json");
   await writeFile(sbomPath, stableJson(sbom));
@@ -328,7 +359,7 @@ async function generate(options) {
     platform: process.platform,
     arch: process.arch,
     node: process.version,
-    rustc: command("rustc", ["-Vv"]).trim(),
+    rustc: rustcVerbose.trim(),
     cargo: command("cargo", ["-V"]).trim(),
   };
   benchmark.source = {
@@ -354,7 +385,7 @@ async function generate(options) {
       source: { repository: REPOSITORY, commit: sourceSha, tree: treeSha },
       build: {
         profile: "release",
-        target: `${process.arch}-${process.platform}`,
+        target: rustHost,
         cargoLockSha256: cargoLock.sha256,
         noRebuild: true,
       },
