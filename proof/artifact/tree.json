@@ -464,7 +464,7 @@
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
-  "scripts/test_mutation.py": "a818205fd84ebeb7b3f8fca7057f817e3835caf7",
+  "scripts/test_mutation.py": "4af08554f4581d3fe7a0046d4f2e7a688f8ce3f4",
   "scripts/test_point_support_surplus_source_binding.py": "def7d1e3fa5bb2383b9b1a81e5e740e12c6f7f9a",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_transport_distribution.mjs": "a8008542702461a9e2b723f41c454f511e72c577",
@@ -478,7 +478,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "7084799143993acbc143bc399a49df94f277215f319b863e8c717606dd169012",
+ "record_sha256": "416fe7ec2334a773203b19af2fa08deff87e739c1e8249d78bfbd1c1378ea6ee",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
