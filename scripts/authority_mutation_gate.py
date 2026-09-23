@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AUTH-01: целевые семантические мутации обязаны делать focused Core gate красным."""
+"""AUTH-01: целевые семантические мутации обязаны делать целевой тест Core красным."""
 
 from __future__ import annotations
 

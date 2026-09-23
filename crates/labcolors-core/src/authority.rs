@@ -70,7 +70,7 @@ identity_type!(
 /// Проверенная привязка одной ветви полномочий.
 ///
 /// Поля и конструктор закрыты: внешний вызывающий код может читать полученный
-/// описание, но не превратить сырые байты в полномочие.
+/// описатель, но не превратить сырые байты в полномочие.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AuthorityDescriptorV1 {
     id: AuthorityIdV1,
@@ -198,8 +198,8 @@ pub enum AuthorityRequireErrorV1 {
 /// Одноразовое разрешение владельца ветви на точное описание.
 ///
 /// Тип специально не реализует `Clone`/`Copy`. Его поля закрыты, а `admit`
-/// потребляет значение. Заимствование удерживает текущее состояние владельца неизменяемым до
-/// точки записи в `AuthorityStateV1`.
+/// потребляет значение. Заимствование удерживает текущее состояние владельца
+/// неизменяемым до точки записи в `AuthorityStateV1`.
 pub struct AuthorityAdmissionPermitV1<'a> {
     owner_current: &'a AuthorityOwnerCurrentV1,
     descriptor: AuthorityDescriptorV1,
