@@ -282,7 +282,7 @@
   "packages/colors/test/helpers/certificate-wire-reference.mjs": "48987da33073dc2cce780dce0dc2ce07a446b3cb",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/program-error-admission.test.mjs": "ba8574aaf3506420e89a5a0f3e707492036426c9",
-  "packages/colors/test/program-runtime-browser-harness.test.mjs": "653d5f153a1af45f2f546d53838955506cc09294",
+  "packages/colors/test/program-runtime-browser-harness.test.mjs": "59dc87ce655a6dd0065afe777733433bb46b53fb",
   "packages/colors/test/program-scalar-admission.test.mjs": "9d36e2196accfa3ea3d959bba9b6016999a35c49",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
   "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
@@ -451,7 +451,7 @@
   "scripts/point-support-release-contract.cjs": "d8b222f54af2446f21a93c8941435ee27222f387",
   "scripts/prepare-npm-package.mjs": "e638bd5ae0d96eab39ee2c310958c83725ed76b5",
   "scripts/release-evidence.mjs": "0867419482af8aecd61026870a429ef90b4532a8",
-  "scripts/test-program-runtime-browser.mjs": "ed317ef5d9166d92fce4f4ead34ebe4f25c1ab7b",
+  "scripts/test-program-runtime-browser.mjs": "52bc7e2ebd2cc8d518c7c9b85e2d461d66a8d25d",
   "scripts/test_artifact_matrix.py": "460b86dadf428d59159d4a2ab77f8b3e9febc960",
   "scripts/test_certificate_source_build.py": "6828c64919d055c7ac5064aa3740c1b20fc7ab9e",
   "scripts/test_ci_peer_gate.py": "b19a0d13e42f125f0db0e9438c6c3bba5c4af91b",
@@ -478,7 +478,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "78c1f91be98c5449340f9964bba6025c5247b501c1cff5d253d38120fcea8c90",
+ "record_sha256": "4233e47245feede82a3a55c52ee03b6a96989a480c4cdffdad760060aa942e56",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
