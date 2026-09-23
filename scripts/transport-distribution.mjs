@@ -11,6 +11,8 @@ const ATTESTATION_TYPE = "https://in-toto.io/Statement/v1";
 const PREDICATE_TYPE = "https://lab.pics/attestations/transport-distribution/v1";
 const BENCHMARK_SCHEMA = 1;
 const EVIDENCE_SCHEMA = 1;
+const CYCLONEDX_SERIAL_NUMBER = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const UUID_DNS_NAMESPACE = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex");
 const WARMUP_ROUNDS = 7;
 const MEASURED_ROUNDS = 31;
 
@@ -155,6 +157,19 @@ function packageRef(pkg) {
   return `cargo:${pkg.name}@${pkg.version}#${source}`;
 }
 
+function bomSerialNumber(sourceSha) {
+  exactSha(sourceSha, "SBOM source SHA");
+  const digest = createHash("sha1")
+    .update(UUID_DNS_NAMESPACE)
+    .update(`${REPOSITORY}\0${sourceSha}\0labcolors-transport-cli`, "utf8")
+    .digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `urn:uuid:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function cyclonedxComponent(pkg, sourceSha) {
   const component = {
     type: pkg.name === "labcolors-transport-cli" ? "application" : "library",
@@ -207,6 +222,7 @@ export function buildSbom(metadata, sourceSha) {
   return {
     bomFormat: "CycloneDX",
     specVersion: "1.6",
+    serialNumber: bomSerialNumber(sourceSha),
     version: 1,
     metadata: {
       component: cyclonedxComponent(root, sourceSha),
@@ -317,7 +333,13 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("transport attestation subject does not bind the binary evidence");
   }
   const sbom = JSON.parse(await readFile(resolve(directory, files.sbom.path), "utf8"));
-  if (sbom.bomFormat !== "CycloneDX" || sbom.specVersion !== "1.6") fail("transport SBOM is not CycloneDX 1.6");
+  if (
+    sbom.bomFormat !== "CycloneDX" ||
+    sbom.specVersion !== "1.6" ||
+    !CYCLONEDX_SERIAL_NUMBER.test(sbom.serialNumber ?? "")
+  ) {
+    fail("transport SBOM is not attestable CycloneDX 1.6");
+  }
   const root = sbom.components?.filter((component) => component.name === "labcolors-transport-cli");
   if (!root || root.length !== 1 || root[0].type !== "application") fail("transport SBOM root is not exact");
   if (sbom.components.some((component) => !(component.licenses ?? []).some((entry) => typeof entry.expression === "string" && entry.expression.length > 0))) {
