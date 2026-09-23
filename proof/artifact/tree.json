@@ -282,7 +282,7 @@
   "packages/colors/test/helpers/certificate-wire-reference.mjs": "48987da33073dc2cce780dce0dc2ce07a446b3cb",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/program-error-admission.test.mjs": "ba8574aaf3506420e89a5a0f3e707492036426c9",
-  "packages/colors/test/program-runtime-browser-harness.test.mjs": "653d5f153a1af45f2f546d53838955506cc09294",
+  "packages/colors/test/program-runtime-browser-harness.test.mjs": "59dc87ce655a6dd0065afe777733433bb46b53fb",
   "packages/colors/test/program-scalar-admission.test.mjs": "9d36e2196accfa3ea3d959bba9b6016999a35c49",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
   "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
@@ -478,7 +478,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "d8244a314d4f2c55ca7454bb176788222a39b108"
  },
- "record_sha256": "8b1a0a20e25ae53f879660679d44ce006c85469939aa98b720d7a6cc81197a2c",
+ "record_sha256": "c2f25edac1a448c02a92d714f9b7067e9e1dbf801d2832ae46244b3d734e133b",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
