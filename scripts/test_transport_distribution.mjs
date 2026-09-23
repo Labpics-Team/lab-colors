@@ -37,10 +37,11 @@ test("SBOM follows normal/build closure and excludes dev-only packages", () => {
 });
 
 test("verifier rejects tampered source identity before trusting digest metadata", async () => {
+  const good = "a".repeat(40);
   const dir = await mkdtemp(join(tmpdir(), "labcolors-transport-dist-test-"));
   try {
     await writeFile(join(dir, "labcolors-transport"), "binary");
-    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify({ bomFormat: "CycloneDX", specVersion: "1.6", serialNumber: "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79", components: [{ type: "application", name: "labcolors-transport-cli", licenses: [{ expression: "MIT" }] }] }));
+    await writeFile(join(dir, "transport.sbom.cdx.json"), JSON.stringify(buildSbom(metadataFixture(), good)));
     await writeFile(join(dir, "transport.licenses.json"), JSON.stringify({ schemaVersion: 1, components: [{}] }));
     await writeFile(join(dir, "transport.benchmark.json"), JSON.stringify({ schemaVersion: 1, workload: { measuredRounds: 31 }, candidate: { parse: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 }, inspect: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 }, serialize: { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 } } }));
     const crypto = await import("node:crypto");
@@ -54,7 +55,6 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       licenses: await rec("transport.licenses.json"),
       benchmark: await rec("transport.benchmark.json"),
     };
-    const good = "a".repeat(40);
     const statement = {
       _type: "https://in-toto.io/Statement/v1",
       subject: [{ name: "labcolors-transport", digest: { sha256: evidence.binary.sha256 } }],

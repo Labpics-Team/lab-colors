@@ -11,7 +11,6 @@ const ATTESTATION_TYPE = "https://in-toto.io/Statement/v1";
 const PREDICATE_TYPE = "https://lab.pics/attestations/transport-distribution/v1";
 const BENCHMARK_SCHEMA = 1;
 const EVIDENCE_SCHEMA = 1;
-const CYCLONEDX_SERIAL_NUMBER = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const UUID_DNS_NAMESPACE = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex");
 const WARMUP_ROUNDS = 7;
 const MEASURED_ROUNDS = 31;
@@ -336,7 +335,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
   if (
     sbom.bomFormat !== "CycloneDX" ||
     sbom.specVersion !== "1.6" ||
-    !CYCLONEDX_SERIAL_NUMBER.test(sbom.serialNumber ?? "")
+    sbom.serialNumber !== bomSerialNumber(expectedSourceSha)
   ) {
     fail("transport SBOM is not attestable CycloneDX 1.6");
   }
