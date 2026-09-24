@@ -225,7 +225,7 @@ fn field_request_with_capability<'a>(
     revision: u64,
     capability: FieldRenderCapabilityV1,
 ) -> FieldEvaluationRequestV1<'a> {
-    let extent = FieldExtentV1::try_new(1, 1).unwrap();
+    let extent = FieldExtentV1::try_new(u32::try_from(source.len()).unwrap(), 1).unwrap();
     let source = FieldRasterViewV1::try_new(FieldRasterIdentityV1::new(1), extent, source).unwrap();
     let destination =
         FieldRasterViewV1::try_new(FieldRasterIdentityV1::new(2), extent, destination).unwrap();
@@ -414,4 +414,167 @@ fn tq_never_occupies_a_foreign_authority_lane() {
     assert!(state.read(AuthorityIdV1::TechnicalQuality).is_some());
     assert_eq!(state.read(AuthorityIdV1::CleanConvention), None);
     assert_eq!(state.read(AuthorityIdV1::HumanCleanEvidence), None);
+}
+
+#[test]
+fn field_tq_admission_never_rehashes_pixels_or_allocates() {
+    use crate::field_effect::input_hash_pixels_for_test;
+    use crate::test_support::{AllocatorEvents, measured_allocator_events};
+
+    for width in [1, 257, 4096] {
+        let source = vec![PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap(); width];
+        let destination = vec![PremultipliedRgba8V1::try_new([20, 20, 20, 255]).unwrap(); width];
+        let before_prepare = input_hash_pixels_for_test();
+        let request = field_request(&source, &destination, 7);
+        let certificate = evaluate_whole_field(
+            &request,
+            FieldEvidenceV1::ExactReferenceWholeRaster {
+                identity: FieldEvidenceIdentityV1::new(8),
+            },
+            &mut FieldEvaluationScratchV1::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            input_hash_pixels_for_test() - before_prepare,
+            2 * width,
+            "идентичность обоих входов вычисляется один раз за подготовку и оценку"
+        );
+        assert!(
+            std::mem::size_of_val(&request) <= 152,
+            "хранение идентичности не увеличивает request относительно f759546 на x86_64"
+        );
+        let session = field_session(7);
+        let mut state = AuthorityStateV1::new();
+        for attempt in 0..4 {
+            let before = input_hash_pixels_for_test();
+            let (result, allocations) = measured_allocator_events(|| {
+                state.admit_exact_reference_field_technical_quality(
+                    &certificate,
+                    &request,
+                    &session,
+                    AuthorityExpectedCurrentV1::Vacant,
+                )
+            });
+            let visits = input_hash_pixels_for_test() - before;
+            println!(
+                "TQ_RESOURCE width={width} attempt={attempt} request_bytes={} input_hash_pixels={visits} allocations={allocations:?} request_digest={:?}",
+                std::mem::size_of_val(&request),
+                request_digest(&request).as_bytes()
+            );
+            assert_eq!(
+                result.unwrap(),
+                if attempt == 0 {
+                    AuthorityAdmissionOutcomeV1::Installed
+                } else {
+                    AuthorityAdmissionOutcomeV1::DuplicateNoop
+                }
+            );
+            assert_eq!(visits, 0, "допуск TQ не должен перечитывать растр");
+            assert_eq!(allocations, AllocatorEvents::default());
+        }
+    }
+}
+
+#[test]
+fn field_tq_content_mismatch_cannot_replace_existing_authority() {
+    let source = [PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap()];
+    let destination = [PremultipliedRgba8V1::try_new([20, 20, 20, 255]).unwrap()];
+    let changed_source = [PremultipliedRgba8V1::try_new([65, 32, 16, 128]).unwrap()];
+    let request = field_request(&source, &destination, 7);
+    // Независимое кодирование V1 + hashlib.sha256; совпадает с исходным f759546.
+    assert_eq!(
+        request_digest(&request).as_bytes(),
+        [
+            99, 161, 221, 214, 79, 183, 237, 109, 138, 149, 68, 90, 79, 180, 125, 109, 219, 52, 74,
+            124, 100, 5, 41, 20, 239, 138, 121, 189, 188, 249, 84, 201,
+        ]
+    );
+    let same_request = field_request(&source, &destination, 7);
+    let changed_request = field_request(&changed_source, &destination, 7);
+    assert_eq!(request_digest(&request), request_digest(&same_request));
+    assert_ne!(request_digest(&request), request_digest(&changed_request));
+    let certificate = evaluate_whole_field(
+        &request,
+        FieldEvidenceV1::ExactReferenceWholeRaster {
+            identity: FieldEvidenceIdentityV1::new(8),
+        },
+        &mut FieldEvaluationScratchV1::new(),
+    )
+    .unwrap();
+    let mut session = field_session(7);
+    let mut state = AuthorityStateV1::new();
+    state
+        .admit_exact_reference_field_technical_quality(
+            &certificate,
+            &request,
+            &session,
+            AuthorityExpectedCurrentV1::Vacant,
+        )
+        .unwrap();
+    let before = state;
+    let expected =
+        AuthorityExpectedCurrentV1::Exact(state.read(AuthorityIdV1::TechnicalQuality).unwrap());
+    assert_eq!(
+        state
+            .admit_exact_reference_field_technical_quality(
+                &certificate,
+                &same_request,
+                &session,
+                AuthorityExpectedCurrentV1::Vacant,
+            )
+            .unwrap(),
+        AuthorityAdmissionOutcomeV1::DuplicateNoop
+    );
+    assert_eq!(
+        state.admit_exact_reference_field_technical_quality(
+            &certificate,
+            &changed_request,
+            &session,
+            expected,
+        ),
+        Err(TechnicalQualityAdmissionErrorV1::FieldReplay(
+            FieldCertificateReplayErrorV1::Request
+        ))
+    );
+    assert!(
+        state == before,
+        "ошибка не должна менять ни одну AUTH-ветвь"
+    );
+    advance_field_session(&mut session, 8);
+    assert!(matches!(
+        state.admit_exact_reference_field_technical_quality(
+            &certificate,
+            &request,
+            &session,
+            expected,
+        ),
+        Err(TechnicalQualityAdmissionErrorV1::FieldReplay(
+            FieldCertificateReplayErrorV1::SceneRevision { .. }
+        ))
+    ));
+    assert!(state == before);
+    let fresh_request = field_request(&changed_source, &destination, 8);
+    let fresh_certificate = evaluate_whole_field(
+        &fresh_request,
+        FieldEvidenceV1::ExactReferenceWholeRaster {
+            identity: FieldEvidenceIdentityV1::new(8),
+        },
+        &mut FieldEvaluationScratchV1::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        state
+            .admit_exact_reference_field_technical_quality(
+                &fresh_certificate,
+                &fresh_request,
+                &session,
+                expected,
+            )
+            .unwrap(),
+        AuthorityAdmissionOutcomeV1::Replaced
+    );
+    assert_ne!(
+        state.read(AuthorityIdV1::TechnicalQuality),
+        before.read(AuthorityIdV1::TechnicalQuality)
+    );
 }

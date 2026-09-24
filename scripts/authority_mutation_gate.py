@@ -30,7 +30,10 @@ TQ_COMMAND = [
     "--locked",
 ]
 
-COMPILE_KILLED = frozenset({"open-authority-id", "tq-digest-as-proof"})
+COMPILE_KILLED = {
+    "open-authority-id": "error[E0004]",  # Нарушена замкнутость перечисления.
+    "tq-digest-as-proof": "error[E0599]",  # У сырых байтов нет методов доказательства.
+}
 
 AUTH_MUTANTS = {
     "open-authority-id": (
@@ -98,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = "error[E" if name in COMPILE_KILLED else "test result: FAILED"
+    expected_marker = COMPILE_KILLED.get(name, "test result: FAILED")
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -138,32 +141,54 @@ TQ_MUTANTS = {
         "    verify_certificate_replay(certificate, request)?;",
         "    let _ = (certificate, request);",
     ),
+    "tq-stale-field-head": (
+        FIELD_SOURCE,
+        TQ_COMMAND,
+        "    if request.scene_revision != current_scene {",
+        "    if false && request.scene_revision != current_scene {",
+    ),
+    "tq-foreign-field-content": (
+        FIELD_SOURCE,
+        TQ_COMMAND,
+        "    if certificate.request_digest != request_digest(request) {",
+        "    if false && certificate.request_digest != request_digest(request) {",
+    ),
+    "tq-repeated-raster-hash": (
+        FIELD_SOURCE,
+        TQ_COMMAND,
+        "pub(crate) const fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> FieldRequestDigestV1 {\n    request.digest\n}",
+        "pub(crate) fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> FieldRequestDigestV1 {\n    let mut hasher = Hasher::new();\n    hash_operation(&mut hasher, &request.operation);\n    request.digest\n}",
+    ),
     "tq-digest-as-proof": (
         TQ_SOURCE,
         TQ_COMMAND,
-        "        replay: FieldExactReferenceReplayV1<'_, '_>,",
-        "        replay: [u8; 32],",
+        "    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof, 'input>),",
+        "    ExactReferenceFieldV1([u8; 32]),",
     ),
 }
 
 
 def main() -> None:
-    """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
-    auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    for name, (before, after) in AUTH_MUTANTS.items():
-        run_mutant(name, AUTH_SOURCE, AUTH_COMMAND, before, after, auth_original)
-    if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
-        raise SystemExit("authority source was not restored")
-
-    originals: dict[Path, str] = {}
-    for name, (source, command, before, after) in TQ_MUTANTS.items():
-        original = originals.setdefault(source, source.read_text(encoding="utf-8"))
-        run_mutant(name, source, command, before, after, original)
+    """Проверить всю матрицу до сборки, затем поймать каждый целевой дефект."""
+    if AUTH_MUTANTS.keys() & TQ_MUTANTS.keys():
+        raise SystemExit("duplicate AUTH/TQ mutant identity")
+    mutants = {
+        name: (AUTH_SOURCE, AUTH_COMMAND, before, after)
+        for name, (before, after) in AUTH_MUTANTS.items()
+    } | TQ_MUTANTS
+    originals = {source: source.read_text(encoding="utf-8")
+                 for source, _, _, _ in mutants.values()}
+    # Поздний испорченный якорь не должен расходовать время всех ранних сборок.
+    for name, (source, _, before, after) in mutants.items():
+        count = originals[source].count(before)
+        if count != 1 or before == after:
+            raise SystemExit(f"{name}: invalid mutation anchor (count={count})")
+    for name, (source, command, before, after) in mutants.items():
+        run_mutant(name, source, command, before, after, originals[source])
     for source, original in originals.items():
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
-    total = len(AUTH_MUTANTS) + len(TQ_MUTANTS)
-    print(f"AUTH/TQ mutation gate caught {total} semantic mutants")
+    print(f"AUTH/TQ mutation gate caught {len(mutants)} semantic mutants")
 
 
 if __name__ == "__main__":

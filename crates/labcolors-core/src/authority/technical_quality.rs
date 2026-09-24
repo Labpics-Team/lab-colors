@@ -72,20 +72,16 @@ impl From<AuthorityAdmissionErrorV1> for TechnicalQualityAdmissionErrorV1 {
 }
 
 /// Закрытое доказательство TQ. Ни одна ветвь не принимает caller-authored digest.
-enum TechnicalQualityProofV1 {
+enum TechnicalQualityProofV1<'proof, 'input> {
     ModeledPointV1(ModeledPointProofV1),
-    ExactReferenceFieldV1(ExactReferenceFieldProofV1),
+    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof, 'input>),
 }
 
 struct ModeledPointProofV1 {
     materialization: AttachedMaterializationAuthorityV1,
 }
 
-struct ExactReferenceFieldProofV1 {
-    identity_material: [[u8; 32]; 3],
-}
-
-impl TechnicalQualityProofV1 {
+impl TechnicalQualityProofV1<'_, '_> {
     fn descriptor(&self) -> AuthorityDescriptorV1 {
         let release = proof_identity(b"labcolors.tq.release.v1\0", self);
         let applicability = proof_identity(b"labcolors.tq.applicability.v1\0", self);
@@ -103,9 +99,7 @@ impl TechnicalQualityProofV1 {
             Self::ModeledPointV1(proof) => proof.hash_identity_material(hasher),
             Self::ExactReferenceFieldV1(proof) => {
                 hasher.update(b"exact-reference-field-v1\0");
-                for identity in proof.identity_material {
-                    hasher.update(&identity);
-                }
+                proof.hash_tq_identity_material(hasher);
             }
         }
     }
@@ -134,7 +128,7 @@ impl ModeledPointProofV1 {
 
         hasher.update(b"modeled-point-v1\0");
         hasher.update(&materialization.content_identity());
-        hasher.update(&[1]); // EncodedSrgb8SourceOverV1, checked before construction.
+        hasher.update(&[1]); // EncodedSrgb8SourceOverV1 проверен до создания доказательства.
         hasher.update(&materialization.revision().to_be_bytes());
         hasher.update(&sink_stamp.sequence().to_be_bytes());
         hasher.update(&sink_stamp.binding_epoch().to_be_bytes());
@@ -151,30 +145,10 @@ impl ModeledPointProofV1 {
     }
 }
 
-impl ExactReferenceFieldProofV1 {
-    fn from_replay(replay: FieldExactReferenceReplayV1<'_, '_>) -> Self {
-        // Keep three independently domain-separated copies of the exact replay
-        // tuple. The sealed replay object, not these digests, is the proof.
-        let identity_material = [
-            field_replay_identity(b"labcolors.tq.field.release-material.v1\0", &replay),
-            field_replay_identity(b"labcolors.tq.field.applicability-material.v1\0", &replay),
-            field_replay_identity(b"labcolors.tq.field.provenance-material.v1\0", &replay),
-        ];
-        Self { identity_material }
-    }
-}
-
-fn proof_identity(domain: &[u8], proof: &TechnicalQualityProofV1) -> [u8; 32] {
+fn proof_identity(domain: &[u8], proof: &TechnicalQualityProofV1<'_, '_>) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(domain);
     proof.hash_identity_material(&mut hasher);
-    *hasher.finalize().as_bytes()
-}
-
-fn field_replay_identity(domain: &[u8], replay: &FieldExactReferenceReplayV1<'_, '_>) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(domain);
-    replay.hash_tq_identity_material(&mut hasher);
     *hasher.finalize().as_bytes()
 }
 
@@ -218,15 +192,13 @@ impl AuthorityStateV1 {
             }
         };
         let replay = verify_exact_reference_for_tq(certificate, request, current_observation)?;
-        let proof = TechnicalQualityProofV1::ExactReferenceFieldV1(
-            ExactReferenceFieldProofV1::from_replay(replay),
-        );
+        let proof = TechnicalQualityProofV1::ExactReferenceFieldV1(replay);
         self.admit_technical_quality_proof(proof, expected)
     }
 
     fn admit_technical_quality_proof(
         &mut self,
-        proof: TechnicalQualityProofV1,
+        proof: TechnicalQualityProofV1<'_, '_>,
         expected: AuthorityExpectedCurrentV1,
     ) -> Result<AuthorityAdmissionOutcomeV1, TechnicalQualityAdmissionErrorV1> {
         let descriptor = proof.descriptor();

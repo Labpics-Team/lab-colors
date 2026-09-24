@@ -1513,17 +1513,15 @@ impl FieldOperationV1<'_> {
     }
 }
 
-/// Fully admitted reference request. Input raster bytes remain caller-owned.
+/// Неизменяемый допущенный запрос. Идентичность вычисляется один раз из точных
+/// входных байтов; заимствованные растры неизменяемы весь срок жизни запроса.
+/// Производные геометрия, формат вывода и фиксированный численный профиль
+/// не хранятся второй раз. Дайджест связывает запрос, но не доказывает его результат.
 #[derive(Debug)]
 pub(crate) struct FieldEvaluationRequestV1<'a> {
-    request_id: FieldRequestIdV1,
-    operator_instance: FieldOperatorInstanceIdV1,
-    geometry: FieldGeometryV1,
+    digest: FieldRequestDigestV1,
     device_pixel_ratio: DevicePixelRatioV1,
-    working_space: FieldWorkingSpaceV1,
-    precision: FieldPrecisionV1,
-    quantization: FieldQuantizationV1,
-    render_capability: FieldRenderCapabilityV1,
+    renderer: FieldRendererCapabilityV1,
     scene_revision: FieldSceneRevisionV1,
     carrier_intent: CarrierIntentV1,
     operation: FieldOperationV1<'a>,
@@ -1577,15 +1575,25 @@ impl<'a> FieldEvaluationRequestV1<'a> {
         if operation.output_capability() != render_capability.output() {
             return Err(FieldEvaluationErrorV1::OutputCapabilityMismatch);
         }
+        // Тот же канонический поток байтов, что и до хранения идентичности.
+        // Все отказы формы/профиля остаются перед единственным проходом входов.
+        let mut hasher = Hasher::new();
+        hasher.update(b"labcolors-field-request-v1\0");
+        hash_u64(&mut hasher, request_id.value());
+        hash_u64(&mut hasher, operator_instance.value());
+        hash_geometry(&mut hasher, geometry);
+        hash_u8(&mut hasher, device_pixel_ratio.value());
+        hash_working_space(&mut hasher, working_space);
+        hash_precision(&mut hasher, precision);
+        hash_quantization(&mut hasher, quantization);
+        hash_render_capability(&mut hasher, render_capability);
+        hash_scene_revision(&mut hasher, scene_revision);
+        hash_carrier_intent(&mut hasher, carrier_intent);
+        hash_operation(&mut hasher, &operation);
         Ok(Self {
-            request_id,
-            operator_instance,
-            geometry,
+            digest: FieldRequestDigestV1(finalize(hasher)),
             device_pixel_ratio,
-            working_space,
-            precision,
-            quantization,
-            render_capability,
+            renderer: render_capability.renderer(),
             scene_revision,
             carrier_intent,
             operation,
@@ -1597,11 +1605,11 @@ impl<'a> FieldEvaluationRequestV1<'a> {
     }
 
     pub(crate) const fn geometry(&self) -> FieldGeometryV1 {
-        self.geometry
+        FieldGeometryV1::new(self.operation.extent())
     }
 
     pub(crate) const fn render_capability(&self) -> FieldRenderCapabilityV1 {
-        self.render_capability
+        FieldRenderCapabilityV1::new(self.renderer, self.operation.output_capability())
     }
 
     pub(crate) const fn scene_revision(&self) -> FieldSceneRevisionV1 {
@@ -1867,10 +1875,10 @@ pub(crate) fn footprint_for_output(
     request: &FieldEvaluationRequestV1<'_>,
     output: FieldRectV1,
 ) -> Result<FieldFootprintV1, FieldEvaluationErrorV1> {
-    if output.extent() != request.geometry.extent() {
+    if output.extent() != request.geometry().extent() {
         return Err(FieldEvaluationErrorV1::ExtentMismatch);
     }
-    let exact_input = output.expanded(request.operation.radius(), request.geometry.extent())?;
+    let exact_input = output.expanded(request.operation.radius(), request.geometry().extent())?;
     Ok(FieldFootprintV1 {
         output,
         exact_input,
@@ -1882,10 +1890,10 @@ pub(crate) fn influence_for_input(
     request: &FieldEvaluationRequestV1<'_>,
     dirty_input: FieldRectV1,
 ) -> Result<FieldInfluenceV1, FieldEvaluationErrorV1> {
-    if dirty_input.extent() != request.geometry.extent() {
+    if dirty_input.extent() != request.geometry().extent() {
         return Err(FieldEvaluationErrorV1::ExtentMismatch);
     }
-    let exact = dirty_input.expanded(request.operation.radius(), request.geometry.extent())?;
+    let exact = dirty_input.expanded(request.operation.radius(), request.geometry().extent())?;
     Ok(FieldInfluenceV1::new(exact, exact))
 }
 
@@ -1893,7 +1901,7 @@ pub(crate) fn evaluate_reference_full<'scratch>(
     request: &FieldEvaluationRequestV1<'_>,
     scratch: &'scratch mut FieldEvaluationScratchV1,
 ) -> Result<&'scratch [PremultipliedRgba8V1], FieldEvaluationErrorV1> {
-    let extent = request.geometry.extent();
+    let extent = request.geometry().extent();
     prepare_scratch(scratch, extent, evaluation_layout_digest(request))?;
     scratch.last_request_digest = None;
     scratch.output.fill(PremultipliedRgba8V1::TRANSPARENT);
@@ -1908,7 +1916,7 @@ pub(crate) fn evaluate_reference_incremental(
     dirty_input: FieldRectV1,
     scratch: &mut FieldEvaluationScratchV1,
 ) -> Result<FieldInfluenceV1, FieldEvaluationErrorV1> {
-    let extent = request.geometry.extent();
+    let extent = request.geometry().extent();
     if scratch.extent.is_none()
         || scratch.layout_digest.is_none()
         || scratch.last_request_digest.is_none()
@@ -1921,7 +1929,7 @@ pub(crate) fn evaluate_reference_incremental(
     let previous_layout = evaluation_layout_digest(previous_request);
     let next_layout = evaluation_layout_digest(request);
     if scratch.extent != Some(extent)
-        || previous_request.geometry.extent() != extent
+        || previous_request.geometry().extent() != extent
         || scratch.layout_digest != Some(previous_layout)
         || previous_layout != next_layout
         || scratch.output.len() != extent.pixel_count()?
@@ -1942,8 +1950,8 @@ fn verify_incremental_change_scope(
     current: &FieldEvaluationRequestV1<'_>,
     dirty: FieldRectV1,
 ) -> Result<(), FieldEvaluationErrorV1> {
-    let extent = current.geometry.extent();
-    if dirty.extent() != extent || previous.geometry.extent() != extent {
+    let extent = current.geometry().extent();
+    if dirty.extent() != extent || previous.geometry().extent() != extent {
         return Err(FieldEvaluationErrorV1::ExtentMismatch);
     }
     let end_x = dirty.end_x()?;
@@ -2048,7 +2056,7 @@ pub(crate) fn evaluate_whole_field(
     }
 
     let request_digest = request_digest(request);
-    let output_digest = raster_digest(request.geometry.extent(), &scratch.output);
+    let output_digest = raster_digest(request.geometry().extent(), &scratch.output);
     let kernel_digest = kernel_digest(&request.operation);
     let evidence_identity = evidence.identity();
     let evidence_class = evidence.class();
@@ -2069,7 +2077,7 @@ pub(crate) fn evaluate_whole_field(
         evidence_class,
         operator_kind: request.operator_kind(),
         scene_revision: request.scene_revision,
-        render_capability: request.render_capability,
+        render_capability: request.render_capability(),
         digest,
     })
 }
@@ -2084,7 +2092,7 @@ pub(crate) fn verify_certificate_replay(
             actual: request.scene_revision,
         });
     }
-    if certificate.render_capability != request.render_capability {
+    if certificate.render_capability != request.render_capability() {
         return Err(FieldCertificateReplayErrorV1::RenderCapability);
     }
     if certificate.request_digest != request_digest(request) {
@@ -2131,21 +2139,9 @@ pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
     })
 }
 
-pub(crate) fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> FieldRequestDigestV1 {
-    let mut hasher = Hasher::new();
-    hasher.update(b"labcolors-field-request-v1\0");
-    hash_u64(&mut hasher, request.request_id.value());
-    hash_u64(&mut hasher, request.operator_instance.value());
-    hash_geometry(&mut hasher, request.geometry);
-    hash_u8(&mut hasher, request.device_pixel_ratio.value());
-    hash_working_space(&mut hasher, request.working_space);
-    hash_precision(&mut hasher, request.precision);
-    hash_quantization(&mut hasher, request.quantization);
-    hash_render_capability(&mut hasher, request.render_capability);
-    hash_scene_revision(&mut hasher, request.scene_revision);
-    hash_carrier_intent(&mut hasher, request.carrier_intent);
-    hash_operation(&mut hasher, &request.operation);
-    FieldRequestDigestV1(finalize(hasher))
+/// Читает связанную с неизменяемым запросом идентичность без обхода его растров.
+pub(crate) const fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> FieldRequestDigestV1 {
+    request.digest
 }
 
 fn admit_proof_evidence(
@@ -2163,14 +2159,14 @@ fn admit_proof_evidence(
             });
         }
         FieldEvidenceV1::ExactReferenceWholeRaster { .. } => {
-            admit_renderer(request.render_capability.renderer())?;
-            if !request.render_capability.renderer().is_exact_reference() {
+            admit_renderer(request.render_capability().renderer())?;
+            if !request.render_capability().renderer().is_exact_reference() {
                 return Err(FieldEvaluationErrorV1::ExactReferenceCannotProveHostRenderer);
             }
         }
         FieldEvidenceV1::ProspectiveObservedWholeRaster(observed) => {
-            admit_renderer(request.render_capability.renderer())?;
-            if !request.render_capability.renderer().is_host_conformant() {
+            admit_renderer(request.render_capability().renderer())?;
+            if !request.render_capability().renderer().is_host_conformant() {
                 return Err(
                     FieldEvaluationErrorV1::ProspectiveObservationRequiresHostConformantRenderer,
                 );
@@ -2184,10 +2180,10 @@ fn admit_proof_evidence(
                     actual: observed.scene_revision,
                 });
             }
-            if observed.render_capability != request.render_capability {
+            if observed.render_capability != request.render_capability() {
                 return Err(FieldEvaluationErrorV1::EvidenceRenderCapabilityMismatch);
             }
-            if observed.raster.extent() != request.geometry.extent() {
+            if observed.raster.extent() != request.geometry().extent() {
                 return Err(FieldEvaluationErrorV1::ExtentMismatch);
             }
         }
@@ -2595,12 +2591,15 @@ fn evaluation_layout_digest(
 ) -> FieldEvaluationLayoutDigestV1 {
     let mut hasher = Hasher::new();
     hasher.update(b"labcolors-field-evaluation-layout-v1\0");
-    hash_geometry(&mut hasher, request.geometry);
+    hash_geometry(&mut hasher, request.geometry());
     hash_u8(&mut hasher, request.device_pixel_ratio.value());
-    hash_working_space(&mut hasher, request.working_space);
-    hash_precision(&mut hasher, request.precision);
-    hash_quantization(&mut hasher, request.quantization);
-    hash_output_capability(&mut hasher, request.render_capability.output());
+    hash_working_space(
+        &mut hasher,
+        FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+    );
+    hash_precision(&mut hasher, FieldPrecisionV1::FixedQ32V1);
+    hash_quantization(&mut hasher, FieldQuantizationV1::RoundHalfUpSrgb8V1);
+    hash_output_capability(&mut hasher, request.render_capability().output());
     hash_operator_kind(&mut hasher, request.operator_kind());
     hash_kernel_metadata(&mut hasher, &request.operation);
     FieldEvaluationLayoutDigestV1(finalize(hasher))
@@ -2643,7 +2642,7 @@ fn certificate_digest(
     hash_u64(&mut hasher, evidence_identity.value());
     hash_evidence_class(&mut hasher, evidence_class);
     hash_scene_revision(&mut hasher, request.scene_revision);
-    hash_render_capability(&mut hasher, request.render_capability);
+    hash_render_capability(&mut hasher, request.render_capability());
     match evidence {
         FieldEvidenceV1::ProspectiveObservedWholeRaster(observed) => {
             hash_u64(&mut hasher, observed.raster.identity().value());
@@ -2727,7 +2726,20 @@ fn hash_kernel_metadata(hasher: &mut Hasher, operation: &FieldOperationV1<'_>) {
     }
 }
 
+// Измеритель только для тестов: учитывает все три вида входного растра.
+#[cfg(test)]
+std::thread_local! {
+    static INPUT_HASH_PIXELS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn input_hash_pixels_for_test() -> usize {
+    INPUT_HASH_PIXELS.with(std::cell::Cell::get)
+}
+
 fn hash_premultiplied_raster(hasher: &mut Hasher, raster: FieldRasterViewV1<'_>) {
+    #[cfg(test)]
+    INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));
     hash_u64(hasher, raster.identity().value());
     hash_extent(hasher, raster.extent());
     hash_usize(hasher, raster.pixels().len());
@@ -2737,6 +2749,8 @@ fn hash_premultiplied_raster(hasher: &mut Hasher, raster: FieldRasterViewV1<'_>)
 }
 
 fn hash_opaque_raster(hasher: &mut Hasher, raster: OpaqueSrgb8RasterViewV1<'_>) {
+    #[cfg(test)]
+    INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));
     hash_u64(hasher, raster.identity().value());
     hash_extent(hasher, raster.extent());
     hash_usize(hasher, raster.pixels().len());
@@ -2746,6 +2760,8 @@ fn hash_opaque_raster(hasher: &mut Hasher, raster: OpaqueSrgb8RasterViewV1<'_>) 
 }
 
 fn hash_screen_raster(hasher: &mut Hasher, raster: EncodedSrgb8AlphaRasterViewV1<'_>) {
+    #[cfg(test)]
+    INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));
     hash_u64(hasher, raster.identity().value());
     hash_extent(hasher, raster.extent());
     hash_usize(hasher, raster.pixels().len());
