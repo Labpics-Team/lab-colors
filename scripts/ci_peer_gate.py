@@ -17,6 +17,7 @@ REQUIRED_WORKFLOWS = frozenset(
     {
         ".github/workflows/ci.yml",
         ".github/workflows/native-conformance.yml",
+        ".github/workflows/code-admission-public.yml",
     }
 )
 GATE_WORKFLOW = ".github/workflows/ci-gate.yml"
