@@ -36,7 +36,7 @@ MUTANTS = {
     ),
     "aggregate-compensation": (
         "        self.slots[id.slot()]",
-        "        self.slots[id.slot()].or(self.slots[0]).or(self.slots[1]).or(self.slots[2])",
+        "        match self.slots[id.slot()] { Some(value) => Some(value), None => self.slots[0] }",
     ),
     "skip-applicability": (
         "    if expected.applicability != current.applicability {",
