@@ -1487,7 +1487,6 @@ fn attachment_snapshot_from_commit(
         let mut saw_matching_certificate = false;
         let mut saw_empty_domain = false;
         let mut saw_conflicting_composite = false;
-        let mut single_source_over_path = true;
         for certificate in render
             .certificate()
             .point_causal_certificates()
@@ -1497,7 +1496,6 @@ fn attachment_snapshot_from_commit(
             })
         {
             saw_matching_certificate = true;
-            single_source_over_path &= certificate.steps().len() == 1;
             match certificate.domain() {
                 crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
                     saw_empty_domain = true;
@@ -1535,11 +1533,10 @@ fn attachment_snapshot_from_commit(
             presentation_root: render.root().value(),
             occurrence: render.occurrence().value(),
             context: ProgramAppearanceContextIdV1::from_core(render.context()),
-            // Causal certificate доказывает каждый шаг как encoded-sRGB8
-            // source-over. Профиль однослойной точки выдаётся только когда
-            // exact terminal replay действительно состоит из одного шага.
-            physical_identity: (terminal_composite.is_some() && single_source_over_path)
-                .then_some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
+            // Closed Program V1 имеет единственный composition profile:
+            // EncodedSrgb8SourceOverV1. Это профиль математики, не утверждение
+            // о topology, числе слоёв или наблюдении реального renderer-а.
+            physical_identity: Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
             terminal_composite,
             terminal_composite_ambiguous,
         }
