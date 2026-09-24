@@ -1,5 +1,6 @@
 use super::*;
 use crate::Srgb8;
+use crate::appearance::SurfaceInputPortId;
 use crate::field_effect::{
     CarrierIntentV1, DevicePixelRatioV1, FieldEvaluationRequestV1, FieldEvaluationScratchV1,
     FieldEvidenceIdentityV1, FieldEvidenceV1, FieldExtentV1, FieldGeometryV1,
@@ -8,19 +9,105 @@ use crate::field_effect::{
     FieldRasterIdentityV1, FieldRasterViewV1, FieldRenderCapabilityV1, FieldRendererCapabilityV1,
     FieldRendererIdV1, FieldRequestIdV1, FieldSceneRevisionV1, FieldWorkingSpaceV1,
     PremultipliedRgba8V1, ProspectiveObservedRasterV1, evaluate_reference_full,
-    evaluate_whole_field, request_digest, verify_exact_reference_for_tq,
+    evaluate_whole_field, request_digest,
 };
-use crate::observation::{ObservationStreamId, Revision};
+use crate::lcs_occurrence::ColorSignal;
+use crate::observation::{
+    CanonicalObservationSchemaV1, ObservationPayloadInput, ObservationStreamId,
+    ObservationUpdateInput, ObservedScenarioSetInput, Revision, RevisionBoundObservationV1,
+    ScenarioId, ScenarioInput, SurfaceInputBinding, canonicalize_observation_schema,
+};
 use crate::program::wire::ProgramWireBuilderV1;
 use crate::program_wire::{
     ProgramMaterializationAuthorityErrorV1, ProgramPointSinkHostErrorV1, ProgramPointSinkIntentV1,
     ProgramScenarioV1, compile_program_wire_v1,
+};
+use crate::session::{
+    Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
+    private as session_private,
 };
 
 const OUTPUT: u32 = 17;
 const ROOT: u32 = 9;
 const OCCURRENCE: u32 = 8;
 const SINK_OUTPUT: u32 = 91;
+const FIELD_STREAM: ObservationStreamId = ObservationStreamId::new(6);
+const FIELD_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(1);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FieldSessionEvidence {
+    observation: RevisionBoundObservationV1,
+}
+
+impl session_private::EvidenceSealed for FieldSessionEvidence {}
+
+impl SessionEvidenceV1 for FieldSessionEvidence {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        &self.observation
+    }
+}
+
+struct FieldSessionPlan {
+    schema: CanonicalObservationSchemaV1,
+}
+
+impl session_private::PlanSealed for FieldSessionPlan {}
+
+impl SessionPlanV1 for FieldSessionPlan {
+    type OwnerLease = ();
+    type Verified = FieldSessionEvidence;
+    type Violation = FieldSessionEvidence;
+    type Error = ();
+
+    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
+        Some(())
+    }
+
+    fn observation_schema<'a>(
+        &'a self,
+        _owner: &'a Self::OwnerLease,
+    ) -> &'a CanonicalObservationSchemaV1 {
+        &self.schema
+    }
+
+    fn evaluate(
+        &mut self,
+        _owner: &Self::OwnerLease,
+        observation: RevisionBoundObservationV1,
+        _previous: Option<&Self::Verified>,
+        _permit: SessionObservationBindingPermitV1,
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
+        Ok(SessionDecision::Verified(FieldSessionEvidence {
+            observation,
+        }))
+    }
+}
+
+fn advance_field_session(session: &mut Session<FieldSessionPlan>, revision: u64) {
+    session
+        .prepare_update(ObservationUpdateInput {
+            stream: FIELD_STREAM,
+            revision: Revision::new(revision),
+            payload: ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+                scenarios: vec![ScenarioInput {
+                    id: ScenarioId::new(1),
+                    bindings: vec![SurfaceInputBinding {
+                        port: FIELD_SURFACE,
+                        value: ColorSignal::from_srgb8(Srgb8::new([0x20; 3])),
+                    }],
+                }],
+            }),
+        })
+        .unwrap()
+        .commit();
+}
+
+fn field_session(revision: u64) -> Session<FieldSessionPlan> {
+    let schema = canonicalize_observation_schema(vec![FIELD_SURFACE]).unwrap();
+    let mut session = Session::new(FIELD_STREAM, FieldSessionPlan { schema });
+    advance_field_session(&mut session, revision);
+    session
+}
 
 #[derive(Default)]
 struct Host {
@@ -74,6 +161,13 @@ fn point_tq_re_reads_current_attachment_and_binds_revisions() {
     attachment
         .update_observed(1, &[ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])])
         .unwrap();
+    assert_eq!(
+        attachment
+            .current_materialization_authority()
+            .unwrap()
+            .physical_identity(),
+        Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1)
+    );
 
     let mut state = AuthorityStateV1::new();
     assert_eq!(
@@ -183,13 +277,14 @@ fn field_tq_accepts_only_fresh_exact_reference_replay() {
         &mut FieldEvaluationScratchV1::new(),
     )
     .unwrap();
-    let replay = verify_exact_reference_for_tq(&certificate, &request).unwrap();
-
+    let session = field_session(7);
     let mut state = AuthorityStateV1::new();
     assert_eq!(
         state
             .admit_exact_reference_field_technical_quality(
-                replay,
+                &certificate,
+                &request,
+                &session,
                 AuthorityExpectedCurrentV1::Vacant,
             )
             .unwrap(),
@@ -211,12 +306,22 @@ fn field_tq_replay_rejects_stale_scene_before_authority_exists() {
         &mut FieldEvaluationScratchV1::new(),
     )
     .unwrap();
-    let stale = field_request(&source, &destination, 8);
+    let mut session = field_session(7);
+    advance_field_session(&mut session, 8);
+    let mut state = AuthorityStateV1::new();
 
     assert!(matches!(
-        verify_exact_reference_for_tq(&certificate, &stale),
-        Err(crate::field_effect::FieldCertificateReplayErrorV1::SceneRevision { .. })
+        state.admit_exact_reference_field_technical_quality(
+            &certificate,
+            &request,
+            &session,
+            AuthorityExpectedCurrentV1::Vacant,
+        ),
+        Err(TechnicalQualityAdmissionErrorV1::FieldReplay(
+            crate::field_effect::FieldCertificateReplayErrorV1::SceneRevision { .. }
+        ))
     ));
+    assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
 }
 
 #[test]
@@ -256,14 +361,22 @@ fn field_tq_rejects_host_observation_even_when_whole_raster_is_exact() {
     )
     .unwrap();
 
+    let session = field_session(7);
+    let mut state = AuthorityStateV1::new();
     assert!(matches!(
-        verify_exact_reference_for_tq(&certificate, &request),
-        Err(
+        state.admit_exact_reference_field_technical_quality(
+            &certificate,
+            &request,
+            &session,
+            AuthorityExpectedCurrentV1::Vacant,
+        ),
+        Err(TechnicalQualityAdmissionErrorV1::FieldReplay(
             crate::field_effect::FieldCertificateReplayErrorV1::EvidenceClass {
                 actual: crate::field_effect::FieldEvidenceClassV1::ProspectiveObservedWholeRaster
             }
-        )
+        ))
     ));
+    assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
 }
 
 #[test]

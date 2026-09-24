@@ -17,12 +17,17 @@ use super::{
     AuthorityExpectedCurrentV1, AuthorityIdV1, AuthorityOwnerCurrentV1, AuthorityPermitErrorV1,
     AuthorityStateV1, RendererObservationRequirementV1, issue_permit,
 };
-use crate::field_effect::FieldExactReferenceReplayV1;
+use crate::field_effect::{
+    FieldCertificateReplayErrorV1, FieldEvaluationRequestV1, FieldExactReferenceReplayV1,
+    FieldWholeRasterCertificateV1, verify_exact_reference_for_tq,
+};
+use crate::observation::ObservationHeadViewV1;
 use crate::program_wire::{
     AttachedMaterializationAuthorityV1, ProgramAttachmentV1,
     ProgramMaterializationAuthorityErrorV1, ProgramPhysicalIdentityV1, ProgramPointSinkHostV1,
     ProgramRendererProvenanceV1,
 };
+use crate::session::{Session, SessionPlanV1};
 use crate::sha256::Hasher;
 
 /// Типизированные отказы единственного TQ admission path.
@@ -32,6 +37,10 @@ pub(crate) enum TechnicalQualityAdmissionErrorV1 {
     Materialization(ProgramMaterializationAuthorityErrorV1),
     /// Point path поддерживает только доказанный физический профиль source-over.
     UnsupportedPhysicalIdentity,
+    /// Exact-reference certificate/request не совпал с текущим field owner.
+    FieldReplay(FieldCertificateReplayErrorV1),
+    /// Текущий Session head не содержит наблюдаемой сцены.
+    CurrentFieldSceneUnavailable,
     /// Fresh owner permit не совпал с только что проверенным proof.
     Permit(AuthorityPermitErrorV1),
     /// AUTH отклонил CAS/branch admission.
@@ -41,6 +50,12 @@ pub(crate) enum TechnicalQualityAdmissionErrorV1 {
 impl From<ProgramMaterializationAuthorityErrorV1> for TechnicalQualityAdmissionErrorV1 {
     fn from(value: ProgramMaterializationAuthorityErrorV1) -> Self {
         Self::Materialization(value)
+    }
+}
+
+impl From<FieldCertificateReplayErrorV1> for TechnicalQualityAdmissionErrorV1 {
+    fn from(value: FieldCertificateReplayErrorV1) -> Self {
+        Self::FieldReplay(value)
     }
 }
 
@@ -182,13 +197,27 @@ impl AuthorityStateV1 {
         self.admit_technical_quality_proof(proof, expected)
     }
 
-    /// Допускает TQ полного поля только из свежего sealed replay-result,
-    /// выданного `field_effect` для exact-reference whole-raster certificate.
-    pub(crate) fn admit_exact_reference_field_technical_quality(
+    /// Допускает TQ полного поля только после синхронной replay-проверки
+    /// exact-reference certificate против текущего Session head. Сырой
+    /// сертификат не превращается в proof: `field_effect` выдаёт закрытый
+    /// replay-result внутри этого вызова непосредственно перед AUTH admission.
+    pub(crate) fn admit_exact_reference_field_technical_quality<Plan>(
         &mut self,
-        replay: FieldExactReferenceReplayV1<'_, '_>,
+        certificate: &FieldWholeRasterCertificateV1,
+        request: &FieldEvaluationRequestV1<'_>,
+        session: &Session<Plan>,
         expected: AuthorityExpectedCurrentV1,
-    ) -> Result<AuthorityAdmissionOutcomeV1, TechnicalQualityAdmissionErrorV1> {
+    ) -> Result<AuthorityAdmissionOutcomeV1, TechnicalQualityAdmissionErrorV1>
+    where
+        Plan: SessionPlanV1,
+    {
+        let current_observation = match session.raw_head() {
+            ObservationHeadViewV1::Observed(observation) => observation,
+            ObservationHeadViewV1::Empty | ObservationHeadViewV1::Unknown(_) => {
+                return Err(TechnicalQualityAdmissionErrorV1::CurrentFieldSceneUnavailable);
+            }
+        };
+        let replay = verify_exact_reference_for_tq(certificate, request, current_observation)?;
         let proof = TechnicalQualityProofV1::ExactReferenceFieldV1(
             ExactReferenceFieldProofV1::from_replay(replay),
         );

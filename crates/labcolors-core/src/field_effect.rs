@@ -2100,6 +2100,7 @@ pub(crate) fn verify_certificate_replay(
 pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
     certificate: &'proof FieldWholeRasterCertificateV1,
     request: &'proof FieldEvaluationRequestV1<'input>,
+    current_observation: &RevisionBoundObservationV1,
 ) -> Result<FieldExactReferenceReplayV1<'proof, 'input>, FieldCertificateReplayErrorV1> {
     if certificate.evidence_class != FieldEvidenceClassV1::ExactReferenceWholeRaster {
         return Err(FieldCertificateReplayErrorV1::EvidenceClass {
@@ -2114,6 +2115,16 @@ pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
         return Err(FieldCertificateReplayErrorV1::ExactReferenceRendererRequired);
     }
     verify_certificate_replay(certificate, request)?;
+    let current_scene = FieldSceneRevisionV1 {
+        stream: current_observation.stream(),
+        revision: current_observation.revision(),
+    };
+    if request.scene_revision != current_scene {
+        return Err(FieldCertificateReplayErrorV1::SceneRevision {
+            expected: current_scene,
+            actual: request.scene_revision,
+        });
+    }
     Ok(FieldExactReferenceReplayV1 {
         certificate,
         request,
