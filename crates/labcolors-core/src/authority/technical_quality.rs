@@ -48,24 +48,28 @@ pub(crate) enum TechnicalQualityAdmissionErrorV1 {
 }
 
 impl From<ProgramMaterializationAuthorityErrorV1> for TechnicalQualityAdmissionErrorV1 {
+    /// Сохраняет точный вид отказа исходного владельца.
     fn from(value: ProgramMaterializationAuthorityErrorV1) -> Self {
         Self::Materialization(value)
     }
 }
 
 impl From<FieldCertificateReplayErrorV1> for TechnicalQualityAdmissionErrorV1 {
+    /// Сохраняет точный вид отказа исходного владельца.
     fn from(value: FieldCertificateReplayErrorV1) -> Self {
         Self::FieldReplay(value)
     }
 }
 
 impl From<AuthorityPermitErrorV1> for TechnicalQualityAdmissionErrorV1 {
+    /// Сохраняет точный вид отказа исходного владельца.
     fn from(value: AuthorityPermitErrorV1) -> Self {
         Self::Permit(value)
     }
 }
 
 impl From<AuthorityAdmissionErrorV1> for TechnicalQualityAdmissionErrorV1 {
+    /// Сохраняет точный вид отказа исходного владельца.
     fn from(value: AuthorityAdmissionErrorV1) -> Self {
         Self::Authority(value)
     }
@@ -82,6 +86,7 @@ struct ModeledPointProofV1 {
 }
 
 impl TechnicalQualityProofV1<'_> {
+    /// Связывает одну ветвь TQ с точными данными уже проверенного доказательства.
     fn descriptor(&self) -> AuthorityDescriptorV1 {
         let release = proof_identity(b"labcolors.tq.release.v1\0", self);
         let applicability = proof_identity(b"labcolors.tq.applicability.v1\0", self);
@@ -94,6 +99,7 @@ impl TechnicalQualityProofV1<'_> {
         )
     }
 
+    /// Связывает только данные закрытого доказательства; не оценивает пиксели.
     fn hash_identity_material(&self, hasher: &mut Hasher) {
         match self {
             Self::ModeledPointV1(proof) => proof.hash_identity_material(hasher),
@@ -106,6 +112,7 @@ impl TechnicalQualityProofV1<'_> {
 }
 
 impl ModeledPointProofV1 {
+    /// Перечитывает attachment и отклоняет недоказанный физический профиль.
     fn from_current<H>(
         attachment: &ProgramAttachmentV1<H>,
     ) -> Result<Self, TechnicalQualityAdmissionErrorV1>
@@ -121,6 +128,7 @@ impl ModeledPointProofV1 {
         Ok(Self { materialization })
     }
 
+    /// Связывает только данные закрытого доказательства; не оценивает пиксели.
     fn hash_identity_material(&self, hasher: &mut Hasher) {
         let materialization = self.materialization;
         let output = materialization.output();
@@ -145,6 +153,7 @@ impl ModeledPointProofV1 {
     }
 }
 
+/// Разделяет выпуск, применимость и происхождение по доменам одного доказательства.
 fn proof_identity(domain: &[u8], proof: &TechnicalQualityProofV1<'_>) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(domain);
@@ -196,6 +205,7 @@ impl AuthorityStateV1 {
         self.admit_technical_quality_proof(proof, expected)
     }
 
+    /// Выдаёт одноразовое разрешение из закрытого доказательства; отказ сохраняет состояние AUTH.
     fn admit_technical_quality_proof(
         &mut self,
         proof: TechnicalQualityProofV1<'_>,

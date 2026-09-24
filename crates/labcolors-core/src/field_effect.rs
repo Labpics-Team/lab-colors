@@ -1528,6 +1528,7 @@ pub(crate) struct FieldEvaluationRequestV1<'a> {
 }
 
 impl<'a> FieldEvaluationRequestV1<'a> {
+    /// Проверяет форму и численный профиль, затем однократно связывает входные байты.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_new(
         request_id: FieldRequestIdV1,
@@ -1600,18 +1601,22 @@ impl<'a> FieldEvaluationRequestV1<'a> {
         })
     }
 
+    /// Выводит вид оператора из самой допущенной операции.
     pub(crate) const fn operator_kind(&self) -> FieldOperatorKindV1 {
         self.operation.kind()
     }
 
+    /// Выводит геометрию из операции; конструктор проверяет совпадение размеров входов.
     pub(crate) const fn geometry(&self) -> FieldGeometryV1 {
         FieldGeometryV1::new(self.operation.extent())
     }
 
+    /// Выводит формат выхода из операции и сохраняет допущенного отрисовщика.
     pub(crate) const fn render_capability(&self) -> FieldRenderCapabilityV1 {
         FieldRenderCapabilityV1::new(self.renderer, self.operation.output_capability())
     }
 
+    /// Читает поток и ревизию, связанные с идентичностью запроса.
     pub(crate) const fn scene_revision(&self) -> FieldSceneRevisionV1 {
         self.scene_revision
     }
@@ -1828,30 +1833,37 @@ pub(crate) struct FieldExactReferenceReplayV1<'proof> {
 }
 
 impl FieldExactReferenceReplayV1<'_> {
+    /// Читает идентичность сертификата после её сравнения с текущим запросом.
     pub(crate) const fn request_digest(&self) -> FieldRequestDigestV1 {
         self.certificate.request_digest
     }
 
+    /// Читает идентичность ранее проверенного полного результата.
     pub(crate) const fn output_digest(&self) -> FieldRasterDigestV1 {
         self.certificate.output_digest
     }
 
+    /// Читает идентичность конечного ядра без повторного построения.
     pub(crate) const fn kernel_digest(&self) -> FieldKernelDigestV1 {
         self.certificate.kernel_digest
     }
 
+    /// Читает вид оператора из проверенного сертификата.
     pub(crate) const fn operator_kind(&self) -> FieldOperatorKindV1 {
         self.certificate.operator_kind
     }
 
+    /// Читает поток и ревизию, сверенные с текущим Session.
     pub(crate) const fn scene_revision(&self) -> FieldSceneRevisionV1 {
         self.certificate.scene_revision
     }
 
+    /// Читает возможности отрисовщика, сверенные с запросом.
     pub(crate) const fn render_capability(&self) -> FieldRenderCapabilityV1 {
         self.certificate.render_capability
     }
 
+    /// Читает идентичность сертификата, не заменяя ею закрытый тип доказательства.
     pub(crate) const fn certificate_digest(&self) -> FieldCertificateDigestV1 {
         self.certificate.digest
     }
@@ -1870,6 +1882,7 @@ impl FieldExactReferenceReplayV1<'_> {
     }
 }
 
+/// Возвращает точную область входа с учётом конечного ядра; чужая геометрия отклоняется.
 pub(crate) fn footprint_for_output(
     request: &FieldEvaluationRequestV1<'_>,
     output: FieldRectV1,
@@ -1885,6 +1898,7 @@ pub(crate) fn footprint_for_output(
     })
 }
 
+/// Возвращает точную область влияния изменённых входов внутри того же поля.
 pub(crate) fn influence_for_input(
     request: &FieldEvaluationRequestV1<'_>,
     dirty_input: FieldRectV1,
@@ -1896,6 +1910,7 @@ pub(crate) fn influence_for_input(
     Ok(FieldInfluenceV1::new(exact, exact))
 }
 
+/// Вычисляет полный эталон в буфере вызывающей стороны и связывает его с запросом.
 pub(crate) fn evaluate_reference_full<'scratch>(
     request: &FieldEvaluationRequestV1<'_>,
     scratch: &'scratch mut FieldEvaluationScratchV1,
@@ -1909,6 +1924,7 @@ pub(crate) fn evaluate_reference_full<'scratch>(
     Ok(&scratch.output)
 }
 
+/// Переиспользует буфер только при совпадении прошлого запроса, геометрии и области изменения.
 pub(crate) fn evaluate_reference_incremental(
     previous_request: &FieldEvaluationRequestV1<'_>,
     request: &FieldEvaluationRequestV1<'_>,
@@ -1944,6 +1960,7 @@ pub(crate) fn evaluate_reference_incremental(
     Ok(influence)
 }
 
+/// Отклоняет изменения входов за пределами объявленной грязной области.
 fn verify_incremental_change_scope(
     previous: &FieldEvaluationRequestV1<'_>,
     current: &FieldEvaluationRequestV1<'_>,
@@ -2034,6 +2051,7 @@ fn operation_input_changed_outside_dirty(
     Ok(changed)
 }
 
+/// Выдаёт сертификат после проверки класса данных, полного эталона и вклада носителя.
 pub(crate) fn evaluate_whole_field(
     request: &FieldEvaluationRequestV1<'_>,
     evidence: FieldEvidenceV1<'_>,
@@ -2081,6 +2099,7 @@ pub(crate) fn evaluate_whole_field(
     })
 }
 
+/// Сверяет сцену, отрисовщик и точный запрос без пересчёта эталона или повторного чтения пикселей.
 pub(crate) fn verify_certificate_replay(
     certificate: &FieldWholeRasterCertificateV1,
     request: &FieldEvaluationRequestV1<'_>,
@@ -2140,6 +2159,7 @@ pub(crate) const fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> Fi
     request.digest
 }
 
+/// Отклоняет слабые данные и несовместимые полномочия отрисовщика до оценки поля.
 fn admit_proof_evidence(
     request: &FieldEvaluationRequestV1<'_>,
     evidence: FieldEvidenceV1<'_>,
@@ -2582,6 +2602,7 @@ fn field_index(extent: FieldExtentV1, x: u32, y: u32) -> Result<usize, FieldEval
     usize::try_from(index).map_err(|_| FieldEvaluationErrorV1::GeometryOverflow)
 }
 
+/// Связывает геометрию и профиль исполнения для повторного использования буфера.
 fn evaluation_layout_digest(
     request: &FieldEvaluationRequestV1<'_>,
 ) -> FieldEvaluationLayoutDigestV1 {
@@ -2728,11 +2749,13 @@ std::thread_local! {
     static INPUT_HASH_PIXELS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Читает счётчик посещений входных пикселей текущего тестового потока.
 #[cfg(test)]
 pub(crate) fn input_hash_pixels_for_test() -> usize {
     INPUT_HASH_PIXELS.with(std::cell::Cell::get)
 }
 
+/// Кодирует ID, размер и точные каналы премультиплицированного входа.
 fn hash_premultiplied_raster(hasher: &mut Hasher, raster: FieldRasterViewV1<'_>) {
     #[cfg(test)]
     INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));
@@ -2744,6 +2767,7 @@ fn hash_premultiplied_raster(hasher: &mut Hasher, raster: FieldRasterViewV1<'_>)
     }
 }
 
+/// Кодирует ID, размер и точные sRGB8-байты непрозрачного входа.
 fn hash_opaque_raster(hasher: &mut Hasher, raster: OpaqueSrgb8RasterViewV1<'_>) {
     #[cfg(test)]
     INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));
@@ -2755,6 +2779,7 @@ fn hash_opaque_raster(hasher: &mut Hasher, raster: OpaqueSrgb8RasterViewV1<'_>) 
     }
 }
 
+/// Кодирует прямой оттенок и binary64-биты alpha без промежуточного округления.
 fn hash_screen_raster(hasher: &mut Hasher, raster: EncodedSrgb8AlphaRasterViewV1<'_>) {
     #[cfg(test)]
     INPUT_HASH_PIXELS.with(|count| count.set(count.get() + raster.pixels().len()));

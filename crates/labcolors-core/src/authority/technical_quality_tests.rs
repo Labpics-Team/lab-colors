@@ -42,6 +42,7 @@ struct FieldSessionEvidence {
 impl session_private::EvidenceSealed for FieldSessionEvidence {}
 
 impl SessionEvidenceV1 for FieldSessionEvidence {
+    /// Возвращает наблюдение именно этого тестового доказательства.
     fn observation(&self) -> &RevisionBoundObservationV1 {
         &self.observation
     }
@@ -59,10 +60,12 @@ impl SessionPlanV1 for FieldSessionPlan {
     type Violation = FieldSessionEvidence;
     type Error = ();
 
+    /// Выдаёт локальное владение тестовой сценой без внешнего планировщика.
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
         Some(())
     }
 
+    /// Сохраняет единственную схему входов при смене ревизий тестовой сцены.
     fn observation_schema<'a>(
         &'a self,
         _owner: &'a Self::OwnerLease,
@@ -70,6 +73,7 @@ impl SessionPlanV1 for FieldSessionPlan {
         &self.schema
     }
 
+    /// Переносит допущенное наблюдение в доказательство тестового Session.
     fn evaluate(
         &mut self,
         _owner: &Self::OwnerLease,
@@ -83,6 +87,7 @@ impl SessionPlanV1 for FieldSessionPlan {
     }
 }
 
+/// Меняет фактический Session head, а не только номер в сертификате.
 fn advance_field_session(session: &mut Session<FieldSessionPlan>, revision: u64) {
     session
         .prepare_update(ObservationUpdateInput {
@@ -102,6 +107,7 @@ fn advance_field_session(session: &mut Session<FieldSessionPlan>, revision: u64)
         .commit();
 }
 
+/// Создаёт наблюдаемую сцену через обычный Session admission.
 fn field_session(revision: u64) -> Session<FieldSessionPlan> {
     let schema = canonicalize_observation_schema(vec![FIELD_SURFACE]).unwrap();
     let mut session = Session::new(FIELD_STREAM, FieldSessionPlan { schema });
@@ -115,6 +121,7 @@ struct Host {
 }
 
 impl ProgramPointSinkHostV1 for Host {
+    /// Имитирует успешную установку, сохраняя точный pending stamp.
     fn try_install(
         &mut self,
         intent: ProgramPointSinkIntentV1,
@@ -130,6 +137,7 @@ impl ProgramPointSinkHostV1 for Host {
     }
 }
 
+/// Строит минимальный Program V1 с отдельно заданным ожидаемым композитом.
 fn point_wire(expected: Srgb8) -> Vec<u8> {
     let mut builder = ProgramWireBuilderV1::new();
     builder
@@ -148,6 +156,7 @@ fn point_wire(expected: Srgb8) -> Vec<u8> {
     builder.finish().unwrap()
 }
 
+/// Получает attachment через обычную загрузку и привязку Program.
 fn point_attachment() -> ProgramAttachmentV1<Host> {
     compile_program_wire_v1(&point_wire(Srgb8::new([0x60; 3])))
         .unwrap()
@@ -155,6 +164,7 @@ fn point_attachment() -> ProgramAttachmentV1<Host> {
         .unwrap()
 }
 
+/// Отличает текущую материализацию от сохранённой и проверяет сохранение других AUTH-ветвей.
 #[test]
 fn point_tq_re_reads_current_attachment_and_binds_revisions() {
     let mut attachment = point_attachment();
@@ -205,6 +215,7 @@ fn point_tq_re_reads_current_attachment_and_binds_revisions() {
     );
 }
 
+/// Недопущенный attachment не создаёт TQ даже при корректном wire-формате.
 #[test]
 fn point_tq_refuses_non_ready_attachment_without_minting_authority() {
     let attachment = point_attachment();
@@ -219,6 +230,7 @@ fn point_tq_refuses_non_ready_attachment_without_minting_authority() {
     assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
 }
 
+/// Строит запрос с явно выбранной возможностью отрисовщика.
 fn field_request_with_capability<'a>(
     source: &'a [PremultipliedRgba8V1],
     destination: &'a [PremultipliedRgba8V1],
@@ -248,6 +260,7 @@ fn field_request_with_capability<'a>(
     .unwrap()
 }
 
+/// Использует эталонный отрисовщик при заданной ревизии и точных входных байтах.
 fn field_request<'a>(
     source: &'a [PremultipliedRgba8V1],
     destination: &'a [PremultipliedRgba8V1],
@@ -264,6 +277,7 @@ fn field_request<'a>(
     )
 }
 
+/// Проверяет разрешённый допуск и идемпотентный повтор точного эталонного поля.
 #[test]
 fn field_tq_accepts_only_fresh_exact_reference_replay() {
     let source = [PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap()];
@@ -293,6 +307,7 @@ fn field_tq_accepts_only_fresh_exact_reference_replay() {
     assert!(state.read(AuthorityIdV1::TechnicalQuality).is_some());
 }
 
+/// Устаревшие запрос или Session не могут заполнить даже пустую TQ-ветвь.
 #[test]
 fn field_tq_replay_rejects_stale_scene_before_authority_exists() {
     let source = [PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap()];
@@ -346,6 +361,7 @@ fn field_tq_replay_rejects_stale_scene_before_authority_exists() {
     assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
 }
 
+/// Совпадение пикселей не превращает наблюдение хоста в эталонное доказательство.
 #[test]
 fn field_tq_rejects_host_observation_even_when_whole_raster_is_exact() {
     let source = [PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap()];
@@ -401,6 +417,7 @@ fn field_tq_rejects_host_observation_even_when_whole_raster_is_exact() {
     assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
 }
 
+/// Допуск TQ не подменяет соглашение или человеческие данные.
 #[test]
 fn tq_never_occupies_a_foreign_authority_lane() {
     let mut attachment = point_attachment();
@@ -416,6 +433,7 @@ fn tq_never_occupies_a_foreign_authority_lane() {
     assert_eq!(state.read(AuthorityIdV1::HumanCleanEvidence), None);
 }
 
+/// Отличает скрытый обход растра от постоянного допуска при непустом контроле чтения входов.
 #[test]
 fn field_tq_admission_never_rehashes_pixels_or_allocates() {
     use crate::field_effect::input_hash_pixels_for_test;
@@ -475,6 +493,7 @@ fn field_tq_admission_never_rehashes_pixels_or_allocates() {
     }
 }
 
+/// Подмена пикселей и устаревший Session сохраняют AUTH; свежая разрешённая замена достижима.
 #[test]
 fn field_tq_content_mismatch_cannot_replace_existing_authority() {
     let source = [PremultipliedRgba8V1::try_new([64, 32, 16, 128]).unwrap()];
