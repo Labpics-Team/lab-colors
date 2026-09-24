@@ -1796,12 +1796,71 @@ impl FieldWholeRasterCertificateV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FieldCertificateReplayErrorV1 {
+    EvidenceClass {
+        actual: FieldEvidenceClassV1,
+    },
+    ExactReferenceRendererRequired,
     SceneRevision {
         expected: FieldSceneRevisionV1,
         actual: FieldSceneRevisionV1,
     },
     RenderCapability,
     Request,
+}
+
+/// Одноразовый внутренний результат свежего replay точного эталонного поля.
+///
+/// Поля закрыты, `Clone`/`Copy` намеренно отсутствуют. Сырый сертификат или его
+/// digest не могут заменить этот тип: он выдаётся только после проверки точного
+/// request, scene revision и render capability непосредственно владельцем
+/// `field_effect`. Заимствование удерживает проверенные certificate/request до
+/// потребления владельцем TQ и не запускает повторную оценку растра.
+pub(crate) struct FieldExactReferenceReplayV1<'proof, 'input> {
+    certificate: &'proof FieldWholeRasterCertificateV1,
+    request: &'proof FieldEvaluationRequestV1<'input>,
+}
+
+impl FieldExactReferenceReplayV1<'_, '_> {
+    pub(crate) fn request_digest(&self) -> FieldRequestDigestV1 {
+        request_digest(self.request)
+    }
+
+    pub(crate) const fn output_digest(&self) -> FieldRasterDigestV1 {
+        self.certificate.output_digest
+    }
+
+    pub(crate) const fn kernel_digest(&self) -> FieldKernelDigestV1 {
+        self.certificate.kernel_digest
+    }
+
+    pub(crate) const fn operator_kind(&self) -> FieldOperatorKindV1 {
+        self.certificate.operator_kind
+    }
+
+    pub(crate) const fn scene_revision(&self) -> FieldSceneRevisionV1 {
+        self.certificate.scene_revision
+    }
+
+    pub(crate) const fn render_capability(&self) -> FieldRenderCapabilityV1 {
+        self.certificate.render_capability
+    }
+
+    pub(crate) const fn certificate_digest(&self) -> FieldCertificateDigestV1 {
+        self.certificate.digest
+    }
+
+    /// Добавляет exact replay tuple в доменно-разделённую identity владельца TQ.
+    /// Сам по себе полученный digest не является proof: вызывающая сторона не
+    /// может сконструировать этот replay-result без проверки `field_effect`.
+    pub(crate) fn hash_tq_identity_material(&self, hasher: &mut Hasher) {
+        hasher.update(&self.request_digest().as_bytes());
+        hasher.update(&self.output_digest().as_bytes());
+        hasher.update(&self.kernel_digest().as_bytes());
+        hash_operator_kind(hasher, self.operator_kind());
+        hash_scene_revision(hasher, self.scene_revision());
+        hash_render_capability(hasher, self.render_capability());
+        hasher.update(&self.certificate_digest().as_bytes());
+    }
 }
 
 pub(crate) fn footprint_for_output(
@@ -2032,6 +2091,33 @@ pub(crate) fn verify_certificate_replay(
         return Err(FieldCertificateReplayErrorV1::Request);
     }
     Ok(())
+}
+
+/// Проверяет, что whole-raster certificate остаётся точным эталонным
+/// доказательством именно для текущего request, и выдаёт неподлежащее
+/// конструированию вызывающей стороной TQ-свидетельство. Полный растр здесь не
+/// вычисляется и не сканируется повторно.
+pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
+    certificate: &'proof FieldWholeRasterCertificateV1,
+    request: &'proof FieldEvaluationRequestV1<'input>,
+) -> Result<FieldExactReferenceReplayV1<'proof, 'input>, FieldCertificateReplayErrorV1> {
+    if certificate.evidence_class != FieldEvidenceClassV1::ExactReferenceWholeRaster {
+        return Err(FieldCertificateReplayErrorV1::EvidenceClass {
+            actual: certificate.evidence_class,
+        });
+    }
+    if !certificate
+        .render_capability
+        .renderer()
+        .is_exact_reference()
+    {
+        return Err(FieldCertificateReplayErrorV1::ExactReferenceRendererRequired);
+    }
+    verify_certificate_replay(certificate, request)?;
+    Ok(FieldExactReferenceReplayV1 {
+        certificate,
+        request,
+    })
 }
 
 pub(crate) fn request_digest(request: &FieldEvaluationRequestV1<'_>) -> FieldRequestDigestV1 {

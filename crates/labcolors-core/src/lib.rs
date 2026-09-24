@@ -26,7 +26,6 @@ mod family_definition_binding;
 pub(crate) mod field_effect;
 #[cfg(test)]
 mod field_effect_tests;
-pub(crate) mod field_technical_quality;
 /// NUMERIC-01: independent numeric reference bounds with declared
 /// applicability, error bounds and counterexamples.
 #[allow(
@@ -35,15 +34,6 @@ pub(crate) mod field_technical_quality;
 )]
 pub(crate) mod numerics_bounds;
 pub(crate) mod spaces;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the alpha/backdrop TQ substrate is staged before its R-10 field consumer"
-    )
-)]
-pub(crate) mod technical_quality;
 
 pub(crate) mod cleanliness;
 

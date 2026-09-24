@@ -6,6 +6,8 @@
 
 use crate::program_wire::ProgramRendererProvenanceV1;
 
+mod technical_quality;
+
 /// Закрытые ветви семантических полномочий AUTH V1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AuthorityIdV1 {

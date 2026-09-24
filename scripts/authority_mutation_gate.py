@@ -8,8 +8,10 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "crates/labcolors-core/src/authority.rs"
-COMMAND = [
+AUTH_SOURCE = ROOT / "crates/labcolors-core/src/authority.rs"
+TQ_SOURCE = ROOT / "crates/labcolors-core/src/authority/technical_quality.rs"
+FIELD_SOURCE = ROOT / "crates/labcolors-core/src/field_effect.rs"
+AUTH_COMMAND = [
     "cargo",
     "test",
     "-p",
@@ -18,10 +20,19 @@ COMMAND = [
     "--lib",
     "--locked",
 ]
+TQ_COMMAND = [
+    "cargo",
+    "test",
+    "-p",
+    "labcolors-core",
+    "authority::technical_quality::tests",
+    "--lib",
+    "--locked",
+]
 
-COMPILE_KILLED = frozenset({"open-authority-id"})
+COMPILE_KILLED = frozenset({"open-authority-id", "tq-digest-as-proof"})
 
-MUTANTS = {
+AUTH_MUTANTS = {
     "open-authority-id": (
         "    HumanCleanEvidence,\n}",
         "    HumanCleanEvidence,\n    Other,\n}",
@@ -65,15 +76,17 @@ MUTANTS = {
 }
 
 
-def run_mutant(name: str, before: str, after: str, original: str) -> None:
-    """Require one targeted source mutation to make the focused AUTH suite red."""
+def run_mutant(
+    name: str, source: Path, command: list[str], before: str, after: str, original: str
+) -> None:
+    """Require one targeted source mutation to make its focused suite red."""
     count = original.count(before)
     if count != 1:
         raise SystemExit(f"{name}: mutation anchor count is {count}, expected 1")
-    SOURCE.write_text(original.replace(before, after, 1), encoding="utf-8")
+    source.write_text(original.replace(before, after, 1), encoding="utf-8")
     try:
         result = subprocess.run(
-            COMMAND,
+            command,
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -81,7 +94,7 @@ def run_mutant(name: str, before: str, after: str, original: str) -> None:
             check=False,
         )
     finally:
-        SOURCE.write_text(original, encoding="utf-8")
+        source.write_text(original, encoding="utf-8")
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
@@ -94,14 +107,63 @@ def run_mutant(name: str, before: str, after: str, original: str) -> None:
     print(f"caught {name}")
 
 
+TQ_MUTANTS = {
+    "tq-stale-point-binding": (
+        TQ_SOURCE,
+        TQ_COMMAND,
+        "        hasher.update(&materialization.revision().to_be_bytes());\n        hasher.update(&sink_stamp.sequence().to_be_bytes());",
+        "        hasher.update(&0_u64.to_be_bytes());\n        hasher.update(&0_u64.to_be_bytes());",
+    ),
+    "tq-foreign-authority-lane": (
+        TQ_SOURCE,
+        TQ_COMMAND,
+        "            AuthorityIdV1::TechnicalQuality,",
+        "            AuthorityIdV1::CleanConvention,",
+    ),
+    "tq-requires-false-observation": (
+        TQ_SOURCE,
+        TQ_COMMAND,
+        "            RendererObservationRequirementV1::NotRequired,",
+        "            RendererObservationRequirementV1::Required,",
+    ),
+    "tq-weak-field-promotion": (
+        FIELD_SOURCE,
+        TQ_COMMAND,
+        "    if certificate.evidence_class != FieldEvidenceClassV1::ExactReferenceWholeRaster {",
+        "    if false && certificate.evidence_class != FieldEvidenceClassV1::ExactReferenceWholeRaster {",
+    ),
+    "tq-skip-field-replay": (
+        FIELD_SOURCE,
+        TQ_COMMAND,
+        "    verify_certificate_replay(certificate, request)?;",
+        "    let _ = (certificate, request);",
+    ),
+    "tq-digest-as-proof": (
+        TQ_SOURCE,
+        TQ_COMMAND,
+        "        replay: FieldExactReferenceReplayV1<'_, '_>,",
+        "        replay: [u8; 32],",
+    ),
+}
+
+
 def main() -> None:
-    """Run the bounded AUTH-01 semantic mutation matrix and restore the source."""
-    original = SOURCE.read_text(encoding="utf-8")
-    for name, (before, after) in MUTANTS.items():
-        run_mutant(name, before, after, original)
-    if SOURCE.read_text(encoding="utf-8") != original:
+    """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
+    auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
+    for name, (before, after) in AUTH_MUTANTS.items():
+        run_mutant(name, AUTH_SOURCE, AUTH_COMMAND, before, after, auth_original)
+    if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
         raise SystemExit("authority source was not restored")
-    print(f"AUTH-01 mutation gate caught {len(MUTANTS)} semantic mutants")
+
+    originals: dict[Path, str] = {}
+    for name, (source, command, before, after) in TQ_MUTANTS.items():
+        original = originals.setdefault(source, source.read_text(encoding="utf-8"))
+        run_mutant(name, source, command, before, after, original)
+    for source, original in originals.items():
+        if source.read_text(encoding="utf-8") != original:
+            raise SystemExit(f"{source}: source was not restored")
+    total = len(AUTH_MUTANTS) + len(TQ_MUTANTS)
+    print(f"AUTH/TQ mutation gate caught {total} semantic mutants")
 
 
 if __name__ == "__main__":
