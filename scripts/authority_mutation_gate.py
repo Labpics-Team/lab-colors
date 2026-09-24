@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AUTH-01: целевые семантические мутации обязаны делать целевой тест Core красным."""
+"""AUTH/TQ: целевые семантические мутации обязаны делать целевой тест Core красным."""
 
 from __future__ import annotations
 
@@ -141,25 +141,45 @@ TQ_MUTANTS = {
     "tq-digest-as-proof": (
         TQ_SOURCE,
         TQ_COMMAND,
-        "        replay: FieldExactReferenceReplayV1<'_, '_>,",
-        "        replay: [u8; 32],",
+        "    fn from_replay(replay: FieldExactReferenceReplayV1<'_, '_>) -> Self {",
+        "    fn from_replay(replay: [u8; 32]) -> Self {",
     ),
 }
+
+
+def validate_anchor(name: str, original: str, before: str, after: str) -> None:
+    """Отклоняет drift semantic-anchor до запуска дорогих mutant subprocess."""
+    count = original.count(before)
+    if count != 1:
+        raise SystemExit(f"{name}: mutation anchor count is {count}, expected 1")
+    if before == after:
+        raise SystemExit(f"{name}: mutation replacement is identical to its anchor")
 
 
 def main() -> None:
     """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
+    tq_originals = {
+        source: source.read_text(encoding="utf-8")
+        for source, _command, _before, _after in TQ_MUTANTS.values()
+    }
+
+    # Сверяем всю матрицу до первого cargo subprocess: поздний stale anchor
+    # должен падать сразу, а не после минут корректных мутантов. run_mutant
+    # всё равно повторно сверяет anchor непосредственно перед подменой.
+    for name, (before, after) in AUTH_MUTANTS.items():
+        validate_anchor(name, auth_original, before, after)
+    for name, (source, _command, before, after) in TQ_MUTANTS.items():
+        validate_anchor(name, tq_originals[source], before, after)
+
     for name, (before, after) in AUTH_MUTANTS.items():
         run_mutant(name, AUTH_SOURCE, AUTH_COMMAND, before, after, auth_original)
     if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
         raise SystemExit("authority source was not restored")
 
-    originals: dict[Path, str] = {}
     for name, (source, command, before, after) in TQ_MUTANTS.items():
-        original = originals.setdefault(source, source.read_text(encoding="utf-8"))
-        run_mutant(name, source, command, before, after, original)
-    for source, original in originals.items():
+        run_mutant(name, source, command, before, after, tq_originals[source])
+    for source, original in tq_originals.items():
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
     total = len(AUTH_MUTANTS) + len(TQ_MUTANTS)
