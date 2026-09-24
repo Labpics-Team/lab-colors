@@ -243,4 +243,5 @@ impl AuthorityStateV1 {
 }
 
 #[cfg(test)]
+#[path = "technical_quality_tests.rs"]
 mod tests;
