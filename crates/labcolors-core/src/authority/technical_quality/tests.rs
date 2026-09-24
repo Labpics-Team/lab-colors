@@ -307,9 +307,31 @@ fn field_tq_replay_rejects_stale_scene_before_authority_exists() {
     )
     .unwrap();
     let mut session = field_session(7);
-    advance_field_session(&mut session, 8);
+    let mismatched_request = field_request_with_capability(
+        &source,
+        &destination,
+        7,
+        FieldRenderCapabilityV1::new(
+            FieldRendererCapabilityV1::exact_reference(FieldRendererIdV1::new(6)),
+            FieldOutputCapabilityV1::PremultipliedRgba8V1,
+        ),
+    );
     let mut state = AuthorityStateV1::new();
 
+    assert!(matches!(
+        state.admit_exact_reference_field_technical_quality(
+            &certificate,
+            &mismatched_request,
+            &session,
+            AuthorityExpectedCurrentV1::Vacant,
+        ),
+        Err(TechnicalQualityAdmissionErrorV1::FieldReplay(
+            crate::field_effect::FieldCertificateReplayErrorV1::RenderCapability
+        ))
+    ));
+    assert_eq!(state.read(AuthorityIdV1::TechnicalQuality), None);
+
+    advance_field_session(&mut session, 8);
     assert!(matches!(
         state.admit_exact_reference_field_technical_quality(
             &certificate,
