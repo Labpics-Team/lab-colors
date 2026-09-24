@@ -1,3 +1,11 @@
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TQ-01 остаётся внутренним provider до EVAL-01; transport export запрещён r15"
+    )
+)]
+
 //! Единственный Core-владелец TechnicalQuality AUTH V1.
 //!
 //! TQ подтверждает только уже доказанный результат: текущую point-materialization

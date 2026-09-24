@@ -2,11 +2,13 @@ use super::*;
 use crate::Srgb8;
 use crate::field_effect::{
     CarrierIntentV1, DevicePixelRatioV1, FieldEvaluationRequestV1, FieldEvaluationScratchV1,
-    FieldEvidenceIdentityV1, FieldEvidenceV1, FieldExtentV1, FieldGeometryV1, FieldOperationV1,
+    FieldEvidenceIdentityV1, FieldEvidenceV1, FieldExtentV1, FieldGeometryV1,
+    FieldHostConformanceIdV1, FieldHostConformancePermitV1, FieldOperationV1,
     FieldOperatorInstanceIdV1, FieldOutputCapabilityV1, FieldPrecisionV1, FieldQuantizationV1,
     FieldRasterIdentityV1, FieldRasterViewV1, FieldRenderCapabilityV1, FieldRendererCapabilityV1,
     FieldRendererIdV1, FieldRequestIdV1, FieldSceneRevisionV1, FieldWorkingSpaceV1,
-    PremultipliedRgba8V1, evaluate_whole_field, verify_exact_reference_for_tq,
+    PremultipliedRgba8V1, ProspectiveObservedRasterV1, evaluate_reference_full,
+    evaluate_whole_field, request_digest, verify_exact_reference_for_tq,
 };
 use crate::observation::{ObservationStreamId, Revision};
 use crate::program::wire::ProgramWireBuilderV1;
