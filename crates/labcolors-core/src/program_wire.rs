@@ -1533,11 +1533,10 @@ fn attachment_snapshot_from_commit(
             presentation_root: render.root().value(),
             occurrence: render.occurrence().value(),
             context: ProgramAppearanceContextIdV1::from_core(render.context()),
-            // Этот seam принимает произвольный скомпилированный Program; без
-            // доказательства точной статической топологии необязательная
-            // структурная идентичность должна отсутствовать, чтобы не
-            // выдавать канонический профиль однослойной композиции за факт.
-            physical_identity: None,
+            // Closed Program V1 имеет единственный composition profile:
+            // EncodedSrgb8SourceOverV1. Это профиль математики, не утверждение
+            // о topology, числе слоёв или наблюдении реального renderer-а.
+            physical_identity: Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
             terminal_composite,
             terminal_composite_ambiguous,
         }

@@ -6,6 +6,8 @@
 
 use crate::program_wire::ProgramRendererProvenanceV1;
 
+mod technical_quality;
+
 /// Закрытые ветви семантических полномочий AUTH V1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AuthorityIdV1 {
@@ -97,13 +99,6 @@ impl AuthorityDescriptorV1 {
         self.provenance
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "создание описания остаётся закрытым путём владельца"
-        )
-    )]
     const fn from_verified_owner(
         id: AuthorityIdV1,
         release: [u8; 32],
@@ -341,13 +336,6 @@ enum RendererObservationRequirementV1 {
     Required,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "AUTH-01 закрывает выпуск разрешений до конструкторов доказательств владельцев"
-    )
-)]
 fn issue_permit<'a>(
     owner_current: &'a AuthorityOwnerCurrentV1,
     next: AuthorityDescriptorV1,

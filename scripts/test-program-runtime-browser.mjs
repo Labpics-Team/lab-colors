@@ -950,8 +950,8 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.first?.renderContextIdentity?.length !== 32
     || result.first?.renderRoot !== 9 || result.first?.authorityRoot !== 9
     || result.first?.renderOccurrence !== 8 || result.first?.authorityOccurrence !== 8
-    || result.first?.renderPhysicalIdentity !== "unknown"
-    || result.first?.authorityPhysicalIdentity !== "unknown"
+    || result.first?.renderPhysicalIdentity !== "encoded-srgb8-source-over-v1"
+    || result.first?.authorityPhysicalIdentity !== "encoded-srgb8-source-over-v1"
     || result.first?.state !== "ready"
     || result.first?.hasRender !== true
     || !equal(result.second?.renderComposite, [112, 112, 112])
@@ -963,8 +963,8 @@ export function verifyBrowserAttachmentConsumer(result) {
     || !equal(result.second?.renderContextIdentity, result.first?.renderContextIdentity)
     || result.second?.renderRoot !== 9 || result.second?.authorityRoot !== 9
     || result.second?.renderOccurrence !== 8 || result.second?.authorityOccurrence !== 8
-    || result.second?.renderPhysicalIdentity !== "unknown"
-    || result.second?.authorityPhysicalIdentity !== "unknown"
+    || result.second?.renderPhysicalIdentity !== "encoded-srgb8-source-over-v1"
+    || result.second?.authorityPhysicalIdentity !== "encoded-srgb8-source-over-v1"
     || result.second?.authorityRevision !== "2"
     || result.second?.authoritySinkSequence !== "2"
     || result.second?.authorityBindingEpoch !== result.second?.renderBindingEpoch
