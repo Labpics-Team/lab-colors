@@ -19,6 +19,8 @@ COMMAND = [
     "--locked",
 ]
 
+COMPILE_KILLED = frozenset({"open-authority-id"})
+
 MUTANTS = {
     "open-authority-id": (
         "    HumanCleanEvidence,\n}",
@@ -83,6 +85,12 @@ def run_mutant(name: str, before: str, after: str, original: str) -> None:
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
+    expected_marker = "error[E" if name in COMPILE_KILLED else "test result: FAILED"
+    if expected_marker not in result.stdout:
+        sys.stderr.write(result.stdout)
+        raise SystemExit(
+            f"{name}: unexpected failure; expected marker {expected_marker!r}"
+        )
     print(f"caught {name}")
 
 
