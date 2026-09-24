@@ -162,7 +162,7 @@ TQ_MUTANTS = {
     "tq-digest-as-proof": (
         TQ_SOURCE,
         TQ_COMMAND,
-        "    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof, 'input>),",
+        "    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof>),",
         "    ExactReferenceFieldV1([u8; 32]),",
     ),
 }

@@ -72,16 +72,16 @@ impl From<AuthorityAdmissionErrorV1> for TechnicalQualityAdmissionErrorV1 {
 }
 
 /// Закрытое доказательство TQ. Ни одна ветвь не принимает caller-authored digest.
-enum TechnicalQualityProofV1<'proof, 'input> {
+enum TechnicalQualityProofV1<'proof> {
     ModeledPointV1(ModeledPointProofV1),
-    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof, 'input>),
+    ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof>),
 }
 
 struct ModeledPointProofV1 {
     materialization: AttachedMaterializationAuthorityV1,
 }
 
-impl TechnicalQualityProofV1<'_, '_> {
+impl TechnicalQualityProofV1<'_> {
     fn descriptor(&self) -> AuthorityDescriptorV1 {
         let release = proof_identity(b"labcolors.tq.release.v1\0", self);
         let applicability = proof_identity(b"labcolors.tq.applicability.v1\0", self);
@@ -145,7 +145,7 @@ impl ModeledPointProofV1 {
     }
 }
 
-fn proof_identity(domain: &[u8], proof: &TechnicalQualityProofV1<'_, '_>) -> [u8; 32] {
+fn proof_identity(domain: &[u8], proof: &TechnicalQualityProofV1<'_>) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(domain);
     proof.hash_identity_material(&mut hasher);
@@ -198,7 +198,7 @@ impl AuthorityStateV1 {
 
     fn admit_technical_quality_proof(
         &mut self,
-        proof: TechnicalQualityProofV1<'_, '_>,
+        proof: TechnicalQualityProofV1<'_>,
         expected: AuthorityExpectedCurrentV1,
     ) -> Result<AuthorityAdmissionOutcomeV1, TechnicalQualityAdmissionErrorV1> {
         let descriptor = proof.descriptor();

@@ -1821,16 +1821,15 @@ pub(crate) enum FieldCertificateReplayErrorV1 {
 /// Поля закрыты, `Clone`/`Copy` намеренно отсутствуют. Сырый сертификат или его
 /// digest не могут заменить этот тип: он выдаётся только после проверки точного
 /// request, scene revision и render capability непосредственно владельцем
-/// `field_effect`. Заимствование удерживает проверенные certificate/request до
-/// потребления владельцем TQ и не запускает повторную оценку растра.
-pub(crate) struct FieldExactReferenceReplayV1<'proof, 'input> {
+/// `field_effect`. Replay удерживает только проверенный certificate: request
+/// после replay-проверки больше не нужен и не может стать вторым источником истины.
+pub(crate) struct FieldExactReferenceReplayV1<'proof> {
     certificate: &'proof FieldWholeRasterCertificateV1,
-    request: &'proof FieldEvaluationRequestV1<'input>,
 }
 
-impl FieldExactReferenceReplayV1<'_, '_> {
-    pub(crate) fn request_digest(&self) -> FieldRequestDigestV1 {
-        request_digest(self.request)
+impl FieldExactReferenceReplayV1<'_> {
+    pub(crate) const fn request_digest(&self) -> FieldRequestDigestV1 {
+        self.certificate.request_digest
     }
 
     pub(crate) const fn output_digest(&self) -> FieldRasterDigestV1 {
@@ -2105,11 +2104,11 @@ pub(crate) fn verify_certificate_replay(
 /// доказательством именно для текущего request, и выдаёт неподлежащее
 /// конструированию вызывающей стороной TQ-свидетельство. Полный растр здесь не
 /// вычисляется и не сканируется повторно.
-pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
+pub(crate) fn verify_exact_reference_for_tq<'proof>(
     certificate: &'proof FieldWholeRasterCertificateV1,
-    request: &'proof FieldEvaluationRequestV1<'input>,
+    request: &FieldEvaluationRequestV1<'_>,
     current_observation: &RevisionBoundObservationV1,
-) -> Result<FieldExactReferenceReplayV1<'proof, 'input>, FieldCertificateReplayErrorV1> {
+) -> Result<FieldExactReferenceReplayV1<'proof>, FieldCertificateReplayErrorV1> {
     if certificate.evidence_class != FieldEvidenceClassV1::ExactReferenceWholeRaster {
         return Err(FieldCertificateReplayErrorV1::EvidenceClass {
             actual: certificate.evidence_class,
@@ -2133,10 +2132,7 @@ pub(crate) fn verify_exact_reference_for_tq<'proof, 'input>(
             actual: request.scene_revision,
         });
     }
-    Ok(FieldExactReferenceReplayV1 {
-        certificate,
-        request,
-    })
+    Ok(FieldExactReferenceReplayV1 { certificate })
 }
 
 /// Читает связанную с неизменяемым запросом идентичность без обхода его растров.
