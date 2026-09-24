@@ -429,7 +429,7 @@
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
   "scripts/artifact_matrix.py": "997bc09191898947c961b73fb706c9423711843d",
   "scripts/atomic-write.mjs": "9be42c1a81abf3220c0bd181e9d7b33507b8428d",
-  "scripts/authority_mutation_gate.py": "9dcf55d2794378e8a9dc0657014586a5a1b13feb",
+  "scripts/authority_mutation_gate.py": "dc8807b6a4746b81c3f05cb37582a630294ca13c",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
