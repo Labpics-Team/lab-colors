@@ -169,3 +169,16 @@ MUTANTS += (
      "        match self.sequence.checked_add(1) {", "        match self.sequence.checked_add(0) {"),
 )
 SOURCES += ("session.rs", "observation.rs", "program/attachment.rs")
+
+
+CONTRACTS["composition::proofs::multiply_preserves_the_entire_admitted_domain"] = (
+    {"multiplying any admitted opacities must preserve the entire canonical unit domain"},
+    {"positive product underflow", "subnormal product", "opaque product"},
+)
+MUTANTS += (
+    ("opacity-multiply-as-addition", "composition.rs",
+     "composition::proofs::multiply_preserves_the_entire_admitted_domain",
+     "multiplying any admitted opacities must preserve the entire canonical unit domain",
+     "        Self((self.value() * rhs.value()).to_bits())",
+     "        Self((self.value() + rhs.value()).to_bits())"),
+)

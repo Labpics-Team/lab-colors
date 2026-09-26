@@ -101,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, LIFECYCLE_FAILURES.get(name, "test result: FAILED"))
+    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES).get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -206,10 +206,33 @@ LIFECYCLE_FAILURES = {
 }
 
 
+# Полнота поиска и авторская минимальность проверяются на настоящем coordinator.
+POINT_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked",
+                 "point_representation::frontier_tests::crossed_rgb_frontiers_require_all_three_channels",
+                 "--", "--exact"]
+POINT_SOURCE = ROOT / "crates/labcolors-core/src/point_representation.rs"
+POINT_MUTANTS = {
+    "point-discard-minimal-selection": (
+        POINT_SOURCE, POINT_COMMAND,
+        "    let selected = feasible_lower;",
+        "    let selected = domain.upper(); let _ = feasible_lower;",
+    ),
+    "point-feasible-on-any-channel": (
+        POINT_SOURCE, POINT_COMMAND,
+        "    (0..3).all(|channel| match target[channel].cmp(&backdrop[channel]) {",
+        "    (0..3).any(|channel| match target[channel].cmp(&backdrop[channel]) {",
+    ),
+}
+POINT_FAILURES = {
+    name: "test point_representation::frontier_tests::crossed_rgb_frontiers_require_all_three_channels ... FAILED"
+    for name in POINT_MUTANTS
+}
+
+
 def main() -> None:
     """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in bounded_mutants.values()
