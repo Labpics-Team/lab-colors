@@ -373,3 +373,6 @@ fn issue_permit<'a>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(kani)]
+mod proofs;

@@ -27,7 +27,7 @@ ext09-extractor = ["dep:serde", "dep:serde_yaml", "dep:toml"]
 private-fixture = []
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(labcolors_private_fixture_unshared_v1)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(labcolors_private_fixture_unshared_v1)', 'cfg(kani)'] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

@@ -1793,6 +1793,7 @@ class MutationTruthTest(unittest.TestCase):
             set(ci_ephemeral),
             {
                 "node-consumer-floor",
+                "formal-authority",
                 "msrv",
                 "lint",
                 "docs",
@@ -2070,7 +2071,7 @@ const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const sha = '0123456789abcdef0123456789abcdef01234567';
 const prefix = 'Labpics-Team/lab-colors/.github/workflows/';
 const names = [
-  ['Node 22 consumer floor', 'MSRV workspace check', 'clippy + rustfmt',
+  ['Node 22 consumer floor', 'formal authority (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
   ['swift conformance (self-hosted Linux, pinned toolchain)'],
@@ -2093,6 +2094,8 @@ const mutations = {
   foreignJob: (_runs, jobs) => { jobs[0][0].run_id = 999; },
   failedJob: (_runs, jobs) => { jobs[0][0].conclusion = 'failure'; },
   duplicateJob: (_runs, jobs) => { jobs[0].push(jobs[0][0]); },
+  missingFormal: (_runs, jobs) => { jobs[0] = jobs[0].filter((job) => !job.name.endsWith('formal authority (Kani)')); },
+  skippedFormal: (_runs, jobs) => { jobs[0].find((job) => job.name.endsWith('formal authority (Kani)')).conclusion = 'skipped'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {
