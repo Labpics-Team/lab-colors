@@ -74,6 +74,46 @@ jobs:
           test "${#tarballs[@]}" -eq 1
           node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
 
+  formal-authority:
+    name: formal authority (Kani)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: isolate verifier toolchains
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
+          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: install pinned Kani
+        run: |
+          cargo install kani-verifier --version "$(python3 scripts/verify_authority_formal.py --kani-version)" --locked
+          cargo kani setup
+      - name: verify proof admission and actual AUTH implementation
+        run: |
+          python3 scripts/test_verify_authority_formal.py
+          python3 scripts/verify_authority_formal.py --output-dir "$RUNNER_TEMP/authority-formal"
+      - name: preserve exact verification and counterexample
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: authority-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authority-formal
+          if-no-files-found: error
+          retention-days: 7
+
   msrv:
     name: MSRV workspace check
     runs-on: ubuntu-latest

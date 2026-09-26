@@ -422,3 +422,39 @@ fn require_distinguishes_every_binding_mismatch() {
         Err(AuthorityRequireErrorV1::ProvenanceMismatch)
     );
 }
+
+/// Один совпавший префикс не удостоверяет ни одну из трёх 256-битных привязок.
+#[test]
+fn require_rejects_every_nonleading_identity_byte() {
+    let current = descriptor(AuthorityIdV1::TechnicalQuality, 4);
+    let owner = AuthorityOwnerCurrentV1::new(current);
+    let mut state = AuthorityStateV1::new();
+    state
+        .admit(
+            current,
+            AuthorityExpectedCurrentV1::Vacant,
+            permit(&owner, current),
+        )
+        .unwrap();
+    assert_eq!(state.require(current), Ok(()));
+    for index in 1..32 {
+        let mut wrong = current;
+        wrong.release.0[index] ^= 1;
+        assert_eq!(
+            state.require(wrong),
+            Err(AuthorityRequireErrorV1::ReleaseMismatch)
+        );
+        let mut wrong = current;
+        wrong.applicability.0[index] ^= 1;
+        assert_eq!(
+            state.require(wrong),
+            Err(AuthorityRequireErrorV1::ApplicabilityMismatch)
+        );
+        let mut wrong = current;
+        wrong.provenance.0[index] ^= 1;
+        assert_eq!(
+            state.require(wrong),
+            Err(AuthorityRequireErrorV1::ProvenanceMismatch)
+        );
+    }
+}
