@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import signal
 from pathlib import Path
 import subprocess
 
@@ -105,8 +107,18 @@ def run_kani(output: Path, *, mutant: bool = False) -> tuple[dict, int]:
     # Обычный код и cfg(kani) исполняются без stubs и отключения safety/reach checks.
     log = output.with_suffix(".log")
     with log.open("w", encoding="utf-8") as stream:
-        process = subprocess.run(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
-                                 timeout=1200, check=False)
+        process = subprocess.Popen(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        try:
+            process.wait(timeout=1200)
+        except BaseException:
+            # Завершаем также дочерний решатель, а не только cargo-обёртку.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            raise
     print(log.read_text(encoding="utf-8"), end="", flush=True)
     return json.loads(output.read_text(encoding="utf-8")), process.returncode
 
@@ -139,25 +151,27 @@ def main() -> None:
     if code != 0:
         raise ValueError("positive verification returned failure")
     validate_report(report)
-    original = SOURCE.read_text(encoding="utf-8")
-    if original.count(MUTANT_BEFORE) != 1:
+    original = SOURCE.read_bytes()
+    if original.count(MUTANT_BEFORE.encode()) != 1:
         raise ValueError("mutation anchor drift")
     try:
-        SOURCE.write_text(original.replace(MUTANT_BEFORE, MUTANT_AFTER), encoding="utf-8")
+        SOURCE.write_bytes(original.replace(MUTANT_BEFORE.encode(), MUTANT_AFTER.encode()))
         mutant, code = run_kani(output / "negative.json", mutant=True)
         validate_mutant(mutant, code)
     finally:
-        SOURCE.write_text(original, encoding="utf-8")
+        SOURCE.write_bytes(original)
     if identities != {str(p.relative_to(ROOT)): digest(p) for p in source_files}:
         raise ValueError("source or dependency identity changed during verification")
     if commit != subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip():
         raise ValueError("checkout changed during verification")
+    final_status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True)
+    clean = not status and not final_status
     receipt = {
         "scope": "AUTH Linux x86_64; current owner proof assumed; symbolic 256-bit identities",
         "schema": 1, "kani_version": KANI_VERSION,
-        "source_commit": commit if not status else None,
+        "source_commit": commit if clean else None,
         "checkout_commit": commit,
-        "working_tree_clean": not status,
+        "working_tree_clean": clean,
         "verified_source_sha256": identities,
         "positive_sha256": digest(output / "positive.json"),
         "negative_sha256": digest(output / "negative.json"),

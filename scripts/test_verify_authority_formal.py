@@ -4,10 +4,15 @@
 import copy
 import json
 import unittest
+from unittest import mock
+import signal
+import subprocess
+import tempfile
+from pathlib import Path
 
 from verify_authority_formal import (
     CONTRACTS, KANI_VERSION, PREFIX, MUTANT_HARNESS, MUTANT_ASSERTION,
-    validate_report, validate_mutant,
+    validate_report, validate_mutant, run_kani,
 )
 
 
@@ -82,6 +87,17 @@ class FormalReportTests(unittest.TestCase):
             report["metadata"][key] = "wrong"
             with self.assertRaises(ValueError):
                 validate_report(report)
+
+    def test_timeout_terminates_the_solver_process_group(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch("verify_authority_formal.subprocess.Popen") as launch, mock.patch("verify_authority_formal.os.killpg") as terminate:
+                launch.return_value.pid = 4242
+                launch.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 1200), -9]
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    run_kani(Path(temporary) / "result.json")
+                terminate.assert_called_once_with(4242, signal.SIGKILL)
+                self.assertEqual(launch.return_value.wait.call_count, 2)
+                self.assertTrue(launch.call_args.kwargs["start_new_session"])
 
     def test_mutant_requires_target_semantic_failure(self):
         report = {"verification_results": {

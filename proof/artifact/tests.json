@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 247,
+   "count": 254,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -811,6 +811,13 @@
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_page_inside_forbidden_module_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_type_alias_route_to_program_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_similar_module_name_is_not_rejected",
+    "test_verify_authority_formal.FormalReportTests.test_complete_result_passes",
+    "test_verify_authority_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
+    "test_verify_authority_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
+    "test_verify_authority_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
+    "test_verify_authority_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
+    "test_verify_authority_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
+    "test_verify_authority_formal.FormalReportTests.test_unreachable_cover_is_not_success",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_array_table_cannot_supply_the_package_license",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_coherently_substituted_packaged_receipt_and_pin_are_rejected",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_commented_table_headers_cannot_supply_the_package_license",
@@ -857,7 +864,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "62bc03f77094861d6ef1200bc863b4338f62ff51ffda2436a2d297beb8d0f935",
+ "record_sha256": "4dc6d46c6997337912c44ef982de4fa952dd34b2bb7bcff8b704e85318dc814c",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -964,6 +971,7 @@
    "authority::tests::permit_must_bind_the_exact_descriptor: test",
    "authority::tests::replacement_rejects_single_axis_expected_binding_mismatches: test",
    "authority::tests::require_distinguishes_every_binding_mismatch: test",
+   "authority::tests::require_rejects_every_nonleading_identity_byte: test",
    "authority::tests::saved_descriptor_cannot_mint_after_owner_current_advances: test",
    "authority::tests::stale_expected_replacement_is_typed_and_non_mutating: test",
    "authority::tests::state_has_exactly_three_fixed_slots: test",
@@ -2348,7 +2356,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1487,
+  "enabled_count": 1488,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

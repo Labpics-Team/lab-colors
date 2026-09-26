@@ -92,7 +92,8 @@ jobs:
             echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
             echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
           } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
+          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
