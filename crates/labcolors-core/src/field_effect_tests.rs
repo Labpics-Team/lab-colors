@@ -1512,3 +1512,6 @@ fn field_program_compile_rejects_every_invalid_reference_and_reachability_class(
         Err(FieldProgramCompileErrorV1::MissingTerminalOperator { operator: first })
     );
 }
+
+#[path = "field_effect/raster_tests.rs"]
+mod raster_tests;

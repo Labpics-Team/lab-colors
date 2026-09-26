@@ -2932,3 +2932,6 @@ fn finalize(hasher: Hasher) -> [u8; 32] {
     let digest = hasher.finalize();
     *digest.as_bytes()
 }
+
+#[cfg(kani)]
+mod proofs;

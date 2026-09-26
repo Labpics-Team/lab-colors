@@ -101,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES).get(name, "test result: FAILED"))
+    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES).get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -229,10 +229,38 @@ POINT_FAILURES = {
 }
 
 
+# Поле проверяется через настоящий full/incremental путь и независимую 2D-свёртку.
+RASTER_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked",
+                  "field_effect_tests::raster_tests"]
+RASTER_SOURCE = ROOT / "crates/labcolors-core/src/field_effect.rs"
+RASTER_MUTANTS = {
+    "field-missing-blur-halo": (
+        RASTER_SOURCE, RASTER_COMMAND,
+        "    let exact = dirty_input.expanded(request.operation.radius(), request.geometry().extent())?;",
+        "    let exact = dirty_input.expanded(0, request.geometry().extent())?;",
+    ),
+    "field-hidden-dirty-change": (
+        RASTER_SOURCE, RASTER_COMMAND,
+        "    verify_incremental_change_scope(previous_request, request, dirty_input)?;",
+        "    let _ = (previous_request, request, dirty_input);",
+    ),
+    "field-biased-blur-rounding": (
+        RASTER_SOURCE, RASTER_COMMAND,
+        "                    .checked_add(1_u128 << 63)",
+        "                    .checked_add(0)",
+    ),
+}
+RASTER_FAILURES = {
+    "field-missing-blur-halo": "test field_effect_tests::raster_tests::every_small_dirty_rectangle_matches_independent_full_convolution ... FAILED",
+    "field-hidden-dirty-change": "test field_effect_tests::raster_tests::rejected_dirty_scope_preserves_output_and_allows_correct_retry ... FAILED",
+    "field-biased-blur-rounding": "test field_effect_tests::raster_tests::every_small_dirty_rectangle_matches_independent_full_convolution ... FAILED",
+}
+
+
 def main() -> None:
     """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in bounded_mutants.values()
