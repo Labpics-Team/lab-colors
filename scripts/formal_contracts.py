@@ -131,9 +131,9 @@ CONTRACTS.update({
         {"equal source and backdrop must be a fixed point for every valid opacity"},
         {"subnormal fixed point", "nonendpoint fixed point"},
     ),
-    "observation::proofs::revision_order_is_total_without_wraparound": (
-        {"all observation paths must preserve revision order without wraparound"},
-        {"first zero revision", "new revision", "replay revision", "wrapped revision rejected"},
+    "observation::proofs::equality_requires_the_same_observation_allocation": (
+        {"observation equality must bind stream revision and allocation identity"},
+        {"same observation accepted", "separate backing rejected despite equal coordinates", "foreign stream rejected", "foreign revision rejected"},
     ),
     "certificate::proofs::ledger_budget_cannot_overflow_or_exceed_capacity": (
         {"ledger budget must reject all count size and overflow violations", "ledger accounting must equal the exact retained byte cost"},
@@ -154,9 +154,9 @@ CONTRACTS.update({
 })
 
 MUTANTS += (
-    ("observation-stale-admission", "observation.rs", "observation::proofs::revision_order_is_total_without_wraparound",
-     "all observation paths must preserve revision order without wraparound",
-     "        Some(current) if incoming < current =>", "        Some(current) if false =>"),
+    ("observation-foreign-backing", "observation.rs", "observation::proofs::equality_requires_the_same_observation_allocation",
+     "observation equality must bind stream revision and allocation identity",
+     "            && Rc::ptr_eq(&self.backing, &other.backing)", "            && true"),
     ("ledger-entry-boundary", "certificate.rs", "certificate::proofs::ledger_budget_cannot_overflow_or_exceed_capacity",
      "ledger budget must reject all count size and overflow violations",
      "    if records >= MAX_ADMISSION_ENTRIES_V1 {", "    if records > MAX_ADMISSION_ENTRIES_V1 {"),

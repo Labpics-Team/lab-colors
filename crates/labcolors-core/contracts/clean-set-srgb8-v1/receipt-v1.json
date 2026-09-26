@@ -55,11 +55,11 @@
       "sha256": "8ca3a1ba5818348d29da08eb30727776ffd9706baed1a49d55593998fe0a29c1"
     },
     {
-      "bytes": 39254,
+      "bytes": 39465,
       "license": "MIT",
       "path": "crates/labcolors-core/src/observation.rs",
       "role": "observation_runtime_source",
-      "sha256": "672cbcb07d22b804e4ed7ed58a77d600630fdce6947ce0d0c5a781d7763d7f21"
+      "sha256": "d7cf2beec8e8a242f346618856382e0e1d5a5eade17bdfd0dc7e27176c988c26"
     },
     {
       "bytes": 7961,

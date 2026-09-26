@@ -186,10 +186,10 @@ LIFECYCLE_MUTANTS = {
         "            if !decision.observation().is_same_binding_as(&raw_observation) {",
         "            if false {",
     ),
-    "observation-order-helper-bypass": (
+    "observation-stale-order-bypass": (
         ROOT / "crates/labcolors-core/src/observation.rs", LIFECYCLE_COMMAND,
-        "    let replay = revision_is_replay(current_revision, revision)?;",
-        "    let replay = current_revision == Some(revision);",
+        "        if revision < current {",
+        "        if false && revision < current {",
     ),
     "ledger-budget-helper-bypass": (
         ROOT / "crates/labcolors-core/src/certificate.rs", LIFECYCLE_COMMAND,
@@ -201,7 +201,7 @@ LIFECYCLE_MUTANTS = {
 
 LIFECYCLE_FAILURES = {
     "session-stale-evidence-admission": "test session::lifecycle_tests::lifecycle_rejects_saved_evidence_for_a_new_revision ... FAILED",
-    "observation-order-helper-bypass": "test session::lifecycle_tests::lifecycle_observed_order_cancel_and_failure_matrix ... FAILED",
+    "observation-stale-order-bypass": "test session::lifecycle_tests::lifecycle_observed_order_cancel_and_failure_matrix ... FAILED",
     "ledger-budget-helper-bypass": "test certificate::lifecycle_tests::lifecycle_replay_conflict_and_capacity_use_the_real_ledger ... FAILED",
 }
 
