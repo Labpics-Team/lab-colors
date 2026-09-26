@@ -74,8 +74,8 @@ jobs:
           test "${#tarballs[@]}" -eq 1
           node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
 
-  formal-authority:
-    name: formal authority (Kani)
+  formal-core:
+    name: formal core (Kani)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -99,18 +99,18 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: install pinned Kani
         run: |
-          cargo install kani-verifier --version "$(python3 scripts/verify_authority_formal.py --kani-version)" --locked
+          cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
       - name: verify proof admission and actual AUTH implementation
         run: |
-          python3 scripts/test_verify_authority_formal.py
-          python3 scripts/verify_authority_formal.py --output-dir "$RUNNER_TEMP/authority-formal"
+          python3 scripts/test_verify_core_formal.py
+          python3 scripts/verify_core_formal.py --output-dir "$RUNNER_TEMP/core-formal"
       - name: preserve exact verification and counterexample
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: authority-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/authority-formal
+          name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-formal
           if-no-files-found: error
           retention-days: 7
 

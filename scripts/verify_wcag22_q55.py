@@ -77,7 +77,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "c97980c1ca2c7ea9cabff9c8d2fb7282773cca180ae15948391c29c9d6196040"
+    "8ab231b0a7fac8ebf78e04c3a2e70c1a7e477fdd3324ffa9d0eb100e89df1059"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -85,7 +85,7 @@ EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
 )
 PARSER_ID = "encoded-srgb8-hex-parser-v1"
 EXPECTED_PARSER_SHA256 = (
-    "071ad416e4da1745d47bb1ed0d43c64306fc568db0336420f7a7f8ca62d20a5a"
+    "70fc992594762b97c3191a721156161b7f188b29cd05ee555c1656fb3840aed0"
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
@@ -117,22 +117,37 @@ pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1"""
 PARSER_ROUTE_BEGIN = b"// BEGIN WCAG22_PARSER_CAPSULE_V1"
 PARSER_ROUTE_END = b"// END WCAG22_PARSER_CAPSULE_V1"
-EXPECTED_PARSER_ROUTE_REGION = b"""// BEGIN WCAG22_PARSER_CAPSULE_V1
+EXPECTED_PARSER_ROUTE_REGION = """// BEGIN WCAG22_PARSER_CAPSULE_V1
 const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
 /// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
-/// ASCII is checked before byte slicing, so arbitrary public Unicode input
-/// returns `Err` instead of panicking at a non-character boundary.
+/// The byte grammar accepts only ASCII hexadecimal digits. Arbitrary Unicode
+/// input returns `Err` without slicing a string at non-character boundaries.
 pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
-    let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 || !hex.is_ascii() {
-        return Err(format!("expected #RRGGBB, got #{hex}"));
-    }
-    let parse = |value: &str| u8::from_str_radix(value, 16).map_err(|error| error.to_string());
-    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+    parse_hex_bytes(hex.as_bytes()).ok_or_else(|| format!("expected #RRGGBB, got {hex}"))
 }
-// END WCAG22_PARSER_CAPSULE_V1"""
+
+// Числовой from_str_radix принимает знак '+': его грамматика шире hex-цвета.
+// Вся грамматика цвета принадлежит этому безаллокирующему байтовому parser.
+fn parse_hex_bytes(bytes: &[u8]) -> Option<[u8; 3]> {
+    let bytes = bytes.strip_prefix(b"#").unwrap_or(bytes);
+    let [r0, r1, g0, g1, b0, b1] = bytes else {
+        return None;
+    };
+    let digit = |value: u8| match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    };
+    Some([
+        digit(*r0)? * 16 + digit(*r1)?,
+        digit(*g0)? * 16 + digit(*g1)?,
+        digit(*b0)? * 16 + digit(*b1)?,
+    ])
+}
+// END WCAG22_PARSER_CAPSULE_V1""".encode("utf-8")
 PROFILE_CHECKSUM_DOMAIN = b"labcolors.wcag22-srgb8-profile.v1"
 REGISTRY_ROW_BINDING_DOMAIN = b"labcolors.wcag22-registry-row.v1"
 REGISTRY_ROW_BINDING_SCHEMA_VERSION = 1
@@ -911,11 +926,12 @@ def verify_srgb8_parser() -> str:
     )
     compact = re.sub(r"\s+", " ", source_bytes.decode("utf-8"))
     required = (
-        "hex.strip_prefix('#').unwrap_or(hex)",
-        "hex.len() != 6 || !hex.is_ascii()",
-        "parse(&hex[0..2])?",
-        "parse(&hex[2..4])?",
-        "parse(&hex[4..6])?",
+        "parse_hex_bytes(hex.as_bytes())",
+        'bytes.strip_prefix(b"#").unwrap_or(bytes)',
+        "let [r0, r1, g0, g1, b0, b1] = bytes else",
+        "digit(*r0)? * 16 + digit(*r1)?",
+        "digit(*g0)? * 16 + digit(*g1)?",
+        "digit(*b0)? * 16 + digit(*b1)?",
     )
     for fragment in required:
         assert fragment in compact, f"encoded sRGB8 parser semantic drift: {fragment}"

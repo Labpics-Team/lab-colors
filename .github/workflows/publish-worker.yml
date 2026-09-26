@@ -141,7 +141,7 @@ jobs:
               },
               requiredJobs: [
                 "Node 22 consumer floor",
-                "formal authority (Kani)",
+                "formal core (Kani)",
                 "MSRV workspace check",
                 "clippy + rustfmt",
                 "cargo doc (intra-doc links)",
