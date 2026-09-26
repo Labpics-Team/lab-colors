@@ -182,3 +182,15 @@ MUTANTS += (
      "        Self((self.value() * rhs.value()).to_bits())",
      "        Self((self.value() + rhs.value()).to_bits())"),
 )
+
+CONTRACTS["composition::proofs::source_over_is_bounded_before_quantization"] = (
+    {"every source-over value must be finite and in byte range before quantization"},
+    {"intermediate darkening", "intermediate lightening"},
+)
+MUTANTS += (
+    ("source-over-before-clamping", "composition.rs",
+     "composition::proofs::source_over_is_bounded_before_quantization",
+     "every source-over value must be finite and in byte range before quantization",
+     "    f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))",
+     "    f64::from(backdrop) + alpha * (f64::from(tint) + f64::from(backdrop))"),
+)

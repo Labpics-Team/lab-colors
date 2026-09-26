@@ -868,7 +868,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "742929a7d08a077270c356f874f4d0c0c1e20b0dfdcb04e0ff81e714a37d48f8",
+ "record_sha256": "45644db87192b2f8ecb1a8563e6a7c6d22a2174ed021dd7cfb15f72334cd79e7",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1659,6 +1659,8 @@
    "parallel_ssot_and_public_claim_are_deterministic: test",
    "parallel_ssot_floor_count: test",
    "platform_fixtures_are_bit_identical_after_w5: test",
+   "point_representation::frontier_tests::crossed_rgb_frontiers_require_all_three_channels: test",
+   "point_representation::frontier_tests::exhaustive_channel_frontiers_keep_exact_solutions_and_reject_predecessors: test",
    "point_representation::tests::a_range_ending_before_the_exact_frontier_is_a_typed_conflict: test",
    "point_representation::tests::canonical_tint_matches_independent_exhaustive_byte_oracle: test",
    "point_representation::tests::corrupted_candidate_cannot_create_verified_output: test",
@@ -2372,7 +2374,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1500,
+  "enabled_count": 1502,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

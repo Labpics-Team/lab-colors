@@ -164,3 +164,26 @@ fn multiply_preserves_the_entire_admitted_domain() {
         "opaque product"
     );
 }
+
+#[kani::proof]
+fn source_over_is_bounded_before_quantization() {
+    let source: u8 = kani::any();
+    let backdrop: u8 = kani::any();
+    let bits: u64 = kani::any();
+    if bits > AdmittedOpacityV1::OPAQUE.bits() {
+        return;
+    }
+    let value = source_over_channel_value(source, f64::from_bits(bits), backdrop);
+    assert!(
+        value.to_bits() <= 255.0_f64.to_bits(),
+        "every source-over value must be finite and in byte range before quantization"
+    );
+    kani::cover!(
+        source < backdrop && bits > 0 && bits < AdmittedOpacityV1::OPAQUE.bits(),
+        "intermediate darkening"
+    );
+    kani::cover!(
+        source > backdrop && bits > 0 && bits < AdmittedOpacityV1::OPAQUE.bits(),
+        "intermediate lightening"
+    );
+}
