@@ -141,7 +141,10 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     (output / "receipt.json").unlink(missing_ok=True)
     lock = ROOT / "Cargo.lock"
-    source_files = [SOURCE, PROOFS, lock, ROOT / "crates/labcolors-core/Cargo.toml", Path(__file__)]
+    source_files = [SOURCE, PROOFS, lock, ROOT / "Cargo.toml",
+                    ROOT / "crates/labcolors-core/Cargo.toml",
+                    ROOT / "crates/labcolors-core/build.rs",
+                    ROOT / "crates/labcolors-core/src/program_wire.rs", Path(__file__)]
     identities = {str(p.relative_to(ROOT)): digest(p) for p in source_files}
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True)
