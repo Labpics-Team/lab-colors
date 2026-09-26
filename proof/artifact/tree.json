@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 495,
+ "file_count": 497,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -136,8 +136,10 @@
   "crates/labcolors-core/src/family_artifact_tests/first_family_image_v1.rs": "44c499ce207feb714f27a48b3a7814e9ffb2b6f8",
   "crates/labcolors-core/src/family_definition_binding.rs": "bcc46c745917323c2640fb78a34f1fbc7672b077",
   "crates/labcolors-core/src/family_definition_binding_tests.rs": "1e334a082bca33282e538a6a5fbaa2e763d3da46",
-  "crates/labcolors-core/src/field_effect.rs": "22a2e97c3134b568bd33498b23e67cfb4fb4376c",
-  "crates/labcolors-core/src/field_effect_tests.rs": "ad9654355036cd361bae0894b919eace164a54cd",
+  "crates/labcolors-core/src/field_effect.rs": "4615a2ebf3cc043a74d89a6be19c3d7967affa32",
+  "crates/labcolors-core/src/field_effect/proofs.rs": "21a08cb417b56edd58e56998afc7a13466408941",
+  "crates/labcolors-core/src/field_effect/raster_tests.rs": "925cab0ad012c8d40a5edbdf0b8607d90eb1136b",
+  "crates/labcolors-core/src/field_effect_tests.rs": "e2ebb8a7e9aae43b0fd0f20464f3b2207789a7b0",
   "crates/labcolors-core/src/field_presentation.rs": "9f708f7ca37f8117b7cda02face14a26d50b6c21",
   "crates/labcolors-core/src/generic_boundary_tests.rs": "82aec426ccffae022acda9a1cf6ba6eb4ffc1fa2",
   "crates/labcolors-core/src/glow.rs": "4852ec101dd974f268519524b947d8e7484087a5",
@@ -443,7 +445,7 @@
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
   "scripts/artifact_matrix.py": "997bc09191898947c961b73fb706c9423711843d",
   "scripts/atomic-write.mjs": "9be42c1a81abf3220c0bd181e9d7b33507b8428d",
-  "scripts/authority_mutation_gate.py": "d3db41db72005856051d3cf4db5c5b3b2c0e0847",
+  "scripts/authority_mutation_gate.py": "eb992230905d1146691f793287c1e98cfcfbf384",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
@@ -459,7 +461,7 @@
   "scripts/extract_public_api.py": "95102381093636044d139f6515c071df0f9d2ebe",
   "scripts/extract_resources.py": "df80efd34421847ec93c354e7ad8aec1835ba238",
   "scripts/extract_source_files.py": "b53d7a1b29a8c8fe1bc25fbd714526ea3d1b2277",
-  "scripts/formal_contracts.py": "1f5d36f141727fbceab037ad6ba9c9a9e19bd69a",
+  "scripts/formal_contracts.py": "30ccc4eb9c30a0eeae78c9c3a9804c8a7f6c5b2a",
   "scripts/generate_wcag22_q55.py": "c9290543f32dda8b30bb1158178858da23ae1e8d",
   "scripts/golden_ref.py": "a83290aa760befda468bfa5ae60b7da86319ae2d",
   "scripts/inspect-npm-tarball.py": "a0dbcbffa1c77bcdf8e3b87f63f8bb69716606f2",
@@ -498,7 +500,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "7174502654409b1d5fd96966ccfef140a43a9fde"
  },
- "record_sha256": "5f55888f993528906684058146402a4d6386159dfd20fde508e6e2a0480b3417",
+ "record_sha256": "f355508ec73232bfcb1e311b522a6de20b8064c4bb45e394606071e3b99779cc",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

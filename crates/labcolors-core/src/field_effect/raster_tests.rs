@@ -23,22 +23,31 @@ fn blur_request<'a>(
     )
 }
 
+fn pascal_row(radius: u8) -> Vec<u128> {
+    // Сложение соседей, не мультипликативная рекурсия production-validator.
+    let mut row = vec![1_u128];
+    for _ in 0..2 * radius {
+        let mut next = vec![1; row.len() + 1];
+        for index in 1..row.len() {
+            next[index] = row[index - 1] + row[index];
+        }
+        row = next;
+    }
+    row
+}
+
 fn direct_binomial_2d(
     geometry: FieldExtentV1,
     radius: u8,
     pixels: &[PremultipliedRgba8V1],
 ) -> Vec<PremultipliedRgba8V1> {
-    // Квадрат биномиального распределения порядка 2r. Никакого промежуточного округления.
-    let order = usize::from(radius) * 2;
-    let mut row = vec![1_u64];
-    for index in 0..order {
-        row.push(row[index] * (order - index) as u64 / (index + 1) as u64);
-    }
-    let denominator = 1_u64 << (4 * radius);
+    // Прямое двумерное ядро, без промежуточного округления.
+    let row = pascal_row(radius);
+    let denominator = 1_u128 << (4 * radius);
     let mut output = Vec::new();
     for y in 0..geometry.height() {
         for x in 0..geometry.width() {
-            let mut numerator = [0_u64; 4];
+            let mut numerator = [0_u128; 4];
             for (ky, wy) in row.iter().enumerate() {
                 for (kx, wx) in row.iter().enumerate() {
                     let sx = (i64::from(x) + kx as i64 - i64::from(radius))
@@ -49,7 +58,7 @@ fn direct_binomial_2d(
                         as usize;
                     let sample = pixels[sy * geometry.width() as usize + sx].channels();
                     for channel in 0..4 {
-                        numerator[channel] += u64::from(sample[channel]) * wx * wy;
+                        numerator[channel] += u128::from(sample[channel]) * wx * wy;
                     }
                 }
             }
@@ -299,4 +308,72 @@ fn pointwise_consumers_preserve_operator_laws_and_track_both_inputs() {
             }
         }
     }
+}
+
+#[test]
+fn every_supported_binomial_radius_matches_the_direct_oracle() {
+    let mut profiles = 0;
+    for ratio in 1..=4_u8 {
+        for css_radius in 1..=16 / u32::from(ratio) {
+            let radius = (css_radius * u32::from(ratio)) as u8;
+            let weights = pascal_row(radius)
+                .into_iter()
+                .map(|coefficient| u32::try_from(coefficient << (32 - 2 * radius)).unwrap())
+                .collect();
+            let kernel = GaussianKernelV1::try_new(
+                GaussianKernelProfileV1::BinomialGaussianQ32V1,
+                css_radius,
+                dpr(ratio),
+                weights,
+            )
+            .unwrap();
+            for (width, height) in [(1, 1), (3, 2), (2, 5)] {
+                let geometry = extent(width, height);
+                let before: Vec<_> = (0..width * height)
+                    .map(|index| {
+                        let alpha = ((index * 61 + 97) % 256) as u8;
+                        pixel(alpha / 3, alpha / 2, alpha, alpha)
+                    })
+                    .collect();
+                let mut after = before.clone();
+                after[0] = pixel(255, 128, 64, 255);
+                let make = |pixels, revision| {
+                    request(
+                        751,
+                        geometry,
+                        dpr(ratio),
+                        reference_capability(FieldOutputCapabilityV1::PremultipliedRgba8V1),
+                        revision,
+                        CarrierIntentV1::Contributes,
+                        FieldOperationV1::GaussianBlur {
+                            source: premultiplied_raster(752, geometry, pixels),
+                            kernel: kernel.clone(),
+                            edge_mode: GaussianEdgeModeV1::ClampToEdgeV1,
+                        },
+                    )
+                };
+                let old = make(&before, 1);
+                let next = make(&after, 2);
+                let mut scratch = FieldEvaluationScratchV1::new();
+                assert_eq!(
+                    evaluate_reference_full(&old, &mut scratch).unwrap(),
+                    direct_binomial_2d(geometry, radius, &before)
+                );
+                evaluate_reference_incremental(
+                    &old,
+                    &next,
+                    rect(geometry, 0, 0, 1, 1),
+                    &mut scratch,
+                )
+                .unwrap();
+                assert_eq!(
+                    scratch.output(),
+                    direct_binomial_2d(geometry, radius, &after),
+                    "CSS radius={css_radius}, DPR={ratio}, extent={width}x{height}"
+                );
+            }
+            profiles += 1;
+        }
+    }
+    assert_eq!(profiles, 33);
 }
