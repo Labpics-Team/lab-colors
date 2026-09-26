@@ -194,3 +194,60 @@ MUTANTS += (
      "    f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))",
      "    f64::from(backdrop) + alpha * (f64::from(tint) + f64::from(backdrop))"),
 )
+
+
+CONTRACTS.update({
+    "field_effect::proofs::premultiplied_admission_and_lighter_are_exact": (
+        {"premultiplied admission must reject exactly channels above alpha",
+         "lighter must clamp the exact sum of every channel including alpha",
+         "lighter channels must remain below their own alpha"},
+        {"transparent lighter source", "lighter saturation", "invalid premultiplied pixel"},
+    ),
+    "field_effect::proofs::premultiplied_source_over_has_unique_nearest_integer_output": (
+        {"premultiplied source-over must return the unique nearest rational value",
+         "source-over channels must remain below their own alpha"},
+        {"transparent premultiplied source", "opaque premultiplied source", "two translucent pixels"},
+    ),
+    "field_effect::proofs::rectangles_admit_exactly_nonempty_in_bounds_geometry": (
+        {"field rectangle must admit exactly its nonempty bounded geometry",
+         "rectangle admission must preserve all declared coordinates"},
+        {"rectangle touches right edge", "empty rectangle rejected",
+         "rectangle addition overflow rejected", "outside rectangle rejected"},
+    ),
+    "field_effect::proofs::expanded_rectangles_preserve_exact_clipped_influence": (
+        {"field expansion must reject a foreign extent", "clipping must not hide overflowing declared geometry",
+         "field expansion must contain exactly the clipped radius on every edge"},
+        {"zero radius is identity", "both horizontal edges clipped",
+         "expansion overflow rejected", "foreign expansion extent rejected"},
+    ),
+    "field_effect::proofs::gaussian_sampling_clamps_without_coordinate_wrap": (
+        {"gaussian sample must reject unrepresentable index or coordinate",
+         "gaussian sample must equal exact clamped coordinate"},
+        {"gaussian left edge clamp", "gaussian right edge clamp", "gaussian interior sample", "gaussian index overflow"},
+    ),
+})
+MUTANTS += (
+    ("field-lighter-low-cap", "field_effect.rs",
+     "field_effect::proofs::premultiplied_admission_and_lighter_are_exact",
+     "lighter must clamp the exact sum of every channel including alpha",
+     "            .min(u16::from(u8::MAX)) as u8;", "            .min(u16::from(u8::MAX) - 1) as u8;"),
+    ("field-source-over-biased-rounding", "field_effect.rs",
+     "field_effect::proofs::premultiplied_source_over_has_unique_nearest_integer_output",
+     "premultiplied source-over must return the unique nearest rational value",
+     "        let attenuated = (u16::from(destination[channel]) * inverse_alpha + 127) / 255;",
+     "        let attenuated = (u16::from(destination[channel]) * inverse_alpha + 126) / 255;"),
+    ("field-empty-rectangle", "field_effect.rs",
+     "field_effect::proofs::rectangles_admit_exactly_nonempty_in_bounds_geometry",
+     "field rectangle must admit exactly its nonempty bounded geometry",
+     "        if width == 0 || height == 0 {\n            return Err(FieldEvaluationErrorV1::EmptyRect);\n        }",
+     "        if false {\n            return Err(FieldEvaluationErrorV1::EmptyRect);\n        }"),
+    ("field-truncated-influence", "field_effect.rs",
+     "field_effect::proofs::expanded_rectangles_preserve_exact_clipped_influence",
+     "field expansion must contain exactly the clipped radius on every edge",
+     "        let left = self.x.saturating_sub(radius);", "        let left = self.x;"),
+    ("field-sample-outside-edge", "field_effect.rs",
+     "field_effect::proofs::gaussian_sampling_clamps_without_coordinate_wrap",
+     "gaussian sample must equal exact clamped coordinate",
+     "                Ok(limit - 1)", "                Ok(limit)"),
+)
+SOURCES += ("field_effect.rs",)

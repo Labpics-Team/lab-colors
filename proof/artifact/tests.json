@@ -868,7 +868,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "45644db87192b2f8ecb1a8563e6a7c6d22a2174ed021dd7cfb15f72334cd79e7",
+ "record_sha256": "54ffee092b7bafc400be68d7dd5b9e4ca2fb0e8627d2beb9016e95592ff326f1",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1362,6 +1362,10 @@
    "field_effect_tests::operators_have_separate_identities_and_reference_results: test",
    "field_effect_tests::output_footprint_is_exact_for_finite_kernel_and_pointwise_operators: test",
    "field_effect_tests::prospective_observation_rejects_revision_capability_request_and_raster_drift: test",
+   "field_effect_tests::raster_tests::every_small_dirty_rectangle_matches_independent_full_convolution: test",
+   "field_effect_tests::raster_tests::every_supported_binomial_radius_matches_the_direct_oracle: test",
+   "field_effect_tests::raster_tests::pointwise_consumers_preserve_operator_laws_and_track_both_inputs: test",
+   "field_effect_tests::raster_tests::rejected_dirty_scope_preserves_output_and_allows_correct_retry: test",
    "field_effect_tests::renderer_capability_unknown_and_unsupported_are_typed_failures: test",
    "field_effect_tests::request_and_replay_bind_the_session_stream_as_well_as_revision: test",
    "field_effect_tests::scratch_storage_is_caller_owned_and_reused_without_capacity_growth: test",
@@ -2374,7 +2378,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1502,
+  "enabled_count": 1506,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
