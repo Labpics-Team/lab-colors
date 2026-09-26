@@ -745,21 +745,11 @@ impl AdmissionStateV1 {
             return Err(CertificateErrorV1::BindingConflict);
         }
 
-        if self.records.len() >= MAX_ADMISSION_ENTRIES_V1 {
-            return Err(CertificateErrorV1::AdmissionCapacityExceeded);
-        }
-        let entry_bytes = envelope
-            .canonical_bytes()
-            .len()
-            .checked_add(ADMISSION_METADATA_BYTES_V1)
-            .ok_or(CertificateErrorV1::AdmissionCapacityExceeded)?;
-        let next_bytes = self
-            .accounted_bytes
-            .checked_add(entry_bytes)
-            .ok_or(CertificateErrorV1::AdmissionCapacityExceeded)?;
-        if next_bytes > MAX_ADMISSION_BYTES_V1 {
-            return Err(CertificateErrorV1::AdmissionCapacityExceeded);
-        }
+        let next_bytes = admission_budget(
+            self.records.len(),
+            self.accounted_bytes,
+            envelope.canonical_bytes().len(),
+        )?;
 
         let prepared_canonical_bytes = try_clone_bytes(
             envelope.canonical_bytes(),
@@ -1482,3 +1472,28 @@ mod tests {
 
 #[cfg(kani)]
 mod proofs;
+
+/// Полный бюджет проверяется до копирования и вставки. Дубликаты уже разобраны
+/// вызывающим ledger, поэтому заполненное хранилище не запрещает точный replay.
+fn admission_budget(
+    records: usize,
+    accounted: usize,
+    canonical_bytes: usize,
+) -> Result<usize, CertificateErrorV1> {
+    if records >= MAX_ADMISSION_ENTRIES_V1 {
+        return Err(CertificateErrorV1::AdmissionCapacityExceeded);
+    }
+    let entry_bytes = canonical_bytes
+        .checked_add(ADMISSION_METADATA_BYTES_V1)
+        .ok_or(CertificateErrorV1::AdmissionCapacityExceeded)?;
+    let next_bytes = accounted
+        .checked_add(entry_bytes)
+        .ok_or(CertificateErrorV1::AdmissionCapacityExceeded)?;
+    if next_bytes > MAX_ADMISSION_BYTES_V1 {
+        return Err(CertificateErrorV1::AdmissionCapacityExceeded);
+    }
+    Ok(next_bytes)
+}
+
+#[cfg(test)]
+mod lifecycle_tests;

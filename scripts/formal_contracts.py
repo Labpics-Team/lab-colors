@@ -124,3 +124,48 @@ MUTANTS = (
 )
 
 SOURCES = ("authority.rs", "srgb8.rs", "composition.rs", "certificate.rs", "program/wire.rs", "wcag22/kernel.rs", "joint.rs")
+
+
+CONTRACTS.update({
+    "composition::proofs::identical_channels_are_fixed_for_every_opacity": (
+        {"equal source and backdrop must be a fixed point for every valid opacity"},
+        {"subnormal fixed point", "nonendpoint fixed point"},
+    ),
+    "observation::proofs::revision_order_is_total_without_wraparound": (
+        {"all observation paths must preserve revision order without wraparound"},
+        {"first zero revision", "new revision", "replay revision", "wrapped revision rejected"},
+    ),
+    "certificate::proofs::ledger_budget_cannot_overflow_or_exceed_capacity": (
+        {"ledger budget must reject all count size and overflow violations", "ledger accounting must equal the exact retained byte cost"},
+        {"exact byte capacity admitted", "entry capacity rejected", "machine word overflow rejected", "first ledger entry admitted"},
+    ),
+    "session::proofs::current_evidence_never_promotes_historical_state": (
+        {"render authority must never promote historical evidence to current", "last good evidence must remain distinct from current authority"},
+        {"ready evidence authorizes", "historical evidence does not authorize", "no evidence remains absent"},
+    ),
+    "session::proofs::state_displacement_conserves_every_owned_payload": (
+        {"displacement must empty the old state before publication", "displacement must retain exactly the old good and violation payloads"},
+        {"failed state keeps two owned payloads", "first violation has no invented predecessor", "empty state has nothing to retire"},
+    ),
+    "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap": (
+        {"sink mutation must refuse exhausted sequence instead of wrapping", "sink CAS must preserve the entire expected token", "sink successor must advance exactly once within the same epoch"},
+        {"sink sequence exhaustion", "last valid sink mutation", "full width binding epoch preserved"},
+    ),
+})
+
+MUTANTS += (
+    ("observation-stale-admission", "observation.rs", "observation::proofs::revision_order_is_total_without_wraparound",
+     "all observation paths must preserve revision order without wraparound",
+     "        Some(current) if incoming < current =>", "        Some(current) if false =>"),
+    ("ledger-entry-boundary", "certificate.rs", "certificate::proofs::ledger_budget_cannot_overflow_or_exceed_capacity",
+     "ledger budget must reject all count size and overflow violations",
+     "    if records >= MAX_ADMISSION_ENTRIES_V1 {", "    if records > MAX_ADMISSION_ENTRIES_V1 {"),
+    ("historical-evidence-promotion", "session.rs", "session::proofs::current_evidence_never_promotes_historical_state",
+     "render authority must never promote historical evidence to current",
+     "            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } => None,",
+     "            Self::Stale { previous } => Some(previous),\n            Self::Waiting | Self::Failed { .. } => None,"),
+    ("sink-stamp-no-advance", "program/attachment.rs", "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap",
+     "sink successor must advance exactly once within the same epoch",
+     "        match self.sequence.checked_add(1) {", "        match self.sequence.checked_add(0) {"),
+)
+SOURCES += ("session.rs", "observation.rs", "program/attachment.rs")

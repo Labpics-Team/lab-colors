@@ -177,12 +177,35 @@ def validate_anchor(name: str, original: str, before: str, after: str) -> None:
         raise SystemExit(f"{name}: mutation replacement is identical to its anchor")
 
 
+# Связка формально проверенного решения с настоящим lifecycle. Подмена
+# самого caller не должна обходить доказанный helper и оставаться незамеченной.
+LIFECYCLE_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked", "lifecycle_"]
+LIFECYCLE_MUTANTS = {
+    "session-stale-evidence-admission": (
+        ROOT / "crates/labcolors-core/src/session.rs", LIFECYCLE_COMMAND,
+        "            if !decision.observation().is_same_binding_as(&raw_observation) {",
+        "            if false {",
+    ),
+    "observation-order-helper-bypass": (
+        ROOT / "crates/labcolors-core/src/observation.rs", LIFECYCLE_COMMAND,
+        "    let replay = revision_is_replay(current_revision, revision)?;",
+        "    let replay = current_revision == Some(revision);",
+    ),
+    "ledger-budget-helper-bypass": (
+        ROOT / "crates/labcolors-core/src/certificate.rs", LIFECYCLE_COMMAND,
+        "            self.records.len(),\n            self.accounted_bytes,",
+        "            0,\n            0,",
+    ),
+}
+
+
 def main() -> None:
     """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
-        for source, _command, _before, _after in TQ_MUTANTS.values()
+        for source, _command, _before, _after in bounded_mutants.values()
     }
 
     # Сверяем всю матрицу до первого cargo subprocess: поздний stale anchor
@@ -190,7 +213,7 @@ def main() -> None:
     # всё равно повторно сверяет anchor непосредственно перед подменой.
     for name, (before, after) in AUTH_MUTANTS.items():
         validate_anchor(name, auth_original, before, after)
-    for name, (source, _command, before, after) in TQ_MUTANTS.items():
+    for name, (source, _command, before, after) in bounded_mutants.items():
         validate_anchor(name, tq_originals[source], before, after)
 
     for name, (before, after) in AUTH_MUTANTS.items():
@@ -198,12 +221,12 @@ def main() -> None:
     if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
         raise SystemExit("authority source was not restored")
 
-    for name, (source, command, before, after) in TQ_MUTANTS.items():
+    for name, (source, command, before, after) in bounded_mutants.items():
         run_mutant(name, source, command, before, after, tq_originals[source])
     for source, original in tq_originals.items():
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
-    total = len(AUTH_MUTANTS) + len(TQ_MUTANTS)
+    total = len(AUTH_MUTANTS) + len(bounded_mutants)
     print(f"AUTH/TQ mutation gate caught {total} semantic mutants")
 
 

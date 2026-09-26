@@ -106,3 +106,37 @@ fn wire_resource_length_is_exact() {
         "overbudget length"
     );
 }
+
+#[kani::proof]
+fn ledger_budget_cannot_overflow_or_exceed_capacity() {
+    let records: usize = kani::any();
+    let accounted: usize = kani::any();
+    let bytes: usize = kani::any();
+    let exact = accounted as u128 + bytes as u128 + ADMISSION_METADATA_BYTES_V1 as u128;
+    let allowed = records < MAX_ADMISSION_ENTRIES_V1 && exact <= MAX_ADMISSION_BYTES_V1 as u128;
+    let result = admission_budget(records, accounted, bytes);
+    assert!(
+        result.is_ok() == allowed,
+        "ledger budget must reject all count size and overflow violations"
+    );
+    match result {
+        Ok(value) => assert!(
+            value as u128 == exact,
+            "ledger accounting must equal the exact retained byte cost"
+        ),
+        Err(error) => assert!(error == CertificateErrorV1::AdmissionCapacityExceeded),
+    }
+    kani::cover!(
+        allowed && exact == MAX_ADMISSION_BYTES_V1 as u128,
+        "exact byte capacity admitted"
+    );
+    kani::cover!(
+        records == MAX_ADMISSION_ENTRIES_V1,
+        "entry capacity rejected"
+    );
+    kani::cover!(exact > usize::MAX as u128, "machine word overflow rejected");
+    kani::cover!(
+        records == 0 && accounted == 0 && bytes == 1,
+        "first ledger entry admitted"
+    );
+}

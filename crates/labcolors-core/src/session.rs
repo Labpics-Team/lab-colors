@@ -132,6 +132,14 @@ pub(crate) enum SessionState<Verified, Violation> {
 }
 
 impl<Verified, Violation> SessionState<Verified, Violation> {
+    /// Только действующее evidence: last_verified может быть историческим.
+    pub(crate) fn current_verified(&self) -> Option<&Verified> {
+        match self {
+            Self::Ready { current } => Some(current),
+            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } => None,
+        }
+    }
+
     pub(crate) fn last_verified(&self) -> Option<&Verified> {
         match self {
             Self::Waiting => None,
@@ -702,3 +710,9 @@ fn displace_session_state<Verified, Violation>(
         },
     }
 }
+
+#[cfg(kani)]
+mod proofs;
+
+#[cfg(test)]
+mod lifecycle_tests;

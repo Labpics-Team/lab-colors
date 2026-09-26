@@ -677,15 +677,8 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
     match update.payload {
         ObservationPayloadInput::Unknown(reason) => {
             let current_revision = owner.observation_head().revision();
-            if let Some(current) = current_revision {
-                if update.revision < current {
-                    return Err(ObservationError::RevisionOutOfOrder {
-                        current,
-                        incoming: update.revision,
-                    });
-                }
-            }
-            if current_revision == Some(update.revision) {
+            let replay = revision_is_replay(current_revision, update.revision)?;
+            if replay {
                 let exact = matches!(
                     owner.observation_head(),
                     ObservationHeadViewV1::Unknown(current) if current.reason == reason
@@ -712,23 +705,14 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
         ObservationPayloadInput::Scenarios(raw) => {
             let scenarios = canonicalize_scenarios_input(schema.as_slice(), raw)?;
             let current_revision = owner.observation_head().revision();
-            if let Some(current) = current_revision {
-                if update.revision < current {
-                    return Err(ObservationError::RevisionOutOfOrder {
-                        current,
-                        incoming: update.revision,
-                    });
-                }
-            }
-            if current_revision == Some(update.revision)
-                && !matches!(owner.observation_head(), ObservationHeadViewV1::Observed(_))
-            {
+            let replay = revision_is_replay(current_revision, update.revision)?;
+            if replay && !matches!(owner.observation_head(), ObservationHeadViewV1::Observed(_)) {
                 return Err(ObservationError::RevisionConflict {
                     revision: update.revision,
                 });
             }
 
-            if current_revision == Some(update.revision) {
+            if replay {
                 let exact = matches!(
                     owner.observation_head(), ObservationHeadViewV1::Observed(current)
                         if current.has_canonical_input(schema, &scenarios)
@@ -820,20 +804,11 @@ pub(crate) fn prepare_schema_ordered_observation<
     });
 
     let current_revision = owner.observation_head().revision();
-    if let Some(current) = current_revision {
-        if revision < current {
-            return Err(ObservationError::RevisionOutOfOrder {
-                current,
-                incoming: revision,
-            });
-        }
-    }
-    if current_revision == Some(revision)
-        && !matches!(owner.observation_head(), ObservationHeadViewV1::Observed(_))
-    {
+    let replay = revision_is_replay(current_revision, revision)?;
+    if replay && !matches!(owner.observation_head(), ObservationHeadViewV1::Observed(_)) {
         return Err(ObservationError::RevisionConflict { revision });
     }
-    if current_revision == Some(revision) {
+    if replay {
         let exact = matches!(
             owner.observation_head(),
             ObservationHeadViewV1::Observed(current)
@@ -1168,3 +1143,21 @@ fn try_reserve_total<T>(storage: &mut Vec<T>, required: usize) -> Result<(), Obs
     }
     Ok(())
 }
+
+/// Только порядок ревизии; `true` требует отдельного точного сравнения payload.
+/// Вызывается после проверки stream/schema/payload, сохраняя приоритет ошибок.
+fn revision_is_replay(
+    current: Option<Revision>,
+    incoming: Revision,
+) -> Result<bool, ObservationError> {
+    match current {
+        Some(current) if incoming < current => {
+            Err(ObservationError::RevisionOutOfOrder { current, incoming })
+        }
+        Some(current) => Ok(incoming == current),
+        None => Ok(false),
+    }
+}
+
+#[cfg(kani)]
+mod proofs;
