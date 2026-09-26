@@ -131,7 +131,7 @@ class FormalReportTests(unittest.TestCase):
                         "failed": 1, "status": "completed"},
             "results": [{"harness_id": MUTANT_HARNESS, "status": "Failure", "checks": [
                 {"category": "assertion", "status": "Failure", "description": MUTANT_ASSERTION},
-                {"category": "cover", "status": "Unsatisfiable", "description": "exact binding"},
+                {"category": "cover", "status": "Unsatisfiable", "description": sorted(CONTRACTS[MUTANT_HARNESS][1])[0]},
             ]}],
         }}
         validate_mutant(report, 1, MUTANT)
