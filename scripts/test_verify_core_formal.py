@@ -125,6 +125,20 @@ class FormalReportTests(unittest.TestCase):
                 self.assertEqual(run_kani(path), ({}, 1))
                 terminate.assert_called_once_with(4243, signal.SIGKILL)
 
+    def test_target_failure_may_make_its_later_cover_unreachable(self):
+        report = {"verification_results": {
+            "summary": {"total_harnesses": 1, "executed": 1, "successful": 0,
+                        "failed": 1, "status": "completed"},
+            "results": [{"harness_id": MUTANT_HARNESS, "status": "Failure", "checks": [
+                {"category": "assertion", "status": "Failure", "description": MUTANT_ASSERTION},
+                {"category": "cover", "status": "Unsatisfiable", "description": "exact binding"},
+            ]}],
+        }}
+        validate_mutant(report, 1, MUTANT)
+        report["verification_results"]["results"][0]["checks"][1]["description"] = "unknown witness"
+        with self.assertRaises(ValueError):
+            validate_mutant(report, 1, MUTANT)
+
     def test_mutant_requires_target_semantic_failure(self):
         report = {"verification_results": {
             "summary": {"total_harnesses": 1, "executed": 1, "successful": 0,

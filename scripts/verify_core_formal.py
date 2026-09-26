@@ -78,6 +78,11 @@ def validate_mutant(report: dict, returncode: int, mutant: tuple) -> None:
     for check in results[0]["checks"]:
         if check["status"] in ("Success", "Satisfied", "Unreachable"):
             continue
+        # Целевой assert может оборвать путь к cover. В положительном прогоне
+        # этот же witness обязан быть достижим; в мутанте это ожидаемое следствие.
+        if (check["category"] == "cover" and check["status"] == "Unsatisfiable"
+                and check["description"] in CONTRACTS[harness][1]):
+            continue
         if not (check["status"] == "Failure" and check["category"] == "assertion"
                 and check["description"] in allowed_assertions):
             raise ValueError("mutant failed outside its declared semantic properties")

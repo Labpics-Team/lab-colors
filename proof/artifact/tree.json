@@ -486,13 +486,13 @@
   "scripts/transport-distribution.mjs": "77ad862e3ea464cb0824e519b6583e3090b85f2a",
   "scripts/verify-package-release.mjs": "8d7b35361d952f894bd1be2fc76ff547c9c5d607",
   "scripts/verify_clean_set_receipt.py": "05fbd7254d592b8cb4d87bc53297ab4f47429e77",
-  "scripts/verify_core_formal.py": "252edc4f6562346bb49489b08c4a74e3c2faf063",
+  "scripts/verify_core_formal.py": "844b79ba2019618aff198875394d1ec6fd7f36a9",
   "scripts/verify_point_support_surplus.py": "1f14c52cdb5480f3c56c35c97864b6b83f0efdaa",
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "7174502654409b1d5fd96966ccfef140a43a9fde"
  },
- "record_sha256": "5186e7d2bb7794e1b540e0065ec99e65dcabec051ca9c56449a5ea0cfc1f0579",
+ "record_sha256": "ca55acfab193a2b16662f14d38f9e9916c7f3aa23cf9241725c7f034f1f370bb",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

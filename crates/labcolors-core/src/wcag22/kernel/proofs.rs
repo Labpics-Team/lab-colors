@@ -12,6 +12,9 @@ fn criterion() -> Wcag22CriterionV1 {
 }
 
 fn direct_ratio_pass(a: u64, b: u64, criterion: Wcag22CriterionV1) -> bool {
+    // На Q55 все промежуточные значения исходной дроби помещаются в u64;
+    // overflow всё равно проверяет Kani. Более широкий oracle не расширяет
+    // этот домен, но существенно усложняет битовую задачу решателя.
     let scale = super::super::q55_data::Q55_SCALE;
     let light = a.max(b);
     let dark = a.min(b);
