@@ -119,3 +119,20 @@ fn source_over_endpoints_preserve_channel_values() {
     kani::cover!(tint < backdrop, "darkening endpoints");
     kani::cover!(tint > backdrop, "lightening endpoints");
 }
+
+#[kani::proof]
+fn identical_channels_are_fixed_for_every_opacity() {
+    let channel: u8 = kani::any();
+    let bits: u64 = kani::any();
+    if let Ok(opacity) = AdmittedOpacityV1::new(f64::from_bits(bits)) {
+        assert!(
+            source_over_channel_srgb8(channel, opacity.value(), channel) == channel,
+            "equal source and backdrop must be a fixed point for every valid opacity"
+        );
+        kani::cover!(opacity.bits() == 1, "subnormal fixed point");
+        kani::cover!(
+            opacity.value() > 0.0 && opacity.value() < 1.0,
+            "nonendpoint fixed point"
+        );
+    }
+}

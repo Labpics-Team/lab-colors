@@ -868,7 +868,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "26999a74248265a328623cb227215e212996b786ffda620c1b11b654455fa6bc",
+ "record_sha256": "742929a7d08a077270c356f874f4d0c0c1e20b0dfdcb04e0ff81e714a37d48f8",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -995,6 +995,9 @@
    "certificate::contract_tests::reader_overflow_is_truncated_input_on_every_pointer_width: test",
    "certificate::contract_tests::structural_truncation_precedes_selector_text_and_digest_errors: test",
    "certificate::contract_tests::text_and_revision_precede_reserved_selectors: test",
+   "certificate::lifecycle_tests::lifecycle_duplicate_requires_every_attestation_byte: test",
+   "certificate::lifecycle_tests::lifecycle_full_ledger_preserves_replay_and_rejects_new_keys: test",
+   "certificate::lifecycle_tests::lifecycle_replay_conflict_and_capacity_use_the_real_ledger: test",
    "certificate::source::tests::issued_capability_requires_explicit_matching_expected_key_and_replays_once: test",
    "certificate::source::tests::source_certificate_matches_independent_exact_wire_vector: test",
    "certificate::source::tests::source_debug_and_errors_are_static_and_redacted: test",
@@ -2216,6 +2219,11 @@
    "semantic::tests::tint_preserves_the_contrast_target_and_floor: test",
    "semantic::wave2_e_locks::neutral_hue_emits_byte_invariant_across_measured_family_spread: test",
    "semantic::wave2_e_locks::stiffness_pins_hue_to_canonical_above_threshold: test",
+   "session::lifecycle_tests::lifecycle_cancellation_does_not_consume_the_arena_pool: test",
+   "session::lifecycle_tests::lifecycle_observed_order_cancel_and_failure_matrix: test",
+   "session::lifecycle_tests::lifecycle_rejects_saved_evidence_for_a_new_revision: test",
+   "session::lifecycle_tests::lifecycle_unknown_and_violation_never_reactivate_last_good: test",
+   "session::lifecycle_tests::lifecycle_unknown_order_abort_and_owner_matrix: test",
    "session_tests::abort_drops_pending_evidence_before_releasing_its_exact_owner_generation: test",
    "session_tests::construction_is_waiting_and_owns_no_raw_evidence: test",
    "session_tests::deferred_commit_returns_before_hostile_retirement_destructor_runs: test",
@@ -2364,7 +2372,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1492,
+  "enabled_count": 1500,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
