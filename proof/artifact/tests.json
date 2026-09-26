@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 257,
+   "count": 258,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -850,6 +850,7 @@
     "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
     "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
+    "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
     "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
     "test_wcag22_source_binding.SourceBindingTests.test_cargo_metadata_rejects_redirected_crate_root",
@@ -867,7 +868,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "dfb7e03f0a3f591f61946d41f26eeb26f82b50a7be3ad69de44f919abadeb266",
+ "record_sha256": "26999a74248265a328623cb227215e212996b786ffda620c1b11b654455fa6bc",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
