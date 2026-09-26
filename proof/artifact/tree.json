@@ -442,7 +442,7 @@
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
   "scripts/artifact_matrix.py": "997bc09191898947c961b73fb706c9423711843d",
   "scripts/atomic-write.mjs": "9be42c1a81abf3220c0bd181e9d7b33507b8428d",
-  "scripts/authority_mutation_gate.py": "c82a7f8bf198b45a2697b0d0d736a57bf55a4b6c",
+  "scripts/authority_mutation_gate.py": "6c922c7b17033c3cac9bb856f4a870b2d9b62e2c",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
@@ -497,7 +497,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "7174502654409b1d5fd96966ccfef140a43a9fde"
  },
- "record_sha256": "26017d54e7b290e43faa0e2ccf338e0e4687eb6f6b514b274cbde7d65b00704e",
+ "record_sha256": "fbabd8b5140eee9b0ceffc6cc9e8a9ce1e40bf6749e6e489f31a922b894d1799",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
