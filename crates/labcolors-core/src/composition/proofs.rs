@@ -136,3 +136,54 @@ fn identical_channels_are_fixed_for_every_opacity() {
         );
     }
 }
+
+// Начальное состояние точно соответствует каноническому admitted-domain:
+// new() и канонизация -0 уже доказаны отдельно; ни один допустимый бит не исключён.
+#[kani::proof]
+fn multiply_preserves_the_entire_admitted_domain() {
+    let left: u64 = kani::any();
+    let right: u64 = kani::any();
+    if left > AdmittedOpacityV1::OPAQUE.bits() || right > AdmittedOpacityV1::OPAQUE.bits() {
+        return;
+    }
+    let result = AdmittedOpacityV1(left).multiply(AdmittedOpacityV1(right));
+    assert!(
+        result.bits() <= AdmittedOpacityV1::OPAQUE.bits(),
+        "multiplying any admitted opacities must preserve the entire canonical unit domain"
+    );
+    kani::cover!(
+        left > 0 && right > 0 && result.bits() == 0,
+        "positive product underflow"
+    );
+    kani::cover!(
+        result.bits() > 0 && result.bits() < (1_u64 << 52),
+        "subnormal product"
+    );
+    kani::cover!(
+        left == AdmittedOpacityV1::OPAQUE.bits() && right == left,
+        "opaque product"
+    );
+}
+
+#[kani::proof]
+fn source_over_is_bounded_before_quantization() {
+    let source: u8 = kani::any();
+    let backdrop: u8 = kani::any();
+    let bits: u64 = kani::any();
+    if bits > AdmittedOpacityV1::OPAQUE.bits() {
+        return;
+    }
+    let value = source_over_channel_value(source, f64::from_bits(bits), backdrop);
+    assert!(
+        value.to_bits() <= 255.0_f64.to_bits(),
+        "every source-over value must be finite and in byte range before quantization"
+    );
+    kani::cover!(
+        source < backdrop && bits > 0 && bits < AdmittedOpacityV1::OPAQUE.bits(),
+        "intermediate darkening"
+    );
+    kani::cover!(
+        source > backdrop && bits > 0 && bits < AdmittedOpacityV1::OPAQUE.bits(),
+        "intermediate lightening"
+    );
+}

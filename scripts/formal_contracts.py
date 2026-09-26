@@ -169,3 +169,28 @@ MUTANTS += (
      "        match self.sequence.checked_add(1) {", "        match self.sequence.checked_add(0) {"),
 )
 SOURCES += ("session.rs", "observation.rs", "program/attachment.rs")
+
+
+CONTRACTS["composition::proofs::multiply_preserves_the_entire_admitted_domain"] = (
+    {"multiplying any admitted opacities must preserve the entire canonical unit domain"},
+    {"positive product underflow", "subnormal product", "opaque product"},
+)
+MUTANTS += (
+    ("opacity-multiply-as-addition", "composition.rs",
+     "composition::proofs::multiply_preserves_the_entire_admitted_domain",
+     "multiplying any admitted opacities must preserve the entire canonical unit domain",
+     "        Self((self.value() * rhs.value()).to_bits())",
+     "        Self((self.value() + rhs.value()).to_bits())"),
+)
+
+CONTRACTS["composition::proofs::source_over_is_bounded_before_quantization"] = (
+    {"every source-over value must be finite and in byte range before quantization"},
+    {"intermediate darkening", "intermediate lightening"},
+)
+MUTANTS += (
+    ("source-over-before-clamping", "composition.rs",
+     "composition::proofs::source_over_is_bounded_before_quantization",
+     "every source-over value must be finite and in byte range before quantization",
+     "    f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))",
+     "    f64::from(backdrop) + alpha * (f64::from(tint) + f64::from(backdrop))"),
+)

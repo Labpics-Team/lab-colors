@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 494,
+ "file_count": 495,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -106,7 +106,7 @@
   "crates/labcolors-core/src/compiled_dependency_plan.rs": "8cd4640b1c2921718f50255091d663280c221c51",
   "crates/labcolors-core/src/compiled_dependency_plan_tests.rs": "c2bc2d238710c76cb75df29d2684eb00a909c7f2",
   "crates/labcolors-core/src/composition.rs": "4c5caaa790336f52bad8da6382dbb8d9a99f48bd",
-  "crates/labcolors-core/src/composition/proofs.rs": "910775f411b90e1377919ea9e82421fc9087da28",
+  "crates/labcolors-core/src/composition/proofs.rs": "d67d0d6527d4ab2369eb7b64e4a4dd8f486e1ef1",
   "crates/labcolors-core/src/config.rs": "2425108e8aca7f96c9c982a57b2b5d5ad19154bf",
   "crates/labcolors-core/src/config/fixture.rs": "837438db6d507c582ad623e26bad676a7833833d",
   "crates/labcolors-core/src/config/preset.rs": "17f059a6a1075402f1cd3521143ac38eea95895d",
@@ -167,7 +167,8 @@
   "crates/labcolors-core/src/output_bindings.rs": "2efe11679a81698990b895bcdb32ecb7b44dacff",
   "crates/labcolors-core/src/output_projection.rs": "bc149ba73845f6c87f206690063c7095797b8af0",
   "crates/labcolors-core/src/output_projection_tests.rs": "0beeeb4d78b2a7387e9898af9431becbadc5339f",
-  "crates/labcolors-core/src/point_representation.rs": "1c7025b05c8201a4c52aa288337a2338d9a7a5c9",
+  "crates/labcolors-core/src/point_representation.rs": "c995001107fadfd1f6c173236ae4182cb563b350",
+  "crates/labcolors-core/src/point_representation/frontier_tests.rs": "f63790579336377b6e321310277c252a28caa976",
   "crates/labcolors-core/src/point_support.rs": "7e7f659b3ea42e6c7ff157888eafaa1e0c34acce",
   "crates/labcolors-core/src/point_support_tests.rs": "f8803ce311685fa7ee973e3d614aac11f83d3dfc",
   "crates/labcolors-core/src/private_fixture.rs": "658dd167862c33fb4c7f32351c942f03b933b1b9",
@@ -442,7 +443,7 @@
   "scripts/_restore_merge_tree_files.py": "e2b627f0c3e040369401889f28b27302e5257b20",
   "scripts/artifact_matrix.py": "997bc09191898947c961b73fb706c9423711843d",
   "scripts/atomic-write.mjs": "9be42c1a81abf3220c0bd181e9d7b33507b8428d",
-  "scripts/authority_mutation_gate.py": "3073f945e72c9030c316416bab8213e93a155120",
+  "scripts/authority_mutation_gate.py": "d3db41db72005856051d3cf4db5c5b3b2c0e0847",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-floor-baseline.ps1": "38017a74b1076fea9df5d62eae30fe5e357c1326",
@@ -458,7 +459,7 @@
   "scripts/extract_public_api.py": "95102381093636044d139f6515c071df0f9d2ebe",
   "scripts/extract_resources.py": "df80efd34421847ec93c354e7ad8aec1835ba238",
   "scripts/extract_source_files.py": "b53d7a1b29a8c8fe1bc25fbd714526ea3d1b2277",
-  "scripts/formal_contracts.py": "27d545ff5ba3fa79d4177683d3483f974d102698",
+  "scripts/formal_contracts.py": "1f5d36f141727fbceab037ad6ba9c9a9e19bd69a",
   "scripts/generate_wcag22_q55.py": "c9290543f32dda8b30bb1158178858da23ae1e8d",
   "scripts/golden_ref.py": "a83290aa760befda468bfa5ae60b7da86319ae2d",
   "scripts/inspect-npm-tarball.py": "a0dbcbffa1c77bcdf8e3b87f63f8bb69716606f2",
@@ -497,7 +498,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "7174502654409b1d5fd96966ccfef140a43a9fde"
  },
- "record_sha256": "628f79a5d6bcb75117819d6a57292123e4339a4e9b5123a178a394ea3e10b9cd",
+ "record_sha256": "5f55888f993528906684058146402a4d6386159dfd20fde508e6e2a0480b3417",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
