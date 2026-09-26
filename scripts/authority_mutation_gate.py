@@ -101,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, "test result: FAILED")
+    expected_marker = COMPILE_KILLED.get(name, LIFECYCLE_FAILURES.get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -196,6 +196,13 @@ LIFECYCLE_MUTANTS = {
         "            self.records.len(),\n            self.accounted_bytes,",
         "            0,\n            0,",
     ),
+}
+
+
+LIFECYCLE_FAILURES = {
+    "session-stale-evidence-admission": "test session::lifecycle_tests::lifecycle_rejects_saved_evidence_for_a_new_revision ... FAILED",
+    "observation-order-helper-bypass": "test session::lifecycle_tests::lifecycle_observed_order_cancel_and_failure_matrix ... FAILED",
+    "ledger-budget-helper-bypass": "test certificate::lifecycle_tests::lifecycle_replay_conflict_and_capacity_use_the_real_ledger ... FAILED",
 }
 
 
