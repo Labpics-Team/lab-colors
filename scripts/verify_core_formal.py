@@ -163,7 +163,7 @@ def main() -> None:
     clean = not status and not final_status
     receipt = {
         "scope": "Core Linux x86_64; per-harness domains documented in docs/how-to/formal-core.md",
-        "schema": 1, "kani_version": KANI_VERSION,
+        "schema": 2, "kani_version": KANI_VERSION,
         "source_commit": commit if clean else None,
         "checkout_commit": commit,
         "working_tree_clean": clean,

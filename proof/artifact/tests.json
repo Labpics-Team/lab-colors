@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 255,
+   "count": 257,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -811,14 +811,6 @@
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_page_inside_forbidden_module_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_type_alias_route_to_program_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_similar_module_name_is_not_rejected",
-    "test_verify_authority_formal.FormalReportTests.test_complete_result_passes",
-    "test_verify_authority_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
-    "test_verify_authority_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
-    "test_verify_authority_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
-    "test_verify_authority_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
-    "test_verify_authority_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
-    "test_verify_authority_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
-    "test_verify_authority_formal.FormalReportTests.test_unreachable_cover_is_not_success",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_array_table_cannot_supply_the_package_license",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_coherently_substituted_packaged_receipt_and_pin_are_rejected",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_commented_table_headers_cannot_supply_the_package_license",
@@ -850,6 +842,16 @@
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_unknown_receipt_field_is_rejected",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_valid_receipt_binds_committed_research_and_product_codec",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_wrong_research_commit_is_rejected_before_blob_lookup",
+    "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
+    "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
+    "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
+    "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
+    "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
+    "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
     "test_wcag22_source_binding.SourceBindingTests.test_cargo_metadata_rejects_redirected_crate_root",
     "test_wcag22_source_binding.SourceBindingTests.test_committed_proof_binds_the_exact_live_capsules",
     "test_wcag22_source_binding.SourceBindingTests.test_every_bound_route_mutation_is_rejected_fail_closed",
@@ -865,7 +867,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "93c320e672c2b286094b5f7c77f774d31378cfc5c2b177618331bf516e1bdb73",
+ "record_sha256": "dfb7e03f0a3f591f61946d41f26eeb26f82b50a7be3ad69de44f919abadeb266",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1444,6 +1446,8 @@
    "hash::tests::published_reference_vectors: test",
    "jnd_band_resolves_within_budget_with_tolerant_acceptance: test",
    "join_key_pairs_are_unique_and_resolve: test",
+   "joint::tests::all_two_by_two_sequences_preserve_complete_authored_policy: test",
+   "joint::tests::every_small_shape_failure_is_typed_before_runtime: test",
    "ladder::tests::achromatic_classification_covers_every_context_and_emitted_rounding: test",
    "ladder::tests::ladder_tint_for_vc_mirrors_anchor_selection: test",
    "ladder::tests::position_alpha_pairs_match_grounded_stub: test",
@@ -2317,6 +2321,8 @@
    "spaces::vc::tests::srgb_c_is_069: test",
    "srgb8::tests::achromatic_identity_is_exact_channel_equality: test",
    "srgb8::tests::encoded_is_bit_exact_byte_over_255_for_every_channel: test",
+   "srgb8::tests::every_ascii_substitution_obeys_hex_grammar: test",
+   "srgb8::tests::non_hex_signs_are_rejected_through_public_consumers: test",
    "srgb8::tests::public_srgb_parser_rejects_a_repeated_hash_prefix: test",
    "srgb8::tests::typed_public_value_round_trips_exact_bytes: test",
    "srgb8::tests::wcag22_transport_parser_preserves_rgb_and_rejects_unicode_without_panic: test",
@@ -2357,7 +2363,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1488,
+  "enabled_count": 1492,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
