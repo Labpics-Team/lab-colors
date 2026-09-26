@@ -39,22 +39,37 @@ pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1"""
 PARSER_BEGIN = b"// BEGIN WCAG22_PARSER_CAPSULE_V1"
 PARSER_END = b"// END WCAG22_PARSER_CAPSULE_V1"
-PARSER_REGION = b"""// BEGIN WCAG22_PARSER_CAPSULE_V1
+PARSER_REGION = """// BEGIN WCAG22_PARSER_CAPSULE_V1
 const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag22_q55.py.
 /// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
-/// ASCII is checked before byte slicing, so arbitrary public Unicode input
-/// returns `Err` instead of panicking at a non-character boundary.
+/// The byte grammar accepts only ASCII hexadecimal digits. Arbitrary Unicode
+/// input returns `Err` without slicing a string at non-character boundaries.
 pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
-    let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 || !hex.is_ascii() {
-        return Err(format!("expected #RRGGBB, got #{hex}"));
-    }
-    let parse = |value: &str| u8::from_str_radix(value, 16).map_err(|error| error.to_string());
-    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+    parse_hex_bytes(hex.as_bytes()).ok_or_else(|| format!("expected #RRGGBB, got {hex}"))
 }
-// END WCAG22_PARSER_CAPSULE_V1"""
+
+// Числовой from_str_radix принимает знак '+': его грамматика шире hex-цвета.
+// Вся грамматика цвета принадлежит этому безаллокирующему байтовому parser.
+fn parse_hex_bytes(bytes: &[u8]) -> Option<[u8; 3]> {
+    let bytes = bytes.strip_prefix(b"#").unwrap_or(bytes);
+    let [r0, r1, g0, g1, b0, b1] = bytes else {
+        return None;
+    };
+    let digit = |value: u8| match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    };
+    Some([
+        digit(*r0)? * 16 + digit(*r1)?,
+        digit(*g0)? * 16 + digit(*g1)?,
+        digit(*b0)? * 16 + digit(*b1)?,
+    ])
+}
+// END WCAG22_PARSER_CAPSULE_V1""".encode("utf-8")
 
 
 def length_prefixed(value: bytes) -> bytes:
@@ -187,13 +202,13 @@ class SourceBindingTests(unittest.TestCase):
         )
         parser_mutations = (
             self.parser_parent_source.replace(
-                b"strip_prefix('#').unwrap_or(hex)",
-                b"trim_start_matches('#')",
+                b'bytes.strip_prefix(b"#").unwrap_or(bytes)',
+                b'bytes.trim_ascii_start()', 
                 1,
             ),
             self.parser_parent_source.replace(
-                b"u8::from_str_radix(value, 16)",
-                b"alternate_parser(value)",
+                b"digit(*r0)? * 16 + digit(*r1)?",
+                b"digit(*g0)? * 16 + digit(*g1)?",
                 1,
             ),
         )
@@ -260,14 +275,14 @@ class SourceBindingTests(unittest.TestCase):
             self.proof["parser_source_sha256"],
         )
         clean = source.decode("utf-8")
-        self.assertEqual(re.findall(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", clean), ["hex_bytes"])
+        self.assertEqual(re.findall(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", clean), ["hex_bytes", "parse_hex_bytes"])
         for fragment in (
-            "strip_prefix('#').unwrap_or(hex)",
-            "hex.len() != 6 || !hex.is_ascii()",
-            "u8::from_str_radix(value, 16)",
-            "parse(&hex[0..2])?",
-            "parse(&hex[2..4])?",
-            "parse(&hex[4..6])?",
+            "parse_hex_bytes(hex.as_bytes())",
+            'bytes.strip_prefix(b"#").unwrap_or(bytes)',
+            "let [r0, r1, g0, g1, b0, b1] = bytes else",
+            "digit(*r0)? * 16 + digit(*r1)?",
+            "digit(*g0)? * 16 + digit(*g1)?",
+            "digit(*b0)? * 16 + digit(*b1)?",
         ):
             self.assertIn(fragment, clean)
         self.assertNotIn("trim_start_matches", clean)

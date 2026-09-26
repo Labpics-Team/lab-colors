@@ -258,3 +258,6 @@ mod tests {
         assert!(predecessor.value() < 1.0);
     }
 }
+
+#[cfg(kani)]
+mod proofs;
