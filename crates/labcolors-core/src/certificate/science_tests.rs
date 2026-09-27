@@ -116,6 +116,7 @@ fn independent_wire_binds_exact_profile_subject_both_branches_and_color() {
     assert_eq!(issued.as_bytes(), independent);
     let verified = VerifiedPointCertificateV1::verify(&independent, &evaluated).unwrap();
     assert!(core::ptr::eq(verified.evaluation(), &evaluated));
+    assert_eq!(verified.as_bytes(), issued.as_bytes());
     assert!(core::ptr::eq(issued.evaluation(), &evaluated));
     assert_eq!(issued.try_to_bytes().unwrap(), independent);
     assert_eq!(

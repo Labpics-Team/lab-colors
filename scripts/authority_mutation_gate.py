@@ -460,6 +460,10 @@ def main() -> None:
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
     verify_evaluation_borrows()
+    # Научный производитель требует реального чистого source identity.
+    # Его подмены выполняются в отдельном временном Git-экземпляре, не здесь.
+    subprocess.run([sys.executable, str(ROOT / "scripts/science_certificate_gate.py")],
+                   cwd=ROOT, check=True)
     total = len(AUTH_MUTANTS) + len(bounded_mutants)
     print(f"AUTH/TQ/CC/EVAL mutation gate caught {total} semantic mutants")
 

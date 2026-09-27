@@ -191,6 +191,7 @@ impl<'a> DeclaredPointCertificateV1<'a> {
 
 /// Допуск полученных байтов только относительно данного действующего результата.
 pub(crate) struct VerifiedPointCertificateV1<'a> {
+    bytes: &'a [u8],
     evaluation: &'a CurrentPointEvaluationV1<'a>,
 }
 impl fmt::Debug for VerifiedPointCertificateV1<'_> {
@@ -200,7 +201,7 @@ impl fmt::Debug for VerifiedPointCertificateV1<'_> {
 }
 impl<'a> VerifiedPointCertificateV1<'a> {
     pub(crate) fn verify(
-        bytes: &[u8],
+        bytes: &'a [u8],
         evaluation: &'a CurrentPointEvaluationV1<'a>,
     ) -> Result<Self, PointCertificateErrorV1> {
         // Предельный кортеж LCEN + единственная фиксированная нагрузка + binding digest.
@@ -218,8 +219,11 @@ impl<'a> VerifiedPointCertificateV1<'a> {
         if payload != expected.0 {
             return Err(PointCertificateErrorV1::DifferentCurrentEvaluation);
         }
-        Ok(Self { evaluation })
+        Ok(Self { bytes, evaluation })
     }
+    /// Заимствует именно проверенные байты; исходный буфер нельзя подменить
+    /// до последнего использования этого результата.
+    pub(crate) fn as_bytes(&self) -> &[u8] { self.bytes }
     pub(crate) fn evaluation(&self) -> &'a CurrentPointEvaluationV1<'a> {
         self.evaluation
     }
