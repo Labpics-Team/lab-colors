@@ -871,7 +871,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "e08b227be67f186341baf6c971ee5309438d30e1abf2ca12ed61880727aa0e75",
+ "record_sha256": "e484ca69adffb75e93d525de511fe003d0738e528a2089564028b09ff9c9dca2",
  "rust": {
   "enabled": [
    "adversarial_emoji_cyrillic_highbit_overflow_match_frozen_characterization: test",
@@ -1015,6 +1015,12 @@
    "certificate::lifecycle_tests::lifecycle_duplicate_requires_every_attestation_byte: test",
    "certificate::lifecycle_tests::lifecycle_full_ledger_preserves_replay_and_rejects_new_keys: test",
    "certificate::lifecycle_tests::lifecycle_replay_conflict_and_capacity_use_the_real_ledger: test",
+   "certificate::science::tests::every_payload_byte_with_recomputed_hashes_is_rejected: test",
+   "certificate::science::tests::forged_producer_context_and_subject_are_refused_after_integrity_validation: test",
+   "certificate::science::tests::generic_transport_and_semantic_certificate_never_change_classes_implicitly: test",
+   "certificate::science::tests::independent_wire_binds_exact_profile_subject_both_branches_and_color: test",
+   "certificate::science::tests::malformed_and_oversized_inputs_preserve_sources_and_static_errors: test",
+   "certificate::science::tests::same_rgb_new_revision_and_other_attachment_do_not_reuse_a_certificate: test",
    "certificate::source::tests::issued_capability_requires_explicit_matching_expected_key_and_replays_once: test",
    "certificate::source::tests::source_certificate_matches_independent_exact_wire_vector: test",
    "certificate::source::tests::source_debug_and_errors_are_static_and_redacted: test",
@@ -1132,6 +1138,7 @@
    "crate_name_matches_path_segment: test",
    "crates/labcolors-core/src/authority/clean_convention.rs - authority::clean_convention (line 17): test",
    "crates/labcolors-core/src/authority/evaluation.rs - authority::evaluation (line 16): test",
+   "crates/labcolors-core/src/certificate/science.rs - certificate::science (line 14): test",
    "crates/labcolors-core/src/curve.rs - curve::CurvePosition (line 12): test",
    "crates/labcolors-core/src/hash.rs - hash::fnv1a_32 (line 38): test",
    "crates/labcolors-core/src/lcs.rs - lcs::LcsColor (line 28): test",
@@ -2132,7 +2139,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1257,
+  "enabled_count": 1264,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
