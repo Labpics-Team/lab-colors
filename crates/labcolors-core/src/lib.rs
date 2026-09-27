@@ -43,6 +43,7 @@ pub mod alpha;
 pub(crate) mod appearance;
 pub mod authority;
 pub mod certificate;
+pub mod point_evaluation;
 pub mod claims_manifest;
 pub(crate) mod constraints;
 #[cfg(feature = "ext09-extractor")]

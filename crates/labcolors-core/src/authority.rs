@@ -8,7 +8,7 @@ use crate::program_wire::ProgramRendererProvenanceV1;
 
 pub(crate) mod clean_convention;
 pub(crate) mod evaluation;
-mod technical_quality;
+pub(crate) mod technical_quality;
 
 /// Закрытые ветви семантических полномочий AUTH V1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -404,7 +404,7 @@ fn issue_permit<'a>(
 }
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub(crate) pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;
