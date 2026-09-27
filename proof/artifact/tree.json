@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 489,
+ "file_count": 487,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -138,7 +138,7 @@
   "crates/labcolors-core/src/field_effect/proofs.rs": "21a08cb417b56edd58e56998afc7a13466408941",
   "crates/labcolors-core/src/field_effect/raster_tests.rs": "925cab0ad012c8d40a5edbdf0b8607d90eb1136b",
   "crates/labcolors-core/src/field_effect_tests.rs": "e2ebb8a7e9aae43b0fd0f20464f3b2207789a7b0",
-  "crates/labcolors-core/src/generic_boundary_tests.rs": "fcb4dfde22ee7bbbc1ca6c94c738f80f3da01660",
+  "crates/labcolors-core/src/generic_boundary_tests.rs": "875f60527e4ea6feb4a20b80a2fa25ff634328ca",
   "crates/labcolors-core/src/glow.rs": "4852ec101dd974f268519524b947d8e7484087a5",
   "crates/labcolors-core/src/golden_tests.rs": "698f55e49e1ea46151bf8a17e54298d8d614ae27",
   "crates/labcolors-core/src/hash.rs": "e5008963afa13fabf0113238e53e435f1ec298c9",
@@ -269,8 +269,6 @@
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
   "packages/colors/README.md": "787d017bad609d7cea3a8d0ed3cd4a01501aa095",
-  "packages/colors/bench/misses.mjs": "b675ddbbfa25dd49a9d4042d581442c9531fc884",
-  "packages/colors/bench/occurrences.mjs": "26c28a9961e4fedc79de9cda620962ec105a53f2",
   "packages/colors/bench/wasm.json": "99a627c05d563b50e5c3a69e4d4cd018440a623d",
   "packages/colors/index.d.ts": "18a274c59826807e7548074724043bf4bf0fb21b",
   "packages/colors/index.js": "884a5cd00092d4f83cdbad64103b442de966c5aa",
@@ -492,7 +490,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "7174502654409b1d5fd96966ccfef140a43a9fde"
  },
- "record_sha256": "20b3961c78c2902ff4d0c176d899c7a052656bc24d34b33b9b22bd39a5b1906e",
+ "record_sha256": "14b02044fb7332f8f8d02816ca895efc614e137b29ef8c71f1c31adb349e2c69",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
