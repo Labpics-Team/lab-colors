@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 259,
+   "count": 261,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -623,6 +623,7 @@
     "test_artifact_matrix.TestsRecordTests.test_pinned_tests_record_is_well_formed_and_nonvacuous",
     "test_artifact_matrix.TestsRecordTests.test_python_module_that_fails_to_import_is_drift",
     "test_artifact_matrix.TestsRecordTests.test_refresh_refuses_tests_record_with_import_failures",
+    "test_artifact_matrix.TestsRecordTests.test_same_count_replacement_cannot_hide_a_missing_rust_test",
     "test_artifact_matrix.TestsRecordTests.test_silently_dropped_rust_test_is_drift",
     "test_artifact_matrix.TestsRecordTests.test_statically_skipped_python_test_is_named_in_diff",
     "test_artifact_matrix.TestsRecordTests.test_tool_failure_is_typed_not_green",
@@ -771,6 +772,7 @@
     "test_mutation.MutationTruthTest.test_phase_rejects_substituted_command_identity",
     "test_mutation.MutationTruthTest.test_pinned_process_automaton_matrix_is_exhaustive",
     "test_mutation.MutationTruthTest.test_publish_caller_uses_exact_local_worker_binding",
+    "test_mutation.MutationTruthTest.test_publish_numerical_contract_accepts_only_current_evidence_rows",
     "test_mutation.MutationTruthTest.test_publish_receipt_guard_executes_exact_sha_and_hostile_runs",
     "test_mutation.MutationTruthTest.test_publish_worker_receipt_identity_is_fail_closed",
     "test_mutation.MutationTruthTest.test_publish_worker_registry_is_fail_closed",
@@ -869,7 +871,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "491692ef4cdef74bcf62ebb15a8969ebe11d6d8d4113877761b97c0d1d4ff8f1",
+ "record_sha256": "f2125f78f3d3c84c720e0d889050fffab4672938c92c3a3aaa39e49779cec20b",
  "rust": {
   "enabled": [
    "adversarial_emoji_cyrillic_highbit_overflow_match_frozen_characterization: test",
