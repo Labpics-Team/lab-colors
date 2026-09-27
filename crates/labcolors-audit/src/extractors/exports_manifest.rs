@@ -572,17 +572,33 @@ mod tests {
     }
 
     const REQUIRED_CRATES: &[&str] = &[
-        "labcolors-audit", "labcolors-conformance", "labcolors-core",
-        "labcolors-evaluate-cli", "labcolors-ffi", "labcolors-transport-cli", "labcolors-wasm",
+        "labcolors-audit",
+        "labcolors-conformance",
+        "labcolors-core",
+        "labcolors-evaluate-cli",
+        "labcolors-ffi",
+        "labcolors-transport-cli",
+        "labcolors-wasm",
     ];
 
     #[test]
     fn extracts_all_declared_workspace_consumers() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let names: Vec<_> = manifests.iter().map(|item| item.crate_name.as_str()).collect();
+        let names: Vec<_> = manifests
+            .iter()
+            .map(|item| item.crate_name.as_str())
+            .collect();
         assert_eq!(names, REQUIRED_CRATES);
-        let evaluator = manifests.iter().find(|m|m.crate_name == "labcolors-evaluate-cli").unwrap();
-        assert!(evaluator.targets.iter().any(|t|t.kind == TargetKind::Bin && t.name == "labcolors-evaluate"));
+        let evaluator = manifests
+            .iter()
+            .find(|m| m.crate_name == "labcolors-evaluate-cli")
+            .unwrap();
+        assert!(
+            evaluator
+                .targets
+                .iter()
+                .any(|t| t.kind == TargetKind::Bin && t.name == "labcolors-evaluate")
+        );
     }
 
     #[test]
@@ -641,13 +657,15 @@ mod tests {
     #[test]
     fn missing_or_substituted_consumer_does_not_match_the_workspace_contract() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let names: Vec<_> = manifests.iter().map(|m|m.crate_name.as_str()).collect();
+        let names: Vec<_> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
         assert_eq!(names, REQUIRED_CRATES);
         // Контроли проверяют ту же норму имён, не уменьшают исторический count.
         for i in 0..names.len() {
-            let mut missing = names.clone(); missing.remove(i);
+            let mut missing = names.clone();
+            missing.remove(i);
             assert_ne!(missing, REQUIRED_CRATES);
-            let mut replaced = names.clone(); replaced[i] = "unrelated-padding-crate";
+            let mut replaced = names.clone();
+            replaced[i] = "unrelated-padding-crate";
             assert_eq!(replaced.len(), REQUIRED_CRATES.len());
             assert_ne!(replaced, REQUIRED_CRATES);
         }
