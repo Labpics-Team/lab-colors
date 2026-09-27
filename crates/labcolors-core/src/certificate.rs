@@ -303,7 +303,6 @@ impl AdmissionKeyV1 {
         )
     }
 
-    #[inline]
     fn try_new_for_class(
         runtime_artifact_id: &str,
         operation: CertificateOperationV1,
@@ -340,22 +339,29 @@ impl AdmissionKeyV1 {
         Ok(key)
     }
 
-    /// Копирует exact tuple с типизированным отказом при нехватке памяти.
+    /// Копирует уже проверенный неизменяемый кортеж без повторного разбора.
+    /// Память выделяется тем же fallible-механизмом; класс и версии не меняются.
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
-        let class = match self.authority_kind {
-            CertificateAuthorityKindV1::GenericTypedCertificate => EnvelopeClassV1::Transport,
-            CertificateAuthorityKindV1::DeclaredModeledPointProfile => {
-                EnvelopeClassV1::DeclaredPoint
-            }
-        };
-        Self::try_new_for_class(
-            &self.runtime_artifact_id,
-            self.operation,
-            &self.context_id,
-            &self.producer_revision,
-            self.producer_content_identity,
-            class,
-        )
+        Ok(Self {
+            runtime_artifact_id: try_clone_string(
+                &self.runtime_artifact_id,
+                CertificateErrorV1::ResourceLimitExceeded,
+            )?,
+            operation: self.operation,
+            context_id: try_clone_string(
+                &self.context_id,
+                CertificateErrorV1::ResourceLimitExceeded,
+            )?,
+            producer_revision: try_clone_string(
+                &self.producer_revision,
+                CertificateErrorV1::ResourceLimitExceeded,
+            )?,
+            producer_content_identity: self.producer_content_identity,
+            authority_kind: self.authority_kind,
+            authority_version: self.authority_version,
+            payload_type: self.payload_type,
+            payload_version: self.payload_version,
+        })
     }
 
     /// Runtime artifact identity.
@@ -597,7 +603,6 @@ impl UntrustedEnvelopeV1 {
         Self::decode_class(bytes, EnvelopeClassV1::Transport)
     }
 
-    #[inline]
     fn decode_class(bytes: &[u8], class: EnvelopeClassV1) -> Result<Self, CertificateErrorV1> {
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);

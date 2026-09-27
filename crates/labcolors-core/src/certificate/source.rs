@@ -134,7 +134,6 @@ pub(super) fn current_key(
     key_from_descriptor(SOURCE_DESCRIPTOR_V1, context, Some(content))
 }
 
-#[inline]
 fn key_from_descriptor(
     bytes: &[u8],
     context: &str,
