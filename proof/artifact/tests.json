@@ -673,7 +673,6 @@
     "test_ci_peer_gate.PeerGateTest.test_unknown_status_is_red_not_pending",
     "test_ci_peer_gate.PeerGateTest.test_unsupported_event_fails_closed",
     "test_ci_peer_gate.PeerGateTest.test_wrong_head_and_wrong_event_do_not_satisfy_admission",
-    "test_evaluation_cli_gate.CliGateWiring.test_required_gate_calls_both_science_and_cli_probes",
     "test_extract_ci_build.EXT09CIBuildTests.test_extract_produces_valid_manifest_schema",
     "test_extract_ci_build.EXT09CIBuildTests.test_manifest_sha256_self_consistent",
     "test_extract_ci_build.EXT09CIBuildTests.test_sabotage_content_drift_detected",
@@ -733,6 +732,7 @@
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_unlisted_file_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_unknown_mode_exits_64",
     "test_extract_source_files.EXT01SourceFilesTests.test_verify_passes_on_current_tree",
+    "test_mutation.CliGateWiringTest.test_required_gate_calls_both_science_and_cli_probes",
     "test_mutation.MutationTruthTest.test_aggregate_binds_baseline_log_and_mutant_diff_bytes",
     "test_mutation.MutationTruthTest.test_aggregate_fails_closed_on_missing_duplicate_and_population_drift",
     "test_mutation.MutationTruthTest.test_aggregate_rechecks_bound_source_before_and_after_artifacts",
@@ -872,7 +872,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "a8d2eb76418023913be6d5b2058dd4b52498c25229a4407c094d0a7d34edd60e",
+ "record_sha256": "a7b9ea5b7219c11136a0558f12ef431d32330e46d79ae3134b20d996f7694081",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

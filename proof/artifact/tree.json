@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 484,
+ "file_count": 483,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
@@ -248,7 +248,7 @@
   "crates/labcolors-core/tests/wasm01_contract.rs": "703a5cf56d6c850c5e0d595b51d867b9e18eccde",
   "crates/labcolors-core/tests/wcag22_neutral_axis_replay.rs": "48f0ae92486a9de967335c61167973bb48210faa",
   "crates/labcolors-evaluate-cli/Cargo.toml": "24f3871618ca71c66e814df19a8bd230afab75a9",
-  "crates/labcolors-evaluate-cli/README.md": "f7e8b4718234149f7b07b6a0def2d53d8c87ed79",
+  "crates/labcolors-evaluate-cli/README.md": "17a9f53081370d9a7980ef83ac89f29368aafbd4",
   "crates/labcolors-evaluate-cli/examples/declared-point.json": "1b3cb0a93b82f534b58e143436e88e5f694753eb",
   "crates/labcolors-evaluate-cli/examples/rejected-point.json": "5762a0cadd211c18c76177af30984690c01c7325",
   "crates/labcolors-evaluate-cli/src/app.rs": "02f4c6336fdccb763dedd0bdbec7ba2d5003e135",
@@ -435,7 +435,7 @@
   "scripts/check-wasm-size-budget.mjs": "80bf6dca6b3284ce222a49df6e71d5d5d569617d",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
-  "scripts/evaluation_cli_gate.py": "e8029e461d27914cb327ff87ab3678faa96fced0",
+  "scripts/evaluation_cli_gate.py": "8ddf8bc256f2ef70dcebe64bb16db3f482cd192e",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
   "scripts/extract_claims.py": "296a5441e60df8aa37a3a5eb283be3f06f7d8df6",
   "scripts/extract_conformance.py": "0e789f62225cd4d26f3616b525229691a94656e3",
@@ -461,7 +461,6 @@
   "scripts/test_artifact_matrix.py": "d107175c0c4fcfc8e68091064b6f0d7064a3888a",
   "scripts/test_certificate_source_build.py": "e9cffbf64923e46a3d3ee1364d6e08ae0534939b",
   "scripts/test_ci_peer_gate.py": "b19a0d13e42f125f0db0e9438c6c3bba5c4af91b",
-  "scripts/test_evaluation_cli_gate.py": "f34ccb6d1070cd46cfd8ff04ce102cf8bb1579c4",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
   "scripts/test_extract_claims.py": "316f7c292f0330d138af063defa2c882e7366112",
   "scripts/test_extract_conformance.py": "505c896a99fbaa407b8f96c29b9ad777fac3fd65",
@@ -471,7 +470,7 @@
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
-  "scripts/test_mutation.py": "43de1018a8c1bcda09e2e08cd1243751b7f5192e",
+  "scripts/test_mutation.py": "c1f054f4a88606fb412bd6da3c4b319ea3386f06",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_transport_distribution.mjs": "c532d55b086dc324ef6477b0d7b0352d16d4e395",
@@ -487,7 +486,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "8a595fa5cb2f30bda056223babd052625f062f526ddeea986dccb0de66da8027",
+ "record_sha256": "2fcaf101c5400c9c513ddb192c592547d5d42ebed09aae7cce263f1becd431b5",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
