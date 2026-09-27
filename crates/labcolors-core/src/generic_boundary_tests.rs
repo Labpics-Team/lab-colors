@@ -128,6 +128,25 @@ fn unadmitted_cleanliness_and_retired_recipe_sources_are_absent() {
 }
 
 #[test]
+fn external_profile_placeholders_cannot_return_as_evaluation_authorities() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/evaluator_registry");
+    for name in ["admission.rs", "lpc_channel.rs"] {
+        assert!(
+            !root.join(name).exists(),
+            "неподключённый профиль вернулся: {name}"
+        );
+    }
+    for (path, source) in rust_sources() {
+        for owner in ["EvaluatorRegistryV1", "ExternalReadabilityProfileV1"] {
+            assert!(
+                !production_contains_retired_placeholder_owner(&source, owner),
+                "недопущенный владелец {owner} возвращён в {path}"
+            );
+        }
+    }
+}
+
+#[test]
 fn aud01_disconnected_placeholder_owners_are_absent() {
     for retired_owner in [
         "FieldArenaPoolV1",

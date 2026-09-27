@@ -1,25 +1,9 @@
-//! Evaluator registry metadata, LPC channel separation, and admission infrastructure.
-//!
-//! This module is staged under `#[expect(dead_code)]` because consumers
-//! land in F-03 PR2–PR4. The types themselves are complete and tested;
-//! only the integration into live evaluation paths is deferred.
+//! Метаданные реально используемых ограничений и их областей применения.
+//! Описания не выдают научные полномочия. Совместная оценка принадлежит AUTH;
+//! сравнение переданных вызывающим кодом хешей не является допуском модели.
 
 #[expect(
     dead_code,
-    reason = "F-03 PR1 metadata types are staged; consumers arrive in PR2-4"
+    reason = "метаданные включают закрытый набор возможных способов численной оценки"
 )]
 pub(crate) mod metadata;
-
-#[expect(
-    dead_code,
-    reason = "F-03 PR1 LPC channel types are staged; consumers arrive in PR2-4"
-)]
-pub(crate) mod lpc_channel;
-
-/// Staged for F-03 PR2–PR4 external profile admission. Types are complete and
-/// tested; the registry wiring into live evaluation paths is deferred.
-#[allow(
-    dead_code,
-    reason = "F-03 PR1 admission types are staged; consumers arrive in PR2-4"
-)]
-pub(crate) mod admission;

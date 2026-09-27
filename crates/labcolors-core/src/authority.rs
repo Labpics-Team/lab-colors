@@ -7,6 +7,7 @@
 use crate::program_wire::ProgramRendererProvenanceV1;
 
 pub(crate) mod clean_convention;
+pub(crate) mod evaluation;
 mod technical_quality;
 
 /// Закрытые ветви семантических полномочий AUTH V1.
