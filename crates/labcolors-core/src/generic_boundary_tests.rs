@@ -10,7 +10,6 @@ const CLEAN_SET_SOURCE: &str = include_str!("clean_set.rs");
 const COMPOSITION_SOURCE: &str = include_str!("composition.rs");
 const CONSTRAINTS_SOURCE: &str = include_str!("constraints/mod.rs");
 const CONTEXTUAL_REGION_SOURCE: &str = include_str!("contextual_region.rs");
-const CORRIDOR_REPRESENTATION_SOURCE: &str = include_str!("corridor_representation.rs");
 const EXACT_CONSTRAINT_SOURCE: &str = include_str!("constraints/exact.rs");
 const FAMILY_CONSTRAINT_SOURCE: &str = include_str!("constraints/family.rs");
 const FAMILY_SOURCE: &str = include_str!("family.rs");
@@ -30,11 +29,9 @@ const PROGRAM_SESSION_SOURCE: &str = include_str!("program_session.rs");
 const PRIVATE_FIXTURE_SOURCE: &str = include_str!("private_fixture.rs");
 const SELECTION_RELEASE_SOURCE: &str = include_str!("selection_release.rs");
 const RELATION_SOURCE: &str = include_str!("relation.rs");
-const SEMANTIC_SOURCE: &str = include_str!("semantic.rs");
 const SESSION_SOURCE: &str = include_str!("session.rs");
 const SOLVE_SOURCE: &str = include_str!("solve.rs");
 const WCAG22_CONSTRAINT_SOURCE: &str = include_str!("constraints/wcag22.rs");
-const GLOW_SOURCE: &str = include_str!("glow.rs");
 const FIELD_EFFECT_SOURCE: &str = include_str!("field_effect.rs");
 
 fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> bool {
@@ -51,6 +48,44 @@ fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> b
                 .strip_prefix(owner)
                 .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['<', '{', '(', ';']))
     })
+}
+
+#[test]
+fn retired_role_engine_has_no_sources_or_declarations() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    for file in [
+        "config.rs",
+        "config",
+        "semantic.rs",
+        "ladder.rs",
+        "material.rs",
+        "output_bindings.rs",
+        "corridor_representation.rs",
+        "glow.rs",
+        "accent_balance.rs",
+        "numerical_plan.rs",
+    ] {
+        assert!(
+            !root.join(file).exists(),
+            "удалённый движок ролей остался в исходниках: {file}"
+        );
+    }
+    let sources = rust_sources();
+    for owner in [
+        "ThemeConfig",
+        "NamedRoleTable",
+        "RoleTable",
+        "CompiledGlowInvocationV1",
+        "CompiledMaterialInvocationV1",
+        "OutputBindingSet",
+    ] {
+        for (path, source) in &sources {
+            assert!(
+                !production_contains_retired_placeholder_owner(source, owner),
+                "старый владелец {owner} возвращён в {path}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -216,22 +251,6 @@ fn w5_removes_legacy_wcag_authority_from_the_solver() {
         final_constraint.contains("0..final_emission_bisection_steps"),
         "final-emission loop must consume the named numerical budget",
     );
-
-    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
-    assert_eq!(
-        semantic
-            .matches("monotonefinalemissionconstraint::toward_contrast_extreme(")
-            .count(),
-        1,
-        "the monotonicity proof obligation must have exactly one production owner",
-    );
-    assert_eq!(
-        semantic
-            .matches("solve_in_with_monotone_final_emission_constraint(")
-            .count(),
-        1,
-        "the monotone final-emission solver path must have one production caller",
-    );
 }
 
 #[test]
@@ -277,116 +296,9 @@ fn point_representation_execution_is_generic_and_the_helper_facade_is_gone() {
         !LIB_SOURCE.contains("mod analog;"),
         "the recipe-shaped execution module must be deleted",
     );
-
-    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
-    for removed in [
-        "compiledalphaanaloginvocation",
-        "compiledalpha-analoginvocation",
-        "alpha_analog_invocations",
-        "compile_alpha_analog_invocations",
-    ] {
-        assert!(
-            !semantic.contains(removed),
-            "compiled execution still owns recipe-shaped IR `{removed}`",
-        );
-    }
-    for required in [
-        "compiledpointrepresentationinvocationv1",
-        "resolve_exact_point_representation_v1",
-    ] {
-        assert!(
-            semantic.contains(required),
-            "frozen frontend no longer lowers through generic point IR `{required}`",
-        );
-    }
 }
 
-/// C7d: Material-физика (60-шаговая бисекция над коробом фонов) живёт ровно в
-/// одном generic-модуле — `corridor_representation.rs` — и не остаётся
-/// исполняемой в recipe-слое. Скомпилированный Material-invocation —
-/// единственный маршрут resolver-а; `resolve_material` и raw-исполнение удалены.
-#[test]
-fn material_physics_lives_only_in_the_generic_corridor_module() {
-    let corridor = normalized_production_code(CORRIDOR_REPRESENTATION_SOURCE);
-    for required in [
-        "solve_corridor_alpha_encoded",
-        "solve_corridor_alpha_hex",
-        "committed_pole_encoded",
-        "worst_contrast_encoded",
-        "corridor_channel_over_byte_scale",
-        "band_luminance",
-        "BackdropBox",
-    ] {
-        assert!(
-            corridor.contains(&required.to_ascii_lowercase()),
-            "generic corridor physics lost `{required}`",
-        );
-    }
-    // Коридорный модуль несёт только corridor-словарь: ни одного Material-
-    // идентификатора (сканируется через CLIENT_OR_LEGACY_VOCABULARY выше), ни
-    // recipe-имён.
-    assert!(
-        !contains_forbidden_material_identifier(CORRIDOR_REPRESENTATION_SOURCE),
-        "corridor physics must stay Material-vocabulary-clean",
-    );
-
-    // Semantic больше не исполняет Material recipe-физику: raw-функция удалена,
-    // dispatch идёт через compiled invocation по ordinal.
-    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
-    for removed in [
-        "fnresolve_material(",
-        "compiledmaterialinvocationv1::resolve",
-    ] {
-        assert!(
-            !semantic.contains(removed),
-            "recipe-layer still owns executable Material path `{removed}`",
-        );
-    }
-    // Guard-сообщение raw-арма — внутри строкового литерала, поэтому проверяется
-    // по production-code (литералы не маскируются), а не по compact syntax.
-    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
-    assert!(
-        semantic_code.contains("material recipe bypassed its compiled invocation"),
-        "raw RoleSpec::Material arm must be a typed InternalInvariant guard",
-    );
-    assert!(
-        semantic.contains("compiledmaterialinvocationv1"),
-        "semantic must own the compiled Material invocation type",
-    );
-}
-
-/// C7e: recipe-слой больше не исполняет Glow-физику. Dispatch идёт через
-/// compiled invocation по ordinal (как Material в C7d и AlphaAnalog в #518);
-/// raw `RoleSpec::Glow`-арм — typed guard. Возврат исполняемого арма создал бы
-/// второй источник физики, который hard cut закрыл.
-#[test]
-fn glow_execution_lives_only_in_the_compiled_invocation() {
-    let semantic = compact_production_syntax(SEMANTIC_SOURCE).to_ascii_lowercase();
-    assert!(
-        semantic.contains("compiledglowinvocationv1"),
-        "semantic must own the compiled Glow invocation type",
-    );
-    // Единственный вызов численного отбора — внутри compiled invocation.
-    // Смэтч-арм по count: solve_screen_alpha_for_dj должен встречаться в
-    // production-коде semantic ровно один раз (в CompiledGlowInvocationV1::resolve).
-    let calls = semantic.matches("solve_screen_alpha_for_dj(").count();
-    assert_eq!(
-        calls, 1,
-        "glow numerical selection must have exactly one semantic call site (compiled invocation), got {calls}",
-    );
-    // Guard-сообщение raw-арма — внутри строкового литерала, проверяется по
-    // production-code (литералы не маскируются), как у Material.
-    let semantic_code = normalized_production_code(SEMANTIC_SOURCE);
-    assert!(
-        semantic_code.contains("glow recipe bypassed its compiled invocation"),
-        "raw RoleSpec::Glow arm must be a typed InternalInvariant guard",
-    );
-}
-
-/// C7e: screen-физика encoded-sRGB8 (закон `bg + α·tint·(255−bg)/255`) живёт
-/// ТОЛЬКО в field_effect. Glow-слой обязан делегировать канал туда — вторая
-/// локальная реализация формулы была вторым SSOT физики, который hard cut
-/// закрыл; её возврат молча развёл бы reference-профили glow и field.
+/// Screen-композиция остаётся у владельца поля после удаления Glow-рецепта.
 #[test]
 fn glow_screen_physics_lives_only_in_field_effect() {
     let field = compact_production_syntax(FIELD_EFFECT_SOURCE);
@@ -394,23 +306,9 @@ fn glow_screen_physics_lives_only_in_field_effect() {
         field.contains("pub(crate)fnencoded_srgb8_screen_channel"),
         "field_effect must own the single encoded-sRGB8 screen channel law",
     );
-
-    let glow = compact_production_syntax(GLOW_SOURCE);
-    assert!(
-        glow.contains("crate::field_effect::encoded_srgb8_screen_channel"),
-        "glow reference layer must delegate its screen channel to field_effect",
-    );
-    // Локальная реализация формулы: узнаваема по мультипликативному ядру
-    // `α·tint·(255−bg)` в любой записи. field_effect — единственный носитель.
-    assert!(
-        !glow.contains("f64::from(u8::MAX-"),
-        "glow.rs must not re-implement the screen channel law locally",
-    );
 }
 
-/// C7c terminal: recipe-фасад не является публичным root. Реализации могут
-/// временно жить только как crate-private characterization oracle; ни модуль,
-/// ни типы/функции не должны быть достижимы из внешнего Rust API.
+/// Публичная граница не возвращает удалённую модель ролей.
 #[test]
 fn c7c_public_surface_has_no_recipe_root() {
     let public_surface = compact_production_syntax(LIB_SOURCE);
@@ -445,13 +343,12 @@ fn c7c_public_surface_has_no_recipe_root() {
     );
 }
 
-const GENERIC_SOURCES: [(&str, &str); 14] = [
+const GENERIC_SOURCES: [(&str, &str); 13] = [
     ("appearance.rs", APPEARANCE_SOURCE),
     ("composition.rs", COMPOSITION_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
     ("constraints/relation.rs", RELATION_CONSTRAINT_SOURCE),
     ("contextual_region.rs", CONTEXTUAL_REGION_SOURCE),
-    ("corridor_representation.rs", CORRIDOR_REPRESENTATION_SOURCE),
     ("family.rs", FAMILY_SOURCE),
     ("joint.rs", JOINT_SOURCE),
     ("lcs_occurrence.rs", LCS_OCCURRENCE_SOURCE),

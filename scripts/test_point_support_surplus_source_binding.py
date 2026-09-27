@@ -68,8 +68,8 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             ),
             (
                 self.numerics_path,
-                b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available",
-                b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable",
+                b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available",
+                b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable",
             ),
         )
         for path, old, new in regressions:

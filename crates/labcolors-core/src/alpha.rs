@@ -10,24 +10,14 @@
 //! применяются. Ошибка round-trip ограничена тестируемой оценкой `8·ε/α`.
 //!
 //! Это не сертификат эмитируемого sRGB8: финальное округление расширяет
-//! достижимое множество. Exact byte-grid proposal, единичная materialization
-//! occurrence и postcondition принадлежат приватному `point_representation` и
-//! используют тот же `composition` source-over kernel.
+//! достижимое множество. Точный независимый эталон достижимости
+//! находится в проверочном `point_representation`; он сверяет инверсию с
+//! рабочим `composition`, но не создаёт отдельной ветви runtime.
 //!
 //! Совпадение с конкретным renderer зависит от его color-management и не
 //! следует из reference-арифметики библиотеки.
 
 use crate::spaces::srgb::{hex_from_srgb_encoded, srgb_encoded_from_hex};
-
-#[cfg(test)]
-pub(crate) fn reset_source_over_evaluation_count() {
-    crate::composition::reset_source_over_evaluation_count();
-}
-
-#[cfg(test)]
-pub(crate) fn source_over_evaluation_count() -> usize {
-    crate::composition::source_over_evaluation_count()
-}
 
 /// Валидный кодированный канал/цвет: конечный и в `[0,1]` — домен всех
 /// функций модуля (hex-обёртки гарантируют его по построению, byte/255).

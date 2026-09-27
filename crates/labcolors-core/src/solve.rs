@@ -46,8 +46,7 @@ use crate::lpc::{
 use crate::scale::max_chroma;
 use crate::spaces::oklab::{neutral_srgb_linear, oklab_to_srgb_linear};
 use crate::spaces::srgb::{
-    encoded_srgb_relative_luminance, hex_from_srgb, srgb_from_hex, srgb_gamma, srgb_gamma_inv,
-    srgb_to_xyz, srgb8_from_linear,
+    encoded_srgb_relative_luminance, hex_from_srgb, srgb_from_hex, srgb_gamma, srgb8_from_linear,
 };
 use crate::spaces::vc::ViewingConditions;
 
@@ -175,39 +174,14 @@ impl BgInput {
     /// Reduce the descriptor to its candidate-score luminance interval — `Ys`,
     /// WCAG relative luminance of the quantised display colour (ADR-0003).
     ///
-    /// Background-dependency invariant: `resolve_set(bg, table, vc)` depends on
-    /// the background **only** through two scalars derived here from `bg` — the
-    /// WCAG 2.1 relative luminance `Y_wcag` of the quantised display colour
-    /// (candidate-score contract + polarity + the legal floor: один домен, одно
-    /// число) and the CAM16-UCS lightness `J'_bg` (needed only by the dJ'
-    /// roles). Бывший третий скаляр — H-K-люминанс `Y_hk` — не входит в
-    /// candidate-score путь и живёт только на яркостной оси
-    /// ([`bg_luma`]: сторона пары, свечение, семейные цветовые операции). Verified by an
-    /// exhaustive trace of every `bg` read on the `resolve_set_live` path.
-    /// The representation stays an interval so a future field background can
-    /// supply bounded endpoints without changing the solver contract.
+    /// Интервал яркости выводится из проверенного физического фона.
+    /// Имена ролей и состояние удалённого конфигуратора на него не влияют.
     pub(crate) fn luma_interval(
         &self,
         _vc: &ViewingConditions,
     ) -> Result<LumaInterval, SolveFailure> {
         let y = encoded_srgb_relative_luminance(quantised_display(self.linear_srgb));
         Ok(LumaInterval { lo: y, hi: y })
-    }
-
-    /// Гамма-кодированный 8-битный sRGB фона (`[0,1]³`, byte/255) — домен
-    /// reference-профиля [`crate::alpha`], заземлённого Figma-якорями без
-    /// универсального обещания browser pipeline. Альфа-роль
-    /// ([`crate::semantic::RoleSpec::Ladder`] /
-    /// [`AlphaAnalog`](crate::semantic::RoleSpec::AlphaAnalog)) композитит свой
-    /// тинт на этом фоне для честного замера контраста солид-эквивалента. Для
-    /// Это квантованный дисплей-цвет валидированного фона.
-    pub(crate) fn encoded_display(&self) -> [f64; 3] {
-        quantised_display(self.linear_srgb)
-    }
-
-    /// Validated linear-sRGB stimulus used by appearance-only measurements.
-    pub(crate) fn linear_srgb(&self) -> [f64; 3] {
-        self.linear_srgb
     }
 }
 
@@ -545,6 +519,7 @@ impl<'a> MonotoneFinalEmissionConstraint<'a> {
     /// Bind a predicate proven monotone toward the target polarity's contrast
     /// extreme. The caller owns that proof; construction is intentionally named
     /// so a generic boolean callback cannot hide the required search law.
+    #[cfg(test)]
     pub(crate) fn toward_contrast_extreme(
         key: &'static str,
         accepts: &'a dyn Fn(&str) -> Result<bool, SolveFailure>,
@@ -577,6 +552,7 @@ pub(crate) fn solve_in(
 /// only maintains the generic admissible-set invariant: the selected candidate
 /// must satisfy both the candidate-score contract and the final-emission
 /// predicate.
+#[cfg(test)]
 pub(crate) fn solve_in_with_monotone_final_emission_constraint(
     bg: &BgInput,
     contract: Contract,
@@ -598,8 +574,7 @@ pub(crate) fn solve_in_with_monotone_final_emission_constraint(
 }
 
 /// Solve one foreground against a background whose luminance `interval` is
-/// already computed — the shared core of [`solve`], [`solve_many`], and the
-/// per-role solves in [`resolve_set`](crate::resolve_set). Inputs are assumed
+/// already computed — the shared core of [`solve`], [`solve_many`], without a role table. Inputs are assumed
 /// validated (finite target/hue/ratio, sRGB gamut); the public entry points
 /// guard that before calling in. See the [module documentation](self) for the
 /// algorithm.
@@ -732,7 +707,7 @@ const FINAL_EMISSION_BISECTION_STEPS: u32 = 48;
 /// Lc-шага 8-бит серой сетки (замер ≈0.44) — на дискретной сетке любой бюджет
 /// в этом диапазоне принимает тот же ближайший узел
 /// (`quant_budget_is_a_couple_of_grid_steps`). Экспозиция (доля целей, чья
-/// приёмка флипает при свипе ±50%) — **1.84%** (`exposure_quant_and_dj_budgets`).
+/// приёмка флипает при свипе ±50%) — **1.84%** (`exposure_quant_budget`).
 // SSOT-TRACKED — допуск приёмки Lc в единицах шага сетки (±1 Lc), терминал (c) interval-insensitive (exposure 1.84%), см. docs/empirical-inventory.md.
 const QUANT_BUDGET: f64 = 1.0;
 
@@ -847,202 +822,6 @@ fn solve_lpc_lightness(
 ) -> Result<f64, SolveFailure> {
     let y_fg = invert_contrast(y_bg, target)?;
     Ok(match_lightness_ys(y_fg, hue, chroma_policy))
-}
-
-/// The CAM16-UCS lightness `J'` of a **linear**-sRGB colour under `vc`.
-fn jp_of_linear(rgb_linear: [f64; 3], vc: &ViewingConditions) -> f64 {
-    LcsColor::from_xyz_with_hok(srgb_to_xyz(rgb_linear), 0.0, vc).jp()
-}
-
-/// The acceptance budget, in CAM16-UCS `J'` units, for a decorative dJ' solve: a
-/// colour is accepted when its measured `|dJ'|` lands within this distance of the
-/// target magnitude. It is the dJ' analogue of [`QUANT_BUDGET`] (the `±1 Lc`
-/// contrast budget): on the light end one 8-bit grey step is worth ~0.3–0.5 `J'`,
-/// so `0.6` is just over one grid step — wide enough that a reachable target is
-/// not rejected for landing on the neighbouring pixel, tight enough that the
-/// emitted colour is honestly within a pixel of the requested separation.
-///
-/// Терминал **(c) INTERVAL-INSENSITIVE**: `DJ_BUDGET` ≈ 1.2–2× медианного
-/// dJ'-шага 8-бит серой сетки (замер ≈0.39) — тот же класс, что
-/// [`QUANT_BUDGET`] (`dj_budget_tracks_grid_step`). Экспозиция — **1.55%**
-/// (`exposure_quant_and_dj_budgets`).
-// SSOT-TRACKED — допуск приёмки dJ' (J'-единицы), ~1 шаг сетки, терминал (c) interval-insensitive (exposure 1.55%); см. docs/empirical-inventory.md.
-const DJ_BUDGET: f64 = 0.6;
-
-/// Maximum distinct hex steps the dJ' search walks from the analytic seed toward
-/// the target `J'`. Like [`NEIGHBOR_STEPS`] this is a tiny grid-bridge, not an
-/// optimiser: the analytic seed lands within a pixel by construction, and a
-/// couple of steps cross the one grid cell quantisation can misplace it into.
-const DJ_NEIGHBOR_STEPS: u32 = 2;
-
-/// Solve a decorative perceived-lightness-difference (dJ') contract: find the
-/// in-gamut colour whose CAM16-UCS lightness `J'` is `magnitude_dj` away from the
-/// background's `J'`, in the direction `sign` selects (negative `J'` offset for
-/// dark-on-light `sign = +1` → a darker decorative mark on a light surface;
-/// positive for light-on-dark).
-///
-/// This is **different physics** from the contrast solver above: there is no
-/// readability floor and no low-contrast clip — distinguishability of a
-/// decorative element (a fill tint, a hairline border) is a *perceived lightness
-/// step* on the perceptually-uniform J' axis, not an LPC contrast ratio. The
-/// solve is analytic end to end:
-///
-/// 1. `J'_bg` — measured on the quantised background display colour under `vc`.
-/// 2. `J'_target = J'_bg − sign·dJ'` — the owner's literal anchor offset.
-/// 3. `J'_target → Oklab L` — the shared grey-axis inverse
-///    [`scale::jp_to_oklab_l`](crate::scale), the same one the accent curve uses.
-/// 4. `build_color` at the role's undertone plan → quantise → **measure the
-///    achieved `|dJ'|` on the emitted hex** (`|J'_fg_quant − J'_bg|`) — an honest
-///    finish on the colour the caller actually gets, never the pre-quantisation
-///    ideal.
-///
-/// If the quantised colour lands within [`DJ_BUDGET`] of the target it is
-/// returned. Otherwise a bounded walk steps toward the target `J'` across at most
-/// [`DJ_NEIGHBOR_STEPS`] distinct hex grid points. If none lands in budget — or
-/// the target J' falls off the end of the axis (e.g. a positive dJ' requested
-/// above a near-white background) — the solver returns the lowest-error
-/// candidate among the analytic seed and the examined bounded walk. The result
-/// carries `degraded: true` and the measured `achieved_dj`. This is a local
-/// selection contract over at most `1 + DJ_NEIGHBOR_STEPS` distinct emitted
-/// colours, not an optimum over the whole output gamut.
-///
-/// The reported `lc` on the returned [`Solved`] is still the measured LPC
-/// contrast of the emitted colour against the background (so the ladder-order
-/// invariants and the golden read a consistent number); only the *target* and
-/// the *acceptance metric* are in J' space.
-pub(crate) fn solve_dj(
-    bg: &BgInput,
-    magnitude_dj: f64,
-    sign: f64,
-    hue: Hue,
-    chroma_policy: ChromaPolicy,
-    vc: &ViewingConditions,
-) -> Result<DjSolved, SolveFailure> {
-    if !magnitude_dj.is_finite() || magnitude_dj < 0.0 {
-        return Err(SolveFailure::InvalidInput(format!(
-            "dJ' magnitude must be finite and non-negative: {magnitude_dj}"
-        )));
-    }
-
-    // The contract is measured against the *displayed* background — the colour on
-    // screen, gamma-quantised then decoded back to linear — so the separation is
-    // the one the eye sees, in the same space `finish` measures the foreground in.
-    let bg_disp = bg.encoded_display();
-    // The encoded background is gamma-encoded (8-bit display values); decode back to
-    // linear so the J' forward sees the same space `finish` measures in.
-    let bg_disp_linear = [
-        srgb_gamma_inv(bg_disp[0]),
-        srgb_gamma_inv(bg_disp[1]),
-        srgb_gamma_inv(bg_disp[2]),
-    ];
-    let jp_bg = jp_of_linear(bg_disp_linear, vc);
-    // Direction: dark-on-light (`sign = +1`) places the mark *below* the surface
-    // in lightness; light-on-dark *above*. "Toward the larger headroom" is exactly
-    // the set polarity, so the offset sign mirrors the contrast solver's.
-    let jp_target = jp_bg - sign * magnitude_dj;
-
-    // The luminance interval still governs which background endpoint the perceptual
-    // LPC measurement uses for the reported `lc` (degenerate for a Solid bg).
-    let interval = bg.luma_interval(vc)?;
-    let y_gov = interval.governing(sign);
-
-    // Build, quantise, and honestly measure the achieved separation on the emitted
-    // hex (decoded to linear — the colour the caller actually gets), not the
-    // pre-quantisation ideal.
-    let evaluate = |jp_goal: f64| -> Result<DjCandidate, SolveFailure> {
-        let l_ok = crate::scale::jp_to_oklab_l(jp_goal, vc);
-        let rgb = build_color(l_ok, hue, chroma_policy);
-        let solved = finish(rgb, y_gov, vc)?;
-        let rgb_quantised = srgb_from_hex(solved.hex()).map_err(|reason| {
-            SolveFailure::InternalInvariant(format!(
-                "solver emitted an invalid sRGB hex during dJ refinement: {reason}"
-            ))
-        })?;
-        let achieved_dj = (jp_of_linear(rgb_quantised, vc) - jp_bg).abs();
-        #[cfg(test)]
-        probe_log::record(solved.hex(), achieved_dj);
-        Ok(DjCandidate {
-            error: (achieved_dj - magnitude_dj).abs(),
-            achieved_dj,
-            solved,
-        })
-    };
-
-    let primary = evaluate(jp_target)?;
-    if primary.error <= DJ_BUDGET {
-        return Ok(DjSolved {
-            achieved_dj: primary.achieved_dj,
-            solved: primary.solved,
-            degraded: false,
-        });
-    }
-
-    // The seed missed the budget — walk distinct hex grid points toward larger
-    // separation (away from `jp_bg`, in the polarity's direction) so a
-    // quantisation undershoot is corrected. Probe well below one grid step so
-    // neighbours are visited in order. Track the best candidate (min error)
-    // across the seed and every neighbour — it becomes the degraded result if
-    // nothing lands in budget.
-    let direction = -sign;
-    const PROBE: f64 = 0.05;
-    // Bound the probe count independently of the distinct-step count so a run of
-    // identical grid points can never loop forever; with a J' axis span well
-    // under ~243 this reaches the white/black wall long before the cap.
-    const MAX_PROBES: u32 = 256;
-    let mut last_hex = primary.solved.hex().to_string();
-    let mut steps_taken = 0_u32;
-    let mut probes = 0_u32;
-    let mut jp_probe = jp_target;
-    let mut best = primary;
-
-    while steps_taken < DJ_NEIGHBOR_STEPS && probes < MAX_PROBES {
-        jp_probe += direction * PROBE;
-        probes += 1;
-        let candidate = evaluate(jp_probe)?;
-        if candidate.solved.hex() == last_hex {
-            continue; // same grid point — not yet a distinct neighbour step
-        }
-        last_hex = candidate.solved.hex().to_string();
-        steps_taken += 1;
-        let in_budget = candidate.error <= DJ_BUDGET;
-        if candidate.error < best.error {
-            best = candidate;
-        }
-        if in_budget {
-            return Ok(DjSolved {
-                achieved_dj: best.achieved_dj,
-                solved: best.solved,
-                degraded: false,
-            });
-        }
-    }
-
-    // Цель за стеной оси / вне бюджета локального обхода: вернуть лучший из
-    // фактически просмотренных кандидатов и явно отметить неточное выполнение.
-    Ok(DjSolved {
-        achieved_dj: best.achieved_dj,
-        solved: best.solved,
-        degraded: true,
-    })
-}
-
-/// One on-grid candidate the dJ' search evaluates: the solved colour, the
-/// `|dJ'|` it achieves on the quantised hex, and the distance of that from the
-/// requested magnitude (the budget the search minimises).
-struct DjCandidate {
-    solved: Solved,
-    achieved_dj: f64,
-    error: f64,
-}
-
-/// Результат dJ'-солва: решённый цвет, замеренный `|ΔJ'|` на отданном hex и
-/// флаг, что локальный ограниченный поиск не попал в бюджет цели.
-pub(crate) struct DjSolved {
-    pub(crate) solved: Solved,
-    /// Честный замер |ΔJ'| на отданном hex — доносится до
-    /// `Resolved::Color.achieved_dj` и wasm-DTO (симметрия честности с glow).
-    pub(crate) achieved_dj: f64,
-    pub(crate) degraded: bool,
 }
 
 /// Gamma-encoded sRGB of a linear stimulus, quantised to the emitted 8-bit grid.
@@ -1620,101 +1399,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cam16_forwards_per_set_regression_guard() {
-        // DETERMINISTIC PERF METRIC (issue #19 / discrete-exactness). Wall-time on
-        // a loaded machine is too noisy to measure a few-percent change, so the
-        // honest before/after number is the count of CIECAM16 forward passes a
-        // default `resolve_set` runs. This guard pins that count so a change that
-        // re-introduces a duplicate forward — or legitimately removes one — fails
-        // here until the table below is updated with intent.
-        //
-        // WHY TWO PINS PER (vc, bg). Post-#52 (undertone v2) a default set no
-        // longer costs a single uniform number. v2 added a per-role curve plan:
-        // for each role `curve_plan_cached` runs a cusp-attracted-hue scan
-        // (Oklab-only — `max_chroma`, ZERO forwards) and a chroma-ratio bisection
-        // `ratio_for_target_mp` (each `mp_at` probe is one `cam16::forward` via
-        // `mp_of_linear_srgb` → `from_xyz_with_hok`). That bisection is the only
-        // forward-heavy work the curve plan does, and it is the ONLY work the
-        // thread-local `CURVE_PLAN_CACHE` memoises. So a set has two honest costs:
-        //
-        //   WARM — the runtime-dominant path. Curve plans already cached (a tool
-        //          re-resolving as an unrelated setting is tweaked, or the same
-        //          theme served repeatedly). The count is the IRREDUCIBLE per-role
-        //          probe/finish + ResolveContext polarity/max work that is never
-        //          cached. This is the number that governs steady-state cost; it
-        //          gets the hard, low pin.
-        //   COLD — the first resolve of a theme on a fresh cache. WARM plus every
-        //          distinct curve-plan key's ratio bisection. The COLD−WARM delta
-        //          (~520–560 forwards) is exactly the bisection work the cache
-        //          elides on the second pass.
-        //
-        // The cache is reset before each COLD measurement so COLD is deterministic
-        // regardless of test/iteration order; WARM is the immediate re-resolve of
-        // the same theme, a verified fixed point. Counts measured on the merged
-        // tree (main@#52 + perf/discrete-tables), 2026-06-12. They vary by
-        // (vc, bg) because each surface reaches a different role mix with different
-        // probe-sweep depths — real product behaviour, not noise.
-        use crate::spaces::cam16::FORWARD_CALLS;
-        let tbl = crate::RoleTable::default();
-
-        // Measures `resolve_set_live` (the solver), not `resolve_set`: the latter
-        // now serves a solid grey through the neutral O(1) fast path (zero
-        // forwards), so it would not exercise the solver this guard exists to pin.
-
-        // (vc name, bg hex) -> (cold forwards, warm forwards), measured.
-        //
-        // RE-MEASURED for the readability→`Ys` activation (глава #64, ADR-0003).
-        // Candidate-score путь не использует `Y_hk`: обратный солвер инвертирует `Ys`
-        // напрямую (`match_lightness_ys`), и весь CAM16-раундтрип `grey_j ↔ y_hk`
-        // на пути читаемости ОТПАЛ — это ровно предсказанный ADR blast radius
-        // («solve.rs упростится … отпадает CAM16-раундтрип для читаемости»).
-        // Оставшиеся форварды — работа ЯРКОСТНЫХ осей (нейтральная лестница,
-        // семейные цвета, свечение), которые H-K сохраняют; потому dim/тёмные фоны
-        // дороже (лестница в dim делает больше H-K-работы). Падение ~10-40×
-        // против прежних пинов — не регрессия покрытия, а снятие лишнего домена.
-        // Re-measured 2026-07-08 (глава #64 merge).
-        let expected = [
-            (("srgb", "#FFFFFF"), (103u64, 26u64)),
-            (("srgb", "#7F7F7F"), (126, 24)),
-            (("srgb", "#101012"), (129, 25)),
-            (("dim", "#FFFFFF"), (128, 29)),
-            (("dim", "#7F7F7F"), (144, 25)),
-            (("dim", "#101012"), (192, 30)),
-        ];
-
-        for (vc, name) in vcs() {
-            for bg in ["#FFFFFF", "#7F7F7F", "#101012"] {
-                let &(_, (cold_exp, warm_exp)) = expected
-                    .iter()
-                    .find(|((n, b), _)| *n == name && *b == bg)
-                    .expect("every (vc, bg) pair has a pinned expectation");
-                let bgi = crate::BgInput::solid(bg).unwrap();
-
-                // COLD: fresh cache, first resolve of this theme.
-                crate::semantic::reset_curve_plan_cache();
-                FORWARD_CALLS.with(|c| c.set(0));
-                crate::semantic::resolve_set_live(&bgi, &tbl, &vc)
-                    .expect("valid cold perf fixture resolves atomically");
-                let cold = FORWARD_CALLS.with(|c| c.get());
-                assert_eq!(
-                    cold, cold_exp,
-                    "{name}/{bg}: COLD CAM16 forwards/set = {cold}, expected {cold_exp}"
-                );
-
-                // WARM: same theme re-resolved, curve plans now cached.
-                FORWARD_CALLS.with(|c| c.set(0));
-                crate::semantic::resolve_set_live(&bgi, &tbl, &vc)
-                    .expect("valid warm perf fixture resolves atomically");
-                let warm = FORWARD_CALLS.with(|c| c.get());
-                assert_eq!(
-                    warm, warm_exp,
-                    "{name}/{bg}: WARM CAM16 forwards/set = {warm}, expected {warm_exp}"
-                );
-            }
-        }
-    }
-
     /// Independent re-measure of an emitted hex's signed Ys candidate score.
     fn candidate_lc(fg_hex: &str, bg_hex: &str) -> f64 {
         let fg = crate::spaces::srgb::srgb_encoded_from_hex(fg_hex).expect("valid emitted hex");
@@ -2023,49 +1707,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, SolveFailure::ExceedsRange { .. }), "{err:?}");
-    }
-
-    #[test]
-    fn dj_degradation_reports_honest_achieved_dj() {
-        // Цель за стеной оси J' даёт явно помеченный исход ограниченного выбора.
-        // `achieved_dj` обязан быть ЗАМЕРОМ на отданном hex, как явно названные
-        // замеры изолированных Glow-слоёв: перечитываем hex и сверяем |ΔJ'|
-        // против фона независимо.
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#101012").unwrap();
-        let d = solve_dj(&bg, 300.0, -1.0, Hue::deg(0.0), ChromaPolicy::Neutral, &vc)
-            .expect("degradation returns Ok, not Err");
-        assert!(d.degraded, "300 J' на почти-чёрном обязан деградировать");
-        assert!(
-            d.achieved_dj < 300.0,
-            "стена оси ниже цели: achieved {:.2}",
-            d.achieved_dj
-        );
-        // Независимый перезамер на отданном hex.
-        let fg = srgb_from_hex(d.solved.hex()).unwrap();
-        let bg_disp = bg.encoded_display();
-        let bg_lin = [
-            srgb_gamma_inv(bg_disp[0]),
-            srgb_gamma_inv(bg_disp[1]),
-            srgb_gamma_inv(bg_disp[2]),
-        ];
-        let measured = (jp_of_linear(fg, &vc) - jp_of_linear(bg_lin, &vc)).abs();
-        assert!(
-            (measured - d.achieved_dj).abs() < 1e-9,
-            "achieved_dj {:.6} must equal the re-measured |dJ'| {:.6} on the emitted hex",
-            d.achieved_dj,
-            measured
-        );
-
-        // Парный контроль: достижимая ступень — точное решение без флага.
-        let ok = solve_dj(&bg, 10.0, -1.0, Hue::deg(0.0), ChromaPolicy::Neutral, &vc)
-            .expect("in-budget dJ' solves");
-        assert!(!ok.degraded);
-        assert!(
-            (ok.achieved_dj - 10.0).abs() <= DJ_BUDGET,
-            "in-budget achieved {:.3}",
-            ok.achieved_dj
-        );
     }
 
     #[test]
@@ -2600,127 +2241,6 @@ mod tests {
         );
     }
 
-    /// Frozen `resolve_set` hex output across the owner's golden grid — the
-    /// before/after gate for any hot-path refactor in this module. Each line is
-    /// `vc|bg|policy|role=hex,…` produced by the live `resolve_set`. The full
-    /// set of emitted `#RRGGBB` hexes for every role must be byte-identical
-    /// before and after a performance change; if any cell moves, the refactor
-    /// altered the colour the caller gets and the test fails loudly.
-    ///
-    /// Grid: 6 backgrounds (#FFFFFF/#F2F2F7/#7F7F7F/#1C1C1E/#101012/#3478F6) ×
-    /// both precompiled viewing conditions × the two production chroma policies
-    /// (achromatic Neutral and the v1 Tinted{286°, 0.10}). Regenerate the
-    /// expectations with `_emit_resolve_set_golden` (kept below, `#[ignore]`d)
-    /// only when a colour change is *intended* and explained.
-    ///
-    /// UPDATED for the HIG role taxonomy (`role-taxonomy-hig`): the row format now
-    /// carries all 19 roles per line (`label-*`, `separator`, `border-*`,
-    /// `fill-*`, `shadow-*`, `none`) instead of the old 10. The `label-*` cells are
-    /// byte-identical to the prior `text-*` cells — the rename moved keys, not
-    /// colours — and `border-strong` mirrors `label-primary` (it shares the
-    /// label-primary contract). The new `border-*`/`fill-*`/`shadow-*` cells are
-    /// Decorative magnitudes resolved against the current `DECORATIVE_FLOOR_MIN`/dJ'
-    /// contract (see `semantic.rs`); will be re-derived in `surface-jnd` (#44).
-    /// This is the one allowed touch to this module's golden: `Role::ALL` changed
-    /// (словарный канон #92 снёс `icon` и переименовал `border-ghost`→`border-none`),
-    /// so the line shape moved with it — colours did not change (`icon` was a byte
-    /// dup of `label-tertiary`, `border-none` is the same honest zero).
-    const RESOLVE_SET_GOLDEN: &[&str] = &[
-        "srgb|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,separator=#ECECEC,border-strong=#141414,border-base=#E9E9E9,border-soft=#F4F4F4,border-none=none,fill-primary=#E4E4E4,fill-secondary=#E9E9E9,fill-tertiary=#EFEFEF,fill-quaternary=#F4F4F4,fill-none=none,shadow-minor=#ECECEC,shadow-ambient=#EAEAEA,shadow-penumbra=#E6E6E6,shadow-major=#E2E2E2,none=none",
-        "srgb|#FFFFFF|Tinted|label-primary=#141419,label-secondary=#757585,label-tertiary=#9493A0,label-quaternary=#C1C1C9,separator=#ECECEE,border-strong=#141419,border-base=#E9E9EB,border-soft=#F4F4F5,border-none=none,fill-primary=#E4E4E7,fill-secondary=#E9E9EB,fill-tertiary=#EFEFF1,fill-quaternary=#F4F4F5,fill-none=none,shadow-minor=#ECECEE,shadow-ambient=#E9E9EC,shadow-penumbra=#E6E6E9,shadow-major=#E1E1E5,none=none",
-        "srgb|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#B8B8B8,separator=#E0E0E0,border-strong=#131313,border-base=#DDDDDD,border-soft=#E8E8E8,border-none=none,fill-primary=#D9D9D9,fill-secondary=#DDDDDD,fill-tertiary=#E3E3E3,fill-quaternary=#E8E8E8,fill-none=none,shadow-minor=#E0E0E0,shadow-ambient=#DDDDDD,shadow-penumbra=#D9D9D9,shadow-major=#D5D5D5,none=none",
-        "srgb|#F2F2F7|Tinted|label-primary=#131218,label-secondary=#6E6D7F,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,separator=#DFDFE3,border-strong=#131218,border-base=#DDDDE1,border-soft=#E8E8EA,border-none=none,fill-primary=#D8D8DD,fill-secondary=#DDDDE1,fill-tertiary=#E3E3E6,fill-quaternary=#E8E8EA,fill-none=none,shadow-minor=#DFDFE3,shadow-ambient=#DDDDE0,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
-        "srgb|#7F7F7F|Neutral|label-primary=#080808,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#606060,separator=#696969,border-strong=#080808,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6C6C6C,fill-secondary=#6F6F6F,fill-tertiary=#747474,fill-quaternary=#777777,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#606060,shadow-major=#5A5A5A,none=none",
-        "srgb|#7F7F7F|Tinted|label-primary=#08080B,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#5F5E70,separator=#676779,border-strong=#08080B,border-base=#6E6E7F,border-soft=#767686,border-none=none,fill-primary=#6A6A7C,fill-secondary=#6E6E7F,fill-tertiary=#727283,fill-quaternary=#767686,fill-none=none,shadow-minor=#676779,shadow-ambient=#646376,shadow-penumbra=#5F5F71,shadow-major=#59596A,none=none",
-        "srgb|#1C1C1E|Neutral|label-primary=#FBFBFB,label-secondary=#C0C0C0,label-tertiary=#9F9F9F,label-quaternary=#787878,separator=#3F3F3F,border-strong=#FBFBFB,border-base=#2B2B2B,border-soft=#242424,border-none=none,fill-primary=#2F2F2F,fill-secondary=#2B2B2B,fill-tertiary=#272727,fill-quaternary=#242424,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
-        "srgb|#1C1C1E|Tinted|label-primary=#FBFBFB,label-secondary=#C0C0C7,label-tertiary=#9E9EAA,label-quaternary=#767686,separator=#3E3D4A,border-strong=#FBFBFB,border-base=#2A2A34,border-soft=#23232B,border-none=none,fill-primary=#2E2E38,fill-secondary=#2A2A34,fill-tertiary=#26262F,fill-quaternary=#23232B,fill-none=none,shadow-minor=#3E3D4A,shadow-ambient=#42424F,shadow-penumbra=#474755,shadow-major=#4E4E5D,none=none",
-        "srgb|#101012|Neutral|label-primary=#FAFAFA,label-secondary=#BFBFBF,label-tertiary=#9D9D9D,label-quaternary=#757575,separator=#393939,border-strong=#FAFAFA,border-base=#202020,border-soft=#181818,border-none=none,fill-primary=#242424,fill-secondary=#202020,fill-tertiary=#1C1C1C,fill-quaternary=#181818,fill-none=none,shadow-minor=#393939,shadow-ambient=#3E3E3E,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
-        "srgb|#101012|Tinted|label-primary=#FAFAFB,label-secondary=#BFBFC6,label-tertiary=#9D9DA8,label-quaternary=#737384,separator=#383844,border-strong=#FAFAFB,border-base=#1F1F27,border-soft=#18171E,border-none=none,fill-primary=#23232B,fill-secondary=#1F1F27,fill-tertiary=#1B1B22,fill-quaternary=#18171E,fill-none=none,shadow-minor=#383844,shadow-ambient=#3D3D49,shadow-penumbra=#434250,shadow-major=#494958,none=none",
-        "srgb|#3478F6|Neutral|label-primary=#080808,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#5F5F5F,separator=#676767,border-strong=#080808,border-base=#6F6F6F,border-soft=#777777,border-none=none,fill-primary=#6B6B6B,fill-secondary=#6F6F6F,fill-tertiary=#737373,fill-quaternary=#777777,fill-none=none,shadow-minor=#676767,shadow-ambient=#646464,shadow-penumbra=#5F5F5F,shadow-major=#595959,none=none",
-        "srgb|#3478F6|Tinted|label-primary=#08080B,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#5E5D6F,separator=#666678,border-strong=#08080B,border-base=#6D6D7E,border-soft=#757585,border-none=none,fill-primary=#69697B,fill-secondary=#6D6D7E,fill-tertiary=#717182,fill-quaternary=#757585,fill-none=none,shadow-minor=#666678,shadow-ambient=#636275,shadow-penumbra=#5E5E6F,shadow-major=#585868,none=none",
-        "dim|#FFFFFF|Neutral|label-primary=#141414,label-secondary=#767676,label-tertiary=#949494,label-quaternary=#C2C2C2,separator=#ECECEC,border-strong=#141414,border-base=#D8D8D8,border-soft=#E8E8E8,border-none=none,fill-primary=#BEBEBE,fill-secondary=#C4C4C4,fill-tertiary=#D1D1D1,fill-quaternary=#DFDFDF,fill-none=none,shadow-minor=#ECECEC,shadow-ambient=#EAEAEA,shadow-penumbra=#E6E6E6,shadow-major=#E2E2E2,none=none",
-        "dim|#FFFFFF|Tinted|label-primary=#141419,label-secondary=#757585,label-tertiary=#9493A0,label-quaternary=#C1C1C9,separator=#ECECEE,border-strong=#141419,border-base=#D7D7DC,border-soft=#E8E8EA,border-none=none,fill-primary=#BDBDC4,fill-secondary=#C3C3CA,fill-tertiary=#D1D1D6,fill-quaternary=#DEDFE2,fill-none=none,shadow-minor=#ECECEE,shadow-ambient=#E9E9EC,shadow-penumbra=#E6E6E9,shadow-major=#E1E1E5,none=none",
-        "dim|#F2F2F7|Neutral|label-primary=#131313,label-secondary=#6F6F6F,label-tertiary=#8C8C8C,label-quaternary=#B8B8B8,separator=#E0E0E0,border-strong=#131313,border-base=#CDCDCD,border-soft=#DCDCDC,border-none=none,fill-primary=#B3B3B3,fill-secondary=#B9B9B9,fill-tertiary=#C6C6C6,fill-quaternary=#D3D3D3,fill-none=none,shadow-minor=#E0E0E0,shadow-ambient=#DDDDDD,shadow-penumbra=#D9D9D9,shadow-major=#D5D5D5,none=none",
-        "dim|#F2F2F7|Tinted|label-primary=#131218,label-secondary=#6E6D7F,label-tertiary=#8C8B99,label-quaternary=#B8B8C0,separator=#DFDFE3,border-strong=#131218,border-base=#CCCCD2,border-soft=#DCDCE0,border-none=none,fill-primary=#B2B2BB,fill-secondary=#B9B9C1,fill-tertiary=#C6C6CC,fill-quaternary=#D3D3D8,fill-none=none,shadow-minor=#DFDFE3,shadow-ambient=#DDDDE0,shadow-penumbra=#D9D9DD,shadow-major=#D4D4D9,none=none",
-        "dim|#7F7F7F|Neutral|label-primary=#080808,label-secondary=#161616,label-tertiary=#363636,label-quaternary=#606060,separator=#696969,border-strong=#080808,border-base=#656565,border-soft=#707070,border-none=none,fill-primary=#525252,fill-secondary=#575757,fill-tertiary=#606060,fill-quaternary=#696969,fill-none=none,shadow-minor=#696969,shadow-ambient=#656565,shadow-penumbra=#606060,shadow-major=#5A5A5A,none=none",
-        "dim|#7F7F7F|Tinted|label-primary=#08080B,label-secondary=#16161B,label-tertiary=#363541,label-quaternary=#5F5E70,separator=#676779,border-strong=#08080B,border-base=#636375,border-soft=#6E6E7F,border-none=none,fill-primary=#515160,fill-secondary=#555565,fill-tertiary=#5E5E70,fill-quaternary=#68677A,fill-none=none,shadow-minor=#676779,shadow-ambient=#646376,shadow-penumbra=#5F5F71,shadow-major=#59596A,none=none",
-        "dim|#1C1C1E|Neutral|label-primary=#FBFBFB,label-secondary=#C0C0C0,label-tertiary=#9F9F9F,label-quaternary=#787878,separator=#3F3F3F,border-strong=#FBFBFB,border-base=#323232,border-soft=#282828,border-none=none,fill-primary=#424242,fill-secondary=#3E3E3E,fill-tertiary=#363636,fill-quaternary=#2E2E2E,fill-none=none,shadow-minor=#3F3F3F,shadow-ambient=#434343,shadow-penumbra=#484848,shadow-major=#4F4F4F,none=none",
-        "dim|#1C1C1E|Tinted|label-primary=#FBFBFB,label-secondary=#C0C0C7,label-tertiary=#9E9EAA,label-quaternary=#767686,separator=#3E3D4A,border-strong=#FBFBFB,border-base=#31313B,border-soft=#282730,border-none=none,fill-primary=#41414E,fill-secondary=#3D3D49,fill-tertiary=#353540,fill-quaternary=#2D2C36,fill-none=none,shadow-minor=#3E3D4A,shadow-ambient=#42424F,shadow-penumbra=#474755,shadow-major=#4E4E5D,none=none",
-        "dim|#101012|Neutral|label-primary=#FAFAFA,label-secondary=#BFBFBF,label-tertiary=#9D9D9D,label-quaternary=#757575,separator=#393939,border-strong=#FAFAFA,border-base=#252525,border-soft=#1C1C1C,border-none=none,fill-primary=#353535,fill-secondary=#313131,fill-tertiary=#292929,fill-quaternary=#212121,fill-none=none,shadow-minor=#393939,shadow-ambient=#3E3E3E,shadow-penumbra=#434343,shadow-major=#4A4A4A,none=none",
-        "dim|#101012|Tinted|label-primary=#FAFAFB,label-secondary=#BFBFC6,label-tertiary=#9D9DA8,label-quaternary=#737384,separator=#383844,border-strong=#FAFAFB,border-base=#25242D,border-soft=#1C1C22,border-none=none,fill-primary=#34343F,fill-secondary=#30303B,fill-tertiary=#282831,fill-quaternary=#212028,fill-none=none,shadow-minor=#383844,shadow-ambient=#3D3D49,shadow-penumbra=#434250,shadow-major=#494958,none=none",
-        "dim|#3478F6|Neutral|label-primary=#080808,label-secondary=#141414,label-tertiary=#353535,label-quaternary=#5F5F5F,separator=#676767,border-strong=#080808,border-base=#646464,border-soft=#6F6F6F,border-none=none,fill-primary=#525252,fill-secondary=#565656,fill-tertiary=#5F5F5F,fill-quaternary=#696969,fill-none=none,shadow-minor=#676767,shadow-ambient=#646464,shadow-penumbra=#5F5F5F,shadow-major=#595959,none=none",
-        "dim|#3478F6|Tinted|label-primary=#08080B,label-secondary=#15141A,label-tertiary=#35343F,label-quaternary=#5E5D6F,separator=#666678,border-strong=#08080B,border-base=#626275,border-soft=#6D6D7E,border-none=none,fill-primary=#505060,fill-secondary=#555465,fill-tertiary=#5E5D6F,fill-quaternary=#676779,fill-none=none,shadow-minor=#666678,shadow-ambient=#636275,shadow-penumbra=#5E5E6F,shadow-major=#585868,none=none",
-    ];
-
-    /// Render one golden grid line for `(vc, bg, policy)` in the frozen format.
-    fn resolve_set_golden_line(
-        vc: &ViewingConditions,
-        vc_name: &str,
-        bg_hex: &str,
-        pol_name: &str,
-        chroma: crate::semantic::RoleChroma,
-    ) -> String {
-        use crate::semantic::{Resolved, RoleTable, resolve_set};
-        let bg = BgInput::solid(bg_hex).unwrap();
-        let table = RoleTable::default().with_chroma(chroma);
-        let cells: Vec<String> = resolve_set(&bg, &table, vc)
-            .iter()
-            .map(|(role, res)| {
-                let v = match res {
-                    Resolved::Color { solved, .. } => solved.hex().to_string(),
-                    // Дефолтная таблица не несёт Ladder/AlphaAnalog/Glow — недостижимо здесь.
-                    Resolved::Translucent(r) => format!("rgba({},{})", r.tint_hex(), r.alpha()),
-                    Resolved::Glow(g) => format!("glow({},{})", g.halo_hex(), g.alpha()),
-                    Resolved::GlowIndeterminate(_) => "glow-indeterminate".to_string(),
-                    Resolved::Material(m) => format!("material({},{:.4})", m.tint_hex(), m.alpha()),
-                    Resolved::None => "none".to_string(),
-                    Resolved::Failure(failure) => crate::test_support::role_failure_repr(failure),
-                };
-                format!("{}={}", role.key(), v)
-            })
-            .collect();
-        format!("{vc_name}|{bg_hex}|{pol_name}|{}", cells.join(","))
-    }
-
-    /// Frozen full semantic emission grid. It pins both candidate-only roles and
-    /// the recipe boundary's caller-owned final-emission criteria so a future
-    /// change cannot silently restore solver WCAG authority or update bytes by
-    /// snapshot acceptance alone.
-    #[test]
-    fn resolve_set_hex_matches_golden() {
-        use crate::semantic::RoleChroma;
-        let bgs = [
-            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
-        ];
-        let policies = [
-            ("Neutral", RoleChroma::Neutral),
-            (
-                "Tinted",
-                RoleChroma::Tinted {
-                    hue_deg: 286.0,
-                    ratio: 0.10,
-                },
-            ),
-        ];
-        let mut idx = 0usize;
-        for (vc, vc_name) in vcs() {
-            for bg_hex in bgs {
-                for (pol_name, chroma) in policies {
-                    let got = resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma);
-                    let want = RESOLVE_SET_GOLDEN[idx];
-                    assert_eq!(got, want, "golden drift at grid index {idx}");
-                    idx += 1;
-                }
-            }
-        }
-        assert_eq!(
-            idx,
-            RESOLVE_SET_GOLDEN.len(),
-            "golden grid size changed: covered {idx}, table has {}",
-            RESOLVE_SET_GOLDEN.len()
-        );
-    }
-
     // ------------------------------------------------------------------
     // #297 local-search truth: инструментированные exact-candidate тесты.
     // Оба локальных поиска пишут каждый материализованный on-grid кандидат в
@@ -2871,109 +2391,14 @@ mod tests {
             other => panic!("expected BoundedSearchExhausted, got {other:?}"),
         }
     }
-
-    /// Реальный контрпример против глобального optimum-claim в dJ':
-    /// dark-on-light цель 98.75 на белом. Сид квантуется в #000000 (dj=100.0,
-    /// err 1.25 > DJ_BUDGET); walk смотрит ТОЛЬКО от фона (к меньшему J'), где
-    /// distinct-соседей нет вовсе — весь examined-набор состоит из ОДНОГО цвета,
-    /// и bounded selection отдаёт его. Но #010101
-    /// (та же полярность, тот же policy-универсум серых) достигает 98.0964 —
-    /// строго ближе к цели, но лежит НАЗАД (к фону), куда walk не смотрит.
-    #[test]
-    fn dj_degraded_selection_is_local_not_global() {
-        let vc = ViewingConditions::srgb();
-        let bg = BgInput::solid("#FFFFFF").unwrap();
-        let magnitude = 98.75;
-        probe_log::start();
-        let dj = solve_dj(
-            &bg,
-            magnitude,
-            1.0,
-            Hue::deg(0.0),
-            ChromaPolicy::Neutral,
-            &vc,
-        )
-        .expect("far dark-on-light dJ' target returns a typed bounded-selection outcome");
-        let examined = probe_log::take();
-
-        assert!(
-            dj.degraded,
-            "seed misses DJ_BUDGET and the wall stops the walk"
-        );
-        assert_eq!(dj.solved.hex(), "#000000");
-        // Отчёт — только из examined-набора (locality of report)…
-        assert!(
-            examined
-                .iter()
-                .any(|(h, m)| h == dj.solved.hex() && *m == dj.achieved_dj),
-            "reported degraded result must be an examined candidate"
-        );
-        // …и весь набор — один-единственный цвет: поиск не «перебрал все hex».
-        assert!(
-            !examined.is_empty() && examined.iter().all(|(h, _)| h == "#000000"),
-            "every examined candidate is the wall colour; got {examined:?}"
-        );
-
-        // Глобальная правда: #010101 строго ближе к запрошенной величине.
-        let bg_disp = bg.encoded_display();
-        let jp_bg = jp_of_linear(
-            [
-                srgb_gamma_inv(bg_disp[0]),
-                srgb_gamma_inv(bg_disp[1]),
-                srgb_gamma_inv(bg_disp[2]),
-            ],
-            &vc,
-        );
-        let better_dj = (jp_of_linear(srgb_from_hex("#010101").unwrap(), &vc) - jp_bg).abs();
-        assert!(
-            (better_dj - magnitude).abs() + 0.5 < (dj.achieved_dj - magnitude).abs(),
-            "#010101 (dj {better_dj:.4}) is strictly closer to {magnitude} than reported {:.4}",
-            dj.achieved_dj
-        );
-        assert!(
-            !examined.iter().any(|(h, _)| h == "#010101"),
-            "the strictly-better on-grid candidate was never examined"
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn _emit_resolve_set_golden() {
-        use crate::semantic::RoleChroma;
-        let bgs = [
-            "#FFFFFF", "#F2F2F7", "#7F7F7F", "#1C1C1E", "#101012", "#3478F6",
-        ];
-        let policies = [
-            ("Neutral", RoleChroma::Neutral),
-            (
-                "Tinted",
-                RoleChroma::Tinted {
-                    hue_deg: 286.0,
-                    ratio: 0.10,
-                },
-            ),
-        ];
-        for (vc, vc_name) in vcs() {
-            for bg_hex in bgs {
-                for (pol_name, chroma) in policies {
-                    eprintln!(
-                        "\"{}\",",
-                        resolve_set_golden_line(&vc, vc_name, bg_hex, pol_name, chroma)
-                    );
-                }
-            }
-        }
-    }
 }
 
 // Научные локи + EXPOSURE (волна science/constants-objectivization). Бюджеты
-// приёмки QUANT_BUDGET (Lc) и DJ_BUDGET (dJ CAM16-UCS) характеризуются как «N x
-// медианного шага 8-бит серой сетки»; экспозиция мерит долю целей, чья приёмка
-// зависит от точного бюджета.
+// приёмки QUANT_BUDGET характеризует остаточную ошибку на 8-битной серой сетке.
+// Этот численный контроль не является законом человеческого восприятия.
 #[cfg(test)]
 mod exposure_locks {
-    use super::{DJ_BUDGET, QUANT_BUDGET};
-    use crate::lcs::LcsColor;
+    use super::QUANT_BUDGET;
 
     fn grey(i: u8) -> String {
         format!("#{i:02X}{i:02X}{i:02X}")
@@ -2989,11 +2414,7 @@ mod exposure_locks {
             })
             .collect()
     }
-    fn grey_jp() -> Vec<f64> {
-        (0u16..=255)
-            .map(|i| LcsColor::from_hex(&grey(i as u8)).unwrap().jp())
-            .collect()
-    }
+
     fn median_step(vals: &[f64]) -> f64 {
         let mut s: Vec<f64> = vals.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
         s.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -3017,21 +2438,6 @@ mod exposure_locks {
         );
     }
 
-    /// (c) DJ_BUDGET ~ 1.5x медианного dJ-шага 8-бит серой сетки (замер ~0.39).
-    #[test]
-    fn dj_budget_tracks_grid_step() {
-        let step = median_step(&grey_jp());
-        let ratio = DJ_BUDGET / step;
-        assert!(
-            (0.30..0.50).contains(&step),
-            "dJ-шаг {step:.4} вне [0.30,0.50)"
-        );
-        assert!(
-            (1.2..2.0).contains(&ratio),
-            "DJ_BUDGET/шаг={ratio:.3} вне [1.2,2)"
-        );
-    }
-
     fn nearest_err(t: f64, grid: &[f64]) -> f64 {
         grid.iter()
             .map(|g| (g - t).abs())
@@ -3048,9 +2454,8 @@ mod exposure_locks {
     /// сетки и этих бюджетов. Точные счётчики детерминированы (фиксированные
     /// сетки, фиксированный шаг свипа) и запинены: дрейф = осознанная правка.
     #[test]
-    fn exposure_quant_and_dj_budgets() {
+    fn exposure_quant_budget() {
         let lc = grey_lc();
-        let jp = grey_jp();
         let (mut fq, mut tq) = (0usize, 0usize);
         let mut t = 0.0;
         while t <= 106.0 {
@@ -3061,25 +2466,10 @@ mod exposure_locks {
             tq += 1;
             t += 0.05;
         }
-        let (mut fd, mut td) = (0usize, 0usize);
-        let mut t = 0.0;
-        while t <= 100.0 {
-            let e = nearest_err(t, &jp);
-            if (0.5 * DJ_BUDGET..1.5 * DJ_BUDGET).contains(&e) {
-                fd += 1;
-            }
-            td += 1;
-            t += 0.05;
-        }
         assert_eq!(
             (fq, tq),
             (39, 2121),
             "QUANT_BUDGET flip-share drifted: {fq}/{tq} (pinned 39/2121 = 1.84%)"
-        );
-        assert_eq!(
-            (fd, td),
-            (31, 2001),
-            "DJ_BUDGET flip-share drifted: {fd}/{td} (pinned 31/2001 = 1.55%)"
         );
     }
 }

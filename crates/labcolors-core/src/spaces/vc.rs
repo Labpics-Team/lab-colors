@@ -426,6 +426,7 @@ impl ViewingConditions {
     /// just `(c, nc)`: a caller-built VC that aliases the surround pair but
     /// differs in adaptation (`aw`/`fl`/`n`/…) must fall through to the live
     /// solver, not be served another condition's cached set.
+    #[cfg(test)]
     pub(crate) fn fingerprint(&self) -> u64 {
         // Destructure rather than list `self.field`s: with no `..`, a field
         // added to `ViewingConditions` is an E0027 compile error here until it is

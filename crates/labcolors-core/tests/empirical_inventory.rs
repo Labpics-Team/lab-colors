@@ -36,8 +36,7 @@ use common::source::{ProductionLine, production_records, production_syntax_lines
 // Audit surface — the perceptual modules the detector scans.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PERCEPTUAL_MODULES: [&str; 7] = [
-    "semantic.rs",
+const PERCEPTUAL_MODULES: [&str; 6] = [
     "scale.rs",
     "spaces/oklab.rs",
     "neutral.rs",
@@ -58,7 +57,7 @@ const PERCEPTUAL_MODULES: [&str; 7] = [
 // Why a SUBSET: the two modules below are POLICY modules — their magnitudes are
 // tunable perceptual policy (role fractions and neutral thresholds). The remaining
 // modules are STANDARD-MODEL or bounded numeric-search transforms.
-const POLICY_LITERAL_MODULES: &[&str] = &["semantic.rs", "neutral.rs"];
+const POLICY_LITERAL_MODULES: &[&str] = &["neutral.rs"];
 
 /// Bare float literal VALUES that are not tunable perceptual policy in the
 /// neutral policy module. The allowlist is deliberately module-scoped: a value
@@ -78,21 +77,8 @@ const BARE_FLOAT_ALLOWLIST_NEUTRAL: &[&str] = &[
     "360.0", // full-turn in degrees (hue-circle modulus, rem_euclid(360)).
 ];
 
-/// `semantic.rs` owns the frozen recipe-facing WCAG report projection, so its
-/// two normative ratio literals are admitted there and nowhere else. They are
-/// not shared with the other policy module. Numerical/model modules remain
-/// outside this deliberately policy-only bare-literal gate and are governed by
-/// the named-constant audit; this allowlist grants them no exemption.
-const BARE_FLOAT_ALLOWLIST_SEMANTIC: &[&str] = &[
-    "0.0", "0.5", "1.0", "2.0",
-    "3.0", // WCAG 2.2 SC 1.4.11 / large-text normative contrast ratio.
-    "4.5", // WCAG 2.2 SC 1.4.3 default-text normative contrast ratio.
-    "100.0", "180.0", "255.0", "300.0", "360.0",
-];
-
 fn bare_float_allowlist(module: &str) -> &'static [&'static str] {
     match module {
-        "semantic.rs" => BARE_FLOAT_ALLOWLIST_SEMANTIC,
         "neutral.rs" => BARE_FLOAT_ALLOWLIST_NEUTRAL,
         other => panic!("bare-float policy scanner has no allowlist for {other}"),
     }
@@ -1273,17 +1259,17 @@ fn gate5_no_untracked_bare_float_literals() {
 // this implementation mutates ONLY an in-memory String, so it is hermetic.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Splice `snippet` at the top of an in-memory copy of `semantic.rs`, run the
+/// Splice `snippet` at the top of an in-memory copy of `neutral.rs`, run the
 /// real scanner, and return the names of all UNMARKED detected sites. The helper
 /// is the single mirror of GATE-1's detection path, so every sub-probe exercises
 /// production behaviour verbatim (INV-4).
 fn unmarked_after_splice(snippet: &str) -> Vec<String> {
-    let original = read_module("semantic.rs");
+    let original = read_module("neutral.rs");
     let mut spliced = String::with_capacity(original.len() + snippet.len() + 2);
     spliced.push_str(snippet);
     spliced.push('\n');
     spliced.push_str(&original);
-    scan_source("semantic.rs", &spliced, NUMERIC_METHOD_ALLOWLIST)
+    scan_source("neutral.rs", &spliced, NUMERIC_METHOD_ALLOWLIST)
         .into_iter()
         .filter(|c| !c.has_marker)
         .map(|c| c.name)
@@ -1291,7 +1277,7 @@ fn unmarked_after_splice(snippet: &str) -> Vec<String> {
 }
 
 /// GATE-5 mirror of `unmarked_after_splice`: prepend `snippet` to an in-memory copy
-/// of `semantic.rs` (a POLICY module) and return the values of every un-allowlisted
+/// of `neutral.rs` (a POLICY module) and return the values of every un-allowlisted
 /// bare float the *same* GATE-5 scanner flags — so the RED-proof exercises the real
 /// bare-literal detection verbatim (INV-4), not a green-from-birth copy.
 fn bare_floats_after_splice_in(module: &str, snippet: &str) -> Vec<String> {
@@ -1307,16 +1293,12 @@ fn bare_floats_after_splice_in(module: &str, snippet: &str) -> Vec<String> {
 }
 
 fn bare_floats_after_splice(snippet: &str) -> Vec<String> {
-    bare_floats_after_splice_in("semantic.rs", snippet)
+    bare_floats_after_splice_in("neutral.rs", snippet)
 }
 
 #[test]
-fn wcag_ratio_literals_are_scoped_to_the_semantic_projection() {
+fn wcag_ratio_literals_do_not_create_policy_module_exemptions() {
     let snippet = "fn _audit_wcag_ratios() -> (f64, f64) { (3.0, 4.5) }";
-    assert!(
-        bare_floats_after_splice_in("semantic.rs", snippet).is_empty(),
-        "semantic.rs owns the frozen recipe-facing WCAG report projection"
-    );
     assert_eq!(
         bare_floats_after_splice_in("neutral.rs", snippet),
         ["3.0".to_string(), "4.5".to_string()],
@@ -1462,7 +1444,7 @@ fn red_proof_audit_probe() {
     //    green-from-birth. The probe const must be a real, currently-detected,
     //    inventoried row so a genuine drift is observable.
     let detected = scan_tree();
-    let probe_name = "DECORATIVE_FLOOR_MIN";
+    let probe_name = "QUANT_BUDGET";
     let probe_const = detected
         .iter()
         .find(|c| c.name == probe_name)

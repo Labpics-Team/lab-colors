@@ -37,10 +37,6 @@ const XYZ_D65_TO_LMS_OKLAB_20210125: [[f64; 3]; 3] = [
     [0.0481771893596242, 0.2642395317527308,  0.6335478284694309],
 ];
 
-/// Canonical degree domain of a hue angle.
-pub(crate) const HUE_DEG_MIN_INCLUSIVE: f64 = 0.0;
-pub(crate) const HUE_DEG_MAX_EXCLUSIVE: f64 = 360.0;
-
 #[rustfmt::skip]
 pub(crate) const OKLAB_TO_LMS: [[f64; 3]; 3] = [
     [1.0,  0.3963377774,  0.2158037573],
@@ -122,64 +118,10 @@ pub(crate) fn oklab_hue(rgb: [f64; 3]) -> f64 {
     if deg < 0.0 { deg + 360.0 } else { deg }
 }
 
-/// Oklab hue identity carried by one exact encoded-sRGB8 stimulus.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum OklabHue {
-    /// Equal encoded channel bytes: there is no chromatic direction to amplify.
-    Achromatic,
-    /// Unequal encoded channel bytes with their Oklab angular coordinate.
-    Chromatic { degrees: f64 },
-}
-
-/// Classify an exact emitted sRGB8 stimulus before deriving its Oklab angle.
-///
-/// The grey-axis branch is exact byte geometry. It prevents `atan2` of matrix
-/// round-off from becoming an invented saturated colour without introducing a
-/// tolerance or a perceptual claim.
-pub(crate) fn hue_of_srgb8(source: crate::Srgb8) -> OklabHue {
-    if source.is_achromatic() {
-        return OklabHue::Achromatic;
-    }
-    let linear = super::srgb::srgb_linear_from_srgb8(source);
-    OklabHue::Chromatic {
-        degrees: oklab_hue(linear),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spaces::srgb::{srgb_from_hex, srgb_gamma_inv};
-
-    #[test]
-    fn srgb8_hue_classification_is_exact_and_returns_chromatic_coordinates() {
-        for base in 0_i16..=255 {
-            for red_delta in -1_i16..=1 {
-                for green_delta in -1_i16..=1 {
-                    for blue_delta in -1_i16..=1 {
-                        let channels = [base + red_delta, base + green_delta, base + blue_delta];
-                        if channels.iter().any(|channel| !(0..=255).contains(channel)) {
-                            continue;
-                        }
-                        let rgb = channels.map(|channel| channel as u8);
-                        let source = crate::Srgb8::new(rgb);
-                        if source.is_achromatic() {
-                            assert_eq!(hue_of_srgb8(source), OklabHue::Achromatic);
-                        } else {
-                            let OklabHue::Chromatic { degrees } = hue_of_srgb8(source) else {
-                                panic!(
-                                    "unequal sRGB8 bytes must retain a chromatic direction: {rgb:?}"
-                                );
-                            };
-                            let linear =
-                                rgb.map(|channel| srgb_gamma_inv(f64::from(channel) / 255.0));
-                            assert_eq!(degrees.to_bits(), oklab_hue(linear).to_bits());
-                        }
-                    }
-                }
-            }
-        }
-    }
+    use crate::spaces::srgb::srgb_from_hex;
 
     #[test]
     fn white_gives_l1_a0_b0() {

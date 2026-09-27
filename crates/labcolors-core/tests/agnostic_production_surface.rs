@@ -662,22 +662,29 @@ fn red_proof_definition_scanner_ignores_prefix_shared_production_types() {
 #[test]
 fn cfg_test_module_exclusion_covers_the_relocated_oracles() {
     let excluded = cfg_test_module_files();
-    // Retired recipe oracle modules were deleted by C7c. Only the nested
-    // cfg(test) config fixtures remain and must stay excluded from production
-    // cleanliness scans.
-    for expected in ["config/preset.rs", "config/fixture.rs", "config/tests.rs"] {
+    // Проверочные эталоны остаются вне продукта; удалённый конфиг не нужен
+    // для проверки самого механизма исключения.
+    for expected in [
+        "point_representation.rs",
+        "point_representation/frontier_tests.rs",
+        "observation_differential_oracle_tests.rs",
+        "golden_tests.rs",
+    ] {
         let path = src_dir().join(expected);
+        assert!(path.is_file(), "проверочный эталон отсутствует: {expected}");
         assert!(
             excluded.contains(&path),
-            "cfg(test) module exclusion must cover {expected} (derivation drifted); \
-             excluded set: {excluded:#?}"
+            "эталон попал в продуктовую поверхность: {expected}"
         );
     }
-    // And a genuine production module must NOT be excluded.
-    assert!(
-        !excluded.contains(&src_dir().join("semantic.rs")),
-        "semantic.rs is production and must be scanned, not excluded"
-    );
+    for actual in ["program.rs", "composition.rs", "authority.rs"] {
+        let path = src_dir().join(actual);
+        assert!(path.is_file(), "действующий владелец отсутствует: {actual}");
+        assert!(
+            !excluded.contains(&path),
+            "действующий владелец исключён из проверки: {actual}"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

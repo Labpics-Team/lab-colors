@@ -14,23 +14,6 @@
     "coverage": "migrated-sites-only-v1",
     "sites": [
       {
-        "siteId": "glow-target-or-maximum-v1",
-        "stableOutcomes": [
-          "bit-exact",
-          "indeterminate"
-        ],
-        "compatibilityReleases": [
-          "glow-cam16-ucs-jprime-target-or-max-v1"
-        ],
-        "evidenceClasses": [
-          "bit-exact"
-        ],
-        "artifactIds": [],
-        "boundIds": [],
-        "proofIds": [],
-        "runtimeAttestations": []
-      },
-      {
         "siteId": "point-support-retained-reference-surplus-v1",
         "stableOutcomes": [
           "canonical-finite-bounded"
@@ -71,6 +54,6 @@
         "runtimeAttestations": []
       }
     ],
-    "checksum": "418d143e"
+    "checksum": "4ba70b1b"
   }
 }
