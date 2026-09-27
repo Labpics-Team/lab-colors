@@ -94,7 +94,12 @@ fn direct_core_oracle() {
 #[test]
 fn binary_stdin_file_and_jsonl_equal_the_direct_fresh_process() {
     let oracle = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "direct_core_oracle", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "direct_core_oracle",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .output()
         .unwrap();
     assert!(
