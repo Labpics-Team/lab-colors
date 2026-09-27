@@ -293,8 +293,14 @@ impl AdmissionKeyV1 {
         producer_revision: &str,
         producer_content_identity: [u8; 32],
     ) -> Result<Self, CertificateErrorV1> {
-        Self::try_new_for_class(runtime_artifact_id, operation, context_id,
-            producer_revision, producer_content_identity, EnvelopeClassV1::Transport)
+        Self::try_new_for_class(
+            runtime_artifact_id,
+            operation,
+            context_id,
+            producer_revision,
+            producer_content_identity,
+            EnvelopeClassV1::Transport,
+        )
     }
 
     fn try_new_for_class(
@@ -337,11 +343,17 @@ impl AdmissionKeyV1 {
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
         let class = match self.authority_kind {
             CertificateAuthorityKindV1::GenericTypedCertificate => EnvelopeClassV1::Transport,
-            CertificateAuthorityKindV1::DeclaredModeledPointProfile => EnvelopeClassV1::DeclaredPoint,
+            CertificateAuthorityKindV1::DeclaredModeledPointProfile => {
+                EnvelopeClassV1::DeclaredPoint
+            }
         };
         Self::try_new_for_class(
-            &self.runtime_artifact_id, self.operation, &self.context_id,
-            &self.producer_revision, self.producer_content_identity, class,
+            &self.runtime_artifact_id,
+            self.operation,
+            &self.context_id,
+            &self.producer_revision,
+            self.producer_content_identity,
+            class,
         )
     }
 
@@ -585,7 +597,6 @@ impl UntrustedEnvelopeV1 {
     }
 
     fn decode_class(bytes: &[u8], class: EnvelopeClassV1) -> Result<Self, CertificateErrorV1> {
-
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }

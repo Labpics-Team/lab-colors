@@ -127,11 +127,18 @@ impl<'a> CoreSourceTreeDescriptorV1<'a> {
     }
 }
 
-pub(super) fn current_key(context: &str, content: [u8; 32]) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
+pub(super) fn current_key(
+    context: &str,
+    content: [u8; 32],
+) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
     key_from_descriptor(SOURCE_DESCRIPTOR_V1, context, Some(content))
 }
 
-fn key_from_descriptor(bytes: &[u8], context: &str, content: Option<[u8; 32]>) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
+fn key_from_descriptor(
+    bytes: &[u8],
+    context: &str,
+    content: Option<[u8; 32]>,
+) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
     let descriptor = CoreSourceTreeDescriptorV1::parse(bytes)?;
     let identity = descriptor.content_identity();
     let mut runtime_id = [0_u8; RUNTIME_PREFIX_V1.len() + 64];
@@ -152,7 +159,8 @@ fn key_from_descriptor(bytes: &[u8], context: &str, content: Option<[u8; 32]>) -
         context,
         descriptor.revision,
         content.unwrap_or(identity),
-    ).map_err(Into::into)
+    )
+    .map_err(Into::into)
 }
 
 fn issue_from_descriptor(bytes: &[u8]) -> Result<SourceCertificateV1, CertificateProducerErrorV1> {
