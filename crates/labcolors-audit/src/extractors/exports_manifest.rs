@@ -571,17 +571,18 @@ mod tests {
             .to_path_buf()
     }
 
+    const REQUIRED_CRATES: &[&str] = &[
+        "labcolors-audit", "labcolors-conformance", "labcolors-core",
+        "labcolors-evaluate-cli", "labcolors-ffi", "labcolors-transport-cli", "labcolors-wasm",
+    ];
+
     #[test]
-    fn extracts_all_six_workspace_crates() {
+    fn extracts_all_declared_workspace_consumers() {
         let manifests = extract_exports_metadata(&workspace_root());
-        let names: Vec<&str> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
-        assert!(names.contains(&"labcolors-core"));
-        assert!(names.contains(&"labcolors-audit"));
-        assert!(names.contains(&"labcolors-conformance"));
-        assert!(names.contains(&"labcolors-ffi"));
-        assert!(names.contains(&"labcolors-wasm"));
-        assert!(names.contains(&"labcolors-transport-cli"));
-        assert_eq!(manifests.len(), 6);
+        let names: Vec<_> = manifests.iter().map(|item| item.crate_name.as_str()).collect();
+        assert_eq!(names, REQUIRED_CRATES);
+        let evaluator = manifests.iter().find(|m|m.crate_name == "labcolors-evaluate-cli").unwrap();
+        assert!(evaluator.targets.iter().any(|t|t.kind == TargetKind::Bin && t.name == "labcolors-evaluate"));
     }
 
     #[test]
@@ -638,16 +639,18 @@ mod tests {
     }
 
     #[test]
-    fn sabotage_missing_crate_fails() {
-        // This test documents the sabotage contract: if someone removes a crate
-        // from the workspace, the count assertion in extracts_all_six_workspace_crates
-        // will fail. We assert the invariant here explicitly.
+    fn missing_or_substituted_consumer_does_not_match_the_workspace_contract() {
         let manifests = extract_exports_metadata(&workspace_root());
-        assert_eq!(
-            manifests.len(),
-            6,
-            "SABOTAGE: expected exactly 6 workspace crates; removal or addition breaks this"
-        );
+        let names: Vec<_> = manifests.iter().map(|m|m.crate_name.as_str()).collect();
+        assert_eq!(names, REQUIRED_CRATES);
+        // Контроли проверяют ту же норму имён, не уменьшают исторический count.
+        for i in 0..names.len() {
+            let mut missing = names.clone(); missing.remove(i);
+            assert_ne!(missing, REQUIRED_CRATES);
+            let mut replaced = names.clone(); replaced[i] = "unrelated-padding-crate";
+            assert_eq!(replaced.len(), REQUIRED_CRATES.len());
+            assert_ne!(replaced, REQUIRED_CRATES);
+        }
     }
 
     #[test]

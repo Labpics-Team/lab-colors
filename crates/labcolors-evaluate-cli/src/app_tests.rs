@@ -288,3 +288,12 @@ fn semantic_results_are_complete_before_writing_and_help_never_reads_input() {
     assert!(String::from_utf8_lossy(&out).contains("labcolors-evaluate"));
     assert!(err.is_empty());
 }
+
+#[test]
+fn operational_limits_are_the_versioned_port_contract_not_a_relaxed_runtime_default() {
+    assert_eq!(MAX_INPUT_BYTES, 2 * 1024 * 1024);
+    assert_eq!(MAX_PROGRAM_BYTES, 1024 * 1024);
+    assert_eq!(crate::request::MAX_SCENARIOS, 64);
+    assert_eq!(crate::request::MAX_SURFACES, 4096);
+    assert_eq!(MAX_OUTPUT_BYTES, 8192);
+}
