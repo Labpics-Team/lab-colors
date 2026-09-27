@@ -193,7 +193,7 @@ impl CertificateAuthorityKindV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::GenericTypedCertificate => GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1,
-            Self::DeclaredModeledPointProfile => 0x04,
+            Self::DeclaredModeledPointProfile => 0x04, // LCEN V1: совместный профиль; 1/2/3 сохраняют отдельные ветви.
         }
     }
 
@@ -225,7 +225,7 @@ impl CertificatePayloadTypeV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::NonSemanticTransportPayloadV1 => NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1,
-            Self::DeclaredPointQualityV1 => 0x02,
+            Self::DeclaredPointQualityV1 => 0x02, // LCPQ V1: фиксированные 302 байта; 0x01 остаётся транспортом.
         }
     }
 
