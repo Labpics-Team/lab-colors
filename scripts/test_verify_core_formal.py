@@ -16,7 +16,7 @@ from verify_core_formal import (
 )
 
 
-from formal_contracts import MUTANTS
+from formal_contracts import MUTANTS, WCAG_INTERVAL_PARTITIONS
 
 MUTANT = MUTANTS[0]
 MUTANT_HARNESS = MUTANT[2]
@@ -52,6 +52,18 @@ class FormalReportTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 report = copy.deepcopy(original)
                 report["verification_results"]["results"] = changed
+                with self.assertRaises(ValueError):
+                    validate_report(report)
+
+    def test_each_wcag_partition_is_mandatory_even_with_adjusted_summary(self):
+        for partition in WCAG_INTERVAL_PARTITIONS:
+            with self.subTest(partition=partition):
+                report = valid_report()
+                verification = report["verification_results"]
+                verification["results"] = [r for r in verification["results"]
+                    if r["harness_id"] != f"wcag22::kernel::proofs::{partition}"]
+                for field in ("total_harnesses", "executed", "successful"):
+                    verification["summary"][field] -= 1
                 with self.assertRaises(ValueError):
                     validate_report(report)
 

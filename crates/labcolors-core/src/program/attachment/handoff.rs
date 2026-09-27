@@ -512,6 +512,7 @@ mod tests {
         published: Option<HandoffPointSinkHostIntentV1>,
         next_error: Option<HandoffPointSinkHostErrorV1>,
         checkpoint_terminal_tail: bool,
+        panic_before_install: bool,
     }
 
     impl FakeHostStateV1 {
@@ -525,6 +526,7 @@ mod tests {
                 published: None,
                 next_error: None,
                 checkpoint_terminal_tail: false,
+                panic_before_install: false,
             }
         }
 
@@ -551,6 +553,9 @@ mod tests {
             intent: HandoffPointSinkHostIntentV1,
         ) -> Result<(), HandoffPointSinkHostErrorV1> {
             let mut state = self.0.borrow_mut();
+            if core::mem::take(&mut state.panic_before_install) {
+                panic!("test host panics before publication");
+            }
             state.installs.push(intent);
             if let Some(error) = state.next_error.take() {
                 return Err(error);
@@ -898,6 +903,211 @@ mod tests {
         assert_eq!(state.borrow().installs.len(), 1);
     }
 
+    #[test]
+    fn exhaustive_handoff_histories_keep_host_session_and_authority_in_sync() {
+        // Семь событий, все истории длины три; два начальных состояния и
+        // обе границы ревизии. Ошибка host затем повторяется тем же запросом.
+        let mut histories = 0;
+        for initial_revision in [0, u64::MAX - 3] {
+            for initial_unknown in [false, true] {
+                for history in 0..343_u32 {
+                    let owned = HandoffPointSinkOutputIdV1::new(900);
+                    let (host, probe) = fake_host(owned);
+                    let mut attachment = attached(owned, host);
+                    let values = [VALUE];
+                    let scenarios = [ScenarioV1::new(1, &values)];
+                    let input = |revision, unknown| {
+                        if unknown {
+                            UpdateV1::Unknown {
+                                revision,
+                                reason_id: 77,
+                            }
+                        } else {
+                            UpdateV1::Observed {
+                                revision,
+                                scenarios: &scenarios,
+                            }
+                        }
+                    };
+                    attachment
+                        .update(input(initial_revision, initial_unknown))
+                        .unwrap();
+                    let mut revision = initial_revision;
+                    let mut unknown = initial_unknown;
+                    let mut sequence = attachment.expected_sink_stamp.sequence();
+                    let epoch = attachment.expected_sink_stamp.binding_epoch();
+                    let mut remaining = history;
+                    for step in 0..3 {
+                        let action = remaining % 7;
+                        remaining /= 7;
+                        let old_sink = attachment.sink.committed;
+                        let old_published = probe.borrow().published;
+                        let old_calls = probe.borrow().installs.len();
+                        let old_kind = attachment.session.evidence().kind();
+                        let repeated = action == 2 || action == 6;
+                        let stale = action == 3;
+                        let reject = action >= 4;
+                        let next_revision = if repeated {
+                            revision
+                        } else if stale {
+                            revision.saturating_sub(1)
+                        } else {
+                            revision + 1
+                        };
+                        let next_unknown = if repeated {
+                            unknown
+                        } else if stale {
+                            !unknown
+                        } else {
+                            action == 1 || action == 5
+                        };
+                        let failure = if step % 2 == 0 {
+                            HandoffPointSinkHostErrorV1::Rejected
+                        } else {
+                            HandoffPointSinkHostErrorV1::Protocol
+                        };
+                        if reject {
+                            probe.borrow_mut().next_error = Some(failure);
+                        }
+                        let result = attachment.update(input(next_revision, next_unknown));
+                        if stale || reject {
+                            if stale {
+                                assert!(matches!(
+                                    result,
+                                    Err(super::super::AttachmentUpdateErrorV1::Update(_))
+                                ));
+                            } else {
+                                assert!(
+                                    matches!(result, Err(super::super::AttachmentUpdateErrorV1::SinkInstall(
+                                    HandoffPointSinkErrorV1::Host(error))) if error == failure)
+                                );
+                            }
+                            assert_eq!(attachment.committed_revision, Some(revision));
+                            assert_eq!(attachment.expected_sink_stamp, old_sink.stamp);
+                            assert_eq!(attachment.sink.committed, old_sink);
+                            assert_eq!(attachment.session.evidence().kind(), old_kind);
+                            assert_eq!(probe.borrow().published, old_published);
+                            assert_eq!(
+                                probe.borrow().installs.len(),
+                                old_calls + usize::from(reject)
+                            );
+                            if stale {
+                                continue;
+                            }
+                            attachment
+                                .update(input(next_revision, next_unknown))
+                                .unwrap();
+                        } else {
+                            assert!(result.is_ok());
+                        }
+                        if !repeated {
+                            sequence += 1;
+                        }
+                        revision = next_revision;
+                        unknown = next_unknown;
+                        assert_eq!(attachment.expected_sink_stamp.sequence(), sequence);
+                        assert_eq!(attachment.expected_sink_stamp.binding_epoch(), epoch);
+                        assert_eq!(attachment.committed_revision, Some(revision));
+                        assert_eq!(
+                            attachment.sink.committed.stamp,
+                            attachment.expected_sink_stamp
+                        );
+                        assert_eq!(attachment.sink.committed.revision, Some(revision));
+                        assert_eq!(attachment.sink.committed.point.is_none(), unknown);
+                        let published = probe.borrow().published.unwrap();
+                        assert_eq!(published.revision(), revision);
+                        assert_eq!(published.desired_sequence(), sequence);
+                        assert_eq!(published.binding_epoch(), epoch);
+                        assert_eq!(
+                            published.operation(),
+                            if repeated {
+                                3
+                            } else if unknown {
+                                2
+                            } else {
+                                1
+                            }
+                        );
+                        assert_eq!(
+                            published.point(),
+                            if unknown {
+                                None
+                            } else {
+                                Some((OUTPUT, owned, point_paint()))
+                            }
+                        );
+                        assert_eq!(
+                            probe.borrow().installs.len(),
+                            old_calls + if reject { 2 } else { 1 }
+                        );
+                        // Повтор проходит весь Attachment и подтверждает живое evidence,
+                        // не повышая исторические значения до текущего render output.
+                        let confirmed = attachment.update(input(revision, unknown)).unwrap();
+                        assert_eq!(confirmed.render_outputs().len(), usize::from(!unknown));
+                        if let Some(output) = confirmed.render_outputs().next() {
+                            assert_eq!(output.paint(), point_paint());
+                            assert_eq!(output.sink_output(), owned);
+                            assert_eq!(output.published_stamp().revision(), revision);
+                            assert_eq!(output.published_stamp().sink_stamp().sequence(), sequence);
+                        }
+                    }
+                    histories += 1;
+                }
+            }
+        }
+        assert_eq!(
+            histories, 1_372,
+            "all declared handoff histories must execute"
+        );
+    }
+
+    #[test]
+    fn host_unwind_before_publication_releases_prepared_state_for_retry() {
+        let owned = HandoffPointSinkOutputIdV1::new(900);
+        let (host, probe) = fake_host(owned);
+        let mut attachment = attached(owned, host);
+        let values = [VALUE];
+        let scenarios = [ScenarioV1::new(1, &values)];
+        attachment
+            .update(UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            })
+            .unwrap();
+        for unknown in [true, false] {
+            let next_revision = attachment.committed_revision.unwrap() + 1;
+            let input = || {
+                if unknown {
+                    UpdateV1::Unknown {
+                        revision: next_revision,
+                        reason_id: 77,
+                    }
+                } else {
+                    UpdateV1::Observed {
+                        revision: next_revision,
+                        scenarios: &scenarios,
+                    }
+                }
+            };
+            let old = attachment.sink.committed;
+            let published = probe.borrow().published;
+            for _ in 0..4 {
+                probe.borrow_mut().panic_before_install = true;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = attachment.update(input());
+                }));
+                assert!(result.is_err());
+                assert_eq!(attachment.sink.committed, old);
+                assert_eq!(attachment.expected_sink_stamp, old.stamp);
+                assert_eq!(attachment.committed_revision, old.revision);
+                assert_eq!(probe.borrow().published, published);
+            }
+            let commit = attachment.update(input()).unwrap();
+            assert_eq!(commit.render_outputs().len(), usize::from(!unknown));
+            assert_eq!(attachment.committed_revision, Some(next_revision));
+        }
+    }
+
     fn owner() -> crate::program::OwnerV1 {
         let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim)
             .unwrap_or_else(|_| panic!("the fixture context is valid"));
@@ -967,3 +1177,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(kani)]
+mod proofs;

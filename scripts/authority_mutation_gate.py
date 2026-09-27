@@ -101,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES).get(name, "test result: FAILED"))
+    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES | HANDOFF_FAILURES).get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -257,10 +257,31 @@ RASTER_FAILURES = {
 }
 
 
+# Проверенный writer не заменяет проверку его применения настоящим Attachment.
+HANDOFF_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked",
+                   "program::attachment::handoff::tests::exhaustive_handoff_histories_keep_host_session_and_authority_in_sync",
+                   "--", "--exact"]
+HANDOFF_SOURCE = ROOT / "crates/labcolors-core/src/program/attachment.rs"
+HANDOFF_MUTANTS = {
+    "handoff-uncommitted-session": (
+        HANDOFF_SOURCE, HANDOFF_COMMAND,
+        "        let _view = transition.commit_deferred();", "        drop(transition);",
+    ),
+    "handoff-lost-publication-stamp": (
+        HANDOFF_SOURCE, HANDOFF_COMMAND,
+        "        self.expected_sink_stamp = desired_sink_stamp;", "        let _ = desired_sink_stamp;",
+    ),
+}
+HANDOFF_FAILURES = {
+    name: "test program::attachment::handoff::tests::exhaustive_handoff_histories_keep_host_session_and_authority_in_sync ... FAILED"
+    for name in HANDOFF_MUTANTS
+}
+
+
 def main() -> None:
     """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in bounded_mutants.values()

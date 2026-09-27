@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 258,
+   "count": 259,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -845,6 +845,7 @@
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
     "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
@@ -868,7 +869,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "54ffee092b7bafc400be68d7dd5b9e4ca2fb0e8627d2beb9016e95592ff326f1",
+ "record_sha256": "b49871d39c4f873fe3bc51c2d0b2408d94bd31b9954d484297a76bcd463e7242",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1695,9 +1696,11 @@
    "production_src_defines_no_builtin_showcase_type: test",
    "program::attachment::handoff::tests::admission_is_exact_and_unbound_drop_has_no_host_effect: test",
    "program::attachment::handoff::tests::drop_before_install_does_not_publish_and_lease_can_retry: test",
+   "program::attachment::handoff::tests::exhaustive_handoff_histories_keep_host_session_and_authority_in_sync: test",
    "program::attachment::handoff::tests::external_registry_retains_exact_cleanup_capability_after_local_core_drop: test",
    "program::attachment::handoff::tests::failed_host_install_leaves_sink_and_session_old_and_retryable: test",
    "program::attachment::handoff::tests::host_success_through_session_commit_has_no_allocator_events: test",
+   "program::attachment::handoff::tests::host_unwind_before_publication_releases_prepared_state_for_retry: test",
    "program::attachment::handoff::tests::set_revoke_confirm_empty_then_set_reuses_the_same_owned_lease: test",
    "program::attachment::handoff::tests::wrong_stamp_revision_scope_and_stale_install_never_call_host: test",
    "program::attachment::tests::a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch: test",
@@ -2378,7 +2381,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1506,
+  "enabled_count": 1508,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
