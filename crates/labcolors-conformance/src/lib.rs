@@ -47,7 +47,7 @@ use labcolors_core::{
 
 /// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
 /// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "11.0.0";
+pub const PACK_VERSION: &str = "12.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -890,7 +890,6 @@ mod tests {
             c.contrasts + c.alpha + c.solve + c.wcag22,
             "итог не сходится с семействами"
         );
-        // Лестниц ровно столько, сколько канонических позиций.
     }
 
     #[test]
@@ -906,15 +905,29 @@ mod tests {
             manifest.numerical_capabilities.sites.len(),
             numerical_registry_v2().len()
         );
-        assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
-            site.site_id == "glow-target-or-maximum-v1"
-                && site.stable_outcomes == ["bit-exact", "indeterminate"]
-                && site.compatibility_releases == ["glow-cam16-ucs-jprime-target-or-max-v1"]
-                && site.evidence_classes == ["bit-exact"]
-                && site.artifact_ids.is_empty()
-                && site.bound_ids.is_empty()
-                && site.proof_ids.is_empty()
+        assert_eq!(
+            manifest
+                .numerical_capabilities
+                .sites
+                .iter()
+                .map(|site| site.site_id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "point-support-retained-reference-surplus-v1",
+                "wcag22-srgb8-contrast-v1"
+            ]
+        );
+        assert!(manifest.numerical_capabilities.sites.iter().all(|site| {
+            site.compatibility_releases.is_empty()
                 && site.runtime_attestations.is_empty()
+                && site.stable_outcomes == ["canonical-finite-bounded"]
+        }));
+        assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
+            site.site_id == "point-support-retained-reference-surplus-v1"
+                && site.evidence_classes == ["canonical-finite-bounded"]
+                && site.artifact_ids == ["wcag22-srgb8-luminance-q55-v1"]
+                && site.bound_ids == ["point-support-reference-surplus-q55-bps-v1"]
+                && site.proof_ids == ["point-support-reference-surplus-integer-v1"]
         }));
         assert!(manifest.numerical_capabilities.sites.iter().any(|site| {
             site.site_id == "wcag22-srgb8-contrast-v1"
@@ -929,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn pack_v11_is_the_terminal_program_conformance_shape() {
+    fn pack_v12_is_the_terminal_program_conformance_shape() {
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(PACK_VERSION, "11.0.0");
+        assert_eq!(PACK_VERSION, "12.0.0");
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(manifest.core_version, "0.3.0");
         // Recipe-ladder family и floorOverride удалены атомарным C7c.

@@ -1,7 +1,7 @@
 {
-  "packVersion": "11.0.0",
+  "packVersion": "12.0.0",
   "coreVersion": "0.3.0",
-  "packDigest": "7ce338d8",
+  "packDigest": "4487d438",
   "counts": {
     "contrasts": 40,
     "alpha": 7,
@@ -13,23 +13,6 @@
     "schemaVersion": 2,
     "coverage": "migrated-sites-only-v1",
     "sites": [
-      {
-        "siteId": "glow-target-or-maximum-v1",
-        "stableOutcomes": [
-          "bit-exact",
-          "indeterminate"
-        ],
-        "compatibilityReleases": [
-          "glow-cam16-ucs-jprime-target-or-max-v1"
-        ],
-        "evidenceClasses": [
-          "bit-exact"
-        ],
-        "artifactIds": [],
-        "boundIds": [],
-        "proofIds": [],
-        "runtimeAttestations": []
-      },
       {
         "siteId": "point-support-retained-reference-surplus-v1",
         "stableOutcomes": [
@@ -71,6 +54,6 @@
         "runtimeAttestations": []
       }
     ],
-    "checksum": "418d143e"
+    "checksum": "4ba70b1b"
   }
 }

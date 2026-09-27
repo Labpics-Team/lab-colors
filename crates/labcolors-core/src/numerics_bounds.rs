@@ -16,19 +16,10 @@
 //! encoded-sRGB8 домене. Mismatched viewing conditions остаются отрицательным
 //! applicability-control, а не частью round-trip guarantee.
 //!
-//! Единственный branch-sensitive perceptual site реестра V1 — Glow — не делает
-//! CAM16-вердикт без sound bound: точный encoded-sRGB8 no-op даёт BitExact, весь
-//! нетривиальный участок — typed Indeterminate. Исчерпывающий per-channel corpus
-//! в `glow::tests` проверяет 65 536 endpoint-пар в каждой из трёх позиций канала
-//! под обоими execution modes (393 216 решений) и использует невалидные viewing
-//! conditions как negative control. Поэтому `numerics.rs` корректно сохраняет
-//! для Glow `bound_status=Unavailable`: отсутствие admitted perceptual bound не
-//! превращается в ложную численную или человеческую semantic truth.
-//!
-//! Этот модуль не создаёт второй runtime/registry и не меняет production verdicts.
-//! Завершение plan-node остаётся отдельным governance transition по merged/readback
-//! evidence; данный комментарий лишь устраняет прежнюю устаревшую маркировку
-//! staged/partial после интеграции последнего branch-sensitive proof.
+//! Удалённый ролевой Glow не является потребителем этих границ.
+//! Действующий численный реестр задаётся в `numerics.rs`; этот модуль
+//! проверяет геометрию и погрешности названных преобразований, не создаёт
+//! дополнительного оценщика или человеческого вердикта.
 
 /// Категория числового сайта, к которому относится граница.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -47,41 +47,18 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
   assert.ok(Array.isArray(manifest.sites));
   const ids = manifest.sites.map((site) => site.siteId);
   assert.deepEqual(ids, [
-    "glow-target-or-maximum-v1",
     "point-support-retained-reference-surplus-v1",
     "wcag22-srgb8-contrast-v1",
   ]);
 
-  // Мигрированный glow-site: точное содержимое registry-строки. Пустые
-  // массивы обязаны быть явными [] — пусто значит «нет evidence», не
-  // «поле потерялось на границе».
-  const glow = manifest.sites.find(
-    (site) => site.siteId === "glow-target-or-maximum-v1",
-  );
-  assert.ok(glow, "манифест обязан покрывать glow site");
-  assert.deepEqual(
-    Object.keys(glow).sort(),
-    [
-      "artifactIds",
-      "boundIds",
-      "compatibilityReleases",
-      "evidenceClasses",
-      "proofIds",
-      "runtimeAttestations",
-      "siteId",
-      "stableOutcomes",
-    ],
-    "V2 row несёт ровно восемь canonical-полей",
-  );
-  assert.deepEqual(glow.stableOutcomes, ["bit-exact", "indeterminate"]);
-  assert.deepEqual(glow.compatibilityReleases, [
-    "glow-cam16-ucs-jprime-target-or-max-v1",
-  ]);
-  assert.deepEqual(glow.evidenceClasses, ["bit-exact"]);
-  assert.deepEqual(glow.artifactIds, []);
-  assert.deepEqual(glow.boundIds, []);
-  assert.deepEqual(glow.proofIds, []);
-  assert.deepEqual(glow.runtimeAttestations, []);
+  // Удалённый рецепт не рекламируется как возможность рабочего пакета.
+  assert.equal(ids.includes("glow-target-or-maximum-v1"), false);
+  for (const site of manifest.sites) {
+    assert.deepEqual(Object.keys(site).sort(), ["artifactIds", "boundIds",
+      "compatibilityReleases", "evidenceClasses", "proofIds", "runtimeAttestations",
+      "siteId", "stableOutcomes"]);
+    assert.deepEqual(site.compatibilityReleases, []);
+  }
 
   const pointSupport = manifest.sites.find(
     (site) => site.siteId === "point-support-retained-reference-surplus-v1",

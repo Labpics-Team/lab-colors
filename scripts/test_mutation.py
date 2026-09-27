@@ -2167,6 +2167,80 @@ const mutations = {
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("17 receipt scenarios passed", result.stdout)
 
+    def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
+        workflow, _ = load_publish_worker()
+        # Исполняется настоящий участок проверки метаданных без публикации,
+        # сети, секрета или записи. Остальные границы публикации проверяются отдельно.
+        def scope(start: str, end: str) -> str:
+            self.assertEqual(workflow.count(start), 1)
+            tail = workflow.split(start, 1)[1]
+            self.assertEqual(tail.count(end), 1)
+            return tail.split(end, 1)[0]
+
+        helpers = "const CAPABILITY_SITE_LIST_FIELDS = [" + scope(
+            "          const CAPABILITY_SITE_LIST_FIELDS = [",
+            "          (async () => {",
+        )
+        guard = "const expectedPointCapability = {" + scope(
+            "          const expectedPointCapability = {",
+            "          const expectedSupported = [",
+        )
+        root = Path(__file__).resolve().parents[1]
+        manifest = json.loads((root / "conformance/vectors/manifest.json").read_bytes())
+        harness = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const point = {
+  siteId: 'point-support-retained-reference-surplus-v1',
+  artifactId: 'wcag22-srgb8-luminance-q55-v1',
+  boundId: 'point-support-reference-surplus-q55-bps-v1',
+  proofId: 'point-support-reference-surplus-integer-v1',
+};
+const wcag = {
+  profileId: 'wcag22-srgb8-contrast-v1',
+  artifactId: 'wcag22-srgb8-luminance-q55-v1',
+  boundId: 'wcag22-srgb8-outward-q55-v1',
+  proofId: 'wcag22-srgb8-full-domain-q55-v1',
+};
+const cases = {
+  current: () => {},
+  missing: caps => caps.sites.pop(),
+  extra: caps => caps.sites.push({...caps.sites[0], siteId: 'glow-target-or-maximum-v1'}),
+  duplicate: caps => caps.sites.push(caps.sites[0]),
+  reordered: caps => caps.sites.reverse(),
+  forgedProof: caps => { caps.sites[0].proofIds = ['unrelated-proof']; },
+  compatibility: caps => { caps.sites[0].compatibilityReleases = ['retired-release']; },
+  newField: caps => { caps.sites[0].approved = true; },
+  checksum: caps => { caps.checksum = '00000000'; },
+};
+for (const [label, mutate] of Object.entries(cases)) {
+  const caps = structuredClone(input.capabilities);
+  mutate(caps);
+  const context = {Buffer, point, wcag, manifest: {numericalCapabilities: caps},
+    capabilitySites: caps.sites, fail: message => { throw new Error(message); }};
+  runInNewContext(input.helpers, context, {timeout: 1000});
+  // Кроме испорченного checksum, все подмены самосогласованны по хешу:
+  // отказ должен различать правило, а не только дрейф контрольной суммы.
+  if (label !== 'current' && label !== 'checksum') {
+    caps.checksum = context.capabilityChecksum(caps);
+  }
+  const execute = () => runInNewContext(input.guard, context, {timeout: 1000});
+  if (label === 'current') assert.doesNotThrow(execute);
+  else assert.throws(execute, /numerical capabilities do not exactly bind/, label);
+}
+console.log('9 numerical promotion scenarios passed');
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", harness],
+            input=json.dumps({"helpers": helpers, "guard": guard,
+                              "capabilities": manifest["numericalCapabilities"]}),
+            text=True, capture_output=True, check=False, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("9 numerical promotion scenarios passed", result.stdout)
+
     def test_publish_worker_secret_context_is_fail_closed(self) -> None:
         _, publish_job = load_publish_worker()
         job_if = re.search(

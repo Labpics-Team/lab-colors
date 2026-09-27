@@ -145,10 +145,10 @@ mod tests {
 
     #[test]
     fn unrelated_registered_row_cannot_mint_wcag_evidence() {
-        let glow = numerical_registry_v2()
+        let unrelated = numerical_registry_v2()
             .iter()
-            .find(|row| row.site_id == NumericalSiteIdV2::GlowTargetOrMaximumV1)
-            .expect("Glow row");
-        assert!(validate_canonical_row(glow).is_err());
+            .find(|row| row.site_id == NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1)
+            .expect("independent point-support row");
+        assert!(validate_canonical_row(unrelated).is_err());
     }
 }

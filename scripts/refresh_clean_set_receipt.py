@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Regenerate clean-set receipt against FETCH_HEAD (merge ref).
+"""Обновить точные привязки исходников в квитанции и её единственный SHA-256 pin.
 
-Uses canonical JSON (sorted keys, 2-space indent, LF, no BOM).
+Численные данные и научный допуск не изменяются. После обновления обязательны
+независимые проверки квитанции и её источников.
 """
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -18,13 +18,6 @@ def canonical_json(value):
     return json.dumps(value, allow_nan=False, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
 
 
-def git_show(path):
-    return subprocess.check_output(
-        ["git", "-C", str(ROOT), "show", f"FETCH_HEAD:{path}"],
-        stderr=subprocess.STDOUT,
-    )
-
-
 def sha256hex(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -33,7 +26,7 @@ receipt = json.loads(RECEIPT_PATH.read_bytes())
 
 changed_artifacts = 0
 for entry in receipt["artifacts"]:
-    data = git_show(entry["path"])
+    data = (ROOT / entry["path"]).read_bytes()
     new_bytes = len(data)
     new_sha = sha256hex(data)
     if entry["bytes"] != new_bytes or entry["sha256"] != new_sha:
@@ -44,7 +37,7 @@ for entry in receipt["artifacts"]:
 
 changed_legal = 0
 for entry in receipt.get("license_scope", {}).get("legal_files", []):
-    data = git_show(entry["path"])
+    data = (ROOT / entry["path"]).read_bytes()
     new_bytes = len(data)
     new_sha = sha256hex(data)
     if entry["bytes"] != new_bytes or entry["sha256"] != new_sha:
@@ -54,7 +47,7 @@ for entry in receipt.get("license_scope", {}).get("legal_files", []):
         changed_legal += 1
 
 if changed_artifacts == 0 and changed_legal == 0:
-    print("No changes needed — receipt already matches FETCH_HEAD.")
+    print("No changes needed — receipt already matches working tree.")
     sys.exit(0)
 
 new_receipt_bytes = canonical_json(receipt).encode("ascii")

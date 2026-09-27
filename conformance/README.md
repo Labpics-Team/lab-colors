@@ -13,10 +13,10 @@
 
 ## Версионирование
 
-- **Версия пака** (`manifest.packVersion`, сейчас `10.0.0`) — семантическая
-  версия СХЕМЫ и состава векторов: пять семейств (`contrasts`, `ladders`,
+- **Версия пака** (`manifest.packVersion`, сейчас `12.0.0`) — семантическая
+  версия СХЕМЫ и состава векторов: четыре семейства (`contrasts`,
   `alpha`, `solve`, `wcag22`), их байты запинены SHA-256 в
-  `crates/labcolors-conformance/tests/pack_v10_contract.rs`.
+  `crates/labcolors-conformance/tests/pack_contract.rs`.
   Удаление/изменение семейства = major-bump с
   absence-законом на снятые файлы; история составов — в git.
 - **Версия ядра** (`manifest.coreVersion`, для этого пака `0.3.0`) — версия
@@ -24,26 +24,32 @@
   ровно для этой версии ядра; при легитимной смене канона (значения
   якорей/ручек, формулы) генератор перегенерирует векторы и `coreVersion`
   сдвигается.
-- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами пяти
-  семейств (в порядке `contrasts, ladders, alpha, solve, wcag22`).
+- **Дайджест** (`manifest.packDigest`) — FNV-1a-32 над сырыми байтами четырёх
+  семейств (в порядке `contrasts, alpha, solve, wcag22`).
   Отпечаток КОНКРЕТНОГО закоммиченного артефакта. Зависит от платформы
   генерации (последний ULP f64 в сериализации) — не кросс-платформенный
   инвариант, а якорь целостности файлов.
+
+Версия 12 обновляет точные привязки доказательства WCAG после удаления
+старого ролевого движка. Ни одного нового порога или цветового результата
+это не вводит: у прежних четырёх семейств сохраняются схема и численные поля;
+у WCAG обновляются только дайджесты перепроверенного доказательства.
+Исторические байты версии 11 остаются в Git, не вторым активным паком.
 
 ## Семейства векторов (`vectors/*.json`)
 
 | Файл | Что фиксирует | Схема элемента |
 |------|---------------|----------------|
 | `contrasts.json` | контраст (fg,bg,тема) | `{fg, bg, theme, lc, wcagRatio}` |
-| `ladders.json` | альфы позиции лестницы | `{position, alphaLight, alphaDark}` |
 | `alpha.json` | подложка→α | `{tint, alpha, bg, composite, minAlpha}` |
 | `solve.json` | резолв контракта | `{bg, contract, theme, outcome}` |
 | `wcag22.json` | финальная sRGB8-пара и явно выбранный критерий WCAG 2.2 | `{foreground, background, criterion, decision, *Q55, evidence*}` |
 | `manifest.json` | метаданные и capability manifest численных решений | `{packVersion, coreVersion, packDigest, counts, numericalCapabilities}` |
 
 Поле `lc` — знаковая кандидатная оценка по `Ys` из версионированной замороженной
-SAPC-shaped кривой; оно не валидирует LPC или читаемость. `wcagRatio` и
-exact-семейство `wcag22` являются отдельными нормативными выходами.
+SAPC-shaped кривой; оно не валидирует LPC или читаемость. `wcagRatio` является
+отчётным отношением яркостей. Нормативный вердикт по явно выбранному критерию
+принадлежит точному семейству `wcag22`.
 
 Точные решения нейтральной оси — не параметры solver-а, а вычисленные
 мощности допустимых подмножеств полной 256-точечной оси `#000000…#FFFFFF`:
@@ -71,7 +77,7 @@ adjacent bytes или нормативного отношения пересчи
   не несёт.
 - `contract` (в `solve`): `{kind:"text", lc}` \| `{kind:"ui", lc}` \|
   `{kind:"range", floor, ceiling}`.
-- `outcome` (в `solve`): успех `{kind:"solved", hex, lc, wcagRatio, floorOverride}`
+- `outcome` (в `solve`): успех `{kind:"solved", hex, lc, wcagRatio}`
   или типизированный терминальный исход `{kind:"failure", category, code}`.
 - `(category, code)` — атомарная core-owned классификация, общая для всех
   биндингов: `unreachable/exceeds_range`, `unreachable/unsatisfiable_criterion`,
@@ -111,17 +117,18 @@ adjacent bytes или нормативного отношения пересчи
   `boundStatus` и `fallbackStatus`. Это site-local proof binding, а не новые
   public capability-поля и не FNV checksum всего manifest.
 
-Словарь **позиций лестницы** (не ролей): `label-*`, `fill-*`, `border-*`,
-`focus-ring`, `glow`, `skeleton-*`, `neutral-fill-*`, `neutral-border-*`,
-`shadow-*`. Пак НЕ вводит роль `icon` — иконки и текст всегда красятся
-labels (канон labui): роли `icon` в словаре нет.
+Семейство ролей и лестниц удалено из действующего пака. Набор численных
+возможностей содержит только настоящие владельцы доказательств: WCAG и
+сохранение точечного контрастного запаса. Старый Glow и его режим совместимости
+не объявляются доступными. Схема и численные результаты четырёх семейств
+сохранены; в WCAG изменены только дайджесты перепроверенного доказательства.
 
 ## Критерий conformance
 
 Биндинг conformant по версии пака `X`, если на КАЖДОМ векторе его выход
 совпадает с каноном по этим правилам:
 
-- **Числовые поля** (`lc`, `wcagRatio`, `alpha`, `minAlpha`, `alpha*`) —
+- **Числовые поля** (`lc`, `wcagRatio`, `alpha`, `minAlpha`) —
   в пределах `DRIFT_TOL = 1e-6` (абсолютная). Для зависимых от libm путей
   (`powf`/`atan2`/`ln`) битовая идентичность f64 между платформами не
   гарантируется: реализации разных ОС/архитектур могут расходиться на несколько
@@ -142,7 +149,7 @@ labels (канон labui): роли `icon` в словаре нет.
 descriptor не являются solve-векторами: `Pack::generate()` возвращает
 `PackGenerationError` и не пишет правдоподобный failure fallback в
 сертификационный артефакт.
-- **Строки/enum/bool** (`theme`, `position`, `category`, `code`, `floorOverride`, `kind`) —
+- **Строки/enum** (`theme`, `category`, `code`, `kind`) —
   ТОЧНО.
 
 ## Референс: ядро само себя проходит

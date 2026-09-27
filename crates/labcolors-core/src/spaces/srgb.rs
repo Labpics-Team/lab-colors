@@ -113,25 +113,6 @@ const RELATIVE_LUMINANCE_RED_WEIGHT: f64 = 0.2126;
 const RELATIVE_LUMINANCE_GREEN_WEIGHT: f64 = 0.7152;
 const RELATIVE_LUMINANCE_BLUE_WEIGHT: f64 = 0.0722;
 const CONTINUOUS_ENCODED_CHANNEL_SPLIT: f64 = 0.039_28;
-const CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT: f64 =
-    f64::from_bits(CONTINUOUS_ENCODED_CHANNEL_SPLIT.to_bits() + 1);
-
-/// Absolute fixed-operation error of one weighted luminance evaluation after
-/// the three platform-produced channel values are known. Three products and two
-/// additions are each bounded by half an ulp on the non-negative `[0, 1]`
-/// domain. This does not bound `powf` or turn the legacy transfer into a
-/// cross-runtime model.
-#[cfg(test)]
-pub(crate) const RELATIVE_LUMINANCE_SINGLE_EVALUATION_ERROR_BOUND: f64 = 5.0 * (0.5 * f64::EPSILON);
-#[cfg(test)]
-pub(crate) const RELATIVE_LUMINANCE_PAIRWISE_ERROR_BOUND: f64 =
-    2.0 * RELATIVE_LUMINANCE_SINGLE_EVALUATION_ERROR_BOUND;
-#[cfg(test)]
-pub(crate) const RELATIVE_LUMINANCE_OUTWARD_ROUNDING_BOUND: f64 = 0.5 * f64::EPSILON;
-/// Frozen power-of-two headroom for comparing a characterized interior
-/// evaluation with an endpoint and then rounding the outward adjustment.
-const RELATIVE_LUMINANCE_RANGE_MARGIN: f64 = 8.0 * f64::EPSILON;
-
 /// Frozen continuous encoded-sRGB channel transfer used by pre-cutover physical
 /// proposal and reporting paths.
 ///
@@ -144,31 +125,6 @@ fn continuous_encoded_channel_to_linear(channel: f64) -> f64 {
     } else {
         ((channel + 0.055) / 1.055).powf(2.4)
     }
-}
-
-fn continuous_encoded_channel_linear_range(encoded_lo: f64, encoded_hi: f64) -> (f64, f64) {
-    debug_assert!(
-        encoded_lo.is_finite()
-            && encoded_hi.is_finite()
-            && (0.0..=1.0).contains(&encoded_lo)
-            && (0.0..=1.0).contains(&encoded_hi)
-            && encoded_lo <= encoded_hi
-    );
-
-    let mut lo = continuous_encoded_channel_to_linear(encoded_lo)
-        .min(continuous_encoded_channel_to_linear(encoded_hi));
-    let mut hi = continuous_encoded_channel_to_linear(encoded_lo)
-        .max(continuous_encoded_channel_to_linear(encoded_hi));
-    if encoded_lo <= CONTINUOUS_ENCODED_CHANNEL_SPLIT
-        && encoded_hi > CONTINUOUS_ENCODED_CHANNEL_SPLIT
-    {
-        let at_split = continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT);
-        let right_of_split =
-            continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT);
-        lo = lo.min(at_split).min(right_of_split);
-        hi = hi.max(at_split).max(right_of_split);
-    }
-    (lo, hi)
 }
 
 /// Continuous relative-luminance coordinate for an encoded-sRGB colour.
@@ -199,30 +155,6 @@ pub(crate) fn encoded_srgb_contrast_ratio(first: [f64; 3], second: [f64; 3]) -> 
     relative_luminance_ratio(
         encoded_srgb_relative_luminance(first),
         encoded_srgb_relative_luminance(second),
-    )
-}
-
-/// Legacy-platform-dependent range of relative luminance over ordered encoded
-/// channel intervals. Both sides of the frozen transfer seam participate in the
-/// extrema. The final pad covers only the fixed weighted-sum operation order;
-/// the `powf` calls are not outward-rounded, so this is a legacy diagnostic
-/// range rather than a cross-runtime sound enclosure.
-pub(crate) fn encoded_srgb_relative_luminance_range(
-    encoded_lo: [f64; 3],
-    encoded_hi: [f64; 3],
-) -> (f64, f64) {
-    let channels = core::array::from_fn::<_, 3, _>(|channel| {
-        continuous_encoded_channel_linear_range(encoded_lo[channel], encoded_hi[channel])
-    });
-    let lower = RELATIVE_LUMINANCE_RED_WEIGHT * channels[0].0
-        + RELATIVE_LUMINANCE_GREEN_WEIGHT * channels[1].0
-        + RELATIVE_LUMINANCE_BLUE_WEIGHT * channels[2].0;
-    let upper = RELATIVE_LUMINANCE_RED_WEIGHT * channels[0].1
-        + RELATIVE_LUMINANCE_GREEN_WEIGHT * channels[1].1
-        + RELATIVE_LUMINANCE_BLUE_WEIGHT * channels[2].1;
-    (
-        (lower - RELATIVE_LUMINANCE_RANGE_MARGIN).max(0.0),
-        (upper + RELATIVE_LUMINANCE_RANGE_MARGIN).min(1.0),
     )
 }
 
@@ -312,7 +244,7 @@ pub(crate) fn xyz_d65_from_srgb8_v1(rgb: Srgb8) -> [f64; 3] {
 /// hot path — while staying byte-identical to the `quantised_display` path.
 ///
 /// С главы #64 (level-3) путь читаемости стал полностью display-доменным
-/// ([`crate::semantic::measure_contrast`] — ноль CAM16-форвардов), потому
+/// ([`crate::recheck::measure_contrast`] — ноль CAM16-форвардов), потому
 /// продакшн-потребитель этого хелпера ушёл; остаётся якорь-тест байт-тождества
 /// (`display_equals_quantised_display_on_every_byte`), потому `#[cfg(test)]`.
 #[cfg(test)]
@@ -325,21 +257,6 @@ pub(crate) fn srgb_linear_and_display_from_hex(hex: &str) -> Result<([f64; 3], [
         f64::from(b) / 255.0,
     ];
     Ok((linear, display))
-}
-
-/// Quantise linear sRGB to the 8-bit display grid and back to linear, exactly as
-/// `srgb_from_hex(hex_from_srgb(rgb))` would — same gamma encode, same per-channel
-/// round to `[0, 255]`, same gamma decode — but without allocating the hex string.
-///
-/// This is the numeric identity of the hex round-trip: a caller that only needs
-/// the quantised linear colour (e.g. to measure its `M'`) gets the byte-for-byte
-/// same result the hex path produces, with no `format!`/parse on the hot path.
-pub(crate) fn quantise_srgb(rgb: [f64; 3]) -> [f64; 3] {
-    let q = |c: f64| {
-        let byte = (srgb_gamma(c).clamp(0.0, 1.0) * 255.0).round() / 255.0;
-        srgb_gamma_inv(byte)
-    };
-    [q(rgb[0]), q(rgb[1]), q(rgb[2])]
 }
 
 /// Linear sRGB `[r, g, b]` in `[0, 1]` → `#RRGGBB` (clamped & rounded).
@@ -393,40 +310,6 @@ pub fn xyz_to_srgb(xyz: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn characterized_luminance_margin_covers_only_the_fixed_operation_budget() {
-        let single = std::hint::black_box(RELATIVE_LUMINANCE_SINGLE_EVALUATION_ERROR_BOUND);
-        let pairwise = std::hint::black_box(RELATIVE_LUMINANCE_PAIRWISE_ERROR_BOUND);
-        let outward = std::hint::black_box(RELATIVE_LUMINANCE_OUTWARD_ROUNDING_BOUND);
-        let margin = std::hint::black_box(RELATIVE_LUMINANCE_RANGE_MARGIN);
-
-        assert_eq!(single, 5.0 * (0.5 * f64::EPSILON));
-        assert_eq!(pairwise, 2.0 * single);
-        let required = pairwise + outward;
-        assert!(margin > required);
-        assert!(margin <= 2.0 * required);
-    }
-
-    #[test]
-    fn characterized_luminance_range_keeps_both_sides_of_the_legacy_seam() {
-        assert_eq!(
-            CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT.to_bits(),
-            CONTINUOUS_ENCODED_CHANNEL_SPLIT.to_bits() + 1
-        );
-        let linear_side = continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT);
-        let power_side =
-            continuous_encoded_channel_to_linear(CONTINUOUS_ENCODED_CHANNEL_SPLIT_RIGHT);
-        assert!(
-            power_side < linear_side,
-            "fixture must expose the legacy seam"
-        );
-
-        let (lo, hi) =
-            encoded_srgb_relative_luminance_range([CONTINUOUS_ENCODED_CHANNEL_SPLIT; 3], [0.5; 3]);
-        assert!(lo <= power_side, "lower range omitted the power side");
-        assert!(hi >= linear_side, "upper range omitted the linear side");
-    }
 
     #[test]
     fn srgb_from_hex_rejects_non_ascii_without_panicking() {

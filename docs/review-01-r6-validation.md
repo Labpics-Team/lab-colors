@@ -1,5 +1,11 @@
 # REVIEW-01-r6 Matrix Validation Report
 
+Исторический отчёт о названном ниже снимке, не текущий состав продукта.
+Проверка общего числа тестов заменена точным инвентарём
+`proof/artifact/tests.json`: удаление, отключение или подмена теста меняет запись
+и отклоняется `scripts/artifact_matrix.py check`. Семантическую силу проверяют
+отдельные предметные и мутационные тесты.
+
 **Date:** 2026-08-31
 **Scope:** Acceptance Criterion 3 — Each of the 10 AUD-01-EXT nodes has merged PR with RED→GREEN proof + sabotage controls.
 **Baseline SHA:** `b37aae65` (AUD-01 base)

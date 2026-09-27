@@ -235,6 +235,17 @@ class TestsRecordTests(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn("~ rust.enabled_count", err)
 
+    def test_same_count_replacement_cannot_hide_a_missing_rust_test(self) -> None:
+        def mutate(record: dict) -> None:
+            self.victim = record["rust"]["enabled"].pop()
+            record["rust"]["enabled"].append("unrelated_padding_probe: test")
+            record["rust"]["enabled"].sort()
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn(f"- rust.enabled: {json.dumps(self.victim)}", err)
+        self.assertIn('+ rust.enabled: "unrelated_padding_probe: test"', err)
+        self.assertNotIn("~ rust.enabled_count", err)
+
     def test_python_module_that_fails_to_import_is_drift(self) -> None:
         def mutate(record: dict) -> None:
             suite = record["python"][0]
@@ -426,7 +437,11 @@ class ToolingTests(unittest.TestCase):
         # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
         commands = job_run_commands(CI_WORKER.read_text("utf-8"), "test")
         self.assertGreater(len(commands), 5, "test job run steps not found")
-        self.assertIn("python3 scripts/artifact_matrix.py check", commands)
+        self.assertEqual(commands.count("python3 scripts/artifact_matrix.py check"), 1)
+        self.assertIn("cargo test --workspace --locked", commands)
+        self.assertFalse((REPO_ROOT / "scripts/check-floor-baseline.ps1").exists())
+        self.assertFalse((REPO_ROOT / "proof/floor/baseline.json").exists())
+        self.assertNotIn("check-floor-baseline", "\n".join(commands))
         self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", commands)
         self.assertIn("python3 scripts/test_artifact_matrix.py", commands)
         joined = "\n".join(commands)

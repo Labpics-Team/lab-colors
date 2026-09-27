@@ -179,14 +179,17 @@ impl<Binding, Identity, Release, Capability, Invocation, Measurement>
         &self.binding
     }
 
+    #[cfg(any(test, kani))]
     pub(crate) fn identity(&self) -> &Identity {
         &self.identity
     }
 
+    #[cfg(any(test, kani))]
     pub(crate) fn release(&self) -> &Release {
         &self.release
     }
 
+    #[cfg(any(test, kani))]
     pub(crate) fn capability(&self) -> &Capability {
         &self.capability
     }

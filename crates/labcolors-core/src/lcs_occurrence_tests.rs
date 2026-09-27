@@ -12,7 +12,7 @@ use crate::lcs_occurrence::{
     OccurrenceFormationError, ReferenceWhiteId, SurroundProfileId, TristimulusComponentV1,
     TristimulusDomainErrorV1, TristimulusSample, TristimulusScale, derive_modeled_tristimulus_v1,
 };
-use crate::spaces::cam16::{ForwardCacheGuard, forward, forward_correlates_v1, ucs_j, ucs_m};
+use crate::spaces::cam16::{forward, forward_correlates_v1, ucs_j, ucs_m};
 use crate::spaces::oklab::{srgb_linear_to_oklab, xyz_d65_to_oklab_v1};
 use crate::spaces::srgb::{D65_WHITE, srgb_linear_from_srgb8, srgb_to_xyz};
 use crate::spaces::vc::ViewingConditions;
@@ -654,7 +654,7 @@ fn full_appearance_state_derivation_is_allocation_free() {
 }
 
 #[test]
-fn appearance_state_bypasses_active_xyz_only_cache_for_each_context_without_allocating() {
+fn appearance_state_keeps_interleaved_contexts_independent_without_allocating() {
     let frame = IEC_SRGB_D65_XYZ_FRAME_V1;
     let sample =
         derive_modeled_tristimulus_v1(ColorSignal::from_srgb8(Srgb8::new([0x44, 0x88, 0xCC])))
@@ -662,8 +662,8 @@ fn appearance_state_bypasses_active_xyz_only_cache_for_each_context_without_allo
             .sample();
     let xyz = sample.xyz();
 
-    // Freeze the per-context cache-free answers before activating the legacy
-    // XYZ-only cache. These are independent of its ambient guard state.
+    // Эталон каждого контекста вычисляется до чередования вызовов.
+    // Повтор XYZ в другом контексте не должен подменять текущий результат.
     let expected_dim = forward_correlates_v1(xyz, &ViewingConditions::dim_surround());
     let expected_dark = forward_correlates_v1(xyz, &ViewingConditions::dark_surround());
 
@@ -678,10 +678,9 @@ fn appearance_state_bypasses_active_xyz_only_cache_for_each_context_without_allo
     )
     .unwrap();
 
-    let _guard = ForwardCacheGuard::activate();
-    let cached_average = forward(xyz, &ViewingConditions::srgb());
-    assert_ne!(cached_average.0.to_bits(), expected_dim.j.to_bits());
-    assert_ne!(cached_average.0.to_bits(), expected_dark.j.to_bits());
+    let average = forward(xyz, &ViewingConditions::srgb());
+    assert_ne!(average.0.to_bits(), expected_dim.j.to_bits());
+    assert_ne!(average.0.to_bits(), expected_dark.j.to_bits());
 
     let (dim, dim_allocations) =
         crate::test_support::measured_allocations(|| AppearanceState::derive_v1(dim_occurrence));
