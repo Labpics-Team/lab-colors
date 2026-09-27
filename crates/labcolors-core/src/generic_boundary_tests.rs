@@ -54,6 +54,43 @@ fn production_contains_retired_placeholder_owner(source: &str, owner: &str) -> b
 }
 
 #[test]
+fn unadmitted_cleanliness_and_retired_recipe_sources_are_absent() {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for retired in [
+        "crates/labcolors-core/src/cleanliness/alpha_assessment.rs",
+        "crates/labcolors-core/src/cleanliness/alpha_aggregation.rs",
+        "crates/labcolors-core/src/field_presentation.rs",
+        "crates/labcolors-wasm/src/engine.rs",
+        "crates/labcolors-wasm/src/cache.rs",
+        "crates/labcolors-wasm/src/config_dto.rs",
+        "crates/labcolors-wasm/src/dto.rs",
+        "crates/labcolors-wasm/src/projection.rs",
+        "packages/colors/bench/wasm-boundary.bench.mjs",
+    ] {
+        assert!(
+            !workspace.join(retired).exists(),
+            "недопущенный или заменённый владелец должен оставаться в Git-истории: {retired}"
+        );
+    }
+    // Переименование файла не возвращает старому самоописанию право выдавать proof.
+    let sources = rust_sources();
+    for owner in [
+        "AlphaBackdropTqEvidenceRef",
+        "AlphaCleanPotentialAssessmentV1",
+        "AggregatedAlphaCleanEvidenceV1",
+        "OwnedCompositionReferenceV1",
+        "FieldPresentationRootV1",
+    ] {
+        for (path, source) in &sources {
+            assert!(
+                !production_contains_retired_placeholder_owner(source, owner),
+                "недопущенный владелец {owner} повторно объявлен в {path}"
+            );
+        }
+    }
+}
+
+#[test]
 fn aud01_disconnected_placeholder_owners_are_absent() {
     for retired_owner in [
         "FieldArenaPoolV1",
