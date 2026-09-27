@@ -7,6 +7,8 @@
 """
 from pathlib import Path
 import tempfile
+import json
+import subprocess
 from science_certificate_gate import git, run
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +79,24 @@ def main() -> None:
                 positive = run(specimen, *command)
                 if positive.returncode or required_test + " ... ok" not in positive.stdout:
                     raise RuntimeError(f"Здоровый исполняемый контроль отсутствует или не прошёл\n{positive.stdout}")
+            # Именно опубликованные команды, а не только внутренние функции.
+            for example, expected_exit in (("declared-point.json", 0), ("rejected-point.json", 4)):
+                result = subprocess.run(
+                    ["cargo", "run", "--quiet", "--locked", "-p", "labcolors-evaluate-cli", "--",
+                     "crates/labcolors-evaluate-cli/examples/" + example], cwd=specimen,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=240,
+                )
+                if result.returncode != expected_exit:
+                    raise RuntimeError(f"Пример {example} не прошёл: {result.stderr!r}")
+                if expected_exit == 0:
+                    document = json.loads(result.stdout)
+                    if result.stderr or document.get("kind") != "labcolors-declared-point-report-v1" or document.get("terminalSrgb8") != [128,128,128]:
+                        raise RuntimeError("Документированный успешный пример нарушил контракт")
+                else:
+                    document = json.loads(result.stderr)
+                    if result.stdout or document.get("error") != {"domain":"clean-convention", "code":"rejected_by_convention"}:
+                        raise RuntimeError("Документированный отказ нарушил контракт")
+                print(f"verified documented {example}", flush=True)
             for name, relative, command, before, after, test in MUTANTS:
                 git(specimen, "switch", "--detach", head)
                 path = specimen / relative

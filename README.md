@@ -50,5 +50,5 @@ MIT
 точка, не подтверждение человеческого восприятия или состояния браузера.
 
 ```sh
-cargo run --locked -p labcolors-evaluate-cli -- crates/labcolors-evaluate-cli/examples/declared-point.json
+cargo run --quiet --locked -p labcolors-evaluate-cli -- crates/labcolors-evaluate-cli/examples/declared-point.json
 ```

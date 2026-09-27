@@ -48,7 +48,7 @@
 occurrence; фон `[128,128,127]`, объявленное ограничение final `[128,128,128]`.
 Выбран существующий выпуск конвенции `67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6`.
 Этот пример проверяет подготовку входа, не заменяет независимый oracle цветовой
-математики. Одна команда `cargo run --locked -p labcolors-evaluate-cli --
+математики. Одна команда `cargo run --quiet --locked -p labcolors-evaluate-cli --
 crates/labcolors-evaluate-cli/examples/declared-point.json` должна вернуть
 exit 0, пустой stderr, итог `[128,128,128]` и LCEN. Контрастный пример
 `rejected-point.json`: белый source, opacity `0.5`, фон `[1,1,3]`, final

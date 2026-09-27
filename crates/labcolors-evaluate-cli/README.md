@@ -9,16 +9,17 @@
 Из чистого checkout репозитория с Rust версии, закреплённой `rust-toolchain.toml`:
 
 ```sh
-cargo run --locked -p labcolors-evaluate-cli -- \
+cargo run --quiet --locked -p labcolors-evaluate-cli -- \
   crates/labcolors-evaluate-cli/examples/declared-point.json
 ```
 
+Параметр `--quiet` отключает служебные сообщения Cargo, не меняя запрос к CLI.
 Ожидается exit 0, пустой stderr и JSON с `terminalSrgb8: [128,128,128]`,
 `ok:true` и `certificateHex`. Пример построен каноническим ProgramWireBuilderV1
 и сверяется с ним в Core-тесте; встроенного preset в CLI нет.
 
 ```sh
-cargo run --locked -p labcolors-evaluate-cli -- \
+cargo run --quiet --locked -p labcolors-evaluate-cli -- \
   crates/labcolors-evaluate-cli/examples/rejected-point.json
 ```
 
