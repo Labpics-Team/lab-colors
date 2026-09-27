@@ -181,9 +181,11 @@ fn same_rgb_new_revision_rejects_each_stale_branch_and_recovers() {
             .require(original.read(AuthorityIdV1::CleanConvention).unwrap())
             .is_ok()
     );
-    assert!(original
-        .evaluate_declared_modeled_point(&attachment, Some(profile()))
-        .is_err());
+    assert!(
+        original
+            .evaluate_declared_modeled_point(&attachment, Some(profile()))
+            .is_err()
+    );
     let mut only_tq = original;
     install_tq(&mut only_tq, &attachment);
     assert_eq!(
