@@ -2,7 +2,7 @@
     not(test),
     expect(
         dead_code,
-        reason = "TQ-01 остаётся внутренним provider до EVAL-01; transport export запрещён r15"
+        reason = "TQ используется внутренним оценщиком; публичный сертификат имеет отдельный контракт"
     )
 )]
 
