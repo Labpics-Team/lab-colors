@@ -5,15 +5,19 @@
 //! полномочием после изменения attachment; публичный транспорт не получает SCI.
 
 use crate::Srgb8;
-use crate::authority::{AuthorityExpectedCurrentV1, AuthorityStateV1};
 use crate::authority::clean_convention::{
     CleanConventionAdmissionKindV1, CleanConventionErrorV1, CleanConventionScopeV1,
     CleanConventionSelectionV1,
 };
 use crate::authority::evaluation::{PointEvaluationErrorV1, PointQualityProfileV1};
 use crate::authority::technical_quality::TechnicalQualityAdmissionErrorV1;
-use crate::certificate::science::{DeclaredPointCertificateV1, PointCertificateErrorV1, VerifiedPointCertificateV1};
-use crate::program_wire::{ProgramAttachmentV1, ProgramMaterializationAuthorityErrorV1, ProgramPointSinkHostV1};
+use crate::authority::{AuthorityExpectedCurrentV1, AuthorityStateV1};
+use crate::certificate::science::{
+    DeclaredPointCertificateV1, PointCertificateErrorV1, VerifiedPointCertificateV1,
+};
+use crate::program_wire::{
+    ProgramAttachmentV1, ProgramMaterializationAuthorityErrorV1, ProgramPointSinkHostV1,
+};
 
 /// Класс отказа для внешнего адаптера; успешного запасного результата нет.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,9 +38,15 @@ pub struct PointEvaluationFailureV1 {
 }
 
 impl PointEvaluationFailureV1 {
-    pub const fn kind(self) -> PointEvaluationFailureKindV1 { self.kind }
-    pub const fn domain(self) -> &'static str { self.domain }
-    pub const fn code(self) -> &'static str { self.code }
+    pub const fn kind(self) -> PointEvaluationFailureKindV1 {
+        self.kind
+    }
+    pub const fn domain(self) -> &'static str {
+        self.domain
+    }
+    pub const fn code(self) -> &'static str {
+        self.code
+    }
 
     fn new(kind: PointEvaluationFailureKindV1, domain: &'static str, code: &'static str) -> Self {
         Self { kind, domain, code }
@@ -57,14 +67,28 @@ pub struct DeclaredPointReportV1 {
 }
 
 impl DeclaredPointReportV1 {
-    pub const fn terminal_srgb8(&self) -> Srgb8 { self.rgb }
-    pub const fn revision(&self) -> u64 { self.revision }
-    pub const fn program_identity(&self) -> &[u8; 32] { &self.program_identity }
-    pub const fn profile_identity(&self) -> &[u8; 32] { &self.profile_identity }
-    pub const fn convention_release(&self) -> &[u8; 32] { &self.convention_release }
-    pub const fn subject_identity(&self) -> &[u8; 32] { &self.subject_identity }
+    pub const fn terminal_srgb8(&self) -> Srgb8 {
+        self.rgb
+    }
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub const fn program_identity(&self) -> &[u8; 32] {
+        &self.program_identity
+    }
+    pub const fn profile_identity(&self) -> &[u8; 32] {
+        &self.profile_identity
+    }
+    pub const fn convention_release(&self) -> &[u8; 32] {
+        &self.convention_release
+    }
+    pub const fn subject_identity(&self) -> &[u8; 32] {
+        &self.subject_identity
+    }
     /// Скопированный пакет снова недоверенный и проверяется с текущим EVAL.
-    pub fn certificate_bytes(&self) -> &[u8] { &self.certificate }
+    pub fn certificate_bytes(&self) -> &[u8] {
+        &self.certificate
+    }
 }
 
 /// Оценивает одну текущую моделируемую sRGB8-точку по явно выбранному выпуску.
@@ -81,16 +105,27 @@ pub fn evaluate_declared_point_v1<H: ProgramPointSinkHostV1>(
         convention_release,
         CleanConventionScopeV1::ModeledSrgb8Point,
         CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
-    ).map_err(convention_failure)?;
+    )
+    .map_err(convention_failure)?;
     let mut authority = AuthorityStateV1::new();
-    authority.admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant)
+    authority
+        .admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant)
         .map_err(technical_failure)?;
-    authority.admit_modeled_point_clean_convention(attachment, Some(selection), AuthorityExpectedCurrentV1::Vacant)
+    authority
+        .admit_modeled_point_clean_convention(
+            attachment,
+            Some(selection),
+            AuthorityExpectedCurrentV1::Vacant,
+        )
         .map_err(convention_failure)?;
-    let evaluation = authority.evaluate_declared_modeled_point(
-        attachment, Some(PointQualityProfileV1::declared_point(selection)),
-    ).map_err(evaluation_failure)?;
-    let certificate = DeclaredPointCertificateV1::issue(&evaluation).map_err(certificate_failure)?;
+    let evaluation = authority
+        .evaluate_declared_modeled_point(
+            attachment,
+            Some(PointQualityProfileV1::declared_point(selection)),
+        )
+        .map_err(evaluation_failure)?;
+    let certificate =
+        DeclaredPointCertificateV1::issue(&evaluation).map_err(certificate_failure)?;
     // Проверяется именно выданный пакет, прежде чем копия уйдёт в недоверенный вывод.
     let verified = VerifiedPointCertificateV1::verify(certificate.as_bytes(), &evaluation)
         .map_err(certificate_failure)?;
@@ -106,7 +141,10 @@ pub fn evaluate_declared_point_v1<H: ProgramPointSinkHostV1>(
     })
 }
 
-fn materialization_failure(domain: &'static str, error: ProgramMaterializationAuthorityErrorV1) -> PointEvaluationFailureV1 {
+fn materialization_failure(
+    domain: &'static str,
+    error: ProgramMaterializationAuthorityErrorV1,
+) -> PointEvaluationFailureV1 {
     use ProgramMaterializationAuthorityErrorV1::*;
     let code = match error {
         NotReady => "materialization_not_ready",
@@ -125,10 +163,21 @@ fn materialization_failure(domain: &'static str, error: ProgramMaterializationAu
 fn technical_failure(error: TechnicalQualityAdmissionErrorV1) -> PointEvaluationFailureV1 {
     use PointEvaluationFailureKindV1 as Kind;
     match error {
-        TechnicalQualityAdmissionErrorV1::Materialization(error) => materialization_failure("technical-quality", error),
-        TechnicalQualityAdmissionErrorV1::UnsupportedPhysicalIdentity =>
-            PointEvaluationFailureV1::new(Kind::Unsupported, "technical-quality", "unsupported_physical_identity"),
-        _ => PointEvaluationFailureV1::new(Kind::Internal, "technical-quality", "authority_inconsistent"),
+        TechnicalQualityAdmissionErrorV1::Materialization(error) => {
+            materialization_failure("technical-quality", error)
+        }
+        TechnicalQualityAdmissionErrorV1::UnsupportedPhysicalIdentity => {
+            PointEvaluationFailureV1::new(
+                Kind::Unsupported,
+                "technical-quality",
+                "unsupported_physical_identity",
+            )
+        }
+        _ => PointEvaluationFailureV1::new(
+            Kind::Internal,
+            "technical-quality",
+            "authority_inconsistent",
+        ),
     }
 }
 fn convention_failure(error: CleanConventionErrorV1) -> PointEvaluationFailureV1 {
@@ -150,7 +199,11 @@ fn evaluation_failure(error: PointEvaluationErrorV1) -> PointEvaluationFailureV1
     match error {
         PointEvaluationErrorV1::Technical(error) => technical_failure(error),
         PointEvaluationErrorV1::Convention(error) => convention_failure(error),
-        _ => PointEvaluationFailureV1::new(PointEvaluationFailureKindV1::Internal, "evaluation", "authority_inconsistent"),
+        _ => PointEvaluationFailureV1::new(
+            PointEvaluationFailureKindV1::Internal,
+            "evaluation",
+            "authority_inconsistent",
+        ),
     }
 }
 fn certificate_failure(error: PointCertificateErrorV1) -> PointEvaluationFailureV1 {

@@ -43,7 +43,6 @@ pub mod alpha;
 pub(crate) mod appearance;
 pub mod authority;
 pub mod certificate;
-pub mod point_evaluation;
 pub mod claims_manifest;
 pub(crate) mod constraints;
 #[cfg(feature = "ext09-extractor")]
@@ -62,6 +61,7 @@ pub mod neutral;
     reason = "the output-profile firewall is intentionally internal to registered profiles"
 )]
 pub(crate) mod output_projection;
+pub mod point_evaluation;
 // Независимая численная проверка границы инверсии alpha; не ветвь runtime.
 #[cfg(test)]
 pub(crate) mod point_representation;
