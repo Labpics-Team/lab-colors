@@ -12,7 +12,7 @@ const OCCURRENCE: u32 = 8;
 const SINK_OUTPUT: u32 = 91;
 
 #[derive(Default)]
-pub(super) struct Host {
+pub(crate) struct Host {
     stamp: Option<crate::program_wire::ProgramPointSinkStampV1>,
 }
 
@@ -53,7 +53,7 @@ fn point_wire(source: Srgb8, opacity: f64, expected: Srgb8) -> Vec<u8> {
 }
 
 /// Ожидаемые конечные байты задаёт тест, а не проверяемый классификатор.
-pub(super) fn point_attachment_for(
+pub(crate) fn point_attachment_for(
     source: Srgb8,
     opacity: f64,
     expected: Srgb8,

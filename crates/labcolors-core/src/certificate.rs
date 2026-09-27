@@ -1,8 +1,8 @@
-//! Fixed, non-semantic certificate transport envelope (r13).
+//! Единый позиционный LCEN-конверт с закрытым выбором класса нагрузки.
 //!
-//! This module owns framing and producer binding only.  It does not interpret
-//! the payload as colour science, a materialization result, or an authority
-//! result.  A decoded byte buffer is deliberately represented as
+//! Этот модуль владеет структурой и привязкой производителя, не цветовой
+//! математикой. Публичный транспорт принимает только несмысловую нагрузку;
+//! внутренний научный путь сверяется с текущим EVAL.  A decoded byte buffer is deliberately represented as
 //! [`UntrustedEnvelopeV1`].  The trusted type can only be made by a producer
 //! capability kept inside this crate.
 
@@ -10,6 +10,7 @@ use core::fmt;
 
 use crate::sha256::Hasher;
 
+pub(crate) mod science;
 mod source;
 pub use source::{CertificateProducerErrorV1, SourceCertificateV1, issue_source_certificate_v1};
 
@@ -184,12 +185,15 @@ impl fmt::Debug for CertificateOperationV1 {
 pub enum CertificateAuthorityKindV1 {
     /// Generic framing; no authority result is implied.
     GenericTypedCertificate,
+    /// Совместный объявленный точечный профиль; доступен только внутреннему SCI-CERT.
+    DeclaredModeledPointProfile,
 }
 
 impl CertificateAuthorityKindV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::GenericTypedCertificate => GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1,
+            Self::DeclaredModeledPointProfile => 0x04,
         }
     }
 
@@ -197,6 +201,7 @@ impl CertificateAuthorityKindV1 {
     pub const fn key(self) -> &'static str {
         match self {
             Self::GenericTypedCertificate => "generic-typed-certificate",
+            Self::DeclaredModeledPointProfile => "declared-modeled-point-profile",
         }
     }
 }
@@ -212,12 +217,15 @@ impl fmt::Debug for CertificateAuthorityKindV1 {
 pub enum CertificatePayloadTypeV1 {
     /// Sealed producer-owned opaque transport body.
     NonSemanticTransportPayloadV1,
+    /// Фиксированное свидетельство обеих текущих ветвей; не транспортный marker.
+    DeclaredPointQualityV1,
 }
 
 impl CertificatePayloadTypeV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::NonSemanticTransportPayloadV1 => NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1,
+            Self::DeclaredPointQualityV1 => 0x02,
         }
     }
 
@@ -225,6 +233,7 @@ impl CertificatePayloadTypeV1 {
     pub const fn key(self) -> &'static str {
         match self {
             Self::NonSemanticTransportPayloadV1 => "non-semantic-transport-v1",
+            Self::DeclaredPointQualityV1 => "declared-point-quality-v1",
         }
     }
 }
@@ -232,6 +241,28 @@ impl CertificatePayloadTypeV1 {
 impl fmt::Debug for CertificatePayloadTypeV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.key())
+    }
+}
+
+/// Пару селекторов выбирает типизированная точка входа, не недоверенные байты.
+#[derive(Clone, Copy)]
+enum EnvelopeClassV1 {
+    Transport,
+    DeclaredPoint,
+}
+
+impl EnvelopeClassV1 {
+    const fn authority(self) -> CertificateAuthorityKindV1 {
+        match self {
+            Self::Transport => CertificateAuthorityKindV1::GenericTypedCertificate,
+            Self::DeclaredPoint => CertificateAuthorityKindV1::DeclaredModeledPointProfile,
+        }
+    }
+    const fn payload(self) -> CertificatePayloadTypeV1 {
+        match self {
+            Self::Transport => CertificatePayloadTypeV1::NonSemanticTransportPayloadV1,
+            Self::DeclaredPoint => CertificatePayloadTypeV1::DeclaredPointQualityV1,
+        }
     }
 }
 
@@ -262,6 +293,18 @@ impl AdmissionKeyV1 {
         producer_revision: &str,
         producer_content_identity: [u8; 32],
     ) -> Result<Self, CertificateErrorV1> {
+        Self::try_new_for_class(runtime_artifact_id, operation, context_id,
+            producer_revision, producer_content_identity, EnvelopeClassV1::Transport)
+    }
+
+    fn try_new_for_class(
+        runtime_artifact_id: &str,
+        operation: CertificateOperationV1,
+        context_id: &str,
+        producer_revision: &str,
+        producer_content_identity: [u8; 32],
+        class: EnvelopeClassV1,
+    ) -> Result<Self, CertificateErrorV1> {
         validate_text(runtime_artifact_id, MAX_RUNTIME_ARTIFACT_ID_BYTES_V1)?;
         validate_text(context_id, MAX_CONTEXT_ID_BYTES_V1)?;
         if !is_canonical_revision(producer_revision.as_bytes()) {
@@ -279,9 +322,9 @@ impl AdmissionKeyV1 {
                 CertificateErrorV1::ResourceLimitExceeded,
             )?,
             producer_content_identity,
-            authority_kind: CertificateAuthorityKindV1::GenericTypedCertificate,
+            authority_kind: class.authority(),
             authority_version: CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
-            payload_type: CertificatePayloadTypeV1::NonSemanticTransportPayloadV1,
+            payload_type: class.payload(),
             payload_version: CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
         };
         if key.serialized_tuple_bytes() > MAX_TUPLE_BYTES_V1 {
@@ -292,12 +335,13 @@ impl AdmissionKeyV1 {
 
     /// Копирует exact tuple с типизированным отказом при нехватке памяти.
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
-        Self::try_new(
-            &self.runtime_artifact_id,
-            self.operation,
-            &self.context_id,
-            &self.producer_revision,
-            self.producer_content_identity,
+        let class = match self.authority_kind {
+            CertificateAuthorityKindV1::GenericTypedCertificate => EnvelopeClassV1::Transport,
+            CertificateAuthorityKindV1::DeclaredModeledPointProfile => EnvelopeClassV1::DeclaredPoint,
+        };
+        Self::try_new_for_class(
+            &self.runtime_artifact_id, self.operation, &self.context_id,
+            &self.producer_revision, self.producer_content_identity, class,
         )
     }
 
@@ -451,11 +495,22 @@ impl CertificateEnvelopeV1 {
         payload: NonSemanticTransportPayloadV1,
         attestation: TrustedProducerAttestationV1,
     ) -> Result<Self, CertificateErrorV1> {
-        let payload_sha256 = payload_digest(payload.as_bytes());
+        if attestation.key.authority_kind != CertificateAuthorityKindV1::GenericTypedCertificate {
+            return Err(CertificateErrorV1::InvalidPayloadType);
+        }
+        Self::issue_bound_bytes(payload.as_bytes(), attestation)
+    }
+
+    // Обе типизированные ветви используют одну проверку capability и один encoder.
+    fn issue_bound_bytes(
+        payload: &[u8],
+        attestation: TrustedProducerAttestationV1,
+    ) -> Result<Self, CertificateErrorV1> {
+        let payload_sha256 = payload_digest(payload);
         if payload_sha256 != attestation.payload_sha256 {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
         }
-        let prefix = encode_prefix(&attestation.key, payload.as_bytes(), payload_sha256)?;
+        let prefix = encode_prefix(&attestation.key, payload, payload_sha256)?;
         let binding_sha256 = binding_digest(&prefix);
         if binding_sha256 != attestation.binding_sha256 {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
@@ -526,6 +581,11 @@ pub struct UntrustedEnvelopeV1 {
 impl UntrustedEnvelopeV1 {
     /// Decodes the exact positional r13 packet and verifies both digests.
     pub fn decode(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
+        Self::decode_class(bytes, EnvelopeClassV1::Transport)
+    }
+
+    fn decode_class(bytes: &[u8], class: EnvelopeClassV1) -> Result<Self, CertificateErrorV1> {
+
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
@@ -584,13 +644,13 @@ impl UntrustedEnvelopeV1 {
         if operation != ISSUE_CERTIFICATE_OPERATION_V1 {
             return Err(CertificateErrorV1::UnknownOperation);
         }
-        if authority_kind != GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1 {
+        if authority_kind != class.authority().wire() {
             return Err(CertificateErrorV1::UnknownAuthorityKind);
         }
         if authority_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
             return Err(CertificateErrorV1::UnsupportedAuthorityVersion);
         }
-        if payload_type != NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1 {
+        if payload_type != class.payload().wire() {
             return Err(CertificateErrorV1::InvalidPayloadType);
         }
         if payload_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
@@ -603,12 +663,13 @@ impl UntrustedEnvelopeV1 {
             return Err(CertificateErrorV1::BindingDigestMismatch);
         }
 
-        let key = AdmissionKeyV1::try_new(
+        let key = AdmissionKeyV1::try_new_for_class(
             runtime_artifact_id,
             CertificateOperationV1::IssueCertificate,
             context_id,
             producer_revision,
             producer_content_identity,
+            class,
         )?;
         Ok(Self {
             key,
@@ -643,6 +704,11 @@ impl UntrustedEnvelopeV1 {
     /// Exact decoded bytes retained for duplicate/conflict comparison.
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        let start = self.key_prefix_len + WIRE_U32_BYTES_V1;
+        &self.canonical_bytes[start..start + self.payload_len as usize]
     }
 
     fn canonical_key_bytes(&self) -> &[u8] {
@@ -1002,8 +1068,18 @@ pub(crate) fn producer_attestation_v1(
     key: AdmissionKeyV1,
     payload: &NonSemanticTransportPayloadV1,
 ) -> Result<TrustedProducerAttestationV1, CertificateErrorV1> {
-    let payload_sha256 = payload_digest(payload.as_bytes());
-    let prefix = encode_prefix(&key, payload.as_bytes(), payload_sha256)?;
+    if key.authority_kind != CertificateAuthorityKindV1::GenericTypedCertificate {
+        return Err(CertificateErrorV1::InvalidPayloadType);
+    }
+    attest_bytes(key, payload.as_bytes())
+}
+
+fn attest_bytes(
+    key: AdmissionKeyV1,
+    payload: &[u8],
+) -> Result<TrustedProducerAttestationV1, CertificateErrorV1> {
+    let payload_sha256 = payload_digest(payload);
+    let prefix = encode_prefix(&key, payload, payload_sha256)?;
     let binding_sha256 = binding_digest(&prefix);
     Ok(TrustedProducerAttestationV1 {
         key,

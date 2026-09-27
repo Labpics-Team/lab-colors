@@ -105,6 +105,13 @@ impl CurrentPointEvaluationV1<'_> {
     pub(crate) const fn convention(&self) -> AuthorityDescriptorV1 {
         self.convention
     }
+    /// Полная идентичность предмета через тот же кодировщик, что у TQ и CC.
+    pub(crate) fn subject_identity(&self) -> [u8; 32] {
+        let mut hasher = Hasher::new();
+        super::hash_modeled_point_identity(self.materialization, &mut hasher);
+        *hasher.finalize().as_bytes()
+    }
+
     pub(crate) const fn human_evidence(&self) -> HumanEvidenceEvaluationV1 {
         HumanEvidenceEvaluationV1::NotRequested
     }
