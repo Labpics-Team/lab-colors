@@ -1,6 +1,9 @@
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "CC остаётся внутренним владельцем до EVAL; r16 запрещает экспорт через транспорт")
+    expect(
+        dead_code,
+        reason = "CC остаётся внутренним владельцем до EVAL; r16 запрещает экспорт через транспорт"
+    )
 )]
 
 //! Допуск текущей конечной точки по явно выбранной объявленной конвенции.
@@ -9,6 +12,11 @@
 //! проверяются до чтения текущей материализации и настоящего классификатора.
 //! Квитанция сохраняет эти ограничения; она не удостоверяет пиксели браузера
 //! или человеческое восприятие и не заменяет независимые ветви TQ/HCE.
+//!
+//! Внешний потребитель не может получить внутренний выбор либо полномочие:
+//! ```compile_fail
+//! use labcolors_core::authority::clean_convention::CleanConventionSelectionV1;
+//! ```
 
 use super::{
     AuthorityAdmissionErrorV1, AuthorityAdmissionOutcomeV1, AuthorityDescriptorV1,
@@ -17,7 +25,7 @@ use super::{
 };
 use crate::Srgb8;
 use crate::clean_set::{
-    EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1, ClosedRejectedBlueIntervalV1,
+    ClosedRejectedBlueIntervalV1, EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
     ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
 };
 use crate::program_wire::{
@@ -74,12 +82,22 @@ impl CleanConventionSelectionV1 {
         if admission != CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate {
             return Err(CleanConventionErrorV1::UnsupportedAdmission);
         }
-        Ok(Self { release, scope, admission })
+        Ok(Self {
+            release,
+            scope,
+            admission,
+        })
     }
 
-    pub(crate) const fn release(self) -> [u8; 32] { self.release }
-    pub(crate) const fn scope(self) -> CleanConventionScopeV1 { self.scope }
-    pub(crate) const fn admission(self) -> CleanConventionAdmissionKindV1 { self.admission }
+    pub(crate) const fn release(self) -> [u8; 32] {
+        self.release
+    }
+    pub(crate) const fn scope(self) -> CleanConventionScopeV1 {
+        self.scope
+    }
+    pub(crate) const fn admission(self) -> CleanConventionAdmissionKindV1 {
+        self.admission
+    }
 }
 
 /// Отказ ничего не записывает в AUTH и не изменяет attachment.
@@ -110,12 +128,18 @@ pub(crate) struct CleanConventionReceiptV1 {
 }
 
 impl CleanConventionReceiptV1 {
-    pub(crate) const fn outcome(self) -> AuthorityAdmissionOutcomeV1 { self.outcome }
-    pub(crate) const fn selection(self) -> CleanConventionSelectionV1 { self.selection }
+    pub(crate) const fn outcome(self) -> AuthorityAdmissionOutcomeV1 {
+        self.outcome
+    }
+    pub(crate) const fn selection(self) -> CleanConventionSelectionV1 {
+        self.selection
+    }
     pub(crate) const fn materialization(self) -> AttachedMaterializationAuthorityV1 {
         self.materialization
     }
-    pub(crate) const fn descriptor(self) -> AuthorityDescriptorV1 { self.descriptor }
+    pub(crate) const fn descriptor(self) -> AuthorityDescriptorV1 {
+        self.descriptor
+    }
 }
 
 /// Создаётся только после классификации конечного результата текущего владельца.
@@ -130,7 +154,8 @@ impl CleanConventionProofV1 {
         attachment: &ProgramAttachmentV1<H>,
     ) -> Result<Self, CleanConventionErrorV1> {
         let selection = selection.ok_or(CleanConventionErrorV1::SelectionRequired)?;
-        let materialization = attachment.current_materialization_authority()
+        let materialization = attachment
+            .current_materialization_authority()
             .map_err(CleanConventionErrorV1::Materialization)?;
         if materialization.physical_identity()
             != Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1)
@@ -141,9 +166,15 @@ impl CleanConventionProofV1 {
         if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) =
             ExactNominalSrgb8CleanSetV1.classify(composite)
         {
-            return Err(CleanConventionErrorV1::RejectedByConvention { composite, interval });
+            return Err(CleanConventionErrorV1::RejectedByConvention {
+                composite,
+                interval,
+            });
         }
-        Ok(Self { selection, materialization })
+        Ok(Self {
+            selection,
+            materialization,
+        })
     }
 
     fn descriptor(&self) -> AuthorityDescriptorV1 {
@@ -171,10 +202,12 @@ impl CleanConventionProofV1 {
         let provenance = *provenance.finalize().as_bytes();
 
         AuthorityDescriptorV1::from_verified_owner(
-            AuthorityIdV1::CleanConvention, release, applicability, provenance,
+            AuthorityIdV1::CleanConvention,
+            release,
+            applicability,
+            provenance,
         )
     }
-
 }
 
 impl AuthorityStateV1 {
@@ -195,11 +228,16 @@ impl AuthorityStateV1 {
             true,
             RendererObservationRequirementV1::NotRequired,
             ProgramRendererProvenanceV1::Unverified,
-        ).map_err(CleanConventionErrorV1::Permit)?;
-        let outcome = self.admit(descriptor, expected, permit)
+        )
+        .map_err(CleanConventionErrorV1::Permit)?;
+        let outcome = self
+            .admit(descriptor, expected, permit)
             .map_err(CleanConventionErrorV1::Authority)?;
         Ok(CleanConventionReceiptV1 {
-            outcome, selection: proof.selection, materialization: proof.materialization, descriptor,
+            outcome,
+            selection: proof.selection,
+            materialization: proof.materialization,
+            descriptor,
         })
     }
 }
@@ -207,3 +245,6 @@ impl AuthorityStateV1 {
 #[cfg(test)]
 #[path = "clean_convention_tests.rs"]
 mod tests;
+
+#[cfg(kani)]
+mod proofs;

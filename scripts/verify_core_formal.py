@@ -136,6 +136,9 @@ def main() -> None:
                     Path(__file__), ROOT / "scripts/formal_contracts.py"]
     for source in SOURCES:
         source_files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])
+    # Выбор CC использует выпуск настоящего классификатора и его единственный pin.
+    source_files.extend([CORE / "clean_set.rs",
+        ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256"])
     identities = {str(p.relative_to(ROOT)): digest(p) for p in source_files}
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     status = subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True)

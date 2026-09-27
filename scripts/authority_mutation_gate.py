@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AUTH/TQ: целевые семантические мутации обязаны делать целевой тест Core красным."""
+"""AUTH/TQ/CC: целевые семантические мутации обязаны делать целевой тест Core красным."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES | HANDOFF_FAILURES).get(name, "test result: FAILED"))
+    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES | HANDOFF_FAILURES | CC_FAILURES).get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -112,10 +112,10 @@ def run_mutant(
 
 TQ_MUTANTS = {
     "tq-stale-point-binding": (
-        TQ_SOURCE,
+        AUTH_SOURCE,
         TQ_COMMAND,
-        "        hasher.update(&materialization.revision().to_be_bytes());\n        hasher.update(&sink_stamp.sequence().to_be_bytes());",
-        "        hasher.update(&0_u64.to_be_bytes());\n        hasher.update(&0_u64.to_be_bytes());",
+        "    hasher.update(&materialization.revision().to_be_bytes());\n    hasher.update(&sink_stamp.sequence().to_be_bytes());",
+        "    hasher.update(&0_u64.to_be_bytes());\n    hasher.update(&0_u64.to_be_bytes());",
     ),
     "tq-foreign-authority-lane": (
         TQ_SOURCE,
@@ -278,10 +278,63 @@ HANDOFF_FAILURES = {
 }
 
 
+# CC проверяется через настоящий attachment; старые TQ/AUTH фальсификаторы сохранены.
+CC_SOURCE = ROOT / "crates/labcolors-core/src/authority/clean_convention.rs"
+CC_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked",
+              "authority::clean_convention::tests"]
+CC_MUTANTS = {
+    "cc-foreign-release": (CC_SOURCE, CC_COMMAND,
+        "        if release != EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1 {",
+        "        if false {"),
+    "cc-unsupported-scope": (CC_SOURCE, CC_COMMAND,
+        "        if scope != CleanConventionScopeV1::ModeledSrgb8Point {",
+        "        if false {"),
+    "cc-unearned-admission": (CC_SOURCE, CC_COMMAND,
+        "        if admission != CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate {",
+        "        if false {"),
+    "cc-hidden-default": (CC_SOURCE, CC_COMMAND,
+        "        let selection = selection.ok_or(CleanConventionErrorV1::SelectionRequired)?;",
+        "        let selection = selection.unwrap_or(CleanConventionSelectionV1 { release: EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1, scope: CleanConventionScopeV1::ModeledSrgb8Point, admission: CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate });"),
+    "cc-source-instead-of-composite": (CC_SOURCE, CC_COMMAND,
+        "        let composite = materialization.terminal_composite();",
+        "        let composite = materialization.output().source();"),
+    "cc-ignore-classifier": (CC_SOURCE, CC_COMMAND,
+        "            ExactNominalSrgb8CleanSetV1.classify(composite)",
+        "            ExactNominalSrgb8CleanSetV1.classify(Srgb8::new([0; 3]))"),
+    "cc-reject-all": (CC_SOURCE, CC_COMMAND,
+        "        let composite = materialization.terminal_composite();",
+        "        return Err(CleanConventionErrorV1::UnsupportedScope);\n        let composite = materialization.terminal_composite();"),
+    "cc-foreign-lane": (CC_SOURCE, CC_COMMAND,
+        "            AuthorityIdV1::CleanConvention,",
+        "            AuthorityIdV1::TechnicalQuality,"),
+    "cc-unbound-technical-receipt": (CC_SOURCE, CC_COMMAND,
+        "        provenance.update(TECHNICAL_RECEIPT_PIN);",
+        "        provenance.update(&[]);"),
+    "cc-unbound-materialization": (CC_SOURCE, CC_COMMAND,
+        "        hash_modeled_point_identity(self.materialization, &mut provenance);",
+        "        let _ = self.materialization;"),
+}
+CC_FAILURES = {
+    name: "test authority::clean_convention::tests::" + test + " ... FAILED"
+    for name, test in {
+        "cc-foreign-release": "explicit_selection_rejects_foreign_release_scope_and_unearned_admission",
+        "cc-unsupported-scope": "explicit_selection_rejects_foreign_release_scope_and_unearned_admission",
+        "cc-unearned-admission": "explicit_selection_rejects_foreign_release_scope_and_unearned_admission",
+        "cc-hidden-default": "missing_selection_and_non_ready_materialization_cannot_mint_authority",
+        "cc-source-instead-of-composite": "accepted_source_does_not_admit_rejected_terminal_composite",
+        "cc-ignore-classifier": "accepted_source_does_not_admit_rejected_terminal_composite",
+        "cc-reject-all": "rejected_source_can_admit_accepted_terminal_composite_without_other_authorities",
+        "cc-foreign-lane": "rejected_source_can_admit_accepted_terminal_composite_without_other_authorities",
+        "cc-unbound-technical-receipt": "receipt_identity_binds_selection_technical_pin_and_every_materialization_coordinate",
+        "cc-unbound-materialization": "receipt_identity_binds_selection_technical_pin_and_every_materialization_coordinate",
+    }.items()
+}
+
+
 def main() -> None:
-    """Run the bounded AUTH/TQ semantic mutation matrix and restore every source."""
+    """Run the bounded AUTH/TQ/CC semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS | CC_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in bounded_mutants.values()
@@ -306,7 +359,7 @@ def main() -> None:
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
     total = len(AUTH_MUTANTS) + len(bounded_mutants)
-    print(f"AUTH/TQ mutation gate caught {total} semantic mutants")
+    print(f"AUTH/TQ/CC mutation gate caught {total} semantic mutants")
 
 
 if __name__ == "__main__":

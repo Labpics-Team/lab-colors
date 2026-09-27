@@ -1,5 +1,5 @@
-use super::*;
 use super::super::test_support::{Host, point_attachment_for};
+use super::*;
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
 use crate::field_effect::{
@@ -18,9 +18,7 @@ use crate::observation::{
     ObservationUpdateInput, ObservedScenarioSetInput, Revision, RevisionBoundObservationV1,
     ScenarioId, ScenarioInput, SurfaceInputBinding, canonicalize_observation_schema,
 };
-use crate::program_wire::{
-    ProgramMaterializationAuthorityErrorV1, ProgramScenarioV1,
-};
+use crate::program_wire::{ProgramMaterializationAuthorityErrorV1, ProgramScenarioV1};
 use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
     private as session_private,

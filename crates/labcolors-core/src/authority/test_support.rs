@@ -2,7 +2,7 @@
 use crate::Srgb8;
 use crate::program::wire::ProgramWireBuilderV1;
 use crate::program_wire::{
-    ProgramAttachmentV1, ProgramPointSinkHostV1, ProgramPointSinkHostErrorV1,
+    ProgramAttachmentV1, ProgramPointSinkHostErrorV1, ProgramPointSinkHostV1,
     ProgramPointSinkIntentV1, compile_program_wire_v1,
 };
 

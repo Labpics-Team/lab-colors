@@ -318,3 +318,19 @@ MUTANTS += (
      "            10 * light_lower >= 30 * dark_upper + scale,",
      "            10 * light_upper >= 30 * dark_lower + scale,"),
 )
+
+
+CONTRACTS["authority::clean_convention::proofs::selection_admits_exactly_declared_modeled_point_release"] = (
+    {"CC selection must admit exactly the declared modeled point release",
+     "CC selection must preserve release scope and admission"},
+    {"declared point remains reachable", "foreign release rejected",
+     "unsupported scope rejected", "unearned admission rejected"},
+)
+MUTANTS += (
+    ("cc-unearned-admission", "authority/clean_convention.rs",
+     "authority::clean_convention::proofs::selection_admits_exactly_declared_modeled_point_release",
+     "CC selection must admit exactly the declared modeled point release",
+     "        if admission != CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate {",
+     "        if false {"),
+)
+SOURCES += ("authority/clean_convention.rs",)
