@@ -1068,11 +1068,27 @@ mod tests {
         let mut attachment = attached(owned, host);
         let values = [VALUE];
         let scenarios = [ScenarioV1::new(1, &values)];
-        attachment.update(UpdateV1::Observed { revision: 1, scenarios: &scenarios }).unwrap();
+        attachment
+            .update(UpdateV1::Observed {
+                revision: 1,
+                scenarios: &scenarios,
+            })
+            .unwrap();
         for unknown in [true, false] {
             let next_revision = attachment.committed_revision.unwrap() + 1;
-            let input = || if unknown { UpdateV1::Unknown { revision: next_revision, reason_id: 77 } }
-                else { UpdateV1::Observed { revision: next_revision, scenarios: &scenarios } };
+            let input = || {
+                if unknown {
+                    UpdateV1::Unknown {
+                        revision: next_revision,
+                        reason_id: 77,
+                    }
+                } else {
+                    UpdateV1::Observed {
+                        revision: next_revision,
+                        scenarios: &scenarios,
+                    }
+                }
+            };
             let old = attachment.sink.committed;
             let published = probe.borrow().published;
             for _ in 0..4 {
