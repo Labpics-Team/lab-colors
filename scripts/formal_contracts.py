@@ -80,10 +80,6 @@ CONTRACTS.update({
         {"exact Q55 points must match the unsimplified contrast ratio", "contrast decision must be independent of polarity"},
         {"contrast passes", "contrast fails"},
     ),
-    "wcag22::kernel::proofs::interval_verdict_is_sound_for_every_enclosed_point": (
-        {"interval PASS must hold for every enclosed colour pair", "interval FAIL must hold for every enclosed colour pair", "interval classification must preserve polarity symmetry"},
-        {"interval passes", "interval fails", "overlapping threshold stays uncertain"},
-    ),
     "joint::proofs::joint_order_is_complete_unique_and_authored": (
         {"joint order must admit exactly the complete nonduplicated product", "joint admission must preserve authored tuple priority"},
         {"complete product", "invalid product", "nonlexicographic policy"},
@@ -298,3 +294,27 @@ MUTANTS += (
      "        if self.writer.committed.stamp != staged.expected_stamp {", "        if false {"),
 )
 SOURCES += ("program/attachment/handoff.rs",)
+
+
+# Конъюнкция четырёх конкретных критериев равносильна прежнему одному
+# обязательству с символическим выбором критерия. Ни одна часть не факультативна.
+WCAG_INTERVAL_PARTITIONS = (
+    "interval_default_text_is_sound_for_every_enclosed_point",
+    "interval_large_text_is_sound_for_every_enclosed_point",
+    "interval_ui_component_is_sound_for_every_enclosed_point",
+    "interval_graphical_object_is_sound_for_every_enclosed_point",
+)
+for partition in WCAG_INTERVAL_PARTITIONS:
+    CONTRACTS[f"wcag22::kernel::proofs::{partition}"] = (
+        {"interval PASS must hold for every enclosed colour pair",
+         "interval FAIL must hold for every enclosed colour pair",
+         "interval classification must preserve polarity symmetry"},
+        {"interval passes", "interval fails", "overlapping threshold stays uncertain"},
+    )
+MUTANTS += (
+    ("wcag-optimistic-interval-pass", "wcag22/kernel.rs",
+     "wcag22::kernel::proofs::interval_large_text_is_sound_for_every_enclosed_point",
+     "interval PASS must hold for every enclosed colour pair",
+     "            10 * light_lower >= 30 * dark_upper + scale,",
+     "            10 * light_upper >= 30 * dark_lower + scale,"),
+)

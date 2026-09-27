@@ -64,14 +64,14 @@ fn exact_points_are_total_symmetric_and_correct() {
     );
 }
 
-#[kani::proof]
-fn interval_verdict_is_sound_for_every_enclosed_point() {
+// Все прежние интервалы и внутренние точки сохраняются. Критерий
+// закрепляется до symex: решатель не несёт четыре независимых ветви сразу.
+fn interval_verdict_is_sound_for_every_enclosed_point(criterion: Wcag22CriterionV1) {
     let [al, au, bl, bu, a, b]: [u64; 6] = kani::any();
     let limit = super::super::q55_data::Q55_SCALE + 3;
     if !(al <= a && a <= au && au <= limit && bl <= b && b <= bu && bu <= limit) {
         return;
     }
-    let criterion = criterion();
     let left = Wcag22LuminanceBoundsQ55V1 {
         lower: al,
         upper: au,
@@ -110,4 +110,24 @@ fn interval_verdict_is_sound_for_every_enclosed_point() {
         "interval fails"
     );
     kani::cover!(result.is_none(), "overlapping threshold stays uncertain");
+}
+
+#[kani::proof]
+fn interval_default_text_is_sound_for_every_enclosed_point() {
+    interval_verdict_is_sound_for_every_enclosed_point(Wcag22CriterionV1::Sc143TextDefault);
+}
+
+#[kani::proof]
+fn interval_large_text_is_sound_for_every_enclosed_point() {
+    interval_verdict_is_sound_for_every_enclosed_point(Wcag22CriterionV1::Sc143TextLargeScale);
+}
+
+#[kani::proof]
+fn interval_ui_component_is_sound_for_every_enclosed_point() {
+    interval_verdict_is_sound_for_every_enclosed_point(Wcag22CriterionV1::Sc1411UiComponentOrState);
+}
+
+#[kani::proof]
+fn interval_graphical_object_is_sound_for_every_enclosed_point() {
+    interval_verdict_is_sound_for_every_enclosed_point(Wcag22CriterionV1::Sc1411GraphicalObject);
 }
