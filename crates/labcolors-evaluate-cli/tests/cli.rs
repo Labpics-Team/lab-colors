@@ -152,3 +152,30 @@ fn binary_failure_has_no_successful_output_or_secret_error_detail() {
     assert!(help.stderr.is_empty());
     assert!(String::from_utf8_lossy(&help.stdout).contains("--format"));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn actual_process_cannot_succeed_when_stdout_refuses_bytes() {
+    let full=std::fs::OpenOptions::new().write(true).open("/dev/full").unwrap();
+    let mut child=Command::new(env!("CARGO_BIN_EXE_labcolors-evaluate"))
+        .stdin(Stdio::piped()).stdout(full).stderr(Stdio::piped()).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(GOOD.as_bytes()).unwrap();
+    let result=child.wait_with_output().unwrap();
+    assert_eq!(result.status.code(),Some(5));
+    let error:Value=serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(error["error"]["code"],"write_failed");
+}
+
+#[test]
+fn real_process_refuses_oversized_input_without_unbounded_output() {
+    let mut child=Command::new(env!("CARGO_BIN_EXE_labcolors-evaluate"))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // Производитель может получить BrokenPipe после законного раннего отказа.
+    // Решение читается из завершившегося потребителя, не из успеха записи входа.
+    let _=child.stdin.take().unwrap().write_all(&vec![b' ';2*1024*1024+2]);
+    let result=child.wait_with_output().unwrap();
+    assert_eq!(result.status.code(),Some(6));assert!(result.stdout.is_empty());
+    let error:Value=serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(error["error"]["code"],"input_too_large");
+    assert!(result.stderr.len()<256);
+}
