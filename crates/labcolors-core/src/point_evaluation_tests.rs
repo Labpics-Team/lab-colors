@@ -121,14 +121,17 @@ fn contradictory_or_ambiguous_observations_cannot_be_replaced_by_a_plausible_sam
         .unwrap()
         .attach(7, 17, 91, 9, 8, Host::default())
         .unwrap();
-    let result = b.update_observed(
+    let snapshot = b.update_observed(
         1,
         &[
             ProgramScenarioV1::new(1, vec![Srgb8::new([128; 3])]),
             ProgramScenarioV1::new(2, vec![Srgb8::new([0; 3])]),
         ],
-    );
-    assert!(result.is_err() || evaluate_declared_point_v1(&b, RELEASE).is_err());
+    ).unwrap();
+    assert_eq!(snapshot.render().unwrap().terminal_composite(), None);
+    let error = evaluate_declared_point_v1(&b, RELEASE).unwrap_err();
+    assert_eq!((error.kind(), error.domain(), error.code()),
+        (PointEvaluationFailureKindV1::Evaluation, "technical-quality", "ambiguous_observation_cases"));
 }
 
 /// Командные примеры остаются каноническими графами реального компилятора.

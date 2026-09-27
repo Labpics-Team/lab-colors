@@ -86,13 +86,15 @@ fn direct_core_oracle() {
         "programIdentitySha256":hex(report.program_identity()),"profileIdentitySha256":hex(report.profile_identity()),
         "conventionReleaseSha256":hex(report.convention_release()),"subjectIdentitySha256":hex(report.subject_identity()),
         "certificateHex":hex(report.certificate_bytes())});
-    println!("DIRECT_REPORT={document}");
+    // libtest при одном потоке пишет свой префикс без перевода строки.
+    // Маркер отчёта всегда начинает самостоятельную строку.
+    println!("\nDIRECT_REPORT={document}");
 }
 
 #[test]
 fn binary_stdin_file_and_jsonl_equal_the_direct_fresh_process() {
     let oracle = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "direct_core_oracle", "--nocapture"])
+        .args(["--exact", "direct_core_oracle", "--nocapture", "--test-threads=1"])
         .output()
         .unwrap();
     assert!(
