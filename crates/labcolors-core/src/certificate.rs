@@ -293,24 +293,6 @@ impl AdmissionKeyV1 {
         producer_revision: &str,
         producer_content_identity: [u8; 32],
     ) -> Result<Self, CertificateErrorV1> {
-        Self::try_new_for_class(
-            runtime_artifact_id,
-            operation,
-            context_id,
-            producer_revision,
-            producer_content_identity,
-            EnvelopeClassV1::Transport,
-        )
-    }
-
-    fn try_new_for_class(
-        runtime_artifact_id: &str,
-        operation: CertificateOperationV1,
-        context_id: &str,
-        producer_revision: &str,
-        producer_content_identity: [u8; 32],
-        class: EnvelopeClassV1,
-    ) -> Result<Self, CertificateErrorV1> {
         validate_text(runtime_artifact_id, MAX_RUNTIME_ARTIFACT_ID_BYTES_V1)?;
         validate_text(context_id, MAX_CONTEXT_ID_BYTES_V1)?;
         if !is_canonical_revision(producer_revision.as_bytes()) {
@@ -328,9 +310,9 @@ impl AdmissionKeyV1 {
                 CertificateErrorV1::ResourceLimitExceeded,
             )?,
             producer_content_identity,
-            authority_kind: class.authority(),
+            authority_kind: CertificateAuthorityKindV1::GenericTypedCertificate,
             authority_version: CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
-            payload_type: class.payload(),
+            payload_type: CertificatePayloadTypeV1::NonSemanticTransportPayloadV1,
             payload_version: CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1,
         };
         if key.serialized_tuple_bytes() > MAX_TUPLE_BYTES_V1 {
@@ -339,29 +321,20 @@ impl AdmissionKeyV1 {
         Ok(key)
     }
 
-    /// Копирует уже проверенный неизменяемый кортеж без повторного разбора.
-    /// Память выделяется тем же fallible-механизмом; класс и версии не меняются.
+    /// Копирует проверенный кортеж, сохраняя закрытый класс и версии.
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
-        Ok(Self {
-            runtime_artifact_id: try_clone_string(
-                &self.runtime_artifact_id,
-                CertificateErrorV1::ResourceLimitExceeded,
-            )?,
-            operation: self.operation,
-            context_id: try_clone_string(
-                &self.context_id,
-                CertificateErrorV1::ResourceLimitExceeded,
-            )?,
-            producer_revision: try_clone_string(
-                &self.producer_revision,
-                CertificateErrorV1::ResourceLimitExceeded,
-            )?,
-            producer_content_identity: self.producer_content_identity,
-            authority_kind: self.authority_kind,
-            authority_version: self.authority_version,
-            payload_type: self.payload_type,
-            payload_version: self.payload_version,
-        })
+        let mut key = Self::try_new(
+            &self.runtime_artifact_id,
+            self.operation,
+            &self.context_id,
+            &self.producer_revision,
+            self.producer_content_identity,
+        )?;
+        key.authority_kind = self.authority_kind;
+        key.authority_version = self.authority_version;
+        key.payload_type = self.payload_type;
+        key.payload_version = self.payload_version;
+        Ok(key)
     }
 
     /// Runtime artifact identity.
@@ -681,14 +654,16 @@ impl UntrustedEnvelopeV1 {
             return Err(CertificateErrorV1::BindingDigestMismatch);
         }
 
-        let key = AdmissionKeyV1::try_new_for_class(
+        let mut key = AdmissionKeyV1::try_new(
             runtime_artifact_id,
             CertificateOperationV1::IssueCertificate,
             context_id,
             producer_revision,
             producer_content_identity,
-            class,
         )?;
+        // Пара уже проверена выше закрытой точкой входа, а не угадана из payload.
+        key.authority_kind = class.authority();
+        key.payload_type = class.payload();
         Ok(Self {
             key,
             key_prefix_len,
