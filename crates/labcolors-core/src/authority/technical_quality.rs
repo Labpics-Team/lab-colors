@@ -130,26 +130,7 @@ impl ModeledPointProofV1 {
 
     /// Связывает только данные закрытого доказательства; не оценивает пиксели.
     fn hash_identity_material(&self, hasher: &mut Hasher) {
-        let materialization = self.materialization;
-        let output = materialization.output();
-        let sink_stamp = materialization.sink_stamp();
-
-        hasher.update(b"modeled-point-v1\0");
-        hasher.update(&materialization.content_identity());
-        hasher.update(&[1]); // EncodedSrgb8SourceOverV1 проверен до создания доказательства.
-        hasher.update(&materialization.revision().to_be_bytes());
-        hasher.update(&sink_stamp.sequence().to_be_bytes());
-        hasher.update(&sink_stamp.binding_epoch().to_be_bytes());
-        hasher.update(&materialization.presentation_root().to_be_bytes());
-        hasher.update(&materialization.occurrence().to_be_bytes());
-        hasher.update(&materialization.context().identity_bytes());
-        hasher.update(&[match materialization.renderer_provenance() {
-            ProgramRendererProvenanceV1::Unverified => 0,
-        }]);
-        hasher.update(&output.slot().to_be_bytes());
-        hasher.update(&output.source().bytes());
-        hasher.update(&output.opacity().to_bits().to_be_bytes());
-        hasher.update(&materialization.terminal_composite().bytes());
+        super::hash_modeled_point_identity(self.materialization, hasher);
     }
 }
 

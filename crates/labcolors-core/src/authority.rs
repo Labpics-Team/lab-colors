@@ -6,6 +6,7 @@
 
 use crate::program_wire::ProgramRendererProvenanceV1;
 
+pub(crate) mod clean_convention;
 mod technical_quality;
 
 /// Закрытые ветви семантических полномочий AUTH V1.
@@ -293,6 +294,36 @@ fn ensure_expected_current(
     Ok(())
 }
 
+/// Единственное кодирование привязки моделируемой точки для ветвей AUTH.
+/// Чтение и доказательство принадлежат attachment; хеш не создаёт полномочие.
+fn hash_modeled_point_identity(
+    materialization: crate::program_wire::AttachedMaterializationAuthorityV1,
+    hasher: &mut crate::sha256::Hasher,
+) {
+    let output = materialization.output();
+    let sink_stamp = materialization.sink_stamp();
+
+    hasher.update(b"modeled-point-v1\0");
+    hasher.update(&materialization.content_identity());
+    hasher.update(&[match materialization.physical_identity() {
+        None => 0,
+        Some(crate::program_wire::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => 1,
+    }]);
+    hasher.update(&materialization.revision().to_be_bytes());
+    hasher.update(&sink_stamp.sequence().to_be_bytes());
+    hasher.update(&sink_stamp.binding_epoch().to_be_bytes());
+    hasher.update(&materialization.presentation_root().to_be_bytes());
+    hasher.update(&materialization.occurrence().to_be_bytes());
+    hasher.update(&materialization.context().identity_bytes());
+    hasher.update(&[match materialization.renderer_provenance() {
+        ProgramRendererProvenanceV1::Unverified => 0,
+    }]);
+    hasher.update(&output.slot().to_be_bytes());
+    hasher.update(&output.source().bytes());
+    hasher.update(&output.opacity().to_bits().to_be_bytes());
+    hasher.update(&materialization.terminal_composite().bytes());
+}
+
 // Владелец-side часть остаётся закрытой внутри AUTH. TQ/CC/HCE добавят свои
 // конструкторы доказательств отдельными узлами и не получают общий публичный mint.
 struct AuthorityOwnerCurrentV1 {
@@ -370,6 +401,9 @@ fn issue_permit<'a>(
         descriptor: next,
     })
 }
+
+#[cfg(test)]
+mod test_support;
 
 #[cfg(test)]
 mod tests;

@@ -1,3 +1,4 @@
+use super::super::test_support::{Host, point_attachment_for};
 use super::*;
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
@@ -17,20 +18,12 @@ use crate::observation::{
     ObservationUpdateInput, ObservedScenarioSetInput, Revision, RevisionBoundObservationV1,
     ScenarioId, ScenarioInput, SurfaceInputBinding, canonicalize_observation_schema,
 };
-use crate::program::wire::ProgramWireBuilderV1;
-use crate::program_wire::{
-    ProgramMaterializationAuthorityErrorV1, ProgramPointSinkHostErrorV1, ProgramPointSinkIntentV1,
-    ProgramScenarioV1, compile_program_wire_v1,
-};
+use crate::program_wire::{ProgramMaterializationAuthorityErrorV1, ProgramScenarioV1};
 use crate::session::{
     Session, SessionDecision, SessionEvidenceV1, SessionObservationBindingPermitV1, SessionPlanV1,
     private as session_private,
 };
 
-const OUTPUT: u32 = 17;
-const ROOT: u32 = 9;
-const OCCURRENCE: u32 = 8;
-const SINK_OUTPUT: u32 = 91;
 const FIELD_STREAM: ObservationStreamId = ObservationStreamId::new(6);
 const FIELD_SURFACE: SurfaceInputPortId = SurfaceInputPortId::new(1);
 
@@ -115,53 +108,9 @@ fn field_session(revision: u64) -> Session<FieldSessionPlan> {
     session
 }
 
-#[derive(Default)]
-struct Host {
-    stamp: Option<crate::program_wire::ProgramPointSinkStampV1>,
-}
-
-impl ProgramPointSinkHostV1 for Host {
-    /// Имитирует успешную установку, сохраняя точный pending stamp.
-    fn try_install(
-        &mut self,
-        intent: ProgramPointSinkIntentV1,
-    ) -> Result<(), ProgramPointSinkHostErrorV1> {
-        if self
-            .stamp
-            .is_some_and(|stamp| intent.expected_stamp() != stamp)
-        {
-            return Err(ProgramPointSinkHostErrorV1::Rejected);
-        }
-        self.stamp = Some(intent.desired_stamp());
-        Ok(())
-    }
-}
-
-/// Строит минимальный Program V1 с отдельно заданным ожидаемым композитом.
-fn point_wire(expected: Srgb8) -> Vec<u8> {
-    let mut builder = ProgramWireBuilderV1::new();
-    builder
-        .source(1, Srgb8::new([0x40; 3]))
-        .fixed_target(2, 1)
-        .surface_input_port(6)
-        .opacity_input(5, 0.5)
-        .solid_paint(3, 2)
-        .opacity_paint(4, 3, 5)
-        .input_surface(7, 6)
-        .source_over_occurrence(OCCURRENCE, 4, 7, 64.0, 0.2, 2)
-        .presentation_root(ROOT, OCCURRENCE)
-        .presentation_target(ROOT, OCCURRENCE)
-        .exact_visible_unary(true, 10, OCCURRENCE, expected)
-        .output(OUTPUT, 4);
-    builder.finish().unwrap()
-}
-
-/// Получает attachment через обычную загрузку и привязку Program.
+/// Сохраняет прежний положительный пример TQ без отдельного построителя графа.
 fn point_attachment() -> ProgramAttachmentV1<Host> {
-    compile_program_wire_v1(&point_wire(Srgb8::new([0x60; 3])))
-        .unwrap()
-        .attach(7, OUTPUT, SINK_OUTPUT, ROOT, OCCURRENCE, Host::default())
-        .unwrap()
+    point_attachment_for(Srgb8::new([0x40; 3]), 0.5, Srgb8::new([0x60; 3]))
 }
 
 /// Отличает текущую материализацию от сохранённой и проверяет сохранение других AUTH-ветвей.
