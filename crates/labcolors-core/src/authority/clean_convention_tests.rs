@@ -85,17 +85,33 @@ fn accepted_source_does_not_admit_rejected_terminal_composite() {
     state
         .admit_modeled_point_technical_quality(&attachment, AuthorityExpectedCurrentV1::Vacant)
         .unwrap();
+    let accepted = ready(
+        Srgb8::new([128, 128, 129]),
+        0.5,
+        Srgb8::new([128, 128, 127]),
+        Srgb8::new([128; 3]),
+    );
+    let established = state
+        .admit_modeled_point_clean_convention(
+            &accepted,
+            Some(selection()),
+            AuthorityExpectedCurrentV1::Vacant,
+        )
+        .unwrap();
     let before = state;
     let result = state.admit_modeled_point_clean_convention(
         &attachment,
         Some(selection()),
-        AuthorityExpectedCurrentV1::Vacant,
+        AuthorityExpectedCurrentV1::Exact(established.descriptor()),
     );
     assert!(
         matches!(result, Err(CleanConventionErrorV1::RejectedByConvention { composite: got, .. }) if got == composite)
     );
     assert!(state == before);
-    assert_eq!(state.read(AuthorityIdV1::CleanConvention), None);
+    assert_eq!(
+        state.read(AuthorityIdV1::CleanConvention),
+        Some(established.descriptor())
+    );
 }
 
 /// Отклонённый исходный [128,128,129] после композиции становится нейтральным.
