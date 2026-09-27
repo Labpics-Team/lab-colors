@@ -1,15 +1,16 @@
-//! Fixed, non-semantic certificate transport envelope (r13).
+//! Единый позиционный LCEN-конверт с закрытым выбором класса нагрузки.
 //!
-//! This module owns framing and producer binding only.  It does not interpret
-//! the payload as colour science, a materialization result, or an authority
-//! result.  A decoded byte buffer is deliberately represented as
-//! [`UntrustedEnvelopeV1`].  The trusted type can only be made by a producer
-//! capability kept inside this crate.
+//! Этот модуль владеет структурой и привязкой производителя, не цветовой
+//! математикой. Публичный транспорт принимает только несмысловую нагрузку;
+//! внутренний научный путь сверяется с текущим EVAL. Декодированный буфер
+//! представлен типом [`UntrustedEnvelopeV1`]; доверенный тип создаётся только
+//! через закрытое полномочие производителя внутри крейта.
 
 use core::fmt;
 
 use crate::sha256::Hasher;
 
+pub(crate) mod science;
 mod source;
 pub use source::{CertificateProducerErrorV1, SourceCertificateV1, issue_source_certificate_v1};
 
@@ -75,7 +76,7 @@ pub enum CertificateErrorV1 {
     TrailingBytes,
     /// The producer revision is not exactly forty lowercase hexadecimal bytes.
     NonCanonicalRevision,
-    /// The payload type selector is not the r13 transport payload.
+    /// Селектор нагрузки не соответствует классу выбранной точки входа.
     InvalidPayloadType,
     /// The payload type version is not supported.
     UnsupportedPayloadVersion,
@@ -184,12 +185,15 @@ impl fmt::Debug for CertificateOperationV1 {
 pub enum CertificateAuthorityKindV1 {
     /// Generic framing; no authority result is implied.
     GenericTypedCertificate,
+    /// Совместный объявленный точечный профиль; доступен только внутреннему SCI-CERT.
+    DeclaredModeledPointProfile,
 }
 
 impl CertificateAuthorityKindV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::GenericTypedCertificate => GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1,
+            Self::DeclaredModeledPointProfile => 0x04, // LCEN V1: совместный профиль; 1/2/3 сохраняют отдельные ветви.
         }
     }
 
@@ -197,6 +201,7 @@ impl CertificateAuthorityKindV1 {
     pub const fn key(self) -> &'static str {
         match self {
             Self::GenericTypedCertificate => "generic-typed-certificate",
+            Self::DeclaredModeledPointProfile => "declared-modeled-point-profile",
         }
     }
 }
@@ -212,12 +217,15 @@ impl fmt::Debug for CertificateAuthorityKindV1 {
 pub enum CertificatePayloadTypeV1 {
     /// Sealed producer-owned opaque transport body.
     NonSemanticTransportPayloadV1,
+    /// Фиксированное свидетельство обеих текущих ветвей; не транспортный marker.
+    DeclaredPointQualityV1,
 }
 
 impl CertificatePayloadTypeV1 {
     const fn wire(self) -> u8 {
         match self {
             Self::NonSemanticTransportPayloadV1 => NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1,
+            Self::DeclaredPointQualityV1 => 0x02, // LCPQ V1: фиксированные 302 байта; 0x01 остаётся транспортом.
         }
     }
 
@@ -225,6 +233,7 @@ impl CertificatePayloadTypeV1 {
     pub const fn key(self) -> &'static str {
         match self {
             Self::NonSemanticTransportPayloadV1 => "non-semantic-transport-v1",
+            Self::DeclaredPointQualityV1 => "declared-point-quality-v1",
         }
     }
 }
@@ -232,6 +241,28 @@ impl CertificatePayloadTypeV1 {
 impl fmt::Debug for CertificatePayloadTypeV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.key())
+    }
+}
+
+/// Пару селекторов выбирает типизированная точка входа, не недоверенные байты.
+#[derive(Clone, Copy)]
+enum EnvelopeClassV1 {
+    Transport,
+    DeclaredPoint,
+}
+
+impl EnvelopeClassV1 {
+    const fn authority(self) -> CertificateAuthorityKindV1 {
+        match self {
+            Self::Transport => CertificateAuthorityKindV1::GenericTypedCertificate,
+            Self::DeclaredPoint => CertificateAuthorityKindV1::DeclaredModeledPointProfile,
+        }
+    }
+    const fn payload(self) -> CertificatePayloadTypeV1 {
+        match self {
+            Self::Transport => CertificatePayloadTypeV1::NonSemanticTransportPayloadV1,
+            Self::DeclaredPoint => CertificatePayloadTypeV1::DeclaredPointQualityV1,
+        }
     }
 }
 
@@ -290,15 +321,20 @@ impl AdmissionKeyV1 {
         Ok(key)
     }
 
-    /// Копирует exact tuple с типизированным отказом при нехватке памяти.
+    /// Копирует проверенный кортеж, сохраняя закрытый класс и версии.
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
-        Self::try_new(
+        let mut key = Self::try_new(
             &self.runtime_artifact_id,
             self.operation,
             &self.context_id,
             &self.producer_revision,
             self.producer_content_identity,
-        )
+        )?;
+        key.authority_kind = self.authority_kind;
+        key.authority_version = self.authority_version;
+        key.payload_type = self.payload_type;
+        key.payload_version = self.payload_version;
+        Ok(key)
     }
 
     /// Runtime artifact identity.
@@ -451,11 +487,22 @@ impl CertificateEnvelopeV1 {
         payload: NonSemanticTransportPayloadV1,
         attestation: TrustedProducerAttestationV1,
     ) -> Result<Self, CertificateErrorV1> {
-        let payload_sha256 = payload_digest(payload.as_bytes());
+        if attestation.key.authority_kind != CertificateAuthorityKindV1::GenericTypedCertificate {
+            return Err(CertificateErrorV1::InvalidPayloadType);
+        }
+        Self::issue_bound_bytes(payload.as_bytes(), attestation)
+    }
+
+    // Обе типизированные ветви используют одну проверку capability и один encoder.
+    fn issue_bound_bytes(
+        payload: &[u8],
+        attestation: TrustedProducerAttestationV1,
+    ) -> Result<Self, CertificateErrorV1> {
+        let payload_sha256 = payload_digest(payload);
         if payload_sha256 != attestation.payload_sha256 {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
         }
-        let prefix = encode_prefix(&attestation.key, payload.as_bytes(), payload_sha256)?;
+        let prefix = encode_prefix(&attestation.key, payload, payload_sha256)?;
         let binding_sha256 = binding_digest(&prefix);
         if binding_sha256 != attestation.binding_sha256 {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
@@ -525,7 +572,20 @@ pub struct UntrustedEnvelopeV1 {
 
 impl UntrustedEnvelopeV1 {
     /// Decodes the exact positional r13 packet and verifies both digests.
+    #[inline(always)]
     pub fn decode(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
+        Self::decode_class::<false>(bytes)
+    }
+
+    // Класс известен из закрытой точки входа. Специализация не включает
+    // недоступную научную ветвь в публичный транспорт; общий парсер остаётся один.
+    #[inline(always)]
+    fn decode_class<const DECLARED: bool>(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
+        let class = if DECLARED {
+            EnvelopeClassV1::DeclaredPoint
+        } else {
+            EnvelopeClassV1::Transport
+        };
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
@@ -584,13 +644,13 @@ impl UntrustedEnvelopeV1 {
         if operation != ISSUE_CERTIFICATE_OPERATION_V1 {
             return Err(CertificateErrorV1::UnknownOperation);
         }
-        if authority_kind != GENERIC_TYPED_CERTIFICATE_AUTHORITY_KIND_V1 {
+        if authority_kind != class.authority().wire() {
             return Err(CertificateErrorV1::UnknownAuthorityKind);
         }
         if authority_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
             return Err(CertificateErrorV1::UnsupportedAuthorityVersion);
         }
-        if payload_type != NON_SEMANTIC_TRANSPORT_PAYLOAD_TYPE_V1 {
+        if payload_type != class.payload().wire() {
             return Err(CertificateErrorV1::InvalidPayloadType);
         }
         if payload_version != CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1 {
@@ -603,13 +663,16 @@ impl UntrustedEnvelopeV1 {
             return Err(CertificateErrorV1::BindingDigestMismatch);
         }
 
-        let key = AdmissionKeyV1::try_new(
+        let mut key = AdmissionKeyV1::try_new(
             runtime_artifact_id,
             CertificateOperationV1::IssueCertificate,
             context_id,
             producer_revision,
             producer_content_identity,
         )?;
+        // Пара уже проверена выше закрытой точкой входа, а не угадана из payload.
+        key.authority_kind = class.authority();
+        key.payload_type = class.payload();
         Ok(Self {
             key,
             key_prefix_len,
@@ -643,6 +706,11 @@ impl UntrustedEnvelopeV1 {
     /// Exact decoded bytes retained for duplicate/conflict comparison.
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
+    }
+
+    fn payload_bytes(&self) -> &[u8] {
+        let start = self.key_prefix_len + WIRE_U32_BYTES_V1;
+        &self.canonical_bytes[start..start + self.payload_len as usize]
     }
 
     fn canonical_key_bytes(&self) -> &[u8] {
@@ -1002,8 +1070,18 @@ pub(crate) fn producer_attestation_v1(
     key: AdmissionKeyV1,
     payload: &NonSemanticTransportPayloadV1,
 ) -> Result<TrustedProducerAttestationV1, CertificateErrorV1> {
-    let payload_sha256 = payload_digest(payload.as_bytes());
-    let prefix = encode_prefix(&key, payload.as_bytes(), payload_sha256)?;
+    if key.authority_kind != CertificateAuthorityKindV1::GenericTypedCertificate {
+        return Err(CertificateErrorV1::InvalidPayloadType);
+    }
+    attest_bytes(key, payload.as_bytes())
+}
+
+fn attest_bytes(
+    key: AdmissionKeyV1,
+    payload: &[u8],
+) -> Result<TrustedProducerAttestationV1, CertificateErrorV1> {
+    let payload_sha256 = payload_digest(payload);
+    let prefix = encode_prefix(&key, payload, payload_sha256)?;
     let binding_sha256 = binding_digest(&prefix);
     Ok(TrustedProducerAttestationV1 {
         key,

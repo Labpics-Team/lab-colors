@@ -127,7 +127,18 @@ impl<'a> CoreSourceTreeDescriptorV1<'a> {
     }
 }
 
-fn issue_from_descriptor(bytes: &[u8]) -> Result<SourceCertificateV1, CertificateProducerErrorV1> {
+pub(super) fn current_key(
+    context: &str,
+    content: [u8; 32],
+) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
+    key_from_descriptor(SOURCE_DESCRIPTOR_V1, context, Some(content))
+}
+
+fn key_from_descriptor(
+    bytes: &[u8],
+    context: &str,
+    content: Option<[u8; 32]>,
+) -> Result<AdmissionKeyV1, CertificateProducerErrorV1> {
     let descriptor = CoreSourceTreeDescriptorV1::parse(bytes)?;
     let identity = descriptor.content_identity();
     let mut runtime_id = [0_u8; RUNTIME_PREFIX_V1.len() + 64];
@@ -142,13 +153,18 @@ fn issue_from_descriptor(bytes: &[u8]) -> Result<SourceCertificateV1, Certificat
     }
     let runtime_id =
         core::str::from_utf8(&runtime_id).map_err(|_| CertificateErrorV1::InvalidUtf8)?;
-    let key = AdmissionKeyV1::try_new(
+    AdmissionKeyV1::try_new(
         runtime_id,
         CertificateOperationV1::IssueCertificate,
-        CONTEXT_ID_V1,
+        context,
         descriptor.revision,
-        identity,
-    )?;
+        content.unwrap_or(identity),
+    )
+    .map_err(Into::into)
+}
+
+fn issue_from_descriptor(bytes: &[u8]) -> Result<SourceCertificateV1, CertificateProducerErrorV1> {
+    let key = key_from_descriptor(bytes, CONTEXT_ID_V1, None)?;
     let payload = producer_payload_v1(&[0x01])?;
     // Одно свидетельство расходуется при выпуске; второе создаём тем же закрытым
     // владельцем для последующего допуска, не вводя публичного копирования.
