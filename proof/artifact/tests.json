@@ -869,7 +869,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "7ea914bafd403360f634b040ba814ca151be2f197bf089c6d972e356f13bb261",
+ "record_sha256": "491692ef4cdef74bcf62ebb15a8969ebe11d6d8d4113877761b97c0d1d4ff8f1",
  "rust": {
   "enabled": [
    "adversarial_emoji_cyrillic_highbit_overflow_match_frozen_characterization: test",
@@ -1509,7 +1509,7 @@
    "output_projection_tests::release_kinds_are_nominal_and_difference_registry_is_empty: test",
    "output_projection_tests::solid_css_has_no_alpha_and_exact_encoded_greys_use_the_release_zero_convention: test",
    "output_projection_tests::source_binding_rejects_bytes_from_an_unrelated_modeled_derivation: test",
-   "pack_v11_family_inventory_and_bytes_are_exact: test",
+   "pack_v12_family_inventory_and_bytes_are_exact: test",
    "padding_boundaries_match_external_known_answers: test",
    "parallel_ssot_and_public_claim_are_deterministic: test",
    "parallel_ssot_covers_current_marker_sources: test",
@@ -2090,7 +2090,7 @@
    "tests::counts_are_nonempty_and_consistent: test",
    "tests::generation_is_deterministic: test",
    "tests::manifest_numerical_registry_is_generated_from_core_ssot: test",
-   "tests::pack_v11_is_the_terminal_program_conformance_shape: test",
+   "tests::pack_v12_is_the_terminal_program_conformance_shape: test",
    "tests::solve_failure_wire_is_the_core_projection_and_fails_closed: test",
    "tests::solve_pack_contains_solved_and_typed_failure: test",
    "tests::wcag22_vector_generator_has_no_private_wire_key_vocabulary: test",
