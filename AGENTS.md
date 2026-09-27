@@ -19,9 +19,11 @@ Special-recipe path не является extension point. В изменяемо
 переносятся в общий graph/constraint contract, а заменённая исполняемая ветвь
 удаляется в том же срезе.
 
-Текущие `RoleRecipe`, публичные `RoleSpec`/`NamedRoleTable` и профильные
-селекторы ещё являются исполняемым pre-cutover долгом, а не target IR. Их нельзя
-расширять новыми variants, fields или semantics. Вариант считается
+Сохранённые `RoleRecipe`, `RoleSpec`/`NamedRoleTable` и профильные селекторы
+в приватных `config`/`semantic` остаются наследуемой реализацией для прежних
+внутренних путей и характеристических проверок, а не публичным API или target IR.
+Они не подключены к действующему WASM-движку ProgramWire. Их нельзя расширять
+новыми variants, fields или semantics. Вариант считается
 мигрированным только когда все его публичные construction paths выполняют
 parse, validation и total one-way lowering, а исполнение читает исключительно
 compiled IR. Старый match/solver/evaluator/default/emission path удаляется в том

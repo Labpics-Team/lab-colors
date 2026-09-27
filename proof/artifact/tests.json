@@ -869,7 +869,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "b49871d39c4f873fe3bc51c2d0b2408d94bd31b9954d484297a76bcd463e7242",
+ "record_sha256": "c5afdef37aa57f1f8403251ef5dad5f131faf50c53fb2e590c6b2cae7f2d2274",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
@@ -1024,16 +1024,6 @@
    "clean_set_tests::neutral_axis_precedes_declared_rejected_interval: test",
    "clean_set_tests::runtime_classifier_matches_the_content_bound_total_table: test",
    "clean_set_tests::table_none_sentinel_is_not_absent_final_owned_domain: test",
-   "cleanliness::alpha_aggregation::tests::aggregation_floor_never_exceeds_weighted_average: test",
-   "cleanliness::alpha_aggregation::tests::aggregation_monotonicity_increasing_alpha_increases_contribution: test",
-   "cleanliness::alpha_aggregation::tests::all_transparent_layers_produce_zero_not_default_clean: test",
-   "cleanliness::alpha_aggregation::tests::empty_assessments_returns_none: test",
-   "cleanliness::alpha_aggregation::tests::floor_prevents_clean_masking_of_dirty_opaque: test",
-   "cleanliness::alpha_aggregation::tests::single_layer_aggregation_equals_individual_score: test",
-   "cleanliness::alpha_assessment::tests::backdrop_context_rejects_unclean_backdrop: test",
-   "cleanliness::alpha_assessment::tests::weighted_contribution_at_opaque_equals_full_score: test",
-   "cleanliness::alpha_assessment::tests::weighted_contribution_at_transparent_is_zero: test",
-   "cleanliness::alpha_assessment::tests::weighted_contribution_is_monotonic_in_alpha: test",
    "cleanliness::relation_corpus::tests::chain_is_a_valid_cleaner_to_dirtier_order: test",
    "cleanliness::relation_corpus::tests::cycle_is_rejected_at_insert: test",
    "cleanliness::relation_corpus::tests::different_alpha_does_not_inherit_relations: test",
@@ -1420,6 +1410,7 @@
    "generic_boundary_tests::staged_program_draft_wraps_the_single_canonical_core_graph: test",
    "generic_boundary_tests::staged_program_module_is_private_module_qualified_and_transport_neutral: test",
    "generic_boundary_tests::staged_session_is_evidence_only_and_retired_operation_authority_cannot_return: test",
+   "generic_boundary_tests::unadmitted_cleanliness_and_retired_recipe_sources_are_absent: test",
    "generic_boundary_tests::w5_removes_legacy_wcag_authority_from_the_solver: test",
    "glow::tests::binary64_boundaries_follow_round_half_up_and_are_reproducible: test",
    "glow::tests::binary64_stream_respects_the_766_state_bound: test",
@@ -2381,7 +2372,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_are_scoped_to_the_semantic_projection: test"
   ],
-  "enabled_count": 1508,
+  "enabled_count": 1499,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
