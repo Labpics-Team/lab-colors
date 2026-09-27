@@ -1132,16 +1132,6 @@ jobs:
             runtimeAttestations: [],
           };
           const expectedCapabilitySites = [
-            {
-              siteId: "glow-target-or-maximum-v1",
-              stableOutcomes: ["bit-exact", "indeterminate"],
-              compatibilityReleases: ["glow-cam16-ucs-jprime-target-or-max-v1"],
-              evidenceClasses: ["bit-exact"],
-              artifactIds: [],
-              boundIds: [],
-              proofIds: [],
-              runtimeAttestations: [],
-            },
             expectedPointCapability,
             expectedWcagCapability,
           ];

@@ -10,8 +10,6 @@ import XCTest
 /// кросс-платформенный libm-шум ~1e-13, реальный дрейф — целые единицы).
 /// Композит-hex — чистая IEEE-алгебра, точен; solve-hex — квантование
 /// трансцендентного резолва, допускается ±1 LSD/канал.
-/// Glow-проверка ниже намеренно НЕ утверждает bit-parity CAM16: она проверяет
-/// типизированный класс решения и точный certificate композитинга отдельно.
 final class ConformanceTests: XCTestCase {
 
     static let driftTol = 1e-6
@@ -86,25 +84,6 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    /// Independent encoded-sRGB8 screen oracle. It intentionally does not call
-    /// the source-over FFI primitive: on black those operators coincide and
-    /// would make the Glow certificate assertion vacuous.
-    func screenComposite(tint: String, alpha: Double, background: String) -> String {
-        let glow = channels(tint)
-        let bg = channels(background)
-        var result: [Int] = []
-        result.reserveCapacity(3)
-        for channel in 0..<3 {
-            let backgroundChannel = Double(bg[channel])
-            let glowChannel = Double(glow[channel])
-            let backgroundHeadroom = Double(255 - bg[channel])
-            let contribution = alpha * glowChannel * backgroundHeadroom / 255.0
-            let rounded = Int(floor(backgroundChannel + contribution + 0.5))
-            result.append(rounded)
-        }
-        return String(format: "#%02X%02X%02X", result[0], result[1], result[2])
-    }
-
     /// Квантованный цвет conformant в пределах ±1 LSB на канал (кросс-платформенно).
     func assertHexWithinOne(_ a: String, _ b: String, _ ctx: String) {
         let ca = channels(a), cb = channels(b)
@@ -118,7 +97,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
-        XCTAssertEqual(manifest.packVersion, "11.0.0", "Swift fixture обязан исполнять terminal pack v11")
+        XCTAssertEqual(manifest.packVersion, "12.0.0", "Swift проверяет действующий пакет conformance v12")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,
