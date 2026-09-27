@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""AUTH/TQ/CC: целевые семантические мутации обязаны делать целевой тест Core красным."""
+"""AUTH/TQ/CC/EVAL: целевые семантические мутации обязаны делать целевой тест Core красным."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import sys
 
@@ -101,7 +102,7 @@ def run_mutant(
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
-    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES | HANDOFF_FAILURES | CC_FAILURES).get(name, "test result: FAILED"))
+    expected_marker = COMPILE_KILLED.get(name, (LIFECYCLE_FAILURES | POINT_FAILURES | RASTER_FAILURES | HANDOFF_FAILURES | CC_FAILURES | EVAL_FAILURES).get(name, "test result: FAILED"))
     if expected_marker not in result.stdout:
         sys.stderr.write(result.stdout)
         raise SystemExit(
@@ -331,10 +332,110 @@ CC_FAILURES = {
 }
 
 
+# Совместный EVAL должен сохранять оба обязательства, а не только дать общий PASS.
+EVAL_SOURCE = ROOT / "crates/labcolors-core/src/authority/evaluation.rs"
+EVAL_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked",
+                "authority::evaluation::tests"]
+EVAL_MUTANTS = {
+    "eval-skip-technical": (EVAL_SOURCE, EVAL_COMMAND,
+        "        self.require(technical)",
+        "        Ok::<(), AuthorityRequireErrorV1>(())"),
+    "eval-skip-convention": (EVAL_SOURCE, EVAL_COMMAND,
+        "        self.require(convention)",
+        "        Ok::<(), AuthorityRequireErrorV1>(())"),
+    "eval-trust-old-technical": (EVAL_SOURCE, EVAL_COMMAND,
+        "        let technical = fresh.read(AuthorityIdV1::TechnicalQuality).ok_or(",
+        "        let technical = self.read(AuthorityIdV1::TechnicalQuality).ok_or("),
+    "eval-trust-old-convention": (EVAL_SOURCE, EVAL_COMMAND,
+        "        let convention = checked.descriptor();",
+        "        let convention = self.read(AuthorityIdV1::CleanConvention).unwrap_or(checked.descriptor());"),
+    "eval-return-one-branch-twice": (EVAL_SOURCE, EVAL_COMMAND,
+        "            technical,\n            convention,",
+        "            technical: convention,\n            convention,"),
+    "eval-reject-all": (EVAL_SOURCE, EVAL_COMMAND,
+        "        let profile = profile.ok_or(PointEvaluationErrorV1::ProfileRequired)?;",
+        "        return Err(PointEvaluationErrorV1::ProfileRequired);\n        let profile = profile.ok_or(PointEvaluationErrorV1::ProfileRequired)?;"),
+    "eval-unbound-profile-release": (EVAL_SOURCE, EVAL_COMMAND,
+        "        hasher.update(&self.convention.release());",
+        "        hasher.update(&[0_u8; 32]);"),
+}
+EVAL_FAILURES = {
+    name: "test authority::evaluation::tests::" + test + " ... FAILED"
+    for name, test in {
+        "eval-skip-technical": "explicit_profile_and_both_installed_authorities_are_required",
+        "eval-skip-convention": "explicit_profile_and_both_installed_authorities_are_required",
+        "eval-trust-old-technical": "same_rgb_new_revision_rejects_each_stale_branch_and_recovers",
+        "eval-trust-old-convention": "same_rgb_new_revision_rejects_each_stale_branch_and_recovers",
+        "eval-return-one-branch-twice": "result_preserves_one_subject_profile_and_distinct_current_branches",
+        "eval-reject-all": "result_preserves_one_subject_profile_and_distinct_current_branches",
+        "eval-unbound-profile-release": "result_preserves_one_subject_profile_and_distinct_current_branches",
+    }.items()
+}
+
+
+def verify_evaluation_borrows() -> None:
+    """Реальный Rust-тип удерживает оба источника, но освобождает их после использования."""
+    original = EVAL_SOURCE.read_text(encoding="utf-8")
+    use = "    let _ = result.materialization();\n"
+    mutate_attachment = "    let _ = attachment.update_unknown(2, 1);\n"
+    mutate_authority = "    let _ = state.admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant);\n"
+
+    def probe(source: str, body: str, expected_error: bool, name: str) -> None:
+        code = """
+#[cfg(test)]
+fn evaluation_borrow_contract_probe(
+    state: &mut AuthorityStateV1,
+    attachment: &mut ProgramAttachmentV1<super::test_support::Host>,
+    profile: PointQualityProfileV1,
+) {
+    let result = state.evaluate_declared_modeled_point(attachment, Some(profile)).unwrap();
+""" + body + "}\n"
+        try:
+            EVAL_SOURCE.write_text(source + code, encoding="utf-8")
+            completed = subprocess.run(
+                ["cargo", "check", "-p", "labcolors-core", "--tests", "--locked", "--message-format=json"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+        finally:
+            EVAL_SOURCE.write_text(original, encoding="utf-8")
+        diagnostics = []
+        for line in completed.stdout.splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if item.get("reason") == "compiler-message" and item["message"]["level"] == "error":
+                diagnostics.append(item["message"])
+        qualified = completed.returncode == 0 and not diagnostics
+        if expected_error:
+            qualified = completed.returncode != 0 and bool(diagnostics) and all(
+                (message.get("code") or {}).get("code") == "E0502"
+                and any(span["file_name"].endswith("authority/evaluation.rs") for span in message["spans"])
+                for message in diagnostics
+            )
+        if not qualified:
+            sys.stderr.write(completed.stdout + completed.stderr)
+            raise SystemExit(f"{name}: evaluation borrow contract did not produce its required compiler outcome")
+        print(f"verified {name}")
+
+    probe(original, use + mutate_attachment + mutate_authority, False, "eval-release-after-use")
+    probe(original, mutate_attachment + use, True, "eval-keeps-attachment-borrowed")
+    probe(original, mutate_authority + use, True, "eval-keeps-authority-borrowed")
+    # Различающий отрицательный контроль: отвязанное время жизни действительно
+    # разрешает запрещённое действие. Ошибка компиляции не засчитывается за него.
+    before = "-> Result<CurrentPointEvaluationV1<'a>, PointEvaluationErrorV1>"
+    after = "-> Result<CurrentPointEvaluationV1<'static>, PointEvaluationErrorV1>"
+    validate_anchor("eval-detached-result", original, before, after)
+    probe(original.replace(before, after), mutate_attachment + mutate_authority + use,
+          False, "eval-detached-result-counterexample")
+    if EVAL_SOURCE.read_text(encoding="utf-8") != original:
+        raise SystemExit("evaluation source was not restored")
+
+
 def main() -> None:
-    """Run the bounded AUTH/TQ/CC semantic mutation matrix and restore every source."""
+    """Run the bounded AUTH/TQ/CC/EVAL semantic mutation matrix and restore every source."""
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS | CC_MUTANTS
+    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
     tq_originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in bounded_mutants.values()
@@ -358,8 +459,9 @@ def main() -> None:
     for source, original in tq_originals.items():
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
+    verify_evaluation_borrows()
     total = len(AUTH_MUTANTS) + len(bounded_mutants)
-    print(f"AUTH/TQ/CC mutation gate caught {total} semantic mutants")
+    print(f"AUTH/TQ/CC/EVAL mutation gate caught {total} semantic mutants")
 
 
 if __name__ == "__main__":

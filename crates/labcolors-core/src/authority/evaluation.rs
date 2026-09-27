@@ -1,6 +1,9 @@
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "внутренний оценщик предоставляет результат следующему SCI-CERT; публичного формата ещё нет")
+    expect(
+        dead_code,
+        reason = "внутренний оценщик предоставляет результат следующему SCI-CERT; публичного формата ещё нет"
+    )
 )]
 
 //! Совместная оценка одной текущей точки без изменения исходного AUTH.
@@ -16,15 +19,15 @@
 
 use core::marker::PhantomData;
 
-use super::clean_convention::{
-    CleanConventionErrorV1, CleanConventionSelectionV1,
-};
+use super::clean_convention::{CleanConventionErrorV1, CleanConventionSelectionV1};
 use super::technical_quality::TechnicalQualityAdmissionErrorV1;
 use super::{
-    AuthorityDescriptorV1, AuthorityExpectedCurrentV1, AuthorityIdV1,
-    AuthorityRequireErrorV1, AuthorityStateV1,
+    AuthorityDescriptorV1, AuthorityExpectedCurrentV1, AuthorityIdV1, AuthorityRequireErrorV1,
+    AuthorityStateV1,
 };
-use crate::program_wire::{AttachedMaterializationAuthorityV1, ProgramAttachmentV1, ProgramPointSinkHostV1};
+use crate::program_wire::{
+    AttachedMaterializationAuthorityV1, ProgramAttachmentV1, ProgramPointSinkHostV1,
+};
 use crate::sha256::Hasher;
 
 /// Явный нечеловеческий профиль с двумя обязательными ветвями: TQ и CC.
@@ -50,7 +53,10 @@ impl PointQualityProfileV1 {
         let mut hasher = Hasher::new();
         hasher.update(b"labcolors.quality-profile.declared-modeled-srgb8-point.v1\0");
         hasher.update(&self.convention.release());
-        hasher.update(&[self.convention.scope() as u8, self.convention.admission() as u8]);
+        hasher.update(&[
+            self.convention.scope() as u8,
+            self.convention.admission() as u8,
+        ]);
         *hasher.finalize().as_bytes()
     }
 }
@@ -87,10 +93,18 @@ pub(crate) struct CurrentPointEvaluationV1<'a> {
 }
 
 impl CurrentPointEvaluationV1<'_> {
-    pub(crate) const fn profile(&self) -> PointQualityProfileV1 { self.profile }
-    pub(crate) const fn materialization(&self) -> AttachedMaterializationAuthorityV1 { self.materialization }
-    pub(crate) const fn technical(&self) -> AuthorityDescriptorV1 { self.technical }
-    pub(crate) const fn convention(&self) -> AuthorityDescriptorV1 { self.convention }
+    pub(crate) const fn profile(&self) -> PointQualityProfileV1 {
+        self.profile
+    }
+    pub(crate) const fn materialization(&self) -> AttachedMaterializationAuthorityV1 {
+        self.materialization
+    }
+    pub(crate) const fn technical(&self) -> AuthorityDescriptorV1 {
+        self.technical
+    }
+    pub(crate) const fn convention(&self) -> AuthorityDescriptorV1 {
+        self.convention
+    }
     pub(crate) const fn human_evidence(&self) -> HumanEvidenceEvaluationV1 {
         HumanEvidenceEvaluationV1::NotRequested
     }
@@ -109,22 +123,35 @@ impl AuthorityStateV1 {
         // Только локальная фиксированная область для существующих admission API.
         // Она не публикуется и не заменяет установленные ветви исходного AUTH.
         let mut fresh = Self::new();
-        fresh.admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant)
+        fresh
+            .admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant)
             .map_err(PointEvaluationErrorV1::Technical)?;
-        let checked = fresh.admit_modeled_point_clean_convention(
-            attachment, Some(profile.convention()), AuthorityExpectedCurrentV1::Vacant,
-        ).map_err(PointEvaluationErrorV1::Convention)?;
-        let technical = fresh.read(AuthorityIdV1::TechnicalQuality)
-            .ok_or(PointEvaluationErrorV1::MissingProducedAuthority(AuthorityIdV1::TechnicalQuality))?;
+        let checked = fresh
+            .admit_modeled_point_clean_convention(
+                attachment,
+                Some(profile.convention()),
+                AuthorityExpectedCurrentV1::Vacant,
+            )
+            .map_err(PointEvaluationErrorV1::Convention)?;
+        let technical = fresh.read(AuthorityIdV1::TechnicalQuality).ok_or(
+            PointEvaluationErrorV1::MissingProducedAuthority(AuthorityIdV1::TechnicalQuality),
+        )?;
         let convention = checked.descriptor();
-        self.require(technical).map_err(|cause| PointEvaluationErrorV1::RequiredAuthority {
-            authority: AuthorityIdV1::TechnicalQuality, cause,
-        })?;
-        self.require(convention).map_err(|cause| PointEvaluationErrorV1::RequiredAuthority {
-            authority: AuthorityIdV1::CleanConvention, cause,
-        })?;
+        self.require(technical)
+            .map_err(|cause| PointEvaluationErrorV1::RequiredAuthority {
+                authority: AuthorityIdV1::TechnicalQuality,
+                cause,
+            })?;
+        self.require(convention)
+            .map_err(|cause| PointEvaluationErrorV1::RequiredAuthority {
+                authority: AuthorityIdV1::CleanConvention,
+                cause,
+            })?;
         Ok(CurrentPointEvaluationV1 {
-            profile, materialization: checked.materialization(), technical, convention,
+            profile,
+            materialization: checked.materialization(),
+            technical,
+            convention,
             sources: PhantomData,
         })
     }
