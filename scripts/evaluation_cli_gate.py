@@ -14,7 +14,11 @@ CORE = "crates/labcolors-core/src/point_evaluation.rs"
 APP = "crates/labcolors-evaluate-cli/src/app.rs"
 CORE_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked"]
 CLI_COMMAND = ["cargo", "test", "-p", "labcolors-evaluate-cli", "--bin", "labcolors-evaluate", "--locked"]
+PROCESS_COMMAND = ["cargo", "test", "-p", "labcolors-evaluate-cli", "--test", "cli", "--locked"]
 MUTANTS = (
+    ("cli-main-drops-report", "crates/labcolors-evaluate-cli/src/main.rs", PROCESS_COMMAND,
+     "        stdout.lock(),", "        std::io::sink(),",
+     "binary_stdin_file_and_jsonl_equal_the_direct_fresh_process"),
     ("point-report-without-tq", CORE, CORE_COMMAND,
      "    authority\n        .admit_modeled_point_technical_quality(attachment, AuthorityExpectedCurrentV1::Vacant)\n        .map_err(technical_failure)?;",
      "    let _ = &attachment;",
@@ -64,10 +68,15 @@ def main() -> None:
         specimen = Path(temporary) / "specimen"
         git(ROOT, "worktree", "add", "--detach", str(specimen), head)
         try:
-            for command in (CORE_COMMAND + ["point_evaluation::tests"], CLI_COMMAND):
+            healthy = (
+                (CORE_COMMAND + ["point_evaluation::tests"], "public_report_equals_direct_owner_chain_on_the_same_attachment"),
+                (CLI_COMMAND, "documented_request_returns_only_declared_modeled_report_and_lcen"),
+                (PROCESS_COMMAND, "binary_stdin_file_and_jsonl_equal_the_direct_fresh_process"),
+            )
+            for command, required_test in healthy:
                 positive = run(specimen, *command)
-                if positive.returncode:
-                    raise RuntimeError(f"Здоровый контроль не прошёл\n{positive.stdout}")
+                if positive.returncode or required_test + " ... ok" not in positive.stdout:
+                    raise RuntimeError(f"Здоровый исполняемый контроль отсутствует или не прошёл\n{positive.stdout}")
             for name, relative, command, before, after, test in MUTANTS:
                 git(specimen, "switch", "--detach", head)
                 path = specimen / relative
