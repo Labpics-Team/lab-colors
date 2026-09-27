@@ -202,6 +202,14 @@ class SourceBuildTests(unittest.TestCase):
             target = core / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / CORE / relative, target)
+        # Эта модель проверяет сборщик и настоящий публичный LCEN/source-путь,
+        # не научную оценку. Его зависимость идёт только от SCI к кодеку: пустой
+        # модуль подтверждает, что кодек не требует EVAL. Все три RUNTIME_SOURCES
+        # копируются побайтно без удаления строк или изменения условий сборки.
+        # Реальный SCI целиком проверяется workspace и science_certificate_gate.
+        (core / "src/certificate/science.rs").write_text(
+            "// SCI не входит в предмет std-only проверки LCEN/source.\n"
+        )
         (core / "src/lib.rs").write_text("pub mod certificate;\nmod sha256;\n")
         (core / "src/main.rs").write_text(MAIN)
         (core / "assets").mkdir()

@@ -2,9 +2,9 @@
 //!
 //! Этот модуль владеет структурой и привязкой производителя, не цветовой
 //! математикой. Публичный транспорт принимает только несмысловую нагрузку;
-//! внутренний научный путь сверяется с текущим EVAL.  A decoded byte buffer is deliberately represented as
-//! [`UntrustedEnvelopeV1`].  The trusted type can only be made by a producer
-//! capability kept inside this crate.
+//! внутренний научный путь сверяется с текущим EVAL. Декодированный буфер
+//! представлен типом [`UntrustedEnvelopeV1`]; доверенный тип создаётся только
+//! через закрытое полномочие производителя внутри крейта.
 
 use core::fmt;
 
@@ -303,6 +303,7 @@ impl AdmissionKeyV1 {
         )
     }
 
+    #[inline]
     fn try_new_for_class(
         runtime_artifact_id: &str,
         operation: CertificateOperationV1,
@@ -596,6 +597,7 @@ impl UntrustedEnvelopeV1 {
         Self::decode_class(bytes, EnvelopeClassV1::Transport)
     }
 
+    #[inline]
     fn decode_class(bytes: &[u8], class: EnvelopeClassV1) -> Result<Self, CertificateErrorV1> {
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
