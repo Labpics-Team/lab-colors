@@ -208,7 +208,7 @@ impl<'a> VerifiedPointCertificateV1<'a> {
         if bytes.len() > super::MAX_TUPLE_BYTES_V1 + PAYLOAD_BYTES + 32 {
             return Err(CertificateErrorV1::ResourceLimitExceeded.into());
         }
-        let decoded = UntrustedEnvelopeV1::decode_class(bytes, EnvelopeClassV1::DeclaredPoint)?;
+        let decoded = UntrustedEnvelopeV1::decode_class::<true>(bytes)?;
         let payload = decoded.payload_bytes();
         if payload.len() != PAYLOAD_BYTES || !payload.starts_with(PAYLOAD_HEADER) {
             return Err(PointCertificateErrorV1::InvalidPointPayload);

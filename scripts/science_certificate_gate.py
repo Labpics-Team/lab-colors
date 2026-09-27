@@ -39,8 +39,8 @@ MUTANTS = (
      "        return Err(PointCertificateErrorV1::InvalidPointPayload);\n        let payload = DeclaredPointPayloadV1::from_evaluation(evaluation)?;",
      "independent_wire_binds_exact_profile_subject_both_branches_and_color"),
     ("science-public-transport-upgrade", CERT,
-     "        Self::decode_class(bytes, EnvelopeClassV1::Transport)",
-     "        Self::decode_class(bytes, EnvelopeClassV1::DeclaredPoint)",
+     "        Self::decode_class::<false>(bytes)",
+     "        Self::decode_class::<true>(bytes)",
      "generic_transport_and_semantic_certificate_never_change_classes_implicitly"),
 )
 

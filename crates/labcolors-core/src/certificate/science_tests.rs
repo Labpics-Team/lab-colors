@@ -88,9 +88,7 @@ fn independent_wire_binds_exact_profile_subject_both_branches_and_color() {
         .evaluate_declared_modeled_point(&a, Some(profile()))
         .unwrap();
     let issued = DeclaredPointCertificateV1::issue(&evaluated).unwrap();
-    let decoded =
-        UntrustedEnvelopeV1::decode_class(issued.as_bytes(), EnvelopeClassV1::DeclaredPoint)
-            .unwrap();
+    let decoded = UntrustedEnvelopeV1::decode_class::<true>(issued.as_bytes()).unwrap();
     let b = decoded.payload_bytes();
     let key = decoded.admission_key();
     let source = super::super::issue_source_certificate_v1().unwrap();
@@ -157,15 +155,13 @@ fn every_payload_byte_with_recomputed_hashes_is_rejected() {
         .evaluate_declared_modeled_point(&a, Some(profile()))
         .unwrap();
     let issued = DeclaredPointCertificateV1::issue(&evaluated).unwrap();
-    let parsed =
-        UntrustedEnvelopeV1::decode_class(issued.as_bytes(), EnvelopeClassV1::DeclaredPoint)
-            .unwrap();
+    let parsed = UntrustedEnvelopeV1::decode_class::<true>(issued.as_bytes()).unwrap();
     for index in 0..302 {
         let mut body = parsed.payload_bytes().to_vec();
         body[index] ^= 1;
         let forged = hostile_wire(parsed.admission_key(), &body, 4, 2);
         assert!(
-            UntrustedEnvelopeV1::decode_class(&forged, EnvelopeClassV1::DeclaredPoint).is_ok(),
+            UntrustedEnvelopeV1::decode_class::<true>(&forged).is_ok(),
             "hashes valid for {index}"
         );
         assert!(
@@ -194,9 +190,7 @@ fn generic_transport_and_semantic_certificate_never_change_classes_implicitly() 
         VerifiedPointCertificateV1::verify(transport.as_bytes(), &evaluated).unwrap_err(),
         PointCertificateErrorV1::Envelope(CertificateErrorV1::UnknownAuthorityKind)
     );
-    let parsed =
-        UntrustedEnvelopeV1::decode_class(issued.as_bytes(), EnvelopeClassV1::DeclaredPoint)
-            .unwrap();
+    let parsed = UntrustedEnvelopeV1::decode_class::<true>(issued.as_bytes()).unwrap();
     for (authority, kind) in [(0, 2), (4, 1), (1, 2), (2, 2), (3, 2), (255, 2), (4, 255)] {
         let mixed = hostile_wire(
             parsed.admission_key(),
@@ -218,9 +212,7 @@ fn forged_producer_context_and_subject_are_refused_after_integrity_validation() 
         .evaluate_declared_modeled_point(&a, Some(profile()))
         .unwrap();
     let issued = DeclaredPointCertificateV1::issue(&evaluated).unwrap();
-    let parsed =
-        UntrustedEnvelopeV1::decode_class(issued.as_bytes(), EnvelopeClassV1::DeclaredPoint)
-            .unwrap();
+    let parsed = UntrustedEnvelopeV1::decode_class::<true>(issued.as_bytes()).unwrap();
     for field in 0..4 {
         let mut key = parsed.admission_key().try_clone().unwrap();
         let expected = match field {
@@ -249,7 +241,7 @@ fn forged_producer_context_and_subject_are_refused_after_integrity_validation() 
             }
         };
         let forged = hostile_wire(&key, parsed.payload_bytes(), 4, 2);
-        assert!(UntrustedEnvelopeV1::decode_class(&forged, EnvelopeClassV1::DeclaredPoint).is_ok());
+        assert!(UntrustedEnvelopeV1::decode_class::<true>(&forged).is_ok());
         assert_eq!(
             VerifiedPointCertificateV1::verify(&forged, &evaluated).unwrap_err(),
             PointCertificateErrorV1::Envelope(expected)

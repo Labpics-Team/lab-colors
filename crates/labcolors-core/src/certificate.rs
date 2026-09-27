@@ -573,10 +573,16 @@ pub struct UntrustedEnvelopeV1 {
 impl UntrustedEnvelopeV1 {
     /// Decodes the exact positional r13 packet and verifies both digests.
     pub fn decode(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
-        Self::decode_class(bytes, EnvelopeClassV1::Transport)
+        Self::decode_class::<false>(bytes)
     }
 
-    fn decode_class(bytes: &[u8], class: EnvelopeClassV1) -> Result<Self, CertificateErrorV1> {
+    // Закрытая точка входа выбирает класс при компиляции, не входной буфер.
+    fn decode_class<const DECLARED: bool>(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
+        let class = if DECLARED {
+            EnvelopeClassV1::DeclaredPoint
+        } else {
+            EnvelopeClassV1::Transport
+        };
         if bytes.len() > MAX_ENVELOPE_BYTES_V1 {
             return Err(CertificateErrorV1::ResourceLimitExceeded);
         }
