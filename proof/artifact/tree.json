@@ -24,7 +24,7 @@
   "bindings/swift/Sources/labcolorsFFI/.gitkeep": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
   "bindings/swift/Tests/LabColorsConformanceTests/ConformanceTests.swift": "a2f166f3f7d264e7fcf425063f2310df71f44379",
   "bindings/swift/ci/run-conformance.sh": "6984fbe368c7e895317c6a8bc3438c578f31a4e9",
-  "conformance/README.md": "c3cbb0da9e5239ef785a67c3eecf0a91eada531a",
+  "conformance/README.md": "bb0f37f333bcf11956b2a8e16ec8ad4daafe5c67",
   "conformance/vectors/alpha.json": "c9b6008f4db1f7bb1f6e516312da766c6cf5f2d2",
   "conformance/vectors/contrasts.json": "3be094681d3ca20fe8fd5ba324eb25287303f13d",
   "conformance/vectors/manifest.json": "e849bcb1a3a74fe84c4dc48b74785941aaea848e",
@@ -465,7 +465,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "16745f2c88cd25e2be3739548e8230044c8c37c4305c54462aad69249293fea8",
+ "record_sha256": "57d5b1cbbe5bb256551b83c2c13c226c6b671e48d29d61b896eb6e237d9731fe",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
