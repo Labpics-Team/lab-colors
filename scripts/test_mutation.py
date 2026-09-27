@@ -2173,8 +2173,9 @@ const mutations = {
         # сети, секрета или записи. Остальные границы публикации проверяются отдельно.
         def scope(start: str, end: str) -> str:
             self.assertEqual(workflow.count(start), 1)
-            self.assertEqual(workflow.count(end), 1)
-            return workflow.split(start, 1)[1].split(end, 1)[0]
+            tail = workflow.split(start, 1)[1]
+            self.assertEqual(tail.count(end), 1)
+            return tail.split(end, 1)[0]
 
         helpers = "const CAPABILITY_SITE_LIST_FIELDS = [" + scope(
             "          const CAPABILITY_SITE_LIST_FIELDS = [",
