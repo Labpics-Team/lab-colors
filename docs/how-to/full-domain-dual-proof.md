@@ -274,7 +274,8 @@ point-support retained-surplus independent verification: FAIL: point-support sem
 
 ```sh
 python3 scripts/refresh_clean_set_receipt.py
-python3 scripts/verify_point_support_surplus.py --emit > "$RUNNER_TEMP/point-support-proof.json"
+proof_output="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/point-support-proof.XXXXXXXX.json")"
+python3 scripts/verify_point_support_surplus.py --emit > "$proof_output"
 ```
 
 Первая команда обновляет записи текущих исходников и единственный
@@ -283,7 +284,7 @@ python3 scripts/verify_point_support_surplus.py --emit > "$RUNNER_TEMP/point-sup
 или регистрации модулей допустимы только изменённые идентичности исходников,
 их общего набора и содержимого доказательства. После этого замените
 `crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json`
-проверенным результатом. Отдельного вручную редактируемого
+проверенным результатом, затем удалите временный файл `"$proof_output"`. Отдельного вручную редактируемого
 `EXPECTED_SOURCE_CAPSULE_SHA256` в текущем проверяющем скрипте нет.
 
 Проверьте обоими верификаторами:

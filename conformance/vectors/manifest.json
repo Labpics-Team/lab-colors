@@ -1,7 +1,7 @@
 {
-  "packVersion": "11.0.0",
+  "packVersion": "12.0.0",
   "coreVersion": "0.3.0",
-  "packDigest": "7ce338d8",
+  "packDigest": "4487d438",
   "counts": {
     "contrasts": 40,
     "alpha": 7,
