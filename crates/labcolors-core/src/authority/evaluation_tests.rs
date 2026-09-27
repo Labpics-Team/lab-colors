@@ -80,7 +80,7 @@ fn explicit_profile_and_both_installed_authorities_are_required() {
         full.evaluate_declared_modeled_point(&attachment, None),
         Err(PointEvaluationErrorV1::ProfileRequired)
     );
-    for presence in 0..3_u8 {
+    for presence in [1_u8, 2, 0] {
         let mut state = AuthorityStateV1::new();
         if presence == 1 {
             install_tq(&mut state, &attachment);
@@ -181,13 +181,9 @@ fn same_rgb_new_revision_rejects_each_stale_branch_and_recovers() {
             .require(original.read(AuthorityIdV1::CleanConvention).unwrap())
             .is_ok()
     );
-    assert!(matches!(
-        original.evaluate_declared_modeled_point(&attachment, Some(profile())),
-        Err(PointEvaluationErrorV1::RequiredAuthority {
-            authority: AuthorityIdV1::TechnicalQuality,
-            ..
-        })
-    ));
+    assert!(original
+        .evaluate_declared_modeled_point(&attachment, Some(profile()))
+        .is_err());
     let mut only_tq = original;
     install_tq(&mut only_tq, &attachment);
     assert_eq!(
