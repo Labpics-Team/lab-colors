@@ -216,8 +216,6 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    // MARK: - Low-level Glow decision contract
-
     // MARK: - Семейство: резолв (снапшоты токенов)
 
     func testSolve() throws {
