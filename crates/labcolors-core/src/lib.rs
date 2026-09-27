@@ -47,7 +47,7 @@ pub mod certificate;
 pub mod claims_manifest;
 #[expect(
     dead_code,
-    reason = "R-07 G4: config module staged before consumer wiring"
+    reason = "private recipe configuration is retained for legacy characterization, not public Program authoring"
 )]
 pub(crate) mod config;
 pub(crate) mod constraints;
@@ -56,7 +56,7 @@ pub(crate) mod corridor_representation;
 pub mod exports_manifest;
 #[expect(
     dead_code,
-    reason = "R-07 G4: glow module staged before field presentation consumer"
+    reason = "legacy point adapter retained for characterization; it is not a public field capability"
 )]
 pub(crate) mod glow;
 pub mod hash;
@@ -70,7 +70,7 @@ pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
 #[expect(
     dead_code,
-    reason = "R-07 G4: material module staged before field presentation consumer"
+    reason = "legacy point adapter retained for characterization; it is not a public field capability"
 )]
 pub(crate) mod material;
 pub mod neutral;
@@ -126,7 +126,7 @@ pub(crate) mod restorative_auto;
 pub mod scale;
 #[expect(
     dead_code,
-    reason = "R-07 G4: semantic module staged; direct path used only through typed Program evidence"
+    reason = "private recipe resolver retained for legacy characterization; the public Program path does not call it"
 )]
 pub(crate) mod semantic;
 pub(crate) mod sha256;
