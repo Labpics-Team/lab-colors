@@ -223,7 +223,9 @@ impl<'a> VerifiedPointCertificateV1<'a> {
     }
     /// Заимствует именно проверенные байты; исходный буфер нельзя подменить
     /// до последнего использования этого результата.
-    pub(crate) fn as_bytes(&self) -> &[u8] { self.bytes }
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.bytes
+    }
     pub(crate) fn evaluation(&self) -> &'a CurrentPointEvaluationV1<'a> {
         self.evaluation
     }
