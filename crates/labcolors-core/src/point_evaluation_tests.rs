@@ -134,12 +134,20 @@ fn contradictory_or_ambiguous_observations_cannot_be_replaced_by_a_plausible_sam
 /// Командные примеры остаются каноническими графами реального компилятора.
 #[test]
 fn documented_inputs_match_the_canonical_graph_and_release() {
-    let hex = |bytes: &[u8]| bytes.iter().map(|b|format!("{b:02x}")).collect::<String>();
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
     for (example, source, expected) in [
-        (include_str!("../../labcolors-evaluate-cli/examples/declared-point.json"), [128,128,129], [128;3]),
-        (include_str!("../../labcolors-evaluate-cli/examples/rejected-point.json"), [255;3], [128,128,129]),
+        (
+            include_str!("../../labcolors-evaluate-cli/examples/declared-point.json"),
+            [128, 128, 129],
+            [128; 3],
+        ),
+        (
+            include_str!("../../labcolors-evaluate-cli/examples/rejected-point.json"),
+            [255; 3],
+            [128, 128, 129],
+        ),
     ] {
-        let wire=hex(&point_wire(Srgb8::new(source),0.5,Srgb8::new(expected)));
+        let wire = hex(&point_wire(Srgb8::new(source), 0.5, Srgb8::new(expected)));
         assert!(example.contains(&format!("\"programWireHex\": \"{wire}\"")));
         assert!(example.contains(&hex(&RELEASE)));
     }
