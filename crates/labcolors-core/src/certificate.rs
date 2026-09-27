@@ -76,7 +76,7 @@ pub enum CertificateErrorV1 {
     TrailingBytes,
     /// The producer revision is not exactly forty lowercase hexadecimal bytes.
     NonCanonicalRevision,
-    /// The payload type selector is not the r13 transport payload.
+    /// Селектор нагрузки не соответствует классу выбранной точки входа.
     InvalidPayloadType,
     /// The payload type version is not supported.
     UnsupportedPayloadVersion,

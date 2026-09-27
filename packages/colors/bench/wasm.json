@@ -27,13 +27,13 @@
     ]
   },
   "measurement": {
-    "source": "github-actions-run-36319552723",
+    "source": "github-actions-run-36349935187",
     "platform": "linux-x64",
-    "rawBytes": 441747
+    "rawBytes": 441557
   },
   "policy": {
-    "maxRawBytes": 441747,
-    "basis": "single-program-runtime-after-retired-role-engine-removal",
+    "maxRawBytes": 441557,
+    "basis": "measured-static-transport-decoder-with-shared-lcen",
     "gzip": "diagnostic-only"
   }
 }
