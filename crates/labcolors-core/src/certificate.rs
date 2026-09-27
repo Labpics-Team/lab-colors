@@ -572,11 +572,14 @@ pub struct UntrustedEnvelopeV1 {
 
 impl UntrustedEnvelopeV1 {
     /// Decodes the exact positional r13 packet and verifies both digests.
+    #[inline(always)]
     pub fn decode(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
         Self::decode_class::<false>(bytes)
     }
 
-    // Закрытая точка входа выбирает класс при компиляции, не входной буфер.
+    // Класс известен из закрытой точки входа. Специализация не включает
+    // недоступную научную ветвь в публичный транспорт; общий парсер остаётся один.
+    #[inline(always)]
     fn decode_class<const DECLARED: bool>(bytes: &[u8]) -> Result<Self, CertificateErrorV1> {
         let class = if DECLARED {
             EnvelopeClassV1::DeclaredPoint
