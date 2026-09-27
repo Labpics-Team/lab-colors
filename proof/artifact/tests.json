@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 258,
+   "count": 259,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -845,6 +845,7 @@
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
     "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
@@ -868,7 +869,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "be3c06f856288b2b60de0ab306d64dee7fc2a16a1d3af03cef9eb61a594af4c5",
+ "record_sha256": "b49871d39c4f873fe3bc51c2d0b2408d94bd31b9954d484297a76bcd463e7242",
  "rust": {
   "enabled": [
    "accent_balance::tests::balanced_takes_the_gamut_wall_at_every_hue: test",
