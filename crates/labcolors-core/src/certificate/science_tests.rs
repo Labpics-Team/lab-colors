@@ -92,6 +92,29 @@ fn independent_wire_binds_exact_profile_subject_both_branches_and_color() {
         UntrustedEnvelopeV1::decode_class(issued.as_bytes(), EnvelopeClassV1::DeclaredPoint)
             .unwrap();
     let b = decoded.payload_bytes();
+    let key = decoded.admission_key();
+    let source = super::super::issue_source_certificate_v1().unwrap();
+    assert_eq!(
+        key.runtime_artifact_id(),
+        source.admission_key().runtime_artifact_id()
+    );
+    assert_eq!(
+        key.producer_revision(),
+        source.admission_key().producer_revision()
+    );
+    assert_eq!(
+        key.producer_content_identity(),
+        &evaluated.subject_identity()
+    );
+    let profile_hex: String = profile()
+        .identity()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        key.context_id(),
+        format!("declared-modeled-point-v1:{profile_hex}")
+    );
     assert_eq!(b.len(), 302);
     assert_eq!(&b[..6], b"LCPQ\x00\x01");
     assert_eq!(&b[6..38], profile().identity());
