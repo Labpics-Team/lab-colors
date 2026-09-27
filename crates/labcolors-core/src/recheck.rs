@@ -1,7 +1,7 @@
 //! Дешёвый display-domain recheck финальных sRGB8 пар.
 //!
 //! Перенесён из legacy semantic recipe-модуля в C7c: это постоянный generic
-//! контракт, независимый от RoleRecipe/NamedRoleTable.
+//! контракт измерений без клиентских ролей и конфигураций.
 
 use crate::{Srgb8, ViewingConditions};
 

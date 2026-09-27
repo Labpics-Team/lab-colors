@@ -81,7 +81,7 @@ pub(crate) fn contextual_region_formula_literals_v1() -> &'static [(&'static str
 thread_local! {
     /// Test-only per-thread counter of [`forward`] invocations. Powers the
     /// deterministic `cam16_forwards_per_set_regression_guard` test, which pins
-    /// the count of CIECAM16 forward passes a default `resolve_set` runs — the
+    /// the count of CIECAM16 forward passes made by the checked numerical path — the
     /// honest, noise-free "before/after" metric for the discrete-exactness perf
     /// work (wall-time on a loaded box is too variable to measure a few-percent
     /// delta). Thread-local, not a global atomic, so the test runner's parallel

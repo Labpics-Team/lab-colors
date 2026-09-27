@@ -335,22 +335,19 @@ pub(crate) fn apparent_contrast_candidate_hex_with_vc_for_test(
 /// # Argument domain
 ///
 /// `fg`/`bg` are **display** (gamma-encoded) sRGB triples in `[0, 1]` — the same
-/// domain [`crate::spaces::srgb::encoded_srgb_relative_luminance`] is defined on and the legal WCAG
-/// floor is measured in. This low-level reference entry point assumes every
+/// domain [`crate::spaces::srgb::encoded_srgb_relative_luminance`] is defined on.
+/// This scalar reference is not the normative WCAG evaluator. This low-level reference entry point assumes every
 /// channel is finite and in `[0, 1]`; it does not parse or validate public text
 /// input. `Ys` is display-referred, so this
 /// contrast is viewing-condition invariant by construction: the dark-theme
 /// surround compensation `Y_hk` carries is a brightness concern, kept off the
 /// Ys candidate-score path.
 ///
-/// ADR-0003: Ys candidate score движка
-/// считает именно в этом домене — `solve::finish`/`meets_floor`, интервал фона,
-/// recheck-примитивы (`semantic::measure_contrast`, `recheck_against*`) и
-/// pointwise hard evaluators. Сам движок зовёт [`contrast_core`] +
-/// [`crate::spaces::srgb::encoded_srgb_relative_luminance`] напрямую на уже
-/// готовых скалярах; эта функция — только test-reference той же формулы (те же
-/// функции, ноль новых констант). `Y_hk` остаётся отдельной appearance-
-/// координатой, но не публичным scalar-LPC API.
+/// Скалярные измерения в `solve` и `recheck` используют [`contrast_core`]
+/// и [`crate::spaces::srgb::encoded_srgb_relative_luminance`]. Этот тестовый
+/// вход не добавляет констант или права утверждать человеческую читаемость.
+/// Нормативный WCAG имеет отдельного владельца `wcag22`, а `Y_hk` остаётся
+/// самостоятельной координатой внешнего вида.
 #[cfg(test)]
 pub(crate) fn ys_candidate_score_for_test(fg_display: [f64; 3], bg_display: [f64; 3]) -> f64 {
     contrast_core(
