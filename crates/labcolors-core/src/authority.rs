@@ -404,7 +404,7 @@ fn issue_permit<'a>(
 }
 
 #[cfg(test)]
-pub(crate) pub(crate) mod test_support;
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;
