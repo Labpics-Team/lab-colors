@@ -251,3 +251,50 @@ MUTANTS += (
      "                Ok(limit - 1)", "                Ok(limit)"),
 )
 SOURCES += ("field_effect.rs",)
+
+
+CONTRACTS.update({
+    "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect": (
+        {"handoff preparation must retain the exact previous and desired state",
+         "handoff command must preserve every publication field",
+         "handoff command must preserve the requested operation",
+         "handoff preparation must reject exactly wrong stamp scope or revision",
+         "preparing or abandoning a handoff must never publish or advance state"},
+        {"valid set prepared", "valid revoke prepared", "published value confirmed",
+         "empty value confirmed", "foreign stamp rejected", "foreign scope rejected", "foreign revision rejected"},
+    ),
+    "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only": (
+        {"handoff must propagate the exact host refusal",
+         "failed handoff must preserve committed and retryable state",
+         "exact handoff retry must remain usable",
+         "successful handoff must commit the complete acknowledged command exactly once",
+         "a consumed handoff must never call the host again",
+         "finishing the handoff must preserve its acknowledged result"},
+        {"rejected set retried", "rejected revoke retried",
+         "exhausted stamp still permits confirmation", "protocol refusal is retryable"},
+    ),
+    "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host": (
+        {"stale prepared handoff must fail before any host call or state mutation"},
+        {"same sequence foreign epoch rejected", "same epoch foreign sequence rejected"},
+    ),
+})
+MUTANTS += (
+    ("handoff-foreign-confirmation", "program/attachment/handoff.rs",
+     "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect",
+     "handoff preparation must reject exactly wrong stamp scope or revision",
+     "                if current.revision != Some(revision) {", "                if false {"),
+    ("handoff-swallowed-host-refusal", "program/attachment/handoff.rs",
+     "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+     "handoff must propagate the exact host refusal",
+     "            .map_err(HandoffPointSinkErrorV1::Host)?;",
+     "            .map_err(HandoffPointSinkErrorV1::Host).unwrap_or(());"),
+    ("handoff-repeated-install", "program/attachment/handoff.rs",
+     "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+     "successful handoff must commit the complete acknowledged command exactly once",
+     "        self.staged = None;", "        self.staged = Some(staged);"),
+    ("handoff-stale-install", "program/attachment/handoff.rs",
+     "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host",
+     "stale prepared handoff must fail before any host call or state mutation",
+     "        if self.writer.committed.stamp != staged.expected_stamp {", "        if false {"),
+)
+SOURCES += ("program/attachment/handoff.rs",)
