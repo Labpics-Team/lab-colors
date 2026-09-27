@@ -66,6 +66,8 @@ fn unadmitted_cleanliness_and_retired_recipe_sources_are_absent() {
         "crates/labcolors-wasm/src/dto.rs",
         "crates/labcolors-wasm/src/projection.rs",
         "packages/colors/bench/wasm-boundary.bench.mjs",
+        "packages/colors/bench/misses.mjs",
+        "packages/colors/bench/occurrences.mjs",
     ] {
         assert!(
             !workspace.join(retired).exists(),
