@@ -18,6 +18,9 @@ CORE_COMMAND = ["cargo", "test", "-p", "labcolors-core", "--lib", "--locked"]
 CLI_COMMAND = ["cargo", "test", "-p", "labcolors-evaluate-cli", "--bin", "labcolors-evaluate", "--locked"]
 PROCESS_COMMAND = ["cargo", "test", "-p", "labcolors-evaluate-cli", "--test", "cli", "--locked"]
 MUTANTS = (
+    ("envelope-bound-before-allocation", "crates/labcolors-core/src/certificate.rs", CORE_COMMAND,
+     "    if envelope_length > MAX_ENVELOPE_BYTES_V1 {", "    if false {",
+     "certificate::tests::complete_envelope_size_is_bounded_before_allocation_and_finalization"),
     ("cli-main-drops-report", "crates/labcolors-evaluate-cli/src/main.rs", PROCESS_COMMAND,
      "        stdout.lock(),", "        std::io::sink(),",
      "binary_stdin_file_and_jsonl_equal_the_direct_fresh_process"),
