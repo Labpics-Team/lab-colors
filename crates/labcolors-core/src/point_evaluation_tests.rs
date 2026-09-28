@@ -120,14 +120,23 @@ fn contradictory_or_ambiguous_observations_cannot_be_replaced_by_a_plausible_sam
     // В отличие от exact-visible условия выше, WCAG-контракт допускает
     // оба цвета композиции; отказывает только запрос единственной точки.
     let mut builder = crate::program::wire::ProgramWireBuilderV1::new();
-    builder.source(1, Srgb8::new([0; 3])).fixed_target(2, 1)
-        .surface_input_port(6).opacity_input(5, 0.5)
-        .solid_paint(3, 2).opacity_paint(4, 3, 5).input_surface(7, 6)
+    builder
+        .source(1, Srgb8::new([0; 3]))
+        .fixed_target(2, 1)
+        .surface_input_port(6)
+        .opacity_input(5, 0.5)
+        .solid_paint(3, 2)
+        .opacity_paint(4, 3, 5)
+        .input_surface(7, 6)
         .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
-        .presentation_root(9, 8).presentation_target(9, 8)
-        .wcag22_visible_unary(true, 10, 8, 3).output(17, 4);
-    let mut b = compile_program_wire_v1(&builder.finish().unwrap()).unwrap()
-        .attach(7, 17, 91, 9, 8, Host::default()).unwrap();
+        .presentation_root(9, 8)
+        .presentation_target(9, 8)
+        .wcag22_visible_unary(true, 10, 8, 3)
+        .output(17, 4);
+    let mut b = compile_program_wire_v1(&builder.finish().unwrap())
+        .unwrap()
+        .attach(7, 17, 91, 9, 8, Host::default())
+        .unwrap();
     let snapshot = b
         .update_observed(
             1,
