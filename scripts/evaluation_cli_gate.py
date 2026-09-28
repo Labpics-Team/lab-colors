@@ -74,6 +74,7 @@ def main() -> None:
         git(ROOT, "worktree", "add", "--detach", str(specimen), head)
         try:
             healthy = (
+                (CORE_COMMAND + ["certificate::tests::complete_envelope_size_is_bounded_before_allocation_and_finalization", "--", "--exact"], "complete_envelope_size_is_bounded_before_allocation_and_finalization"),
                 (CORE_COMMAND + ["point_evaluation::tests"], "public_report_equals_direct_owner_chain_on_the_same_attachment"),
                 (CLI_COMMAND, "documented_request_returns_only_declared_modeled_report_and_lcen"),
                 (PROCESS_COMMAND, "binary_stdin_file_and_jsonl_equal_the_direct_fresh_process"),
