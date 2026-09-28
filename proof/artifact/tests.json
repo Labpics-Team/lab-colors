@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 262,
+   "count": 263,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -733,6 +733,7 @@
     "test_extract_source_files.EXT01SourceFilesTests.test_unknown_mode_exits_64",
     "test_extract_source_files.EXT01SourceFilesTests.test_verify_passes_on_current_tree",
     "test_mutation.CliGateWiringTest.test_required_gate_calls_both_science_and_cli_probes",
+    "test_mutation.CoreConsumerProjectionTest.test_actual_projection_guard_covers_each_normal_core_consumer",
     "test_mutation.MutationTruthTest.test_aggregate_binds_baseline_log_and_mutant_diff_bytes",
     "test_mutation.MutationTruthTest.test_aggregate_fails_closed_on_missing_duplicate_and_population_drift",
     "test_mutation.MutationTruthTest.test_aggregate_rechecks_bound_source_before_and_after_artifacts",
@@ -872,7 +873,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "a7b9ea5b7219c11136a0558f12ef431d32330e46d79ae3134b20d996f7694081",
+ "record_sha256": "9c8fd1ff904d3f259242210b9ec3bfb9f75fe408008793eb7993f319f29bbfc5",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1043,6 +1044,7 @@
    "certificate::tests::canonical_producer_revision_rejects_uppercase_and_abbreviated_values: test",
    "certificate::tests::canonical_wire_round_trips_and_is_positional: test",
    "certificate::tests::capacity_refuses_without_eviction_and_exact_duplicate_still_noops: test",
+   "certificate::tests::complete_envelope_size_is_bounded_before_allocation_and_finalization: test",
    "certificate::tests::expected_tuple_mismatches_are_typed_and_state_preserving: test",
    "certificate::tests::forged_attestation_cannot_be_recomputed_from_a_different_tuple: test",
    "certificate::tests::independent_reference_decoder_agrees_with_wire_prefix: test",
@@ -1051,6 +1053,7 @@
    "certificate::tests::producer_capability_is_required_and_matching: test",
    "certificate::tests::selector_length_and_version_mutants_never_fallback: test",
    "certificate::tests::single_writer_model_has_one_accept_and_duplicate_replays: test",
+   "certificate::tests::specialized_key_clone_preserves_every_selector_and_identity: test",
    "cfg_test_module_exclusion_covers_the_relocated_oracles: test",
    "characterization_counters_are_non_vacuous: test",
    "check_returns_32_byte_identity_for_valid_bytes: test",
@@ -2163,7 +2166,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1287,
+  "enabled_count": 1289,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
