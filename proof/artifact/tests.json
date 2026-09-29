@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 261,
+   "count": 263,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -747,6 +747,7 @@
     "test_mutation.MutationTruthTest.test_execution_source_digest_binds_all_tracked_modes_and_symlink_targets",
     "test_mutation.MutationTruthTest.test_execution_source_rejects_forbidden_index_flags_outside_population",
     "test_mutation.MutationTruthTest.test_exit_priority_is_exhaustive_and_rejects_unbound_process_codes",
+    "test_mutation.MutationTruthTest.test_expensive_proofs_have_independent_required_jobs",
     "test_mutation.MutationTruthTest.test_external_command_timeout_is_a_typed_contract_failure",
     "test_mutation.MutationTruthTest.test_git_authority_environment_drops_host_overrides",
     "test_mutation.MutationTruthTest.test_git_fixture_ignores_hostile_global_configuration",
@@ -766,6 +767,7 @@
     "test_mutation.MutationTruthTest.test_materialized_execution_source_walk_is_not_python_stack_bounded",
     "test_mutation.MutationTruthTest.test_mutant_validation_accepts_canonical_equivalent_repo_roots",
     "test_mutation.MutationTruthTest.test_outcome_fixture_rejects_missing_or_extra_summaries",
+    "test_mutation.MutationTruthTest.test_parallel_proof_aggregate_executes_fail_closed_results",
     "test_mutation.MutationTruthTest.test_parent_swap_after_containment_proof_cannot_redirect_writes",
     "test_mutation.MutationTruthTest.test_phase_automaton_rejects_work_after_a_failed_check",
     "test_mutation.MutationTruthTest.test_phase_fixture_rejects_unknown_summary",
@@ -871,7 +873,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "e484ca69adffb75e93d525de511fe003d0738e528a2089564028b09ff9c9dca2",
+ "record_sha256": "efcb24a7fbd3fb79b5fdb1e7ac0fff791a9d09f7071dc05827b53002abb46f78",
  "rust": {
   "enabled": [
    "adversarial_emoji_cyrillic_highbit_overflow_match_frozen_characterization: test",

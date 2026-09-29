@@ -435,8 +435,8 @@ class ToolingTests(unittest.TestCase):
 
     def test_required_ci_executes_gate_and_sabotage_suites(self) -> None:
         # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
-        commands = job_run_commands(CI_WORKER.read_text("utf-8"), "test")
-        self.assertGreater(len(commands), 5, "test job run steps not found")
+        commands = job_run_commands(CI_WORKER.read_text("utf-8"), "core-tests")
+        self.assertGreater(len(commands), 5, "core-tests job run steps not found")
         self.assertEqual(commands.count("python3 scripts/artifact_matrix.py check"), 1)
         self.assertIn("cargo test --workspace --locked", commands)
         self.assertFalse((REPO_ROOT / "scripts/check-floor-baseline.ps1").exists())
@@ -448,9 +448,20 @@ class ToolingTests(unittest.TestCase):
         self.assertNotRegex(joined, r"extract_\w+\.py extract \| python3 scripts/extract_\w+\.py verify")
         # Ни один шаг обязательного job не должен быть условным или неблокирующим.
         text = CI_WORKER.read_text("utf-8")
-        start = text.index("\n  test:\n")
-        end = text.index("\n  audit:\n", start)
-        self.assertNotRegex(text[start:end], r"^\s+(if|continue-on-error):", "test job steps must be unconditional")
+        def require_unconditional(source: str) -> None:
+            block = re.search(r"(?ms)^  core-tests:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", source)
+            self.assertIsNotNone(block, "core-tests job must exist")
+            self.assertNotRegex(block[1], r"(?m)^\s+(?:if|continue-on-error):",
+                                "core-tests job and its steps must be unconditional")
+        require_unconditional(text)
+        # Проверяем отказ на самом условном шаге, а не на соседнем always-агрегаторе.
+        for field in ("if: false", "continue-on-error: true"):
+            for anchor, indent in (("  core-tests:\n", "    "),
+                                   ("      - name: artifact matrix - pinned records reproduce\n", "        ")):
+                self.assertEqual(text.count(anchor), 1)
+                mutant = text.replace(anchor, anchor + indent + field + "\n", 1)
+                with self.subTest(field=field, anchor=anchor), self.assertRaises(AssertionError):
+                    require_unconditional(mutant)
 
     def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
         # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый
