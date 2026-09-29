@@ -76,12 +76,17 @@ function summarize(samples) {
 
 function timed(binary, args, input) {
   const start = performance.now();
-  const output = execFileSync(binary, args, {
+  const result = spawnSync(binary, args, {
     input,
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  return { milliseconds: performance.now() - start, output };
+  if (result.error) fail(`${binary} ${args.join(" ")} failed to spawn`);
+  if (result.status !== 0) {
+    const stderr = result.stderr?.toString().trim();
+    fail(`${binary} ${args.join(" ")} exited ${result.status}${stderr ? `: ${stderr.slice(0, 200)}` : ""}`);
+  }
+  return { milliseconds: performance.now() - start, output: result.stdout, stderr: result.stderr };
 }
 
 function readFixture(relativePath) {
@@ -111,16 +116,16 @@ function assertGoodReport(stdout, stderr, label) {
 
 function exercise(binary, good, goodCompact, fixturePath) {
   const viaStdin = timed(binary, [], good);
-  const stdinReport = assertGoodReport(viaStdin.output, Buffer.alloc(0), `${binary}: stdin-json`);
+  const stdinReport = assertGoodReport(viaStdin.output, viaStdin.stderr, `${binary}: stdin-json`);
   void stdinReport;
   const viaFile = timed(binary, [fixturePath], Buffer.alloc(0));
-  assertGoodReport(viaFile.output, Buffer.alloc(0), `${binary}: file-json`);
+  assertGoodReport(viaFile.output, viaFile.stderr, `${binary}: file-json`);
   if (!viaFile.output.equals(viaStdin.output)) fail(`${binary}: file and stdin reports diverged`);
   const viaJsonl = timed(binary, ["--format", "jsonl", "-"], goodCompact);
   if (viaJsonl.output.filter((byte) => byte === 0x0a).length !== 1) {
     fail(`${binary}: jsonl output is not a single line`);
   }
-  const jsonlReport = assertGoodReport(viaJsonl.output, Buffer.alloc(0), `${binary}: stdin-jsonl`);
+  const jsonlReport = assertGoodReport(viaJsonl.output, viaJsonl.stderr, `${binary}: stdin-jsonl`);
   if (stableJson(jsonlReport) !== stableJson(JSON.parse(viaStdin.output.toString("utf8")))) {
     fail(`${binary}: jsonl and json reports diverged`);
   }

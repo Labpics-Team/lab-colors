@@ -435,7 +435,7 @@
   "scripts/check-wasm-size-budget.mjs": "101e8aa10aa26b3b0cb920220377806aa97dc6b4",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
-  "scripts/evaluate-distribution.mjs": "15c882dde45e77ff750ce0d29799b9a53f651422",
+  "scripts/evaluate-distribution.mjs": "d5e9408147d5d1f2983b2c2a24377000574db2d1",
   "scripts/evaluation_cli_gate.py": "70c5e2724dc2b4abcf4e53f59b09c9c9c6cc0f75",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
   "scripts/extract_claims.py": "296a5441e60df8aa37a3a5eb283be3f06f7d8df6",
@@ -488,7 +488,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "8ddc4966c6a6a133913f821d102080c0dde9194148158e2c44ed1f99871c8500",
+ "record_sha256": "c1ac626e4894658dfd750469aea4ecb83c0ab133f54d1ce13eb99de0c11cf251",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
