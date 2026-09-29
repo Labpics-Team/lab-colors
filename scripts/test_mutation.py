@@ -1725,6 +1725,73 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
+    def test_expensive_proofs_have_independent_required_jobs(self) -> None:
+        source = (Path(__file__).resolve().parents[1] /
+                  ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        jobs = workflow_job_blocks(source, "ci-worker.yml")
+        lanes = ("core-tests", "region-proof", "authority-mutation")
+        for lane in lanes:
+            with self.subTest(lane=lane):
+                self.assertIn(lane, jobs)
+                block = jobs[lane]
+                self.assertIn("    runs-on: ubuntu-latest\n", block)
+                self.assertIn("    timeout-minutes: 40\n", block)
+                self.assertNotRegex(block, r"(?m)^    (?:needs|if|strategy):")
+                self.assertNotIn("continue-on-error:", block)
+                self.assertIn("          persist-credentials: false\n", block)
+        owners = {
+            "canonical region-proof protocol": "region-proof",
+            "AUTH-01 semantic mutation gate": "authority-mutation",
+            "cargo test": "core-tests",
+            "cargo test private-fixture feature": "core-tests",
+            "exhaustive 24-bit family membership oracle": "core-tests",
+        }
+        for step, owner in owners.items():
+            anchor = f"      - name: {step}\n"
+            self.assertEqual(source.count(anchor), 1, step)
+            self.assertIn(anchor, jobs[owner])
+        self.assertIn("run: python3 scripts/authority_mutation_gate.py", jobs["authority-mutation"])
+        self.assertIn("PYTHONOPTIMIZE=2 python -m unittest discover", jobs["region-proof"])
+        self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof"])
+        aggregate = jobs["test"]
+        self.assertIn("    name: test\n", aggregate)
+        self.assertIn("    if: ${{ always() }}\n", aggregate)
+        self.assertIn("    needs: [core-tests, region-proof, authority-mutation]\n", aggregate)
+        self.assertIn("    permissions: {}\n", aggregate)
+        self.assertNotIn("continue-on-error:", aggregate)
+        for variable, lane in (("CORE_TESTS", "core-tests"),
+                               ("REGION_PROOF", "region-proof"),
+                               ("AUTHORITY_MUTATION", "authority-mutation")):
+            self.assertIn(f"          {variable}: ${{{{ needs.{lane}.result }}}}\n", aggregate)
+
+    def test_parallel_proof_aggregate_executes_fail_closed_results(self) -> None:
+        source = (Path(__file__).resolve().parents[1] /
+                  ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        aggregate = workflow_job_blocks(source, "ci-worker.yml")["test"]
+        self.assertEqual(aggregate.count("        run: |\n"), 1)
+        body = aggregate.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in body.splitlines() if line.startswith(" " * 10))
+        good = {"CORE_TESTS": "success", "REGION_PROOF": "success",
+                "AUTHORITY_MUTATION": "success"}
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in (*good, "BASH_ENV", "ENV")}
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash, "real Bash is required for the native CI aggregate")
+        def execute(values: dict[str, str]) -> subprocess.CompletedProcess:
+            return subprocess.run([bash, "--noprofile", "--norc", "-s"],
+                                  input=script, text=True, capture_output=True,
+                                  env=environment | values, timeout=10, check=False)
+        result = execute(good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for lane in good:
+            for status in ("failure", "cancelled", "skipped", "neutral", "in_progress", "", "unknown"):
+                with self.subTest(lane=lane, status=status):
+                    result = execute(good | {lane: status})
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+            with self.subTest(missing=lane):
+                result = execute({key: value for key, value in good.items() if key != lane})
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_shared_runner_workflows_cancel_stale_prs_without_canceling_running_evidence(
         self,
     ) -> None:
