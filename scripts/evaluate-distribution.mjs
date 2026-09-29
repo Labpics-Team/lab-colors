@@ -1,0 +1,545 @@
+import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const REPOSITORY = "https://github.com/Labpics-Team/lab-colors";
+const ATTESTATION_TYPE = "https://in-toto.io/Statement/v1";
+const PREDICATE_TYPE = "https://lab.pics/attestations/evaluate-distribution/v1";
+const BENCHMARK_SCHEMA = 1;
+const EVIDENCE_SCHEMA = 1;
+const UUID_DNS_NAMESPACE = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex");
+const WARMUP_ROUNDS = 7;
+const MEASURED_ROUNDS = 31;
+const GOOD_TERMINAL_SRGB8 = [128, 128, 128];
+const REJECTED_EXIT = 4;
+const FIXTURE_GOOD = "crates/labcolors-evaluate-cli/examples/declared-point.json";
+const FIXTURE_REJECTED = "crates/labcolors-evaluate-cli/examples/rejected-point.json";
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+  }
+  return value;
+}
+
+function stableJson(value) {
+  return `${JSON.stringify(stable(value), null, 2)}\n`;
+}
+
+function command(name, args, options = {}) {
+  try {
+    return execFileSync(name, args, {
+      cwd: options.cwd ?? REPO_ROOT,
+      encoding: options.encoding ?? "utf8",
+      input: options.input,
+      env: options.env ?? process.env,
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: options.stdio ?? ["pipe", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const stderr = error?.stderr?.toString().trim();
+    const stdout = error?.stdout?.toString().trim();
+    fail(`${name} ${args.join(" ")} failed${stderr || stdout ? `: ${[stderr, stdout].filter(Boolean).join("\n")}` : ""}`);
+  }
+}
+
+function percentile(sorted, p) {
+  if (sorted.length === 0) fail("cannot compute percentile of empty sample");
+  const rank = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, Math.min(sorted.length - 1, rank))];
+}
+
+function summarize(samples) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  return {
+    n: sorted.length,
+    minMs: Number(sorted[0].toFixed(6)),
+    medianMs: Number(percentile(sorted, 50).toFixed(6)),
+    p95Ms: Number(percentile(sorted, 95).toFixed(6)),
+    maxMs: Number(sorted.at(-1).toFixed(6)),
+  };
+}
+
+function timed(binary, args, input) {
+  const start = performance.now();
+  const output = execFileSync(binary, args, {
+    input,
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  return { milliseconds: performance.now() - start, output };
+}
+
+function readFixture(relativePath) {
+  const text = command("git", ["show", `HEAD:${relativePath}`]);
+  if (!text || !text.trim()) fail(`evaluate fixture ${relativePath} is missing at HEAD`);
+  return Buffer.from(text, "utf8");
+}
+
+function assertGoodReport(stdout, stderr, label) {
+  if (stderr.length !== 0) fail(`${label}: expected empty stderr`);
+  let report;
+  try {
+    report = JSON.parse(stdout.toString("utf8"));
+  } catch {
+    fail(`${label}: stdout is not a JSON report`);
+  }
+  if (report?.ok !== true || report?.kind !== "labcolors-declared-point-report-v1") {
+    fail(`${label}: stdout is not a successful declared-point report`);
+  }
+  const terminal = report?.terminalSrgb8;
+  if (!Array.isArray(terminal) || terminal.length !== GOOD_TERMINAL_SRGB8.length ||
+    terminal.some((value, index) => value !== GOOD_TERMINAL_SRGB8[index])) {
+    fail(`${label}: terminal sRGB8 is not the declared GOOD point`);
+  }
+  return report;
+}
+
+function exercise(binary, good, goodCompact, fixturePath) {
+  const viaStdin = timed(binary, [], good);
+  const stdinReport = assertGoodReport(viaStdin.output, Buffer.alloc(0), `${binary}: stdin-json`);
+  void stdinReport;
+  const viaFile = timed(binary, [fixturePath], Buffer.alloc(0));
+  assertGoodReport(viaFile.output, Buffer.alloc(0), `${binary}: file-json`);
+  if (!viaFile.output.equals(viaStdin.output)) fail(`${binary}: file and stdin reports diverged`);
+  const viaJsonl = timed(binary, ["--format", "jsonl", "-"], goodCompact);
+  if (viaJsonl.output.filter((byte) => byte === 0x0a).length !== 1) {
+    fail(`${binary}: jsonl output is not a single line`);
+  }
+  const jsonlReport = assertGoodReport(viaJsonl.output, Buffer.alloc(0), `${binary}: stdin-jsonl`);
+  if (stableJson(jsonlReport) !== stableJson(JSON.parse(viaStdin.output.toString("utf8")))) {
+    fail(`${binary}: jsonl and json reports diverged`);
+  }
+  return {
+    "stdin-json": viaStdin.milliseconds,
+    "file-json": viaFile.milliseconds,
+    "stdin-jsonl": viaJsonl.milliseconds,
+  };
+}
+
+function assertRejectedOnce(binary, rejected) {
+  const result = spawnSync(binary, [], {
+    input: rejected,
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (result.error) fail(`${binary}: rejected fixture run failed to spawn`);
+  if (result.status !== REJECTED_EXIT) fail(`${binary}: rejected fixture exit is not ${REJECTED_EXIT}`);
+  if (result.stdout.length !== 0) fail(`${binary}: rejected fixture must leave stdout empty`);
+}
+
+export async function benchmarkPair(candidateBinary, baselineBinary = null) {
+  const good = readFixture(FIXTURE_GOOD);
+  const rejected = readFixture(FIXTURE_REJECTED);
+  const goodCompact = Buffer.from(`${JSON.stringify(JSON.parse(good.toString("utf8")))}`, "utf8");
+  return benchmarkPairWithFixtures(candidateBinary, baselineBinary, good, goodCompact, rejected);
+}
+
+export async function benchmarkPairWithFixtures(candidateBinary, baselineBinary, good, goodCompact, rejected) {
+  const scratch = await mkdtemp(join(tmpdir(), "labcolors-evaluate-dist-"));
+  try {
+    const fixturePath = join(scratch, "declared-point.json");
+    await writeFile(fixturePath, good);
+    const candidate = { "stdin-json": [], "file-json": [], "stdin-jsonl": [] };
+    const baseline = baselineBinary ? { "stdin-json": [], "file-json": [], "stdin-jsonl": [] } : null;
+    assertRejectedOnce(candidateBinary, rejected);
+    for (let i = 0; i < WARMUP_ROUNDS; i += 1) {
+      if (baselineBinary && i % 2 === 0) exercise(baselineBinary, good, goodCompact, fixturePath);
+      exercise(candidateBinary, good, goodCompact, fixturePath);
+      if (baselineBinary && i % 2 !== 0) exercise(baselineBinary, good, goodCompact, fixturePath);
+    }
+    for (let i = 0; i < MEASURED_ROUNDS; i += 1) {
+      const firstBaseline = baselineBinary && i % 2 === 0;
+      const runs = [];
+      if (firstBaseline) runs.push(["baseline", baselineBinary]);
+      runs.push(["candidate", candidateBinary]);
+      if (baselineBinary && !firstBaseline) runs.push(["baseline", baselineBinary]);
+      for (const [kind, binary] of runs) {
+        const values = exercise(binary, good, goodCompact, fixturePath);
+        const target = kind === "candidate" ? candidate : baseline;
+        for (const operation of Object.keys(values)) target[operation].push(values[operation]);
+      }
+    }
+    const result = {
+      schemaVersion: BENCHMARK_SCHEMA,
+      workload: {
+        id: "evaluate-declared-point-cli-process-v1",
+        fixtureBytes: good.length,
+        warmupRounds: WARMUP_ROUNDS,
+        measuredRounds: MEASURED_ROUNDS,
+        operations: ["stdin-json", "file-json", "stdin-jsonl"],
+        method: "alternating-process-wall-clock-hrtime",
+      },
+      correctness: {
+        goodTerminalSrgb8: [...GOOD_TERMINAL_SRGB8],
+        rejectedExit: REJECTED_EXIT,
+      },
+      candidate: Object.fromEntries(Object.entries(candidate).map(([key, values]) => [key, summarize(values)])),
+    };
+    if (baseline) {
+      result.baseline = Object.fromEntries(Object.entries(baseline).map(([key, values]) => [key, summarize(values)]));
+      result.pairedMedianRatioCandidateOverBaseline = Object.fromEntries(
+        Object.keys(candidate).map((operation) => {
+          const ratios = candidate[operation].map((value, index) => value / baseline[operation][index]);
+          return [operation, Number(percentile(ratios.sort((a, b) => a - b), 50).toFixed(6))];
+        }),
+      );
+    }
+    return result;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+function packageRef(pkg) {
+  const source = pkg.source ?? "workspace";
+  return `cargo:${pkg.name}@${pkg.version}#${source}`;
+}
+
+function bomSerialNumber(sourceSha) {
+  exactSha(sourceSha, "SBOM source SHA");
+  const digest = createHash("sha1")
+    .update(UUID_DNS_NAMESPACE)
+    .update(`${REPOSITORY}\0${sourceSha}\0labcolors-evaluate-cli`, "utf8")
+    .digest();
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `urn:uuid:${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function cyclonedxComponent(pkg, sourceSha) {
+  const component = {
+    type: pkg.name === "labcolors-evaluate-cli" ? "application" : "library",
+    "bom-ref": packageRef(pkg),
+    name: pkg.name,
+    version: pkg.version,
+  };
+  if (pkg.source?.startsWith("registry+")) {
+    component.purl = `pkg:cargo/${encodeURIComponent(pkg.name)}@${encodeURIComponent(pkg.version)}`;
+  } else if (pkg.source == null) {
+    component.properties = [
+      { name: "labpics:source-repository", value: REPOSITORY },
+      { name: "labpics:source-commit", value: sourceSha },
+    ];
+  }
+  if (pkg.license) component.licenses = [{ expression: pkg.license }];
+  return component;
+}
+
+export function buildSbom(metadata, sourceSha) {
+  const root = metadata.packages.find((pkg) => pkg.name === "labcolors-evaluate-cli");
+  if (!root) fail("cargo metadata has no labcolors-evaluate-cli package");
+  const byId = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]));
+  const nodes = new Map((metadata.resolve?.nodes ?? []).map((node) => [node.id, node]));
+  const selected = new Set();
+  const queue = [root.id];
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (selected.has(id)) continue;
+    selected.add(id);
+    const node = nodes.get(id);
+    if (!node) continue;
+    for (const dep of node.deps ?? []) {
+      const admittedKinds = (dep.dep_kinds ?? []).filter((kind) => kind.kind !== "dev");
+      if (admittedKinds.length > 0) queue.push(dep.pkg);
+    }
+  }
+  const packages = [...selected].map((id) => byId.get(id)).filter(Boolean);
+  packages.sort((a, b) => packageRef(a).localeCompare(packageRef(b), "en"));
+  const refs = new Set(packages.map(packageRef));
+  const dependencies = packages.map((pkg) => {
+    const node = nodes.get(pkg.id);
+    const dependsOn = (node?.deps ?? [])
+      .filter((dep) => refs.has(packageRef(byId.get(dep.pkg))))
+      .filter((dep) => (dep.dep_kinds ?? []).some((kind) => kind.kind !== "dev"))
+      .map((dep) => packageRef(byId.get(dep.pkg)))
+      .sort();
+    return { ref: packageRef(pkg), dependsOn: [...new Set(dependsOn)] };
+  });
+  return {
+    bomFormat: "CycloneDX",
+    specVersion: "1.6",
+    serialNumber: bomSerialNumber(sourceSha),
+    version: 1,
+    metadata: {
+      component: cyclonedxComponent(root, sourceSha),
+      properties: [
+        { name: "labpics:evidence-kind", value: "evaluate-distribution" },
+        { name: "labpics:source-commit", value: sourceSha },
+      ],
+    },
+    components: packages.map((pkg) => cyclonedxComponent(pkg, sourceSha)),
+    dependencies,
+  };
+}
+
+function licenseInventory(sbom) {
+  return {
+    schemaVersion: 1,
+    components: sbom.components.map((component) => ({
+      ref: component["bom-ref"],
+      name: component.name,
+      version: component.version,
+      licenseExpressions: (component.licenses ?? []).map((entry) => entry.expression).sort(),
+    })),
+  };
+}
+
+async function fileEvidence(path, displayPath = basename(path)) {
+  const status = await lstat(path);
+  if (!status.isFile()) fail(`${displayPath} must be a regular file`);
+  const bytes = await readFile(path);
+  if (bytes.length === 0) fail(`${displayPath} is empty`);
+  return { path: displayPath, bytes: bytes.length, sha256: sha256(bytes) };
+}
+
+function exactSha(value, label) {
+  if (!/^[0-9a-f]{40}$/u.test(value ?? "")) fail(`${label} must be a full lowercase Git SHA`);
+}
+
+function rustHostTriple(verbose) {
+  const match = /^host:\s*(\S+)$/mu.exec(verbose);
+  if (!match) fail("rustc -vV did not report a host triple");
+  const host = match[1];
+  if (!/^[A-Za-z0-9_.+]+(?:-[A-Za-z0-9_.+]+){2,}$/u.test(host)) {
+    fail("rustc -vV reported a malformed host triple");
+  }
+  return host;
+}
+
+function canonicalBinaryName(target) {
+  if (typeof target !== "string" || !/^[A-Za-z0-9_.+]+(?:-[A-Za-z0-9_.+]+){2,}$/u.test(target)) {
+    fail("evaluate attestation build target is malformed");
+  }
+  return target.split("-").includes("windows") ? "labcolors-evaluate.exe" : "labcolors-evaluate";
+}
+
+export async function verifyBundle(directory, expectedSourceSha) {
+  exactSha(expectedSourceSha, "expected source SHA");
+  const attestationPath = resolve(directory, "evaluate.intoto.json");
+  const attestationStatus = await lstat(attestationPath);
+  if (!attestationStatus.isFile()) fail("evaluate.intoto.json must be a regular file");
+  const attestationBytes = await readFile(attestationPath);
+  const attestation = JSON.parse(attestationBytes);
+  if (attestation._type !== ATTESTATION_TYPE || attestation.predicateType !== PREDICATE_TYPE) {
+    fail("evaluate attestation has an unsupported type");
+  }
+  if (!Array.isArray(attestation.subject) || attestation.subject.length !== 1) {
+    fail("evaluate attestation must bind exactly one binary subject");
+  }
+  const predicate = attestation.predicate;
+  if (predicate?.schemaVersion !== EVIDENCE_SCHEMA || predicate?.source?.commit !== expectedSourceSha) {
+    fail("evaluate attestation source identity mismatch");
+  }
+  if (predicate.source.repository !== REPOSITORY || predicate.build?.noRebuild !== true) {
+    fail("evaluate attestation repository/build contract mismatch");
+  }
+  const files = predicate.evidence;
+  const canonicalPaths = {
+    binary: canonicalBinaryName(predicate.build?.target),
+    sbom: "evaluate.sbom.cdx.json",
+    licenses: "evaluate.licenses.json",
+    benchmark: "evaluate.benchmark.json",
+  };
+  const expectedEntries = ["evaluate.intoto.json", ...Object.values(canonicalPaths)].sort();
+  const actualEntries = (await readdir(directory, { withFileTypes: true }))
+    .map((entry) => entry.name)
+    .sort();
+  if (actualEntries.length !== expectedEntries.length || actualEntries.some((name, index) => name !== expectedEntries[index])) {
+    fail("evaluate distribution directory is not the canonical closed file set");
+  }
+  const seenPaths = new Set();
+  for (const key of ["binary", "sbom", "licenses", "benchmark"]) {
+    const record = files?.[key];
+    if (!record || !/^[0-9a-f]{64}$/u.test(record.sha256 ?? "") || !Number.isSafeInteger(record.bytes) || record.bytes <= 0) {
+      fail(`evaluate attestation has malformed ${key} evidence`);
+    }
+    if (record.path !== canonicalPaths[key] || record.path.includes("/") || record.path.includes("\\")) {
+      fail(`evaluate attestation has non-canonical ${key} evidence path`);
+    }
+    if (seenPaths.has(record.path)) fail("evaluate attestation reuses an evidence path");
+    seenPaths.add(record.path);
+    const actual = await fileEvidence(resolve(directory, record.path), record.path);
+    if (actual.bytes !== record.bytes || actual.sha256 !== record.sha256) {
+      fail(`evaluate ${key} evidence bytes changed`);
+    }
+  }
+  const binaryDigest = files.binary.sha256;
+  const subject = attestation.subject[0];
+  if (subject.name !== files.binary.path || subject.digest?.sha256 !== binaryDigest) {
+    fail("evaluate attestation subject does not bind the binary evidence");
+  }
+  const sbom = JSON.parse(await readFile(resolve(directory, files.sbom.path), "utf8"));
+  if (
+    sbom.bomFormat !== "CycloneDX" ||
+    sbom.specVersion !== "1.6" ||
+    sbom.serialNumber !== bomSerialNumber(expectedSourceSha)
+  ) {
+    fail("evaluate SBOM is not attestable CycloneDX 1.6");
+  }
+  const root = sbom.components?.filter((component) => component.name === "labcolors-evaluate-cli");
+  if (!root || root.length !== 1 || root[0].type !== "application") fail("evaluate SBOM root is not exact");
+  if (sbom.components.some((component) => !(component.licenses ?? []).some((entry) => typeof entry.expression === "string" && entry.expression.length > 0))) {
+    fail("evaluate SBOM contains a component without declared license expression");
+  }
+  const licenses = JSON.parse(await readFile(resolve(directory, files.licenses.path), "utf8"));
+  if (licenses.schemaVersion !== 1 || licenses.components?.length !== sbom.components.length) {
+    fail("evaluate license inventory is incomplete");
+  }
+  const benchmark = JSON.parse(await readFile(resolve(directory, files.benchmark.path), "utf8"));
+  if (benchmark.schemaVersion !== BENCHMARK_SCHEMA || benchmark.workload?.measuredRounds !== MEASURED_ROUNDS) {
+    fail("evaluate benchmark receipt is malformed");
+  }
+  if (benchmark.workload?.id !== "evaluate-declared-point-cli-process-v1") {
+    fail("evaluate benchmark workload is not the declared-point process");
+  }
+  const correctness = benchmark.correctness;
+  if (!Array.isArray(correctness?.goodTerminalSrgb8) ||
+    correctness.goodTerminalSrgb8.length !== GOOD_TERMINAL_SRGB8.length ||
+    correctness.goodTerminalSrgb8.some((value, index) => value !== GOOD_TERMINAL_SRGB8[index]) ||
+    correctness.rejectedExit !== REJECTED_EXIT) {
+    fail("evaluate benchmark correctness is not the declared GOOD/REJECTED pair");
+  }
+  for (const operation of ["stdin-json", "file-json", "stdin-jsonl"]) {
+    const sample = benchmark.candidate?.[operation];
+    if (sample?.n !== MEASURED_ROUNDS || !(sample.minMs > 0) || !(sample.p95Ms >= sample.medianMs)) {
+      fail(`evaluate benchmark ${operation} summary is invalid`);
+    }
+  }
+  return { attestationSha256: sha256(attestationBytes), binarySha256: binaryDigest };
+}
+
+async function generate(options) {
+  const sourceSha = options.sourceSha;
+  exactSha(sourceSha, "source SHA");
+  const head = command("git", ["rev-parse", "HEAD"]).trim();
+  if (head !== sourceSha) fail(`checked-out HEAD ${head} != source SHA ${sourceSha}`);
+  const treeSha = command("git", ["rev-parse", "HEAD^{tree}"]).trim();
+  const changes = command("git", ["status", "--porcelain=v1", "--untracked-files=all"]).trim();
+  if (changes) fail(`tracked source is dirty and cannot attest ${sourceSha}`);
+
+  const out = resolve(options.out);
+  await mkdir(out, { recursive: true });
+  const binaryName = process.platform === "win32" ? "labcolors-evaluate.exe" : "labcolors-evaluate";
+  const binaryPath = resolve(out, binaryName);
+  await copyFile(resolve(options.binary), binaryPath);
+  await chmod(binaryPath, 0o755);
+
+  const rustcVerbose = command("rustc", ["-vV"]);
+  const rustHost = rustHostTriple(rustcVerbose);
+  const metadata = JSON.parse(command("cargo", ["metadata", "--locked", "--format-version", "1", "--filter-platform", rustHost]));
+  const sbom = buildSbom(metadata, sourceSha);
+  const sbomPath = resolve(out, "evaluate.sbom.cdx.json");
+  await writeFile(sbomPath, stableJson(sbom));
+  const licensesPath = resolve(out, "evaluate.licenses.json");
+  await writeFile(licensesPath, stableJson(licenseInventory(sbom)));
+
+  const benchmark = await benchmarkPair(
+    binaryPath,
+    options.baselineBinary ?? null,
+  );
+  benchmark.environment = {
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+    rustc: rustcVerbose.trim(),
+    cargo: command("cargo", ["-V"]).trim(),
+  };
+  benchmark.source = {
+    candidate: sourceSha,
+    baseline: options.baselineSha ?? null,
+  };
+  const benchmarkPath = resolve(out, "evaluate.benchmark.json");
+  await writeFile(benchmarkPath, stableJson(benchmark));
+
+  const evidence = {
+    binary: await fileEvidence(binaryPath, binaryName),
+    sbom: await fileEvidence(sbomPath, "evaluate.sbom.cdx.json"),
+    licenses: await fileEvidence(licensesPath, "evaluate.licenses.json"),
+    benchmark: await fileEvidence(benchmarkPath, "evaluate.benchmark.json"),
+  };
+  const cargoLock = await fileEvidence(resolve(REPO_ROOT, "Cargo.lock"), "Cargo.lock");
+  const attestation = {
+    _type: ATTESTATION_TYPE,
+    subject: [{ name: evidence.binary.path, digest: { sha256: evidence.binary.sha256 } }],
+    predicateType: PREDICATE_TYPE,
+    predicate: {
+      schemaVersion: EVIDENCE_SCHEMA,
+      source: { repository: REPOSITORY, commit: sourceSha, tree: treeSha },
+      build: {
+        profile: "release",
+        target: rustHost,
+        cargoLockSha256: cargoLock.sha256,
+        noRebuild: true,
+      },
+      evidence,
+      boundary: {
+        semanticAuthority: false,
+        registryPublication: false,
+        deployedAdoption: false,
+      },
+    },
+  };
+  await writeFile(resolve(out, "evaluate.intoto.json"), stableJson(attestation));
+  const verified = await verifyBundle(out, sourceSha);
+  return { ...verified, evidence };
+}
+
+function parseArgs(argv) {
+  const [commandName, ...rest] = argv;
+  if (!commandName || !["generate", "verify"].includes(commandName)) {
+    fail("usage: evaluate-distribution.mjs <generate|verify> ...");
+  }
+  const options = {};
+  for (let i = 0; i < rest.length; i += 2) {
+    const flag = rest[i];
+    const value = rest[i + 1];
+    if (!flag?.startsWith("--") || value == null) fail(`invalid argument near ${flag ?? "<end>"}`);
+    options[flag.slice(2)] = value;
+  }
+  return { commandName, options };
+}
+
+async function main() {
+  const { commandName, options } = parseArgs(process.argv.slice(2));
+  if (commandName === "generate") {
+    for (const required of ["binary", "source-sha", "out"]) if (!options[required]) fail(`--${required} is required`);
+    if (Boolean(options["baseline-binary"]) !== Boolean(options["baseline-sha"])) {
+      fail("--baseline-binary and --baseline-sha must be provided together");
+    }
+    const result = await generate({
+      binary: options.binary,
+      sourceSha: options["source-sha"],
+      out: options.out,
+      baselineBinary: options["baseline-binary"],
+      baselineSha: options["baseline-sha"],
+    });
+    console.log(stableJson(result).trim());
+    return;
+  }
+  if (!options.dir || !options["source-sha"]) fail("verify requires --dir and --source-sha");
+  console.log(stableJson(await verifyBundle(resolve(options.dir), options["source-sha"])).trim());
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
