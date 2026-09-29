@@ -1870,6 +1870,8 @@ class MutationTruthTest(unittest.TestCase):
                 "authority-mutation",
                 "transport-distribution",
                 "transport-distribution-attestation",
+                "evaluate-distribution",
+                "evaluate-distribution-attestation",
                 "audit",
                 "wasm",
             },

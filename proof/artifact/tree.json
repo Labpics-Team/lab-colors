@@ -1,10 +1,10 @@
 {
  "class": "tree",
- "file_count": 483,
+ "file_count": 485,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
-  ".github/workflows/ci-worker.yml": "00646a32eba6b2b20c406ba5a5f13fee3c002380",
+  ".github/workflows/ci-worker.yml": "ec1f655afa62cb4dd46e1bfe8e49f7c6c65c9732",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
   ".github/workflows/full-domain-corpus.yml": "ce4a1ad54e0e947539dfe3cefb6b995ae816a867",
@@ -435,6 +435,7 @@
   "scripts/check-wasm-size-budget.mjs": "101e8aa10aa26b3b0cb920220377806aa97dc6b4",
   "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
+  "scripts/evaluate-distribution.mjs": "d5e9408147d5d1f2983b2c2a24377000574db2d1",
   "scripts/evaluation_cli_gate.py": "70c5e2724dc2b4abcf4e53f59b09c9c9c6cc0f75",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
   "scripts/extract_claims.py": "296a5441e60df8aa37a3a5eb283be3f06f7d8df6",
@@ -461,6 +462,7 @@
   "scripts/test_artifact_matrix.py": "f86ea9d1712c809f847a705a4d60e52e8adb564b",
   "scripts/test_certificate_source_build.py": "e9cffbf64923e46a3d3ee1364d6e08ae0534939b",
   "scripts/test_ci_peer_gate.py": "b19a0d13e42f125f0db0e9438c6c3bba5c4af91b",
+  "scripts/test_evaluate_distribution.mjs": "7d4c2057fb16c48512bb668ae01c44af7f5d6a4b",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
   "scripts/test_extract_claims.py": "316f7c292f0330d138af063defa2c882e7366112",
   "scripts/test_extract_conformance.py": "505c896a99fbaa407b8f96c29b9ad777fac3fd65",
@@ -470,7 +472,7 @@
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
-  "scripts/test_mutation.py": "ae89207370c5b1a5013aa10427b739a2b613582f",
+  "scripts/test_mutation.py": "67e9b4616355e2e7d36e56e481462a1eb8b96248",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_transport_distribution.mjs": "c532d55b086dc324ef6477b0d7b0352d16d4e395",
@@ -486,7 +488,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "7c068552abae822a87327eef6f06740551e25463490d52ef4c0574a4d49a3578",
+ "record_sha256": "80876ace208c8cfa87584cc87c978d5b038bec908d7582524395b50c9143f501",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
