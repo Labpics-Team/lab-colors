@@ -1732,7 +1732,7 @@ class MutationTruthTest(unittest.TestCase):
         lanes = ("core-tests", "region-proof", "authority-mutation")
         for lane in lanes:
             with self.subTest(lane=lane):
-                self.assertIn(lane, jobs)
+                self.assertIn(lane, list(jobs))
                 block = jobs[lane]
                 self.assertIn("    runs-on: ubuntu-latest\n", block)
                 self.assertIn("    timeout-minutes: 40\n", block)
@@ -1865,6 +1865,9 @@ class MutationTruthTest(unittest.TestCase):
                 "lint",
                 "docs",
                 "test",
+                "core-tests",
+                "region-proof",
+                "authority-mutation",
                 "transport-distribution",
                 "transport-distribution-attestation",
                 "audit",

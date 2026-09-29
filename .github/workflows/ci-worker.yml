@@ -243,8 +243,10 @@ jobs:
             --package-root "$crate_dir"
           cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
 
-  test:
-    name: test
+  # Независимые доказательства не образуют последовательную очередь.
+  # Каждый job получает отдельную VM; обязательный test ниже соединяет результаты.
+  region-proof:
+    name: region proof protocol
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -295,6 +297,47 @@ jobs:
               PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
               python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
             '
+
+  authority-mutation:
+    name: authority semantic mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: AUTH-01 semantic mutation gate
+        run: python3 scripts/authority_mutation_gate.py
+
+  core-tests:
+    name: core tests and artifact contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -327,8 +370,6 @@ jobs:
         run: python3 scripts/test_certificate_source_build.py
       - name: cargo test
         run: cargo test --workspace --locked
-      - name: AUTH-01 semantic mutation gate
-        run: python3 scripts/authority_mutation_gate.py
       # The private-fixture lifecycle/dispose tests in private_fixture.rs are
       # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
       # `cargo test --workspace` step above never compiles them. They must run
@@ -460,6 +501,29 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_extract_*.py'
       - name: artifact matrix - gate anti-vacuum mutants
         run: python3 scripts/test_artifact_matrix.py
+
+  # Сохраняет прежнее имя для publish-gate и требует все три независимых результата.
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: [core-tests, region-proof, authority-mutation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: require every proof lane to succeed
+        shell: bash
+        env:
+          CORE_TESTS: ${{ needs.core-tests.result }}
+          REGION_PROOF: ${{ needs.region-proof.result }}
+          AUTHORITY_MUTATION: ${{ needs.authority-mutation.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$CORE_TESTS" != success || "$REGION_PROOF" != success || "$AUTHORITY_MUTATION" != success ]]; then
+            printf 'Required proof results: core=%s region=%s mutation=%s\n' "$CORE_TESTS" "$REGION_PROOF" "$AUTHORITY_MUTATION" >&2
+            exit 1
+          fi
+          echo 'all required proof lanes succeeded'
 
   transport-distribution:
     name: transport distribution evidence
