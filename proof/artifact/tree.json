@@ -472,7 +472,7 @@
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
-  "scripts/test_mutation.py": "ae89207370c5b1a5013aa10427b739a2b613582f",
+  "scripts/test_mutation.py": "67e9b4616355e2e7d36e56e481462a1eb8b96248",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_transport_distribution.mjs": "c532d55b086dc324ef6477b0d7b0352d16d4e395",
@@ -488,7 +488,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "c1ac626e4894658dfd750469aea4ecb83c0ab133f54d1ce13eb99de0c11cf251",
+ "record_sha256": "80876ace208c8cfa87584cc87c978d5b038bec908d7582524395b50c9143f501",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
