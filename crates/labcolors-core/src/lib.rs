@@ -61,6 +61,7 @@ pub mod neutral;
     reason = "the output-profile firewall is intentionally internal to registered profiles"
 )]
 pub(crate) mod output_projection;
+pub mod point_evaluation;
 // Независимая численная проверка границы инверсии alpha; не ветвь runtime.
 #[cfg(test)]
 pub(crate) mod point_representation;

@@ -464,6 +464,9 @@ def main() -> None:
     # Его подмены выполняются в отдельном временном Git-экземпляре, не здесь.
     subprocess.run([sys.executable, str(ROOT / "scripts/science_certificate_gate.py")],
                    cwd=ROOT, check=True)
+    # Внешний потребитель обязан сохранить вызовы владельцев и ошибки процесса.
+    subprocess.run([sys.executable, str(ROOT / "scripts/evaluation_cli_gate.py")],
+                   cwd=ROOT, check=True)
     total = len(AUTH_MUTANTS) + len(bounded_mutants)
     print(f"AUTH/TQ/CC/EVAL mutation gate caught {total} semantic mutants")
 

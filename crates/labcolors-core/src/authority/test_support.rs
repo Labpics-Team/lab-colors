@@ -34,7 +34,7 @@ impl ProgramPointSinkHostV1 for Host {
 }
 
 /// Строит минимальный Program V1 с отдельно заданным ожидаемым композитом.
-fn point_wire(source: Srgb8, opacity: f64, expected: Srgb8) -> Vec<u8> {
+pub(crate) fn point_wire(source: Srgb8, opacity: f64, expected: Srgb8) -> Vec<u8> {
     let mut builder = ProgramWireBuilderV1::new();
     builder
         .source(1, source)

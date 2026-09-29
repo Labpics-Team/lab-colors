@@ -1,0 +1,19 @@
+[package]
+name = "labcolors-evaluate-cli"
+description = "Bounded local evaluation of declared point contracts through the Lab Colors core."
+publish = false
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "labcolors-evaluate"
+path = "src/main.rs"
+
+[dependencies]
+labcolors-core = { path = "../labcolors-core", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

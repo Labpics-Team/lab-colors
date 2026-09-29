@@ -40,3 +40,15 @@ cargo tree -p labcolors-core --edges=no-dev
 ## Лицензия
 
 MIT
+
+
+## Оценка в командной строке
+
+[labcolors-evaluate](crates/labcolors-evaluate-cli/README.md) принимает один
+ограниченный запрос с каноническим ProgramWire и явной объявленной конвенцией,
+исполняет существующее ядро и выдаёт отчёт с LCEN-сертификатом. Это моделируемая
+точка, не подтверждение человеческого восприятия или состояния браузера.
+
+```sh
+cargo run --quiet --locked -p labcolors-evaluate-cli -- crates/labcolors-evaluate-cli/examples/declared-point.json
+```

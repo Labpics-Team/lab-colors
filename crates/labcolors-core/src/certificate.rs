@@ -322,6 +322,9 @@ impl AdmissionKeyV1 {
     }
 
     /// Копирует проверенный кортеж, сохраняя закрытый класс и версии.
+    // Закрытый класс известен потребителю: специализация сохраняет точный
+    // кортеж без отдельного универсального пути в транспортном WASM.
+    #[inline(always)]
     pub fn try_clone(&self) -> Result<Self, CertificateErrorV1> {
         let mut key = Self::try_new(
             &self.runtime_artifact_id,
@@ -508,10 +511,10 @@ impl CertificateEnvelopeV1 {
             return Err(CertificateErrorV1::ProducerBindingMismatch);
         }
         let mut canonical_bytes = prefix;
+        // encode_prefix проверяет и резервирует полный конверт с digest до
+        // выделения памяти. Здесь дописываются ровно зарезервированные 32 байта.
         canonical_bytes.extend_from_slice(&binding_sha256);
-        if canonical_bytes.len() > MAX_ENVELOPE_BYTES_V1 {
-            return Err(CertificateErrorV1::ResourceLimitExceeded);
-        }
+        debug_assert!(canonical_bytes.len() <= MAX_ENVELOPE_BYTES_V1);
         Ok(Self {
             key: attestation.key,
             payload_sha256,
@@ -1096,6 +1099,72 @@ mod contract_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn complete_envelope_size_is_bounded_before_allocation_and_finalization() {
+        use crate::test_support::{AllocatorEvents, measured_allocator_events};
+        let key = AdmissionKeyV1::try_new(
+            "runtime",
+            CertificateOperationV1::IssueCertificate,
+            "context",
+            "0123456789abcdef0123456789abcdef01234567",
+            [5; 32],
+        )
+        .unwrap();
+        for len in [1, 127, MAX_PAYLOAD_BYTES_V1] {
+            let payload = vec![9; len];
+            let prefix = encode_prefix(&key, &payload, payload_digest(&payload)).unwrap();
+            let final_length = key.serialized_tuple_bytes() + payload.len() + WIRE_DIGEST_BYTES_V1;
+            assert_eq!(prefix.len() + 32, final_length);
+            assert!(prefix.capacity() >= final_length && final_length <= MAX_ENVELOPE_BYTES_V1);
+            let (mut finished, events) = measured_allocator_events(|| {
+                let mut owned = prefix;
+                owned.extend_from_slice(&[0; 32]);
+                owned
+            });
+            assert_eq!(events, AllocatorEvents::default());
+            assert_eq!(finished.len(), final_length);
+            finished.clear();
+        }
+        // Невозможный публично ключ проверяет собственную раннюю границу
+        // encoder при нарушенной внутренней предпосылке, до любой аллокации.
+        let mut oversized = key;
+        oversized.context_id = "x".repeat(MAX_ENVELOPE_BYTES_V1);
+        let (result, events) =
+            measured_allocator_events(|| encode_prefix(&oversized, &[1], [0; 32]));
+        assert_eq!(
+            result.unwrap_err(),
+            CertificateErrorV1::ResourceLimitExceeded
+        );
+        assert_eq!(events, AllocatorEvents::default());
+        let payload = vec![1; MAX_PAYLOAD_BYTES_V1 + 1];
+        let (result, events) =
+            measured_allocator_events(|| encode_prefix(&oversized, &payload, [0; 32]));
+        assert_eq!(
+            result.unwrap_err(),
+            CertificateErrorV1::ResourceLimitExceeded
+        );
+        assert_eq!(events, AllocatorEvents::default());
+    }
+
+    #[test]
+    fn specialized_key_clone_preserves_every_selector_and_identity() {
+        for class in [EnvelopeClassV1::Transport, EnvelopeClassV1::DeclaredPoint] {
+            let mut key = AdmissionKeyV1::try_new(
+                "runtime",
+                CertificateOperationV1::IssueCertificate,
+                "context",
+                "0123456789abcdef0123456789abcdef01234567",
+                [7; 32],
+            )
+            .unwrap();
+            key.authority_kind = class.authority();
+            key.payload_type = class.payload();
+            let copy = key.try_clone().unwrap();
+            assert_eq!(copy, key);
+            assert_eq!(copy.serialized_tuple_bytes(), key.serialized_tuple_bytes());
+        }
+    }
+
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::thread;

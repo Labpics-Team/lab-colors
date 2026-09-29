@@ -2830,5 +2830,74 @@ jobs:
         self.assertIn("crates/labcolors-core/src/program_identity.rs", config)
 
 
+class CliGateWiringTest(unittest.TestCase):
+    def test_required_gate_calls_both_science_and_cli_probes(self):
+        from contextlib import redirect_stdout
+        import io
+        from unittest.mock import patch
+        import authority_mutation_gate as gate
+        # Предметная проверка исполняется отдельно; здесь проверяется реальный
+        # маршрут main с подменёнными дорогими эффектами, не текстовый маркер.
+        with patch.object(gate, "run_mutant"), patch.object(gate, "verify_evaluation_borrows"), \
+             patch.object(gate.subprocess, "run") as calls, redirect_stdout(io.StringIO()):
+            gate.main()
+        scripts = [call.args[0][1] for call in calls.call_args_list]
+        self.assertEqual(scripts, [str(gate.ROOT / "scripts/science_certificate_gate.py"),
+                                   str(gate.ROOT / "scripts/evaluation_cli_gate.py")])
+        for call in calls.call_args_list:
+            self.assertIs(call.kwargs["check"], True)
+            self.assertEqual(call.kwargs["cwd"], gate.ROOT)
+
+
+class CoreConsumerProjectionTest(unittest.TestCase):
+    def test_actual_projection_guard_covers_each_normal_core_consumer(self):
+        import textwrap
+        root = Path(__file__).resolve().parents[1]
+        verify_ci_binding(root, os.environ)
+        workflow = (root / ".github/workflows/ci-worker.yml").read_text()
+        start = "      - name: prove core capability projection boundary\n"
+        self.assertEqual(workflow.count(start), 1)
+        step = workflow.split(start, 1)[1].split("      - name:", 1)[0]
+        source = textwrap.dedent(step.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0])
+        program = compile(source, "actual-ci-core-projection", "exec")
+        original_check_output = subprocess.check_output
+        metadata_command = ["cargo", "metadata", "--format-version", "1", "--no-deps"]
+        metadata = json.loads(original_check_output(metadata_command, cwd=root, text=True))
+        cached_trees = {}
+        def execute(document):
+            def output(command, **kwargs):
+                if command == metadata_command:
+                    return json.dumps(document)
+                self.assertEqual(command[:2], ["cargo", "tree"])
+                key = tuple(command)
+                if key not in cached_trees:
+                    cached_trees[key] = original_check_output(command, cwd=root, **kwargs)
+                return cached_trees[key]
+            with mock.patch.object(subprocess, "check_output", side_effect=output), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                exec(program, {"__name__":"capability_guard"})
+        execute(metadata)
+        consumers = ("labcolors-evaluate-cli", "labcolors-transport-cli", "labcolors-wasm",
+                     "labcolors-ffi", "labcolors-conformance")
+        for consumer in consumers:
+            for mode in ("default", "feature", "missing", "duplicate"):
+                with self.subTest(consumer=consumer, mode=mode):
+                    altered = copy.deepcopy(metadata)
+                    package = next(p for p in altered["packages"] if p["name"] == consumer)
+                    dep = next(d for d in package["dependencies"] if d["name"] == "labcolors-core" and d["kind"] is None)
+                    if mode == "default": dep["uses_default_features"] = True
+                    elif mode == "feature": dep["features"] = ["private-fixture"]
+                    elif mode == "missing": package["dependencies"].remove(dep)
+                    else: package["dependencies"].append(copy.deepcopy(dep))
+                    with self.assertRaisesRegex(SystemExit, consumer):
+                        execute(altered)
+        # Имя прежней optional-библиотеки не разрешает сделать её обязательной.
+        altered = copy.deepcopy(metadata)
+        core = next(p for p in altered["packages"] if p["name"] == "labcolors-core")
+        core["dependencies"].append({"name":"serde", "kind":None, "optional":False})
+        with self.assertRaisesRegex(SystemExit, "zero runtime dependencies"):
+            execute(altered)
+
+
 if __name__ == "__main__":
     unittest.main()

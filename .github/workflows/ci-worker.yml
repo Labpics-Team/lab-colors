@@ -403,6 +403,8 @@ jobs:
           ))
           packages = {package["name"]: package for package in metadata["packages"]}
           direct_core_consumers = (
+              "labcolors-evaluate-cli",
+              "labcolors-transport-cli",
               "labcolors-wasm",
               "labcolors-ffi",
               "labcolors-conformance",
@@ -415,15 +417,12 @@ jobs:
               if dep["kind"] is None:
                   print(f"  core dep: {dep['name']} optional={dep.get('optional', 'MISSING')} kind={dep['kind']}", file=sys.stderr)
 
-          # Known optional deps gated behind feature flags; excluded from zero-runtime check
-          # even if cargo metadata omits the optional flag due to toolchain differences.
-          _OPTIONAL_FEATURE_GATED = frozenset({"serde", "serde_yaml", "toml"})
+          # Признак optional приходит из pinned Cargo, имя зависимости не даёт исключения.
           runtime_dependencies = [
               dependency
               for dependency in core["dependencies"]
               if dependency["kind"] is None
               and not dependency.get("optional", False)
-              and dependency["name"] not in _OPTIONAL_FEATURE_GATED
           ]
           if runtime_dependencies:
               names = sorted(dependency["name"] for dependency in runtime_dependencies)
