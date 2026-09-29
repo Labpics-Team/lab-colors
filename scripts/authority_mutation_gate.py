@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import argparse
 import json
 import subprocess
 import sys
@@ -432,44 +433,123 @@ fn evaluation_borrow_contract_probe(
         raise SystemExit("evaluation source was not restored")
 
 
-def main() -> None:
-    """Run the bounded AUTH/TQ/CC/EVAL semantic mutation matrix and restore every source."""
+REQUIRED_SCOPES = (
+    "authority-tq",
+    "lifecycle-geometry",
+    "cc-eval",
+    "science",
+    "cli",
+)
+
+MUTATION_SCOPES = {
+    "authority-tq": {
+        "authority": tuple(AUTH_MUTANTS),
+        "bounded": tuple(TQ_MUTANTS),
+    },
+    "lifecycle-geometry": {
+        "authority": (),
+        "bounded": tuple(
+            LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
+        ),
+    },
+    "cc-eval": {
+        "authority": (),
+        "bounded": tuple(CC_MUTANTS | EVAL_MUTANTS),
+    },
+}
+
+
+def validate_scope_partition() -> None:
+    """Every semantic mutant belongs to exactly one required CI shard."""
+    expected_authority = set(AUTH_MUTANTS)
+    expected_bounded = set(
+        TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS
+        | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
+    )
+    seen_authority: list[str] = []
+    seen_bounded: list[str] = []
+    for scope in REQUIRED_SCOPES:
+        partition = MUTATION_SCOPES.get(scope)
+        if partition is None:
+            continue
+        seen_authority.extend(partition["authority"])
+        seen_bounded.extend(partition["bounded"])
+    if set(seen_authority) != expected_authority or len(seen_authority) != len(expected_authority):
+        raise SystemExit("authority mutation shard partition is incomplete or duplicated")
+    if set(seen_bounded) != expected_bounded or len(seen_bounded) != len(expected_bounded):
+        raise SystemExit("bounded mutation shard partition is incomplete or duplicated")
+
+
+def run_mutation_scope(scope: str) -> None:
+    partition = MUTATION_SCOPES[scope]
+    authority_names = partition["authority"]
+    bounded_names = partition["bounded"]
+    bounded_mutants = (
+        TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS
+        | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
+    )
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
-    bounded_mutants = TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
-    tq_originals = {
+    selected = {name: bounded_mutants[name] for name in bounded_names}
+    originals = {
         source: source.read_text(encoding="utf-8")
-        for source, _command, _before, _after in bounded_mutants.values()
+        for source, _command, _before, _after in selected.values()
     }
 
-    # Сверяем всю матрицу до первого cargo subprocess: поздний stale anchor
-    # должен падать сразу, а не после минут корректных мутантов. run_mutant
-    # всё равно повторно сверяет anchor непосредственно перед подменой.
-    for name, (before, after) in AUTH_MUTANTS.items():
+    for name in authority_names:
+        before, after = AUTH_MUTANTS[name]
         validate_anchor(name, auth_original, before, after)
-    for name, (source, _command, before, after) in bounded_mutants.items():
-        validate_anchor(name, tq_originals[source], before, after)
+    for name, (source, _command, before, after) in selected.items():
+        validate_anchor(name, originals[source], before, after)
 
-    for name, (before, after) in AUTH_MUTANTS.items():
+    for name in authority_names:
+        before, after = AUTH_MUTANTS[name]
         run_mutant(name, AUTH_SOURCE, AUTH_COMMAND, before, after, auth_original)
     if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
         raise SystemExit("authority source was not restored")
 
-    for name, (source, command, before, after) in bounded_mutants.items():
-        run_mutant(name, source, command, before, after, tq_originals[source])
-    for source, original in tq_originals.items():
+    for name, (source, command, before, after) in selected.items():
+        run_mutant(name, source, command, before, after, originals[source])
+    for source, original in originals.items():
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
-    verify_evaluation_borrows()
-    # Научный производитель требует реального чистого source identity.
-    # Его подмены выполняются в отдельном временном Git-экземпляре, не здесь.
-    subprocess.run([sys.executable, str(ROOT / "scripts/science_certificate_gate.py")],
-                   cwd=ROOT, check=True)
-    # Внешний потребитель обязан сохранить вызовы владельцев и ошибки процесса.
-    subprocess.run([sys.executable, str(ROOT / "scripts/evaluation_cli_gate.py")],
-                   cwd=ROOT, check=True)
-    total = len(AUTH_MUTANTS) + len(bounded_mutants)
-    print(f"AUTH/TQ/CC/EVAL mutation gate caught {total} semantic mutants")
+
+    if scope == "cc-eval":
+        verify_evaluation_borrows()
+    print(f"mutation shard {scope}: caught {len(authority_names) + len(bounded_names)} semantic mutants")
+
+
+def run_external_gate(script: str, label: str) -> None:
+    subprocess.run([sys.executable, str(ROOT / "scripts" / script)], cwd=ROOT, check=True)
+    print(f"mutation shard {label}: passed")
+
+
+def run_scope(scope: str) -> None:
+    if scope in MUTATION_SCOPES:
+        run_mutation_scope(scope)
+    elif scope == "science":
+        run_external_gate("science_certificate_gate.py", scope)
+    elif scope == "cli":
+        run_external_gate("evaluation_cli_gate.py", scope)
+    else:
+        raise SystemExit(f"unknown mutation scope: {scope}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Run all semantic proof shards or one independently schedulable shard."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scope", choices=("all", *REQUIRED_SCOPES), default="all")
+    args = parser.parse_args([] if argv is None else argv)
+    validate_scope_partition()
+    scopes = REQUIRED_SCOPES if args.scope == "all" else (args.scope,)
+    for scope in scopes:
+        run_scope(scope)
+    if args.scope == "all":
+        bounded = (
+            TQ_MUTANTS | LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS
+            | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
+        )
+        print(f"AUTH/TQ/CC/EVAL mutation gate caught {len(AUTH_MUTANTS) + len(bounded)} semantic mutants")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
