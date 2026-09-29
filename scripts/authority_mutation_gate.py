@@ -481,6 +481,7 @@ def validate_scope_partition() -> None:
 
 
 def run_mutation_scope(scope: str) -> None:
+    """Execute one disjoint in-process mutant partition and restore every source."""
     partition = MUTATION_SCOPES[scope]
     authority_names = partition["authority"]
     bounded_names = partition["bounded"]
@@ -519,11 +520,13 @@ def run_mutation_scope(scope: str) -> None:
 
 
 def run_external_gate(script: str, label: str) -> None:
+    """Execute one existing standalone semantic gate as its own CI shard."""
     subprocess.run([sys.executable, str(ROOT / "scripts" / script)], cwd=ROOT, check=True)
     print(f"mutation shard {label}: passed")
 
 
 def run_scope(scope: str) -> None:
+    """Dispatch a validated required scope to its canonical owner."""
     if scope in MUTATION_SCOPES:
         run_mutation_scope(scope)
     elif scope == "science":
