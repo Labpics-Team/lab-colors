@@ -4,7 +4,7 @@
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
-  ".github/workflows/ci-worker.yml": "348089b8417fd4c3b8bb40ebf230db2b9b300adc",
+  ".github/workflows/ci-worker.yml": "00646a32eba6b2b20c406ba5a5f13fee3c002380",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
   ".github/workflows/full-domain-corpus.yml": "ce4a1ad54e0e947539dfe3cefb6b995ae816a867",
@@ -53,7 +53,7 @@
   "crates/labcolors-conformance/tests/pack_contract.rs": "e1a5dcbe35d7cc1797c8a949fc5b0b534c9c2396",
   "crates/labcolors-conformance/tests/reference_runner.rs": "01ca48842fc5a98bbcbdeed82fd61520adc97b0b",
   "crates/labcolors-core/Cargo.toml": "2afe00cebf72b24e6688b3bebf67fb09d8b7a1d2",
-  "crates/labcolors-core/LICENSE": "30cff7403da04711c46979a06f6bf8eb10ee088a",
+  "crates/labcolors-core/LICENSE": "600f12ae191586af6925cf936356b2449182cb3a",
   "crates/labcolors-core/LICENSES/CC-BY-4.0.txt": "da6ab6cc8f333d7e89a99812866df8f24374d47c",
   "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt": "2d58298e6eda10e7204abb52722efbc840db2390",
   "crates/labcolors-core/NOTICE.md": "b9328f2b79f43f69e72c91b541297b9dd0ca7746",
@@ -265,7 +265,7 @@
   "crates/labcolors-transport-cli/src/app.rs": "3f24c734a204a8681a6eda0129a910459cd4c111",
   "crates/labcolors-transport-cli/src/main.rs": "2e4f8cc3321221893970004e9cb79df5ea2b442c",
   "crates/labcolors-wasm/Cargo.toml": "fec2f394f0c39fb2e91fe7520d0aa3590b65a0d2",
-  "crates/labcolors-wasm/LICENSE": "30cff7403da04711c46979a06f6bf8eb10ee088a",
+  "crates/labcolors-wasm/LICENSE": "600f12ae191586af6925cf936356b2449182cb3a",
   "crates/labcolors-wasm/src/error.rs": "d4ed9b152f1ee398742f19b39b083712f3efdc60",
   "crates/labcolors-wasm/src/lib.rs": "e37206cd017d243ffe89ed4a4664af61b725838f",
   "crates/labcolors-wasm/src/terminal_projection.rs": "c0cbec0f3d7652c2fdc67bc7108014014330abae",
@@ -486,7 +486,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "2bf2fe9967fb6e1a68b9e95cd491d0c5fbc47c685875467dd02a2c78f1a1b978",
+ "record_sha256": "7c068552abae822a87327eef6f06740551e25463490d52ef4c0574a4d49a3578",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
