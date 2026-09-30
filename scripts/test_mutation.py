@@ -1736,9 +1736,14 @@ class MutationTruthTest(unittest.TestCase):
                 block = jobs[lane]
                 self.assertIn("    runs-on: ubuntu-latest\n", block)
                 self.assertIn("    timeout-minutes: 40\n", block)
-                self.assertNotRegex(block, r"(?m)^    (?:needs|if|strategy):")
+                self.assertNotRegex(block, r"(?m)^    (?:needs|if):")
                 self.assertNotIn("continue-on-error:", block)
                 self.assertIn("          persist-credentials: false\n", block)
+        mutation_lane = jobs["authority-mutation"]
+        self.assertIn("    strategy:\n      fail-fast: false\n      max-parallel: 5\n", mutation_lane)
+        self.assertIn("        scope: [authority-tq, lifecycle-geometry, cc-eval, science, cli]\n", mutation_lane)
+        self.assertNotIn("    strategy:\n", jobs["core-tests"])
+        self.assertNotIn("    strategy:\n", jobs["region-proof"])
         owners = {
             "canonical region-proof protocol": "region-proof",
             "AUTH-01 semantic mutation gate": "authority-mutation",
@@ -1750,7 +1755,7 @@ class MutationTruthTest(unittest.TestCase):
             anchor = f"      - name: {step}\n"
             self.assertEqual(source.count(anchor), 1, step)
             self.assertIn(anchor, jobs[owner])
-        self.assertIn("run: python3 scripts/authority_mutation_gate.py", jobs["authority-mutation"])
+        self.assertIn('run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"', jobs["authority-mutation"])
         self.assertIn("PYTHONOPTIMIZE=2 python -m unittest discover", jobs["region-proof"])
         self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof"])
         aggregate = jobs["test"]
@@ -2830,6 +2835,44 @@ jobs:
         self.assertNotIn("crates/labcolors-core/src/recheck.rs", config)
         self.assertIn("crates/labcolors-core/src/point_support.rs", config)
         self.assertIn("crates/labcolors-core/src/program_identity.rs", config)
+
+
+class AuthorityMutationShardContractTest(unittest.TestCase):
+    def test_required_scopes_partition_every_semantic_mutant_once(self):
+        import authority_mutation_gate as gate
+        gate.validate_scope_partition()
+        self.assertEqual(
+            gate.REQUIRED_SCOPES,
+            ("authority-tq", "lifecycle-geometry", "cc-eval", "science", "cli"),
+        )
+        bounded = (gate.TQ_MUTANTS | gate.LIFECYCLE_MUTANTS | gate.POINT_MUTANTS
+                   | gate.RASTER_MUTANTS | gate.HANDOFF_MUTANTS
+                   | gate.CC_MUTANTS | gate.EVAL_MUTANTS)
+        authority = []
+        selected = []
+        for scope in gate.MUTATION_SCOPES.values():
+            authority.extend(scope["authority"])
+            selected.extend(scope["bounded"])
+        self.assertCountEqual(authority, gate.AUTH_MUTANTS)
+        self.assertEqual(len(authority), len(set(authority)))
+        self.assertCountEqual(selected, bounded)
+        self.assertEqual(len(selected), len(set(selected)))
+
+    def test_external_scopes_do_not_execute_core_mutants(self):
+        from unittest.mock import patch
+        import authority_mutation_gate as gate
+        for scope, script in (("science", "science_certificate_gate.py"),
+                              ("cli", "evaluation_cli_gate.py")):
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "run_mutant") as mutants, \
+                 patch.object(gate, "verify_evaluation_borrows") as borrows, \
+                 patch.object(gate.subprocess, "run") as calls:
+                gate.main(["--scope", scope])
+                mutants.assert_not_called()
+                borrows.assert_not_called()
+                self.assertEqual(calls.call_count, 1)
+                self.assertEqual(calls.call_args.args[0][1], str(gate.ROOT / "scripts" / script))
+                self.assertIs(calls.call_args.kwargs["check"], True)
 
 
 class CliGateWiringTest(unittest.TestCase):
