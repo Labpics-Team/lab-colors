@@ -9,7 +9,8 @@
 //! Перечень закрывает все численные категории, названные r13 для NUMERIC-01,
 //! не вводя искусственный счётчик «доменов»: LCS round-trip проверяется на всех
 //! 16 777 216 encoded-sRGB8 стимулах при фиксированных sRGB viewing conditions;
-//! alpha/backdrop и quantization имеют достигаемую half-step границу; transforms
+//! alpha/backdrop имеет half-step границу относительно binary64-композиции;
+//! sRGB-квантование отдельно учитывает округление масштаба на 255; transforms
 //! покрыты полным 256-level sRGB transfer grid; gamut проверяет clamp + emitted
 //! quantization; output projection имеет отдельные Oklch chroma/hue bounds и
 //! near-neutral wrap counterexample; Oklab precision проверяется на полном
@@ -89,14 +90,18 @@ pub(crate) const ALPHA_MIDGRID_BACKDROP: [u8; 3] = [255, 255, 255];
 /// (полный домен сетки, не выборка).
 pub(crate) const SRGB_GAMMA_ROUNDTRIP_MAX_ULPS: u32 = 3;
 
-/// Граница gamut-clamp: `srgb8_from_linear` клампит encoded-значение в
-/// [0, 1] до квантования, поэтому линейный вход вне [0,1] (вне гамута)
-/// отображается ровно в граничный байт (0 или 255), а внутри-гамутные
-/// входы — в ближайший уровень сетки: ошибка encoded-канала не
-/// превышает половины шага сетки (0.5/255). Контрпример — линейный
-/// вход 1.5 (encoded = srgb_gamma(1.5) ≈ 1.194 > 1): клампится к 1.0
-/// → байт 255, encoded-ошибка строго больше нуля.
-pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = 1.0 / 510.0;
+/// Граница между вычисленным `encoded = srgb_gamma(linear).clamp(0, 1)`
+/// и точным рациональным уровнем выданного байта `byte/255`.
+/// Ошибка gamma относительно вещественной формулы и расстояние до значения
+/// до clamp сюда не входят. Runtime сохраняет `round(encoded * 255)`.
+///
+/// На [0,255] ошибка binary64-умножения не больше 2^-46: это половина
+/// наибольшего ulp произведения. Последующий round добавляет не больше 0.5
+/// байта, поэтому нормированная ошибка <= (0.5 + 2^-46)/255. Одного
+/// half-step недостаточно: умножение может округлиться ровно к полубайту.
+/// Деление этой константы округлено вверх; точное целочисленное сравнение
+/// ниже проверяет enclosure, не округляя измеренную ошибку в binary64.
+pub(crate) const SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR: f64 = (0.5 + 64.0 * f64::EPSILON) / 255.0;
 
 /// Граница chroma полярного Oklch-вида (output projection), в единицах
 /// Oklab chroma. На полной сетке 360 целых углов тест строит rectangular
@@ -330,34 +335,92 @@ mod tests {
         u32::try_from(a.to_bits().abs_diff(b.to_bits())).expect("ulp count fits u32")
     }
 
-    /// Gamut-clamp: ошибка измеряется в ENCODED-домене (как заявляет
-    /// константа) — расстояние от клампнутого encoded-значения до
-    /// ближайшего уровня сетки u8/255 не превышает половины шага.
-    /// Контрпример — линейный вход 1.5 (encoded > 1): клампится к 1.0
-    /// → байт 255, encoded-ошибка строго больше нуля (vacuity guard).
+    /// Независимый oracle для точного binary64-значения в области теста.
+    /// Нули представлены отдельно; нормальные значения дают дробь без
+    /// floating-point умножения, деления или вычитания.
+    fn bounded_dyadic(value: f64) -> (u128, u128) {
+        assert!(value.is_finite() && (0.0..=1.0).contains(&value));
+        if value == 0.0 {
+            return (0, 1);
+        }
+        let bits = value.to_bits();
+        let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023;
+        // В тесте минимальное ненулевое encoded около 1/510. Ограничение
+        // гарантирует отсутствие overflow и в перекрёстных произведениях.
+        assert!((-10..=0).contains(&exponent));
+        let numerator = u128::from((bits & ((1_u64 << 52) - 1)) | (1_u64 << 52));
+        (numerator, 1_u128 << (52 - exponent))
+    }
+
+    /// Полушаговые окрестности обнаруживают double rounding; универсальная
+    /// граница следует из оценки двух операций, а не из плотности выборки.
     #[test]
     fn srgb_gamut_clamp_error_stays_within_bound() {
-        use crate::spaces::srgb::{srgb_gamma, srgb8_from_linear};
-        let linear_inputs = [
-            1.5,   // контрпример: вне гамута сверху, encoded > 1 → байт 255
-            -0.25, // вне гамута снизу, encoded < 0 → байт 0
+        use crate::spaces::srgb::{
+            hex_from_srgb_encoded, srgb_gamma, srgb_gamma_inv, srgb8_from_linear,
+        };
+        let (bound_numerator, bound_denominator) =
+            bounded_dyadic(SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR);
+        // Выводим (0.5 + 2^-46)/255 независимо от floating-point формулы.
+        let exact_numerator = (1_u128 << 45) + 1;
+        let exact_denominator = 255_u128 << 46;
+        assert!(bound_numerator * exact_denominator >= exact_numerator * bound_denominator);
+        // Соседний меньший f64 уже не является верхней границей.
+        let (previous_numerator, previous_denominator) = bounded_dyadic(f64::from_bits(
+            SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR.to_bits() - 1,
+        ));
+        assert!(previous_numerator * exact_denominator < exact_numerator * previous_denominator);
+
+        // Фиксируем шаг квантования независимо от зависящего от платформы powf:
+        // gamma исходного линейного witness даёт это e на проверенной среде.
+        // Тот же живой encoded-formatter обязан сохранить прежний байт 33.
+        let witness = f64::from_bits(0x3fc0_5050_5050_5050);
+        assert_eq!(hex_from_srgb_encoded([witness; 3]), "#212121");
+        let (witness_numerator, witness_denominator) = bounded_dyadic(witness);
+        let witness_error = 33 * witness_denominator - 255 * witness_numerator;
+        assert_eq!(
+            (2 * witness_error - witness_denominator) * 114_841_790_497_947_648_u128,
+            510 * witness_denominator,
+        );
+
+        let mut linear_inputs = vec![
+            f64::from_bits(0x3f8e_5bae_05f5_ea9a),
+            f64::from_bits(0x3f8e_5bae_05f5_ea8a),
+            f64::from_bits(0x3f8e_5bae_05f5_eaaa),
+            1.5,
+            -0.25,
             0.5,
             1.0 - 0.25 / 255.0,
         ];
+        for byte in 0..255 {
+            let middle = srgb_gamma_inv((f64::from(byte) + 0.5) / 255.0).to_bits();
+            for bits in middle - 4..=middle + 4 {
+                linear_inputs.push(f64::from_bits(bits));
+            }
+        }
+        let mut ideal_halfstep_violations = 0;
         for v in linear_inputs {
-            // Production-квантизатор целиком: gamma + clamp + round.
             let quantized = srgb8_from_linear([v, v, v]);
             let encoded = srgb_gamma(v).clamp(0.0, 1.0);
-            let grid = f64::from(quantized.bytes()[0]) / 255.0;
-            let error = (grid - encoded).abs();
+            let (numerator, denominator) = bounded_dyadic(encoded);
+            let byte = u128::from(quantized.bytes()[0]);
+            let error_numerator = (byte * denominator).abs_diff(255 * numerator);
+            // Оба знаменателя — степени двойки. Их НОК вместо произведения
+            // сохраняет точность и запас u128 даже для ошибочного байта 255.
+            let common_denominator = denominator.max(bound_denominator);
             assert!(
-                error <= SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR,
-                "gamut clamp error {} exceeds the declared bound {}",
-                error,
-                SRGB_GAMUT_CLAMP_MAX_CHANNEL_ERROR
+                error_numerator * (common_denominator / denominator)
+                    <= bound_numerator * 255 * (common_denominator / bound_denominator),
+                "linear {:016x}, encoded {:016x}, byte {byte}: exact error exceeds bound",
+                v.to_bits(),
+                encoded.to_bits(),
             );
+            ideal_halfstep_violations += usize::from(2 * error_numerator > denominator);
         }
-        // Vacuity guard: оба контрпримера реально клампятся к граничным байтам.
+        assert!(
+            ideal_halfstep_violations > 0,
+            "старый half-step bound должен быть опровергнут"
+        );
         assert_eq!(srgb8_from_linear([1.5, 1.5, 1.5]).bytes()[0], 255);
         assert_eq!(srgb8_from_linear([-0.25, -0.25, -0.25]).bytes()[0], 0);
     }
