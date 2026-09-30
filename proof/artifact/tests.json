@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 265,
+   "count": 267,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -732,6 +732,8 @@
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_unlisted_file_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_unknown_mode_exits_64",
     "test_extract_source_files.EXT01SourceFilesTests.test_verify_passes_on_current_tree",
+    "test_mutation.AuthorityMutationShardContractTest.test_external_scopes_do_not_execute_core_mutants",
+    "test_mutation.AuthorityMutationShardContractTest.test_required_scopes_partition_every_semantic_mutant_once",
     "test_mutation.CliGateWiringTest.test_required_gate_calls_both_science_and_cli_probes",
     "test_mutation.CoreConsumerProjectionTest.test_actual_projection_guard_covers_each_normal_core_consumer",
     "test_mutation.MutationTruthTest.test_aggregate_binds_baseline_log_and_mutant_diff_bytes",
@@ -875,7 +877,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "dc1a80d270ea2a8797a917354aa32f420e6418233225b81eba47d44dc6a022c1",
+ "record_sha256": "35134a2e0b2ac1558c9f560140b3966270337bd64e7bf01da8bea68d6c71d213",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
