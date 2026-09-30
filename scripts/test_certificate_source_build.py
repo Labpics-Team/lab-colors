@@ -440,6 +440,7 @@ class SourceBuildTests(unittest.TestCase):
         samples = {
             "docs/new-source-contract.md": b"source contract\nsecond line\n",
             "contracts/new/reference-vectors.tsv": b"input\toutput\n0\t1\n",
+            "contracts/new-formula.lcir": b"literal formula bytes\r\n",
             "assets/new-payload.bin": b"\x00\xff\r\n\x80\n",
         }
         for name, content in samples.items():
@@ -457,6 +458,9 @@ class SourceBuildTests(unittest.TestCase):
                          b"outside source identity\r\n")
         for name, content in samples.items():
             self.assertEqual((checkout / CORE / name).read_bytes(), content, name)
+        formula = f"{CORE.as_posix()}/contracts/new-formula.lcir"
+        self.assertEqual(self.git("check-attr", "text", "eol", "--", formula, root=checkout),
+                         f"{formula}: text: unset\n{formula}: eol: unspecified")
         self.assertEqual(self.build(root=checkout)[0], original)
 
         # Защита raw bytes остаётся строгой после исправления checkout-пути.

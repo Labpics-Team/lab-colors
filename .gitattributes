@@ -1,5 +1,5 @@
-# Сертификат связывает raw bytes всего дерева Core, включая документы и таблицы.
-# Fresh checkout с core.autocrlf=true сохраняет этот артефакт; бинарные входы
+# Сертификат связывает исходные байты всего дерева Core, включая документы и таблицы.
+# Извлечение с core.autocrlf=true сохраняет этот артефакт; бинарные входы
 # не нормализуются благодаря text=auto и явным binary/-text правилам ниже.
 crates/labcolors-core/** text=auto eol=lf
 
@@ -38,7 +38,7 @@ scripts/verify_clean_set_receipt.py text eol=lf
 scripts/test_verify_clean_set_receipt.py text eol=lf
 # Formula releases are identified by their exact repository bytes. They remain
 # human-readable, but Git must never rewrite line endings before admission.
-crates/labcolors-core/contracts/*.lcir -text
+crates/labcolors-core/contracts/*.lcir -text !eol
 proof/region/v1/fixtures/*.bin binary
 
 # Rust source files are scanned byte-for-byte by architecture guards using
