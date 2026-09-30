@@ -433,6 +433,39 @@ class SourceBuildTests(unittest.TestCase):
         self.assertNotEqual(self.build(root=linked)[0], original)
         self.assertEqual(self.build()[0], original)
 
+        # Атрибуты продукта обязаны сохранять всё дерево, включая новые документы,
+        # а не только Rust и заранее перечисленные численные эталоны.
+        shutil.copyfile(REPO / ".gitattributes", self.root / ".gitattributes")
+        core = self.root / CORE
+        samples = {
+            "docs/new-source-contract.md": b"source contract\nsecond line\n",
+            "contracts/new/reference-vectors.tsv": b"input\toutput\n0\t1\n",
+            "assets/new-payload.bin": b"\x00\xff\r\n\x80\n",
+        }
+        for name, content in samples.items():
+            path = core / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        (self.root / "outside.txt").write_bytes(b"outside source identity\n")
+        self.commit()
+        original, _ = self.build()
+
+        checkout = self.base / "autocrlf-checkout"
+        self.git("clone", "--quiet", "--config", "core.autocrlf=true",
+                 str(self.root), str(checkout))
+        self.assertEqual((checkout / "outside.txt").read_bytes(),
+                         b"outside source identity\r\n")
+        for name, content in samples.items():
+            self.assertEqual((checkout / CORE / name).read_bytes(), content, name)
+        self.assertEqual(self.build(root=checkout)[0], original)
+
+        # Защита raw bytes остаётся строгой после исправления checkout-пути.
+        changed = checkout / CORE / "docs/new-source-contract.md"
+        changed.write_bytes(samples["docs/new-source-contract.md"].replace(b"\n", b"\r\n"))
+        self.build(root=checkout, available=False)
+        changed.write_bytes(samples["docs/new-source-contract.md"])
+        self.assertEqual(self.build(root=checkout)[0], original)
+
     def test_sha256_format_wrong_owner_and_non_tree_revision_unavailable(self) -> None:
         self.build()
         other = self.base / "sha256"

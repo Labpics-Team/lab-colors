@@ -1,3 +1,8 @@
+# Сертификат связывает raw bytes всего дерева Core, включая документы и таблицы.
+# Fresh checkout с core.autocrlf=true сохраняет этот артефакт; бинарные входы
+# не нормализуются благодаря text=auto и явным binary/-text правилам ниже.
+crates/labcolors-core/** text=auto eol=lf
+
 # Golden emission snapshots are byte-compared by tests and regenerated with LF.
 # Pin them to LF so `core.autocrlf` checkouts cannot rewrite them to CRLF and
 # spuriously drift the byte-identity gates.
