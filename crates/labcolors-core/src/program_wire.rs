@@ -1284,12 +1284,7 @@ impl CompiledProgramV1 {
                 crate::program::PresentationRootIdV1::new(presentation_root),
                 crate::program::OccurrenceIdV1::new(occurrence),
             )
-            .map_err(|error| match error {
-                crate::program_session::PointOutputPresentationBindErrorV1::NonTerminalTarget {
-                    ..
-                } => ProgramAttachErrorV1::NonTerminalTarget,
-                _ => ProgramAttachErrorV1::Binding,
-            })?;
+            .map_err(map_attachment_binding_error)?;
         let mut outputs_scratch = Vec::new();
         outputs_scratch
             .try_reserve_exact(output_count)
@@ -1349,6 +1344,20 @@ impl CompiledProgramV1 {
             outputs_scratch,
             current_render: None,
         })
+    }
+}
+
+fn map_attachment_binding_error(
+    error: crate::program_session::PointOutputPresentationBindErrorV1,
+) -> ProgramAttachErrorV1 {
+    match error {
+        crate::program_session::PointOutputPresentationBindErrorV1::InternalInvariant => {
+            ProgramAttachErrorV1::InternalInvariant
+        }
+        crate::program_session::PointOutputPresentationBindErrorV1::NonTerminalTarget {
+            ..
+        } => ProgramAttachErrorV1::NonTerminalTarget,
+        _ => ProgramAttachErrorV1::Binding,
     }
 }
 
@@ -1847,6 +1856,25 @@ mod runtime_tests {
     #[test]
     fn update_projection_retains_infrastructure_class_and_semantic_refusals() {
         use crate::program::{UpdateErrorV1, UpdateInvariantFailureV1, UpdatePhaseV1};
+        use crate::program_session::PointOutputPresentationBindErrorV1 as BindError;
+        assert_eq!(
+            map_attachment_binding_error(BindError::InternalInvariant),
+            ProgramAttachErrorV1::InternalInvariant
+        );
+        assert_eq!(
+            map_attachment_binding_error(BindError::MissingOutput {
+                output: crate::program_session::OutputSlotId::new(1),
+            }),
+            ProgramAttachErrorV1::Binding
+        );
+        assert_eq!(
+            map_attachment_binding_error(BindError::NonTerminalTarget {
+                root: crate::program_session::PresentationRootId::new(1),
+                terminal: crate::appearance::OccurrenceId::new(2),
+                occurrence: crate::appearance::OccurrenceId::new(3),
+            }),
+            ProgramAttachErrorV1::NonTerminalTarget
+        );
         for phase in [
             UpdatePhaseV1::ObservationAdmission,
             UpdatePhaseV1::ProgramEvaluation,

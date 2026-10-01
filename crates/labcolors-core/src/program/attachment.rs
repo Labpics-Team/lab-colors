@@ -575,13 +575,16 @@ where
     pub(crate) const fn kind(&self) -> AttachmentCreateFailureKindV1 {
         match self {
             Self::Contract { cause, .. } => match cause {
-                AttachmentCreateErrorV1::ResourceExhausted => {
+                AttachmentCreateErrorV1::ResourceExhausted
+                | AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::ResourceExhausted) => {
                     AttachmentCreateFailureKindV1::ResourceExhausted
                 }
-                AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::ResourceExhausted) => {
-                    AttachmentCreateFailureKindV1::ResourceExhausted
+                AttachmentCreateErrorV1::InternalInvariant
+                | AttachmentCreateErrorV1::InvalidPointBinding {
+                    cause: PointOutputPresentationBindErrorV1::InternalInvariant,
+                    ..
                 }
-                AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::InternalInvariant) => {
+                | AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::InternalInvariant) => {
                     AttachmentCreateFailureKindV1::InternalInvariant
                 }
                 AttachmentCreateErrorV1::Instantiate(_) => {
