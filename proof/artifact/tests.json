@@ -877,7 +877,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "35134a2e0b2ac1558c9f560140b3966270337bd64e7bf01da8bea68d6c71d213",
+ "record_sha256": "85e6d3bc2b4774b4e988322a2f90e113bdb2da19bf8ada1577d30f2291d49f90",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1902,10 +1902,13 @@
    "program_wire::fv01_red_tests::host_refusal_preserves_the_previous_materialization: test",
    "program_wire::fv01_red_tests::paint_and_stale_binding_inputs_are_typed_refusals: test",
    "program_wire::fv01_red_tests::public_attachment_rejects_an_intermediate_presentation_target: test",
+   "program_wire::fv01_red_tests::public_attachment_resource_failure_keeps_head_and_allows_same_revision_retry: test",
    "program_wire::fv01_red_tests::ready_attachment_is_the_only_materialization_authority_source: test",
    "program_wire::runtime_tests::detached_snapshots_remain_readable_after_later_reuse_and_session_drop: test",
    "program_wire::runtime_tests::family_graphs_fail_closed_until_a_public_trust_parameter_exists: test",
+   "program_wire::runtime_tests::public_session_preserves_resource_failure_and_retries_same_revision: test",
    "program_wire::runtime_tests::update_failure_preserves_previous_ready_snapshot: test",
+   "program_wire::runtime_tests::update_projection_retains_infrastructure_class_and_semantic_refusals: test",
    "program_wire::runtime_tests::wire_runtime_compiles_instantiates_updates_and_returns_certified_outputs: test",
    "program_wire::tests::canonical_bytes_yield_the_compiled_content_identity: test",
    "program_wire::tests::format_pins_are_part_of_the_contract: test",
@@ -2170,7 +2173,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1289,
+  "enabled_count": 1292,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

@@ -6,7 +6,8 @@
 
 ## Первый запуск из исходников
 
-Из чистого checkout репозитория с Rust версии, закреплённой `rust-toolchain.toml`:
+Из чистого checkout репозитория с Rust не ниже `workspace.package.rust-version`
+из корневого `Cargo.toml` (сейчас 1.85):
 
 ```sh
 cargo run --quiet --locked -p labcolors-evaluate-cli -- \

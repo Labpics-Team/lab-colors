@@ -5,13 +5,16 @@ import init, { attachProgramWire, compileProgramWire, isProgramError } from "../
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
-const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate"];
+const infrastructureCodes = ["program_resource_exhausted", "program_internal_invariant"];
+const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate", ...infrastructureCodes];
+const updateCodes = ["program_update", ...infrastructureCodes];
 const attachmentCodes = [
   ...compileCodes,
   "program_attachment_binding",
   "program_attachment_instantiate",
   "program_attachment_sink_admission",
   "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
   "program_attachment_non_terminal_target",
 ];
 const attachmentUpdateCodes = [
@@ -66,7 +69,7 @@ const attachmentOperations = [
 test("error admission recognizes exactly the operation/code relation", () => {
   for (const code of [
     ...compileCodes,
-    "program_update",
+    ...updateCodes,
     ...attachmentCodes,
     ...attachmentUpdateCodes,
     ...attachmentDisposeCodes,
@@ -81,7 +84,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
   ]) {
     for (const operation of operations) {
       const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
-        : (operation === "updateObserved" || operation === "updateUnknown") && code === "program_update";
+        : (operation === "updateObserved" || operation === "updateUnknown") && updateCodes.includes(code);
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }
     for (const operation of attachmentOperations) {

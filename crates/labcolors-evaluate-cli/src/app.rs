@@ -271,6 +271,7 @@ fn evaluate_request(request: &Request) -> Result<DeclaredPointReportV1, Error> {
             ProgramAttachErrorV1::ResourceExhausted => {
                 Error::resource("attachment_resource_exhausted")
             }
+            ProgramAttachErrorV1::InternalInvariant => Error::resource("internal_invariant"),
             ProgramAttachErrorV1::NonTerminalTarget => Error::unsupported("non_terminal_target"),
             ProgramAttachErrorV1::Binding => Error::unsupported("attachment_binding_rejected"),
             _ => Error::evaluate("attachment_rejected"),
@@ -304,6 +305,8 @@ fn runtime_error(error: ProgramRuntimeErrorV1) -> Error {
         ProgramRuntimeErrorV1::FamilyArtifactsRequired => {
             Error::unsupported("family_artifacts_required")
         }
+        ProgramRuntimeErrorV1::ResourceExhausted => Error::resource("allocation_refused"),
+        ProgramRuntimeErrorV1::InternalInvariant => Error::resource("internal_invariant"),
         _ => Error::evaluate("program_runtime_rejected"),
     }
 }

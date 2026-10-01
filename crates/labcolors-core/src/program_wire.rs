@@ -1,13 +1,12 @@
-//! РџСѓР±Р»РёС‡РЅР°СЏ РїСЂРѕРІРµСЂРєР° РєР°РЅРѕРЅРёС‡РµСЃРєРёС… wire-Р±Р°Р№С‚РѕРІ Program (v1).
+//! Публичная проверка, компиляция и runtime канонических Program wire-байтов (v1).
 //!
-//! РџРµСЂРІС‹Р№ Рё РµРґРёРЅСЃС‚РІРµРЅРЅС‹Р№ РїСѓР±Р»РёС‡РЅС‹Р№ seam Program РґРѕ terminal C7c: РєР»РёРµРЅС‚ РјРѕР¶РµС‚
-//! РґРѕРєР°Р·Р°С‚СЊ, С‡С‚Рѕ РµРіРѕ Р±Р°Р№С‚С‹ РєР°РЅРѕРЅРЅС‹ Рё РєРѕРјРїРёР»РёСЂСѓРµРјС‹, Рё РїРѕР»СѓС‡РёС‚СЊ content identity
-//! РіСЂР°С„Р° вЂ” РЅРѕ РќР• РјРѕР¶РµС‚ РїРѕР»СѓС‡РёС‚СЊ runtime (Owner/Session/attachment РѕСЃС‚Р°СЋС‚СЃСЏ
-//! РїСЂРёРІР°С‚РЅС‹РјРё). РџРѕР»РЅС‹Р№ authoring/emission РєРѕРЅС‚СЂР°РєС‚ РїСѓР±Р»РёРєСѓРµС‚ Р°С‚РѕРјР°СЂРЅС‹Р№ C7c.
+//! Проверка возвращает content identity без runtime authority. Компиляция создаёт
+//! immutable owner для Session или terminal point attachment; физическим sink
+//! владеет host. Все пути исполняют тот же закрытый Core.
 //!
-//! РћС‚РєР°Р·С‹ РґРІСѓС…СЃР»РѕР№РЅС‹ Рё С‚РёРїРёР·РёСЂРѕРІР°РЅС‹: [`ProgramWireCheckErrorV1::Wire`] вЂ” Р±Р°Р№С‚С‹
-//! РЅР°СЂСѓС€Р°СЋС‚ РєР°РЅРѕРЅ С„РѕСЂРјР°С‚Р°; [`ProgramWireCheckErrorV1::Compile`] вЂ” Р±Р°Р№С‚С‹ РєР°РЅРѕРЅРЅС‹,
-//! РЅРѕ РіСЂР°С„ СЃРµРјР°РЅС‚РёС‡РµСЃРєРё РЅРµРІР°Р»РёРґРµРЅ. РќРё РѕРґРёРЅ РёР· СЃР»РѕС‘РІ РЅРµ РІС‹СЂР°Р¶Р°РµС‚ РґСЂСѓРіРѕР№.
+//! Отказы формата и семантики остаются раздельными. Возвращённая нехватка ресурсов
+//! или внутренний сбой сохраняют свой класс при проверке, компиляции и update;
+//! они не превращаются в отказ пользовательского графа или observation.
 
 use crate::Srgb8;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
@@ -38,6 +37,10 @@ pub enum ProgramWireCheckErrorV1 {
     /// compile-РєРѕРЅС‚СЂР°РєС‚ РїСѓР±Р»РёРєСѓРµС‚ Р°С‚РѕРјР°СЂРЅС‹Р№ C7c; РїСЂРµР¶РґРµРІСЂРµРјРµРЅРЅР°СЏ СЃС‚СЂРѕРєРѕРІР°СЏ
     /// РїСЂРѕРµРєС†РёСЏ 62 РІРЅСѓС‚СЂРµРЅРЅРёС… РєР»Р°СЃСЃРѕРІ СЃС‚Р°Р»Р° Р±С‹ Hyrum-РєРѕРЅС‚СЂР°РєС‚РѕРј РґРѕ РЅРµРіРѕ.
     Compile,
+    /// Недостаточно ресурсов для семантической компиляции.
+    ResourceExhausted,
+    /// Нарушен внутренний инвариант компилятора.
+    InternalInvariant,
 }
 
 fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize) {
@@ -106,9 +109,15 @@ pub fn check_program_wire_v1(bytes: &[u8]) -> Result<[u8; 32], ProgramWireCheckE
         let (section, offset) = section_name(&error);
         ProgramWireCheckErrorV1::Wire { section, offset }
     })?;
-    let owner = draft
-        .compile()
-        .map_err(|_| ProgramWireCheckErrorV1::Compile)?;
+    let owner = draft.compile().map_err(|error| match error {
+        crate::program::CompileErrorV1::ResourceExhausted => {
+            ProgramWireCheckErrorV1::ResourceExhausted
+        }
+        crate::program::CompileErrorV1::InternalInvariant => {
+            ProgramWireCheckErrorV1::InternalInvariant
+        }
+        _ => ProgramWireCheckErrorV1::Compile,
+    })?;
     Ok(*owner.content_identity().as_bytes())
 }
 
@@ -338,6 +347,30 @@ mod fv01_red_tests {
             result,
             Err(ProgramAttachErrorV1::NonTerminalTarget)
         ));
+    }
+
+    #[test]
+    fn public_attachment_resource_failure_keeps_head_and_allows_same_revision_retry() {
+        let mut attachment = ready_attachment();
+        let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])];
+        {
+            let _failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
+            assert!(matches!(
+                attachment.update_observed(1, &scenarios),
+                Err(ProgramAttachmentUpdateErrorV1::ResourceExhausted)
+            ));
+            assert_eq!(
+                crate::program_session::program_preflight_failure_remaining_for_test(),
+                None
+            );
+        }
+        assert!(attachment.current_render().is_none());
+        let retry = attachment.update_observed(1, &scenarios).unwrap();
+        let render = retry.render().unwrap();
+        assert_eq!(render.revision(), 1);
+        assert_eq!(render.terminal_composite(), Some(Srgb8::new([0x60; 3])));
+        assert_eq!(attachment.current_render(), Some(render));
+        assert_eq!(render.sink_stamp().sequence(), 1);
     }
 
     #[test]
@@ -759,6 +792,7 @@ pub enum ProgramAttachErrorV1 {
     Instantiate,
     SinkAdmission,
     ResourceExhausted,
+    InternalInvariant,
     NonTerminalTarget,
 }
 
@@ -1305,6 +1339,9 @@ impl CompiledProgramV1 {
                 crate::program::attachment::AttachmentCreateFailureKindV1::ResourceExhausted => {
                     ProgramAttachErrorV1::ResourceExhausted
                 }
+                crate::program::attachment::AttachmentCreateFailureKindV1::InternalInvariant => {
+                    ProgramAttachErrorV1::InternalInvariant
+                }
             })?;
         Ok(ProgramAttachmentV1 {
             inner: Some(inner),
@@ -1440,9 +1477,15 @@ fn map_attachment_update_error(
     >,
 ) -> ProgramAttachmentUpdateErrorV1 {
     match error {
-        crate::program::attachment::AttachmentUpdateErrorV1::Update(_) => {
-            ProgramAttachmentUpdateErrorV1::Update
-        }
+        crate::program::attachment::AttachmentUpdateErrorV1::Update(error) => match error.kind() {
+            crate::program::UpdateErrorKindV1::ResourceExhausted => {
+                ProgramAttachmentUpdateErrorV1::ResourceExhausted
+            }
+            crate::program::UpdateErrorKindV1::InternalInvariant => {
+                ProgramAttachmentUpdateErrorV1::InternalInvariant
+            }
+            _ => ProgramAttachmentUpdateErrorV1::Update,
+        },
         crate::program::attachment::AttachmentUpdateErrorV1::SinkPrepare(error)
         | crate::program::attachment::AttachmentUpdateErrorV1::SinkInstall(error) => {
             ProgramAttachmentUpdateErrorV1::Sink(map_sink_error(error))
@@ -1554,6 +1597,10 @@ pub enum ProgramRuntimeErrorV1 {
     FamilyArtifactsRequired,
     Instantiate,
     Update,
+    /// Недостаточно ресурсов для компиляции, создания Session или update.
+    ResourceExhausted,
+    /// Нарушен внутренний инвариант, а не контракт пользовательского ввода.
+    InternalInvariant,
 }
 
 /// РљРѕРјРїРёР»РёСЂСѓРµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Program wire bytes РІ immutable owner.
@@ -1563,9 +1610,15 @@ pub enum ProgramRuntimeErrorV1 {
 /// РІРµСЂСЃРёРµР№ seam, РЅРµ silent assumption.
 pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
     let draft = decode_program_wire_v1(bytes).map_err(|_| ProgramRuntimeErrorV1::Wire)?;
-    let owner = draft
-        .compile()
-        .map_err(|_| ProgramRuntimeErrorV1::Compile)?;
+    let owner = draft.compile().map_err(|error| match error {
+        crate::program::CompileErrorV1::ResourceExhausted => {
+            ProgramRuntimeErrorV1::ResourceExhausted
+        }
+        crate::program::CompileErrorV1::InternalInvariant => {
+            ProgramRuntimeErrorV1::InternalInvariant
+        }
+        _ => ProgramRuntimeErrorV1::Compile,
+    })?;
     if owner.required_family_releases().next().is_some() {
         return Err(ProgramRuntimeErrorV1::FamilyArtifactsRequired);
     }
@@ -1584,7 +1637,15 @@ impl CompiledProgramV1 {
         let session = self
             .owner
             .instantiate(stream_id)
-            .map_err(|_| ProgramRuntimeErrorV1::Instantiate)?;
+            .map_err(|error| match error {
+                crate::program::InstantiateErrorV1::ResourceExhausted => {
+                    ProgramRuntimeErrorV1::ResourceExhausted
+                }
+                crate::program::InstantiateErrorV1::InternalInvariant => {
+                    ProgramRuntimeErrorV1::InternalInvariant
+                }
+                _ => ProgramRuntimeErrorV1::Instantiate,
+            })?;
         Ok(ProgramSessionV1 {
             owner: self.owner,
             session,
@@ -1606,15 +1667,15 @@ impl ProgramSessionV1 {
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
         self.outputs_scratch
             .try_reserve_exact(self.owner.output_slots().count())
-            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
             .prepare_schema_ordered_update(&mut self.session, revision, &source)
-            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+            .map_err(map_runtime_update_error)?;
         let evidence = transition.commit();
         snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::Update)
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
     }
 
     /// РђС‚РѕРјР°СЂРЅРѕ РїСЂРёРјРµРЅСЏРµС‚ Unknown update СЃ РЅРµРїСЂРѕР·СЂР°С‡РЅРѕР№ РїСЂРёС‡РёРЅРѕР№.
@@ -1625,7 +1686,7 @@ impl ProgramSessionV1 {
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
         self.outputs_scratch
             .try_reserve_exact(self.owner.output_slots().count())
-            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let transition = self
             .owner
             .prepare_update(
@@ -1635,9 +1696,21 @@ impl ProgramSessionV1 {
                     reason_id,
                 },
             )
-            .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+            .map_err(map_runtime_update_error)?;
         snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::Update)
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+    }
+}
+
+fn map_runtime_update_error(error: crate::program::UpdateErrorV1) -> ProgramRuntimeErrorV1 {
+    match error.kind() {
+        crate::program::UpdateErrorKindV1::ResourceExhausted => {
+            ProgramRuntimeErrorV1::ResourceExhausted
+        }
+        crate::program::UpdateErrorKindV1::InternalInvariant => {
+            ProgramRuntimeErrorV1::InternalInvariant
+        }
+        _ => ProgramRuntimeErrorV1::Update,
     }
 }
 
@@ -1743,6 +1816,79 @@ mod runtime_tests {
             crate::Srgb8::new([0x40, 0x40, 0x40])
         );
         assert_eq!(snapshot.outputs()[0].opacity().to_bits(), 0.5_f64.to_bits());
+    }
+
+    #[test]
+    fn public_session_preserves_resource_failure_and_retries_same_revision() {
+        let compiled =
+            compile_program_wire_v1(&runtime_wire(crate::Srgb8::new([0x60; 3]))).unwrap();
+        let mut session = compiled.instantiate(100).unwrap();
+        let scenarios = [ProgramScenarioV1::new(
+            7,
+            vec![crate::Srgb8::new([0x80; 3])],
+        )];
+        {
+            let _failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
+            assert!(matches!(
+                session.update_observed(1, &scenarios),
+                Err(ProgramRuntimeErrorV1::ResourceExhausted)
+            ));
+            assert_eq!(
+                crate::program_session::program_preflight_failure_remaining_for_test(),
+                None
+            );
+        }
+        let retry = session.update_observed(1, &scenarios).unwrap();
+        assert_eq!(retry.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(retry.outputs()[0].source(), crate::Srgb8::new([0x40; 3]));
+        assert_eq!(retry.outputs()[0].opacity(), 0.5);
+    }
+
+    #[test]
+    fn update_projection_retains_infrastructure_class_and_semantic_refusals() {
+        use crate::program::{UpdateErrorV1, UpdateInvariantFailureV1, UpdatePhaseV1};
+        for phase in [
+            UpdatePhaseV1::ObservationAdmission,
+            UpdatePhaseV1::ProgramEvaluation,
+        ] {
+            assert_eq!(
+                map_runtime_update_error(UpdateErrorV1::ResourceExhausted { phase }),
+                ProgramRuntimeErrorV1::ResourceExhausted
+            );
+            assert_eq!(
+                map_attachment_update_error(
+                    crate::program::attachment::AttachmentUpdateErrorV1::Update(
+                        UpdateErrorV1::ResourceExhausted { phase }
+                    )
+                ),
+                ProgramAttachmentUpdateErrorV1::ResourceExhausted
+            );
+        }
+        let invariant = || UpdateErrorV1::InternalInvariant {
+            source: UpdateInvariantFailureV1::OwnerAuthority,
+        };
+        assert_eq!(
+            map_runtime_update_error(invariant()),
+            ProgramRuntimeErrorV1::InternalInvariant
+        );
+        assert_eq!(
+            map_attachment_update_error(
+                crate::program::attachment::AttachmentUpdateErrorV1::Update(invariant())
+            ),
+            ProgramAttachmentUpdateErrorV1::InternalInvariant
+        );
+        assert_eq!(
+            map_runtime_update_error(UpdateErrorV1::EmptyScenarioSet),
+            ProgramRuntimeErrorV1::Update
+        );
+        assert_eq!(
+            map_attachment_update_error(
+                crate::program::attachment::AttachmentUpdateErrorV1::Update(
+                    UpdateErrorV1::EmptyScenarioSet
+                )
+            ),
+            ProgramAttachmentUpdateErrorV1::Update
+        );
     }
 
     #[test]

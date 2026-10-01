@@ -219,6 +219,8 @@ fn to_program_js_error(
         E::FamilyArtifactsRequired => "program_family_artifacts_required",
         E::Instantiate => "program_instantiate",
         E::Update => "program_update",
+        E::ResourceExhausted => "program_resource_exhausted",
+        E::InternalInvariant => "program_internal_invariant",
         _ => "program_runtime",
     };
     program_error("Program runtime operation failed", code, operation.key()).into()
@@ -252,6 +254,7 @@ fn to_attachment_error(
         E::Instantiate => "program_attachment_instantiate",
         E::SinkAdmission => "program_attachment_sink_admission",
         E::ResourceExhausted => "program_attachment_resource_exhausted",
+        E::InternalInvariant => "program_attachment_internal_invariant",
         E::NonTerminalTarget => "program_attachment_non_terminal_target",
         _ => "program_attachment",
     };
@@ -1335,6 +1338,26 @@ mod browser_tests {
                 E::Update,
                 ProgramOperation::UpdateObserved,
                 "program_update",
+            ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::CompileProgramWire,
+                "program_resource_exhausted",
+            ),
+            (
+                E::InternalInvariant,
+                ProgramOperation::CompileProgramWire,
+                "program_internal_invariant",
+            ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::UpdateObserved,
+                "program_resource_exhausted",
+            ),
+            (
+                E::InternalInvariant,
+                ProgramOperation::UpdateUnknown,
+                "program_internal_invariant",
             ),
         ] {
             assert_program_error(to_program_js_error(error, operation), code, operation.key());

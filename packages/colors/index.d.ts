@@ -27,17 +27,23 @@ export type {
 } from "./pkg/labcolors.js";
 export type { Wcag22CriterionV1 } from "./wcag22.js";
 
+export type ProgramInfrastructureErrorCode =
+  | "program_resource_exhausted"
+  | "program_internal_invariant";
 export type ProgramCompileErrorCode =
+  | ProgramInfrastructureErrorCode
   | "program_wire"
   | "program_compile"
   | "program_family_artifacts_required"
   | "program_instantiate";
+export type ProgramUpdateErrorCode = "program_update" | ProgramInfrastructureErrorCode;
 export type ProgramAttachmentErrorCode =
   | ProgramCompileErrorCode
   | "program_attachment_binding"
   | "program_attachment_instantiate"
   | "program_attachment_sink_admission"
   | "program_attachment_resource_exhausted"
+  | "program_attachment_internal_invariant"
   | "program_attachment_non_terminal_target";
 export type ProgramAttachmentUpdateErrorCode =
   | "program_attachment_update"
@@ -74,7 +80,7 @@ export type ProgramMaterializationErrorCode =
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
-  | Readonly<{ code: "program_update"; operation: ProgramUpdateOperation }>
+  | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;
