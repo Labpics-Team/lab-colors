@@ -80,7 +80,7 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22AssessmentV1;
 }
-
+// Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
 #[wasm_bindgen(inline_js = r#"
 export function programError(message, code, operation) {
   try {
@@ -91,6 +91,40 @@ export function programError(message, code, operation) {
   } catch {
     return new Error("Program error projection failed");
   }
+}
+
+const programFailureCodes = [
+  "program_wire",
+  "program_compile",
+  "program_family_artifacts_required",
+  "program_instantiate",
+  "program_update",
+  "program_resource_exhausted",
+  "program_internal_invariant",
+  "program_runtime",
+  "program_attachment_binding",
+  "program_attachment_instantiate",
+  "program_attachment_sink_admission",
+  "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
+  "program_attachment_non_terminal_target",
+  "program_attachment",
+];
+
+export function programFailure(kind, operation) {
+  return programError(
+    kind < 8 ? "Program runtime operation failed" : "Program attachment admission failed",
+    programFailureCodes[kind],
+    operation,
+  );
+}
+
+export function certificateError(code, operation) {
+  return programError(
+    "Certificate envelope operation failed",
+    `certificate_${code}`,
+    operation,
+  );
 }
 
 export function unsupportedPhysicalIdentityError() {
@@ -137,6 +171,12 @@ extern "C" {
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
+    #[wasm_bindgen(js_name = programFailure)]
+    fn program_failure_error(kind: u32, operation: &str) -> js_sys::Error;
+
+    #[wasm_bindgen(js_name = certificateError)]
+    fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
+
     #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
     fn unsupported_physical_identity_error() -> js_sys::Error;
     #[wasm_bindgen(js_name = certificateProjection)]
@@ -158,27 +198,28 @@ extern "C" {
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
-    program_error(
-        "Certificate envelope operation failed",
-        &format!("certificate_{}", error.code()),
-        "decodeCertificateEnvelope",
-    )
-    .into()
+    // Форматирование принадлежит существующей JS-проекции: не создаём временную
+    // Rust String для уже закрытого статического Core-кода.
+    certificate_error(error.code(), "decodeCertificateEnvelope").into()
 }
 
 fn to_certificate_producer_js_error(
     error: labcolors_core::certificate::CertificateProducerErrorV1,
 ) -> JsValue {
-    program_error(
-        "Certificate envelope operation failed",
-        &format!("certificate_{}", error.code()),
-        "issueSourceCertificateEnvelope",
-    )
-    .into()
+    certificate_error(error.code(), "issueSourceCertificateEnvelope").into()
 }
 
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
+}
+
+// Одна диагностика обоих snapshot-владельцев; один String вместо reason и
+// последующего Display. Запрещённый индекс не создаёт output или authority.
+#[inline(never)]
+fn output_index_error(index: usize) -> JsError {
+    JsError::new(&format!(
+        "internal_error: program output index {index} is out of bounds"
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -213,15 +254,26 @@ fn to_program_js_error(
     operation: ProgramOperation,
 ) -> JsValue {
     use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
-    let code = match error {
-        E::Wire => "program_wire",
-        E::Compile => "program_compile",
-        E::FamilyArtifactsRequired => "program_family_artifacts_required",
-        E::Instantiate => "program_instantiate",
-        E::Update => "program_update",
-        _ => "program_runtime",
+    // Закрытые private-теги этой JS-проекции, не discriminants Core enum и не
+    // новый public ABI. Browser-тест сверяет каждый tag с прежним строковым кодом.
+    let kind = match error {
+        E::Wire => 0,
+        E::Compile => 1,
+        E::FamilyArtifactsRequired => 2,
+        E::Instantiate => 3,
+        E::Update => 4,
+        E::ResourceExhausted => 5,
+        E::InternalInvariant => 6,
+        _ => 7,
     };
-    program_error("Program runtime operation failed", code, operation.key()).into()
+    program_failure_error(kind, operation.key()).into()
+}
+
+fn program_observation_reservation_error(_: std::collections::TryReserveError) -> JsValue {
+    to_program_js_error(
+        labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+        ProgramOperation::UpdateObserved,
+    )
 }
 
 fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -> JsValue {
@@ -247,15 +299,18 @@ fn to_attachment_error(
     operation: ProgramOperation,
 ) -> JsValue {
     use labcolors_core::program_wire::ProgramAttachErrorV1 as E;
-    let code = match error {
-        E::Binding => "program_attachment_binding",
-        E::Instantiate => "program_attachment_instantiate",
-        E::SinkAdmission => "program_attachment_sink_admission",
-        E::ResourceExhausted => "program_attachment_resource_exhausted",
-        E::NonTerminalTarget => "program_attachment_non_terminal_target",
-        _ => "program_attachment",
+    // Продолжение закрытой private-таблицы той же JS-проекции: отдельный диапазон
+    // сохраняет admission message и прежний unknown-класс attachment.
+    let kind = match error {
+        E::Binding => 8,
+        E::Instantiate => 9,
+        E::SinkAdmission => 10,
+        E::ResourceExhausted => 11,
+        E::InternalInvariant => 12,
+        E::NonTerminalTarget => 13,
+        _ => 14,
     };
-    attachment_js_error("Program attachment admission failed", code, operation)
+    program_failure_error(kind, operation.key()).into()
 }
 
 fn to_attachment_update_error(
@@ -432,15 +487,7 @@ impl ProgramSnapshot {
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
-        use labcolors_core::program_wire::ProgramSnapshotStateV1 as S;
-        match self.inner.state() {
-            S::Waiting => "waiting",
-            S::Ready => "ready",
-            S::Stale => "stale",
-            S::Failed => "failed",
-            _ => "unknown",
-        }
-        .to_string()
+        snapshot_state_key(self.inner.state()).to_string()
     }
 
     #[wasm_bindgen(js_name = outputCount)]
@@ -458,11 +505,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -475,11 +518,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -492,11 +531,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 }
 
@@ -551,13 +586,13 @@ impl ProgramRuntime {
         let mut scenarios = Vec::new();
         scenarios
             .try_reserve_exact(scenario_ids.len())
-            .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+            .map_err(program_observation_reservation_error)?;
         for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
             let start = row * row_bytes;
             let mut values = Vec::new();
             values
                 .try_reserve_exact(surface_count)
-                .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+                .map_err(program_observation_reservation_error)?;
             for offset in 0..surface_count {
                 let byte = start + offset * 3;
                 values.push(labcolors_core::Srgb8::new([
@@ -1007,11 +1042,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -1025,11 +1056,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1043,11 +1070,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = hasRender)]
@@ -1310,6 +1333,21 @@ mod browser_tests {
     fn program_error_projection_distinguishes_every_runtime_failure_class() {
         use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
 
+        for reservation_error in [
+            Vec::<labcolors_core::program_wire::ProgramScenarioV1>::new()
+                .try_reserve_exact(usize::MAX)
+                .unwrap_err(),
+            Vec::<labcolors_core::Srgb8>::new()
+                .try_reserve_exact(usize::MAX)
+                .unwrap_err(),
+        ] {
+            assert_program_error(
+                program_observation_reservation_error(reservation_error),
+                "program_resource_exhausted",
+                "updateObserved",
+            );
+        }
+
         for (error, operation, code) in [
             (
                 E::Wire,
@@ -1336,8 +1374,72 @@ mod browser_tests {
                 ProgramOperation::UpdateObserved,
                 "program_update",
             ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::CompileProgramWire,
+                "program_resource_exhausted",
+            ),
+            (
+                E::InternalInvariant,
+                ProgramOperation::CompileProgramWire,
+                "program_internal_invariant",
+            ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::UpdateObserved,
+                "program_resource_exhausted",
+            ),
+            (
+                E::InternalInvariant,
+                ProgramOperation::UpdateUnknown,
+                "program_internal_invariant",
+            ),
         ] {
-            assert_program_error(to_program_js_error(error, operation), code, operation.key());
+            let projected = to_program_js_error(error, operation);
+            assert_eq!(
+                js_sys::Reflect::get(&projected, &JsValue::from_str("message"))
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("Program runtime operation failed")
+            );
+            assert_program_error(projected, code, operation.key());
+        }
+        for (error, code) in [
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::Binding,
+                "program_attachment_binding",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::Instantiate,
+                "program_attachment_instantiate",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::SinkAdmission,
+                "program_attachment_sink_admission",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::ResourceExhausted,
+                "program_attachment_resource_exhausted",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::InternalInvariant,
+                "program_attachment_internal_invariant",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::NonTerminalTarget,
+                "program_attachment_non_terminal_target",
+            ),
+        ] {
+            let projected = to_attachment_error(error, ProgramOperation::AttachProgramWire);
+            assert_eq!(
+                js_sys::Reflect::get(&projected, &JsValue::from_str("message"))
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("Program attachment admission failed")
+            );
+            assert_program_error(projected, code, "attachProgramWire");
         }
     }
 

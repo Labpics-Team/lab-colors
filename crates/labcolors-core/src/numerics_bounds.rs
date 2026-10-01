@@ -68,8 +68,12 @@ pub(crate) const LCS_SRGB8_ROUNDTRIP_MAX_CHANNEL_STEPS: u8 = 0;
 
 /// Квантование source-over до u8 использует округление к ближайшему,
 /// поэтому ошибка каждого канала результата не превышает половины шага
-/// сетки: 1/510 в [0,1]-масштабе.
-pub(crate) const ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR: f64 = 1.0 / 510.0;
+/// сетки: 1/510 в [0,1]-масштабе относительно вычисленной binary64-композиции
+/// в байтах. Ближайший binary64 к этой рациональной границе лежит ниже неё;
+/// следующий представимый уровень даёт минимальную консервативную границу.
+/// Точный целочисленный oracle ниже проверяет оба соседних представления.
+pub(crate) const ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR: f64 =
+    f64::from_bits((1.0_f64 / 510.0).to_bits() + 1);
 
 /// Контрпример к ALPHA_SOURCE_OVER: композиция, попадающая ровно
 /// посередине между уровнями u8. Production-формула
@@ -180,33 +184,40 @@ mod tests {
         assert_eq!(visited, 16_777_216, "full sRGB8 domain must be visited");
     }
 
-    /// Контрпример mid-grid: ошибка реальной композиции достигает
-    /// ровно половины шага сетки и не превосходит заявленную границу.
-    /// `error > 0` исключает vacuity — квантование реально задействовано.
+    /// Ошибка mid-grid достигает точной рациональной половины шага.
+    /// Сравнение в целых числах не повторяет округление самой границы;
+    /// соседняя четверть шага сохраняет полезный положительный контроль.
     #[test]
     fn alpha_midgrid_counterexample_hits_half_step() {
+        let (bound_numerator, bound_denominator) =
+            bounded_dyadic(ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR);
+        assert!(
+            510 * bound_numerator >= bound_denominator,
+            "binary64 bound must enclose the exact rational half-step 1/510"
+        );
+        let (previous_numerator, previous_denominator) = bounded_dyadic(f64::from_bits(
+            ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR.to_bits() - 1,
+        ));
+        assert!(510 * previous_numerator < previous_denominator);
         let result = composite_over_srgb8(
             ALPHA_MIDGRID_TINT,
             ALPHA_MIDGRID_ALPHA,
             ALPHA_MIDGRID_BACKDROP,
         )
         .expect("valid midgrid composition");
-        // Точное ожидание в байтах: 255 + 0.5*(128-255) = 191.5.
-        let expected_bytes = 255.0
-            + ALPHA_MIDGRID_ALPHA
-                * (f64::from(ALPHA_MIDGRID_TINT[0]) - f64::from(ALPHA_MIDGRID_BACKDROP[0]));
-        let actual = f64::from(result[0]);
-        let error = (expected_bytes - actual).abs() / 255.0;
-        assert!(
-            error > 0.0,
-            "midgrid input must actually exercise rounding, error was zero"
-        );
-        assert!(
-            error <= ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR,
-            "midgrid error {} exceeds the declared bound {}",
-            error,
-            ALPHA_SOURCE_OVER_MAX_QUANTIZATION_ERROR
-        );
+        // 255 + (128-255)/2 = 383/2: byte 192 даёт exact error 1/510.
+        assert_eq!(result, [192; 3]);
+        let half_step_error_numerator = (2 * u128::from(result[0])).abs_diff(383);
+        assert_eq!(half_step_error_numerator, 1);
+        assert!(half_step_error_numerator * bound_denominator <= 510 * bound_numerator);
+
+        // 255 + (128-255)/4 = 893/4: byte 223 даёт exact error 1/1020.
+        let neighbor = composite_over_srgb8(ALPHA_MIDGRID_TINT, 0.25, ALPHA_MIDGRID_BACKDROP)
+            .expect("valid neighboring composition");
+        assert_eq!(neighbor, [223; 3]);
+        let quarter_step_error_numerator = (4 * u128::from(neighbor[0])).abs_diff(893);
+        assert_eq!(quarter_step_error_numerator, 1);
+        assert!(quarter_step_error_numerator * bound_denominator <= 1020 * bound_numerator);
     }
 
     /// Границы привязаны к inventory: ключи стабильны.

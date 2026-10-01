@@ -229,11 +229,20 @@ export function attachProgramWire(...args) {
 // wasm-bindgen returns every raw export from its loaders. The public facade
 // deliberately erases that value: initialization is an effect, not a second
 // uncurated ABI beside the typed package surface.
+const PROGRAM_INFRASTRUCTURE_ERROR_CODES = [
+  "program_resource_exhausted",
+  "program_internal_invariant",
+];
 const COMPILE_PROGRAM_ERROR_CODES = new Set([
+  ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
   "program_wire",
   "program_compile",
   "program_family_artifacts_required",
   "program_instantiate",
+]);
+const UPDATE_PROGRAM_ERROR_CODES = new Set([
+  "program_update",
+  ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
 ]);
 const ATTACHMENT_ERROR_CODES = new Set([
   ...COMPILE_PROGRAM_ERROR_CODES,
@@ -241,6 +250,7 @@ const ATTACHMENT_ERROR_CODES = new Set([
   "program_attachment_instantiate",
   "program_attachment_sink_admission",
   "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
   "program_attachment_non_terminal_target",
 ]);
 const ATTACHMENT_UPDATE_ERROR_CODES = new Set([
@@ -291,7 +301,7 @@ export function isProgramError(error) {
     const code = error.code;
     if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
     if (operation === "updateObserved" || operation === "updateUnknown") {
-      return code === "program_update";
+      return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }
     if (operation === "attachProgramWire") return ATTACHMENT_ERROR_CODES.has(code);
     if (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown") {

@@ -120,6 +120,7 @@ fn cold_attach_failure_preserves_the_same_unbound_lease_for_retry() {
         Ok(_) => panic!("incomplete presentation binding must fail"),
         Err(failure) => failure,
     };
+    assert_eq!(failure.kind(), AttachmentCreateFailureKindV1::Binding);
     let retry = match failure {
         AttachmentCreateFailureV2::Contract { cause, retry } => {
             assert_eq!(cause, AttachmentCreateErrorV1::EmptyPresentations);
@@ -142,6 +143,32 @@ fn cold_attach_failure_preserves_the_same_unbound_lease_for_retry() {
     attachment.dispose();
     assert!(probe.is_closed());
     assert!(!probe.ambient_fallback_is_exposed());
+
+    for cause in [
+        AttachmentCreateErrorV1::InternalInvariant,
+        AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::InternalInvariant),
+        AttachmentCreateErrorV1::InvalidPointBinding {
+            authored_index: 0,
+            cause: PointOutputPresentationBindErrorV1::InternalInvariant,
+        },
+    ] {
+        let (sink, probe) = in_memory_point_sink(&[900]);
+        let failure = AttachmentCreateFailureV2::Contract {
+            cause,
+            retry: UnpreparedAttachmentRetryV2 {
+                sink,
+                family_artifacts: FamilyArtifactBundleV2::empty(),
+            },
+        };
+        assert_eq!(
+            failure.kind(),
+            AttachmentCreateFailureKindV1::InternalInvariant
+        );
+        assert!(!probe.lease_was_dropped());
+        assert!(probe.ambient_fallback_is_exposed());
+        drop(failure);
+        assert!(probe.ambient_fallback_is_exposed());
+    }
 }
 
 #[test]

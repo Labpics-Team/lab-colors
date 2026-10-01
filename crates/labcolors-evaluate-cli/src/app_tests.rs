@@ -287,6 +287,30 @@ fn semantic_results_are_complete_before_writing_and_help_never_reads_input() {
     );
     assert!(String::from_utf8_lossy(&out).contains("labcolors-evaluate"));
     assert!(err.is_empty());
+    for (cause, expected) in [
+        (
+            ProgramRuntimeErrorV1::ResourceExhausted,
+            Error::resource("allocation_refused"),
+        ),
+        (
+            ProgramRuntimeErrorV1::InternalInvariant,
+            Error::resource("internal_invariant"),
+        ),
+        (
+            ProgramRuntimeErrorV1::Compile,
+            Error::evaluate("program_compile_rejected"),
+        ),
+    ] {
+        let projected = runtime_error(cause);
+        assert_eq!(projected, expected);
+        let mut stderr = Vec::new();
+        assert_eq!(finish_error(projected, &mut stderr), expected.exit);
+        let diagnostic: Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(
+            diagnostic["error"],
+            json!({"domain":expected.domain,"code":expected.code})
+        );
+    }
 }
 
 #[test]

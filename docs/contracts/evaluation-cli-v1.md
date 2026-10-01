@@ -40,6 +40,13 @@
 кардинальность в JSON — `invalid_document`, а байтовый предел чтения —
 `input_too_large`. Core сохраняет собственный порядок отказов внутри своей области.
 
+Возвращённая Core нехватка памяти при compile/instantiate относится к
+`6 / resource / allocation_refused`, при attach — к
+`attachment_resource_exhausted`, при update — к `observation_resource_exhausted`.
+Возвращённый внутренний сбой остаётся `6 / resource / internal_invariant`.
+Классы `program_compile_rejected`, `attachment_rejected` и `observation_rejected`
+описывают остальные отказы соответствующего этапа, не нехватку ресурсов.
+
 Проверяемый исходный пример —
 `crates/labcolors-evaluate-cli/examples/declared-point.json`. Его ProgramWire
 получается **существующим** `ProgramWireBuilderV1`, а точная hex-строка затем
