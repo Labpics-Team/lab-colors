@@ -269,6 +269,13 @@ fn to_program_js_error(
     program_failure_error(kind, operation.key()).into()
 }
 
+fn program_observation_reservation_error(_: std::collections::TryReserveError) -> JsValue {
+    to_program_js_error(
+        labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+        ProgramOperation::UpdateObserved,
+    )
+}
+
 fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -> JsValue {
     program_error(message, code, operation.key()).into()
 }
@@ -579,13 +586,13 @@ impl ProgramRuntime {
         let mut scenarios = Vec::new();
         scenarios
             .try_reserve_exact(scenario_ids.len())
-            .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+            .map_err(program_observation_reservation_error)?;
         for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
             let start = row * row_bytes;
             let mut values = Vec::new();
             values
                 .try_reserve_exact(surface_count)
-                .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
+                .map_err(program_observation_reservation_error)?;
             for offset in 0..surface_count {
                 let byte = start + offset * 3;
                 values.push(labcolors_core::Srgb8::new([
@@ -1325,6 +1332,21 @@ mod browser_tests {
     #[wasm_bindgen_test]
     fn program_error_projection_distinguishes_every_runtime_failure_class() {
         use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+
+        for reservation_error in [
+            Vec::<labcolors_core::program_wire::ProgramScenarioV1>::new()
+                .try_reserve_exact(usize::MAX)
+                .unwrap_err(),
+            Vec::<labcolors_core::Srgb8>::new()
+                .try_reserve_exact(usize::MAX)
+                .unwrap_err(),
+        ] {
+            assert_program_error(
+                program_observation_reservation_error(reservation_error),
+                "program_resource_exhausted",
+                "updateObserved",
+            );
+        }
 
         for (error, operation, code) in [
             (
