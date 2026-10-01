@@ -80,7 +80,7 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22AssessmentV1;
 }
-// Private JS ordinal ranges: to_program_js_error 0..7, to_attachment_error 8..14. Update both matches, this table/boundary and program_error_projection_distinguishes_every_runtime_failure_class together.
+// Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
 #[wasm_bindgen(inline_js = r#"
 export function programError(message, code, operation) {
   try {
