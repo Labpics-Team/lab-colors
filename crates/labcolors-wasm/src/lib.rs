@@ -93,6 +93,25 @@ export function programError(message, code, operation) {
   }
 }
 
+const programRuntimeErrorCodes = [
+  "program_wire",
+  "program_compile",
+  "program_family_artifacts_required",
+  "program_instantiate",
+  "program_update",
+  "program_resource_exhausted",
+  "program_internal_invariant",
+  "program_runtime",
+];
+
+export function programRuntimeError(kind, operation) {
+  return programError(
+    "Program runtime operation failed",
+    programRuntimeErrorCodes[kind],
+    operation,
+  );
+}
+
 export function certificateError(code, operation) {
   return programError(
     "Certificate envelope operation failed",
@@ -144,6 +163,9 @@ export function certificateProjection(
 extern "C" {
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
+
+    #[wasm_bindgen(js_name = programRuntimeError)]
+    fn program_runtime_error(kind: u32, operation: &str) -> js_sys::Error;
 
     #[wasm_bindgen(js_name = certificateError)]
     fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
@@ -225,17 +247,19 @@ fn to_program_js_error(
     operation: ProgramOperation,
 ) -> JsValue {
     use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
-    let code = match error {
-        E::Wire => "program_wire",
-        E::Compile => "program_compile",
-        E::FamilyArtifactsRequired => "program_family_artifacts_required",
-        E::Instantiate => "program_instantiate",
-        E::Update => "program_update",
-        E::ResourceExhausted => "program_resource_exhausted",
-        E::InternalInvariant => "program_internal_invariant",
-        _ => "program_runtime",
+    // Закрытые private-теги этой JS-проекции, не discriminants Core enum и не
+    // новый public ABI. Browser-тест сверяет каждый tag с прежним строковым кодом.
+    let kind = match error {
+        E::Wire => 0,
+        E::Compile => 1,
+        E::FamilyArtifactsRequired => 2,
+        E::Instantiate => 3,
+        E::Update => 4,
+        E::ResourceExhausted => 5,
+        E::InternalInvariant => 6,
+        _ => 7,
     };
-    program_error("Program runtime operation failed", code, operation.key()).into()
+    program_runtime_error(kind, operation.key()).into()
 }
 
 fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -> JsValue {
@@ -1341,6 +1365,22 @@ mod browser_tests {
             ),
         ] {
             assert_program_error(to_program_js_error(error, operation), code, operation.key());
+        }
+        for (error, code) in [
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::ResourceExhausted,
+                "program_attachment_resource_exhausted",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::InternalInvariant,
+                "program_attachment_internal_invariant",
+            ),
+        ] {
+            assert_program_error(
+                to_attachment_error(error, ProgramOperation::AttachProgramWire),
+                code,
+                "attachProgramWire",
+            );
         }
     }
 
