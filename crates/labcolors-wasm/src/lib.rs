@@ -93,7 +93,7 @@ export function programError(message, code, operation) {
   }
 }
 
-const programRuntimeErrorCodes = [
+const programFailureCodes = [
   "program_wire",
   "program_compile",
   "program_family_artifacts_required",
@@ -102,12 +102,19 @@ const programRuntimeErrorCodes = [
   "program_resource_exhausted",
   "program_internal_invariant",
   "program_runtime",
+  "program_attachment_binding",
+  "program_attachment_instantiate",
+  "program_attachment_sink_admission",
+  "program_attachment_resource_exhausted",
+  "program_attachment_internal_invariant",
+  "program_attachment_non_terminal_target",
+  "program_attachment",
 ];
 
-export function programRuntimeError(kind, operation) {
+export function programFailure(kind, operation) {
   return programError(
-    "Program runtime operation failed",
-    programRuntimeErrorCodes[kind],
+    kind < 8 ? "Program runtime operation failed" : "Program attachment admission failed",
+    programFailureCodes[kind],
     operation,
   );
 }
@@ -164,8 +171,8 @@ extern "C" {
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
-    #[wasm_bindgen(js_name = programRuntimeError)]
-    fn program_runtime_error(kind: u32, operation: &str) -> js_sys::Error;
+    #[wasm_bindgen(js_name = programFailure)]
+    fn program_failure_error(kind: u32, operation: &str) -> js_sys::Error;
 
     #[wasm_bindgen(js_name = certificateError)]
     fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
@@ -259,7 +266,7 @@ fn to_program_js_error(
         E::InternalInvariant => 6,
         _ => 7,
     };
-    program_runtime_error(kind, operation.key()).into()
+    program_failure_error(kind, operation.key()).into()
 }
 
 fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -> JsValue {
@@ -285,16 +292,18 @@ fn to_attachment_error(
     operation: ProgramOperation,
 ) -> JsValue {
     use labcolors_core::program_wire::ProgramAttachErrorV1 as E;
-    let code = match error {
-        E::Binding => "program_attachment_binding",
-        E::Instantiate => "program_attachment_instantiate",
-        E::SinkAdmission => "program_attachment_sink_admission",
-        E::ResourceExhausted => "program_attachment_resource_exhausted",
-        E::InternalInvariant => "program_attachment_internal_invariant",
-        E::NonTerminalTarget => "program_attachment_non_terminal_target",
-        _ => "program_attachment",
+    // Продолжение закрытой private-таблицы той же JS-проекции: отдельный диапазон
+    // сохраняет admission message и прежний unknown-класс attachment.
+    let kind = match error {
+        E::Binding => 8,
+        E::Instantiate => 9,
+        E::SinkAdmission => 10,
+        E::ResourceExhausted => 11,
+        E::InternalInvariant => 12,
+        E::NonTerminalTarget => 13,
+        _ => 14,
     };
-    attachment_js_error("Program attachment admission failed", code, operation)
+    program_failure_error(kind, operation.key()).into()
 }
 
 fn to_attachment_update_error(
@@ -1364,9 +1373,29 @@ mod browser_tests {
                 "program_internal_invariant",
             ),
         ] {
-            assert_program_error(to_program_js_error(error, operation), code, operation.key());
+            let projected = to_program_js_error(error, operation);
+            assert_eq!(
+                js_sys::Reflect::get(&projected, &JsValue::from_str("message"))
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("Program runtime operation failed")
+            );
+            assert_program_error(projected, code, operation.key());
         }
         for (error, code) in [
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::Binding,
+                "program_attachment_binding",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::Instantiate,
+                "program_attachment_instantiate",
+            ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::SinkAdmission,
+                "program_attachment_sink_admission",
+            ),
             (
                 labcolors_core::program_wire::ProgramAttachErrorV1::ResourceExhausted,
                 "program_attachment_resource_exhausted",
@@ -1375,12 +1404,20 @@ mod browser_tests {
                 labcolors_core::program_wire::ProgramAttachErrorV1::InternalInvariant,
                 "program_attachment_internal_invariant",
             ),
+            (
+                labcolors_core::program_wire::ProgramAttachErrorV1::NonTerminalTarget,
+                "program_attachment_non_terminal_target",
+            ),
         ] {
-            assert_program_error(
-                to_attachment_error(error, ProgramOperation::AttachProgramWire),
-                code,
-                "attachProgramWire",
+            let projected = to_attachment_error(error, ProgramOperation::AttachProgramWire);
+            assert_eq!(
+                js_sys::Reflect::get(&projected, &JsValue::from_str("message"))
+                    .unwrap()
+                    .as_string()
+                    .as_deref(),
+                Some("Program attachment admission failed")
             );
+            assert_program_error(projected, code, "attachProgramWire");
         }
     }
 
