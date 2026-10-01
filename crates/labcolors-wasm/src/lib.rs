@@ -93,6 +93,14 @@ export function programError(message, code, operation) {
   }
 }
 
+export function certificateError(code, operation) {
+  return programError(
+    "Certificate envelope operation failed",
+    `certificate_${code}`,
+    operation,
+  );
+}
+
 export function unsupportedPhysicalIdentityError() {
   return programError(
     "Unsupported program physical identity",
@@ -137,6 +145,9 @@ extern "C" {
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
+    #[wasm_bindgen(js_name = certificateError)]
+    fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
+
     #[wasm_bindgen(js_name = unsupportedPhysicalIdentityError)]
     fn unsupported_physical_identity_error() -> js_sys::Error;
     #[wasm_bindgen(js_name = certificateProjection)]
@@ -158,27 +169,28 @@ extern "C" {
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
-    program_error(
-        "Certificate envelope operation failed",
-        &format!("certificate_{}", error.code()),
-        "decodeCertificateEnvelope",
-    )
-    .into()
+    // Форматирование принадлежит существующей JS-проекции: не создаём временную
+    // Rust String для уже закрытого статического Core-кода.
+    certificate_error(error.code(), "decodeCertificateEnvelope").into()
 }
 
 fn to_certificate_producer_js_error(
     error: labcolors_core::certificate::CertificateProducerErrorV1,
 ) -> JsValue {
-    program_error(
-        "Certificate envelope operation failed",
-        &format!("certificate_{}", error.code()),
-        "issueSourceCertificateEnvelope",
-    )
-    .into()
+    certificate_error(error.code(), "issueSourceCertificateEnvelope").into()
 }
 
 fn to_js_error(error: BindingError) -> JsError {
     JsError::new(&error.to_string())
+}
+
+// Одна диагностика обоих snapshot-владельцев; один String вместо reason и
+// последующего Display. Запрещённый индекс не создаёт output или authority.
+#[inline(never)]
+fn output_index_error(index: usize) -> JsError {
+    JsError::new(&format!(
+        "internal_error: program output index {index} is out of bounds"
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -435,15 +447,7 @@ impl ProgramSnapshot {
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
-        use labcolors_core::program_wire::ProgramSnapshotStateV1 as S;
-        match self.inner.state() {
-            S::Waiting => "waiting",
-            S::Ready => "ready",
-            S::Stale => "stale",
-            S::Failed => "failed",
-            _ => "unknown",
-        }
-        .to_string()
+        snapshot_state_key(self.inner.state()).to_string()
     }
 
     #[wasm_bindgen(js_name = outputCount)]
@@ -461,11 +465,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -478,11 +478,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -495,11 +491,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 }
 
@@ -1010,11 +1002,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -1028,11 +1016,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1046,11 +1030,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| {
-                to_js_error(BindingError::Internal {
-                    reason: format!("program output index {index} is out of bounds"),
-                })
-            })
+            .ok_or_else(|| output_index_error(index))
     }
 
     #[wasm_bindgen(js_name = hasRender)]

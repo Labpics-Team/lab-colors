@@ -1477,11 +1477,11 @@ fn map_attachment_update_error(
     >,
 ) -> ProgramAttachmentUpdateErrorV1 {
     match error {
-        crate::program::attachment::AttachmentUpdateErrorV1::Update(error) => match error.kind() {
-            crate::program::UpdateErrorKindV1::ResourceExhausted => {
+        crate::program::attachment::AttachmentUpdateErrorV1::Update(error) => match error {
+            crate::program::UpdateErrorV1::ResourceExhausted { .. } => {
                 ProgramAttachmentUpdateErrorV1::ResourceExhausted
             }
-            crate::program::UpdateErrorKindV1::InternalInvariant => {
+            crate::program::UpdateErrorV1::InternalInvariant { .. } => {
                 ProgramAttachmentUpdateErrorV1::InternalInvariant
             }
             _ => ProgramAttachmentUpdateErrorV1::Update,
@@ -1703,11 +1703,11 @@ impl ProgramSessionV1 {
 }
 
 fn map_runtime_update_error(error: crate::program::UpdateErrorV1) -> ProgramRuntimeErrorV1 {
-    match error.kind() {
-        crate::program::UpdateErrorKindV1::ResourceExhausted => {
+    match error {
+        crate::program::UpdateErrorV1::ResourceExhausted { .. } => {
             ProgramRuntimeErrorV1::ResourceExhausted
         }
-        crate::program::UpdateErrorKindV1::InternalInvariant => {
+        crate::program::UpdateErrorV1::InternalInvariant { .. } => {
             ProgramRuntimeErrorV1::InternalInvariant
         }
         _ => ProgramRuntimeErrorV1::Update,

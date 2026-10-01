@@ -123,6 +123,11 @@ for (const method of ["outputSlot", "outputRgb", "outputOpacity"]) {
       for (const value of [-0.5, 0.5, 2 ** 32, -(2 ** 32), "0", null, false, NaN]) {
         assert.throws(() => snapshot[method](value), Error);
       }
+      for (const index of [1, 0xffff_ffff]) {
+        assert.throws(() => snapshot[method](index), {
+          message: `internal_error: program output index ${index} is out of bounds`,
+        });
+      }
       assert.deepEqual(read(snapshot), expected);
     } finally {
       snapshot.free();
