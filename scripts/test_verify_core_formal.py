@@ -12,6 +12,7 @@ from pathlib import Path
 
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
+    assemble_fragments, digest, selected_mutants,
     validate_report, validate_mutant, run_kani,
 )
 
@@ -165,6 +166,61 @@ class FormalReportTests(unittest.TestCase):
         report["verification_results"]["results"][0]["checks"][0]["description"] = "compiler error"
         with self.assertRaises(ValueError):
             validate_mutant(report, 1, MUTANT)
+
+
+    def test_mutant_shards_cover_each_mutant_exactly_once(self):
+        selected = []
+        for index in range(5):
+            shard = selected_mutants(index, 5)
+            self.assertTrue(shard)
+            selected.extend(mutant[0] for mutant in shard)
+        expected = [mutant[0] for mutant in MUTANTS]
+        self.assertCountEqual(selected, expected)
+        self.assertEqual(len(selected), len(set(selected)))
+
+    def test_fragment_assembly_requires_exact_complete_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = {
+                "fragment_schema": 1,
+                "kani_version": KANI_VERSION,
+                "checkout_commit": "abc123",
+                "source_commit": "abc123",
+                "working_tree_clean": True,
+                "verified_source_sha256": {"source.rs": "source-digest"},
+            }
+            positive = root / "positive.json"
+            positive.write_text('{"positive": true}\n', encoding="utf-8")
+            (root / "fragment-positive.json").write_text(json.dumps({
+                **common,
+                "kind": "positive",
+                "positive_sha256": digest(positive),
+                "harnesses": sorted(CONTRACTS),
+            }), encoding="utf-8")
+
+            for index in range(5):
+                negatives = {}
+                for mutant in selected_mutants(index, 5):
+                    name = mutant[0]
+                    path = root / f"negative-{name}.json"
+                    path.write_text(json.dumps({"mutant": name}), encoding="utf-8")
+                    negatives[name] = digest(path)
+                (root / f"fragment-mutants-{index}.json").write_text(json.dumps({
+                    **common,
+                    "kind": "mutants",
+                    "shard_index": index,
+                    "shard_count": 5,
+                    "negative_sha256": negatives,
+                }), encoding="utf-8")
+
+            assemble_fragments(root, root)
+            receipt = json.loads((root / "receipt.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(receipt["negative_sha256"]), {mutant[0] for mutant in MUTANTS})
+            self.assertTrue(receipt["semantic_mutant_rejected"])
+
+            (root / "fragment-mutants-4.json").unlink()
+            with self.assertRaisesRegex(ValueError, "missing or duplicate mutant shard"):
+                assemble_fragments(root, root)
 
 
 if __name__ == "__main__":

@@ -1729,35 +1729,83 @@ class MutationTruthTest(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] /
                   ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
         jobs = workflow_job_blocks(source, "ci-worker.yml")
-        lanes = ("core-tests", "region-proof", "authority-mutation")
-        for lane in lanes:
-            with self.subTest(lane=lane):
-                self.assertIn(lane, list(jobs))
-                block = jobs[lane]
+
+        workers = {
+            "core-tests-worker": (
+                "    timeout-minutes: 20\n",
+                "      max-parallel: 3\n",
+                "        lane: [default, private-fixture, proof-contracts]\n",
+            ),
+            "region-proof-worker": (
+                "    timeout-minutes: 15\n",
+                "      max-parallel: 3\n",
+                "        mode: [normal, optimized, fast]\n",
+            ),
+            "authority-mutation-worker": (
+                "    timeout-minutes: 20\n",
+                "      max-parallel: 7\n",
+                "        scope: [authority, tq, lifecycle-geometry, cc, eval, science, cli]\n",
+            ),
+            "formal-mutants": (
+                "    timeout-minutes: 15\n",
+                "      max-parallel: 5\n",
+                "        shard: [0, 1, 2, 3, 4]\n",
+            ),
+        }
+        for worker, required in workers.items():
+            with self.subTest(worker=worker):
+                block = jobs[worker]
                 self.assertIn("    runs-on: ubuntu-latest\n", block)
-                self.assertIn("    timeout-minutes: 40\n", block)
-                self.assertNotRegex(block, r"(?m)^    (?:needs|if):")
+                self.assertIn("    strategy:\n      fail-fast: false\n", block)
                 self.assertNotIn("continue-on-error:", block)
-                self.assertIn("          persist-credentials: false\n", block)
-        mutation_lane = jobs["authority-mutation"]
-        self.assertIn("    strategy:\n      fail-fast: false\n      max-parallel: 5\n", mutation_lane)
-        self.assertIn("        scope: [authority-tq, lifecycle-geometry, cc-eval, science, cli]\n", mutation_lane)
-        self.assertNotIn("    strategy:\n", jobs["core-tests"])
-        self.assertNotIn("    strategy:\n", jobs["region-proof"])
+                for needle in required:
+                    self.assertIn(needle, block)
+
         owners = {
-            "canonical region-proof protocol": "region-proof",
-            "AUTH-01 semantic mutation gate": "authority-mutation",
-            "cargo test": "core-tests",
-            "cargo test private-fixture feature": "core-tests",
-            "exhaustive 24-bit family membership oracle": "core-tests",
+            "canonical region-proof protocol": "region-proof-worker",
+            "AUTH-01 semantic mutation gate": "authority-mutation-worker",
+            "cargo test": "core-tests-worker",
+            "cargo test private-fixture feature": "core-tests-worker",
+            "exhaustive 24-bit family membership oracle": "core-tests-worker",
         }
         for step, owner in owners.items():
             anchor = f"      - name: {step}\n"
             self.assertEqual(source.count(anchor), 1, step)
             self.assertIn(anchor, jobs[owner])
-        self.assertIn('run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"', jobs["authority-mutation"])
-        self.assertIn("PYTHONOPTIMIZE=2 python -m unittest discover", jobs["region-proof"])
-        self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof"])
+
+        self.assertIn(
+            'run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"',
+            jobs["authority-mutation-worker"],
+        )
+        self.assertIn("case \"$REGION_MODE\" in", jobs["region-proof-worker"])
+        self.assertIn("PYTHONOPTIMIZE=2 python -m unittest discover", jobs["region-proof-worker"])
+        self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof-worker"])
+        self.assertIn("--phase positive", jobs["formal-positive"])
+        self.assertIn("--phase mutants", jobs["formal-mutants"])
+        self.assertIn("--shard-count 5", jobs["formal-mutants"])
+
+        for aggregate, worker in (
+            ("core-tests", "core-tests-worker"),
+            ("region-proof", "region-proof-worker"),
+            ("authority-mutation", "authority-mutation-worker"),
+        ):
+            with self.subTest(aggregate=aggregate):
+                block = jobs[aggregate]
+                self.assertIn("    if: ${{ always() }}\n", block)
+                self.assertIn(f"    needs: {worker}\n", block)
+                self.assertIn("    permissions: {}\n", block)
+                self.assertNotIn("continue-on-error:", block)
+
+        formal = jobs["formal-core"]
+        self.assertIn("    if: ${{ always() }}\n", formal)
+        self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
+        self.assertIn("--phase assemble", formal)
+        self.assertIn("merge-multiple: true", formal)
+        self.assertIn(
+            "name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}",
+            formal,
+        )
+
         aggregate = jobs["test"]
         self.assertIn("    name: test\n", aggregate)
         self.assertIn("    if: ${{ always() }}\n", aggregate)
@@ -1865,13 +1913,18 @@ class MutationTruthTest(unittest.TestCase):
             set(ci_ephemeral),
             {
                 "node-consumer-floor",
+                "formal-positive",
+                "formal-mutants",
                 "formal-core",
                 "msrv",
                 "lint",
                 "docs",
                 "test",
+                "core-tests-worker",
                 "core-tests",
+                "region-proof-worker",
                 "region-proof",
+                "authority-mutation-worker",
                 "authority-mutation",
                 "transport-distribution",
                 "transport-distribution-attestation",
@@ -2843,7 +2896,7 @@ class AuthorityMutationShardContractTest(unittest.TestCase):
         gate.validate_scope_partition()
         self.assertEqual(
             gate.REQUIRED_SCOPES,
-            ("authority-tq", "lifecycle-geometry", "cc-eval", "science", "cli"),
+            ("authority", "tq", "lifecycle-geometry", "cc", "eval", "science", "cli"),
         )
         bounded = (gate.TQ_MUTANTS | gate.LIFECYCLE_MUTANTS | gate.POINT_MUTANTS
                    | gate.RASTER_MUTANTS | gate.HANDOFF_MUTANTS

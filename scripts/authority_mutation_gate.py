@@ -434,16 +434,22 @@ fn evaluation_borrow_contract_probe(
 
 
 REQUIRED_SCOPES = (
-    "authority-tq",
+    "authority",
+    "tq",
     "lifecycle-geometry",
-    "cc-eval",
+    "cc",
+    "eval",
     "science",
     "cli",
 )
 
 MUTATION_SCOPES = {
-    "authority-tq": {
+    "authority": {
         "authority": tuple(AUTH_MUTANTS),
+        "bounded": (),
+    },
+    "tq": {
+        "authority": (),
         "bounded": tuple(TQ_MUTANTS),
     },
     "lifecycle-geometry": {
@@ -452,9 +458,13 @@ MUTATION_SCOPES = {
             LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
         ),
     },
-    "cc-eval": {
+    "cc": {
         "authority": (),
-        "bounded": tuple(CC_MUTANTS | EVAL_MUTANTS),
+        "bounded": tuple(CC_MUTANTS),
+    },
+    "eval": {
+        "authority": (),
+        "bounded": tuple(EVAL_MUTANTS),
     },
 }
 
@@ -514,7 +524,7 @@ def run_mutation_scope(scope: str) -> None:
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
 
-    if scope == "cc-eval":
+    if scope == "eval":
         verify_evaluation_borrows()
     print(f"mutation shard {scope}: caught {len(authority_names) + len(bounded_names)} semantic mutants")
 
