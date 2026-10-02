@@ -52,9 +52,16 @@ cargo test --workspace --locked
 [GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
 показывает результаты CI.
 
-У `labcolors-core` по умолчанию нет рантайм-зависимостей. Необязательная
+## Зависимости
+
+У `labcolors-core` по умолчанию ноль рантайм-зависимостей. Необязательная
 возможность `ext09-extractor` подключает зависимости из
-[манифеста Core](crates/labcolors-core/Cargo.toml).
+[манифеста Core](crates/labcolors-core/Cargo.toml). Проверить конфигурацию по
+умолчанию:
+
+```sh
+cargo tree -p labcolors-core --edges=no-dev
+```
 
 ## Лицензии
 
