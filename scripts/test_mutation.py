@@ -1751,11 +1751,6 @@ class MutationTruthTest(unittest.TestCase):
                 "      max-parallel: 8\n",
                 "        scope: [authority, tq, lifecycle-geometry, cc-selection, cc-binding, eval, science, cli]\n",
             ),
-            "formal-positive": (
-                "    timeout-minutes: 10\n",
-                "      max-parallel: 5\n",
-                "        shard: [0, 1, 2, 3, 4]\n",
-            ),
             "formal-mutants": (
                 "    timeout-minutes: 15\n",
                 "      max-parallel: 5\n",
@@ -1794,8 +1789,14 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("--shard-count 2", jobs["region-proof-worker"])
         self.assertIn('test "$REGION_SHARD" = 0', jobs["region-proof-worker"])
         self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof-worker"])
-        self.assertIn("--phase positive", jobs["formal-positive"])
-        self.assertIn("--shard-count 5", jobs["formal-positive"])
+        formal_positive = jobs["formal-positive"]
+        self.assertIn("    runs-on: ubuntu-latest\n", formal_positive)
+        self.assertNotIn("    strategy:\n", formal_positive)
+        self.assertNotIn("continue-on-error:", formal_positive)
+        self.assertIn("--phase positive", formal_positive)
+        self.assertNotIn("--shard-index", formal_positive)
+        self.assertNotIn("--shard-count", formal_positive)
+        self.assertIn("verify every positive formal harness in native parallel", formal_positive)
         self.assertIn("--phase mutants", jobs["formal-mutants"])
         self.assertIn("--shard-count 5", jobs["formal-mutants"])
 

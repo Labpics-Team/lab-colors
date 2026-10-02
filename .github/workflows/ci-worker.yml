@@ -75,16 +75,11 @@ jobs:
           node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
 
   formal-positive:
-    name: formal core positive (${{ matrix.shard }})
+    name: formal core positive (Kani)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       CARGO_BUILD_JOBS: 2
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        shard: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,18 +101,16 @@ jobs:
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
-      - name: verify assigned positive formal harnesses
+      - name: verify every positive formal harness in native parallel
         run: |
           python3 scripts/verify_core_formal.py \
             --phase positive \
-            --shard-index "${{ matrix.shard }}" \
-            --shard-count 5 \
             --output-dir "$RUNNER_TEMP/core-formal"
       - name: preserve positive formal fragment
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: core-formal-fragment-positive-${{ matrix.shard }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          name: core-formal-fragment-positive-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/core-formal
           if-no-files-found: warn
           retention-days: 7
