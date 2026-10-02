@@ -433,17 +433,39 @@ fn evaluation_borrow_contract_probe(
         raise SystemExit("evaluation source was not restored")
 
 
+CC_SELECTION_MUTANTS = (
+    "cc-foreign-release",
+    "cc-unsupported-scope",
+    "cc-unearned-admission",
+    "cc-hidden-default",
+    "cc-source-instead-of-composite",
+)
+CC_BINDING_MUTANTS = (
+    "cc-ignore-classifier",
+    "cc-reject-all",
+    "cc-foreign-lane",
+    "cc-unbound-technical-receipt",
+    "cc-unbound-materialization",
+)
+
 REQUIRED_SCOPES = (
-    "authority-tq",
+    "authority",
+    "tq",
     "lifecycle-geometry",
-    "cc-eval",
+    "cc-selection",
+    "cc-binding",
+    "eval",
     "science",
     "cli",
 )
 
 MUTATION_SCOPES = {
-    "authority-tq": {
+    "authority": {
         "authority": tuple(AUTH_MUTANTS),
+        "bounded": (),
+    },
+    "tq": {
+        "authority": (),
         "bounded": tuple(TQ_MUTANTS),
     },
     "lifecycle-geometry": {
@@ -452,9 +474,17 @@ MUTATION_SCOPES = {
             LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
         ),
     },
-    "cc-eval": {
+    "cc-selection": {
         "authority": (),
-        "bounded": tuple(CC_MUTANTS | EVAL_MUTANTS),
+        "bounded": CC_SELECTION_MUTANTS,
+    },
+    "cc-binding": {
+        "authority": (),
+        "bounded": CC_BINDING_MUTANTS,
+    },
+    "eval": {
+        "authority": (),
+        "bounded": tuple(EVAL_MUTANTS),
     },
 }
 
@@ -514,7 +544,7 @@ def run_mutation_scope(scope: str) -> None:
         if source.read_text(encoding="utf-8") != original:
             raise SystemExit(f"{source}: source was not restored")
 
-    if scope == "cc-eval":
+    if scope == "eval":
         verify_evaluation_borrows()
     print(f"mutation shard {scope}: caught {len(authority_names) + len(bounded_names)} semantic mutants")
 
