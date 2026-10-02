@@ -1751,6 +1751,11 @@ class MutationTruthTest(unittest.TestCase):
                 "      max-parallel: 7\n",
                 "        scope: [authority, tq, lifecycle-geometry, cc, eval, science, cli]\n",
             ),
+            "formal-positive": (
+                "    timeout-minutes: 10\n",
+                "      max-parallel: 5\n",
+                "        shard: [0, 1, 2, 3, 4]\n",
+            ),
             "formal-mutants": (
                 "    timeout-minutes: 15\n",
                 "      max-parallel: 5\n",
@@ -1790,6 +1795,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn('test "$REGION_SHARD" = 0', jobs["region-proof-worker"])
         self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof-worker"])
         self.assertIn("--phase positive", jobs["formal-positive"])
+        self.assertIn("--shard-count 5", jobs["formal-positive"])
         self.assertIn("--phase mutants", jobs["formal-mutants"])
         self.assertIn("--shard-count 5", jobs["formal-mutants"])
 
@@ -1810,6 +1816,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
         self.assertIn("--phase assemble", formal)
         self.assertIn("merge-multiple: true", formal)
+        self.assertIn("run: python3 scripts/test_verify_core_formal.py", formal)
         self.assertIn(
             "name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}",
             formal,
