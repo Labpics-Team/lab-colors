@@ -124,6 +124,7 @@ class FormalReportTests(unittest.TestCase):
                 terminate.assert_called_once_with(4242, signal.SIGKILL)
                 self.assertEqual(launch.return_value.wait.call_count, 2)
                 self.assertTrue(launch.call_args.kwargs["start_new_session"])
+                self.assertIn("--jobs=4", launch.call_args.args[0])
 
     def test_completed_wrapper_still_cleans_its_solver_group(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -137,6 +138,28 @@ class FormalReportTests(unittest.TestCase):
                 launch.return_value.wait.side_effect = completed
                 self.assertEqual(run_kani(path), ({}, 1))
                 terminate.assert_called_once_with(4243, signal.SIGKILL)
+                self.assertIn("--jobs=4", launch.call_args.args[0])
+
+    def test_exact_harness_keeps_concrete_playback_single_threaded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "result.json"
+            with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
+                "verify_core_formal.os.killpg"
+            ):
+                launch.return_value.pid = 4244
+                launch.return_value.returncode = 1
+
+                def completed(*args, **kwargs):
+                    path.write_text("{}")
+                    return 1
+
+                launch.return_value.wait.side_effect = completed
+                run_kani(path, harness="demo::proof")
+                command = launch.call_args.args[0]
+                self.assertNotIn("--jobs=4", command)
+                self.assertIn("--harness", command)
+                self.assertIn("demo::proof", command)
+                self.assertIn("--concrete-playback", command)
 
     def test_target_failure_may_make_its_later_cover_unreachable(self):
         report = {"verification_results": {

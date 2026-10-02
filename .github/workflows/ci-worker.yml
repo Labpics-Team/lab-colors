@@ -335,14 +335,19 @@ jobs:
   # Независимые доказательства не образуют последовательную очередь.
   # Каждый job получает отдельную VM; обязательный test ниже соединяет результаты.
   region-proof-worker:
-    name: region proof protocol (${{ matrix.mode }})
+    name: region proof protocol (${{ matrix.mode }}-${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 5
       matrix:
-        mode: [normal, optimized, fast]
+        include:
+          - { mode: normal, shard: 0 }
+          - { mode: normal, shard: 1 }
+          - { mode: optimized, shard: 0 }
+          - { mode: optimized, shard: 1 }
+          - { mode: fast, shard: 0 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -369,20 +374,23 @@ jobs:
             --env PYTHONDONTWRITEBYTECODE=1 \
             --env PYTHONHASHSEED=0 \
             --env REGION_MODE="${{ matrix.mode }}" \
+            --env REGION_SHARD="${{ matrix.shard }}" \
             "$PYTHON_PROOF_IMAGE" \
             sh -euc '
               python -c '\''import sys; expected = (3, 14, 6); actual = sys.version_info[:3]; assert actual == expected, (actual, expected)'\''
               case "$REGION_MODE" in
                 normal)
-                  test -f proof/region/v1/tests/test_provenance.py
-                  python -m unittest proof/region/v1/tests/test_provenance.py -v
-                  python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
-                  python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+                  if [ "$REGION_SHARD" = 0 ]; then
+                    test -f proof/region/v1/tests/test_provenance.py
+                    python -m unittest proof/region/v1/tests/test_provenance.py -v
+                  fi
+                  python scripts/region_unittest_shard.py --shard-index "$REGION_SHARD" --shard-count 2
                   ;;
                 optimized)
-                  PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
+                  PYTHONOPTIMIZE=2 python scripts/region_unittest_shard.py --shard-index "$REGION_SHARD" --shard-count 2
                   ;;
                 fast)
+                  test "$REGION_SHARD" = 0
                   python proof/region/v1/arb/tests/gate.py
                   PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
                   python proof/region/v1/mpfi/tests/gate.py

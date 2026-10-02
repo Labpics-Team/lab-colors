@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 269,
+   "count": 270,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -854,6 +854,7 @@
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
+    "test_verify_core_formal.FormalReportTests.test_exact_harness_keeps_concrete_playback_single_threaded",
     "test_verify_core_formal.FormalReportTests.test_fragment_assembly_requires_exact_complete_evidence",
     "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
@@ -879,7 +880,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "494e4b1f99f5d830b6c4d8fdb8947d971b34255be086e983c0d469734fe056ea",
+ "record_sha256": "8c4f041b184a777db99734590870ba87171df777f05be337bff57039f921b61b",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

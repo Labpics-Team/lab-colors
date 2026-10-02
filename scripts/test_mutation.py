@@ -1738,8 +1738,13 @@ class MutationTruthTest(unittest.TestCase):
             ),
             "region-proof-worker": (
                 "    timeout-minutes: 15\n",
-                "      max-parallel: 3\n",
-                "        mode: [normal, optimized, fast]\n",
+                "      max-parallel: 5\n",
+                "        include:\n",
+                "          - { mode: normal, shard: 0 }\n",
+                "          - { mode: normal, shard: 1 }\n",
+                "          - { mode: optimized, shard: 0 }\n",
+                "          - { mode: optimized, shard: 1 }\n",
+                "          - { mode: fast, shard: 0 }\n",
             ),
             "authority-mutation-worker": (
                 "    timeout-minutes: 20\n",
@@ -1778,7 +1783,11 @@ class MutationTruthTest(unittest.TestCase):
             jobs["authority-mutation-worker"],
         )
         self.assertIn("case \"$REGION_MODE\" in", jobs["region-proof-worker"])
-        self.assertIn("PYTHONOPTIMIZE=2 python -m unittest discover", jobs["region-proof-worker"])
+        self.assertIn("python scripts/region_unittest_shard.py", jobs["region-proof-worker"])
+        self.assertIn("PYTHONOPTIMIZE=2 python scripts/region_unittest_shard.py",
+                      jobs["region-proof-worker"])
+        self.assertIn("--shard-count 2", jobs["region-proof-worker"])
+        self.assertIn('test "$REGION_SHARD" = 0', jobs["region-proof-worker"])
         self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof-worker"])
         self.assertIn("--phase positive", jobs["formal-positive"])
         self.assertIn("--phase mutants", jobs["formal-mutants"])

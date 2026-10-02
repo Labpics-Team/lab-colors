@@ -88,7 +88,14 @@ def run_kani(output: Path, *, harness: str | None = None) -> tuple[dict, int]:
     output.unlink(missing_ok=True)
     command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--output-format", "terse",
                "-Z", "unstable-options", "--harness-timeout", "300s", "--export-json", str(output)]
-    if harness is not None:
+    if harness is None:
+        # Kani defaults to a one-thread verifier even with many independent harnesses.
+        # The public GitHub runner provides four vCPUs; keep one canonical report while
+        # letting Kani schedule the 41 proofs across those cores.
+        command.append("--jobs=4")
+    else:
+        # Concrete playback is intentionally single-harness and Kani rejects it
+        # together with multi-threaded --jobs.
         command.extend(["--harness", harness, "--exact", "-Z", "concrete-playback", "--concrete-playback", "print"])
     log = output.with_suffix(".log")
     with log.open("w", encoding="utf-8") as stream:
