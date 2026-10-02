@@ -862,8 +862,8 @@
     "test_verify_core_formal.FormalReportTests.test_mutant_shards_cover_each_mutant_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
-    "test_verify_core_formal.FormalReportTests.test_parallel_positive_uses_native_kani_jobs",
     "test_verify_core_formal.FormalReportTests.test_parallel_positive_preserves_terse_json_contract",
+    "test_verify_core_formal.FormalReportTests.test_parallel_positive_uses_native_kani_jobs",
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
     "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
@@ -882,7 +882,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "c77e300aad5b658bc15a979c6421051e048f48c56fd07a4a6c8426dd7f862fa8",
+ "record_sha256": "7c8fea09180e1229cd953fd0aee2ae7138f0ce21f96c0412a189f120b4700ad1",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
