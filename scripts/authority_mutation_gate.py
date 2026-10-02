@@ -433,11 +433,27 @@ fn evaluation_borrow_contract_probe(
         raise SystemExit("evaluation source was not restored")
 
 
+CC_SELECTION_MUTANTS = (
+    "cc-foreign-release",
+    "cc-unsupported-scope",
+    "cc-unearned-admission",
+    "cc-hidden-default",
+    "cc-source-instead-of-composite",
+)
+CC_BINDING_MUTANTS = (
+    "cc-ignore-classifier",
+    "cc-reject-all",
+    "cc-foreign-lane",
+    "cc-unbound-technical-receipt",
+    "cc-unbound-materialization",
+)
+
 REQUIRED_SCOPES = (
     "authority",
     "tq",
     "lifecycle-geometry",
-    "cc",
+    "cc-selection",
+    "cc-binding",
     "eval",
     "science",
     "cli",
@@ -458,9 +474,13 @@ MUTATION_SCOPES = {
             LIFECYCLE_MUTANTS | POINT_MUTANTS | RASTER_MUTANTS | HANDOFF_MUTANTS
         ),
     },
-    "cc": {
+    "cc-selection": {
         "authority": (),
-        "bounded": tuple(CC_MUTANTS),
+        "bounded": CC_SELECTION_MUTANTS,
+    },
+    "cc-binding": {
+        "authority": (),
+        "bounded": CC_BINDING_MUTANTS,
     },
     "eval": {
         "authority": (),

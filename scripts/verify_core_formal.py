@@ -424,8 +424,11 @@ def merge_positive_reports(reports: list[dict]) -> dict:
 def assemble_fragments(output: Path, input_dir: Path) -> None:
     fragments = [json.loads(path.read_text(encoding="utf-8"))
                  for path in sorted(input_dir.glob("fragment-*.json"))]
-    positives = [item for item in fragments if item.get("kind") == "positive"]
-    mutants = [item for item in fragments if item.get("kind") == "mutants"]
+    for fragment in fragments:
+        if fragment.get("kind") not in {"positive", "mutants"}:
+            raise ValueError("unknown formal fragment kind")
+    positives = [item for item in fragments if item["kind"] == "positive"]
+    mutants = [item for item in fragments if item["kind"] == "mutants"]
     if not positives or not mutants:
         raise ValueError("missing formal proof fragments")
     reference = positives[0]

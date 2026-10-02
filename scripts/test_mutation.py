@@ -1748,8 +1748,8 @@ class MutationTruthTest(unittest.TestCase):
             ),
             "authority-mutation-worker": (
                 "    timeout-minutes: 20\n",
-                "      max-parallel: 7\n",
-                "        scope: [authority, tq, lifecycle-geometry, cc, eval, science, cli]\n",
+                "      max-parallel: 8\n",
+                "        scope: [authority, tq, lifecycle-geometry, cc-selection, cc-binding, eval, science, cli]\n",
             ),
             "formal-positive": (
                 "    timeout-minutes: 10\n",
@@ -2912,8 +2912,11 @@ class AuthorityMutationShardContractTest(unittest.TestCase):
         gate.validate_scope_partition()
         self.assertEqual(
             gate.REQUIRED_SCOPES,
-            ("authority", "tq", "lifecycle-geometry", "cc", "eval", "science", "cli"),
+            ("authority", "tq", "lifecycle-geometry", "cc-selection", "cc-binding",
+             "eval", "science", "cli"),
         )
+        self.assertEqual(len(gate.MUTATION_SCOPES["cc-selection"]["bounded"]), 5)
+        self.assertEqual(len(gate.MUTATION_SCOPES["cc-binding"]["bounded"]), 5)
         bounded = (gate.TQ_MUTANTS | gate.LIFECYCLE_MUTANTS | gate.POINT_MUTANTS
                    | gate.RASTER_MUTANTS | gate.HANDOFF_MUTANTS
                    | gate.CC_MUTANTS | gate.EVAL_MUTANTS)

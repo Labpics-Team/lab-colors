@@ -436,9 +436,9 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 7
+      max-parallel: 8
       matrix:
-        scope: [authority, tq, lifecycle-geometry, cc, eval, science, cli]
+        scope: [authority, tq, lifecycle-geometry, cc-selection, cc-binding, eval, science, cli]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

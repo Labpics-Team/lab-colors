@@ -317,6 +317,12 @@ class FormalReportTests(unittest.TestCase):
             self.assertTrue(receipt["semantic_mutant_rejected"])
             validate_report(json.loads((root / "positive.json").read_text(encoding="utf-8")))
 
+            unknown_fragment = root / "fragment-unknown.json"
+            unknown_fragment.write_text(json.dumps({**common, "kind": "future"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown formal fragment kind"):
+                assemble_fragments(root, root)
+            unknown_fragment.unlink()
+
             positive_fragment = root / "fragment-positive-4.json"
             saved_positive = positive_fragment.read_bytes()
             positive_fragment.unlink()
