@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 267,
+   "count": 269,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -854,9 +854,11 @@
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
+    "test_verify_core_formal.FormalReportTests.test_fragment_assembly_requires_exact_complete_evidence",
     "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
+    "test_verify_core_formal.FormalReportTests.test_mutant_shards_cover_each_mutant_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
@@ -877,7 +879,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "85e6d3bc2b4774b4e988322a2f90e113bdb2da19bf8ada1577d30f2291d49f90",
+ "record_sha256": "494e4b1f99f5d830b6c4d8fdb8947d971b34255be086e983c0d469734fe056ea",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
