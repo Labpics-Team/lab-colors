@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 267,
+   "count": 278,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -850,15 +850,26 @@
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_unknown_receipt_field_is_rejected",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_valid_receipt_binds_committed_research_and_product_codec",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_wrong_research_commit_is_rejected_before_blob_lookup",
+    "test_verify_core_formal.FormalReportTests.test_assembly_rejects_index_hidden_source_changes",
+    "test_verify_core_formal.FormalReportTests.test_checkout_ignores_foreign_git_repository_environment",
+    "test_verify_core_formal.FormalReportTests.test_checkout_rejects_corrupt_blob_even_when_status_and_bytes_match",
+    "test_verify_core_formal.FormalReportTests.test_checkout_rejects_ignored_core_extras_but_allows_workspace_target",
+    "test_verify_core_formal.FormalReportTests.test_checkout_rejects_symlinks_for_each_formal_input_outside_core",
+    "test_verify_core_formal.FormalReportTests.test_checkout_rejects_tracked_core_symlink_to_ignored_target",
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
+    "test_verify_core_formal.FormalReportTests.test_exact_mutant_harness_keeps_concrete_playback_single_threaded",
+    "test_verify_core_formal.FormalReportTests.test_fragment_assembly_requires_exact_complete_evidence",
     "test_verify_core_formal.FormalReportTests.test_incomplete_or_wrong_tool_result_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_missing_duplicate_extra_or_foreign_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_mutant_requires_target_semantic_failure",
+    "test_verify_core_formal.FormalReportTests.test_mutant_shards_cover_each_mutant_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
+    "test_verify_core_formal.FormalReportTests.test_positive_shards_cover_each_harness_exactly_once",
+    "test_verify_core_formal.FormalReportTests.test_positive_subset_uses_exact_multi_filter_without_concrete_playback",
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
     "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
@@ -877,7 +888,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "85e6d3bc2b4774b4e988322a2f90e113bdb2da19bf8ada1577d30f2291d49f90",
+ "record_sha256": "2e62131734917268357705f8bacdea4216290ee6fe15e36171165748286627be",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
