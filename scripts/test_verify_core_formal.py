@@ -98,14 +98,17 @@ class FormalReportTests(unittest.TestCase):
             git("add", "--", source.name)
             git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                 "commit", "-qm", "initial")
+            fixed_time = 1_600_000_000_000_000_000
+            os.utime(source, ns=(fixed_time, fixed_time))
+            git("add", "--", source.name)
+            git("config", "core.trustctime", "false")
+            git("update-index", "--refresh")
             commit = git("rev-parse", "HEAD").decode("ascii").strip()
 
             with mock.patch("verify_core_formal.ROOT", checkout):
                 identities = {source.name: digest(source)}
                 self.assertTrue(checkout_is_clean(identities, commit))
 
-                git("config", "core.trustctime", "false")
-                git("update-index", "--refresh")
                 original = source.stat()
                 source.write_bytes(b"trusteX\n")
                 os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
