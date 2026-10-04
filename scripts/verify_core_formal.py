@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import signal
+import stat
 from pathlib import Path
 import subprocess
 
@@ -228,13 +229,143 @@ def formal_source_files() -> list[Path]:
     return files
 
 
+def git_checkout_environment() -> dict[str, str]:
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update({
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "LC_ALL": "C",
+    })
+    return environment
+
+
+def git_checkout_output(*args: str) -> str:
+    return subprocess.check_output(
+        ["git", "-c", "core.fsmonitor=false", *args],
+        cwd=ROOT, text=True, env=git_checkout_environment(),
+    ).strip()
+
+
+def core_tree_has_no_physical_extras(paths: set[str]) -> bool:
+    core_relative = Path("crates/labcolors-core")
+    core_root = ROOT / core_relative
+    prefix = core_relative.as_posix() + "/"
+    expected_files = {path for path in paths if path.startswith(prefix)}
+    if not expected_files or core_root.is_symlink() or not core_root.is_dir():
+        return False
+
+    expected_directories: set[str] = set()
+    for file in expected_files:
+        parent = Path(file).parent
+        while parent != core_relative:
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    expected = expected_files | expected_directories
+
+    # Cargo сверяет физическое поддерево Core, включая игнорируемые Git записи.
+    observed: set[str] = set()
+    pending = [core_root]
+    while pending:
+        for entry in pending.pop().iterdir():
+            relative = entry.relative_to(ROOT).as_posix()
+            if relative not in expected:
+                return False
+            observed.add(relative)
+            if relative in expected_directories:
+                if entry.is_symlink() or not entry.is_dir():
+                    return False
+                pending.append(entry)
+    return observed == expected
+
+
+def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
+    # Сначала удостоверяем достижимые объекты Git: cat-file может отдать повреждённый blob под прежним OID.
+    environment = git_checkout_environment()
+    command = ["git", "-c", "core.fsmonitor=false"]
+    try:
+        subprocess.check_output(
+            [*command, "fsck", "--strict", "--no-reflogs", "--no-progress", "--no-dangling", commit],
+            cwd=ROOT, env=environment, stderr=subprocess.DEVNULL,
+        )
+        tree = subprocess.check_output(
+            [*command, "ls-tree", "-rz", "--full-tree", commit], cwd=ROOT, env=environment,
+        )
+        entries = []
+        paths = set()
+        for record in tree.split(b"\0"):
+            if not record:
+                continue
+            metadata, path_bytes = record.split(b"\t", 1)
+            mode, kind, oid = metadata.split(b" ")
+            if kind != b"blob" or mode not in {b"100644", b"100755", b"120000"}:
+                return False
+            relative = os.fsdecode(path_bytes)
+            entries.append((mode, oid, ROOT / relative))
+            paths.add(Path(relative).as_posix())
+        formal_paths = {Path(path).as_posix() for path in identities}
+        if formal_paths - paths:
+            return False
+        blobs = subprocess.check_output(
+            [*command, "cat-file", "--batch"],
+            input=b"".join(oid + b"\n" for _, oid, _ in entries), cwd=ROOT, env=environment,
+        )
+        cursor = 0
+        for mode, oid, path in entries:
+            if mode == b"120000":
+                # Git связывает только текст ссылки; формальный вход может читать изменяемую цель.
+                if (path.is_relative_to(ROOT / "crates/labcolors-core")
+                        or path.relative_to(ROOT).as_posix() in formal_paths):
+                    return False
+                if not path.is_symlink():
+                    return False
+                actual = os.fsencode(os.readlink(path))
+            else:
+                if path.is_symlink() or not path.is_file():
+                    return False
+                actual = path.read_bytes()
+                if os.name != "nt" and bool(path.stat().st_mode & stat.S_IXUSR) != (mode == b"100755"):
+                    return False
+            end = blobs.find(b"\n", cursor)
+            if end < 0 or blobs[cursor:end] != oid + b" blob " + str(len(actual)).encode("ascii"):
+                return False
+            cursor = end + 1
+            if blobs[cursor:cursor + len(actual)] != actual or blobs[cursor + len(actual):cursor + len(actual) + 1] != b"\n":
+                return False
+            cursor += len(actual) + 1
+        return cursor == len(blobs) and core_tree_has_no_physical_extras(paths)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return False
+
+
+def checkout_is_clean(identities: dict[str, str] | None = None, commit: str | None = None) -> bool:
+    # Git status скрывает правки с флагами индекса; для связи квитанции с HEAD этого недостаточно.
+    version_text = git_checkout_output("version").split()
+    try:
+        version = tuple(int(part) for part in version_text[2].split(".")[:3])
+    except (IndexError, ValueError) as error:
+        raise ValueError("cannot verify Git version for formal checkout") from error
+    if len(version) != 3 or version < (2, 35, 2):
+        raise ValueError("Git 2.35.2 or newer is required for formal checkout")
+    records = git_checkout_output("ls-files", "-v", "-z").split("\0")
+    status = git_checkout_output("status", "--porcelain", "--untracked-files=all")
+    if status or any(not record.startswith("H ") for record in records if record):
+        return False
+    if identities is None:
+        identities = {str(path.relative_to(ROOT)): digest(path) for path in formal_source_files()}
+    if commit is None:
+        commit = git_checkout_output("rev-parse", "HEAD")
+    return tracked_tree_matches_head(commit, identities)
+
+
 def checkout_snapshot() -> tuple[dict[str, str], str, bool]:
     files = formal_source_files()
     identities = {str(path.relative_to(ROOT)): digest(path) for path in files}
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    clean = not subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True
-    )
+    commit = git_checkout_output("rev-parse", "HEAD")
+    clean = checkout_is_clean(identities, commit)
     subprocess.run(
         ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
         cwd=ROOT, stdout=subprocess.DEVNULL, check=True,
@@ -246,12 +377,10 @@ def assert_snapshot(identities: dict[str, str], commit: str) -> bool:
     current = {str(path.relative_to(ROOT)): digest(path) for path in formal_source_files()}
     if identities != current:
         raise ValueError("source or dependency identity changed during verification")
-    actual_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    actual_commit = git_checkout_output("rev-parse", "HEAD")
     if commit != actual_commit:
         raise ValueError("checkout changed during verification")
-    return not subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True
-    )
+    return checkout_is_clean(current, commit)
 
 
 def fragment_base(identities: dict[str, str], commit: str, clean: bool) -> dict:
@@ -441,6 +570,13 @@ def assemble_fragments(output: Path, input_dir: Path) -> None:
         if any(fragment.get(key) != reference.get(key) for key in common):
             raise ValueError("formal fragments describe different source states")
 
+    identities, commit, clean = checkout_snapshot()
+    if (not clean or reference.get("working_tree_clean") is not True
+            or reference.get("checkout_commit") != commit
+            or reference.get("source_commit") != commit
+            or reference.get("verified_source_sha256") != identities):
+        raise ValueError("formal fragments do not bind to the current clean source state")
+
     positive_counts = {item.get("shard_count") for item in positives}
     if len(positive_counts) != 1:
         raise ValueError("positive shard-count mismatch")
@@ -519,6 +655,8 @@ def assemble_fragments(output: Path, input_dir: Path) -> None:
         "harnesses": sorted(CONTRACTS),
         "semantic_mutant_rejected": True,
     }
+    if not assert_snapshot(identities, commit):
+        raise ValueError("source state became dirty during formal assembly")
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 
