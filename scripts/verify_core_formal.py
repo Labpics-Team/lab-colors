@@ -441,6 +441,13 @@ def assemble_fragments(output: Path, input_dir: Path) -> None:
         if any(fragment.get(key) != reference.get(key) for key in common):
             raise ValueError("formal fragments describe different source states")
 
+    identities, commit, clean = checkout_snapshot()
+    if (not clean or reference.get("working_tree_clean") is not True
+            or reference.get("checkout_commit") != commit
+            or reference.get("source_commit") != commit
+            or reference.get("verified_source_sha256") != identities):
+        raise ValueError("formal fragments do not bind to the current clean source state")
+
     positive_counts = {item.get("shard_count") for item in positives}
     if len(positive_counts) != 1:
         raise ValueError("positive shard-count mismatch")
@@ -519,6 +526,8 @@ def assemble_fragments(output: Path, input_dir: Path) -> None:
         "harnesses": sorted(CONTRACTS),
         "semantic_mutant_rejected": True,
     }
+    if not assert_snapshot(identities, commit):
+        raise ValueError("source state became dirty during formal assembly")
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
 
 

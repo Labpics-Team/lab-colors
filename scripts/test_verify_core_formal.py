@@ -281,6 +281,11 @@ class FormalReportTests(unittest.TestCase):
                 "verified_source_sha256": {"source.rs": "source-digest"},
             }
 
+            def assemble_claimed_source():
+                with mock.patch("verify_core_formal.checkout_snapshot", return_value=(common["verified_source_sha256"], common["checkout_commit"], True)), \
+                     mock.patch("verify_core_formal.assert_snapshot", return_value=True):
+                    assemble_fragments(root, root)
+
             for index in range(5):
                 harnesses = selected_positive_harnesses(index, 5)
                 path = root / f"positive-{index}.json"
@@ -310,29 +315,43 @@ class FormalReportTests(unittest.TestCase):
                     "negative_sha256": negatives,
                 }), encoding="utf-8")
 
-            assemble_fragments(root, root)
+            with mock.patch("verify_core_formal.checkout_snapshot", return_value=({"source.rs": "actual-digest"}, common["checkout_commit"], True)):
+                with self.assertRaisesRegex(ValueError, "source state"):
+                    assemble_fragments(root, root)
+            with mock.patch("verify_core_formal.checkout_snapshot", return_value=(common["verified_source_sha256"], "actual-head", True)):
+                with self.assertRaisesRegex(ValueError, "source state"):
+                    assemble_fragments(root, root)
+            assemble_claimed_source()
             receipt = json.loads((root / "receipt.json").read_text(encoding="utf-8"))
             self.assertEqual(set(receipt["negative_sha256"]), {mutant[0] for mutant in MUTANTS})
             self.assertEqual(receipt["harnesses"], sorted(CONTRACTS))
             self.assertTrue(receipt["semantic_mutant_rejected"])
             validate_report(json.loads((root / "positive.json").read_text(encoding="utf-8")))
 
+            with mock.patch("verify_core_formal.checkout_snapshot", return_value=(common["verified_source_sha256"], common["checkout_commit"], False)):
+                with self.assertRaisesRegex(ValueError, "clean source state"):
+                    assemble_fragments(root, root)
+            with mock.patch("verify_core_formal.checkout_snapshot", return_value=(common["verified_source_sha256"], common["checkout_commit"], True)), \
+                 mock.patch("verify_core_formal.assert_snapshot", return_value=False):
+                with self.assertRaisesRegex(ValueError, "became dirty"):
+                    assemble_fragments(root, root)
+
             unknown_fragment = root / "fragment-unknown.json"
             unknown_fragment.write_text(json.dumps({**common, "kind": "future"}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unknown formal fragment kind"):
-                assemble_fragments(root, root)
+                assemble_claimed_source()
             unknown_fragment.unlink()
 
             positive_fragment = root / "fragment-positive-4.json"
             saved_positive = positive_fragment.read_bytes()
             positive_fragment.unlink()
             with self.assertRaisesRegex(ValueError, "missing or duplicate positive shard"):
-                assemble_fragments(root, root)
+                assemble_claimed_source()
             positive_fragment.write_bytes(saved_positive)
 
             (root / "fragment-mutants-4.json").unlink()
             with self.assertRaisesRegex(ValueError, "missing or duplicate mutant shard"):
-                assemble_fragments(root, root)
+                assemble_claimed_source()
 
 
 if __name__ == "__main__":
