@@ -250,6 +250,38 @@ def git_checkout_output(*args: str) -> str:
     ).strip()
 
 
+def core_tree_has_no_physical_extras(paths: set[str]) -> bool:
+    core_relative = Path("crates/labcolors-core")
+    core_root = ROOT / core_relative
+    prefix = core_relative.as_posix() + "/"
+    expected_files = {path for path in paths if path.startswith(prefix)}
+    if not expected_files or core_root.is_symlink() or not core_root.is_dir():
+        return False
+
+    expected_directories: set[str] = set()
+    for file in expected_files:
+        parent = Path(file).parent
+        while parent != core_relative:
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    expected = expected_files | expected_directories
+
+    # Cargo сверяет физическое поддерево Core, включая игнорируемые Git записи.
+    observed: set[str] = set()
+    pending = [core_root]
+    while pending:
+        for entry in pending.pop().iterdir():
+            relative = entry.relative_to(ROOT).as_posix()
+            if relative not in expected:
+                return False
+            observed.add(relative)
+            if relative in expected_directories:
+                if entry.is_symlink() or not entry.is_dir():
+                    return False
+                pending.append(entry)
+    return observed == expected
+
+
 def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
     # Сначала удостоверяем достижимые объекты Git: cat-file может отдать повреждённый blob под прежним OID.
     environment = git_checkout_environment()
@@ -299,7 +331,7 @@ def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
             if blobs[cursor:cursor + len(actual)] != actual or blobs[cursor + len(actual):cursor + len(actual) + 1] != b"\n":
                 return False
             cursor += len(actual) + 1
-        return cursor == len(blobs)
+        return cursor == len(blobs) and core_tree_has_no_physical_extras(paths)
     except (OSError, ValueError, subprocess.CalledProcessError):
         return False
 

@@ -105,7 +105,8 @@ class FormalReportTests(unittest.TestCase):
             git("update-index", "--refresh")
             commit = git("rev-parse", "HEAD").decode("ascii").strip()
 
-            with mock.patch("verify_core_formal.ROOT", checkout):
+            with mock.patch("verify_core_formal.ROOT", checkout), \
+                 mock.patch("verify_core_formal.core_tree_has_no_physical_extras", return_value=True):
                 identities = {source.name: digest(source)}
                 self.assertTrue(checkout_is_clean(identities, commit))
 
@@ -158,6 +159,7 @@ class FormalReportTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, foreign), \
              mock.patch("verify_core_formal.subprocess.check_output", side_effect=git_output) as command, \
+             mock.patch("verify_core_formal.core_tree_has_no_physical_extras", return_value=True), \
              mock.patch("verify_core_formal.subprocess.run"):
             identities, commit, clean = checkout_snapshot()
             self.assertTrue(clean)
@@ -172,6 +174,53 @@ class FormalReportTests(unittest.TestCase):
         with mock.patch("verify_core_formal.git_checkout_output", return_value="git version 2.35.1"):
             with self.assertRaisesRegex(ValueError, "Git 2.35.2"):
                 checkout_is_clean()
+
+    def test_checkout_rejects_ignored_core_extras_but_allows_workspace_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            core = checkout / "crates/labcolors-core"
+            source = core / "src/lib.rs"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"trusted source\n")
+            (checkout / ".gitignore").write_text("target/\n", encoding="ascii")
+
+            def git(*arguments):
+                return subprocess.check_output(["git", *arguments], cwd=checkout)
+
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            git("add", "--", ".gitignore", "crates/labcolors-core/src/lib.rs")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "initial")
+            (checkout / "target").mkdir()
+            (checkout / "target/workspace-build.txt").write_bytes(b"ordinary build output\n")
+            self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+
+            real_run = subprocess.run
+
+            def run_without_cargo(command, *args, **kwargs):
+                if command[:2] == ["cargo", "metadata"]:
+                    return subprocess.CompletedProcess(command, 0)
+                return real_run(command, *args, **kwargs)
+
+            with mock.patch("verify_core_formal.ROOT", checkout), \
+                 mock.patch("verify_core_formal.formal_source_files", return_value=[source]), \
+                 mock.patch("verify_core_formal.subprocess.run", side_effect=run_without_cargo):
+                identities, commit, clean = checkout_snapshot()
+                self.assertTrue(clean)
+                self.assertTrue(assert_snapshot(identities, commit))
+
+                ignored_dir = core / "target"
+                ignored_dir.mkdir()
+                (ignored_dir / "ignored-marker.txt").write_bytes(b"changes compiled source identity\n")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                self.assertFalse(checkout_snapshot()[2])
+                self.assertFalse(assert_snapshot(identities, commit))
+
+                (ignored_dir / "ignored-marker.txt").unlink()
+                self.assertFalse(checkout_snapshot()[2], "even an empty extra directory changes the Core tree")
+                ignored_dir.rmdir()
+                self.assertTrue(checkout_snapshot()[2])
 
     def test_complete_result_passes(self):
         validate_report(valid_report())
@@ -505,6 +554,7 @@ class FormalReportTests(unittest.TestCase):
 
             with mock.patch("verify_core_formal.ROOT", checkout), \
                  mock.patch("verify_core_formal.formal_source_files", return_value=[source]), \
+                 mock.patch("verify_core_formal.core_tree_has_no_physical_extras", return_value=True), \
                  mock.patch("verify_core_formal.subprocess.run", side_effect=run_without_cargo):
                 write_fragments(digest(source))
                 assemble_fragments(evidence, evidence)
