@@ -222,6 +222,58 @@ class FormalReportTests(unittest.TestCase):
                 ignored_dir.rmdir()
                 self.assertTrue(checkout_snapshot()[2])
 
+    @unittest.skipUnless(os.name == "posix", "requires POSIX symlink semantics")
+    def test_checkout_rejects_tracked_core_symlink_to_ignored_target(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            source = checkout / "crates/labcolors-core/src/numerics.rs"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"regular source\n")
+            (checkout / ".gitignore").write_text("target/\n", encoding="ascii")
+            target = checkout / "target/numerics.rs"
+            target.parent.mkdir()
+            target.write_bytes(b"mutable source\n")
+
+            def git(*arguments):
+                return subprocess.check_output(["git", *arguments], cwd=checkout)
+
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            git("config", "core.symlinks", "true")
+            git("add", "--", ".gitignore", "crates/labcolors-core/src/numerics.rs")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "regular source")
+            self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+
+            real_run = subprocess.run
+
+            def run_without_cargo(command, *args, **kwargs):
+                if command[:2] == ["cargo", "metadata"]:
+                    return subprocess.CompletedProcess(command, 0)
+                return real_run(command, *args, **kwargs)
+
+            with mock.patch("verify_core_formal.ROOT", checkout), \
+                 mock.patch("verify_core_formal.formal_source_files", return_value=[source]), \
+                 mock.patch("verify_core_formal.subprocess.run", side_effect=run_without_cargo):
+                self.assertTrue(checkout_snapshot()[2], "regular Core source must remain admissible")
+
+                source.unlink()
+                source.symlink_to("../../../target/numerics.rs")
+                git("add", "--", "crates/labcolors-core/src/numerics.rs")
+                git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "tracked symlink")
+                mode = git("ls-files", "-s", "--", "crates/labcolors-core/src/numerics.rs").split(b" ", 1)[0]
+                self.assertEqual(mode, b"120000")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                before, _, clean = checkout_snapshot()
+                self.assertFalse(clean)
+
+                target.write_bytes(b"changed while Git remains clean\n")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                after, _, clean = checkout_snapshot()
+                self.assertNotEqual(after, before)
+                self.assertFalse(clean)
+
     def test_complete_result_passes(self):
         validate_report(valid_report())
 
