@@ -13,7 +13,8 @@ from pathlib import Path
 
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
-    assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, selected_mutants, selected_positive_harnesses,
+    assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, formal_source_files,
+    selected_mutants, selected_positive_harnesses,
     validate_report, validate_mutant, run_kani,
 )
 
@@ -82,6 +83,9 @@ def valid_subset_report(harnesses):
 
 class FormalReportTests(unittest.TestCase):
     def test_checkout_ignores_foreign_git_repository_environment(self):
+        root = Path(__file__).resolve().parent.parent
+        sources = {path.relative_to(root).as_posix(): path.read_bytes() for path in formal_source_files()}
+        oids = {path: f"{index:040x}".encode("ascii") for index, path in enumerate(sources, 1)}
         foreign = {
             "GIT_DIR": "/foreign/.git",
             "GIT_WORK_TREE": "/foreign",
@@ -98,8 +102,14 @@ class FormalReportTests(unittest.TestCase):
                 return "H source.rs\0"
             if command[3] == "status":
                 return ""
+            if command[3] == "ls-tree":
+                return b"".join((b"100755" if (root / path).stat().st_mode & 0o100 else b"100644")
+                                + b" blob " + oid + b"\t" + path.encode() + b"\0"
+                                for path, oid in oids.items())
             if command[3] == "cat-file":
-                return (Path(__file__).resolve().parent.parent / command[5].split(":", 1)[1]).read_bytes()
+                self.assertEqual(kwargs["input"], b"".join(oid + b"\n" for oid in oids.values()))
+                return b"".join(oid + b" blob " + str(len(sources[path])).encode() + b"\n"
+                                + sources[path] + b"\n" for path, oid in oids.items())
             return "local-head"
 
         with mock.patch.dict(os.environ, foreign), \
@@ -108,7 +118,7 @@ class FormalReportTests(unittest.TestCase):
             identities, commit, clean = checkout_snapshot()
             self.assertTrue(clean)
             self.assertTrue(assert_snapshot(identities, commit))
-        self.assertEqual(command.call_count, 8 + 2 * len(identities))
+        self.assertEqual(command.call_count, 12)
         for call in command.call_args_list:
             environment = call.kwargs["env"]
             self.assertFalse(set(foreign) & set(environment))
@@ -401,13 +411,15 @@ class FormalReportTests(unittest.TestCase):
             evidence.mkdir()
             source = checkout / "formal.rs"
             source.write_bytes(b"trusted\n")
+            other = checkout / "other.txt"
+            other.write_bytes(b"trusted other\n")
 
             def git(*arguments):
                 return subprocess.check_output(["git", *arguments], cwd=checkout)
 
             git("init", "-q")
             git("config", "core.autocrlf", "false")
-            git("add", "--", source.name)
+            git("add", "--", source.name, other.name)
             git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                 "commit", "-qm", "initial")
 
@@ -469,8 +481,15 @@ class FormalReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "clean source state"):
                     assemble_fragments(evidence, evidence)
                 self.assertFalse(receipt.exists())
-                git("config", "--unset", "core.fsmonitor")
                 source.write_bytes(b"trusted\n")
+                other.write_bytes(b"trusteX other\n")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                write_fragments(digest(source))
+                with self.assertRaisesRegex(ValueError, "clean source state"):
+                    assemble_fragments(evidence, evidence)
+                self.assertFalse(receipt.exists())
+                other.write_bytes(b"trusted other\n")
+                git("config", "--unset", "core.fsmonitor")
 
                 for flag, clear in (("--assume-unchanged", "--no-assume-unchanged"),
                                     ("--skip-worktree", "--no-skip-worktree")):
@@ -488,11 +507,13 @@ class FormalReportTests(unittest.TestCase):
 
                 fixed_time = 1_600_000_000_000_000_000
                 os.utime(source, ns=(fixed_time, fixed_time))
-                git("add", "--", source.name)
+                os.utime(other, ns=(fixed_time, fixed_time))
+                git("add", "--", source.name, other.name)
                 git("config", "core.trustctime", "false")
                 try:
                     git("update-index", "--refresh")
                     original = source.stat()
+                    other_original = other.stat()
                     source.write_bytes(b"trusteX\n")
                     os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
                     self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
@@ -502,9 +523,19 @@ class FormalReportTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "clean source state"):
                         assemble_fragments(evidence, evidence)
                     self.assertFalse(receipt.exists())
+                    source.write_bytes(b"trusted\n")
+                    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+                    other.write_bytes(b"trusteX other\n")
+                    os.utime(other, ns=(other_original.st_atime_ns, other_original.st_mtime_ns))
+                    self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                    write_fragments(digest(source))
+                    with self.assertRaisesRegex(ValueError, "clean source state"):
+                        assemble_fragments(evidence, evidence)
+                    self.assertFalse(receipt.exists())
                 finally:
                     git("config", "--unset", "core.trustctime")
                     source.write_bytes(b"trusted\n")
+                    other.write_bytes(b"trusted other\n")
 
 
 if __name__ == "__main__":

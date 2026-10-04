@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import signal
+import stat
 from pathlib import Path
 import subprocess
 
@@ -249,6 +250,56 @@ def git_checkout_output(*args: str) -> str:
     ).strip()
 
 
+def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
+    # Статистика индекса зависит от локальной конфигурации: читаем сырые blob из commit.
+    environment = git_checkout_environment()
+    command = ["git", "-c", "core.fsmonitor=false"]
+    try:
+        tree = subprocess.check_output(
+            [*command, "ls-tree", "-rz", "--full-tree", commit], cwd=ROOT, env=environment,
+        )
+        entries = []
+        paths = set()
+        for record in tree.split(b"\0"):
+            if not record:
+                continue
+            metadata, path_bytes = record.split(b"\t", 1)
+            mode, kind, oid = metadata.split(b" ")
+            if kind != b"blob" or mode not in {b"100644", b"100755", b"120000"}:
+                return False
+            relative = os.fsdecode(path_bytes)
+            entries.append((mode, oid, ROOT / relative))
+            paths.add(Path(relative).as_posix())
+        if {Path(path).as_posix() for path in identities} - paths:
+            return False
+        blobs = subprocess.check_output(
+            [*command, "cat-file", "--batch"],
+            input=b"".join(oid + b"\n" for _, oid, _ in entries), cwd=ROOT, env=environment,
+        )
+        cursor = 0
+        for mode, oid, path in entries:
+            if mode == b"120000":
+                if not path.is_symlink():
+                    return False
+                actual = os.fsencode(os.readlink(path))
+            else:
+                if path.is_symlink() or not path.is_file():
+                    return False
+                actual = path.read_bytes()
+                if os.name != "nt" and bool(path.stat().st_mode & stat.S_IXUSR) != (mode == b"100755"):
+                    return False
+            end = blobs.find(b"\n", cursor)
+            if end < 0 or blobs[cursor:end] != oid + b" blob " + str(len(actual)).encode("ascii"):
+                return False
+            cursor = end + 1
+            if blobs[cursor:cursor + len(actual)] != actual or blobs[cursor + len(actual):cursor + len(actual) + 1] != b"\n":
+                return False
+            cursor += len(actual) + 1
+        return cursor == len(blobs)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return False
+
+
 def checkout_is_clean(identities: dict[str, str] | None = None, commit: str | None = None) -> bool:
     # Git status скрывает правки с флагами индекса; для связи квитанции с HEAD этого недостаточно.
     version_text = git_checkout_output("version").split()
@@ -266,18 +317,7 @@ def checkout_is_clean(identities: dict[str, str] | None = None, commit: str | No
         identities = {str(path.relative_to(ROOT)): digest(path) for path in formal_source_files()}
     if commit is None:
         commit = git_checkout_output("rev-parse", "HEAD")
-    # Локальные stat-настройки Git могут скрыть изменение даже при отключённом fsmonitor.
-    for path, worktree_digest in identities.items():
-        try:
-            head_bytes = subprocess.check_output(
-                ["git", "-c", "core.fsmonitor=false", "cat-file", "blob", f"{commit}:{Path(path).as_posix()}"],
-                cwd=ROOT, env=git_checkout_environment(),
-            )
-        except subprocess.CalledProcessError:
-            return False
-        if hashlib.sha256(head_bytes).hexdigest() != worktree_digest:
-            return False
-    return True
+    return tracked_tree_matches_head(commit, identities)
 
 
 def checkout_snapshot() -> tuple[dict[str, str], str, bool]:
