@@ -306,7 +306,8 @@ def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
             relative = os.fsdecode(path_bytes)
             entries.append((mode, oid, ROOT / relative))
             paths.add(Path(relative).as_posix())
-        if {Path(path).as_posix() for path in identities} - paths:
+        formal_paths = {Path(path).as_posix() for path in identities}
+        if formal_paths - paths:
             return False
         blobs = subprocess.check_output(
             [*command, "cat-file", "--batch"],
@@ -315,8 +316,9 @@ def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
         cursor = 0
         for mode, oid, path in entries:
             if mode == b"120000":
-                # Git связывает только текст ссылки; Core может читать изменяемую цель.
-                if path.is_relative_to(ROOT / "crates/labcolors-core"):
+                # Git связывает только текст ссылки; формальный вход может читать изменяемую цель.
+                if (path.is_relative_to(ROOT / "crates/labcolors-core")
+                        or path.relative_to(ROOT).as_posix() in formal_paths):
                     return False
                 if not path.is_symlink():
                     return False

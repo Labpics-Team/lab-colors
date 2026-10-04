@@ -15,6 +15,7 @@ from pathlib import Path
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
     assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, formal_source_files,
+    fragment_base,
     selected_mutants, selected_positive_harnesses,
     validate_report, validate_mutant, run_kani,
 )
@@ -273,6 +274,88 @@ class FormalReportTests(unittest.TestCase):
                 after, _, clean = checkout_snapshot()
                 self.assertNotEqual(after, before)
                 self.assertFalse(clean)
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX symlink semantics")
+    def test_checkout_rejects_symlinks_for_each_formal_input_outside_core(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origin = root / "origin"
+            checkout = root / "checkout"
+            origin.mkdir()
+            manifest_bytes = (b'[package]\nname = "formal-source-link"\n'
+                              b'version = "0.1.0"\nedition = "2021"\n')
+            script_bytes = b"CONTRACTS = {}\n"
+            (origin / "Cargo.toml").write_bytes(manifest_bytes)
+            (origin / ".gitignore").write_text("target/\n", encoding="ascii")
+            (origin / "src").mkdir()
+            (origin / "src/lib.rs").write_bytes(b"pub fn witness() {}\n")
+            (origin / "crates/labcolors-core").mkdir(parents=True)
+            (origin / "crates/labcolors-core/README.md").write_bytes(b"Core fixture\n")
+            (origin / "scripts").mkdir()
+            (origin / "scripts/formal_contracts.py").write_bytes(script_bytes)
+            (origin / "docs").mkdir()
+            (origin / "docs/guide.md").symlink_to("../target/guide.md")
+
+            def git(directory, *arguments):
+                return subprocess.check_output(["git", *arguments], cwd=directory)
+
+            git(origin, "init", "-q")
+            git(origin, "config", "core.autocrlf", "false")
+            git(origin, "config", "core.symlinks", "true")
+            subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=origin,
+                           stdout=subprocess.DEVNULL, check=True)
+            git(origin, "add", "-A")
+            git(origin, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "regular formal inputs")
+            git(root, "clone", "-q", str(origin), str(checkout))
+            git(checkout, "config", "core.autocrlf", "false")
+            git(checkout, "config", "core.symlinks", "true")
+            manifest = checkout / "Cargo.toml"
+            script = checkout / "scripts/formal_contracts.py"
+            ignored = checkout / "target"
+            (ignored / "src").mkdir(parents=True)
+            (ignored / "Cargo.toml").write_bytes(manifest_bytes)
+            (ignored / "src/lib.rs").write_bytes(b"pub fn witness() {}\n")
+            (ignored / "formal_contracts.py").write_bytes(script_bytes)
+            (ignored / "guide.md").write_bytes(b"unrelated documentation\n")
+
+            def commit(message, path):
+                git(checkout, "add", "--", path)
+                git(checkout, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", message)
+
+            with mock.patch("verify_core_formal.ROOT", checkout), \
+                 mock.patch("verify_core_formal.formal_source_files", return_value=[manifest, script]):
+                identities, head, clean = checkout_snapshot()
+                self.assertTrue(clean, "regular formal inputs and unrelated docs link remain admissible")
+                self.assertEqual(fragment_base(identities, head, clean)["source_commit"], head)
+
+                manifest.unlink()
+                manifest.symlink_to("target/Cargo.toml")
+                commit("linked manifest", "Cargo.toml")
+                self.assertEqual(git(checkout, "ls-files", "-s", "--", "Cargo.toml").split(b" ", 1)[0], b"120000")
+                self.assertEqual(git(checkout, "status", "--porcelain", "--untracked-files=all").strip(), b"")
+                before, head, clean = checkout_snapshot()
+                self.assertFalse(clean)
+                self.assertIsNone(fragment_base(before, head, clean)["source_commit"])
+
+                (ignored / "Cargo.toml").write_bytes(manifest_bytes + b'description = "mutable"\n')
+                self.assertEqual(git(checkout, "status", "--porcelain", "--untracked-files=all").strip(), b"")
+                after, head, clean = checkout_snapshot()
+                self.assertNotEqual(after, before)
+                self.assertFalse(clean)
+
+                manifest.unlink()
+                manifest.write_bytes(manifest_bytes)
+                commit("regular manifest", "Cargo.toml")
+                self.assertTrue(checkout_snapshot()[2])
+
+                script.unlink()
+                script.symlink_to("../target/formal_contracts.py")
+                commit("linked formal contract", "scripts/formal_contracts.py")
+                self.assertEqual(git(checkout, "ls-files", "-s", "--", "scripts/formal_contracts.py").split(b" ", 1)[0], b"120000")
+                self.assertEqual(git(checkout, "status", "--porcelain", "--untracked-files=all").strip(), b"")
+                self.assertFalse(checkout_snapshot()[2])
 
     def test_complete_result_passes(self):
         validate_report(valid_report())
