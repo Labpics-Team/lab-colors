@@ -228,13 +228,25 @@ def formal_source_files() -> list[Path]:
     return files
 
 
+def git_checkout_output(*args: str) -> str:
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update({
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "LC_ALL": "C",
+    })
+    return subprocess.check_output(["git", *args], cwd=ROOT, text=True, env=environment).strip()
+
+
 def checkout_snapshot() -> tuple[dict[str, str], str, bool]:
     files = formal_source_files()
     identities = {str(path.relative_to(ROOT)): digest(path) for path in files}
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    clean = not subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True
-    )
+    commit = git_checkout_output("rev-parse", "HEAD")
+    clean = not git_checkout_output("status", "--porcelain", "--untracked-files=all")
     subprocess.run(
         ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
         cwd=ROOT, stdout=subprocess.DEVNULL, check=True,
@@ -246,12 +258,10 @@ def assert_snapshot(identities: dict[str, str], commit: str) -> bool:
     current = {str(path.relative_to(ROOT)): digest(path) for path in formal_source_files()}
     if identities != current:
         raise ValueError("source or dependency identity changed during verification")
-    actual_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    actual_commit = git_checkout_output("rev-parse", "HEAD")
     if commit != actual_commit:
         raise ValueError("checkout changed during verification")
-    return not subprocess.check_output(
-        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=ROOT, text=True
-    )
+    return not git_checkout_output("status", "--porcelain", "--untracked-files=all")
 
 
 def fragment_base(identities: dict[str, str], commit: str, clean: bool) -> dict:

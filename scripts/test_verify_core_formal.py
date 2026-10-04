@@ -3,6 +3,7 @@
 
 import copy
 import json
+import os
 import unittest
 from unittest import mock
 import signal
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
-    assemble_fragments, digest, selected_mutants, selected_positive_harnesses,
+    assemble_fragments, assert_snapshot, checkout_snapshot, digest, selected_mutants, selected_positive_harnesses,
     validate_report, validate_mutant, run_kani,
 )
 
@@ -80,6 +81,27 @@ def valid_subset_report(harnesses):
 
 
 class FormalReportTests(unittest.TestCase):
+    def test_checkout_ignores_foreign_git_repository_environment(self):
+        foreign = {
+            "GIT_DIR": "/foreign/.git",
+            "GIT_WORK_TREE": "/foreign",
+            "GIT_INDEX_FILE": "/foreign/index",
+            "GIT_OBJECT_DIRECTORY": "/foreign/objects",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.repositoryformatversion",
+            "GIT_CONFIG_VALUE_0": "99",
+        }
+        with mock.patch.dict(os.environ, foreign), \
+             mock.patch("verify_core_formal.subprocess.check_output", return_value="local-head") as command, \
+             mock.patch("verify_core_formal.subprocess.run"):
+            identities, commit, _ = checkout_snapshot()
+            assert_snapshot(identities, commit)
+        self.assertEqual(command.call_count, 4)
+        for call in command.call_args_list:
+            environment = call.kwargs["env"]
+            self.assertFalse(set(foreign) & set(environment))
+            self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
+
     def test_complete_result_passes(self):
         validate_report(valid_report())
 
