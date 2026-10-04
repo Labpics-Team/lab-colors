@@ -98,6 +98,8 @@ class FormalReportTests(unittest.TestCase):
                 return "H source.rs\0"
             if command[3] == "status":
                 return ""
+            if command[3] == "cat-file":
+                return (Path(__file__).resolve().parent.parent / command[5].split(":", 1)[1]).read_bytes()
             return "local-head"
 
         with mock.patch.dict(os.environ, foreign), \
@@ -106,7 +108,7 @@ class FormalReportTests(unittest.TestCase):
             identities, commit, clean = checkout_snapshot()
             self.assertTrue(clean)
             self.assertTrue(assert_snapshot(identities, commit))
-        self.assertEqual(command.call_count, 8)
+        self.assertEqual(command.call_count, 8 + 2 * len(identities))
         for call in command.call_args_list:
             environment = call.kwargs["env"]
             self.assertFalse(set(foreign) & set(environment))
@@ -483,6 +485,26 @@ class FormalReportTests(unittest.TestCase):
                         self.assertFalse(receipt.exists())
                         git("update-index", clear, "--", source.name)
                         source.write_bytes(b"trusted\n")
+
+                fixed_time = 1_600_000_000_000_000_000
+                os.utime(source, ns=(fixed_time, fixed_time))
+                git("add", "--", source.name)
+                git("config", "core.trustctime", "false")
+                try:
+                    git("update-index", "--refresh")
+                    original = source.stat()
+                    source.write_bytes(b"trusteX\n")
+                    os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+                    self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                    self.assertEqual(git("ls-files", "-v", "--", source.name).strip(), b"H formal.rs")
+                    self.assertNotEqual(source.read_bytes(), git("show", f"HEAD:{source.name}"))
+                    write_fragments(digest(source))
+                    with self.assertRaisesRegex(ValueError, "clean source state"):
+                        assemble_fragments(evidence, evidence)
+                    self.assertFalse(receipt.exists())
+                finally:
+                    git("config", "--unset", "core.trustctime")
+                    source.write_bytes(b"trusted\n")
 
 
 if __name__ == "__main__":
