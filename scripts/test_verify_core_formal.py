@@ -13,7 +13,7 @@ from pathlib import Path
 
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
-    assemble_fragments, assert_snapshot, checkout_snapshot, digest, selected_mutants, selected_positive_harnesses,
+    assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, selected_mutants, selected_positive_harnesses,
     validate_report, validate_mutant, run_kani,
 )
 
@@ -92,9 +92,11 @@ class FormalReportTests(unittest.TestCase):
             "GIT_CONFIG_VALUE_0": "99",
         }
         def git_output(command, **kwargs):
-            if command[1] == "ls-files":
+            if command[3] == "version":
+                return "git version 2.51.0"
+            if command[3] == "ls-files":
                 return "H source.rs\0"
-            if command[1] == "status":
+            if command[3] == "status":
                 return ""
             return "local-head"
 
@@ -104,11 +106,16 @@ class FormalReportTests(unittest.TestCase):
             identities, commit, clean = checkout_snapshot()
             self.assertTrue(clean)
             self.assertTrue(assert_snapshot(identities, commit))
-        self.assertEqual(command.call_count, 6)
+        self.assertEqual(command.call_count, 8)
         for call in command.call_args_list:
             environment = call.kwargs["env"]
             self.assertFalse(set(foreign) & set(environment))
             self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
+            self.assertEqual(call.args[0][1:3], ["-c", "core.fsmonitor=false"])
+
+        with mock.patch("verify_core_formal.git_checkout_output", return_value="git version 2.35.1"):
+            with self.assertRaisesRegex(ValueError, "Git 2.35.2"):
+                checkout_is_clean()
 
     def test_complete_result_passes(self):
         validate_report(valid_report())
@@ -447,6 +454,21 @@ class FormalReportTests(unittest.TestCase):
                 self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))[
                     "verified_source_sha256"], {source.name: digest(source)})
                 receipt.unlink()
+
+                monitor = checkout / ".git" / "fsmonitor.sh"
+                monitor.write_text("#!/bin/sh\nprintf 'token\\0'\n", encoding="ascii")
+                monitor.chmod(0o755)
+                git("config", "core.fsmonitor", ".git/fsmonitor.sh")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                source.write_bytes(b"tampered\n")
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                self.assertEqual(git("ls-files", "-v", "--", source.name).strip(), b"H formal.rs")
+                write_fragments(digest(source))
+                with self.assertRaisesRegex(ValueError, "clean source state"):
+                    assemble_fragments(evidence, evidence)
+                self.assertFalse(receipt.exists())
+                git("config", "--unset", "core.fsmonitor")
+                source.write_bytes(b"trusted\n")
 
                 for flag, clear in (("--assume-unchanged", "--no-assume-unchanged"),
                                     ("--skip-worktree", "--no-skip-worktree")):

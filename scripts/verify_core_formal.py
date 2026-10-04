@@ -239,11 +239,21 @@ def git_checkout_output(*args: str) -> str:
         "GIT_OPTIONAL_LOCKS": "0",
         "LC_ALL": "C",
     })
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True, env=environment).strip()
+    return subprocess.check_output(
+        ["git", "-c", "core.fsmonitor=false", *args],
+        cwd=ROOT, text=True, env=environment,
+    ).strip()
 
 
 def checkout_is_clean() -> bool:
     # Git status скрывает правки с флагами индекса; для связи квитанции с HEAD этого недостаточно.
+    version_text = git_checkout_output("version").split()
+    try:
+        version = tuple(int(part) for part in version_text[2].split(".")[:3])
+    except (IndexError, ValueError) as error:
+        raise ValueError("cannot verify Git version for formal checkout") from error
+    if len(version) != 3 or version < (2, 35, 2):
+        raise ValueError("Git 2.35.2 or newer is required for formal checkout")
     records = git_checkout_output("ls-files", "-v", "-z").split("\0")
     status = git_checkout_output("status", "--porcelain", "--untracked-files=all")
     return not status and all(record.startswith("H ") for record in records if record)
