@@ -91,12 +91,20 @@ class FormalReportTests(unittest.TestCase):
             "GIT_CONFIG_KEY_0": "core.repositoryformatversion",
             "GIT_CONFIG_VALUE_0": "99",
         }
+        def git_output(command, **kwargs):
+            if command[1] == "ls-files":
+                return "H source.rs\0"
+            if command[1] == "status":
+                return ""
+            return "local-head"
+
         with mock.patch.dict(os.environ, foreign), \
-             mock.patch("verify_core_formal.subprocess.check_output", return_value="local-head") as command, \
+             mock.patch("verify_core_formal.subprocess.check_output", side_effect=git_output) as command, \
              mock.patch("verify_core_formal.subprocess.run"):
-            identities, commit, _ = checkout_snapshot()
-            assert_snapshot(identities, commit)
-        self.assertEqual(command.call_count, 4)
+            identities, commit, clean = checkout_snapshot()
+            self.assertTrue(clean)
+            self.assertTrue(assert_snapshot(identities, commit))
+        self.assertEqual(command.call_count, 6)
         for call in command.call_args_list:
             environment = call.kwargs["env"]
             self.assertFalse(set(foreign) & set(environment))
@@ -374,6 +382,85 @@ class FormalReportTests(unittest.TestCase):
             (root / "fragment-mutants-4.json").unlink()
             with self.assertRaisesRegex(ValueError, "missing or duplicate mutant shard"):
                 assemble_claimed_source()
+
+    def test_assembly_rejects_index_hidden_source_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checkout = root / "checkout"
+            evidence = root / "evidence"
+            checkout.mkdir()
+            evidence.mkdir()
+            source = checkout / "formal.rs"
+            source.write_bytes(b"trusted\n")
+
+            def git(*arguments):
+                return subprocess.check_output(["git", *arguments], cwd=checkout)
+
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            git("add", "--", source.name)
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "initial")
+
+            positive = evidence / "positive.json"
+            positive.write_text(json.dumps(valid_report()), encoding="utf-8")
+            negatives = {}
+            for mutant in MUTANTS:
+                name = mutant[0]
+                path = evidence / f"negative-{name}.json"
+                path.write_text(json.dumps({"mutant": name}), encoding="utf-8")
+                negatives[name] = digest(path)
+
+            commit = git("rev-parse", "HEAD").decode("ascii").strip()
+
+            def write_fragments(source_digest):
+                common = {
+                    "fragment_schema": 1,
+                    "kani_version": KANI_VERSION,
+                    "checkout_commit": commit,
+                    "source_commit": commit,
+                    "working_tree_clean": True,
+                    "verified_source_sha256": {source.name: source_digest},
+                }
+                (evidence / "fragment-positive-0.json").write_text(json.dumps({
+                    **common, "kind": "positive", "shard_index": 0, "shard_count": 1,
+                    "positive_sha256": digest(positive), "harnesses": sorted(CONTRACTS),
+                }), encoding="utf-8")
+                (evidence / "fragment-mutants-0.json").write_text(json.dumps({
+                    **common, "kind": "mutants", "shard_index": 0, "shard_count": 1,
+                    "negative_sha256": negatives,
+                }), encoding="utf-8")
+
+            real_run = subprocess.run
+
+            def run_without_cargo(command, *args, **kwargs):
+                if command[:2] == ["cargo", "metadata"]:
+                    return subprocess.CompletedProcess(command, 0)
+                return real_run(command, *args, **kwargs)
+
+            with mock.patch("verify_core_formal.ROOT", checkout), \
+                 mock.patch("verify_core_formal.formal_source_files", return_value=[source]), \
+                 mock.patch("verify_core_formal.subprocess.run", side_effect=run_without_cargo):
+                write_fragments(digest(source))
+                assemble_fragments(evidence, evidence)
+                receipt = evidence / "receipt.json"
+                self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))[
+                    "verified_source_sha256"], {source.name: digest(source)})
+                receipt.unlink()
+
+                for flag, clear in (("--assume-unchanged", "--no-assume-unchanged"),
+                                    ("--skip-worktree", "--no-skip-worktree")):
+                    with self.subTest(flag=flag):
+                        git("update-index", flag, "--", source.name)
+                        source.write_bytes(b"tampered\n")
+                        self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                        self.assertNotEqual(source.read_bytes(), git("show", f"HEAD:{source.name}"))
+                        write_fragments(digest(source))
+                        with self.assertRaisesRegex(ValueError, "clean source state"):
+                            assemble_fragments(evidence, evidence)
+                        self.assertFalse(receipt.exists())
+                        git("update-index", clear, "--", source.name)
+                        source.write_bytes(b"trusted\n")
 
 
 if __name__ == "__main__":

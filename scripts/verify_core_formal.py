@@ -242,11 +242,18 @@ def git_checkout_output(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True, env=environment).strip()
 
 
+def checkout_is_clean() -> bool:
+    # Git status скрывает правки с флагами индекса; для связи квитанции с HEAD этого недостаточно.
+    records = git_checkout_output("ls-files", "-v", "-z").split("\0")
+    status = git_checkout_output("status", "--porcelain", "--untracked-files=all")
+    return not status and all(record.startswith("H ") for record in records if record)
+
+
 def checkout_snapshot() -> tuple[dict[str, str], str, bool]:
     files = formal_source_files()
     identities = {str(path.relative_to(ROOT)): digest(path) for path in files}
     commit = git_checkout_output("rev-parse", "HEAD")
-    clean = not git_checkout_output("status", "--porcelain", "--untracked-files=all")
+    clean = checkout_is_clean()
     subprocess.run(
         ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
         cwd=ROOT, stdout=subprocess.DEVNULL, check=True,
@@ -261,7 +268,7 @@ def assert_snapshot(identities: dict[str, str], commit: str) -> bool:
     actual_commit = git_checkout_output("rev-parse", "HEAD")
     if commit != actual_commit:
         raise ValueError("checkout changed during verification")
-    return not git_checkout_output("status", "--porcelain", "--untracked-files=all")
+    return checkout_is_clean()
 
 
 def fragment_base(identities: dict[str, str], commit: str, clean: bool) -> dict:
