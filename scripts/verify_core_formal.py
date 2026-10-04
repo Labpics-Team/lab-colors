@@ -251,10 +251,14 @@ def git_checkout_output(*args: str) -> str:
 
 
 def tracked_tree_matches_head(commit: str, identities: dict[str, str]) -> bool:
-    # Статистика индекса зависит от локальной конфигурации: читаем сырые blob из commit.
+    # Сначала удостоверяем достижимые объекты Git: cat-file может отдать повреждённый blob под прежним OID.
     environment = git_checkout_environment()
     command = ["git", "-c", "core.fsmonitor=false"]
     try:
+        subprocess.check_output(
+            [*command, "fsck", "--strict", "--no-reflogs", "--no-progress", "--no-dangling", commit],
+            cwd=ROOT, env=environment, stderr=subprocess.DEVNULL,
+        )
         tree = subprocess.check_output(
             [*command, "ls-tree", "-rz", "--full-tree", commit], cwd=ROOT, env=environment,
         )

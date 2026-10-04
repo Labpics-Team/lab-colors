@@ -9,6 +9,7 @@ from unittest import mock
 import signal
 import subprocess
 import tempfile
+import zlib
 from pathlib import Path
 
 from verify_core_formal import (
@@ -82,6 +83,46 @@ def valid_subset_report(harnesses):
 
 
 class FormalReportTests(unittest.TestCase):
+    def test_checkout_rejects_corrupt_blob_even_when_status_and_bytes_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary)
+            source = checkout / "formal.rs"
+            source.write_bytes(b"trusted\n")
+
+            def git(*arguments):
+                return subprocess.check_output(["git", *arguments], cwd=checkout)
+
+            git("init", "-q")
+            git("config", "core.autocrlf", "false")
+            git("config", "commit.gpgsign", "false")
+            git("add", "--", source.name)
+            git("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                "commit", "-qm", "initial")
+            commit = git("rev-parse", "HEAD").decode("ascii").strip()
+
+            with mock.patch("verify_core_formal.ROOT", checkout):
+                identities = {source.name: digest(source)}
+                self.assertTrue(checkout_is_clean(identities, commit))
+
+                git("config", "core.trustctime", "false")
+                git("update-index", "--refresh")
+                original = source.stat()
+                source.write_bytes(b"trusteX\n")
+                os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+                oid = git("rev-parse", f"HEAD:{source.name}").decode("ascii").strip()
+                object_path = checkout / ".git" / "objects" / oid[:2] / oid[2:]
+                self.assertTrue(object_path.is_file())
+                object_path.chmod(0o600)
+                payload = source.read_bytes()
+                object_path.write_bytes(zlib.compress(b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload))
+
+                self.assertEqual(git("status", "--porcelain", "--untracked-files=all").strip(), b"")
+                self.assertNotEqual(subprocess.run(
+                    ["git", "fsck", "--strict", "--no-reflogs", "--no-progress", "--no-dangling", commit],
+                    cwd=checkout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                ).returncode, 0)
+                self.assertFalse(checkout_is_clean({source.name: digest(source)}, commit))
+
     def test_checkout_ignores_foreign_git_repository_environment(self):
         root = Path(__file__).resolve().parent.parent
         sources = {path.relative_to(root).as_posix(): path.read_bytes() for path in formal_source_files()}
@@ -118,7 +159,7 @@ class FormalReportTests(unittest.TestCase):
             identities, commit, clean = checkout_snapshot()
             self.assertTrue(clean)
             self.assertTrue(assert_snapshot(identities, commit))
-        self.assertEqual(command.call_count, 12)
+        self.assertEqual(command.call_count, 14)
         for call in command.call_args_list:
             environment = call.kwargs["env"]
             self.assertFalse(set(foreign) & set(environment))
