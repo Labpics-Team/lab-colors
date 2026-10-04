@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 274,
+   "count": 275,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -852,6 +852,7 @@
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_wrong_research_commit_is_rejected_before_blob_lookup",
     "test_verify_core_formal.FormalReportTests.test_assembly_rejects_index_hidden_source_changes",
     "test_verify_core_formal.FormalReportTests.test_checkout_ignores_foreign_git_repository_environment",
+    "test_verify_core_formal.FormalReportTests.test_checkout_rejects_corrupt_blob_even_when_status_and_bytes_match",
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
@@ -884,7 +885,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "8bc0e0a1f66fbaf9132fc5e2038cde4ae8e188696c34da431cd3030155092a90",
+ "record_sha256": "bb33f0426c76922aa670139ea83e454bd487a705e259a9d86c9d3297445cdc98",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
