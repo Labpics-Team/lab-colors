@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 272,
+   "count": 273,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -850,6 +850,7 @@
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_unknown_receipt_field_is_rejected",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_valid_receipt_binds_committed_research_and_product_codec",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_wrong_research_commit_is_rejected_before_blob_lookup",
+    "test_verify_core_formal.FormalReportTests.test_checkout_ignores_foreign_git_repository_environment",
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
@@ -882,7 +883,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "93ed27c874673dea462679f7d54b9d1dc091cbca376436f5506ee4b334a2739c",
+ "record_sha256": "d33902f91ccc51dddc2d074b0c3d16513935904752fbbf88e866be0d9e1ce654",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
