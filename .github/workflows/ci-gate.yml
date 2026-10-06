@@ -119,4 +119,4 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           GATE_EVENT: ${{ github.event_name }}
-        run: python3 scripts/ci_peer_gate.py
+        run: python3 scripts/ci/peer_gate.py
