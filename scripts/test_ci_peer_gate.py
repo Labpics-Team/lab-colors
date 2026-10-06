@@ -18,7 +18,7 @@ from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[1]
-SCRIPT = Path(__file__).with_name("ci_peer_gate.py")
+SCRIPT = Path(__file__).parent / "ci" / "peer_gate.py"
 SPEC = importlib.util.spec_from_file_location("ci_peer_gate", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 gate = importlib.util.module_from_spec(SPEC)
