@@ -1,11 +1,12 @@
 {
  "class": "tree",
- "file_count": 486,
+ "file_count": 487,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
-  ".github/workflows/ci-gate.yml": "8f6df88e98239a76c2628d85a308a4ed113c4c04",
+  ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
   ".github/workflows/ci-worker.yml": "fe06d6fa7f634ed9358aa8790f14658b0ec4717c",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
+  ".github/workflows/code-admission-public.yml": "08a1173b4bfe336827dc0d2db65e961ba0cf58b6",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
   ".github/workflows/full-domain-corpus.yml": "ce4a1ad54e0e947539dfe3cefb6b995ae816a867",
   ".github/workflows/full-domain-run.yml": "84b0957c9ff5eb89e48cc4007b67ea6c73f30d5a",
@@ -433,7 +434,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "1f86dfec38ee36c66b3a83506c9366fb9217fd44",
   "scripts/check-wasm-size-budget.mjs": "a3149aa57cf5b7e28858c1577eb89f228506c0d0",
-  "scripts/ci_peer_gate.py": "da28789791a00e964d51db61673d3bfcb160e0fa",
+  "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
   "scripts/evaluate-distribution.mjs": "d5e9408147d5d1f2983b2c2a24377000574db2d1",
   "scripts/evaluation_cli_gate.py": "70c5e2724dc2b4abcf4e53f59b09c9c9c6cc0f75",
@@ -462,7 +463,7 @@
   "scripts/test-program-runtime-browser.mjs": "0df3385c9e745dbb2046045fcd6794b627b2053d",
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "3930713ea0e082372615b45059261e80abf99c5c",
-  "scripts/test_ci_peer_gate.py": "b19a0d13e42f125f0db0e9438c6c3bba5c4af91b",
+  "scripts/test_ci_peer_gate.py": "a6af99440f3d4be357cdc27c5a749c059b5535d1",
   "scripts/test_evaluate_distribution.mjs": "7d4c2057fb16c48512bb668ae01c44af7f5d6a4b",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
   "scripts/test_extract_claims.py": "316f7c292f0330d138af063defa2c882e7366112",
@@ -489,7 +490,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "7766ec8c003140a6d46f2abe9dafd030f68fb9d7a7b2df1e3bce1c66ad299274",
+ "record_sha256": "25d8548bb093705d04b01eab0ace9d7a9cfd2dd13a79648d6715246b85f7627a",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
