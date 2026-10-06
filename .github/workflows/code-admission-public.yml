@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(git rev-parse HEAD)" == "${{ github.workflow_sha }}" ]]
-          node .github/vendor/labpics-code-admission/verify.mjs --root .github/vendor/labpics-code-admission
+          node .github/actions/labpics-code-admission/verify.mjs --root .github/actions/labpics-code-admission
       - name: Checkout immutable integration candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -41,7 +41,7 @@ jobs:
           submodules: false
           lfs: false
       - name: Run qualified source admission
-        uses: ./.github/vendor/labpics-code-admission/.github/actions/code-admission
+        uses: ./.github/actions/labpics-code-admission/.github/actions/code-admission
         with:
           repo: .code-subject.public01
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
