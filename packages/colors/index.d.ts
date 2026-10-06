@@ -27,17 +27,23 @@ export type {
 } from "./pkg/labcolors.js";
 export type { Wcag22CriterionV1 } from "./wcag22.js";
 
+export type ProgramInfrastructureErrorCode =
+  | "program_resource_exhausted"
+  | "program_internal_invariant";
 export type ProgramCompileErrorCode =
+  | ProgramInfrastructureErrorCode
   | "program_wire"
   | "program_compile"
   | "program_family_artifacts_required"
   | "program_instantiate";
+export type ProgramUpdateErrorCode = "program_update" | ProgramInfrastructureErrorCode;
 export type ProgramAttachmentErrorCode =
   | ProgramCompileErrorCode
   | "program_attachment_binding"
   | "program_attachment_instantiate"
   | "program_attachment_sink_admission"
   | "program_attachment_resource_exhausted"
+  | "program_attachment_internal_invariant"
   | "program_attachment_non_terminal_target";
 export type ProgramAttachmentUpdateErrorCode =
   | "program_attachment_update"
@@ -74,7 +80,7 @@ export type ProgramMaterializationErrorCode =
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
-  | Readonly<{ code: "program_update"; operation: ProgramUpdateOperation }>
+  | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;
@@ -88,6 +94,67 @@ export type ProgramError = Error & (
 export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];
 export declare function isProgramError(error: unknown): error is ProgramError;
+
+export type CertificateDecodeErrorCode =
+  | "certificate_invalid_magic"
+  | "certificate_unsupported_schema"
+  | "certificate_unknown_operation"
+  | "certificate_unknown_authority_kind"
+  | "certificate_unsupported_authority_version"
+  | "certificate_invalid_utf8"
+  | "certificate_invalid_length"
+  | "certificate_truncated_input"
+  | "certificate_trailing_bytes"
+  | "certificate_non_canonical_revision"
+  | "certificate_invalid_payload_type"
+  | "certificate_unsupported_payload_version"
+  | "certificate_payload_digest_mismatch"
+  | "certificate_binding_digest_mismatch"
+  | "certificate_missing_producer_attestation"
+  | "certificate_producer_binding_mismatch"
+  | "certificate_runtime_artifact_mismatch"
+  | "certificate_producer_revision_mismatch"
+  | "certificate_content_identity_mismatch"
+  | "certificate_context_mismatch"
+  | "certificate_resource_limit_exceeded"
+  | "certificate_admission_capacity_exceeded"
+  | "certificate_unsupported_opaque"
+  | "certificate_binding_conflict"
+  | "certificate_invalid_input";
+export type CertificateProducerErrorCode =
+  | Exclude<CertificateDecodeErrorCode, "certificate_invalid_input">
+  | "certificate_producer_identity_unavailable";
+export type CertificateErrorCode = CertificateDecodeErrorCode | CertificateProducerErrorCode;
+export type CertificateError = Error & (
+  | Readonly<{ code: CertificateDecodeErrorCode; operation: "decodeCertificateEnvelope" }>
+  | Readonly<{ code: CertificateProducerErrorCode; operation: "issueSourceCertificateEnvelope" }>
+);
+export interface UntrustedCertificateEnvelopeV1 {
+  readonly schemaVersion: 1;
+  readonly operation: "issue-certificate";
+  readonly authorityKind: "generic-typed-certificate";
+  readonly authorityVersion: 1;
+  readonly runtimeArtifactId: string;
+  readonly producerRevision: string;
+  readonly producerContentIdentity: Uint8Array;
+  readonly contextId: string;
+  readonly payloadType: "non-semantic-transport-v1";
+  readonly payloadVersion: 1;
+  readonly payloadLength: number;
+  readonly payloadSha256: Uint8Array;
+  readonly bindingSha256: Uint8Array;
+}
+export declare const MAX_CERTIFICATE_ENVELOPE_BYTES: 2097152;
+export declare function decodeCertificateEnvelope(
+  bytes: Uint8Array,
+): UntrustedCertificateEnvelopeV1;
+/**
+ * Копия канонических байтов сертификата встроенного дескриптора исходников Core.
+ * Не выдаёт capability или полномочий на приём.
+ * При недоступной идентичности бросает certificate_producer_identity_unavailable.
+ */
+export declare function issueSourceCertificateEnvelope(): Uint8Array;
+export declare function isCertificateError(error: unknown): error is CertificateError;
 
 export type ProgramPointSinkOperation = "setAll" | "revokeAll" | "confirmExact";
 export interface ProgramPointSinkPoint {

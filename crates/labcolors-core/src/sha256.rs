@@ -18,7 +18,7 @@ impl Digest {
     #[cfg(test)]
     #[allow(
         dead_code,
-        reason = "Test-only hex formatting; consumed by cross-crate test harnesses (sha256.rs, pack_v10_contract.rs)"
+        reason = "Test-only hex formatting; consumed by the independent conformance contract"
     )]
     pub(crate) fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";

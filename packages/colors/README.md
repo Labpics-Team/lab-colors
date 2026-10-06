@@ -115,6 +115,50 @@ binding epoch и отсутствием downstream point, а не доказат
 пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
 отзывается владельцем host до `dispose(true)`.
 
+## Создание и инспекция certificate envelope
+
+После инициализации WASM `issueSourceCertificateEnvelope()` возвращает новый
+`Uint8Array` с envelope встроенного source producer Core. Функция не принимает
+payload или identity. Например, после `await init()`:
+
+```ts
+const bytes = issueSourceCertificateEnvelope();
+const metadata = decodeCertificateEnvelope(bytes);
+```
+
+Обе функции импортируются из `@labpics/colors`. `metadata.producerRevision` —
+полный Git tree object ID исходников Core, а content identity адресует встроенный
+source descriptor. Эти данные не утверждают равенство исполняемых файлов,
+аутентичность удалённого отправителя или научные свойства цвета.
+
+Если при сборке проверенный source descriptor недоступен, issuance бросает
+ошибку с `operation: "issueSourceCertificateEnvelope"` и
+`code: "certificate_producer_identity_unavailable"`. Её распознаёт
+`isCertificateError`; untrusted decode и остальные операции остаются доступны.
+
+`decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
+transport envelope и возвращает замороженный metadata-object
+`UntrustedCertificateEnvelopeV1`. Результат — метаданные framing и проверенные digest,
+а не authority result и не доказательство
+истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
+
+До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array`, безопасно
+нормализует честный subclass (включая Node `Buffer`) и отвергает Proxy либо
+подменённые `length`/`byteLength`; размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
+(`2097152`) отвергается до копирования, поскольку `wasm-bindgen` копирует typed array
+в linear memory до входа Rust. Неизвестная schema, authority,
+operation, payload type/version, неканоничные строки, trailing bytes и digest
+mismatch дают typed error; `isCertificateError(value)` проверяет только
+допустимую пару `operation`/`code`.
+
+Заморожен внешний metadata-object; его три byte-поля — отдельные detached snapshots,
+поэтому изменение буфера результата не меняет состояние WASM или следующий decode.
+
+Создать envelope из произвольных JS-байтов, `ProgramSnapshot`, Paint, CSS, DOM или
+materialization authority нельзя. Producer capability и admission ledger остаются
+владением Rust Core; в r13 нет persistence, network relay, CLI, science authority
+или registry publication.
+
 ## Контракт
 
 - Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
@@ -141,6 +185,13 @@ ID потока и причины, число подложек и индекс o
 или исключение при чтении возвращают `false`, не заменяя исходную ошибку
 новым исключением. Каждое поле читается не более одного раза, без преобразования
 его значения; читаемые унаследованные поля и getters допустимы.
+
+Нехватка ресурсов при compile/instantiate/update возвращает
+`program_resource_exhausted`, внутренний сбой — `program_internal_invariant`.
+Attachment сохраняет те же классы в `program_attachment_resource_exhausted`
+и `program_attachment_internal_invariant`. Эти причины не означают, что
+пользовательский граф или observation семантически недопустимы; отказ update
+сохраняет предыдущий committed head и допускает повтор той же ревизии.
 
 Проверка описывает только наблюдённые значения. Она не удостоверяет происхождение
 ошибки, не замораживает объект и не гарантирует неизменность следующих чтений

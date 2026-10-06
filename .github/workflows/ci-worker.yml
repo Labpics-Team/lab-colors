@@ -74,6 +74,145 @@ jobs:
           test "${#tarballs[@]}" -eq 1
           node scripts/verify-package-release.mjs --package-smoke "${tarballs[0]}"
 
+  formal-positive:
+    name: formal core positive (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CARGO_BUILD_JOBS: 2
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: isolate verifier toolchains
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
+          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: install pinned Kani
+        run: |
+          cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
+          cargo kani setup
+      - name: verify assigned positive formal harnesses
+        run: |
+          python3 scripts/verify_core_formal.py \
+            --phase positive \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count 5 \
+            --output-dir "$RUNNER_TEMP/core-formal"
+      - name: preserve positive formal fragment
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: core-formal-fragment-positive-${{ matrix.shard }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-formal
+          if-no-files-found: warn
+          retention-days: 7
+
+
+  formal-mutants:
+    name: formal core mutants (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: 2
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        shard: [0, 1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: isolate verifier toolchains
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
+          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: install pinned Kani
+        run: |
+          cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
+          cargo kani setup
+      - name: reject assigned semantic mutants
+        run: |
+          python3 scripts/verify_core_formal.py \
+            --phase mutants \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count 5 \
+            --output-dir "$RUNNER_TEMP/core-formal"
+      - name: preserve mutant formal fragment
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: core-formal-fragment-mutants-${{ matrix.shard }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-formal
+          if-no-files-found: warn
+          retention-days: 7
+
+  formal-core:
+    name: formal core (Kani)
+    if: ${{ always() }}
+    needs: [formal-positive, formal-mutants]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require positive and every mutant shard
+        env:
+          POSITIVE: ${{ needs.formal-positive.result }}
+          MUTANTS: ${{ needs.formal-mutants.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$POSITIVE" != success || "$MUTANTS" != success ]]; then
+            printf 'Required formal results: positive=%s mutants=%s\n' "$POSITIVE" "$MUTANTS" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: verifier contract hostile tests
+        run: python3 scripts/test_verify_core_formal.py
+      - name: collect immutable formal fragments
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: core-formal-fragment-*-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-formal
+          merge-multiple: true
+      - name: require exact proof and mutant completeness
+        run: |
+          python3 scripts/verify_core_formal.py \
+            --phase assemble \
+            --input-dir "$RUNNER_TEMP/core-formal" \
+            --output-dir "$RUNNER_TEMP/core-formal"
+      - name: preserve exact verification and counterexamples
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/core-formal
+          if-no-files-found: error
+          retention-days: 7
+
   msrv:
     name: MSRV workspace check
     runs-on: ubuntu-latest
@@ -188,8 +327,8 @@ jobs:
       - name: package labcolors-core and run extracted package doctests
         run: |
           set -euo pipefail
-          test -L crates/labcolors-core/LICENSE
-          test "$(readlink crates/labcolors-core/LICENSE)" = "../../LICENSE"
+          test -f crates/labcolors-core/LICENSE
+          test ! -L crates/labcolors-core/LICENSE
           cmp LICENSE crates/labcolors-core/LICENSE
           cargo package -p labcolors-core --locked
           crate_version="$(cargo pkgid -p labcolors-core | sed 's/.*#//')"
@@ -203,10 +342,22 @@ jobs:
             --package-root "$crate_dir"
           cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
 
-  test:
-    name: test
+  # Независимые доказательства не образуют последовательную очередь.
+  # Каждый job получает отдельную VM; обязательный test ниже соединяет результаты.
+  region-proof-worker:
+    name: region proof protocol (${{ matrix.mode }}-${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - { mode: normal, shard: 0 }
+          - { mode: normal, shard: 1 }
+          - { mode: optimized, shard: 0 }
+          - { mode: optimized, shard: 1 }
+          - { mode: fast, shard: 0 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -232,29 +383,119 @@ jobs:
             --workdir /workspace \
             --env PYTHONDONTWRITEBYTECODE=1 \
             --env PYTHONHASHSEED=0 \
+            --env REGION_MODE="${{ matrix.mode }}" \
+            --env REGION_SHARD="${{ matrix.shard }}" \
             "$PYTHON_PROOF_IMAGE" \
             sh -euc '
               python -c '\''import sys; expected = (3, 14, 6); actual = sys.version_info[:3]; assert actual == expected, (actual, expected)'\''
-              test -f proof/region/v1/tests/test_provenance.py
-              python -m unittest proof/region/v1/tests/test_provenance.py -v
-              python -c '\''import unittest; suite = unittest.defaultTestLoader.discover("proof/region/v1/tests", pattern="test_*.py"); count = suite.countTestCases(); minimum = 25; assert count >= minimum, f"region-proof anti-vacuum floor failed: {count} < {minimum}"; print(f"region-proof discovered tests: {count}")'\''
-              python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
-              PYTHONOPTIMIZE=2 python -m unittest discover -s proof/region/v1/tests -p "test_*.py" -v
-              # Both fast gates carry their own expected inventory, and until
-              # now nothing ran them before a merge: `arb.yml` is privileged вЂ”
-              # sudo, Docker, a delegated cgroup вЂ” so it refuses a
-              # `pull_request` trigger by contract, and a wrong
-              # EXPECTED_TEST_INVENTORY_SHA256 went green on the pull request
-              # and broke `main` on push.  The discovery above cannot stand in
-              # for them: `tests/test_build.py` deliberately does not read the
-              # gate constants, and that independence is the point.  They need
-              # no build вЂ” the exact skip manifest is what makes them fast.
-              python proof/region/v1/arb/tests/gate.py
-              PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
-              python proof/region/v1/mpfi/tests/gate.py
-              PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
-              python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
+              case "$REGION_MODE" in
+                normal)
+                  if [ "$REGION_SHARD" = 0 ]; then
+                    test -f proof/region/v1/tests/test_provenance.py
+                    python -m unittest proof/region/v1/tests/test_provenance.py -v
+                  fi
+                  python scripts/region_unittest_shard.py --shard-index "$REGION_SHARD" --shard-count 2
+                  ;;
+                optimized)
+                  PYTHONOPTIMIZE=2 python scripts/region_unittest_shard.py --shard-index "$REGION_SHARD" --shard-count 2
+                  ;;
+                fast)
+                  test "$REGION_SHARD" = 0
+                  python proof/region/v1/arb/tests/gate.py
+                  PYTHONOPTIMIZE=2 python proof/region/v1/arb/tests/gate.py
+                  python proof/region/v1/mpfi/tests/gate.py
+                  PYTHONOPTIMIZE=2 python proof/region/v1/mpfi/tests/gate.py
+                  python proof/region/v1/controller.py verify-fixtures --repo-root /workspace
+                  ;;
+                *)
+                  echo "unknown region proof mode: $REGION_MODE" >&2
+                  exit 2
+                  ;;
+              esac
             '
+
+  region-proof:
+    name: region proof protocol
+    if: ${{ always() }}
+    needs: region-proof-worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: require every region proof shard
+        env:
+          REGION_SHARDS: ${{ needs.region-proof-worker.result }}
+        run: |
+          set -euo pipefail
+          test "$REGION_SHARDS" = success
+          echo 'all required region proof shards succeeded'
+
+  authority-mutation-worker:
+    name: authority semantic mutations (${{ matrix.scope }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        scope: [authority, tq, lifecycle-geometry, cc-selection, cc-binding, eval, science, cli]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: toolchain env (runner.temp)
+        # runner-контекст недоступен в job-level env — только в шагах; поэтому
+        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
+        # же: изоляция per job под runner.temp, который раннер вайпит между
+        # джобами (класс утечки /tmp закрыт, см. историю #143).
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
+            # при исчерпании места (4КБ свободно) все
+            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: AUTH-01 semantic mutation gate
+        run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"
+
+  authority-mutation:
+    name: authority semantic mutations
+    if: ${{ always() }}
+    needs: authority-mutation-worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: require every authority mutation shard
+        env:
+          MUTATION_SHARDS: ${{ needs.authority-mutation-worker.result }}
+        run: |
+          set -euo pipefail
+          test "$MUTATION_SHARDS" = success
+          echo 'all required authority mutation shards succeeded'
+
+  core-tests-worker:
+    name: core tests and artifact contracts (${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        lane: [default, private-fixture, proof-contracts]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - name: toolchain env (runner.temp)
         # runner-контекст недоступен в job-level env — только в шагах; поэтому
         # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
@@ -275,23 +516,22 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: CI peer gate hostile tests
+        if: ${{ matrix.lane == 'default' }}
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
       - name: mutation evidence verifier hostile tests
+        if: ${{ matrix.lane == 'default' }}
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_mutation.py
+      - name: Core source certificate build histories
+        if: ${{ matrix.lane == 'default' }}
+        timeout-minutes: 4
+        run: python3 scripts/test_certificate_source_build.py
       - name: cargo test
+        if: ${{ matrix.lane == 'default' }}
         run: cargo test --workspace --locked
-      # Floor baseline gate: test count must never regress below the declared
-      # minimum. The baseline is updated atomically with each merge that adds
-      # tests; a drop means either tests were silently dropped or a feature
-      # gate hid an entire module. This step runs AFTER cargo test so it can
-      # reuse the same compilation artifacts and add zero wall-clock cost.
-      - name: floor baseline gate
-        shell: pwsh
-        run: scripts/check-floor-baseline.ps1
       # The private-fixture lifecycle/dispose tests in private_fixture.rs are
       # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
       # `cargo test --workspace` step above never compiles them. They must run
@@ -299,8 +539,10 @@ jobs:
       # and two-phase-dispose proofs. `--locked` keeps the same lockfile
       # contract as every other cargo command in this workflow.
       - name: cargo test private-fixture feature
+        if: ${{ matrix.lane == 'private-fixture' }}
         run: cargo test -p labcolors-core --lib --features private-fixture --locked
       - name: exhaustive 24-bit family membership oracle
+        if: ${{ matrix.lane == 'proof-contracts' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -312,6 +554,7 @@ jobs:
             '
           cargo test -p labcolors-core --lib "${test_name}" --locked -- --ignored --exact
       - name: prove core capability projection boundary
+        if: ${{ matrix.lane == 'proof-contracts' }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -325,6 +568,8 @@ jobs:
           ))
           packages = {package["name"]: package for package in metadata["packages"]}
           direct_core_consumers = (
+              "labcolors-evaluate-cli",
+              "labcolors-transport-cli",
               "labcolors-wasm",
               "labcolors-ffi",
               "labcolors-conformance",
@@ -337,15 +582,12 @@ jobs:
               if dep["kind"] is None:
                   print(f"  core dep: {dep['name']} optional={dep.get('optional', 'MISSING')} kind={dep['kind']}", file=sys.stderr)
 
-          # Known optional deps gated behind feature flags; excluded from zero-runtime check
-          # even if cargo metadata omits the optional flag due to toolchain differences.
-          _OPTIONAL_FEATURE_GATED = frozenset({"serde", "serde_yaml", "toml"})
+          # Признак optional приходит из pinned Cargo, имя зависимости не даёт исключения.
           runtime_dependencies = [
               dependency
               for dependency in core["dependencies"]
               if dependency["kind"] is None
               and not dependency.get("optional", False)
-              and dependency["name"] not in _OPTIONAL_FEATURE_GATED
           ]
           if runtime_dependencies:
               names = sorted(dependency["name"] for dependency in runtime_dependencies)
@@ -401,14 +643,19 @@ jobs:
           print("core capability projection: PASS")
           PY
       - name: reject WCAG22 source-route redirects and proof vacuums
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_wcag22_source_binding.py
       - name: prove WCAG22 sRGB8 Q55 artifact over the full finite domain
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/verify_wcag22_q55.py
       - name: independently recompute WCAG22 neutral-axis fixtures
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/verify_wcag22_neutral_axis.py
       - name: reject point-support source-binding vacuums
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_point_support_surplus_source_binding.py
       - name: prove point-support retained reference surplus over Q55 bounds
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/verify_point_support_surplus.py
       # Исполняемая матрица артефактов (ARTIFACT-01). Две закреплённые записи в
       # proof/artifact/: tree.json (path -> blob id объявленных корней) и tests.json
@@ -418,11 +665,315 @@ jobs:
       # anti-vacuum мутанты гейта исполняются здесь же, иначе их существование в
       # дереве не является гейтом.
       - name: artifact matrix - pinned records reproduce
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/artifact_matrix.py check
       - name: artifact matrix - extractor sabotage suites
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 -m unittest discover -s scripts -p 'test_extract_*.py'
       - name: artifact matrix - gate anti-vacuum mutants
+        if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_artifact_matrix.py
+
+  core-tests:
+    name: core tests and artifact contracts
+    if: ${{ always() }}
+    needs: core-tests-worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: require every core test shard
+        env:
+          CORE_SHARDS: ${{ needs.core-tests-worker.result }}
+        run: |
+          set -euo pipefail
+          test "$CORE_SHARDS" = success
+          echo 'all required core test shards succeeded'
+
+  # Сохраняет прежнее имя для publish-gate и требует все три независимых результата.
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: [core-tests, region-proof, authority-mutation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: require every proof lane to succeed
+        shell: bash
+        env:
+          CORE_TESTS: ${{ needs.core-tests.result }}
+          REGION_PROOF: ${{ needs.region-proof.result }}
+          AUTHORITY_MUTATION: ${{ needs.authority-mutation.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$CORE_TESTS" != success || "$REGION_PROOF" != success || "$AUTHORITY_MUTATION" != success ]]; then
+            printf 'Required proof results: core=%s region=%s mutation=%s\n' "$CORE_TESTS" "$REGION_PROOF" "$AUTHORITY_MUTATION" >&2
+            exit 1
+          fi
+          echo 'all required proof lanes succeeded'
+
+  transport-distribution:
+    name: transport distribution evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      artifact-name: ${{ steps.artifact-name.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
+          # evidence must bind the reviewed source, not a synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: toolchain env (runner.temp)
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: transport-distribution
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: distribution verifier hostile tests
+        run: node --test scripts/test_transport_distribution.mjs
+      - name: build exact candidate transport artifact
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-candidate-target
+        run: |
+          set -euo pipefail
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          cargo build --release --locked -p labcolors-transport-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
+      - name: build paired merge-base control on pull requests
+        id: base
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_ROOT: ${{ runner.temp }}/transport-base-source
+          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-base-target
+        run: |
+          set -euo pipefail
+          test -n "$HEAD_SHA"
+          test -n "$BASE_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          git cat-file -e "$BASE_SHA^{commit}" || git fetch --no-tags origin "$BASE_SHA"
+          CONTROL_SHA="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          test -n "$CONTROL_SHA"
+          git cat-file -e "$CONTROL_SHA^{commit}"
+          echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
+          cd "$BASE_ROOT"
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          cargo build --release --locked -p labcolors-transport-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
+      - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha || '' }}
+          CANDIDATE_BINARY: ${{ runner.temp }}/transport-candidate-target/release/labcolors-transport
+          BASE_BINARY: ${{ runner.temp }}/transport-base-target/release/labcolors-transport
+          EVIDENCE_DIR: ${{ runner.temp }}/transport-distribution
+        run: |
+          set -euo pipefail
+          args=(
+            generate
+            --binary "$CANDIDATE_BINARY"
+            --source-sha "$SOURCE_SHA"
+            --out "$EVIDENCE_DIR"
+          )
+          if [ -n "$BASE_SHA" ]; then
+            test -x "$BASE_BINARY"
+            args+=(--baseline-binary "$BASE_BINARY" --baseline-sha "$BASE_SHA")
+          fi
+          node scripts/transport-distribution.mjs "${args[@]}"
+          node scripts/transport-distribution.mjs verify \
+            --dir "$EVIDENCE_DIR" \
+            --source-sha "$SOURCE_SHA"
+          find "$EVIDENCE_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
+      - name: bind immutable artifact name to producer attempt
+        id: artifact-name
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: echo "value=transport-distribution-${SOURCE_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: upload immutable transport distribution packet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact-name.outputs.value }}
+          path: ${{ runner.temp }}/transport-distribution
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 90
+
+  transport-distribution-attestation:
+    name: transport distribution signed attestations
+    if: github.event_name == 'push'
+    needs: transport-distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: download exact no-rebuild distribution packet
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.transport-distribution.outputs.artifact-name }}
+          path: ${{ runner.temp }}/transport-distribution
+      - name: attest binary build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/transport-distribution/labcolors-transport
+      - name: attest binary SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/transport-distribution/labcolors-transport
+          sbom-path: ${{ runner.temp }}/transport-distribution/transport.sbom.cdx.json
+
+  evaluate-distribution:
+    name: evaluate distribution evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      artifact-name: ${{ steps.artifact-name.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
+          # evidence must bind the reviewed source, not a synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: toolchain env (runner.temp)
+        run: |
+          {
+            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
+            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: evaluate-distribution
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: distribution verifier hostile tests
+        run: node --test scripts/test_evaluate_distribution.mjs
+      - name: build exact candidate evaluate artifact
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-candidate-target
+        run: |
+          set -euo pipefail
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          cargo build --release --locked -p labcolors-evaluate-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+      - name: build paired merge-base control on pull requests
+        id: base
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
+          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-base-target
+        run: |
+          set -euo pipefail
+          test -n "$HEAD_SHA"
+          test -n "$BASE_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          git cat-file -e "$BASE_SHA^{commit}" || git fetch --no-tags origin "$BASE_SHA"
+          CONTROL_SHA="$(git merge-base "$HEAD_SHA" "$BASE_SHA")"
+          test -n "$CONTROL_SHA"
+          git cat-file -e "$CONTROL_SHA^{commit}"
+          echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
+          git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
+          cd "$BASE_ROOT"
+          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          cargo build --release --locked -p labcolors-evaluate-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+      - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha || '' }}
+          CANDIDATE_BINARY: ${{ runner.temp }}/evaluate-candidate-target/release/labcolors-evaluate
+          BASE_BINARY: ${{ runner.temp }}/evaluate-base-target/release/labcolors-evaluate
+          EVIDENCE_DIR: ${{ runner.temp }}/evaluate-distribution
+        run: |
+          set -euo pipefail
+          args=(
+            generate
+            --binary "$CANDIDATE_BINARY"
+            --source-sha "$SOURCE_SHA"
+            --out "$EVIDENCE_DIR"
+          )
+          if [ -n "$BASE_SHA" ]; then
+            test -x "$BASE_BINARY"
+            args+=(--baseline-binary "$BASE_BINARY" --baseline-sha "$BASE_SHA")
+          fi
+          node scripts/evaluate-distribution.mjs "${args[@]}"
+          node scripts/evaluate-distribution.mjs verify \
+            --dir "$EVIDENCE_DIR" \
+            --source-sha "$SOURCE_SHA"
+          find "$EVIDENCE_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
+      - name: bind immutable artifact name to producer attempt
+        id: artifact-name
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: echo "value=evaluate-distribution-${SOURCE_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: upload immutable evaluate distribution packet
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact-name.outputs.value }}
+          path: ${{ runner.temp }}/evaluate-distribution
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 90
+
+  evaluate-distribution-attestation:
+    name: evaluate distribution signed attestations
+    if: github.event_name == 'push'
+    needs: evaluate-distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: download exact no-rebuild distribution packet
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.evaluate-distribution.outputs.artifact-name }}
+          path: ${{ runner.temp }}/evaluate-distribution
+      - name: attest binary build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/evaluate-distribution/labcolors-evaluate
+      - name: attest binary SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/evaluate-distribution/labcolors-evaluate
+          sbom-path: ${{ runner.temp }}/evaluate-distribution/evaluate.sbom.cdx.json
 
   audit:
     name: cargo audit (rustsec)

@@ -3,15 +3,30 @@ const _: () = (); // First-item parser proof anchor; moving it fails verify_wcag
 /// Parse optional-`#` `RRGGBB` into exact encoded-sRGB8 bytes shared by colour math and proofs.
 ///
 /// Public APIs choose their own transport strictness before calling this SSOT.
-/// ASCII is checked before byte slicing, so arbitrary public Unicode input
-/// returns `Err` instead of panicking at a non-character boundary.
+/// The byte grammar accepts only ASCII hexadecimal digits. Arbitrary Unicode
+/// input returns `Err` without slicing a string at non-character boundaries.
 pub(crate) fn hex_bytes(hex: &str) -> Result<[u8; 3], String> {
-    let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 || !hex.is_ascii() {
-        return Err(format!("expected #RRGGBB, got #{hex}"));
-    }
-    let parse = |value: &str| u8::from_str_radix(value, 16).map_err(|error| error.to_string());
-    Ok([parse(&hex[0..2])?, parse(&hex[2..4])?, parse(&hex[4..6])?])
+    parse_hex_bytes(hex.as_bytes()).ok_or_else(|| format!("expected #RRGGBB, got {hex}"))
+}
+
+// Числовой from_str_radix принимает знак '+': его грамматика шире hex-цвета.
+// Вся грамматика цвета принадлежит этому безаллокирующему байтовому parser.
+fn parse_hex_bytes(bytes: &[u8]) -> Option<[u8; 3]> {
+    let bytes = bytes.strip_prefix(b"#").unwrap_or(bytes);
+    let [r0, r1, g0, g1, b0, b1] = bytes else {
+        return None;
+    };
+    let digit = |value: u8| match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    };
+    Some([
+        digit(*r0)? * 16 + digit(*r1)?,
+        digit(*g0)? * 16 + digit(*g1)?,
+        digit(*b0)? * 16 + digit(*b1)?,
+    ])
 }
 // END WCAG22_PARSER_CAPSULE_V1
 
@@ -80,6 +95,43 @@ mod tests {
     }
 
     #[test]
+    fn non_hex_signs_are_rejected_through_public_consumers() {
+        for invalid in ["#+1+2+3", "#00+000", "+10000", "#0000+F"] {
+            assert!(
+                hex_bytes(invalid).is_err(),
+                "accepted malformed colour: {invalid}"
+            );
+            assert!(crate::spaces::srgb::srgb_encoded_from_hex(invalid).is_err());
+            assert!(
+                crate::wcag22::evaluate_wcag22_hex(
+                    invalid,
+                    "#FFFFFF",
+                    crate::wcag22::Wcag22CriterionV1::Sc143TextDefault,
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(hex_bytes("#010203"), Ok([1, 2, 3]));
+        assert_eq!(hex_bytes("aBcDeF"), Ok([0xAB, 0xCD, 0xEF]));
+    }
+
+    #[test]
+    fn every_ascii_substitution_obeys_hex_grammar() {
+        for index in 0..6 {
+            for byte in 0_u8..=127 {
+                let mut value = *b"123456";
+                value[index] = byte;
+                let text = core::str::from_utf8(&value).unwrap();
+                assert_eq!(
+                    hex_bytes(text).is_ok(),
+                    byte.is_ascii_hexdigit(),
+                    "{value:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn public_srgb_parser_rejects_a_repeated_hash_prefix() {
         assert!(crate::spaces::srgb::srgb_encoded_from_hex("##1A2B3C").is_err());
     }
@@ -126,3 +178,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(kani)]
+mod proofs;

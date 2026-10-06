@@ -1,0 +1,33 @@
+{
+  "formatVersion": 1,
+  "kind": "labcolors-declared-point-request-v1",
+  "programWireHex": "4c4350570100c2000000010000000100000080808101000000020000000101000000000000000000000001000000060000000100000005000000000000000000e03f0200000003000000010200000004000000020300000005000000010000000700000001060000000100000008000000040000000700000000000000000050409a9999999999c93f02010000000900000008000000010000000900000008000000010000000a000000010800000080808000000000010000001100000004000000",
+  "binding": {
+    "streamId": 7,
+    "outputSlot": 17,
+    "sinkOutput": 91,
+    "presentationRoot": 9,
+    "occurrence": 8
+  },
+  "observation": {
+    "revision": 1,
+    "scenarios": [
+      {
+        "id": 1,
+        "surfaces": [
+          [
+            128,
+            128,
+            127
+          ]
+        ]
+      }
+    ]
+  },
+  "profile": {
+    "conventionReleaseSha256": "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6",
+    "scope": "modeled-srgb8-point",
+    "admission": "declared-package-policy-candidate",
+    "human": "not-requested"
+  }
+}

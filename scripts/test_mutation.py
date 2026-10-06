@@ -1725,6 +1725,142 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
         self.assertEqual(second["commands"]["Build"][0], "test")
 
+    def test_expensive_proofs_have_independent_required_jobs(self) -> None:
+        source = (Path(__file__).resolve().parents[1] /
+                  ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        jobs = workflow_job_blocks(source, "ci-worker.yml")
+
+        workers = {
+            "core-tests-worker": (
+                "    timeout-minutes: 20\n",
+                "      max-parallel: 3\n",
+                "        lane: [default, private-fixture, proof-contracts]\n",
+            ),
+            "region-proof-worker": (
+                "    timeout-minutes: 15\n",
+                "      max-parallel: 5\n",
+                "        include:\n",
+                "          - { mode: normal, shard: 0 }\n",
+                "          - { mode: normal, shard: 1 }\n",
+                "          - { mode: optimized, shard: 0 }\n",
+                "          - { mode: optimized, shard: 1 }\n",
+                "          - { mode: fast, shard: 0 }\n",
+            ),
+            "authority-mutation-worker": (
+                "    timeout-minutes: 20\n",
+                "      max-parallel: 8\n",
+                "        scope: [authority, tq, lifecycle-geometry, cc-selection, cc-binding, eval, science, cli]\n",
+            ),
+            "formal-positive": (
+                "    timeout-minutes: 10\n",
+                "      max-parallel: 5\n",
+                "        shard: [0, 1, 2, 3, 4]\n",
+            ),
+            "formal-mutants": (
+                "    timeout-minutes: 15\n",
+                "      max-parallel: 5\n",
+                "        shard: [0, 1, 2, 3, 4]\n",
+            ),
+        }
+        for worker, required in workers.items():
+            with self.subTest(worker=worker):
+                block = jobs[worker]
+                self.assertIn("    runs-on: ubuntu-latest\n", block)
+                self.assertIn("    strategy:\n      fail-fast: false\n", block)
+                self.assertNotIn("continue-on-error:", block)
+                for needle in required:
+                    self.assertIn(needle, block)
+
+        owners = {
+            "canonical region-proof protocol": "region-proof-worker",
+            "AUTH-01 semantic mutation gate": "authority-mutation-worker",
+            "cargo test": "core-tests-worker",
+            "cargo test private-fixture feature": "core-tests-worker",
+            "exhaustive 24-bit family membership oracle": "core-tests-worker",
+        }
+        for step, owner in owners.items():
+            anchor = f"      - name: {step}\n"
+            self.assertEqual(source.count(anchor), 1, step)
+            self.assertIn(anchor, jobs[owner])
+
+        self.assertIn(
+            'run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"',
+            jobs["authority-mutation-worker"],
+        )
+        self.assertIn("case \"$REGION_MODE\" in", jobs["region-proof-worker"])
+        self.assertIn("python scripts/region_unittest_shard.py", jobs["region-proof-worker"])
+        self.assertIn("PYTHONOPTIMIZE=2 python scripts/region_unittest_shard.py",
+                      jobs["region-proof-worker"])
+        self.assertIn("--shard-count 2", jobs["region-proof-worker"])
+        self.assertIn('test "$REGION_SHARD" = 0', jobs["region-proof-worker"])
+        self.assertIn("python proof/region/v1/controller.py verify-fixtures", jobs["region-proof-worker"])
+        self.assertIn("--phase positive", jobs["formal-positive"])
+        self.assertIn("--shard-count 5", jobs["formal-positive"])
+        self.assertIn("--phase mutants", jobs["formal-mutants"])
+        self.assertIn("--shard-count 5", jobs["formal-mutants"])
+
+        for aggregate, worker in (
+            ("core-tests", "core-tests-worker"),
+            ("region-proof", "region-proof-worker"),
+            ("authority-mutation", "authority-mutation-worker"),
+        ):
+            with self.subTest(aggregate=aggregate):
+                block = jobs[aggregate]
+                self.assertIn("    if: ${{ always() }}\n", block)
+                self.assertIn(f"    needs: {worker}\n", block)
+                self.assertIn("    permissions: {}\n", block)
+                self.assertNotIn("continue-on-error:", block)
+
+        formal = jobs["formal-core"]
+        self.assertIn("    if: ${{ always() }}\n", formal)
+        self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
+        self.assertIn("--phase assemble", formal)
+        self.assertIn("merge-multiple: true", formal)
+        self.assertIn("run: python3 scripts/test_verify_core_formal.py", formal)
+        self.assertIn(
+            "name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}",
+            formal,
+        )
+
+        aggregate = jobs["test"]
+        self.assertIn("    name: test\n", aggregate)
+        self.assertIn("    if: ${{ always() }}\n", aggregate)
+        self.assertIn("    needs: [core-tests, region-proof, authority-mutation]\n", aggregate)
+        self.assertIn("    permissions: {}\n", aggregate)
+        self.assertNotIn("continue-on-error:", aggregate)
+        for variable, lane in (("CORE_TESTS", "core-tests"),
+                               ("REGION_PROOF", "region-proof"),
+                               ("AUTHORITY_MUTATION", "authority-mutation")):
+            self.assertIn(f"          {variable}: ${{{{ needs.{lane}.result }}}}\n", aggregate)
+
+    def test_parallel_proof_aggregate_executes_fail_closed_results(self) -> None:
+        source = (Path(__file__).resolve().parents[1] /
+                  ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        aggregate = workflow_job_blocks(source, "ci-worker.yml")["test"]
+        self.assertEqual(aggregate.count("        run: |\n"), 1)
+        body = aggregate.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in body.splitlines() if line.startswith(" " * 10))
+        good = {"CORE_TESTS": "success", "REGION_PROOF": "success",
+                "AUTHORITY_MUTATION": "success"}
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in (*good, "BASH_ENV", "ENV")}
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash, "real Bash is required for the native CI aggregate")
+        def execute(values: dict[str, str]) -> subprocess.CompletedProcess:
+            return subprocess.run([bash, "--noprofile", "--norc", "-s"],
+                                  input=script, text=True, capture_output=True,
+                                  env=environment | values, timeout=10, check=False)
+        result = execute(good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for lane in good:
+            for status in ("failure", "cancelled", "skipped", "neutral", "in_progress", "", "unknown"):
+                with self.subTest(lane=lane, status=status):
+                    result = execute(good | {lane: status})
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+            with self.subTest(missing=lane):
+                result = execute({key: value for key, value in good.items() if key != lane})
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_shared_runner_workflows_cancel_stale_prs_without_canceling_running_evidence(
         self,
     ) -> None:
@@ -1791,7 +1927,28 @@ class MutationTruthTest(unittest.TestCase):
         }
         self.assertEqual(
             set(ci_ephemeral),
-            {"node-consumer-floor", "msrv", "lint", "docs", "test", "audit", "wasm"},
+            {
+                "node-consumer-floor",
+                "formal-positive",
+                "formal-mutants",
+                "formal-core",
+                "msrv",
+                "lint",
+                "docs",
+                "test",
+                "core-tests-worker",
+                "core-tests",
+                "region-proof-worker",
+                "region-proof",
+                "authority-mutation-worker",
+                "authority-mutation",
+                "transport-distribution",
+                "transport-distribution-attestation",
+                "evaluate-distribution",
+                "evaluate-distribution-attestation",
+                "audit",
+                "wasm",
+            },
         )
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
@@ -2060,7 +2217,7 @@ const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const sha = '0123456789abcdef0123456789abcdef01234567';
 const prefix = 'Labpics-Team/lab-colors/.github/workflows/';
 const names = [
-  ['Node 22 consumer floor', 'MSRV workspace check', 'clippy + rustfmt',
+  ['Node 22 consumer floor', 'formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
   ['swift conformance (self-hosted Linux, pinned toolchain)'],
@@ -2083,6 +2240,8 @@ const mutations = {
   foreignJob: (_runs, jobs) => { jobs[0][0].run_id = 999; },
   failedJob: (_runs, jobs) => { jobs[0][0].conclusion = 'failure'; },
   duplicateJob: (_runs, jobs) => { jobs[0].push(jobs[0][0]); },
+  missingFormal: (_runs, jobs) => { jobs[0] = jobs[0].filter((job) => !job.name.endsWith('formal core (Kani)')); },
+  skippedFormal: (_runs, jobs) => { jobs[0].find((job) => job.name.endsWith('formal core (Kani)')).conclusion = 'skipped'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {
@@ -2153,6 +2312,80 @@ const mutations = {
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("17 receipt scenarios passed", result.stdout)
+
+    def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
+        workflow, _ = load_publish_worker()
+        # Исполняется настоящий участок проверки метаданных без публикации,
+        # сети, секрета или записи. Остальные границы публикации проверяются отдельно.
+        def scope(start: str, end: str) -> str:
+            self.assertEqual(workflow.count(start), 1)
+            tail = workflow.split(start, 1)[1]
+            self.assertEqual(tail.count(end), 1)
+            return tail.split(end, 1)[0]
+
+        helpers = "const CAPABILITY_SITE_LIST_FIELDS = [" + scope(
+            "          const CAPABILITY_SITE_LIST_FIELDS = [",
+            "          (async () => {",
+        )
+        guard = "const expectedPointCapability = {" + scope(
+            "          const expectedPointCapability = {",
+            "          const expectedSupported = [",
+        )
+        root = Path(__file__).resolve().parents[1]
+        manifest = json.loads((root / "conformance/vectors/manifest.json").read_bytes())
+        harness = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const point = {
+  siteId: 'point-support-retained-reference-surplus-v1',
+  artifactId: 'wcag22-srgb8-luminance-q55-v1',
+  boundId: 'point-support-reference-surplus-q55-bps-v1',
+  proofId: 'point-support-reference-surplus-integer-v1',
+};
+const wcag = {
+  profileId: 'wcag22-srgb8-contrast-v1',
+  artifactId: 'wcag22-srgb8-luminance-q55-v1',
+  boundId: 'wcag22-srgb8-outward-q55-v1',
+  proofId: 'wcag22-srgb8-full-domain-q55-v1',
+};
+const cases = {
+  current: () => {},
+  missing: caps => caps.sites.pop(),
+  extra: caps => caps.sites.push({...caps.sites[0], siteId: 'glow-target-or-maximum-v1'}),
+  duplicate: caps => caps.sites.push(caps.sites[0]),
+  reordered: caps => caps.sites.reverse(),
+  forgedProof: caps => { caps.sites[0].proofIds = ['unrelated-proof']; },
+  compatibility: caps => { caps.sites[0].compatibilityReleases = ['retired-release']; },
+  newField: caps => { caps.sites[0].approved = true; },
+  checksum: caps => { caps.checksum = '00000000'; },
+};
+for (const [label, mutate] of Object.entries(cases)) {
+  const caps = structuredClone(input.capabilities);
+  mutate(caps);
+  const context = {Buffer, point, wcag, manifest: {numericalCapabilities: caps},
+    capabilitySites: caps.sites, fail: message => { throw new Error(message); }};
+  runInNewContext(input.helpers, context, {timeout: 1000});
+  // Кроме испорченного checksum, все подмены самосогласованны по хешу:
+  // отказ должен различать правило, а не только дрейф контрольной суммы.
+  if (label !== 'current' && label !== 'checksum') {
+    caps.checksum = context.capabilityChecksum(caps);
+  }
+  const execute = () => runInNewContext(input.guard, context, {timeout: 1000});
+  if (label === 'current') assert.doesNotThrow(execute);
+  else assert.throws(execute, /numerical capabilities do not exactly bind/, label);
+}
+console.log('9 numerical promotion scenarios passed');
+"""
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", harness],
+            input=json.dumps({"helpers": helpers, "guard": guard,
+                              "capabilities": manifest["numericalCapabilities"]}),
+            text=True, capture_output=True, check=False, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("9 numerical promotion scenarios passed", result.stdout)
 
     def test_publish_worker_secret_context_is_fail_closed(self) -> None:
         _, publish_job = load_publish_worker()
@@ -2671,6 +2904,116 @@ jobs:
         self.assertNotIn("crates/labcolors-core/src/recheck.rs", config)
         self.assertIn("crates/labcolors-core/src/point_support.rs", config)
         self.assertIn("crates/labcolors-core/src/program_identity.rs", config)
+
+
+class AuthorityMutationShardContractTest(unittest.TestCase):
+    def test_required_scopes_partition_every_semantic_mutant_once(self):
+        import authority_mutation_gate as gate
+        gate.validate_scope_partition()
+        self.assertEqual(
+            gate.REQUIRED_SCOPES,
+            ("authority", "tq", "lifecycle-geometry", "cc-selection", "cc-binding",
+             "eval", "science", "cli"),
+        )
+        self.assertEqual(len(gate.MUTATION_SCOPES["cc-selection"]["bounded"]), 5)
+        self.assertEqual(len(gate.MUTATION_SCOPES["cc-binding"]["bounded"]), 5)
+        bounded = (gate.TQ_MUTANTS | gate.LIFECYCLE_MUTANTS | gate.POINT_MUTANTS
+                   | gate.RASTER_MUTANTS | gate.HANDOFF_MUTANTS
+                   | gate.CC_MUTANTS | gate.EVAL_MUTANTS)
+        authority = []
+        selected = []
+        for scope in gate.MUTATION_SCOPES.values():
+            authority.extend(scope["authority"])
+            selected.extend(scope["bounded"])
+        self.assertCountEqual(authority, gate.AUTH_MUTANTS)
+        self.assertEqual(len(authority), len(set(authority)))
+        self.assertCountEqual(selected, bounded)
+        self.assertEqual(len(selected), len(set(selected)))
+
+    def test_external_scopes_do_not_execute_core_mutants(self):
+        from unittest.mock import patch
+        import authority_mutation_gate as gate
+        for scope, script in (("science", "science_certificate_gate.py"),
+                              ("cli", "evaluation_cli_gate.py")):
+            with self.subTest(scope=scope), \
+                 patch.object(gate, "run_mutant") as mutants, \
+                 patch.object(gate, "verify_evaluation_borrows") as borrows, \
+                 patch.object(gate.subprocess, "run") as calls:
+                gate.main(["--scope", scope])
+                mutants.assert_not_called()
+                borrows.assert_not_called()
+                self.assertEqual(calls.call_count, 1)
+                self.assertEqual(calls.call_args.args[0][1], str(gate.ROOT / "scripts" / script))
+                self.assertIs(calls.call_args.kwargs["check"], True)
+
+
+class CliGateWiringTest(unittest.TestCase):
+    def test_required_gate_calls_both_science_and_cli_probes(self):
+        from contextlib import redirect_stdout
+        import io
+        from unittest.mock import patch
+        import authority_mutation_gate as gate
+        # Предметная проверка исполняется отдельно; здесь проверяется реальный
+        # маршрут main с подменёнными дорогими эффектами, не текстовый маркер.
+        with patch.object(gate, "run_mutant"), patch.object(gate, "verify_evaluation_borrows"), \
+             patch.object(gate.subprocess, "run") as calls, redirect_stdout(io.StringIO()):
+            gate.main()
+        scripts = [call.args[0][1] for call in calls.call_args_list]
+        self.assertEqual(scripts, [str(gate.ROOT / "scripts/science_certificate_gate.py"),
+                                   str(gate.ROOT / "scripts/evaluation_cli_gate.py")])
+        for call in calls.call_args_list:
+            self.assertIs(call.kwargs["check"], True)
+            self.assertEqual(call.kwargs["cwd"], gate.ROOT)
+
+
+class CoreConsumerProjectionTest(unittest.TestCase):
+    def test_actual_projection_guard_covers_each_normal_core_consumer(self):
+        import textwrap
+        root = Path(__file__).resolve().parents[1]
+        verify_ci_binding(root, os.environ)
+        workflow = (root / ".github/workflows/ci-worker.yml").read_text()
+        start = "      - name: prove core capability projection boundary\n"
+        self.assertEqual(workflow.count(start), 1)
+        step = workflow.split(start, 1)[1].split("      - name:", 1)[0]
+        source = textwrap.dedent(step.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0])
+        program = compile(source, "actual-ci-core-projection", "exec")
+        original_check_output = subprocess.check_output
+        metadata_command = ["cargo", "metadata", "--format-version", "1", "--no-deps"]
+        metadata = json.loads(original_check_output(metadata_command, cwd=root, text=True))
+        cached_trees = {}
+        def execute(document):
+            def output(command, **kwargs):
+                if command == metadata_command:
+                    return json.dumps(document)
+                self.assertEqual(command[:2], ["cargo", "tree"])
+                key = tuple(command)
+                if key not in cached_trees:
+                    cached_trees[key] = original_check_output(command, cwd=root, **kwargs)
+                return cached_trees[key]
+            with mock.patch.object(subprocess, "check_output", side_effect=output), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                exec(program, {"__name__":"capability_guard"})
+        execute(metadata)
+        consumers = ("labcolors-evaluate-cli", "labcolors-transport-cli", "labcolors-wasm",
+                     "labcolors-ffi", "labcolors-conformance")
+        for consumer in consumers:
+            for mode in ("default", "feature", "missing", "duplicate"):
+                with self.subTest(consumer=consumer, mode=mode):
+                    altered = copy.deepcopy(metadata)
+                    package = next(p for p in altered["packages"] if p["name"] == consumer)
+                    dep = next(d for d in package["dependencies"] if d["name"] == "labcolors-core" and d["kind"] is None)
+                    if mode == "default": dep["uses_default_features"] = True
+                    elif mode == "feature": dep["features"] = ["private-fixture"]
+                    elif mode == "missing": package["dependencies"].remove(dep)
+                    else: package["dependencies"].append(copy.deepcopy(dep))
+                    with self.assertRaisesRegex(SystemExit, consumer):
+                        execute(altered)
+        # Имя прежней optional-библиотеки не разрешает сделать её обязательной.
+        altered = copy.deepcopy(metadata)
+        core = next(p for p in altered["packages"] if p["name"] == "labcolors-core")
+        core["dependencies"].append({"name":"serde", "kind":None, "optional":False})
+        with self.assertRaisesRegex(SystemExit, "zero runtime dependencies"):
+            execute(altered)
 
 
 if __name__ == "__main__":

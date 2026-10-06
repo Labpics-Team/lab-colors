@@ -74,5 +74,5 @@
   "bg=#FFFFFF contract=text(90) hue=264 chroma=neutral": "ok hex=#414141 lc_bits=40567dc4663d6f83 jp_bits=403dbb13a4f6a259 h_ok_bits=0000000000000000 s_bits=3f970efa32c221ba",
   "bg=#FFFFFF contract=ui(45) hue=30 chroma=neutral": "ok hex=#A7A7A7 lc_bits=40467f9543eb6c22 jp_bits=4051df2fbbbc101b h_ok_bits=0000000000000000 s_bits=3f90dc1a48524b3b",
   "bg=#FFFFFF contract=ui(45) hue=30 chroma=relative(0.6)": "ok hex=#E09386 lc_bits=404699861fd893d4 jp_bits=40521fff95c712a3 h_ok_bits=403e05ccd738c54b s_bits=3fd3d1bbbda2be88",
-  "bg=not-a-color contract=text(60) hue=0 chroma=neutral": "err invalid_input message=\"expected #RRGGBB, got #not-a-color\""
+  "bg=not-a-color contract=text(60) hue=0 chroma=neutral": "err invalid_input message=\"expected #RRGGBB, got not-a-color\""
 }

@@ -57,25 +57,11 @@ ARTIFACT_ID = "wcag22-srgb8-luminance-q55-v1"
 SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
-ACCEPTED_SOURCE_CAPSULE_SHA256 = frozenset({
-    # HEAD / Docker-local source cone (canonical, up-to-date files)
-    "84ba61b9d792261d584c5e6e18064b2baee96a1f7ea1f6f9d56a0dcade6d5274",
-    # Stale GitHub PR merge-ref (cached old point_support.rs blob)
-    "2dbd57e677d7334d5d68a165417662da8a19dd2826e427ebd2b645a9242cbf4d",
-    # Current CI merge-ref after EXT-08/EXT-09 merges shifted source hashes
-    "16eb9f2c0dac2417f15987e8f7d65be0025509b71aa7a00b59737abf7561f24b",
-    # PR #691: ci-worker pin update + oracle fixture fix shifted point_support.rs hash
-    "6758df8bf846a423adc27bec71035b0fa2e15db11aea1414beb4da923292cc11",
-    # PR #691: local recomputation after proof payload refresh
-    "62085a606a541329a898bb8de5a2e941de44c493c5a2e74d6ae0717804b48c3c",
-    # PR #752: NUMERIC-01 numerics_bounds registration shifted lib.rs hash
-    "0e15aa3cbdf0e44a01a7162a4834eb0ce0dccab827fc7747f57ae806d183aba9",
-})
 EXPECTED_Q55_PROOF_SHA256 = (
-    "fd544b92e7b4cfa4734f0dd9d90aeb52491df6cf94c766ccf59ec716cbc78d12"
+    "2b2170e20bd24c059a0bbaf8d92603470ec941402f3a08185f54a5e1e41c69ca"
 )
 EXPECTED_Q55_PAYLOAD_SHA256 = (
-    "e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6"
+    "a4e02b4dce47c58310fb3ea9e34af1538ae5813b31b15ddee71a9a1be7bb76f8"
 )
 
 DROP_SCALE = 10_000
@@ -193,14 +179,6 @@ def mutate_source(
 def verify_source_binding() -> tuple[str, int]:
     sources = read_source_cone()
     digest = source_closure_digest(sources)
-    # When running with --emit, skip source binding assertion so the proof
-    # artifact can be regenerated even when local source cone differs from
-    # the expected hash (e.g. due to stale GitHub merge-ref caching).
-    if "--emit" not in sys.argv[1:]:
-        assert digest in ACCEPTED_SOURCE_CAPSULE_SHA256, (
-            f"point-support semantic source drifted: {digest} not in "
-            f"accepted set {sorted(ACCEPTED_SOURCE_CAPSULE_SHA256)}"
-        )
     mutations = (
         (POINT_SOURCE, b"matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::RequiredFailure(_))", b"false"),
@@ -230,7 +208,7 @@ def verify_source_binding() -> tuple[str, int]:
         (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Ready { current }, last_verified)\n                    }\n", b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Stale { previous: current }, last_verified)\n                    }\n"),
         (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => (\n                        SessionState::Failed {\n                            cause,\n                            previous: last_verified,\n                        },\n                        None,\n                    ),\n", b"                    SessionDecision::Violation(_) => (\n                        SessionState::Waiting,\n                        last_verified,\n                    ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
-        (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n            bound_status: Unavailable"),
+        (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
         (APPEARANCE_SOURCE, b"self.opacity\n", b"crate::composition::AdmittedOpacityV1::OPAQUE\n"),
         (CONSTRAINTS_SOURCE, b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();", b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();"),
@@ -244,7 +222,7 @@ def verify_source_binding() -> tuple[str, int]:
         (HASH_SOURCE, b"const FNV1A_32_PRIME: u32 = 16777619;", b"const FNV1A_32_PRIME: u32 = 16777621;"),
         (LIB_SOURCE, b"pub(crate) mod point_support;", b"#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;"),
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
-        (Q55_PROOF, b'"proof_payload_sha256":"e0f7d6f57fa1ab547e8d0fa13844ca3b010f594fad79a8504ee5f2d81cba23f6"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
+        (Q55_PROOF, b'"proof_payload_sha256":"a4e02b4dce47c58310fb3ea9e34af1538ae5813b31b15ddee71a9a1be7bb76f8"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)
@@ -818,44 +796,21 @@ def main() -> int:
     emit_only = sys.argv[1:] == ["--emit"]
     if sys.argv[1:] not in ([], ["--emit"]):
         raise ValueError("usage: verify_point_support_surplus.py [--emit|--source-closure-digest]")
-    if emit_only:
-        proof = canonical_proof()
-        canonical = json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n"
-        sys.stdout.write(canonical)
-        print("point-support retained-surplus independent verification: PASS", file=sys.stderr)
-        return 0
-
-    # Verification mode: read committed proof and verify internal consistency.
-    # We do NOT recompute canonical_proof() from local files because GitHub PR
-    # merge-ref may contain stale source files with a different source cone hash
-    # than local HEAD. Instead, we verify the committed proof is self-consistent
-    # by checking that its proof_payload_sha256 matches its own payload content,
-    # and that its source_closure_sha256 is in the accepted set.
-    committed_text = PROOF_PATH.read_text(encoding="utf-8-sig")
-    committed_proof = json.loads(committed_text)
-    claimed_source_hash = committed_proof["source_closure_sha256"]
-    assert claimed_source_hash in ACCEPTED_SOURCE_CAPSULE_SHA256, (
-        f"committed proof source_closure_sha256 {claimed_source_hash} not in "
-        f"accepted set {sorted(ACCEPTED_SOURCE_CAPSULE_SHA256)}"
-    )
-    # Verify proof_payload_sha256 internal consistency
-    payload_for_hash = dict(committed_proof)
-    claimed_payload_hash = payload_for_hash.pop("proof_payload_sha256")
-    canonical_payload_bytes = json.dumps(
-        payload_for_hash, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    assert sha256(canonical_payload_bytes) == claimed_payload_hash, (
-        "committed proof_payload_sha256 does not match proof content"
-    )
-    # Verify byte-exact canonical form (no trailing whitespace, sorted keys)
-    expected_canonical = json.dumps(committed_proof, sort_keys=True, separators=(",", ":")) + "\n"
-    assert committed_text == expected_canonical, (
-        "committed point-support surplus proof is not in canonical JSON form; "
-        "regenerate explicitly with --emit only after numerical review"
-    )
-    sys.stdout.write(expected_canonical)
+    # Проверка и явная генерация исполняют один независимый replay.
+    # Исторический digest или самосогласованный JSON не удостоверяют ни
+    # текущие исходники, ни численное содержимое записанного доказательства.
+    proof = canonical_proof()
+    canonical = json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n"
+    if not emit_only:
+        assert PROOF_PATH.read_bytes() == canonical.encode("utf-8"), (
+            "committed point-support surplus proof does not match the current "
+            "source and independent numerical replay; regenerate explicitly "
+            "with --emit only after numerical review"
+        )
+    sys.stdout.write(canonical)
     print("point-support retained-surplus independent verification: PASS", file=sys.stderr)
     return 0
+
 
 
 if __name__ == "__main__":

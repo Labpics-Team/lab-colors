@@ -30,5 +30,7 @@ jobs:
     name: CI
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     # GitHub загружает локальный reusable workflow из snapshot самого caller'а.
     uses: ./.github/workflows/ci-worker.yml

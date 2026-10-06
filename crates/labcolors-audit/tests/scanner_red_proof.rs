@@ -16,26 +16,44 @@ fn workspace_root() -> &'static std::path::Path {
     })
 }
 
-/// RED-proof floor: ParallelSsot extractor finds at least the known SSOT markers.
-///
-/// Baseline: 51 occurrences of SSOT-TRACKED/GROUNDED across 6 production files
-/// in labcolors-core/src/ (measured 2026-08-29). Floor set conservatively at 40
-/// to absorb minor refactors without breaking the invariant.
+/// Проверяем действующих владельцев маркеров, не историческое количество
+/// удалённых рецептов. Пустой или частичный скан не проходит тот же критерий.
 #[test]
-fn parallel_ssot_floor_count() {
-    let source_root = workspace_root();
-
-    let artifacts = enumerate_production_artifacts(source_root);
-    let ssot_count = artifacts
-        .iter()
-        .filter(|a| a.class == ArtifactClass::ParallelSsot)
-        .count();
-
+fn parallel_ssot_covers_current_marker_sources() {
+    let artifacts = enumerate_production_artifacts(workspace_root());
+    let required = [
+        ("crates/labcolors-core/src/lpc.rs", "grounded:"),
+        ("crates/labcolors-core/src/lpc.rs", "ssot-tracked:"),
+        ("crates/labcolors-core/src/neutral.rs", "ssot-tracked:"),
+        ("crates/labcolors-core/src/scale.rs", "ssot-tracked:"),
+        ("crates/labcolors-core/src/solve.rs", "ssot-tracked:"),
+    ];
+    let complete = |rows: &[labcolors_audit::RawArtifact]| {
+        required.iter().all(|(path, marker)| {
+            rows.iter().any(|row| {
+                row.class == ArtifactClass::ParallelSsot
+                    && row.module == *path
+                    && row.raw_key.starts_with(marker)
+            })
+        })
+    };
     assert!(
-        ssot_count >= 40,
-        "ParallelSsot floor violated: expected >= 40, found {ssot_count}. \
-         SSOT-TRACKED/GROUNDED markers may have been removed or scanner regressed."
+        complete(&artifacts),
+        "скан потерял действующего владельца маркеров"
     );
+    assert!(!complete(&[]), "пустой скан не доказывает покрытие");
+    for (path, marker) in required {
+        let missing: Vec<_> = artifacts
+            .iter()
+            .filter(|row| {
+                !(row.class == ArtifactClass::ParallelSsot
+                    && row.module == path
+                    && row.raw_key.starts_with(marker))
+            })
+            .cloned()
+            .collect();
+        assert!(!complete(&missing), "пропуск {path}/{marker} не обнаружен");
+    }
 }
 
 /// RED-proof floor: PublicClaim extractor finds module-level doc sections.

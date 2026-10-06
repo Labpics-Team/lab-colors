@@ -209,3 +209,9 @@ pub(crate) fn admit_finite_joint_order_v1(
         rest: rest.into_boxed_slice(),
     })
 }
+
+#[cfg(kani)]
+mod proofs;
+
+#[cfg(test)]
+mod tests;

@@ -575,12 +575,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "labcolors-evaluate-cli"
+version = "0.3.0"
+dependencies = [
+ "labcolors-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "labcolors-ffi"
 version = "0.3.0"
 dependencies = [
  "labcolors-core",
  "thiserror",
  "uniffi",
+]
+
+[[package]]
+name = "labcolors-transport-cli"
+version = "0.3.0"
+dependencies = [
+ "labcolors-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -4,8 +4,6 @@
 //! существует только под `cfg(test)`, чтобы golden/property тесты не стирали
 //! разные причины терминального отказа в один правдоподобный sentinel.
 
-use crate::semantic::RoleFailure;
-
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -183,14 +181,4 @@ fn allocator_event_counter_distinguishes_alloc_realloc_and_dealloc() {
             dealloc: 1,
         }
     );
-}
-
-/// Stable representation of an already-admitted role failure. Admission lives
-/// in production; tests only format the typed category and core-owned code.
-pub(crate) fn role_failure_repr(failure: &RoleFailure) -> String {
-    format!(
-        "FAILURE({},{})",
-        failure.category().as_str(),
-        failure.code()
-    )
 }

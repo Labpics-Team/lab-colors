@@ -174,6 +174,7 @@ impl LcsColor {
     /// the `oklab_hue` step too: it is purely `rgb → XYZ → CAM16 → M'`. It is the
     /// allocation-free equivalent of `from_hex_with_vc(hex_from_srgb(rgb))?.mp()`
     /// for callers that have already quantised `rgb` to the display grid.
+    #[cfg(test)]
     pub(crate) fn mp_of_linear_srgb(rgb: [f64; 3], vc: &ViewingConditions) -> f64 {
         let xyz = srgb_to_xyz(rgb);
         // h_ok is irrelevant to M'; pass 0.0 to avoid the oklab_hue computation.

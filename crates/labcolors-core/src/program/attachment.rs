@@ -18,8 +18,8 @@ use crate::session::PreparedSessionDispositionV1;
 
 use super::{
     CorePreparedSessionTransitionV1, EvidenceViewV1, InstantiateErrorV1, OccurrenceIdV1,
-    OutputSlotIdV1, OwnerV1, PresentationRootIdV1, SessionState, SessionV1, UpdateErrorV1,
-    UpdateV1, VerifiedCertificateV1,
+    OutputSlotIdV1, OwnerV1, PresentationRootIdV1, SessionV1, UpdateErrorV1, UpdateV1,
+    VerifiedCertificateV1,
 };
 
 /// Sealing оставляет реализации физического writer внутри пакета.
@@ -565,6 +565,7 @@ pub(crate) enum AttachmentCreateFailureKindV1 {
     Instantiate,
     SinkAdmission,
     ResourceExhausted,
+    InternalInvariant,
 }
 
 impl<L> AttachmentCreateFailureV2<L>
@@ -574,8 +575,17 @@ where
     pub(crate) const fn kind(&self) -> AttachmentCreateFailureKindV1 {
         match self {
             Self::Contract { cause, .. } => match cause {
-                AttachmentCreateErrorV1::ResourceExhausted => {
+                AttachmentCreateErrorV1::ResourceExhausted
+                | AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::ResourceExhausted) => {
                     AttachmentCreateFailureKindV1::ResourceExhausted
+                }
+                AttachmentCreateErrorV1::InternalInvariant
+                | AttachmentCreateErrorV1::InvalidPointBinding {
+                    cause: PointOutputPresentationBindErrorV1::InternalInvariant,
+                    ..
+                }
+                | AttachmentCreateErrorV1::Instantiate(InstantiateErrorV1::InternalInvariant) => {
+                    AttachmentCreateFailureKindV1::InternalInvariant
                 }
                 AttachmentCreateErrorV1::Instantiate(_) => {
                     AttachmentCreateFailureKindV1::Instantiate
@@ -784,12 +794,11 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
     }
 
     pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId> {
-        let certificate = match self.evidence.state() {
-            SessionState::Ready { current } => Some(VerifiedCertificateV1 { inner: current }),
-            SessionState::Waiting | SessionState::Stale { .. } | SessionState::Failed { .. } => {
-                None
-            }
-        };
+        let certificate = self
+            .evidence
+            .state()
+            .current_verified()
+            .map(|current| VerifiedCertificateV1 { inner: current });
         AttachedRenderOutputsV1 {
             certificate,
             committed_render_patch: self.committed_render_patch,
@@ -1631,3 +1640,6 @@ pub(crate) mod handoff;
 pub(crate) mod support;
 #[cfg(test)]
 mod tests;
+
+#[cfg(kani)]
+mod proofs;

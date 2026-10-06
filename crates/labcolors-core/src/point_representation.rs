@@ -665,3 +665,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod frontier_tests;

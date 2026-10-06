@@ -235,6 +235,17 @@ class TestsRecordTests(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn("~ rust.enabled_count", err)
 
+    def test_same_count_replacement_cannot_hide_a_missing_rust_test(self) -> None:
+        def mutate(record: dict) -> None:
+            self.victim = record["rust"]["enabled"].pop()
+            record["rust"]["enabled"].append("unrelated_padding_probe: test")
+            record["rust"]["enabled"].sort()
+        code, err = self._with_mutated_extraction(mutate)
+        self.assertEqual(code, 1, err)
+        self.assertIn(f"- rust.enabled: {json.dumps(self.victim)}", err)
+        self.assertIn('+ rust.enabled: "unrelated_padding_probe: test"', err)
+        self.assertNotIn("~ rust.enabled_count", err)
+
     def test_python_module_that_fails_to_import_is_drift(self) -> None:
         def mutate(record: dict) -> None:
             suite = record["python"][0]
@@ -424,18 +435,86 @@ class ToolingTests(unittest.TestCase):
 
     def test_required_ci_executes_gate_and_sabotage_suites(self) -> None:
         # Инвентарь без исполнения — ровно тот дефект, который закрывает ARTIFACT-01.
-        commands = job_run_commands(CI_WORKER.read_text("utf-8"), "test")
-        self.assertGreater(len(commands), 5, "test job run steps not found")
-        self.assertIn("python3 scripts/artifact_matrix.py check", commands)
+        text = CI_WORKER.read_text("utf-8")
+        commands = job_run_commands(text, "core-tests-worker")
+        self.assertGreater(len(commands), 5, "core-tests worker run steps not found")
+        self.assertEqual(commands.count("python3 scripts/artifact_matrix.py check"), 1)
+        self.assertIn("cargo test --workspace --locked", commands)
+        self.assertFalse((REPO_ROOT / "scripts/check-floor-baseline.ps1").exists())
+        self.assertFalse((REPO_ROOT / "proof/floor/baseline.json").exists())
+        self.assertNotIn("check-floor-baseline", "\n".join(commands))
         self.assertIn("python3 -m unittest discover -s scripts -p 'test_extract_*.py'", commands)
         self.assertIn("python3 scripts/test_artifact_matrix.py", commands)
         joined = "\n".join(commands)
         self.assertNotRegex(joined, r"extract_\w+\.py extract \| python3 scripts/extract_\w+\.py verify")
-        # Ни один шаг обязательного job не должен быть условным или неблокирующим.
-        text = CI_WORKER.read_text("utf-8")
-        start = text.index("\n  test:\n")
-        end = text.index("\n  audit:\n", start)
-        self.assertNotRegex(text[start:end], r"^\s+(if|continue-on-error):", "test job steps must be unconditional")
+
+        def require_sharded_contract(source: str) -> None:
+            worker = re.search(
+                r"(?ms)^  core-tests-worker:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+                source,
+            )
+            self.assertIsNotNone(worker, "core-tests worker must exist")
+            block = worker[1]
+            self.assertIn(
+                "    strategy:\n"
+                "      fail-fast: false\n"
+                "      max-parallel: 3\n"
+                "      matrix:\n"
+                "        lane: [default, private-fixture, proof-contracts]\n",
+                block,
+            )
+            self.assertNotRegex(block, r"(?m)^    if:")
+            self.assertNotIn("continue-on-error:", block)
+            self.assertIn(
+                "      - name: cargo test\n"
+                "        if: ${{ matrix.lane == 'default' }}\n"
+                "        run: cargo test --workspace --locked\n",
+                block,
+            )
+            for step in (
+                "artifact matrix - pinned records reproduce",
+                "artifact matrix - extractor sabotage suites",
+                "artifact matrix - gate anti-vacuum mutants",
+            ):
+                self.assertIn(
+                    f"      - name: {step}\n"
+                    "        if: ${{ matrix.lane == 'proof-contracts' }}\n",
+                    block,
+                )
+
+            aggregate = re.search(
+                r"(?ms)^  core-tests:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+                source,
+            )
+            self.assertIsNotNone(aggregate, "stable core-tests aggregate must exist")
+            aggregate_block = aggregate[1]
+            self.assertIn("    if: ${{ always() }}\n", aggregate_block)
+            self.assertIn("    needs: core-tests-worker\n", aggregate_block)
+            self.assertIn('test "$CORE_SHARDS" = success', aggregate_block)
+            self.assertNotIn("continue-on-error:", aggregate_block)
+
+        require_sharded_contract(text)
+        mutations = (
+            (
+                "  core-tests-worker:\n",
+                "  core-tests-worker:\n    if: false\n",
+            ),
+            (
+                "      - name: artifact matrix - pinned records reproduce\n"
+                "        if: ${{ matrix.lane == 'proof-contracts' }}\n",
+                "      - name: artifact matrix - pinned records reproduce\n"
+                "        if: false\n",
+            ),
+            (
+                "  core-tests:\n",
+                "  core-tests:\n    continue-on-error: true\n",
+            ),
+        )
+        for anchor, replacement in mutations:
+            self.assertEqual(text.count(anchor), 1)
+            mutant = text.replace(anchor, replacement, 1)
+            with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
+                require_sharded_contract(mutant)
 
     def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
         # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый

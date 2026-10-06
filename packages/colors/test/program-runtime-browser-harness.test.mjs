@@ -30,7 +30,10 @@ test("packed browser files include only the runtime's exact generated snippet", 
   const installed = mkdtempSync(join(tmpdir(), "labcolors-browser-files-"));
   try {
     const snippet = "snippets/labcolors-wasm-0123456789abcdef/inline0.js";
-    for (const file of ["index.js", "program-wire/abi-v1.js", "pkg/labcolors_bg.wasm", `pkg/${snippet}`]) {
+    for (const file of [
+      "index.js", "package.json", "build-metadata.json", "program-wire/abi-v1.js",
+      "pkg/labcolors_bg.wasm", `pkg/${snippet}`,
+    ]) {
       const destination = join(installed, file);
       mkdirSync(dirname(destination), { recursive: true });
       writeFileSync(destination, "fixture\n");
@@ -39,7 +42,8 @@ test("packed browser files include only the runtime's exact generated snippet", 
     writeFileSync(join(installed, "pkg", "unexpected.js"), "must not be served\n");
     const files = await packedBrowserFiles(installed);
     assert.deepEqual([...files.keys()].sort(), [
-      "/index.js", "/pkg/labcolors.js", "/pkg/labcolors_bg.wasm",
+      "/index.js", "/package.json", "/build-metadata.json",
+      "/pkg/labcolors.js", "/pkg/labcolors_bg.wasm",
       `/pkg/${snippet}`, "/program-wire/abi-v1.js",
     ].sort());
   } finally {

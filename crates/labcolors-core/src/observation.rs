@@ -1168,3 +1168,6 @@ fn try_reserve_total<T>(storage: &mut Vec<T>, required: usize) -> Result<(), Obs
     }
     Ok(())
 }
+
+#[cfg(kani)]
+mod proofs;

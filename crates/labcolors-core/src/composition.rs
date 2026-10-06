@@ -33,6 +33,7 @@ pub(crate) enum CompositionProfileV1 {
 pub(crate) struct AdmittedOpacityV1(u64);
 
 impl AdmittedOpacityV1 {
+    #[cfg(any(test, kani))]
     pub(crate) const TRANSPARENT: Self = Self(0.0f64.to_bits());
     pub(crate) const OPAQUE: Self = Self(1.0f64.to_bits());
 
@@ -56,6 +57,7 @@ impl AdmittedOpacityV1 {
     }
 
     /// Непосредственный binary64 predecessor внутри канонического `[0,1]`.
+    #[cfg(any(test, kani))]
     pub(crate) const fn predecessor(self) -> Option<Self> {
         if self.0 == Self::TRANSPARENT.0 {
             None
@@ -73,6 +75,7 @@ impl AdmittedOpacityV1 {
 
 /// Typed отказ admission замкнутого opacity-domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(test, kani))]
 pub(crate) enum OpacityDomainAdmissionErrorV1 {
     /// Нижняя граница сама не является допустимой opacity.
     InvalidLower(OpacityAdmissionErrorV1),
@@ -88,11 +91,13 @@ pub(crate) enum OpacityDomainAdmissionErrorV1 {
 /// слой не получает второй variant и не может случайно применить recourse к
 /// числу, которое клиент объявил фиксированным.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(test, kani))]
 pub(crate) struct OpacityDomainV1 {
     lower: AdmittedOpacityV1,
     upper: AdmittedOpacityV1,
 }
 
+#[cfg(any(test, kani))]
 impl OpacityDomainV1 {
     pub(crate) fn try_new(lower: f64, upper: f64) -> Result<Self, OpacityDomainAdmissionErrorV1> {
         let lower =
@@ -258,3 +263,6 @@ mod tests {
         assert!(predecessor.value() < 1.0);
     }
 }
+
+#[cfg(kani)]
+mod proofs;

@@ -270,14 +270,22 @@ clean-set verification: FAIL: receipt artifact[6] bytes do not match receipt met
 point-support retained-surplus independent verification: FAIL: point-support semantic source drifted
 ```
 
-Перегенерируйте четыре артефакта по цепочке, каждый следующий из предыдущего:
+Обновляйте привязки только после проверки исходного изменения:
 
-1. запись `crates/labcolors-core/src/lib.rs` (поля `bytes` и `sha256`) в
-   `crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.json`;
-2. `crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256`;
-3. `EXPECTED_SOURCE_CAPSULE_SHA256` в `scripts/verify_point_support_surplus.py`;
-4. `crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json`
-   — только через `python3 scripts/verify_point_support_surplus.py --emit`.
+```sh
+python3 scripts/refresh_clean_set_receipt.py
+proof_output="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/point-support-proof.XXXXXXXX.json")"
+python3 scripts/verify_point_support_surplus.py --emit > "$proof_output"
+```
+
+Первая команда обновляет записи текущих исходников и единственный
+`receipt-v1.sha256`. Вторая повторно выполняет независимые численные проверки.
+Сопоставьте полученный JSON с действующим артефактом: при правке документации
+или регистрации модулей допустимы только изменённые идентичности исходников,
+их общего набора и содержимого доказательства. После этого замените
+`crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json`
+проверенным результатом, затем удалите временный файл `"$proof_output"`. Отдельного вручную редактируемого
+`EXPECTED_SOURCE_CAPSULE_SHA256` в текущем проверяющем скрипте нет.
 
 Проверьте обоими верификаторами:
 

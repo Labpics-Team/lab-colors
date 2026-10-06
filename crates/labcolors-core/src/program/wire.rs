@@ -1222,3 +1222,6 @@ impl ProgramWireBuilderV1 {
         Ok(bytes)
     }
 }
+
+#[cfg(kani)]
+mod proofs;

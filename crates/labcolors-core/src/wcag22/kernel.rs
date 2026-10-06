@@ -226,3 +226,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(kani)]
+#[path = "kernel/proofs.rs"]
+mod proofs;
