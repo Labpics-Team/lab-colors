@@ -66,3 +66,10 @@ packages/colors/bench/wasm.json text eol=lf
 proof/artifact/*.json text eol=lf
 scripts/artifact_matrix.py text eol=lf
 scripts/test_artifact_matrix.py text eol=lf
+
+# Versioned scientific inputs preserve original, hash-bound source bytes.
+/proof/clean-set-srgb8/v2/** -text
+/proof/clean-set-srgb8/v2/geometry/input/** -diff
+/proof/clean-set-srgb8/v2/primary/** -diff
+/proof/clean-set-srgb8/v2/audits/*/input/** -diff
+/proof/clean-set-srgb8/v2/LICENSES/** -diff

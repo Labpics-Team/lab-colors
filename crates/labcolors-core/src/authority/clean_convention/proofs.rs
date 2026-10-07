@@ -15,7 +15,7 @@ fn selection_admits_exactly_declared_modeled_point_release() {
         1 => CleanConventionAdmissionKindV1::ProductionAuto,
         _ => CleanConventionAdmissionKindV1::HumanAction,
     };
-    let exact_release = release == EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+    let exact_release = release == EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
     let exact_scope = scope == CleanConventionScopeV1::ModeledSrgb8Point;
     let exact_admission =
         admission == CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate;

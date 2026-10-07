@@ -1,0 +1,49 @@
+{
+  "admission": {
+    "authority": "ExactTechnicalDerivation",
+    "convention": "DeclaredPackagePolicyCandidate",
+    "production_auto_minted": false
+  },
+  "excluded_claims": [
+    "ideal algebraic IEC 61966-2-1 transfer semantics",
+    "chromatic adaptation",
+    "physical applicability of object-colour geometry to self-luminous display",
+    "human cleanliness law or population guarantee",
+    "continuous-spectrum or full CIE wavelength-range theorem",
+    "published measurement-error enclosure for printed xyY values",
+    "unconditional raw-column interpretation or stimulus identity",
+    "independent human holdout validation of the fitted frontier"
+  ],
+  "proof_capsule": {
+    "bytes": 11919,
+    "manifest": "PROOF-MANIFEST.json",
+    "sha256": "2c4eb64a7cd5a0ba50760297e74371d093eca2c1143684153a89892a81273778"
+  },
+  "release_id": "exact-nominal-srgb8-point-clean-set-v2",
+  "runtime_contract": {
+    "accepted_points": 8342111,
+    "codec": {
+      "bytes": 11280,
+      "header_hex": "4c50434301010000",
+      "id": "green-column-red-run-start-rle-v1",
+      "records": 3586,
+      "sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+    },
+    "domain_id": "encoded-srgb8-u8-cube-v1",
+    "domain_points": 16777216,
+    "law_id": "neutral-or-blue-outside-closed-dirty-interval-v1",
+    "neutral_axis_id": "srgb8-output-neutral-axis-v1",
+    "raw": {
+      "bytes": 131072,
+      "id": "raw-dirty-blue-interval-u8-pair-v1",
+      "sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e"
+    }
+  },
+  "schema": "lab-point-clean-set-srgb8-release/2",
+  "supersedes": {
+    "delta_path": "historical-v1/DELTA.json",
+    "delta_sha256": "b4e4670998717659bcd95478e4a0ff752527bd8357345adf470066474d664f05",
+    "derivation_status": "Unrecovered",
+    "release_sha256": "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6"
+  }
+}

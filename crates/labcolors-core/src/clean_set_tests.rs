@@ -1,14 +1,14 @@
 use crate::Srgb8;
 use crate::clean_set::{
-    EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V1, EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V1,
-    EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V1, ExactNominalSrgb8CleanSetDecisionV1,
-    ExactNominalSrgb8CleanSetV1, RejectedBlueIntervalV1, exact_nominal_srgb8_clean_set_codec_v1,
+    EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V2, EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V2,
+    EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V2, ExactNominalSrgb8CleanSetDecisionV1,
+    ExactNominalSrgb8CleanSetV2, RejectedBlueIntervalV1, exact_nominal_srgb8_clean_set_codec_v1,
 };
 use crate::sha256::Hasher;
 
 #[test]
 fn neutral_axis_precedes_declared_rejected_interval() {
-    let profile = ExactNominalSrgb8CleanSetV1;
+    let profile = ExactNominalSrgb8CleanSetV2;
 
     assert_eq!(
         profile.classify(Srgb8::new([0x80, 0x80, 0x80])),
@@ -22,19 +22,19 @@ fn neutral_axis_precedes_declared_rejected_interval() {
 
 #[test]
 fn closed_interval_endpoints_are_rejected() {
-    let profile = ExactNominalSrgb8CleanSetV1;
-    let interval = profile.rejected_blue_interval(0, 200);
+    let profile = ExactNominalSrgb8CleanSetV2;
+    let interval = profile.rejected_blue_interval(0, 199);
 
-    assert_eq!(interval, RejectedBlueIntervalV1::Closed { lo: 71, hi: 101 },);
-    for blue in [70, 71, 101, 102] {
-        let decision = profile.classify(Srgb8::new([0, 200, blue]));
+    assert_eq!(interval, RejectedBlueIntervalV1::Closed { lo: 64, hi: 108 },);
+    for blue in [63, 64, 108, 109] {
+        let decision = profile.classify(Srgb8::new([0, 199, blue]));
         assert_eq!(
             matches!(decision, ExactNominalSrgb8CleanSetDecisionV1::Rejected(_)),
-            (71..=101).contains(&blue),
+            (64..=108).contains(&blue),
             "closed-boundary semantics drifted at blue={blue}",
         );
         if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) = decision {
-            assert_eq!(interval.endpoints(), [71, 101]);
+            assert_eq!(interval.endpoints(), [64, 108]);
         }
     }
 }
@@ -48,13 +48,13 @@ fn embedded_codec_has_the_package_pinned_content_identity() {
     digest.update(codec);
     assert_eq!(
         digest.finalize().as_bytes(),
-        &EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V1,
+        &EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V2,
     );
 }
 
 #[test]
 fn table_none_sentinel_is_not_absent_final_owned_domain() {
-    let profile = ExactNominalSrgb8CleanSetV1;
+    let profile = ExactNominalSrgb8CleanSetV2;
 
     assert_eq!(
         profile.rejected_blue_interval(255, 0),
@@ -70,7 +70,7 @@ fn table_none_sentinel_is_not_absent_final_owned_domain() {
 
 #[test]
 fn runtime_classifier_matches_the_content_bound_total_table() {
-    let profile = ExactNominalSrgb8CleanSetV1;
+    let profile = ExactNominalSrgb8CleanSetV2;
     let mut accepted = 0_u32;
     let mut raw_table = Hasher::new();
 
@@ -94,7 +94,29 @@ fn runtime_classifier_matches_the_content_bound_total_table() {
 
     assert_eq!(
         raw_table.finalize().as_bytes(),
-        &EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V1,
+        &EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V2,
     );
-    assert_eq!(accepted, EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V1,);
+    assert_eq!(accepted, EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V2,);
+}
+
+#[test]
+fn nominal_v2_uses_the_independently_replayed_boundary() {
+    let profile = ExactNominalSrgb8CleanSetV2;
+    assert_eq!(
+        profile.classify(Srgb8::new([0, 0, 198])),
+        ExactNominalSrgb8CleanSetDecisionV1::Accepted,
+    );
+    assert_eq!(
+        profile.rejected_blue_interval(0, 199),
+        RejectedBlueIntervalV1::Closed { lo: 64, hi: 108 },
+    );
+    for blue in [63, 64, 108, 109] {
+        assert_eq!(
+            matches!(
+                profile.classify(Srgb8::new([0, 199, blue])),
+                ExactNominalSrgb8CleanSetDecisionV1::Rejected(_)
+            ),
+            (64..=108).contains(&blue),
+        );
+    }
 }

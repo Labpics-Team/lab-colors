@@ -1,0 +1,8839 @@
+{
+  "status": "UnpublishedResearchCandidate",
+  "source_pins": {
+    "cmf": {
+      "archive_path": "colors-nominal-model-input-closure-20261002/primary/cie-cmf.csv",
+      "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1"
+    },
+    "spd": {
+      "archive_path": "colors-nominal-model-input-closure-20261002/primary/cie-d65.csv",
+      "sha256": "e76f210bffff3d552ef7113025da5f325d5dfec200dd4b878b1a2f3a507032cb"
+    },
+    "join": {
+      "archive_path": "colors-sato-input-identity-20261002/STIMULUS-JOIN.json",
+      "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df"
+    },
+    "bridge": {
+      "archive_path": "audits/bridge/input/bridge.json",
+      "sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab"
+    },
+    "witnesses": {
+      "archive_path": "colors-sato-exact-witnesses-20261002/results/WITNESSES.json",
+      "sha256": "31a98acd8a180a852c238ab3ad1aaa3f67050da950c79d849ebe58cb8f67465b"
+    }
+  },
+  "spectral_rule": {
+    "grid_nm": {
+      "first": 360,
+      "last": 780,
+      "step": 1,
+      "count": 421
+    },
+    "weights": "Все native rows; относительный вес каждой строки 1.",
+    "generator": "v_i = S_D65(lambda_i) * (xbar_i, ybar_i, zbar_i)",
+    "normalization": "Явный gauge k=1. Общий положительный множитель сокращается только вместе с regenerated T.",
+    "basis": "NOTICE.md:30–32 фиксирует диапазон; CIE ISO/CIE11664-3:2019 описывает summation с шагом1nm. Это abbreviated package range, не полный standard360..830."
+  },
+  "measured_mapping": "Literal xY/y, Y, (1-x-y)Y/y из условного TableS1 join; Y не перенормируется. Это объявленная численная координата без вывода физической единицы.",
+  "query_mapping": "scale100 * pinned exact-dyadic matrix * pinned decode; без скрытой adaptation.",
+  "generators": [
+    {
+      "wavelength_nm": 360,
+      "xyz": [
+        {
+          "numerator": "605831517",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "1826822211",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "2826747363",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 361,
+      "xyz": [
+        {
+          "numerator": "34407786699",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "1036520448777",
+          "denominator": "5000000000000000"
+        },
+        {
+          "numerator": "200788722783",
+          "denominator": "6250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 362,
+      "xyz": [
+        {
+          "numerator": "156360570597",
+          "denominator": "20000000000000"
+        },
+        {
+          "numerator": "117641302257",
+          "denominator": "500000000000000"
+        },
+        {
+          "numerator": "5706133089",
+          "denominator": "156250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 363,
+      "xyz": [
+        {
+          "numerator": "177650052239",
+          "denominator": "20000000000000"
+        },
+        {
+          "numerator": "66763891799",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "207579042957",
+          "denominator": "5000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 364,
+      "xyz": [
+        {
+          "numerator": "252258154943",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "303077829357",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "294923170413",
+          "denominator": "6250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 365,
+      "xyz": [
+        {
+          "numerator": "1145731477",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "687636341",
+          "denominator": "2000000000000"
+        },
+        {
+          "numerator": "268044891",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 366,
+      "xyz": [
+        {
+          "numerator": "1016611063",
+          "denominator": "78125000000"
+        },
+        {
+          "numerator": "243717740267",
+          "denominator": "625000000000000"
+        },
+        {
+          "numerator": "19036869549",
+          "denominator": "312500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 367,
+      "xyz": [
+        {
+          "numerator": "5914710697",
+          "denominator": "400000000000"
+        },
+        {
+          "numerator": "552932867263",
+          "denominator": "1250000000000000"
+        },
+        {
+          "numerator": "692595316931",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 368,
+      "xyz": [
+        {
+          "numerator": "41996064183",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "1254553050429",
+          "denominator": "2500000000000000"
+        },
+        {
+          "numerator": "787208310631",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 369,
+      "xyz": [
+        {
+          "numerator": "1191677951",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "7115153089",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "5587002349",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 370,
+      "xyz": [
+        {
+          "numerator": "2161176759",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "645383949",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "506826943",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 371,
+      "xyz": [
+        {
+          "numerator": "2407948579099",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "720395012057",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "1129780618729",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 372,
+      "xyz": [
+        {
+          "numerator": "16758836419",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "6279598839",
+          "denominator": "7812500000000"
+        },
+        {
+          "numerator": "157311852647",
+          "denominator": "1250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 373,
+      "xyz": [
+        {
+          "numerator": "2993929757",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "2243818767",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "28114528323",
+          "denominator": "200000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 374,
+      "xyz": [
+        {
+          "numerator": "3357665039639",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "8028350479",
+          "denominator": "8000000000000"
+        },
+        {
+          "numerator": "98582117623",
+          "denominator": "625000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 375,
+      "xyz": [
+        {
+          "numerator": "473069421",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "561865623",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "889492989",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 376,
+      "xyz": [
+        {
+          "numerator": "536814559983",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "252474673737",
+          "denominator": "200000000000000"
+        },
+        {
+          "numerator": "2020246138443",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 377,
+      "xyz": [
+        {
+          "numerator": "76272368027",
+          "denominator": "1562500000000"
+        },
+        {
+          "numerator": "44348654753",
+          "denominator": "31250000000000"
+        },
+        {
+          "numerator": "1795407191",
+          "denominator": "7812500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 378,
+      "xyz": [
+        {
+          "numerator": "275917293459",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "49659614379",
+          "denominator": "31250000000000"
+        },
+        {
+          "numerator": "16248127689",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 379,
+      "xyz": [
+        {
+          "numerator": "308939013413",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "1767342222749",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "2912299133183",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 380,
+      "xyz": [
+        {
+          "numerator": "17091621",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "3898089",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "644684049951",
+          "denominator": "2000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 381,
+      "xyz": [
+        {
+          "numerator": "3788380387",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "6750886031",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "55827695007",
+          "denominator": "156250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 382,
+      "xyz": [
+        {
+          "numerator": "1045136481",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1194211143",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "2464517463",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 383,
+      "xyz": [
+        {
+          "numerator": "463007603643",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "33131679451",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "136489448953",
+          "denominator": "312500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 384,
+      "xyz": [
+        {
+          "numerator": "517346116811",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "37053594843",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "152529146207",
+          "denominator": "312500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 385,
+      "xyz": [
+        {
+          "numerator": "146211481",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "261559",
+          "denominator": "78125000"
+        },
+        {
+          "numerator": "275944483441",
+          "denominator": "500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 386,
+      "xyz": [
+        {
+          "numerator": "267630676907",
+          "denominator": "2000000000000"
+        },
+        {
+          "numerator": "3818262294011",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "31577207739",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 387,
+      "xyz": [
+        {
+          "numerator": "96262935237",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "34199264187",
+          "denominator": "7812500000000"
+        },
+        {
+          "numerator": "45445369773",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 388,
+      "xyz": [
+        {
+          "numerator": "1772997386573",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "156958414181",
+          "denominator": "31250000000000"
+        },
+        {
+          "numerator": "167458368257",
+          "denominator": "200000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 389,
+      "xyz": [
+        {
+          "numerator": "508384260981",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "575054942049",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "192127096827",
+          "denominator": "200000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 390,
+      "xyz": [
+        {
+          "numerator": "1159361563",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "819723",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "547848478241",
+          "denominator": "500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 391,
+      "xyz": [
+        {
+          "numerator": "2736416333121",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "9695040197",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "10105296743",
+          "denominator": "7812500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 392,
+      "xyz": [
+        {
+          "numerator": "5019364499",
+          "denominator": "15625000000"
+        },
+        {
+          "numerator": "4565173547",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "9493531101",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 393,
+      "xyz": [
+        {
+          "numerator": "235711467939",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "1677617919",
+          "denominator": "156250000000"
+        },
+        {
+          "numerator": "222986299193",
+          "denominator": "125000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 394,
+      "xyz": [
+        {
+          "numerator": "4441782661353",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "15798661093",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "262715584117",
+          "denominator": "125000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 395,
+      "xyz": [
+        {
+          "numerator": "21022659",
+          "denominator": "40000000"
+        },
+        {
+          "numerator": "29816451",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "497536263",
+          "denominator": "200000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 396,
+      "xyz": [
+        {
+          "numerator": "3129149681253",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "882842065587",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "1481650902531",
+          "denominator": "500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 397,
+      "xyz": [
+        {
+          "numerator": "93171930669",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "5225643099",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "882653557797",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 398,
+      "xyz": [
+        {
+          "numerator": "11012460489",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "767768571",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "130451911749",
+          "denominator": "31250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 399,
+      "xyz": [
+        {
+          "numerator": "514401354621",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "1428070025907",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "2438219354963",
+          "denominator": "500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 400,
+      "xyz": [
+        {
+          "numerator": "1184222619",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "81927351",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "5614920792549",
+          "denominator": "1000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 401,
+      "xyz": [
+        {
+          "numerator": "32833251801",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "90676732329",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "19466068653",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 402,
+      "xyz": [
+        {
+          "numerator": "181122192773",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "6245476301",
+          "denominator": "156250000000"
+        },
+        {
+          "numerator": "1718785329429",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 403,
+      "xyz": [
+        {
+          "numerator": "400857908131",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "55266561499",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "951427586511",
+          "denominator": "125000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 404,
+      "xyz": [
+        {
+          "numerator": "1789459842873",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "4935231788451",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "265589073147",
+          "denominator": "31250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 405,
+      "xyz": [
+        {
+          "numerator": "505080519",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "217801",
+          "denominator": "3906250"
+        },
+        {
+          "numerator": "120008351",
+          "denominator": "12500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 406,
+      "xyz": [
+        {
+          "numerator": "563007801",
+          "denominator": "244140625"
+        },
+        {
+          "numerator": "124524693",
+          "denominator": "1953125000"
+        },
+        {
+          "numerator": "17133082617",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 407,
+      "xyz": [
+        {
+          "numerator": "330833839427",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "1467189217",
+          "denominator": "20000000000"
+        },
+        {
+          "numerator": "1259256246339",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 408,
+      "xyz": [
+        {
+          "numerator": "380058373077",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "10557438771",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "144753438293",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 409,
+      "xyz": [
+        {
+          "numerator": "435714848037",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "24236232363",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "207567876159",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 410,
+      "xyz": [
+        {
+          "numerator": "199027793",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "5534903",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "47435491",
+          "denominator": "2500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 411,
+      "xyz": [
+        {
+          "numerator": "56149325067",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "624386600673",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "1071251597163",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 412,
+      "xyz": [
+        {
+          "numerator": "7898769343",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "343354849",
+          "denominator": "2441406250"
+        },
+        {
+          "numerator": "37699179527",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 413,
+      "xyz": [
+        {
+          "numerator": "142060785009",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "98996103531",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "1356990449481",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 414,
+      "xyz": [
+        {
+          "numerator": "15964491829",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "1785612218689",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "610417840871",
+          "denominator": "20000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 415,
+      "xyz": [
+        {
+          "numerator": "7177584407",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "100780201",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "3432998957",
+          "denominator": "100000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 416,
+      "xyz": [
+        {
+          "numerator": "1611394648977",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "1137229059",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "771264596937",
+          "denominator": "20000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 417,
+      "xyz": [
+        {
+          "numerator": "1127834227029",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "641580371",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "2160873329401",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 418,
+      "xyz": [
+        {
+          "numerator": "504320200419",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "7252205457",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "604421942481",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 419,
+      "xyz": [
+        {
+          "numerator": "35187486187",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "128434243",
+          "denominator": "390625000"
+        },
+        {
+          "numerator": "1350844562179",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 420,
+      "xyz": [
+        {
+          "numerator": "3138841321",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "467159",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "376997313",
+          "denominator": "6250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 421,
+      "xyz": [
+        {
+          "numerator": "43293714643",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "823622411",
+          "denominator": "1953125000"
+        },
+        {
+          "numerator": "208263306687",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 422,
+      "xyz": [
+        {
+          "numerator": "1522995030783",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "118769997077",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "7336287441927",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 423,
+      "xyz": [
+        {
+          "numerator": "1663451102339",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "33302275877",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "8024117239671",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 424,
+      "xyz": [
+        {
+          "numerator": "4505093313",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "1856081841",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "21762954837",
+          "denominator": "250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 425,
+      "xyz": [
+        {
+          "numerator": "1934154189",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "6574161",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "935737348557",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 426,
+      "xyz": [
+        {
+          "numerator": "514364489407",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "7227889773247",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "9969387154533",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 427,
+      "xyz": [
+        {
+          "numerator": "2172256803587",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "98783339489",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "10542813109941",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 428,
+      "xyz": [
+        {
+          "numerator": "1139036751453",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "3358868591",
+          "denominator": "3906250000"
+        },
+        {
+          "numerator": "5537768098513",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 429,
+      "xyz": [
+        {
+          "numerator": "593609427047",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "232903686099",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "5647206194",
+          "denominator": "48828125"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 430,
+      "xyz": [
+        {
+          "numerator": "2460910497",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "25137867",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "375334359",
+          "denominator": "3125000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 431,
+      "xyz": [
+        {
+          "numerator": "652567581657",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "556366544451",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "398981502441",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 432,
+      "xyz": [
+        {
+          "numerator": "137689430021",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "4792089731",
+          "denominator": "3906250000"
+        },
+        {
+          "numerator": "675044291779",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 433,
+      "xyz": [
+        {
+          "numerator": "2891145183883",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "168492036141",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "14209294189013",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 434,
+      "xyz": [
+        {
+          "numerator": "755508055379",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "738258783493",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "7445405006039",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 435,
+      "xyz": [
+        {
+          "numerator": "78654069",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "50400857",
+          "denominator": "31250000"
+        },
+        {
+          "numerator": "2428698779",
+          "denominator": "15625000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 436,
+      "xyz": [
+        {
+          "numerator": "3262997863447",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "54917889887",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "1010323072507",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 437,
+      "xyz": [
+        {
+          "numerator": "1686047194151",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "119382206231",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "8376780123909",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 438,
+      "xyz": [
+        {
+          "numerator": "86833707391",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "3235170959",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "86543587943",
+          "denominator": "500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 439,
+      "xyz": [
+        {
+          "numerator": "22292260557",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "13987496733",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1783106842587",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 440,
+      "xyz": [
+        {
+          "numerator": "182611911",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "482379",
+          "denominator": "200000"
+        },
+        {
+          "numerator": "1832054469",
+          "denominator": "10000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 441,
+      "xyz": [
+        {
+          "numerator": "370852077921",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "257714793419",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "933518855617",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 442,
+      "xyz": [
+        {
+          "numerator": "93921787839",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "134171147",
+          "denominator": "48828125"
+        },
+        {
+          "numerator": "949349811751",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 443,
+      "xyz": [
+        {
+          "numerator": "9494802651",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "73130512839",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "481847053899",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 444,
+      "xyz": [
+        {
+          "numerator": "19162234107",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "1244302341",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "488381783787",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 445,
+      "xyz": [
+        {
+          "numerator": "241327401",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "2066183",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "123596571",
+          "denominator": "625000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 446,
+      "xyz": [
+        {
+          "numerator": "388461119683",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "351154089533",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "999808332991",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 447,
+      "xyz": [
+        {
+          "numerator": "1219603343",
+          "denominator": "31250000"
+        },
+        {
+          "numerator": "4659822979",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "201982397827",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 448,
+      "xyz": [
+        {
+          "numerator": "48955138119",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "24721221303",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1019293752789",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 449,
+      "xyz": [
+        {
+          "numerator": "196325311077",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "209735993187",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "1028173774887",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 450,
+      "xyz": [
+        {
+          "numerator": "12293153",
+          "denominator": "312500"
+        },
+        {
+          "numerator": "138947",
+          "denominator": "31250"
+        },
+        {
+          "numerator": "1295944043",
+          "denominator": "6250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 451,
+      "xyz": [
+        {
+          "numerator": "12191703843",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "14579896553",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "64700593151",
+          "denominator": "312500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 452,
+      "xyz": [
+        {
+          "numerator": "386705856459",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "611739349",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "206690685591",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 453,
+      "xyz": [
+        {
+          "numerator": "382977091893",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "2565759867",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "1031172008031",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 454,
+      "xyz": [
+        {
+          "numerator": "9471077061",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "53787204711",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "205616870979",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 455,
+      "xyz": [
+        {
+          "numerator": "37418567",
+          "denominator": "1000000"
+        },
+        {
+          "numerator": "35223",
+          "denominator": "6250"
+        },
+        {
+          "numerator": "204774781",
+          "denominator": "1000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 456,
+      "xyz": [
+        {
+          "numerator": "36894808999",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "3689456227",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "40735181131",
+          "denominator": "200000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 457,
+      "xyz": [
+        {
+          "numerator": "9078950191",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "77263311073",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "2023230076751",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 458,
+      "xyz": [
+        {
+          "numerator": "44603023563",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "80856473307",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "2007051822219",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 459,
+      "xyz": [
+        {
+          "numerator": "87491917707",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "10569890661",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "124261505019",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 460,
+      "xyz": [
+        {
+          "numerator": "21412331",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "88359",
+          "denominator": "12500"
+        },
+        {
+          "numerator": "122907369",
+          "denominator": "625000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 461,
+      "xyz": [
+        {
+          "numerator": "333713142417",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "735679570849",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "1936126302379",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 462,
+      "xyz": [
+        {
+          "numerator": "81094589877",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "47824759059",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "951498417597",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 463,
+      "xyz": [
+        {
+          "numerator": "157218758003",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "49724726801",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1866180994721",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 464,
+      "xyz": [
+        {
+          "numerator": "37967025433",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "103381278111",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1425578357",
+          "denominator": "7812500"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 465,
+      "xyz": [
+        {
+          "numerator": "18257481",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "5373269",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "111108151",
+          "denominator": "625000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 466,
+      "xyz": [
+        {
+          "numerator": "11179273899",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "1117126707",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "862249264837",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 467,
+      "xyz": [
+        {
+          "numerator": "8313861561",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "5806571709",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "166618855539",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 468,
+      "xyz": [
+        {
+          "numerator": "31519162059",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "24148539317",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "1604630243349",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 469,
+      "xyz": [
+        {
+          "numerator": "11907792547",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "3139181349",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "192704382309",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 470,
+      "xyz": [
+        {
+          "numerator": "140245281",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "522502689",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "3697490451",
+          "denominator": "25000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 471,
+      "xyz": [
+        {
+          "numerator": "26473106189",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "218247719417",
+          "denominator": "20000000000"
+        },
+        {
+          "numerator": "1422627295641",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 472,
+      "xyz": [
+        {
+          "numerator": "199452923929",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "142468774329",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1366865056739",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 473,
+      "xyz": [
+        {
+          "numerator": "9369207679",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "2976464283",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "65581251749",
+          "denominator": "500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 474,
+      "xyz": [
+        {
+          "numerator": "87780662619",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "31093959989",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "15709850291",
+          "denominator": "125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 475,
+      "xyz": [
+        {
+          "numerator": "2562063",
+          "denominator": "156250"
+        },
+        {
+          "numerator": "1015089",
+          "denominator": "78125"
+        },
+        {
+          "numerator": "18785457",
+          "denominator": "156250"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 476,
+      "xyz": [
+        {
+          "numerator": "38165909857",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "1696838867",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "71767396503",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 477,
+      "xyz": [
+        {
+          "numerator": "1106995003",
+          "denominator": "78125000"
+        },
+        {
+          "numerator": "4431766043",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "273792843173",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 478,
+      "xyz": [
+        {
+          "numerator": "8191991667",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "18512718601",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "1043080396541",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 479,
+      "xyz": [
+        {
+          "numerator": "120794698843",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "603754021",
+          "denominator": "39062500"
+        },
+        {
+          "numerator": "992110774681",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 480,
+      "xyz": [
+        {
+          "numerator": "277171893",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "805780773",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "942396144423",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 481,
+      "xyz": [
+        {
+          "numerator": "50289778773",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "10417785873",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "221932097919",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 482,
+      "xyz": [
+        {
+          "numerator": "227021247201",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "172288853193",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "52201349403",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 483,
+      "xyz": [
+        {
+          "numerator": "12751081551",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "178036431391",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "12266340411",
+          "denominator": "156250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 484,
+      "xyz": [
+        {
+          "numerator": "365134459361",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "91998960403",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "368693589411",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 485,
+      "xyz": [
+        {
+          "numerator": "651166877367",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "190237331",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "346202727",
+          "denominator": "5000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 486,
+      "xyz": [
+        {
+          "numerator": "72383946927",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "24598249467",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "40637801351",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 487,
+      "xyz": [
+        {
+          "numerator": "12836758091",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "40729706809",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "61065925309",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 488,
+      "xyz": [
+        {
+          "numerator": "28351155969",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "42169303451",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "35848984163",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 489,
+      "xyz": [
+        {
+          "numerator": "199400298363",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "5460164549",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "269406213153",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 490,
+      "xyz": [
+        {
+          "numerator": "348304011",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "1131743211",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "2530835049",
+          "denominator": "50000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 491,
+      "xyz": [
+        {
+          "numerator": "1519602989",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "47273515827",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "47892391579",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 492,
+      "xyz": [
+        {
+          "numerator": "164363003",
+          "denominator": "62500000"
+        },
+        {
+          "numerator": "1234796087",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "2833169857",
+          "denominator": "62500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 493,
+      "xyz": [
+        {
+          "numerator": "1127172569",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "129056328077",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "107307297157",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 494,
+      "xyz": [
+        {
+          "numerator": "1195246707",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "16863987671",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "101653863963",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 495,
+      "xyz": [
+        {
+          "numerator": "8017527",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "70521513",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "192693353",
+          "denominator": "5000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 496,
+      "xyz": [
+        {
+          "numerator": "132730127523",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "294871694313",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "182726878593",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 497,
+      "xyz": [
+        {
+          "numerator": "27079258809",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "308239532349",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "346738313511",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 498,
+      "xyz": [
+        {
+          "numerator": "4351905669",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "12893116749",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "526713843",
+          "denominator": "16000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 499,
+      "xyz": [
+        {
+          "numerator": "3440953089",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "168637877",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "1563911399",
+          "denominator": "50000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 500,
+      "xyz": [
+        {
+          "numerator": "2679173",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "17660671",
+          "denominator": "500000"
+        },
+        {
+          "numerator": "929509",
+          "denominator": "31250"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 501,
+      "xyz": [
+        {
+          "numerator": "412463514427",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "369531709179",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "282625685029",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 502,
+      "xyz": [
+        {
+          "numerator": "2007309213",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "48345447969",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "33596974359",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 503,
+      "xyz": [
+        {
+          "numerator": "412563021",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "25295948223",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "15977394849",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 504,
+      "xyz": [
+        {
+          "numerator": "243158846769",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "3386271819",
+          "denominator": "80000000"
+        },
+        {
+          "numerator": "242967476689",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 505,
+      "xyz": [
+        {
+          "numerator": "162867",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "221119097",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "115255547",
+          "denominator": "5000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 506,
+      "xyz": [
+        {
+          "numerator": "3964920687",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "461480706477",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "54528420429",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 507,
+      "xyz": [
+        {
+          "numerator": "1298052119",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "15032659929",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "12864918033",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 508,
+      "xyz": [
+        {
+          "numerator": "874159847",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "3913944951",
+          "denominator": "78125000"
+        },
+        {
+          "numerator": "6055130139",
+          "denominator": "312500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 509,
+      "xyz": [
+        {
+          "numerator": "2355513783",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "104273399203",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "22746647857",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 510,
+      "xyz": [
+        {
+          "numerator": "5012793",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "27112203",
+          "denominator": "500000"
+        },
+        {
+          "numerator": "42635691",
+          "denominator": "2500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 511,
+      "xyz": [
+        {
+          "numerator": "130608232449",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "562842233193",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "159250153883",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 512,
+      "xyz": [
+        {
+          "numerator": "26022599",
+          "denominator": "15625000"
+        },
+        {
+          "numerator": "4560288",
+          "denominator": "78125"
+        },
+        {
+          "numerator": "46355893",
+          "denominator": "3125000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 513,
+      "xyz": [
+        {
+          "numerator": "13013174581",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "3023556481",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "34473054979",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 514,
+      "xyz": [
+        {
+          "numerator": "255755730369",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "625687400841",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "127996454347",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 515,
+      "xyz": [
+        {
+          "numerator": "3866517",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "40405767",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "14841579",
+          "denominator": "1250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 516,
+      "xyz": [
+        {
+          "numerator": "14760800103",
+          "denominator": "4000000000"
+        },
+        {
+          "numerator": "8338435859",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "2753347319",
+          "denominator": "250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 517,
+      "xyz": [
+        {
+          "numerator": "13581731847",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "85916908649",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "127714657889",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 518,
+      "xyz": [
+        {
+          "numerator": "3950968231",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "2761909339",
+          "denominator": "39062500"
+        },
+        {
+          "numerator": "463059513",
+          "denominator": "48828125"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 519,
+      "xyz": [
+        {
+          "numerator": "581979350351",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "90751648323",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "881138747321",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 520,
+      "xyz": [
+        {
+          "numerator": "66300633",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "744009",
+          "denominator": "10000"
+        },
+        {
+          "numerator": "81998164521",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 521,
+      "xyz": [
+        {
+          "numerator": "18818517127",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "4782356301",
+          "denominator": "62500000"
+        },
+        {
+          "numerator": "19232001673",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 522,
+      "xyz": [
+        {
+          "numerator": "5298941393",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "19637374883",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "9045772149",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 523,
+      "xyz": [
+        {
+          "numerator": "11852405217",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "20127421701",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "2131949367",
+          "denominator": "312500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 524,
+      "xyz": [
+        {
+          "numerator": "4214964351",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "257536903",
+          "denominator": "3125000"
+        },
+        {
+          "numerator": "2576210273",
+          "denominator": "400000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 525,
+      "xyz": [
+        {
+          "numerator": "14554743",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "210671937",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "608218381239",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 526,
+      "xyz": [
+        {
+          "numerator": "64006564773",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "53804495501",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "114847530023",
+          "denominator": "20000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 527,
+      "xyz": [
+        {
+          "numerator": "28011039551",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "439291107939",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "67758816727",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 528,
+      "xyz": [
+        {
+          "numerator": "152488834011",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "223939962603",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "127868759271",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 529,
+      "xyz": [
+        {
+          "numerator": "82618936129",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "228086370871",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "482206366741",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 530,
+      "xyz": [
+        {
+          "numerator": "35645059",
+          "denominator": "2000000"
+        },
+        {
+          "numerator": "46413959",
+          "denominator": "500000"
+        },
+        {
+          "numerator": "56752103",
+          "denominator": "12500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 531,
+      "xyz": [
+        {
+          "numerator": "190304995131",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "234533003247",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "53019263601",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 532,
+      "xyz": [
+        {
+          "numerator": "126525203",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "14799889937",
+          "denominator": "156250000"
+        },
+        {
+          "numerator": "12354048189",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 533,
+      "xyz": [
+        {
+          "numerator": "6707993643",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "7465058523",
+          "denominator": "78125000"
+        },
+        {
+          "numerator": "5745070071",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 534,
+      "xyz": [
+        {
+          "numerator": "907871479",
+          "denominator": "40000000"
+        },
+        {
+          "numerator": "240791301",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "341343759",
+          "denominator": "100000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 535,
+      "xyz": [
+        {
+          "numerator": "239400996453",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "970171085547",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "39555531",
+          "denominator": "12500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 536,
+      "xyz": [
+        {
+          "numerator": "251950472271",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "244140798303",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "292966484139",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 537,
+      "xyz": [
+        {
+          "numerator": "6614982513",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "24558304509",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "6769842579",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 538,
+      "xyz": [
+        {
+          "numerator": "69338871291",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "246875370503",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "31239082549",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 539,
+      "xyz": [
+        {
+          "numerator": "290216923461",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "248014342179",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "9212000481",
+          "denominator": "4000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 540,
+      "xyz": [
+        {
+          "numerator": "7579803",
+          "denominator": "250000"
+        },
+        {
+          "numerator": "9960237",
+          "denominator": "100000"
+        },
+        {
+          "numerator": "4238843",
+          "denominator": "2000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 541,
+      "xyz": [
+        {
+          "numerator": "4955753227",
+          "denominator": "156250000"
+        },
+        {
+          "numerator": "1002209689009",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "39071683209",
+          "denominator": "20000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 542,
+      "xyz": [
+        {
+          "numerator": "165666510379",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "503932250321",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "44968461997",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 543,
+      "xyz": [
+        {
+          "numerator": "21605019253",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "506497833991",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "41363251527",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 544,
+      "xyz": [
+        {
+          "numerator": "90050955527",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "40704432749",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "152060602321",
+          "denominator": "100000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 545,
+      "xyz": [
+        {
+          "numerator": "14995893",
+          "denominator": "400000"
+        },
+        {
+          "numerator": "40868707",
+          "denominator": "400000"
+        },
+        {
+          "numerator": "279323",
+          "denominator": "200000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 546,
+      "xyz": [
+        {
+          "numerator": "38975801541",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "25633146789",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "12822902937",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 547,
+      "xyz": [
+        {
+          "numerator": "50597961123",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "257108888007",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "14714200119",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 548,
+      "xyz": [
+        {
+          "numerator": "26249345157",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "64443367569",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "1688325429",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 549,
+      "xyz": [
+        {
+          "numerator": "43538697543",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "129167271189",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "247957306773",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 550,
+      "xyz": [
+        {
+          "numerator": "225493641477",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "517602890523",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "455201197977",
+          "denominator": "500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 551,
+      "xyz": [
+        {
+          "numerator": "465135936873",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "258250260057",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "260242551",
+          "denominator": "312500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 552,
+      "xyz": [
+        {
+          "numerator": "2996040977",
+          "denominator": "62500000"
+        },
+        {
+          "numerator": "1030406741971",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "952567799",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 553,
+      "xyz": [
+        {
+          "numerator": "96417854",
+          "denominator": "1953125"
+        },
+        {
+          "numerator": "802661603",
+          "denominator": "7812500"
+        },
+        {
+          "numerator": "218048829",
+          "denominator": "312500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 554,
+      "xyz": [
+        {
+          "numerator": "127003370791",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "128002760787",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "399648449",
+          "denominator": "625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 555,
+      "xyz": [
+        {
+          "numerator": "522408873523",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "102023",
+          "denominator": "1000"
+        },
+        {
+          "numerator": "586632147977",
+          "denominator": "1000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 556,
+      "xyz": [
+        {
+          "numerator": "268421863831",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "508017190703",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "673676531",
+          "denominator": "1250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 557,
+      "xyz": [
+        {
+          "numerator": "68913019503",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "252859039461",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "1239820893",
+          "denominator": "2500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 558,
+      "xyz": [
+        {
+          "numerator": "282874792023",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "201280390659",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "2285440839",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 559,
+      "xyz": [
+        {
+          "numerator": "23206467083",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "200187227947",
+          "denominator": "2000000000"
+        },
+        {
+          "numerator": "105485493",
+          "denominator": "250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 560,
+      "xyz": [
+        {
+          "numerator": "1189",
+          "denominator": "20"
+        },
+        {
+          "numerator": "199",
+          "denominator": "2"
+        },
+        {
+          "numerator": "39",
+          "denominator": "100"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 561,
+      "xyz": [
+        {
+          "numerator": "3044900820903",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "988961626567",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "2256198343",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 562,
+      "xyz": [
+        {
+          "numerator": "779214351793",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1228107259071",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "4182358451",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 563,
+      "xyz": [
+        {
+          "numerator": "3188348860403",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "2438991177333",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "15534270121",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 564,
+      "xyz": [
+        {
+          "numerator": "6518691034889",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "9683144165217",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "7229417569",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 565,
+      "xyz": [
+        {
+          "numerator": "52028563",
+          "denominator": "781250"
+        },
+        {
+          "numerator": "4803316203",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "2699594268329",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 566,
+      "xyz": [
+        {
+          "numerator": "169986853449",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "1905317458037",
+          "denominator": "20000000000"
+        },
+        {
+          "numerator": "1264169263",
+          "denominator": "5000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 567,
+      "xyz": [
+        {
+          "numerator": "3468932321327",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "147547077787",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "11880115427",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 568,
+      "xyz": [
+        {
+          "numerator": "884318472927",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "584744209677",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "5604186339",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 569,
+      "xyz": [
+        {
+          "numerator": "56322081543",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "289538785431",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "41490687",
+          "denominator": "195312500"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 570,
+      "xyz": [
+        {
+          "numerator": "3670814691",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "57318849",
+          "denominator": "625000"
+        },
+        {
+          "numerator": "10115091",
+          "denominator": "50000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 571,
+      "xyz": [
+        {
+          "numerator": "234243212121",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "284461207287",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "485666315367",
+          "denominator": "2500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 572,
+      "xyz": [
+        {
+          "numerator": "956026167",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "1128838569",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "37493109",
+          "denominator": "200000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 573,
+      "xyz": [
+        {
+          "numerator": "487418969787",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "2238755145621",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "9087131647",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 574,
+      "xyz": [
+        {
+          "numerator": "993385555367",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "554742335277",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1769425639481",
+          "denominator": "10000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 575,
+      "xyz": [
+        {
+          "numerator": "323725907",
+          "denominator": "4000000"
+        },
+        {
+          "numerator": "4396716547",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "8645499",
+          "denominator": "50000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 576,
+      "xyz": [
+        {
+          "numerator": "65893677249",
+          "denominator": "800000000"
+        },
+        {
+          "numerator": "108848137427",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "339146225471",
+          "denominator": "2000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 577,
+      "xyz": [
+        {
+          "numerator": "130896622461",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "2154785101667",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "8337260591",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 578,
+      "xyz": [
+        {
+          "numerator": "66520770981",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "133237891479",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "512810277",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 579,
+      "xyz": [
+        {
+          "numerator": "4324025636553",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "527003474851",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "806547586271",
+          "denominator": "5000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 580,
+      "xyz": [
+        {
+          "numerator": "219426361",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "2083389",
+          "denominator": "25000"
+        },
+        {
+          "numerator": "39512573947",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 581,
+      "xyz": [
+        {
+          "numerator": "884032909011",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "4087686035457",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "765439516737",
+          "denominator": "5000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 582,
+      "xyz": [
+        {
+          "numerator": "22242382003",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "2003874989",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "147628517",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 583,
+      "xyz": [
+        {
+          "numerator": "1118359009581",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "392715361203",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "442999029",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 584,
+      "xyz": [
+        {
+          "numerator": "899000021513",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "769211990911",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "135566266751",
+          "denominator": "1000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 585,
+      "xyz": [
+        {
+          "numerator": "35258958",
+          "denominator": "390625"
+        },
+        {
+          "numerator": "29411289",
+          "denominator": "390625"
+        },
+        {
+          "numerator": "50442",
+          "denominator": "390625"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 586,
+      "xyz": [
+        {
+          "numerator": "141492343839",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "3683006129451",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "611702929211",
+          "denominator": "5000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 587,
+      "xyz": [
+        {
+          "numerator": "283672886517",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "360123864183",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "115336701",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 588,
+      "xyz": [
+        {
+          "numerator": "2273127309103",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "87987705589",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "217155701",
+          "denominator": "2000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 589,
+      "xyz": [
+        {
+          "numerator": "142196088333",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "3437959986513",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "512536068993",
+          "denominator": "5000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 590,
+      "xyz": [
+        {
+          "numerator": "1137725391",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "83918749",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "1219427",
+          "denominator": "12500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 591,
+      "xyz": [
+        {
+          "numerator": "9183596525379",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "6614734622757",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "148325559",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 592,
+      "xyz": [
+        {
+          "numerator": "462976962021",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "101794926177",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "4667190759",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 593,
+      "xyz": [
+        {
+          "numerator": "116606739973",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "801740208681",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1153163901",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 594,
+      "xyz": [
+        {
+          "numerator": "4694727684023",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "631184512517",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "1138814157",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 595,
+      "xyz": [
+        {
+          "numerator": "9441181253",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "6208646591",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "893459",
+          "denominator": "10000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 596,
+      "xyz": [
+        {
+          "numerator": "59267677077",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "19076127993",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "135424953",
+          "denominator": "1562500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 597,
+      "xyz": [
+        {
+          "numerator": "11893478289",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "14997837519",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "13020333",
+          "denominator": "156250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 598,
+      "xyz": [
+        {
+          "numerator": "2384462853157",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "736641745903",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "4974404603",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 599,
+      "xyz": [
+        {
+          "numerator": "1194100546017",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "361656074623",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "2366385053",
+          "denominator": "31250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 600,
+      "xyz": [
+        {
+          "numerator": "2390114641",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "283969561",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "450031",
+          "denominator": "6250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 601,
+      "xyz": [
+        {
+          "numerator": "238573931589",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "222450674541",
+          "denominator": "4000000000"
+        },
+        {
+          "numerator": "213937959",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 602,
+      "xyz": [
+        {
+          "numerator": "148719264127",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "42525606529",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "254206169",
+          "denominator": "3906250000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 603,
+      "xyz": [
+        {
+          "numerator": "2371197387301",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "1331353401949",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "3853331367",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 604,
+      "xyz": [
+        {
+          "numerator": "590145806457",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "2603831985243",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "906070689",
+          "denominator": "15625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 605,
+      "xyz": [
+        {
+          "numerator": "586859991",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "636251421",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "1347039",
+          "denominator": "25000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 606,
+      "xyz": [
+        {
+          "numerator": "9326592631411",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "4972460086209",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "4917755593873",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 607,
+      "xyz": [
+        {
+          "numerator": "289171651903",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "303446743429",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "275668387",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 608,
+      "xyz": [
+        {
+          "numerator": "917132161491",
+          "denominator": "10000000000"
+        },
+        {
+          "numerator": "118457358201",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "390468897",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 609,
+      "xyz": [
+        {
+          "numerator": "4540469660923",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "2311058812277",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "1718693914733",
+          "denominator": "50000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 610,
+      "xyz": [
+        {
+          "numerator": "4491602883",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "450683473",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "15231847",
+          "denominator": "500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 611,
+      "xyz": [
+        {
+          "numerator": "354549103777",
+          "denominator": "4000000000"
+        },
+        {
+          "numerator": "274077337413",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "2747124102503",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 612,
+      "xyz": [
+        {
+          "numerator": "436874840883",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "26655871411",
+          "denominator": "625000000"
+        },
+        {
+          "numerator": "631581301",
+          "denominator": "25000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 613,
+      "xyz": [
+        {
+          "numerator": "215114451641",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "51823513813",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "147699111",
+          "denominator": "6250000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 614,
+      "xyz": [
+        {
+          "numerator": "8464995930331",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "251749009653",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "2237081657737",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 615,
+      "xyz": [
+        {
+          "numerator": "1039851597",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "977797367",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "2659467",
+          "denominator": "125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 616,
+      "xyz": [
+        {
+          "numerator": "408323628633",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "9488986203",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "2030544858063",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 617,
+      "xyz": [
+        {
+          "numerator": "782044328",
+          "denominator": "9765625"
+        },
+        {
+          "numerator": "359485032",
+          "denominator": "9765625"
+        },
+        {
+          "numerator": "4754792",
+          "denominator": "244140625"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 618,
+      "xyz": [
+        {
+          "numerator": "98042934447",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "11148353913",
+          "denominator": "312500000"
+        },
+        {
+          "numerator": "1166823903",
+          "denominator": "62500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 619,
+      "xyz": [
+        {
+          "numerator": "19179951001",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "43178839423",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "1776992622029",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 620,
+      "xyz": [
+        {
+          "numerator": "7493414544513",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "334132047",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "16662753",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 621,
+      "xyz": [
+        {
+          "numerator": "182168772867",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "100596784599",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "1520145186741",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 622,
+      "xyz": [
+        {
+          "numerator": "353754611991",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "193615999839",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "3378037797",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 623,
+      "xyz": [
+        {
+          "numerator": "342991858401",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "372254218047",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "2935910043",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 624,
+      "xyz": [
+        {
+          "numerator": "332117850519",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "178753628817",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1004175327951",
+          "denominator": "100000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 625,
+      "xyz": [
+        {
+          "numerator": "401499319",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "34304307",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "106867",
+          "denominator": "12500000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 626,
+      "xyz": [
+        {
+          "numerator": "775662276217",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1315500484203",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "3662931831579",
+          "denominator": "500000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 627,
+      "xyz": [
+        {
+          "numerator": "93547219547",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "78754996577",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "78900317",
+          "denominator": "12500000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 628,
+      "xyz": [
+        {
+          "numerator": "1442688713383",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "75383610213",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "5471089",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 629,
+      "xyz": [
+        {
+          "numerator": "43422327553",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "28847411419",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "297937809223",
+          "denominator": "62500000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 630,
+      "xyz": [
+        {
+          "numerator": "334403729",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "22071479",
+          "denominator": "1000000"
+        },
+        {
+          "numerator": "2082214583557",
+          "denominator": "500000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 631,
+      "xyz": [
+        {
+          "numerator": "5179065016253",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "132683381419",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "57497493",
+          "denominator": "15625000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 632,
+      "xyz": [
+        {
+          "numerator": "2505763914283",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "3987620581",
+          "denominator": "195312500"
+        },
+        {
+          "numerator": "822868809",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 633,
+      "xyz": [
+        {
+          "numerator": "605887884017",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "15335676489",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "372433687",
+          "denominator": "125000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 634,
+      "xyz": [
+        {
+          "numerator": "146406906183",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "3684519357",
+          "denominator": "195312500"
+        },
+        {
+          "numerator": "1330029",
+          "denominator": "488281250"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 635,
+      "xyz": [
+        {
+          "numerator": "4524534441",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "181181763",
+          "denominator": "10000000"
+        },
+        {
+          "numerator": "2504817",
+          "denominator": "1000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 636,
+      "xyz": [
+        {
+          "numerator": "17462139693",
+          "denominator": "400000000"
+        },
+        {
+          "numerator": "2173597407",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "46200418431",
+          "denominator": "20000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 637,
+      "xyz": [
+        {
+          "numerator": "6575686551",
+          "denominator": "156250000"
+        },
+        {
+          "numerator": "651464473",
+          "denominator": "39062500"
+        },
+        {
+          "numerator": "6675633",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 638,
+      "xyz": [
+        {
+          "numerator": "1013321351889",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "6243688857",
+          "denominator": "390625000"
+        },
+        {
+          "numerator": "494177061",
+          "denominator": "250000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 639,
+      "xyz": [
+        {
+          "numerator": "3900089590559",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "95670566579",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "1824861742473",
+          "denominator": "1000000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 640,
+      "xyz": [
+        {
+          "numerator": "29288181",
+          "denominator": "781250"
+        },
+        {
+          "numerator": "45773",
+          "denominator": "3125"
+        },
+        {
+          "numerator": "6539",
+          "denominator": "3906250"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 641,
+      "xyz": [
+        {
+          "numerator": "89553004629",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "6967534351",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "37777166389",
+          "denominator": "25000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 642,
+      "xyz": [
+        {
+          "numerator": "170947934703",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "82781348013",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "67201407",
+          "denominator": "50000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 643,
+      "xyz": [
+        {
+          "numerator": "3259660779",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "6288874533",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "2345769",
+          "denominator": "2000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 644,
+      "xyz": [
+        {
+          "numerator": "1552231938283",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "596686589109",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "498863076283",
+          "denominator": "500000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 645,
+      "xyz": [
+        {
+          "numerator": "36920213",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "56567333",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "81863",
+          "denominator": "100000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 646,
+      "xyz": [
+        {
+          "numerator": "1403587086677",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "535836107437",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "3151170797507",
+          "denominator": "5000000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 647,
+      "xyz": [
+        {
+          "numerator": "33315094011",
+          "denominator": "1250000000"
+        },
+        {
+          "numerator": "25357686217",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "4380939",
+          "denominator": "10000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 648,
+      "xyz": [
+        {
+          "numerator": "157998984481",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "59954766281",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "807613",
+          "denominator": "3125000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 649,
+      "xyz": [
+        {
+          "numerator": "119787502167",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "45329795127",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "53595986601",
+          "denominator": "500000000000000"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 650,
+      "xyz": [
+        {
+          "numerator": "113437989",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "21407169",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 651,
+      "xyz": [
+        {
+          "numerator": "33712305067",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "50767020717",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 652,
+      "xyz": [
+        {
+          "numerator": "16020285957",
+          "denominator": "781250000"
+        },
+        {
+          "numerator": "120332589819",
+          "denominator": "15625000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 653,
+      "xyz": [
+        {
+          "numerator": "243442213197",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "912176139747",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 654,
+      "xyz": [
+        {
+          "numerator": "231021088771",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "1381995677643",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 655,
+      "xyz": [
+        {
+          "numerator": "1752239709",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "40861557",
+          "denominator": "6250000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 656,
+      "xyz": [
+        {
+          "numerator": "331933160909",
+          "denominator": "20000000000"
+        },
+        {
+          "numerator": "19313779779",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 657,
+      "xyz": [
+        {
+          "numerator": "24538860379",
+          "denominator": "1562500000"
+        },
+        {
+          "numerator": "729696234977",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 658,
+      "xyz": [
+        {
+          "numerator": "37116098079",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "17215525263",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 659,
+      "xyz": [
+        {
+          "numerator": "701040808217",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "162320709969",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 660,
+      "xyz": [
+        {
+          "numerator": "661369377",
+          "denominator": "50000000"
+        },
+        {
+          "numerator": "24465453",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 661,
+      "xyz": [
+        {
+          "numerator": "1249472984403",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "4615854864789",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 662,
+      "xyz": [
+        {
+          "numerator": "92110277",
+          "denominator": "7812500"
+        },
+        {
+          "numerator": "2124142481",
+          "denominator": "488281250"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 663,
+      "xyz": [
+        {
+          "numerator": "694613229",
+          "denominator": "62500000"
+        },
+        {
+          "numerator": "16000556431",
+          "denominator": "3906250000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 664,
+      "xyz": [
+        {
+          "numerator": "1046603565333",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "770683776207",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 665,
+      "xyz": [
+        {
+          "numerator": "123087993",
+          "denominator": "12500000"
+        },
+        {
+          "numerator": "905488899",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 666,
+      "xyz": [
+        {
+          "numerator": "37024950657",
+          "denominator": "4000000000"
+        },
+        {
+          "numerator": "66432659",
+          "denominator": "19531250"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 667,
+      "xyz": [
+        {
+          "numerator": "4346902071",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "49869233307",
+          "denominator": "15625000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 668,
+      "xyz": [
+        {
+          "numerator": "510073613043",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "11692601853",
+          "denominator": "3906250000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 669,
+      "xyz": [
+        {
+          "numerator": "1531956631723",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "35086058679",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 670,
+      "xyz": [
+        {
+          "numerator": "179776993",
+          "denominator": "25000000"
+        },
+        {
+          "numerator": "411389",
+          "denominator": "156250"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 671,
+      "xyz": [
+        {
+          "numerator": "13097499147",
+          "denominator": "1953125000"
+        },
+        {
+          "numerator": "76665330207",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 672,
+      "xyz": [
+        {
+          "numerator": "1564485902637",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "142978709889",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 673,
+      "xyz": [
+        {
+          "numerator": "182624727077",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "266847076249",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 674,
+      "xyz": [
+        {
+          "numerator": "170655787183",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "99672767861",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 675,
+      "xyz": [
+        {
+          "numerator": "12764679",
+          "denominator": "2500000"
+        },
+        {
+          "numerator": "2328149",
+          "denominator": "1250000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 676,
+      "xyz": [
+        {
+          "numerator": "29859167931",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "54421262151",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 677,
+      "xyz": [
+        {
+          "numerator": "559179440721",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "25460565159",
+          "denominator": "15625000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 678,
+      "xyz": [
+        {
+          "numerator": "261818966201",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "381200930383",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 679,
+      "xyz": [
+        {
+          "numerator": "979976895449",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "356450280921",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 680,
+      "xyz": [
+        {
+          "numerator": "1830676017",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "6654157",
+          "denominator": "5000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 681,
+      "xyz": [
+        {
+          "numerator": "678021408999",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "1231397061741",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 682,
+      "xyz": [
+        {
+          "numerator": "48904558059",
+          "denominator": "15625000000"
+        },
+        {
+          "numerator": "142013326511",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 683,
+      "xyz": [
+        {
+          "numerator": "90083792481",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "261419944851",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 684,
+      "xyz": [
+        {
+          "numerator": "265035369999",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "48039939801",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 685,
+      "xyz": [
+        {
+          "numerator": "243468883",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "110264023",
+          "denominator": "125000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 686,
+      "xyz": [
+        {
+          "numerator": "447132704767",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "161921627483",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 687,
+      "xyz": [
+        {
+          "numerator": "128227272407",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "371332708889",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 688,
+      "xyz": [
+        {
+          "numerator": "470478666519",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "6810015846429",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 689,
+      "xyz": [
+        {
+          "numerator": "4314541021",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "390212831427",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 690,
+      "xyz": [
+        {
+          "numerator": "158267351",
+          "denominator": "100000000"
+        },
+        {
+          "numerator": "572411873",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 691,
+      "xyz": [
+        {
+          "numerator": "1474004822329",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "5329792920881",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 692,
+      "xyz": [
+        {
+          "numerator": "343482507033",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "310425267771",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 693,
+      "xyz": [
+        {
+          "numerator": "80116090827",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "289561892811",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 694,
+      "xyz": [
+        {
+          "numerator": "299298646947",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "216309162127",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 695,
+      "xyz": [
+        {
+          "numerator": "17489637",
+          "denominator": "15625000"
+        },
+        {
+          "numerator": "1011042349",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 696,
+      "xyz": [
+        {
+          "numerator": "6549850041",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "189288551193",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 697,
+      "xyz": [
+        {
+          "numerator": "61413481281",
+          "denominator": "62500000000"
+        },
+        {
+          "numerator": "221822085043",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 698,
+      "xyz": [
+        {
+          "numerator": "46117694971",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "166553635763",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 699,
+      "xyz": [
+        {
+          "numerator": "21656777569",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "125130508209",
+          "denominator": "400000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 700,
+      "xyz": [
+        {
+          "numerator": "203354806089",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "1468702641",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 701,
+      "xyz": [
+        {
+          "numerator": "152814125797",
+          "denominator": "200000000000"
+        },
+        {
+          "numerator": "2759199008443",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 702,
+      "xyz": [
+        {
+          "numerator": "3585791523533",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "2589789754529",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 703,
+      "xyz": [
+        {
+          "numerator": "3363853113621",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "2429497718109",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 704,
+      "xyz": [
+        {
+          "numerator": "3154984739777",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "2278645449743",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 705,
+      "xyz": [
+        {
+          "numerator": "147981634691",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "213755491",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 706,
+      "xyz": [
+        {
+          "numerator": "138858167041",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "200576896167",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 707,
+      "xyz": [
+        {
+          "numerator": "260607113571",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "47055000663",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 708,
+      "xyz": [
+        {
+          "numerator": "489102326713",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "44155950111",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 709,
+      "xyz": [
+        {
+          "numerator": "1147312119",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "265161833",
+          "denominator": "1600000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 710,
+      "xyz": [
+        {
+          "numerator": "215253217377",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "155463759",
+          "denominator": "1000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 711,
+      "xyz": [
+        {
+          "numerator": "395320330037",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "285514786463",
+          "denominator": "2000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 712,
+      "xyz": [
+        {
+          "numerator": "1813877297",
+          "denominator": "5000000000"
+        },
+        {
+          "numerator": "32751211",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 713,
+      "xyz": [
+        {
+          "numerator": "83176223139",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "12014583129",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 714,
+      "xyz": [
+        {
+          "numerator": "304947263257",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "110122039937",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 715,
+      "xyz": [
+        {
+          "numerator": "558693007521",
+          "denominator": "2000000000000"
+        },
+        {
+          "numerator": "50438563",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 716,
+      "xyz": [
+        {
+          "numerator": "127864832463",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "2885895381",
+          "denominator": "31250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 717,
+      "xyz": [
+        {
+          "numerator": "23395225227",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "8448443707",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 718,
+      "xyz": [
+        {
+          "numerator": "106954021163",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "19311528519",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 719,
+      "xyz": [
+        {
+          "numerator": "15639517791",
+          "denominator": "80000000000"
+        },
+        {
+          "numerator": "17649114651",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 720,
+      "xyz": [
+        {
+          "numerator": "44652535127",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "16124847",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 721,
+      "xyz": [
+        {
+          "numerator": "211047994007",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "381066482657",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 722,
+      "xyz": [
+        {
+          "numerator": "79803501053",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "360231350129",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 723,
+      "xyz": [
+        {
+          "numerator": "37718773967",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "272418807941",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 724,
+      "xyz": [
+        {
+          "numerator": "89123026391",
+          "denominator": "625000000000"
+        },
+        {
+          "numerator": "80459906121",
+          "denominator": "1562500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 725,
+      "xyz": [
+        {
+          "numerator": "16840448339",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "3040697",
+          "denominator": "62500000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 726,
+      "xyz": [
+        {
+          "numerator": "1590229251",
+          "denominator": "12500000000"
+        },
+        {
+          "numerator": "459408755871",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 727,
+      "xyz": [
+        {
+          "numerator": "600354403909",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "43359801641",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 728,
+      "xyz": [
+        {
+          "numerator": "113268143223",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "51128990541",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 729,
+      "xyz": [
+        {
+          "numerator": "533972188733",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "1928271479989",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 730,
+      "xyz": [
+        {
+          "numerator": "125791546647",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "1135641",
+          "denominator": "31250000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 731,
+      "xyz": [
+        {
+          "numerator": "471732975197",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "106469611711",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 732,
+      "xyz": [
+        {
+          "numerator": "35357270409",
+          "denominator": "400000000000"
+        },
+        {
+          "numerator": "199502499297",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 733,
+      "xyz": [
+        {
+          "numerator": "41384059533",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "37361363949",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 734,
+      "xyz": [
+        {
+          "numerator": "38733288333",
+          "denominator": "500000000000"
+        },
+        {
+          "numerator": "87420581619",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 735,
+      "xyz": [
+        {
+          "numerator": "7248262494459",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "2617480293",
+          "denominator": "100000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 736,
+      "xyz": [
+        {
+          "numerator": "211886429091",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "30606427443",
+          "denominator": "1250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 737,
+      "xyz": [
+        {
+          "numerator": "792647261539",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "286239421433",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 738,
+      "xyz": [
+        {
+          "numerator": "5929291723901",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "267646980419",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 739,
+      "xyz": [
+        {
+          "numerator": "138581837981",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "2001777511591",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 740,
+      "xyz": [
+        {
+          "numerator": "259079659191",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "46779201",
+          "denominator": "2500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 741,
+      "xyz": [
+        {
+          "numerator": "73997165979",
+          "denominator": "1562500000000"
+        },
+        {
+          "numerator": "106886921009",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 742,
+      "xyz": [
+        {
+          "numerator": "4327267830501",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "195331961517",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 743,
+      "xyz": [
+        {
+          "numerator": "1976743126001",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "356919047527",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 744,
+      "xyz": [
+        {
+          "numerator": "361207615097",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "52175474967",
+          "denominator": "4000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 745,
+      "xyz": [
+        {
+          "numerator": "1650361086887",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "595975581",
+          "denominator": "50000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 746,
+      "xyz": [
+        {
+          "numerator": "23571162473",
+          "denominator": "781250000000"
+        },
+        {
+          "numerator": "68095828439",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 747,
+      "xyz": [
+        {
+          "numerator": "275881558797",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "24906468951",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 748,
+      "xyz": [
+        {
+          "numerator": "315440715203",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "28477855333",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 749,
+      "xyz": [
+        {
+          "numerator": "2309021169711",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "33353187657",
+          "denominator": "4000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 750,
+      "xyz": [
+        {
+          "numerator": "2113192416197",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "1907781",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 751,
+      "xyz": [
+        {
+          "numerator": "3743432681",
+          "denominator": "195312500000"
+        },
+        {
+          "numerator": "540728823",
+          "denominator": "78125000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 752,
+      "xyz": [
+        {
+          "numerator": "868940619219",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "39223787967",
+          "denominator": "6250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 753,
+      "xyz": [
+        {
+          "numerator": "787598169891",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "142208041617",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 754,
+      "xyz": [
+        {
+          "numerator": "713483892589",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "5153041199423",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 755,
+      "xyz": [
+        {
+          "numerator": "645835178047",
+          "denominator": "50000000000000"
+        },
+        {
+          "numerator": "14576431",
+          "denominator": "3125000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 756,
+      "xyz": [
+        {
+          "numerator": "1459898031",
+          "denominator": "125000000000"
+        },
+        {
+          "numerator": "52719596887",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 757,
+      "xyz": [
+        {
+          "numerator": "105474977689",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "3808893989",
+          "denominator": "1000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 758,
+      "xyz": [
+        {
+          "numerator": "190279810611",
+          "denominator": "20000000000000"
+        },
+        {
+          "numerator": "8589190599",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 759,
+      "xyz": [
+        {
+          "numerator": "107141060853",
+          "denominator": "12500000000000"
+        },
+        {
+          "numerator": "773811900513",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 760,
+      "xyz": [
+        {
+          "numerator": "77124071391",
+          "denominator": "10000000000000"
+        },
+        {
+          "numerator": "696273",
+          "denominator": "250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 761,
+      "xyz": [
+        {
+          "numerator": "187799077071",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "2712707876403",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 762,
+      "xyz": [
+        {
+          "numerator": "182569240341",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "4120567199",
+          "denominator": "1562500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 763,
+      "xyz": [
+        {
+          "numerator": "11074070933",
+          "denominator": "1562500000000"
+        },
+        {
+          "numerator": "499881233",
+          "denominator": "195312500000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 764,
+      "xyz": [
+        {
+          "numerator": "17170334453",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "2480209325057",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 765,
+      "xyz": [
+        {
+          "numerator": "33234806367",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "15002127",
+          "denominator": "6250000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 766,
+      "xyz": [
+        {
+          "numerator": "25701001003",
+          "denominator": "4000000000000"
+        },
+        {
+          "numerator": "58006869413",
+          "denominator": "25000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 767,
+      "xyz": [
+        {
+          "numerator": "31019615627",
+          "denominator": "5000000000000"
+        },
+        {
+          "numerator": "70010909397",
+          "denominator": "31250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 768,
+      "xyz": [
+        {
+          "numerator": "14959757649",
+          "denominator": "2500000000000"
+        },
+        {
+          "numerator": "6752802497",
+          "denominator": "3125000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 769,
+      "xyz": [
+        {
+          "numerator": "576578422413",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "65066569821",
+          "denominator": "31250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 770,
+      "xyz": [
+        {
+          "numerator": "2774938321229",
+          "denominator": "500000000000000"
+        },
+        {
+          "numerator": "1002081",
+          "denominator": "500000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 771,
+      "xyz": [
+        {
+          "numerator": "5151733666739",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "14883081983",
+          "denominator": "8000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 772,
+      "xyz": [
+        {
+          "numerator": "597675410817",
+          "denominator": "125000000000000"
+        },
+        {
+          "numerator": "431663022351",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 773,
+      "xyz": [
+        {
+          "numerator": "1109319581877",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "100148905179",
+          "denominator": "62500000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 774,
+      "xyz": [
+        {
+          "numerator": "257363160701",
+          "denominator": "62500000000000"
+        },
+        {
+          "numerator": "371754167451",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 775,
+      "xyz": [
+        {
+          "numerator": "955362020883",
+          "denominator": "250000000000000"
+        },
+        {
+          "numerator": "34499873",
+          "denominator": "25000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 776,
+      "xyz": [
+        {
+          "numerator": "443309277063",
+          "denominator": "125000000000000"
+        },
+        {
+          "numerator": "128069671389",
+          "denominator": "100000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 777,
+      "xyz": [
+        {
+          "numerator": "1607069211",
+          "denominator": "488281250000"
+        },
+        {
+          "numerator": "232136853",
+          "denominator": "195312500000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 778,
+      "xyz": [
+        {
+          "numerator": "1527253595571",
+          "denominator": "500000000000000"
+        },
+        {
+          "numerator": "1103038375351",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 779,
+      "xyz": [
+        {
+          "numerator": "2834853769317",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "1023717604209",
+          "denominator": "1000000000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    },
+    {
+      "wavelength_nm": 780,
+      "xyz": [
+        {
+          "numerator": "328877028129",
+          "denominator": "125000000000000"
+        },
+        {
+          "numerator": "237527043",
+          "denominator": "250000000000"
+        },
+        {
+          "numerator": "0",
+          "denominator": "1"
+        }
+      ]
+    }
+  ],
+  "queries": {
+    "Sato:0": [
+      {
+        "numerator": "1463",
+        "denominator": "40"
+      },
+      {
+        "numerator": "77",
+        "denominator": "4"
+      },
+      {
+        "numerator": "1001",
+        "denominator": "120"
+      }
+    ],
+    "Sato:1": [
+      {
+        "numerator": "169863",
+        "denominator": "3200"
+      },
+      {
+        "numerator": "4143",
+        "denominator": "100"
+      },
+      {
+        "numerator": "111861",
+        "denominator": "3200"
+      }
+    ],
+    "Sato:2": [
+      {
+        "numerator": "4347",
+        "denominator": "155"
+      },
+      {
+        "numerator": "483",
+        "denominator": "25"
+      },
+      {
+        "numerator": "11592",
+        "denominator": "775"
+      }
+    ],
+    "Sato:3": [
+      {
+        "numerator": "113",
+        "denominator": "10"
+      },
+      {
+        "numerator": "339",
+        "denominator": "50"
+      },
+      {
+        "numerator": "113",
+        "denominator": "25"
+      }
+    ],
+    "Sato:4": [
+      {
+        "numerator": "220321",
+        "denominator": "4000"
+      },
+      {
+        "numerator": "4157",
+        "denominator": "100"
+      },
+      {
+        "numerator": "29099",
+        "denominator": "4000"
+      }
+    ],
+    "Sato:5": [
+      {
+        "numerator": "1622",
+        "denominator": "25"
+      },
+      {
+        "numerator": "5677",
+        "denominator": "100"
+      },
+      {
+        "numerator": "811",
+        "denominator": "20"
+      }
+    ],
+    "Sato:6": [
+      {
+        "numerator": "125603",
+        "denominator": "3600"
+      },
+      {
+        "numerator": "2921",
+        "denominator": "100"
+      },
+      {
+        "numerator": "20447",
+        "denominator": "1200"
+      }
+    ],
+    "Sato:7": [
+      {
+        "numerator": "13754",
+        "denominator": "925"
+      },
+      {
+        "numerator": "299",
+        "denominator": "25"
+      },
+      {
+        "numerator": "5083",
+        "denominator": "925"
+      }
+    ],
+    "Sato:8": [
+      {
+        "numerator": "324349",
+        "denominator": "4600"
+      },
+      {
+        "numerator": "7543",
+        "denominator": "100"
+      },
+      {
+        "numerator": "82973",
+        "denominator": "4600"
+      }
+    ],
+    "Sato:9": [
+      {
+        "numerator": "1661",
+        "denominator": "51"
+      },
+      {
+        "numerator": "151",
+        "denominator": "2"
+      },
+      {
+        "numerator": "1359",
+        "denominator": "34"
+      }
+    ],
+    "Sato:10": [
+      {
+        "numerator": "8356",
+        "denominator": "205"
+      },
+      {
+        "numerator": "2089",
+        "denominator": "50"
+      },
+      {
+        "numerator": "39691",
+        "denominator": "2050"
+      }
+    ],
+    "Sato:11": [
+      {
+        "numerator": "389",
+        "denominator": "20"
+      },
+      {
+        "numerator": "389",
+        "denominator": "20"
+      },
+      {
+        "numerator": "2723",
+        "denominator": "430"
+      }
+    ],
+    "Sato:12": [
+      {
+        "numerator": "221871",
+        "denominator": "5000"
+      },
+      {
+        "numerator": "5689",
+        "denominator": "100"
+      },
+      {
+        "numerator": "62579",
+        "denominator": "5000"
+      }
+    ],
+    "Sato:13": [
+      {
+        "numerator": "68004",
+        "denominator": "1025"
+      },
+      {
+        "numerator": "1889",
+        "denominator": "25"
+      },
+      {
+        "numerator": "43447",
+        "denominator": "1025"
+      }
+    ],
+    "Sato:14": [
+      {
+        "numerator": "357",
+        "denominator": "10"
+      },
+      {
+        "numerator": "833",
+        "denominator": "20"
+      },
+      {
+        "numerator": "1309",
+        "denominator": "60"
+      }
+    ],
+    "Sato:15": [
+      {
+        "numerator": "1957",
+        "denominator": "125"
+      },
+      {
+        "numerator": "1957",
+        "denominator": "100"
+      },
+      {
+        "numerator": "37183",
+        "denominator": "4500"
+      }
+    ],
+    "Sato:16": [
+      {
+        "numerator": "33603",
+        "denominator": "2150"
+      },
+      {
+        "numerator": "1461",
+        "denominator": "50"
+      },
+      {
+        "numerator": "24837",
+        "denominator": "1075"
+      }
+    ],
+    "Sato:17": [
+      {
+        "numerator": "9961",
+        "denominator": "225"
+      },
+      {
+        "numerator": "1423",
+        "denominator": "25"
+      },
+      {
+        "numerator": "1423",
+        "denominator": "25"
+      }
+    ],
+    "Sato:18": [
+      {
+        "numerator": "20594",
+        "denominator": "925"
+      },
+      {
+        "numerator": "1471",
+        "denominator": "50"
+      },
+      {
+        "numerator": "10297",
+        "denominator": "370"
+      }
+    ],
+    "Sato:19": [
+      {
+        "numerator": "121",
+        "denominator": "15"
+      },
+      {
+        "numerator": "121",
+        "denominator": "10"
+      },
+      {
+        "numerator": "847",
+        "denominator": "78"
+      }
+    ],
+    "Sato:20": [
+      {
+        "numerator": "1393",
+        "denominator": "50"
+      },
+      {
+        "numerator": "4179",
+        "denominator": "100"
+      },
+      {
+        "numerator": "12537",
+        "denominator": "220"
+      }
+    ],
+    "Sato:21": [
+      {
+        "numerator": "14807",
+        "denominator": "330"
+      },
+      {
+        "numerator": "1139",
+        "denominator": "20"
+      },
+      {
+        "numerator": "46699",
+        "denominator": "660"
+      }
+    ],
+    "Sato:22": [
+      {
+        "numerator": "489",
+        "denominator": "22"
+      },
+      {
+        "numerator": "1467",
+        "denominator": "50"
+      },
+      {
+        "numerator": "10269",
+        "denominator": "275"
+      }
+    ],
+    "Sato:23": [
+      {
+        "numerator": "3311",
+        "denominator": "400"
+      },
+      {
+        "numerator": "301",
+        "denominator": "25"
+      },
+      {
+        "numerator": "6923",
+        "denominator": "400"
+      }
+    ],
+    "Sato:24": [
+      {
+        "numerator": "2902",
+        "denominator": "115"
+      },
+      {
+        "numerator": "1451",
+        "denominator": "50"
+      },
+      {
+        "numerator": "82707",
+        "denominator": "1150"
+      }
+    ],
+    "Sato:25": [
+      {
+        "numerator": "24557",
+        "denominator": "450"
+      },
+      {
+        "numerator": "5667",
+        "denominator": "100"
+      },
+      {
+        "numerator": "88783",
+        "denominator": "900"
+      }
+    ],
+    "Sato:26": [
+      {
+        "numerator": "8733",
+        "denominator": "325"
+      },
+      {
+        "numerator": "2911",
+        "denominator": "100"
+      },
+      {
+        "numerator": "2911",
+        "denominator": "52"
+      }
+    ],
+    "Sato:27": [
+      {
+        "numerator": "3311",
+        "denominator": "300"
+      },
+      {
+        "numerator": "301",
+        "denominator": "25"
+      },
+      {
+        "numerator": "2709",
+        "denominator": "100"
+      }
+    ],
+    "Sato:28": [
+      {
+        "numerator": "1163",
+        "denominator": "50"
+      },
+      {
+        "numerator": "1163",
+        "denominator": "100"
+      },
+      {
+        "numerator": "33727",
+        "denominator": "700"
+      }
+    ],
+    "Sato:29": [
+      {
+        "numerator": "59943",
+        "denominator": "1150"
+      },
+      {
+        "numerator": "2067",
+        "denominator": "50"
+      },
+      {
+        "numerator": "49608",
+        "denominator": "575"
+      }
+    ],
+    "Sato:30": [
+      {
+        "numerator": "18647",
+        "denominator": "700"
+      },
+      {
+        "numerator": "1929",
+        "denominator": "100"
+      },
+      {
+        "numerator": "643",
+        "denominator": "14"
+      }
+    ],
+    "Sato:31": [
+      {
+        "numerator": "19401",
+        "denominator": "1700"
+      },
+      {
+        "numerator": "669",
+        "denominator": "100"
+      },
+      {
+        "numerator": "18063",
+        "denominator": "850"
+      }
+    ],
+    "primary:red": [
+      {
+        "numerator": "92862152495259775",
+        "denominator": "2251799813685248"
+      },
+      {
+        "numerator": "191528189521473275",
+        "denominator": "9007199254740992"
+      },
+      {
+        "numerator": "34823307185722375",
+        "denominator": "18014398509481984"
+      }
+    ],
+    "primary:green": [
+      {
+        "numerator": "20130208720034475",
+        "denominator": "562949953421312"
+      },
+      {
+        "numerator": "20130208720034475",
+        "denominator": "281474976710656"
+      },
+      {
+        "numerator": "107361113173517175",
+        "denominator": "9007199254740992"
+      }
+    ],
+    "primary:blue": [
+      {
+        "numerator": "81281321139403425",
+        "denominator": "4503599627370496"
+      },
+      {
+        "numerator": "130050113823045475",
+        "denominator": "18014398509481984"
+      },
+      {
+        "numerator": "214040812333762375",
+        "denominator": "2251799813685248"
+      }
+    ]
+  },
+  "positive_ray_certificates": {
+    "Sato:0": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "194371965598234853",
+          "denominator": "7378597804738818815745"
+        },
+        {
+          "numerator": "1523137194193260289072",
+          "denominator": "52747748766358948613325"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "172768294308468803759191",
+        "denominator": "989621838072229906250000000"
+      }
+    },
+    "Sato:1": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "359274431547167851",
+          "denominator": "4979054324641187602855"
+        },
+        {
+          "numerator": "10309163199440865938464",
+          "denominator": "106782039173440031903025"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "1900451237393156841351101",
+        "denominator": "14821441963189389547265625000"
+      }
+    },
+    "Sato:2": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "77328780499355099",
+          "denominator": "1389418626567610179690"
+        },
+        {
+          "numerator": "1168596704746709266171",
+          "denominator": "14898908963113354235475"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "58913988359187862081884131",
+        "denominator": "246875997767800287600000000000"
+      }
+    },
+    "Sato:3": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "12561641579574659",
+          "denominator": "314579128875229222865"
+        },
+        {
+          "numerator": "131850208579427410644",
+          "denominator": "2248847449903525618525"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "1900451237393156841351101",
+        "denominator": "3269241312471917650000000000"
+      }
+    },
+    "Sato:4": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        612,
+        574
+      ],
+      "reflectance": [
+        {
+          "numerator": "15764539787735187953920",
+          "denominator": "31244951198937721892039"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "19479946897415267494400",
+          "denominator": "276193092800873552284831"
+        }
+      ],
+      "mu": {
+        "numerator": "12619586012136706245501159353",
+        "denominator": "7465837311004025336443750000"
+      }
+    },
+    "Sato:5": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "83959914155686569",
+          "denominator": "990272113081445020825"
+        },
+        {
+          "numerator": "317569788187729074712",
+          "denominator": "4247524476610261587075"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "1900451237393156841351101",
+        "denominator": "18465201082216344437500000000"
+      }
+    },
+    "Sato:6": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "412898014334921973",
+          "denominator": "5459755611012206346665"
+        },
+        {
+          "numerator": "1852677777991518301824",
+          "denominator": "39030426229551682141525"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "17104061136538411572159909",
+        "denominator": "91669192769022828503125000000"
+      }
+    },
+    "Sato:7": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "405996457891411101",
+          "denominator": "5968150656617187589205"
+        },
+        {
+          "numerator": "3176821963255882943144",
+          "denominator": "127994445462053553172275"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "5408976598734369471537749",
+        "denominator": "12624269090542458550000000000"
+      }
+    },
+    "Sato:8": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        612,
+        574
+      ],
+      "reflectance": [
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "209935175798513014995521",
+          "denominator": "247796585734874512187800"
+        },
+        {
+          "numerator": "74960117648186538602",
+          "denominator": "283990914724030471411"
+        }
+      ],
+      "mu": {
+        "numerator": "18617585736532512867165882107",
+        "denominator": "13782832767788416892500000000"
+      }
+    },
+    "Sato:9": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "845491404190123119",
+          "denominator": "2836680581164143890855"
+        },
+        {
+          "numerator": "448795282696587486088",
+          "denominator": "20278719424110388447675"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "641874258987092708006001",
+        "denominator": "3261062167378054375000000000"
+      }
+    },
+    "Sato:10": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "27610730922558069",
+          "denominator": "274028885586793755365"
+        },
+        {
+          "numerator": "118140241669277545432",
+          "denominator": "5876891732345545143075"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "4100973722795759499757639",
+        "denominator": "26323486981450532725000000000"
+      }
+    },
+    "Sato:11": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        630,
+        612
+      ],
+      "reflectance": [
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "27235175539319212822660",
+          "denominator": "27584240296292453829251"
+        },
+        {
+          "numerator": "1460040519549438892698567",
+          "denominator": "5909664311790368521483000"
+        }
+      ],
+      "mu": {
+        "numerator": "6181431462697977646806067624921",
+        "denominator": "1610404886631808635812500000000"
+      }
+    },
+    "Sato:12": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        612,
+        574
+      ],
+      "reflectance": [
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "5001583156841372657659",
+          "denominator": "9896251564259244246504"
+        },
+        {
+          "numerator": "2354278421652639318430",
+          "denominator": "4442183216181868222313"
+        }
+      ],
+      "mu": {
+        "numerator": "15379744738874684542441380871",
+        "denominator": "7887862331604092250300000000"
+      }
+    },
+    "Sato:13": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "111419162190664471",
+          "denominator": "917079453545903772279"
+        },
+        {
+          "numerator": "4154150838679624089736",
+          "denominator": "98339571883213752730725"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "77918500733119430495395141",
+        "denominator": "796613304032911915350000000000"
+      }
+    },
+    "Sato:14": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "22098584503013491",
+          "denominator": "177997255558454932155"
+        },
+        {
+          "numerator": "4565604206814052952",
+          "denominator": "141384202824926717575"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "146188556722550526257777",
+        "denominator": "811685252386431937500000000"
+      }
+    },
+    "Sato:15": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "32998176602812421",
+          "denominator": "250290672362671387365"
+        },
+        {
+          "numerator": "6276563099912077544",
+          "denominator": "1789265366364087101025"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "100023749336481939018479",
+        "denominator": "250265863176439282500000000"
+      }
+    },
+    "Sato:16": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "69762933433371607",
+          "denominator": "265171745644655951641"
+        },
+        {
+          "numerator": "4230893885159098058044",
+          "denominator": "28434696515545321267275"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "81719403207905744178097343",
+        "denominator": "178150110999807944850000000000"
+      }
+    },
+    "Sato:17": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "885335641022547",
+          "denominator": "5182843157183521535"
+        },
+        {
+          "numerator": "7019098653469713096",
+          "denominator": "37050848411195655475"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "113271928056545772001059",
+        "denominator": "678284036370940850000000000"
+      }
+    },
+    "Sato:18": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "552210113302646799",
+          "denominator": "3172968643729156381775"
+        },
+        {
+          "numerator": "2353902014918192242504",
+          "denominator": "13609655164194266145525"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "70316695783546803129990737",
+        "denominator": "214628349945535809625000000000"
+      }
+    },
+    "Sato:19": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "54853713387733013",
+          "denominator": "267950510736363080525"
+        },
+        {
+          "numerator": "65612483800486780248",
+          "denominator": "383102226091303843925"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "6737963478030283346608449",
+        "denominator": "7454501347130110625000000000"
+      }
+    },
+    "Sato:20": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "531078453939611721",
+          "denominator": "2071115798938575147425"
+        },
+        {
+          "numerator": "1228675079134708198136",
+          "denominator": "2961177684960314081225"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "20904963611324725254862111",
+        "denominator": "66333686827399114812500000000"
+      }
+    },
+    "Sato:21": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "498586530514892677",
+          "denominator": "2692267357358137637965"
+        },
+        {
+          "numerator": "5506879980019090748504",
+          "denominator": "19246345435252105402025"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "62714890833974175764586333",
+        "denominator": "352525512037619532437500000000"
+      }
+    },
+    "Sato:22": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "19488827360425863",
+          "denominator": "97576133375124885205"
+        },
+        {
+          "numerator": "217923224382027050348",
+          "denominator": "697547353178441217425"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "1608074123948055788835547",
+        "denominator": "4388247286512472650000000000"
+      }
+    },
+    "Sato:23": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "51361106781458331",
+          "denominator": "202858442214826577279"
+        },
+        {
+          "numerator": "9689611436258390944736",
+          "denominator": "21752763387259954105725"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "1900451237393156841351101",
+        "denominator": "1754883266426211446875000000"
+      }
+    },
+    "Sato:24": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "301445958326274735",
+          "denominator": "1089158079207151009816"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "115933582023809225325",
+          "denominator": "116906219293376062792"
+        }
+      ],
+      "mu": {
+        "numerator": "7071674397397352357921157",
+        "denominator": "14534395012825693352000000000"
+      }
+    },
+    "Sato:25": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "393782213764722211",
+          "denominator": "2437079096616281390155"
+        },
+        {
+          "numerator": "7405073351011408583368",
+          "denominator": "17422068435482499388175"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "17104061136538411572159909",
+        "denominator": "105847406341868511537500000000"
+      }
+    },
+    "Sato:26": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "28040056382289523",
+          "denominator": "148855138615442197875"
+        },
+        {
+          "numerator": "482381197240241200616",
+          "denominator": "893867625817737853275"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "24705866086111038937564313",
+        "denominator": "69740123963444070937500000000"
+      }
+    },
+    "Sato:27": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "186935989407178011",
+          "denominator": "844166703912895387855"
+        },
+        {
+          "numerator": "4495332726081008871488",
+          "denominator": "6034736462573580692675"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "5701353712179470524053303",
+        "denominator": "5842158725450909837500000000"
+      }
+    },
+    "Sato:28": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "75230116213496673",
+          "denominator": "1097373488776020382585"
+        },
+        {
+          "numerator": "16799366920501308156728",
+          "denominator": "23534545161810430784175"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "13303158661752097889457707",
+        "denominator": "29343561003708894837500000000"
+      }
+    },
+    "Sato:29": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "74885931674017321",
+          "denominator": "683204314567428939880"
+        },
+        {
+          "numerator": "3072436513724543546867",
+          "denominator": "7326084947552748734700"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "3362336804618662103928871",
+        "denominator": "19980959969139304800000000000"
+      }
+    },
+    "Sato:30": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "132304477223006231",
+          "denominator": "1323877252344548505125"
+        },
+        {
+          "numerator": "176517903205257774732",
+          "denominator": "378562683871015892425"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "13303158661752097889457707",
+        "denominator": "39144191425673194375000000000"
+      }
+    },
+    "Sato:31": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        360,
+        767
+      ],
+      "reflectance": [
+        {
+          "numerator": "8851791361177219",
+          "denominator": "112619499887629977805"
+        },
+        {
+          "numerator": "1376094191944240994524",
+          "denominator": "2415265844596053265275"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "2937061003243969663906247",
+        "denominator": "3464562066016041825000000000"
+      }
+    },
+    "primary:red": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        630,
+        612
+      ],
+      "reflectance": [
+        {
+          "numerator": "6843822273081925624886276184445915023",
+          "denominator": "47220228834539684805412512343264303100"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "1934056071320404671778363854834912350869",
+          "denominator": "7749149929439629438448491145749124660000"
+        }
+      ],
+      "mu": {
+        "numerator": "1210722520572893735539885613145704653389824",
+        "denominator": "662653942473049823633143465317840576171875"
+      }
+    },
+    "primary:green": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        566,
+        565
+      ],
+      "reflectance": [
+        {
+          "numerator": "1",
+          "denominator": "1"
+        },
+        {
+          "numerator": "3612847403589535721959414157249669",
+          "denominator": "11900349079909092609350153534066325"
+        },
+        {
+          "numerator": "106224301742228214330235210594971245",
+          "denominator": "133783517378932127269522952524100328"
+        }
+      ],
+      "mu": {
+        "numerator": "643444908569258654544173131156668022784",
+        "denominator": "311923415032800430823064165728759765625"
+      }
+    },
+    "primary:blue": {
+      "status": "PositiveRay",
+      "wavelengths_nm": [
+        504,
+        453,
+        435
+      ],
+      "reflectance": [
+        {
+          "numerator": "85558287739059197339875058982768000",
+          "denominator": "236209324493204265787132441187932441"
+        },
+        {
+          "numerator": "1897026779970377947386329712874880",
+          "denominator": "4468584334861736314864221823398389"
+        },
+        {
+          "numerator": "1",
+          "denominator": "1"
+        }
+      ],
+      "mu": {
+        "numerator": "280980212204889684116404640514125594624",
+        "denominator": "106073210731974097471672134769384765625"
+      }
+    }
+  },
+  "canonical_witness_keys": [
+    {
+      "CohortId": "NTF",
+      "StimulusId": 2
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 3
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 6
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 7
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 10
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 11
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 14
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 15
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 18
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 19
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 22
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 23
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 26
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 27
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 28
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 30
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 31
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 2
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 3
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 6
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 7
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 10
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 11
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 14
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 15
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 18
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 19
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 22
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 23
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 27
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 28
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 30
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 31
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 2
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 3
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 6
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 7
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 11
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 14
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 15
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 19
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 22
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 23
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 26
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 27
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 28
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 30
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 31
+    }
+  ],
+  "witness_stimulus_ids": [
+    2,
+    3,
+    6,
+    7,
+    10,
+    11,
+    14,
+    15,
+    18,
+    19,
+    22,
+    23,
+    26,
+    27,
+    28,
+    30,
+    31
+  ],
+  "source_basis": {
+    "notice_sha256": "caf524260873a2daa9f727d81b9b49f571f444e9452d48099a516a8a9f9f7684",
+    "design_sha256": "8c674660b92c7559766e602791d445fa3285649b8aa403a940c5ddd4aac94898",
+    "evidence_sha256": "31a173979f8cd4687339ebf096d77dde8a9949952b4d997bdf2aa8d076a8022f",
+    "cie_publication_url": "https://www.cie.co.at/publications/colorimetry-part-3-cie-tristimulus-values-2",
+    "cie_publication_html_sha256": "c6584aa4b376a2294dd7adcf8c6709a780fe6a6fb76aa1cacbc173f8c34b7d6d",
+    "measured_conversion": "source/replay_sato.py:79; development-only source, не certificate generator."
+  },
+  "limits": [
+    "Historical ac6 identity unproven",
+    "New declared nominal candidate, not a release",
+    "Uniform-grid choice not fitted to current table/count",
+    "Shortened spectral range is not full ISO/CIE standard range",
+    "Physical calibration and HCE not established",
+    "No optimal frontier/T/full-classifier proof yet",
+    "Independent candidate review pending"
+  ],
+  "counts": {
+    "positive_rays": 35,
+    "failed": [],
+    "hull_vertices": 158
+  },
+  "script_sha256": "53172ee088961ca91696ed2f250afb24967da3a727c266c035dfb5769320c964",
+  "computed_utc": "2026-10-02T04:22:15.411705+00:00"
+}

@@ -11,7 +11,7 @@ const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REPOSITORY = "https://github.com/Labpics-Team/lab-colors";
 const ATTESTATION_TYPE = "https://in-toto.io/Statement/v1";
 const PREDICATE_TYPE = "https://lab.pics/attestations/evaluate-distribution/v1";
-const BENCHMARK_SCHEMA = 1;
+const BENCHMARK_SCHEMA = 2;
 const EVIDENCE_SCHEMA = 1;
 const UUID_DNS_NAMESPACE = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex");
 const WARMUP_ROUNDS = 7;
@@ -90,13 +90,62 @@ function timed(binary, args, input) {
   return { milliseconds: performance.now() - start, output: result.stdout, stderr: result.stderr };
 }
 
-function readFixture(relativePath) {
-  const text = command("git", ["show", `HEAD:${relativePath}`]);
-  if (!text || !text.trim()) fail(`evaluate fixture ${relativePath} is missing at HEAD`);
-  return Buffer.from(text, "utf8");
+function readFixtures(sourceSha) {
+  exactSha(sourceSha, "fixture source SHA");
+  return {
+    sourceSha,
+    good: command("git", ["show", `${sourceSha}:${FIXTURE_GOOD}`], { encoding: "buffer" }),
+    rejected: command("git", ["show", `${sourceSha}:${FIXTURE_REJECTED}`], { encoding: "buffer" }),
+  };
 }
 
-function assertGoodReport(stdout, stderr, label) {
+function describeFixtures(fixtures) {
+  exactSha(fixtures.sourceSha, "fixture source SHA");
+  const result = { sourceSha: fixtures.sourceSha };
+  for (const [kind, path] of [["good", FIXTURE_GOOD], ["rejected", FIXTURE_REJECTED]]) {
+    const bytes = fixtures[kind];
+    if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 2 * 1024 * 1024) {
+      fail(`${kind}: expected a bounded JSON fixture`);
+    }
+    const utf8 = bytes.toString("utf8");
+    if (!Buffer.from(utf8).equals(bytes)) fail(`${kind}: fixture is not UTF-8`);
+    const request = JSON.parse(utf8);
+    const release = request?.profile?.conventionReleaseSha256;
+    if (!/^[0-9a-f]{64}$/u.test(release ?? "") || request.formatVersion !== 1 ||
+      request.kind !== "labcolors-declared-point-request-v1" ||
+      request.profile.scope !== "modeled-srgb8-point" ||
+      request.profile.admission !== "declared-package-policy-candidate" ||
+      request.profile.human !== "not-requested") {
+      fail(`${kind}: fixture does not declare the supported nominal point profile`);
+    }
+    if (kind === "good") result.conventionReleaseSha256 = release;
+    else if (release !== result.conventionReleaseSha256) fail("GOOD and REJECTED release identities differ");
+    // Parsing is timed too: preserve whitespace, key order and all bytes except
+    // the single literal release selector, whose width is always 64 hex digits.
+    const selector = /"conventionReleaseSha256"(\s*:\s*)"([a-f0-9]{64})"/gu;
+    const matches = [...utf8.matchAll(selector)];
+    if (matches.length !== 1 || matches[0][2] !== release) fail(`${kind}: expected one literal release selector`);
+    const normalized = utf8.replace(selector, (_match, separator) => `"conventionReleaseSha256"${separator}"${"0".repeat(64)}"`);
+    result[kind] = { path, bytes: bytes.length, sha256: sha256(bytes), utf8,
+      normalizedSha256: sha256(normalized) };
+  }
+  return result;
+}
+
+export function describeFixturePair(candidate, baseline = null) {
+  const result = { candidate: describeFixtures(candidate), baseline: baseline ? describeFixtures(baseline) : null,
+    comparison: baseline ? "same-requests-except-convention-release" : "candidate-only" };
+  if (result.baseline) {
+    for (const kind of ["good", "rejected"]) {
+      if (result.candidate[kind].normalizedSha256 !== result.baseline[kind].normalizedSha256) {
+        fail(`${kind}: paired workload differs beyond the convention release`);
+      }
+    }
+  }
+  return result;
+}
+
+function assertGoodReport(stdout, stderr, release, label) {
   if (stderr.length !== 0) fail(`${label}: expected empty stderr`);
   let report;
   try {
@@ -104,10 +153,15 @@ function assertGoodReport(stdout, stderr, label) {
   } catch {
     fail(`${label}: stdout is not a JSON report`);
   }
-  if (report?.ok !== true || report?.kind !== "labcolors-declared-point-report-v1") {
+  if (report?.formatVersion !== 1 || report.ok !== true || report.kind !== "labcolors-declared-point-report-v1") {
     fail(`${label}: stdout is not a successful declared-point report`);
   }
-  const terminal = report?.terminalSrgb8;
+  if (report.conventionReleaseSha256 !== release || report.scope !== "modeled-srgb8-point" ||
+    report.admission !== "declared-package-policy-candidate" || report.human !== "not-requested" ||
+    report.rendererProvenance !== "unverified") {
+    fail(`${label}: report has the wrong release or claim scope`);
+  }
+  const terminal = report.terminalSrgb8;
   if (!Array.isArray(terminal) || terminal.length !== GOOD_TERMINAL_SRGB8.length ||
     terminal.some((value, index) => value !== GOOD_TERMINAL_SRGB8[index])) {
     fail(`${label}: terminal sRGB8 is not the declared GOOD point`);
@@ -115,100 +169,85 @@ function assertGoodReport(stdout, stderr, label) {
   return report;
 }
 
-function exercise(binary, good, goodCompact, fixturePath) {
-  const viaStdin = timed(binary, [], good);
-  const stdinReport = assertGoodReport(viaStdin.output, viaStdin.stderr, `${binary}: stdin-json`);
-  void stdinReport;
+function exercise(binary, fixtures, fixturePath, release) {
+  const viaStdin = timed(binary, [], fixtures.good);
+  const stdinReport = assertGoodReport(viaStdin.output, viaStdin.stderr, release, `${binary}: stdin-json`);
   const viaFile = timed(binary, [fixturePath], Buffer.alloc(0));
-  assertGoodReport(viaFile.output, viaFile.stderr, `${binary}: file-json`);
+  assertGoodReport(viaFile.output, viaFile.stderr, release, `${binary}: file-json`);
   if (!viaFile.output.equals(viaStdin.output)) fail(`${binary}: file and stdin reports diverged`);
-  const viaJsonl = timed(binary, ["--format", "jsonl", "-"], goodCompact);
+  const compact = Buffer.from(JSON.stringify(JSON.parse(fixtures.good)));
+  const viaJsonl = timed(binary, ["--format", "jsonl", "-"], compact);
   if (viaJsonl.output.filter((byte) => byte === 0x0a).length !== 1) {
     fail(`${binary}: jsonl output is not a single line`);
   }
-  const jsonlReport = assertGoodReport(viaJsonl.output, viaJsonl.stderr, `${binary}: stdin-jsonl`);
-  if (stableJson(jsonlReport) !== stableJson(JSON.parse(viaStdin.output.toString("utf8")))) {
-    fail(`${binary}: jsonl and json reports diverged`);
+  const jsonlReport = assertGoodReport(viaJsonl.output, viaJsonl.stderr, release, `${binary}: stdin-jsonl`);
+  if (stableJson(jsonlReport) !== stableJson(stdinReport)) fail(`${binary}: jsonl and json reports diverged`);
+  return { "stdin-json": viaStdin.milliseconds, "file-json": viaFile.milliseconds, "stdin-jsonl": viaJsonl.milliseconds };
+}
+
+function assertRefusal(binary, input, exit, code) {
+  const result = spawnSync(binary, [], { input, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
+  if (result.error) fail(`${binary}: ${code} fixture run failed to spawn`);
+  if (result.status !== exit || result.stdout.length !== 0) fail(`${binary}: expected ${code} exit ${exit} and empty stdout`);
+  let report;
+  try { report = JSON.parse(result.stderr.toString("utf8")); }
+  catch { fail(`${binary}: ${code} stderr is not a JSON refusal`); }
+  if (stableJson(report) !== stableJson({ formatVersion: 1, ok: false, error: { domain: "clean-convention", code } })) {
+    fail(`${binary}: expected typed ${code} refusal`);
   }
-  return {
-    "stdin-json": viaStdin.milliseconds,
-    "file-json": viaFile.milliseconds,
-    "stdin-jsonl": viaJsonl.milliseconds,
-  };
 }
 
-function assertRejectedOnce(binary, rejected) {
-  const result = spawnSync(binary, [], {
-    input: rejected,
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  if (result.error) fail(`${binary}: rejected fixture run failed to spawn`);
-  if (result.status !== REJECTED_EXIT) fail(`${binary}: rejected fixture exit is not ${REJECTED_EXIT}`);
-  if (result.stdout.length !== 0) fail(`${binary}: rejected fixture must leave stdout empty`);
+export async function benchmarkPair(candidateBinary, baselineBinary, sourceSha, baselineSha = null) {
+  return benchmarkPairWithFixtures(candidateBinary, baselineBinary, readFixtures(sourceSha),
+    baselineSha ? readFixtures(baselineSha) : null);
 }
 
-export async function benchmarkPair(candidateBinary, baselineBinary = null) {
-  const good = readFixture(FIXTURE_GOOD);
-  const rejected = readFixture(FIXTURE_REJECTED);
-  const goodCompact = Buffer.from(`${JSON.stringify(JSON.parse(good.toString("utf8")))}`, "utf8");
-  return benchmarkPairWithFixtures(candidateBinary, baselineBinary, good, goodCompact, rejected);
-}
-
-export async function benchmarkPairWithFixtures(candidateBinary, baselineBinary, good, goodCompact, rejected) {
+export async function benchmarkPairWithFixtures(candidateBinary, baselineBinary, candidateFixtures, baselineFixtures = null) {
+  if (Boolean(baselineBinary) !== Boolean(baselineFixtures)) fail("baseline binary and fixtures must be provided together");
+  const fixtures = describeFixturePair(candidateFixtures, baselineFixtures);
+  const crossRelease = fixtures.baseline && fixtures.candidate.conventionReleaseSha256 !== fixtures.baseline.conventionReleaseSha256;
   const scratch = await mkdtemp(join(tmpdir(), "labcolors-evaluate-dist-"));
   try {
-    const fixturePath = join(scratch, "declared-point.json");
-    await writeFile(fixturePath, good);
-    const candidate = { "stdin-json": [], "file-json": [], "stdin-jsonl": [] };
-    const baseline = baselineBinary ? { "stdin-json": [], "file-json": [], "stdin-jsonl": [] } : null;
-    assertRejectedOnce(candidateBinary, rejected);
-    for (let i = 0; i < WARMUP_ROUNDS; i += 1) {
-      if (baselineBinary && i % 2 === 0) exercise(baselineBinary, good, goodCompact, fixturePath);
-      exercise(candidateBinary, good, goodCompact, fixturePath);
-      if (baselineBinary && i % 2 !== 0) exercise(baselineBinary, good, goodCompact, fixturePath);
+    const inputs = { candidate: candidateFixtures, baseline: baselineFixtures };
+    const paths = { candidate: join(scratch, "candidate.json"), baseline: join(scratch, "baseline.json") };
+    const samples = { candidate: { "stdin-json": [], "file-json": [], "stdin-jsonl": [] } };
+    const binaries = { candidate: candidateBinary };
+    if (baselineBinary) { binaries.baseline = baselineBinary; samples.baseline = { "stdin-json": [], "file-json": [], "stdin-jsonl": [] }; }
+    for (const [kind, binary] of Object.entries(binaries)) {
+      await writeFile(paths[kind], inputs[kind].good);
+      assertRefusal(binary, inputs[kind].rejected, REJECTED_EXIT, "rejected_by_convention");
     }
-    for (let i = 0; i < MEASURED_ROUNDS; i += 1) {
-      const firstBaseline = baselineBinary && i % 2 === 0;
-      const runs = [];
-      if (firstBaseline) runs.push(["baseline", baselineBinary]);
-      runs.push(["candidate", candidateBinary]);
-      if (baselineBinary && !firstBaseline) runs.push(["baseline", baselineBinary]);
-      for (const [kind, binary] of runs) {
-        const values = exercise(binary, good, goodCompact, fixturePath);
-        const target = kind === "candidate" ? candidate : baseline;
-        for (const operation of Object.keys(values)) target[operation].push(values[operation]);
+    if (crossRelease) {
+      assertRefusal(candidateBinary, baselineFixtures.good, 3, "unsupported_convention_release");
+      assertRefusal(baselineBinary, candidateFixtures.good, 3, "unsupported_convention_release");
+    }
+    for (let i = 0; i < WARMUP_ROUNDS + MEASURED_ROUNDS; i += 1) {
+      const order = baselineBinary ? (i % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"]) : ["candidate"];
+      for (const kind of order) {
+        const values = exercise(binaries[kind], inputs[kind], paths[kind], fixtures[kind].conventionReleaseSha256);
+        if (i >= WARMUP_ROUNDS) {
+          for (const operation of Object.keys(values)) samples[kind][operation].push(values[operation]);
+        }
       }
     }
     const result = {
       schemaVersion: BENCHMARK_SCHEMA,
-      workload: {
-        id: "evaluate-declared-point-cli-process-v1",
-        fixtureBytes: good.length,
-        warmupRounds: WARMUP_ROUNDS,
-        measuredRounds: MEASURED_ROUNDS,
-        operations: ["stdin-json", "file-json", "stdin-jsonl"],
-        method: "alternating-process-wall-clock-hrtime",
-      },
-      correctness: {
-        goodTerminalSrgb8: [...GOOD_TERMINAL_SRGB8],
-        rejectedExit: REJECTED_EXIT,
-      },
-      candidate: Object.fromEntries(Object.entries(candidate).map(([key, values]) => [key, summarize(values)])),
+      workload: { id: "evaluate-declared-point-cli-process-v2", warmupRounds: WARMUP_ROUNDS,
+        measuredRounds: MEASURED_ROUNDS, operations: ["stdin-json", "file-json", "stdin-jsonl"],
+        method: "alternating-process-wall-clock-hrtime", fixtures },
+      correctness: { goodTerminalSrgb8: [...GOOD_TERMINAL_SRGB8], rejectedExit: REJECTED_EXIT,
+        rejectedCode: "rejected_by_convention", crossReleaseRefusals: crossRelease ? "unsupported_convention_release" : "not-applicable" },
+      candidate: Object.fromEntries(Object.entries(samples.candidate).map(([key, values]) => [key, summarize(values)])),
     };
-    if (baseline) {
-      result.baseline = Object.fromEntries(Object.entries(baseline).map(([key, values]) => [key, summarize(values)]));
-      result.pairedMedianRatioCandidateOverBaseline = Object.fromEntries(
-        Object.keys(candidate).map((operation) => {
-          const ratios = candidate[operation].map((value, index) => value / baseline[operation][index]);
-          return [operation, Number(percentile(ratios.sort((a, b) => a - b), 50).toFixed(6))];
-        }),
-      );
+    if (samples.baseline) {
+      result.baseline = Object.fromEntries(Object.entries(samples.baseline).map(([key, values]) => [key, summarize(values)]));
+      result.pairedRatios = Object.fromEntries(Object.keys(samples.candidate).map((operation) => {
+        const ratios = samples.candidate[operation].map((value, index) => value / samples.baseline[operation][index]);
+        return [operation, Number(percentile(ratios.sort((a, b) => a - b), 50).toFixed(6))];
+      }));
     }
     return result;
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
-  }
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 
 function packageRef(pkg) {
@@ -399,20 +438,45 @@ export async function verifyBundle(directory, expectedSourceSha) {
   if (benchmark.schemaVersion !== BENCHMARK_SCHEMA || benchmark.workload?.measuredRounds !== MEASURED_ROUNDS) {
     fail("evaluate benchmark receipt is malformed");
   }
-  if (benchmark.workload?.id !== "evaluate-declared-point-cli-process-v1") {
+  if (benchmark.workload?.id !== "evaluate-declared-point-cli-process-v2") {
     fail("evaluate benchmark workload is not the declared-point process");
   }
+  const recordedFixtures = benchmark.workload.fixtures;
+  const decodeFixtures = (record) => {
+    if (typeof record?.good?.utf8 !== "string" || typeof record?.rejected?.utf8 !== "string") {
+      fail("evaluate benchmark fixture bytes are missing");
+    }
+    return { sourceSha: record.sourceSha, good: Buffer.from(record.good.utf8), rejected: Buffer.from(record.rejected.utf8) };
+  };
+  const fixtures = describeFixturePair(decodeFixtures(recordedFixtures?.candidate),
+    recordedFixtures?.baseline ? decodeFixtures(recordedFixtures.baseline) : null);
+  if (stableJson(recordedFixtures) !== stableJson(fixtures)) fail("evaluate benchmark fixture metadata differs from its bytes");
+  if (fixtures.candidate.sourceSha !== expectedSourceSha || benchmark.source?.candidate !== expectedSourceSha ||
+    (fixtures.baseline?.sourceSha ?? null) !== benchmark.source?.baseline) {
+    fail("evaluate benchmark fixture source identity mismatch");
+  }
+  const crossRelease = fixtures.baseline && fixtures.candidate.conventionReleaseSha256 !== fixtures.baseline.conventionReleaseSha256;
   const correctness = benchmark.correctness;
   if (!Array.isArray(correctness?.goodTerminalSrgb8) ||
     correctness.goodTerminalSrgb8.length !== GOOD_TERMINAL_SRGB8.length ||
     correctness.goodTerminalSrgb8.some((value, index) => value !== GOOD_TERMINAL_SRGB8[index]) ||
-    correctness.rejectedExit !== REJECTED_EXIT) {
+    correctness.rejectedExit !== REJECTED_EXIT || correctness.rejectedCode !== "rejected_by_convention" ||
+    correctness.crossReleaseRefusals !== (crossRelease ? "unsupported_convention_release" : "not-applicable")) {
     fail("evaluate benchmark correctness is not the declared GOOD/REJECTED pair");
   }
-  for (const operation of ["stdin-json", "file-json", "stdin-jsonl"]) {
-    const sample = benchmark.candidate?.[operation];
-    if (sample?.n !== MEASURED_ROUNDS || !(sample.minMs > 0) || !(sample.p95Ms >= sample.medianMs)) {
-      fail(`evaluate benchmark ${operation} summary is invalid`);
+  if (!fixtures.baseline && (benchmark.baseline !== undefined || benchmark.pairedRatios !== undefined)) {
+    fail("evaluate benchmark has unbound baseline measurements");
+  }
+  for (const kind of fixtures.baseline ? ["candidate", "baseline"] : ["candidate"]) {
+    for (const operation of ["stdin-json", "file-json", "stdin-jsonl"]) {
+      const sample = benchmark[kind]?.[operation];
+      if (sample?.n !== MEASURED_ROUNDS || ![sample.minMs, sample.medianMs, sample.p95Ms, sample.maxMs].every(Number.isFinite) ||
+        !(sample.minMs > 0) || !(sample.medianMs >= sample.minMs) || !(sample.p95Ms >= sample.medianMs) || !(sample.maxMs >= sample.p95Ms)) {
+        fail(`evaluate benchmark ${kind} ${operation} summary is invalid`);
+      }
+      if (kind === "baseline" && (!Number.isFinite(benchmark.pairedRatios?.[operation]) || benchmark.pairedRatios[operation] <= 0)) {
+        fail(`evaluate benchmark ${operation} paired ratio is invalid`);
+      }
     }
   }
   return { attestationSha256: sha256(attestationBytes), binarySha256: binaryDigest };
@@ -448,6 +512,8 @@ async function generate(options) {
   const benchmark = await benchmarkPair(
     binaryPath,
     options.baselineBinary ?? null,
+    sourceSha,
+    options.baselineSha ?? null,
   );
   benchmark.environment = {
     platform: process.platform,

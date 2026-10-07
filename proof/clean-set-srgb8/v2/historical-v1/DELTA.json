@@ -1,0 +1,267 @@
+{
+  "schema": 1,
+  "scope": "Exact finite observable delta; no empirical superiority or historical provenance claim",
+  "counts": {
+    "visited": 16777216,
+    "old_accepted": 8232849,
+    "new_accepted": 8342111,
+    "accept_to_reject": 0,
+    "reject_to_accept": 109262,
+    "rejection_payload_changes": 7483302,
+    "unchanged": 9184652
+  },
+  "examples": {
+    "accept_to_reject": [],
+    "reject_to_accept": [
+      {
+        "rgb": [
+          0,
+          0,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          1,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          2,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          3,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          4,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          5,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          6,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          7,
+          198
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      }
+    ],
+    "rejection_payload_changes": [
+      {
+        "rgb": [
+          0,
+          0,
+          1
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          2
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          3
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          4
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          5
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          6
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          7
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      },
+      {
+        "rgb": [
+          0,
+          0,
+          8
+        ],
+        "old_interval": [
+          0,
+          198
+        ],
+        "new_interval": [
+          0,
+          197
+        ]
+      }
+    ]
+  },
+  "raw_different_columns": 39363,
+  "raw_different_bytes": 41321,
+  "old_raw_sha256": "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2",
+  "new_raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+  "new_codec_bytes": 11280,
+  "new_codec_records": 3586,
+  "new_codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+}

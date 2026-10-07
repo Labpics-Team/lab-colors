@@ -57,10 +57,10 @@ function resolve(builder, backdrop) {
 // оценку. Alpha-пары меняют вердикт относительно source; exact-visible constraint
 // отдельно подтверждает конечные байты композиции существующим Core evaluator.
 const cases = [
-  { name: "accepted opaque final", source: [0, 200, 70], opacity: 1,
-    backdrop: [0, 0, 0], final: [0, 200, 70], state: "ready" },
-  { name: "rejected opaque final", source: [0, 200, 71], opacity: 1,
-    backdrop: [0, 0, 0], final: [0, 200, 71], state: "failed" },
+  { name: "accepted opaque final", source: [0, 199, 63], opacity: 1,
+    backdrop: [0, 0, 0], final: [0, 199, 63], state: "ready" },
+  { name: "rejected opaque final", source: [0, 199, 64], opacity: 1,
+    backdrop: [0, 0, 0], final: [0, 199, 64], state: "failed" },
   { name: "rejected source becomes accepted final after alpha", source: [128, 128, 129], opacity: 0.5,
     backdrop: [128, 128, 127], final: [128, 128, 128], state: "ready" },
   { name: "accepted source becomes rejected final after alpha", source: [255, 255, 255], opacity: 0.5,
@@ -83,7 +83,7 @@ for (const { name, source, opacity, backdrop, final, state } of cases) {
 }
 
 test("declared clean-set report mode retains a rejected fixed output", () => {
-  const source = [0, 200, 71];
+  const source = [0, 199, 64];
   const builder = pointBuilder(source, 1, source).declaredSrgb8CleanSet(false, 81, 71, 61);
   assert.deepEqual(resolve(builder, [0, 0, 0]), {
     state: "ready", outputs: [{ slot: 91, rgb: source, opacity: 1 }],
@@ -91,7 +91,7 @@ test("declared clean-set report mode retains a rejected fixed output", () => {
 });
 
 test("declared clean-set presentation references remain Core compile obligations", () => {
-  const builder = pointBuilder([0, 200, 70], 1, [0, 200, 70])
+  const builder = pointBuilder([0, 199, 63], 1, [0, 199, 63])
     .declaredSrgb8CleanSet(true, 81, 72, 61);
   let unexpected;
   try {

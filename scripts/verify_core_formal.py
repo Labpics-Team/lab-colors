@@ -224,7 +224,7 @@ def formal_source_files() -> list[Path]:
         files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])
     files.extend([
         CORE / "clean_set.rs",
-        ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256",
+        ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.sha256",
     ])
     return files
 

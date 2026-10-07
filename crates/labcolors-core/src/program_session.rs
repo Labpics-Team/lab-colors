@@ -39,7 +39,7 @@ use crate::appearance::{
     SurfaceSpec,
 };
 use crate::clean_set::{
-    ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
+    ClosedRejectedBlueIntervalV1, ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV2,
 };
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
@@ -1726,7 +1726,7 @@ impl CompiledConstraintPhasesV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DeclaredSrgb8CleanSetV1 {
-    classifier: ExactNominalSrgb8CleanSetV1,
+    classifier: ExactNominalSrgb8CleanSetV2,
     #[cfg(test)]
     final_recheck_mutant: bool,
 }
@@ -1734,7 +1734,7 @@ struct DeclaredSrgb8CleanSetV1 {
 impl DeclaredSrgb8CleanSetV1 {
     const fn package_pinned() -> Self {
         Self {
-            classifier: ExactNominalSrgb8CleanSetV1,
+            classifier: ExactNominalSrgb8CleanSetV2,
             #[cfg(test)]
             final_recheck_mutant: false,
         }
@@ -1743,7 +1743,7 @@ impl DeclaredSrgb8CleanSetV1 {
     #[cfg(test)]
     const fn final_recheck_mutant() -> Self {
         Self {
-            classifier: ExactNominalSrgb8CleanSetV1,
+            classifier: ExactNominalSrgb8CleanSetV2,
             final_recheck_mutant: true,
         }
     }

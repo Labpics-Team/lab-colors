@@ -1090,6 +1090,8 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
     // Вместе с fixed golden этот Program содержит каждый V9 vertex/edge tag,
     // все constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
+    // Nominal release v2 меняет один семантический вход (release SHA-256),
+    // а не V9-кодировку: прежний Program не должен иметь новую идентичность.
     let (field, field_outputs) = complete_field_schema();
     let compiled = full_program(
         canonical_full_ids(),
@@ -1122,8 +1124,8 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
     assert_eq!(
         compiled.content_identity().as_bytes(),
         &[
-            18, 121, 226, 19, 228, 94, 97, 162, 49, 50, 79, 248, 170, 114, 212, 216, 202, 60, 248,
-            218, 150, 31, 183, 76, 231, 8, 220, 213, 93, 23, 72, 174,
+            233, 128, 235, 40, 248, 23, 223, 249, 143, 131, 221, 90, 4, 88, 91, 177, 52, 68, 253,
+            222, 136, 93, 251, 121, 118, 84, 242, 82, 33, 210, 131, 194,
         ]
     );
 }

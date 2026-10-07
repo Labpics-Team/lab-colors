@@ -2,7 +2,7 @@ use super::super::clean_convention::{CleanConventionAdmissionKindV1, CleanConven
 use super::super::test_support::{Host, point_attachment_for};
 use super::*;
 use crate::Srgb8;
-use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
 use crate::program_wire::{
     ProgramMaterializationAuthorityErrorV1, ProgramRendererProvenanceV1, ProgramScenarioV1,
 };
@@ -11,11 +11,11 @@ use crate::test_support::{AllocatorEvents, measured_allocator_events};
 fn profile() -> PointQualityProfileV1 {
     PointQualityProfileV1::declared_point(
         CleanConventionSelectionV1::select(
-            EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
+            EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
             CleanConventionScopeV1::ModeledSrgb8Point,
             CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
         )
-        .unwrap(),
+        .expect("the packaged nominal release must admit its declared modeled-point profile"),
     )
 }
 
@@ -148,7 +148,7 @@ fn result_preserves_one_subject_profile_and_distinct_current_branches() {
     // Кодирование выбранного закона проверяется отдельно от данных текущей точки.
     let mut expected = Hasher::new();
     expected.update(b"labcolors.quality-profile.declared-modeled-srgb8-point.v1\0");
-    expected.update(&EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1);
+    expected.update(&EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2);
     expected.update(&[1, 1]);
     assert_eq!(result.profile().identity(), *expected.finalize().as_bytes());
 }

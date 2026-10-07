@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
@@ -143,7 +144,7 @@ class ReceiptFixture:
         digest = self.write_receipt()
         _write(
             self.product / RECEIPT_PIN_PATH,
-            f"{digest}  receipt-v1.json\n".encode("ascii"),
+            f"{digest}  receipt-v2.json\n".encode("ascii"),
         )
         return digest
 
@@ -156,151 +157,67 @@ class ReceiptFixture:
         )
 
 
+def _runtime_contract() -> dict[str, object]:
+    return {
+        "accepted_points": verifier.ACCEPTED_POINTS,
+        "codec": {"bytes": len(CANONICAL_CODEC), "header_hex": verifier.CODEC_HEADER.hex(),
+                  "id": "green-column-red-run-start-rle-v1", "records": verifier.CODEC_RECORDS,
+                  "sha256": _sha256(CANONICAL_CODEC)},
+        "domain_id": "encoded-srgb8-u8-cube-v1", "domain_points": verifier.DOMAIN_POINTS,
+        "law_id": "neutral-or-blue-outside-closed-dirty-interval-v1",
+        "neutral_axis_id": "srgb8-output-neutral-axis-v1",
+        "raw": {"bytes": len(CANONICAL_RAW), "id": "raw-dirty-blue-interval-u8-pair-v1",
+                "sha256": _sha256(CANONICAL_RAW)},
+    }
+
+
 def _research_fixture(root: Path) -> tuple[str, str]:
-    files: dict[str, tuple[str, str, bytes]] = {}
-
-    profile = {
-        "admission": {
-            "authority": "ExactTechnicalDerivation",
-            "convention": "DeclaredPackagePolicyCandidate",
-            "production_auto_minted": False,
-        },
-        "excluded_claims": list(EXCLUDED_CLAIMS),
-        "geometry": {},
-        "neutral_axis": {"id": "srgb8-output-neutral-axis-v1"},
-        "nominal_bridge": {},
-        "output_release": {},
-        "policy": {},
-        "release_id": "exact-nominal-srgb8-point-clean-set-v1",
-        "schema": "lab-point-clean-set-srgb8-profile/1",
+    # This small fixture tests the delivery boundary, never the real theorem.
+    # The production full gate executes the independently reviewed full capsule.
+    capsule = root / verifier.RESEARCH_CAPSULE_PATH
+    files = {
+        "geometry/input/intervals-refined.raw": CANONICAL_RAW,
+        "derived/new-column-rle.bin": CANONICAL_CODEC,
+        "NOMINAL-SPEC.md": b"conditional nominal fixture\n",
+        "NOTICE.md": b"fixture attribution\n",
+        "geometry/verify_exact_v2.py": b"# delivery fixture, no mathematical claim\n",
+        "historical-v1/DELTA.json": b'{"fixture": true}\n',
     }
-    profile_bytes = canonical_json_bytes(profile)
-    proof = {
-        "admission": copy.deepcopy(profile["admission"]),
-        "artifacts": {
-            "certificates_bytes": 8,
-            "certificates_sha256": _sha256(b"certificate"),
-            "codec_bytes": len(CANONICAL_CODEC),
-            "codec_sha256": _sha256(CANONICAL_CODEC),
-            "profile_sha256": _sha256(profile_bytes),
-            "table_bytes": len(CANONICAL_RAW),
-            "table_sha256": _sha256(CANONICAL_RAW),
-        },
-        "certificate_encoding": {},
-        "codec_encoding": {
-            "body_offset": 522,
-            "column_axis": "green",
-            "empty_interval": [255, 0],
-            "header_hex": "4c50434301010000",
-            "id": "green-column-red-run-start-rle-v1",
-            "index": {},
-            "record": {},
-            "records": 3616,
-            "run_axis": "red",
-        },
-        "cone_certificates": [],
-        "counts": {
-            "accepted_chromatic": 8_232_593,
-            "boundary_unproven": 0,
-            "chromatic_points": 16_776_960,
-            "continuous_nonempty_discrete_empty_columns": 0,
-            "cube_points": 16_777_216,
-            "empty_columns": 21_379,
-            "full_columns": 0,
-            "neutral_points": 256,
-            "no_positive_ray": 0,
-            "rejected_chromatic": 8_544_367,
-            "singleton_columns": 1,
-        },
-        "excluded_claims": list(EXCLUDED_CLAIMS),
-        "generator_sha256": "1" * 64,
-        "inputs": [],
-        "law": {
-            "chromatic_accept": "q / T_policy not in Z",
-            "equality": "reject",
-            "neutral_outer_union": "red == green == blue",
-            "runtime": "neutral or blue outside closed dirty interval",
-        },
-        "release_id": "exact-nominal-srgb8-point-clean-set-v1",
-        "schema": "lab-point-clean-set-srgb8-proof/1",
-        "witnesses": {},
-    }
-    proof_bytes = canonical_json_bytes(proof)
-
-    definitions = [
-        (
-            "evidence/point-clean-set-srgb8/profile-v1.json",
-            "semantic_profile",
-            "CC-BY-SA-4.0",
-            profile_bytes,
-        ),
-        (
-            "evidence/frontier/artifact-v1.json",
-            "policy_frontier",
-            "CC-BY-SA-4.0",
-            b"frontier",
-        ),
-        (
-            "evidence/cie-2019/CIE_xyz_1931_2deg.csv",
-            "cie_1931_2deg_source",
-            "CC-BY-SA-4.0",
-            b"cmf",
-        ),
-        (
-            "evidence/cie-2019/CIE_std_illum_D65.csv",
-            "cie_d65_source",
-            "CC-BY-SA-4.0",
-            b"d65",
-        ),
-        (
-            "evidence/point-clean-set-srgb8/artifact-v1.bin",
-            "canonical_raw_table",
-            "CC-BY-SA-4.0",
-            CANONICAL_RAW,
-        ),
-        (
-            "evidence/point-clean-set-srgb8/point-clean-set-srgb8-column-rle-v1.bin",
-            "runtime_codec_table",
-            "CC-BY-SA-4.0",
-            CANONICAL_CODEC,
-        ),
-        (
-            "evidence/point-clean-set-srgb8/certificates-v1.bin",
-            "boundary_certificates",
-            "CC-BY-SA-4.0",
-            b"certificate",
-        ),
-        ("evidence/point-clean-set-srgb8/proof-v1.json", "proof", "CC-BY-SA-4.0", proof_bytes),
-        ("evidence/point-clean-set-srgb8/generate.py", "generator", "MIT", b"generator"),
-        ("evidence/cie/ciegen.py", "generator_cie_reader", "MIT", b"cie generator"),
-        ("evidence/point-clean-set-srgb8/verify.py", "independent_verifier", "MIT", b"verifier"),
-        ("evidence/cie/ciever.py", "verifier_cie_reader", "MIT", b"cie verifier"),
-        ("evidence/point-clean-set-srgb8/NOTICE.md", "data_notice", "CC-BY-SA-4.0", b"notice"),
-    ]
-    for path, role, license_id, data in definitions:
-        files[path] = (role, license_id, data)
-        _write(root / path, data)
-
+    runner = """import argparse,hashlib,json,shutil
+from pathlib import Path
+p=argparse.ArgumentParser()
+p.add_argument('--output-dir',type=Path,required=True)
+p.add_argument('--mode',required=True)
+p.add_argument('--product-root',required=True)
+a=p.parse_args();a.output_dir.mkdir();r=Path(__file__).resolve().parent
+shutil.copyfile(r/'geometry/input/intervals-refined.raw',a.output_dir/'derived.raw')
+shutil.copyfile(r/'derived/new-column-rle.bin',a.output_dir/'derived-codec.bin')
+result={"status":"PASS_CONDITIONAL_NOMINAL","proof_manifest_sha256":hashlib.sha256((r/'PROOF-MANIFEST.json').read_bytes()).hexdigest(),"modes":["normal","optimized"],"current_product_source_checked":True,"table_sha256":"TABLE_HASH","codec_sha256":"CODEC_HASH","accepted_points":ACCEPTED,"domain_points":DOMAIN}
+(a.output_dir/'result.json').write_text(json.dumps(result))
+""".replace("TABLE_HASH", verifier.RAW_SHA256).replace("CODEC_HASH", verifier.CODEC_SHA256).replace("ACCEPTED", str(verifier.ACCEPTED_POINTS)).replace("DOMAIN", str(verifier.DOMAIN_POINTS))
+    files["verify_bundle.py"] = runner.encode()
+    manifest = {"schema": "lab-colors-public-nominal-proof/1",
+                "files": [_artifact(name, "fixture", "MIT", data) for name, data in sorted(files.items())],
+                "limits": ["delivery fixture only"]}
+    manifest_bytes = canonical_json_bytes(manifest)
+    files["PROOF-MANIFEST.json"] = manifest_bytes
     release = {
-        "artifacts": [
-            _artifact(path, role, license_id, data)
-            for path, (role, license_id, data) in files.items()
-        ],
-        "bundle_root": "cleanliness-repository-v1",
-        "codec_id": "green-column-red-run-start-rle-v1",
-        "encoding_id": "raw-dirty-blue-interval-u8-pair-v1",
-        "license": "CC-BY-SA-4.0",
-        "release_id": "exact-nominal-srgb8-point-clean-set-v1",
-        "schema": "lab-point-clean-set-srgb8-release/1",
+        "schema": "lab-point-clean-set-srgb8-release/2", "release_id": verifier.RELEASE_ID,
+        "admission": {"authority": "ExactTechnicalDerivation", "convention": "DeclaredPackagePolicyCandidate", "production_auto_minted": False},
+        "excluded_claims": list(EXCLUDED_CLAIMS), "runtime_contract": _runtime_contract(),
+        "proof_capsule": {"manifest": "PROOF-MANIFEST.json", "bytes": len(manifest_bytes), "sha256": _sha256(manifest_bytes)},
+        "supersedes": {"release_sha256": verifier.OLD_RELEASE_SHA256, "derivation_status": "Unrecovered",
+                       "delta_path": "historical-v1/DELTA.json", "delta_sha256": _sha256(files["historical-v1/DELTA.json"])},
     }
     release_bytes = canonical_json_bytes(release)
-    _write(root / "evidence/point-clean-set-srgb8/release-v1.json", release_bytes)
-
+    files["release-v2.json"] = release_bytes
+    for name, data in files.items():
+        _write(capsule / name, data)
     _git(root, "init", "--quiet")
     _git(root, "config", "user.name", "Receipt fixture")
     _git(root, "config", "user.email", "receipt@example.invalid")
     _git(root, "add", ".")
-    _git(root, "commit", "--quiet", "-m", "fixture")
+    _git(root, "commit", "--quiet", "-m", "immutable fixture")
     return _git(root, "rev-parse", "HEAD"), _sha256(release_bytes)
 
 
@@ -374,33 +291,16 @@ def _product_fixture(root: Path, research_commit: str, release_sha256: str) -> d
             "receipt_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
             "software_spdx": "MIT",
         },
-        "release_id": "exact-nominal-srgb8-point-clean-set-v1",
+        "release_id": verifier.RELEASE_ID,
         "research": {
             "commit": research_commit,
             "object_format": "sha1",
-            "release_path": "evidence/point-clean-set-srgb8/release-v1.json",
+            "release_path": verifier.RESEARCH_RELEASE_PATH,
+            "repository": verifier.RESEARCH_REPOSITORY,
             "release_sha256": release_sha256,
         },
-        "runtime_contract": {
-            "accepted_points": 8_232_849,
-            "codec": {
-                "bytes": len(CANONICAL_CODEC),
-                "header_hex": "4c50434301010000",
-                "id": "green-column-red-run-start-rle-v1",
-                "records": 3616,
-                "sha256": _sha256(CANONICAL_CODEC),
-            },
-            "domain_id": "encoded-srgb8-u8-cube-v1",
-            "domain_points": 16_777_216,
-            "law_id": "neutral-or-blue-outside-closed-dirty-interval-v1",
-            "neutral_axis_id": "srgb8-output-neutral-axis-v1",
-            "raw": {
-                "bytes": len(CANONICAL_RAW),
-                "id": "raw-dirty-blue-interval-u8-pair-v1",
-                "sha256": _sha256(CANONICAL_RAW),
-            },
-        },
-        "schema": "labcolors-exact-point-clean-set-product-receipt/1",
+        "runtime_contract": _runtime_contract(),
+        "schema": verifier.RECEIPT_SCHEMA,
     }
 
 
@@ -411,6 +311,7 @@ def _fixture(root: Path) -> ReceiptFixture:
     research.mkdir()
     commit, release_sha256 = _research_fixture(research)
     policy = VerifierPolicy(commit, release_sha256)
+    shutil.copytree(research / verifier.RESEARCH_CAPSULE_PATH, product / verifier.CAPSULE_PATH)
     return ReceiptFixture(
         product,
         research,
@@ -500,7 +401,7 @@ class ReceiptHostileTests(unittest.TestCase):
                 fixture.product / RECEIPT_PIN_PATH,
                 f"{digest}  other.json\n".encode("ascii"),
             )
-            with self.assertRaisesRegex(VerificationError, "receipt-v1.json"):
+            with self.assertRaisesRegex(VerificationError, "receipt-v2.json"):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
 
     def test_product_pin_rejects_noncanonical_digest(self) -> None:
@@ -509,7 +410,7 @@ class ReceiptHostileTests(unittest.TestCase):
             fixture.write_receipt()
             _write(
                 fixture.product / RECEIPT_PIN_PATH,
-                b"A" * 64 + b"  receipt-v1.json\n",
+                b"A" * 64 + b"  receipt-v2.json\n",
             )
             with self.assertRaisesRegex(VerificationError, "lower-case SHA-256"):
                 verify_product_receipt(fixture.product, policy=fixture.policy)
@@ -573,7 +474,7 @@ class ReceiptHostileTests(unittest.TestCase):
     def test_dirty_research_worktree_cannot_replace_committed_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
-            release = fixture.research / "evidence/point-clean-set-srgb8/release-v1.json"
+            release = fixture.research / verifier.RESEARCH_RELEASE_PATH
             release.write_text("not the committed release\n", encoding="utf-8")
             fixture.verify()
 
@@ -587,7 +488,7 @@ class ReceiptHostileTests(unittest.TestCase):
     def test_new_commit_cannot_rebless_a_different_release_blob(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
-            release = fixture.research / "evidence/point-clean-set-srgb8/release-v1.json"
+            release = fixture.research / verifier.RESEARCH_RELEASE_PATH
             release.write_bytes(release.read_bytes() + b"\n")
             _git(fixture.research, "add", ".")
             _git(fixture.research, "commit", "--quiet", "-m", "mutated release")
@@ -638,6 +539,135 @@ class ReceiptHostileTests(unittest.TestCase):
                 fixture.verify()
 
 
+class ReceiptRefreshLocaleTests(unittest.TestCase):
+    def test_refresh_status_and_byte_bindings_do_not_depend_on_text_locale(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / os.fsdecode(b"refresh-\xce\xbb")
+            root.mkdir()
+            fixture = _fixture(root)
+            fixture.write_pin()
+            script = fixture.product / "scripts/refresh_clean_set_receipt.py"
+            shutil.copyfile(REPO_ROOT / "scripts/refresh_clean_set_receipt.py", script)
+            environment = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0",
+                           "PYTHONCOERCECLOCALE": "0", "PYTHONIOENCODING": "ascii"}
+            artifact = fixture.product / PRODUCT_ARTIFACT_PATHS["classifier_source"]
+            for changed in (False, True):
+                with self.subTest(changed=changed):
+                    if changed:
+                        artifact.write_bytes(artifact.read_bytes() + "\n# \u03bb\n".encode("utf-8"))
+                    process = subprocess.run([sys.executable, "-B", "-X", "utf8=0", str(script)],
+                                             cwd=fixture.product, env=environment, capture_output=True,
+                                             check=False, timeout=30)
+                    self.assertEqual(process.returncode, 0, process.stderr.decode("ascii"))
+                    self.assertEqual(process.stderr, b"")
+                    self.assertIn(b"Changed: 1 artifacts" if changed else b"No changes needed", process.stdout)
+                    receipt = fixture.receipt_path.read_bytes()
+                    entry = next(item for item in json.loads(receipt)["artifacts"]
+                                 if item["role"] == "classifier_source")
+                    self.assertEqual(entry["sha256"], _sha256(artifact.read_bytes()))
+                    self.assertEqual((fixture.product / RECEIPT_PIN_PATH).read_bytes(),
+                                     f"{_sha256(receipt)}  receipt-v2.json\n".encode("ascii"))
+
+
+class CapsuleReplayTests(unittest.TestCase):
+    def replay(self, fixture: ReceiptFixture):
+        return verify_receipt(fixture.product, None, fixture.write_receipt(), policy=fixture.policy, replay=True)
+
+    def test_full_replay_is_offline_and_does_not_need_the_research_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            shutil.rmtree(fixture.research)
+            self.assertTrue(self.replay(fixture).research_replayed)
+
+    def test_identity_mode_never_claims_or_executes_mathematical_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            with mock.patch.object(verifier, "_replay_capsule") as replay:
+                self.assertFalse(verify_product_receipt(fixture.product, policy=fixture.policy).research_replayed)
+                replay.assert_not_called()
+
+    def test_mutated_proof_input_fails_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            path = fixture.product / verifier.CAPSULE_PATH / "geometry/verify_exact_v2.py"
+            data = bytearray(path.read_bytes()); data[0] ^= 1; path.write_bytes(data)
+            with mock.patch.object(verifier, "_replay_capsule") as replay:
+                with self.assertRaisesRegex(VerificationError, "proof file identity"):
+                    self.replay(fixture)
+                replay.assert_not_called()
+
+    def test_rehashed_manifest_cannot_rebless_a_mutated_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            root = fixture.product / verifier.CAPSULE_PATH
+            path = root / "verify_bundle.py"; path.write_bytes(path.read_bytes() + b"\n")
+            manifest = json.loads((root / "PROOF-MANIFEST.json").read_bytes())
+            entry = next(item for item in manifest["files"] if item["path"] == "verify_bundle.py")
+            entry.update(bytes=path.stat().st_size, sha256=_sha256(path.read_bytes()))
+            (root / "PROOF-MANIFEST.json").write_bytes(canonical_json_bytes(manifest))
+            with self.assertRaisesRegex(VerificationError, "proof manifest differs"):
+                self.replay(fixture)
+
+    def test_success_exit_and_pass_text_cannot_replace_derived_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            process = subprocess.CompletedProcess([], 0, b"PASS\n", b"")
+            with mock.patch.object(verifier.subprocess, "run", return_value=process):
+                with self.assertRaisesRegex(VerificationError, "scientific replay result"):
+                    self.replay(fixture)
+
+    def test_matching_counts_and_hash_labels_do_not_hide_wrong_derived_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            original_run = subprocess.run
+            def corrupt_output(command, **kwargs):
+                result = original_run(command, **kwargs)
+                path = Path(command[command.index("--output-dir") + 1]) / "derived.raw"
+                data = bytearray(path.read_bytes()); data[-1] ^= 1; path.write_bytes(data)
+                return result
+            with mock.patch.object(verifier.subprocess, "run", side_effect=corrupt_output):
+                with self.assertRaisesRegex(VerificationError, "replay output differs"):
+                    self.replay(fixture)
+
+    def test_pythonpath_cannot_inject_an_import_into_the_admitted_checker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); fixture = _fixture(root)
+            poison = root / "poison"; poison.mkdir(); marker = root / "imported"
+            (poison / "sitecustomize.py").write_text("from pathlib import Path\nPath(" + repr(str(marker)) + ").write_text('injected')\n")
+            (poison / "json.py").write_text("raise RuntimeError('untrusted json imported')\n")
+            with mock.patch.dict(os.environ, {"PYTHONPATH": str(poison), "PYTHONSTARTUP": str(poison / "sitecustomize.py")}):
+                self.assertTrue(self.replay(fixture).research_replayed)
+            self.assertFalse(marker.exists())
+
+    def test_parent_symlink_cannot_supply_an_authenticated_proof_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); fixture = _fixture(root)
+            capsule = fixture.product / verifier.CAPSULE_PATH
+            (capsule / "geometry").rename(root / "outside")
+            (capsule / "geometry").symlink_to(root / "outside", target_is_directory=True)
+            with self.assertRaisesRegex(VerificationError, "contains a symlink"):
+                self.replay(fixture)
+
+    def test_oversized_proof_file_is_rejected_before_read_or_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            path = fixture.product / verifier.CAPSULE_PATH / "verify_bundle.py"
+            with path.open("r+b") as stream:
+                stream.truncate(verifier.CAPSULE_FILE_BYTES_LIMIT + 1)
+            with mock.patch.object(verifier, "_replay_capsule") as replay:
+                with self.assertRaisesRegex(VerificationError, "bounded size"):
+                    self.replay(fixture)
+                replay.assert_not_called()
+
+    def test_timeout_is_a_failure_even_without_partial_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            with mock.patch.object(verifier.subprocess, "run", side_effect=subprocess.TimeoutExpired(["python"], 1)):
+                with self.assertRaisesRegex(VerificationError, "replay did not complete"):
+                    self.replay(fixture)
+
+
 class CorePackageLicenseTests(unittest.TestCase):
     def _package_fixture(self, root: Path) -> tuple[Path, Path]:
         source = root / "source"
@@ -646,7 +676,7 @@ class CorePackageLicenseTests(unittest.TestCase):
         package.mkdir()
 
         receipt = b'{"fixture":true}\n'
-        receipt_pin = f"{_sha256(receipt)}  receipt-v1.json\n".encode("ascii")
+        receipt_pin = f"{_sha256(receipt)}  receipt-v2.json\n".encode("ascii")
         files = {
             "LICENSE": b"MIT fixture\n",
             "crates/labcolors-core/LICENSES/CC-BY-4.0.txt": b"CC BY fixture\n",
@@ -672,9 +702,9 @@ class CorePackageLicenseTests(unittest.TestCase):
                 "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt"
             ],
             "NOTICE.md": files["crates/labcolors-core/NOTICE.md"],
-            "contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin": CANONICAL_CODEC,
-            "contracts/clean-set-srgb8-v1/receipt-v1.json": receipt,
-            "contracts/clean-set-srgb8-v1/receipt-v1.sha256": receipt_pin,
+            "contracts/clean-set-srgb8-v2/point-clean-set-srgb8-column-rle-v1.bin": CANONICAL_CODEC,
+            "contracts/clean-set-srgb8-v2/receipt-v2.json": receipt,
+            "contracts/clean-set-srgb8-v2/receipt-v2.sha256": receipt_pin,
             "Cargo.toml": (
                 "[package]\n"
                 'name = "labcolors-core"\n'
@@ -746,24 +776,24 @@ class CorePackageLicenseTests(unittest.TestCase):
     def test_missing_packaged_receipt_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source, package = self._package_fixture(Path(temporary))
-            (package / "contracts/clean-set-srgb8-v1/receipt-v1.json").unlink()
-            with self.assertRaisesRegex(VerificationError, "receipt-v1.json"):
+            (package / "contracts/clean-set-srgb8-v2/receipt-v2.json").unlink()
+            with self.assertRaisesRegex(VerificationError, "receipt-v2.json"):
                 verify_core_package(source, package)
 
     def test_missing_packaged_receipt_pin_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source, package = self._package_fixture(Path(temporary))
-            (package / "contracts/clean-set-srgb8-v1/receipt-v1.sha256").unlink()
-            with self.assertRaisesRegex(VerificationError, "receipt-v1.sha256"):
+            (package / "contracts/clean-set-srgb8-v2/receipt-v2.sha256").unlink()
+            with self.assertRaisesRegex(VerificationError, "receipt-v2.sha256"):
                 verify_core_package(source, package)
 
     def test_coherently_substituted_packaged_receipt_and_pin_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source, package = self._package_fixture(Path(temporary))
             receipt = b'{"substituted":true}\n'
-            (package / "contracts/clean-set-srgb8-v1/receipt-v1.json").write_bytes(receipt)
-            (package / "contracts/clean-set-srgb8-v1/receipt-v1.sha256").write_bytes(
-                f"{_sha256(receipt)}  receipt-v1.json\n".encode("ascii")
+            (package / "contracts/clean-set-srgb8-v2/receipt-v2.json").write_bytes(receipt)
+            (package / "contracts/clean-set-srgb8-v2/receipt-v2.sha256").write_bytes(
+                f"{_sha256(receipt)}  receipt-v2.json\n".encode("ascii")
             )
             with self.assertRaisesRegex(VerificationError, "canonical product bytes"):
                 verify_core_package(source, package)
