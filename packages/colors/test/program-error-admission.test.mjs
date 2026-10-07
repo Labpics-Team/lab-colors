@@ -41,6 +41,7 @@ const attachmentFreeCodes = [
   "program_attachment_busy",
 ];
 const materializationCodes = [
+  "program_attachment_resource_exhausted",
   "program_materialization_not_ready",
   "program_materialization_paint_not_authority",
   "program_materialization_stale_revision",

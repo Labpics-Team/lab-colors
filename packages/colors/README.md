@@ -200,9 +200,9 @@ transport envelope и возвращает замороженный metadata-obj
 а не authority result и не доказательство
 истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
 
-До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array`, безопасно
-нормализует честный subclass (включая Node `Buffer`) и отвергает Proxy либо
-подменённые `length`/`byteLength`; размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
+До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array` и создаёт
+собственный snapshot по правилам [допуска массивов](#массивы-на-границе-wasm).
+Размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
 (`2097152`) отвергается до копирования, поскольку `wasm-bindgen` копирует typed array
 в linear memory до входа Rust. Неизвестная schema, authority,
 operation, payload type/version, неканоничные строки, trailing bytes и digest
@@ -236,6 +236,22 @@ ID потока и причины, число подложек и индекс o
 Допустимость конкретного индекса, формы observations и порядка ревизий
 по-прежнему проверяет соответствующий контракт runtime.
 
+## Массивы на границе WASM
+
+Program wire, поверхности и content identity принимают реальный `Uint8Array`,
+ID сценариев — `Uint32Array`. Обычные массивы, другие виды typed array,
+Proxy-обёртки, detached storage и собственные свойства `length`/`byteLength`
+дают типизированный отказ до generated copier. Числа не оборачиваются и не
+округляются неявно.
+
+Допустимы `Buffer`, subclasses, subarray и массивы из другого realm, если их
+внутренний тип соответствует аргументу. Фасад использует intrinsic storage,
+не читает пользовательские getters и не обходит цепочку прототипов. Унаследованные
+свойства размеров не участвуют в копировании; WASM получает отдельный snapshot.
+Отказ observations сохраняет предыдущий head и допускает повтор той же ревизии.
+Для `materializationAuthorityFor` identity должна содержать ровно 32 байта;
+неверная длина отвергается до выделения snapshot.
+
 ## Распознавание ошибок
 
 `isProgramError(value)` распознаёт ошибки Program по принадлежности текущему
@@ -250,6 +266,9 @@ Attachment сохраняет те же классы в `program_attachment_reso
 и `program_attachment_internal_invariant`. Эти причины не означают, что
 пользовательский граф или observation семантически недопустимы; отказ update
 сохраняет предыдущий committed head и допускает повтор той же ревизии.
+Нехватка памяти при подготовке identity для `materializationAuthorityFor`
+также возвращает `program_attachment_resource_exhausted` с операцией
+`materializationAuthority`.
 
 Проверка описывает только наблюдённые значения. Она не удостоверяет происхождение
 ошибки, не замораживает объект и не гарантирует неизменность следующих чтений

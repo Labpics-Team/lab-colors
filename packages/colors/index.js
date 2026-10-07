@@ -6,17 +6,18 @@
 
 import initWasm, {
   initSync as initWasmSync,
+  compileProgramWire as compileProgramWireWasm,
   attachProgramWire as attachProgramWireWasm,
   decodeCertificateEnvelope as decodeCertificateEnvelopeWasm,
   issueSourceCertificateEnvelope as issueSourceCertificateEnvelopeWasm,
   ProgramAttachment,
+  ProgramRuntime,
 } from "./pkg/labcolors.js";
 
 let initState = "idle";
 let initFlight;
 
 export {
-  compileProgramWire,
   evaluateWcag22,
   numericalCapabilityManifest,
   ProgramRuntime,
@@ -42,6 +43,12 @@ const intrinsicSet = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   "set",
 ).value;
+const intrinsicTypedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+).get;
+const byteStorage = { Type: Uint8Array, tag: "Uint8Array", bytesPerElement: 1 };
+const scenarioStorage = { Type: Uint32Array, tag: "Uint32Array", bytesPerElement: 4 };
 
 const CERTIFICATE_ERROR_CODES = new Set([
   "certificate_invalid_magic",
@@ -78,59 +85,99 @@ function certificateIngressError(code) {
   return error;
 }
 
-function checkCertificateIngress(bytes) {
-  let byteLength;
+// Generated bindings копируют массив до Rust. Проверяем реальный storage,
+// не вызывая пользовательские getters, instanceof hooks или prototype traps,
+// и передаём copier-у только собственный fixed-length snapshot.
+function copyTypedArrayStorage(value, storage, invalid, {
+  requiredLength,
+  maximumBytes,
+  tooLarge = invalid,
+  allocation = invalid,
+} = {}) {
+  let byteLength, length;
   try {
-    if (!(bytes instanceof Uint8Array)) {
-      throw certificateIngressError("certificate_invalid_input");
+    if (Reflect.apply(intrinsicTypedArrayTagGetter, value, []) !== storage.tag) {
+      throw invalid();
     }
-    const intrinsicByteLength = Reflect.apply(intrinsicByteLengthGetter, bytes, []);
-    const intrinsicLength = Reflect.apply(intrinsicLengthGetter, bytes, []);
+    byteLength = Reflect.apply(intrinsicByteLengthGetter, value, []);
+    length = Reflect.apply(intrinsicLengthGetter, value, []);
     if (
-      !Number.isSafeInteger(intrinsicByteLength) ||
-      intrinsicByteLength < 0 ||
-      intrinsicLength !== intrinsicByteLength ||
-      Object.getOwnPropertyDescriptor(bytes, "byteLength") !== undefined ||
-      Object.getOwnPropertyDescriptor(bytes, "length") !== undefined ||
-      bytes.byteLength !== intrinsicByteLength ||
-      bytes.length !== intrinsicLength
+      !Number.isSafeInteger(byteLength) || byteLength < 0 ||
+      length * storage.bytesPerElement !== byteLength ||
+      (requiredLength !== undefined && length !== requiredLength) ||
+      Object.getOwnPropertyDescriptor(value, "byteLength") !== undefined ||
+      Object.getOwnPropertyDescriptor(value, "length") !== undefined
     ) {
-      throw certificateIngressError("certificate_invalid_input");
+      throw invalid();
     }
-    byteLength = intrinsicByteLength;
   } catch {
-    throw certificateIngressError("certificate_invalid_input");
+    throw invalid();
   }
-  if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
-    throw certificateIngressError("certificate_invalid_input");
+  if (maximumBytes !== undefined && byteLength > maximumBytes) {
+    throw tooLarge();
   }
-  if (byteLength > MAX_CERTIFICATE_ENVELOPE_BYTES) {
-    throw certificateIngressError("certificate_resource_limit_exceeded");
-  }
-  // Размер caller-owned backing store мог измениться при чтении свойств.
-  // В generated copier входит только собственный snapshot фиксированной
-  // длины. Повторное чтение intrinsic lengths отвергает рост и усечение,
-  // чтобы копирование не дополнило укороченный packet нулевыми bytes.
   try {
     if (
-      Reflect.apply(intrinsicByteLengthGetter, bytes, []) !== byteLength ||
-      Reflect.apply(intrinsicLengthGetter, bytes, []) !== byteLength
+      Reflect.apply(intrinsicByteLengthGetter, value, []) !== byteLength ||
+      Reflect.apply(intrinsicLengthGetter, value, []) !== length
     ) {
-      throw certificateIngressError("certificate_invalid_input");
+      throw invalid();
     }
-    const normalized = new Uint8Array(byteLength);
-    Reflect.apply(intrinsicSet, normalized, [bytes, 0]);
+  } catch {
+    throw invalid();
+  }
+  let normalized;
+  try {
+    normalized = new storage.Type(length);
+  } catch {
+    throw allocation();
+  }
+  try {
+    // Даже пустой detached/OOB view обязан пройти intrinsic set и получить отказ.
+    Reflect.apply(intrinsicSet, normalized, [value, 0]);
     return normalized;
   } catch {
-    throw certificateIngressError("certificate_invalid_input");
+    throw invalid();
   }
 }
 
 export function decodeCertificateEnvelope(bytes) {
-  // This check is deliberately in the package facade: wasm-bindgen copies a
-  // typed-array argument into linear memory before Rust can observe it.
-  return decodeCertificateEnvelopeWasm(checkCertificateIngress(bytes));
+  return decodeCertificateEnvelopeWasm(copyTypedArrayStorage(
+    bytes, byteStorage, () => certificateIngressError("certificate_invalid_input"), {
+      maximumBytes: MAX_CERTIFICATE_ENVELOPE_BYTES,
+      tooLarge: () => certificateIngressError("certificate_resource_limit_exceeded"),
+    },
+  ));
 }
+
+function programIngressError(operation, code) {
+  const error = new Error("Program input was refused");
+  error.operation = operation;
+  error.code = code;
+  return error;
+}
+
+function copyProgramInput(value, storage, operation, code, requiredLength) {
+  const resource = operation === "attachmentUpdateObserved" || operation === "materializationAuthority"
+    ? "program_attachment_resource_exhausted" : "program_resource_exhausted";
+  return copyTypedArrayStorage(value, storage, () => programIngressError(operation, code), {
+    requiredLength,
+    allocation: () => programIngressError(operation, resource),
+  });
+}
+
+export function compileProgramWire(bytes, streamId) {
+  return compileProgramWireWasm(copyProgramInput(
+    bytes, byteStorage, "compileProgramWire", "program_wire",
+  ), streamId);
+}
+
+const runtimeUpdateObserved = ProgramRuntime.prototype.updateObserved;
+ProgramRuntime.prototype.updateObserved = function updateObserved(revision, scenarioIds, surfaces, surfaceCount) {
+  return runtimeUpdateObserved.call(this, revision,
+    copyProgramInput(scenarioIds, scenarioStorage, "updateObserved", "program_update"),
+    copyProgramInput(surfaces, byteStorage, "updateObserved", "program_update"), surfaceCount);
+};
 
 // Идентичность и тело принадлежат Core; аргументы вызывающего кода не передаются.
 export function issueSourceCertificateEnvelope() {
@@ -195,7 +242,15 @@ for (const [method, operation] of [
 ]) {
   const original = ProgramAttachment.prototype[method];
   ProgramAttachment.prototype[method] = function guardedAttachmentOperation(...args) {
-    const result = withAttachmentOperation(this, operation, () => original.apply(this, args));
+    const result = withAttachmentOperation(this, operation, () => {
+      if (method === "updateObserved") {
+        args[1] = copyProgramInput(args[1], scenarioStorage, operation, "program_attachment_update");
+        args[2] = copyProgramInput(args[2], byteStorage, operation, "program_attachment_update");
+      } else if (method === "materializationAuthorityFor") {
+        args[1] = copyProgramInput(args[1], byteStorage, operation, "program_materialization_stale_identity", 32);
+      }
+      return original.apply(this, args);
+    });
     if (method === "dispose") {
       const state = attachmentStates.get(this);
       if (state !== undefined) state.disposed = true;
@@ -227,6 +282,7 @@ if (Symbol.dispose) {
 }
 
 export function attachProgramWire(...args) {
+  args[0] = copyProgramInput(args[0], byteStorage, "attachProgramWire", "program_wire");
   const attachment = attachProgramWireWasm(...args);
   attachmentStates.set(attachment, { busy: false, disposed: false });
   return attachment;
@@ -283,6 +339,7 @@ const ATTACHMENT_FREE_ERROR_CODES = new Set([
   "program_attachment_busy",
 ]);
 const MATERIALIZATION_ERROR_CODES = new Set([
+  "program_attachment_resource_exhausted",
   "program_materialization_not_ready",
   "program_materialization_paint_not_authority",
   "program_materialization_stale_revision",
