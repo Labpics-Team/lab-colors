@@ -7,22 +7,22 @@
    "text": "t.skip(\"pkg/ not built — run `npm run build` first (CI builds before `npm test`)\");"
   },
   {
-   "line": 221,
+   "line": 222,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"Windows junction/reparse behavior is platform-specific\");"
   },
   {
-   "line": 239,
+   "line": 240,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"Windows privilege prevents creating a junction fixture\");"
   },
   {
-   "line": 258,
+   "line": 259,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"Windows junction/reparse behavior is platform-specific\");"
   },
   {
-   "line": 421,
+   "line": 422,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"directory symlink setup is privilege-dependent on Windows\");"
   },
@@ -888,7 +888,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "2e62131734917268357705f8bacdea4216290ee6fe15e36171165748286627be",
+ "record_sha256": "d306b3667b652665405c4a27500855f423a9e54db1a9432941f9db4d4f163afb",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

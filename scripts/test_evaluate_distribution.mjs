@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildSbom, verifyBundle } from "./evaluate-distribution.mjs";
+import { licenseInventory } from "./distribution-licenses.mjs";
 
 function metadataFixture() {
   const root = { id: "root", name: "labcolors-evaluate-cli", version: "1.0.0", source: null, license: "MIT" };
@@ -54,7 +55,8 @@ test("verifier rejects tampered source identity before trusting digest metadata"
   try {
     await writeFile(join(dir, "labcolors-evaluate"), "binary");
     await writeFile(join(dir, "evaluate.sbom.cdx.json"), JSON.stringify(buildSbom(metadataFixture(), good)));
-    await writeFile(join(dir, "evaluate.licenses.json"), JSON.stringify({ schemaVersion: 1, components: [{}, {}, {}] }));
+    await writeFile(join(dir, "evaluate.licenses.json"), JSON.stringify(licenseInventory(buildSbom(metadataFixture(), good))));
+    await writeFile(join(dir, "NOTICES.txt"), "Fixture license notice\n");
     await writeFile(join(dir, "evaluate.benchmark.json"), JSON.stringify(benchmarkFixture()));
     const crypto = await import("node:crypto");
     const rec = async (path) => {
@@ -65,6 +67,7 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       binary: await rec("labcolors-evaluate"),
       sbom: await rec("evaluate.sbom.cdx.json"),
       licenses: await rec("evaluate.licenses.json"),
+      notices: await rec("NOTICES.txt"),
       benchmark: await rec("evaluate.benchmark.json"),
     };
     const statement = {
@@ -80,6 +83,26 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     };
     await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(statement));
     await assert.rejects(() => verifyBundle(dir, "c".repeat(40)), /source identity mismatch/);
+    await verifyBundle(dir, good);
+    const originalLicenses = await readFile(join(dir, "evaluate.licenses.json"));
+    for (const mutate of [
+      (inventory) => { inventory.components[0].name = "incorrect-name"; },
+      (inventory) => { inventory.components[0].licenseExpressions = ["incorrect-license"]; },
+      (inventory) => { inventory.components[0] = {}; },
+      (inventory) => { inventory.components[0] = inventory.components[1]; },
+    ]) {
+      const inventory = JSON.parse(originalLicenses);
+      mutate(inventory);
+      await writeFile(join(dir, "evaluate.licenses.json"), JSON.stringify(inventory));
+      const alteredStatement = structuredClone(statement);
+      alteredStatement.predicate.evidence.licenses = await rec("evaluate.licenses.json");
+      await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(alteredStatement));
+      await assert.rejects(() => verifyBundle(dir, good), /license inventory differs from the SBOM/);
+    }
+    await writeFile(join(dir, "evaluate.licenses.json"), originalLicenses);
+    await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(statement));
+    await verifyBundle(dir, good);
+
 
     const originalSbom = await readFile(join(dir, "evaluate.sbom.cdx.json"));
     const serialMutant = JSON.parse(originalSbom);
@@ -123,6 +146,7 @@ test("verifier rejects tampered source identity before trusting digest metadata"
       ["labcolors-evaluate", /binary evidence bytes changed/],
       ["evaluate.sbom.cdx.json", /sbom evidence bytes changed/],
       ["evaluate.licenses.json", /licenses evidence bytes changed/],
+      ["NOTICES.txt", /notices evidence bytes changed/],
       ["evaluate.benchmark.json", /benchmark evidence bytes changed/],
     ];
     for (const [path, expected] of tamperCases) {

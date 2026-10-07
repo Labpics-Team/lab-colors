@@ -35,6 +35,7 @@ const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "prepare-npm-package.mjs",
   "atomic-write.mjs",
   "cargo-workspace.mjs",
+  "package-licenses.mjs",
   "release-evidence.mjs",
   "package-runtime-snippets.mjs",
 ]);
