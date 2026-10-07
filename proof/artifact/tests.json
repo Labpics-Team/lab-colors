@@ -888,7 +888,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "d306b3667b652665405c4a27500855f423a9e54db1a9432941f9db4d4f163afb",
+ "record_sha256": "48b7c112579f2a93a4bed9967bf7f66f7fd7d4c9003610d675c6388d4ad20540",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1309,6 +1309,7 @@
    "family_definition_binding_tests::every_byte_of_the_definition_address_is_compared: test",
    "family_definition_binding_tests::the_artifact_of_the_asked_region_is_admitted: test",
    "family_definition_binding_tests::the_asked_definition_does_not_weaken_the_transport_contract: test",
+   "field_effect::source_over_quotient_tests::every_byte_product_matches_legacy_integer_division: test",
    "field_effect_tests::binomial_profile_rejects_symmetric_normalized_non_binomial_weights: test",
    "field_effect_tests::carrier_presence_contribution_and_variation_fail_closed: test",
    "field_effect_tests::certificate_replay_reports_scene_capability_and_request_mismatch_separately: test",
@@ -2184,7 +2185,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1292,
+  "enabled_count": 1293,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

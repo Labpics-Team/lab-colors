@@ -134,7 +134,7 @@
   "crates/labcolors-core/src/family_artifact_tests/first_family_image_v1.rs": "44c499ce207feb714f27a48b3a7814e9ffb2b6f8",
   "crates/labcolors-core/src/family_definition_binding.rs": "bcc46c745917323c2640fb78a34f1fbc7672b077",
   "crates/labcolors-core/src/family_definition_binding_tests.rs": "1e334a082bca33282e538a6a5fbaa2e763d3da46",
-  "crates/labcolors-core/src/field_effect.rs": "4615a2ebf3cc043a74d89a6be19c3d7967affa32",
+  "crates/labcolors-core/src/field_effect.rs": "35919b1c74322f454fda81f63487edc2d9697868",
   "crates/labcolors-core/src/field_effect/proofs.rs": "21a08cb417b56edd58e56998afc7a13466408941",
   "crates/labcolors-core/src/field_effect/raster_tests.rs": "925cab0ad012c8d40a5edbdf0b8607d90eb1136b",
   "crates/labcolors-core/src/field_effect_tests.rs": "e2ebb8a7e9aae43b0fd0f20464f3b2207789a7b0",
@@ -448,7 +448,7 @@
   "scripts/extract_public_api.py": "95102381093636044d139f6515c071df0f9d2ebe",
   "scripts/extract_resources.py": "df80efd34421847ec93c354e7ad8aec1835ba238",
   "scripts/extract_source_files.py": "b53d7a1b29a8c8fe1bc25fbd714526ea3d1b2277",
-  "scripts/formal_contracts.py": "7b778662ce09da506540288ee18efb754f1cb485",
+  "scripts/formal_contracts.py": "97e1522f4eda424b103b70a9b7117102b9885218",
   "scripts/generate_wcag22_q55.py": "c9290543f32dda8b30bb1158178858da23ae1e8d",
   "scripts/golden_ref.py": "a83290aa760befda468bfa5ae60b7da86319ae2d",
   "scripts/inspect-npm-tarball.py": "a0dbcbffa1c77bcdf8e3b87f63f8bb69716606f2",
@@ -492,7 +492,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "6174dc902611e2878899e4ec8225272904f9c64614016f1b7f31b0baa8d9a1f2",
+ "record_sha256": "06c0d124c57213222340eb18295b350e70a5455fed53973cb12a5d799c24efab",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

@@ -2961,8 +2961,8 @@ mod source_over_quotient_tests {
                 // тип. Красный канал перебирает все 256² пары множителей;
                 // зелёный и синий одновременно проверяют прибавление source.
                 let expected: [u8; 4] = std::array::from_fn(|index| {
-                    let numerator = u32::from(s[index]) * 255
-                        + u32::from(d[index]) * (255 - u32::from(s[3]));
+                    let numerator =
+                        u32::from(s[index]) * 255 + u32::from(d[index]) * (255 - u32::from(s[3]));
                     u8::try_from((numerator + 127) / 255)
                         .expect("the legacy quotient remains in byte range")
                 });
@@ -2974,6 +2974,9 @@ mod source_over_quotient_tests {
                 products += 1;
             }
         }
-        assert_eq!(products, 65_536, "every pair of byte factors must be visited");
+        assert_eq!(
+            products, 65_536,
+            "every pair of byte factors must be visited"
+        );
     }
 }
