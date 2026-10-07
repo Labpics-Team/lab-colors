@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 278,
+   "count": 288,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -819,6 +819,16 @@
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_page_inside_forbidden_module_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_public_type_alias_route_to_program_is_rejected",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_similar_module_name_is_not_rejected",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_full_replay_is_offline_and_does_not_need_the_research_repository",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_identity_mode_never_claims_or_executes_mathematical_replay",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_matching_counts_and_hash_labels_do_not_hide_wrong_derived_bytes",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_mutated_proof_input_fails_before_execution",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_oversized_proof_file_is_rejected_before_read_or_execution",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_parent_symlink_cannot_supply_an_authenticated_proof_file",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_pythonpath_cannot_inject_an_import_into_the_admitted_checker",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_rehashed_manifest_cannot_rebless_a_mutated_verifier",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_success_exit_and_pass_text_cannot_replace_derived_evidence",
+    "test_verify_clean_set_receipt.CapsuleReplayTests.test_timeout_is_a_failure_even_without_partial_output",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_array_table_cannot_supply_the_package_license",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_coherently_substituted_packaged_receipt_and_pin_are_rejected",
     "test_verify_clean_set_receipt.CorePackageLicenseTests.test_commented_table_headers_cannot_supply_the_package_license",
@@ -888,7 +898,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f156b0d59308d5512729c9577503d4c33a6928a95c310b5dde9e0fc66d438034",
+ "record_sha256": "78f6ba9b52e6880ec1cda5d763a3c0b1b7471450b273c3683004cefe5c1035f3",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -997,6 +1007,7 @@
    "authority::clean_convention::tests::missing_selection_and_non_ready_materialization_cannot_mint_authority: test",
    "authority::clean_convention::tests::receipt_identity_binds_selection_technical_pin_and_every_materialization_coordinate: test",
    "authority::clean_convention::tests::rejected_source_can_admit_accepted_terminal_composite_without_other_authorities: test",
+   "authority::clean_convention::tests::superseded_nominal_release_cannot_silently_select_the_new_set: test",
    "authority::evaluation::tests::bounded_histories_preserve_joint_freshness_and_recovery: test",
    "authority::evaluation::tests::equal_colors_from_different_attachments_cannot_be_joined: test",
    "authority::evaluation::tests::explicit_profile_and_both_installed_authorities_are_required: test",
@@ -1077,6 +1088,7 @@
    "clean_set_tests::closed_interval_endpoints_are_rejected: test",
    "clean_set_tests::embedded_codec_has_the_package_pinned_content_identity: test",
    "clean_set_tests::neutral_axis_precedes_declared_rejected_interval: test",
+   "clean_set_tests::nominal_v2_uses_the_independently_replayed_boundary: test",
    "clean_set_tests::runtime_classifier_matches_the_content_bound_total_table: test",
    "clean_set_tests::table_none_sentinel_is_not_absent_final_owned_domain: test",
    "cleanliness::relation_corpus::tests::chain_is_a_valid_cleaner_to_dirtier_order: test",
@@ -2159,7 +2171,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1267,
+  "enabled_count": 1269,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
