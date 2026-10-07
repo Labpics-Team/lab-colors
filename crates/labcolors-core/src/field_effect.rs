@@ -2415,7 +2415,11 @@ fn premultiplied_source_over(
     let inverse_alpha = u16::from(u8::MAX - source[3]);
     let mut output = [0_u8; 4];
     for channel in 0..4 {
-        let attenuated = (u16::from(destination[channel]) * inverse_alpha + 127) / 255;
+        // N <= 255² + 127 = 65152. При N = 255q + r, q <= 255:
+        // N >> 8 = q - [r < q], поэтому (N + 1 + (N >> 8)) >> 8 = q.
+        // Сумма <= 65407 помещается в u16; округление остаётся прежним.
+        let numerator = u16::from(destination[channel]) * inverse_alpha + 127;
+        let attenuated = (numerator + 1 + (numerator >> 8)) >> 8;
         let value = u16::from(source[channel])
             .checked_add(attenuated)
             .ok_or(FieldEvaluationErrorV1::ArithmeticOverflow)?;
@@ -2935,3 +2939,41 @@ fn finalize(hasher: Hasher) -> [u8; 32] {
 
 #[cfg(kani)]
 mod proofs;
+
+#[cfg(test)]
+mod source_over_quotient_tests {
+    use super::*;
+
+    #[test]
+    fn every_byte_product_matches_legacy_integer_division() {
+        let mut products = 0_u32;
+        for alpha in 0..=u8::MAX {
+            for channel in 0..=u8::MAX {
+                let source = PremultipliedRgba8V1::try_new([0, alpha, alpha / 2, alpha])
+                    .expect("source remains in the admitted premultiplied domain");
+                let destination = PremultipliedRgba8V1::try_new([channel; 4])
+                    .expect("equal channels and alpha form an admitted destination");
+                let actual = premultiplied_source_over(source, destination)
+                    .expect("every admitted source-over remains total");
+                let s = source.channels();
+                let d = destination.channels();
+                // Независимый прежний oracle сохраняет деление и более широкий
+                // тип. Красный канал перебирает все 256² пары множителей;
+                // зелёный и синий одновременно проверяют прибавление source.
+                let expected: [u8; 4] = std::array::from_fn(|index| {
+                    let numerator = u32::from(s[index]) * 255
+                        + u32::from(d[index]) * (255 - u32::from(s[3]));
+                    u8::try_from((numerator + 127) / 255)
+                        .expect("the legacy quotient remains in byte range")
+                });
+                assert_eq!(
+                    actual.channels(),
+                    expected,
+                    "alpha={alpha}, channel={channel}"
+                );
+                products += 1;
+            }
+        }
+        assert_eq!(products, 65_536, "every pair of byte factors must be visited");
+    }
+}
