@@ -15,19 +15,24 @@ test("README describes the terminal Program runtime, not recipe roles", () => {
   }
 });
 
-test("README first route emits the session-verified output through the public entrypoints", () => {
-  const example = read("README.md").match(/```ts\r?\n([\s\S]*?)\r?\n```/u)?.[1];
-  assert.equal(typeof example, "string");
+test("README Node.js first route initializes a fresh module and emits the session-verified output", () => {
+  const readme = read("README.md");
+  const exampleUnder = (heading) => {
+    const section = readme.split(`### ${heading}\n`)[1]?.split(/\n#{1,3} /u)[0];
+    const example = section?.match(/```ts\r?\n([\s\S]*?)\r?\n```/u)?.[1];
+    assert.equal(typeof example, "string", `README example: ${heading}`);
+    return example;
+  };
+  const initialization = exampleUnder("Node.js");
+  const example = exampleUnder("Объявление графа и чтение результата");
   const result = execFileSync(process.execPath, ["--input-type=module"], {
     cwd: new URL("../", import.meta.url),
     encoding: "utf8",
     timeout: 30_000,
     input: `
-      import { readFileSync } from "node:fs";
-      import { init as initialize } from "@labpics/colors";
-      await initialize({ module_or_path: readFileSync(new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm"))) });
       const outputs = [];
       console.log = (slot, rgb, opacity) => outputs.push({ slot, rgb: [...rgb], opacity });
+      ${initialization}
       ${example}
       process.stdout.write(JSON.stringify(outputs));
     `,

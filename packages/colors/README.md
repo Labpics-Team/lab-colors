@@ -12,15 +12,51 @@ npm install @labpics/colors
 
 ## Первый маршрут
 
+Инициализируйте WASM один раз выбранным способом, затем выполните общий пример
+ниже в том же модуле.
+
+### Браузер
+
+В ESM-проекте с настройкой разрешения npm-импортов:
+
 ```ts
-import init, { compileProgramWire } from "@labpics/colors";
+import init from "@labpics/colors";
+
+await init();
+```
+
+Сборщик или сервер должен публиковать `pkg/labcolors_bg.wasm` рядом с
+сгенерированным `pkg/labcolors.js`; `init()` загружает файл относительно этого
+модуля. Если сборщик переносит WASM, передайте его URL явно через
+`init({ module_or_path: wasmUrl })`.
+
+### Node.js
+
+В Node.js 22.11 или новее используйте ESM (`.mjs` или `"type": "module"` в
+`package.json`) и передайте байты файла. Node.js не загружает `file:` URL через
+`fetch`, поэтому браузерный вызов без аргументов здесь не подходит.
+
+```ts
+import { readFileSync } from "node:fs";
+import init from "@labpics/colors";
+
+await init({
+  module_or_path: readFileSync(
+    new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm")),
+  ),
+});
+```
+
+### Объявление графа и чтение результата
+
+```ts
+import { compileProgramWire } from "@labpics/colors";
 import {
   ProgramWireBuilderV1,
   SURROUND_AVERAGE_V1,
   WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1,
 } from "@labpics/colors/program-wire/abi-v1.js";
 
-await init();
 const programBytes = new ProgramWireBuilderV1()
   .source(11, [20, 20, 20])
   .fixedTarget(21, 11)
@@ -61,6 +97,20 @@ try {
 
 Канонические `LCPW` v1 bytes создаются `ProgramWireBuilderV1` или другим реализационно-независимым энкодером того же контракта.
 
+## Явная конвенция cleanliness
+
+Чтобы выбранный результат удовлетворял встроенной конвенции sRGB8, добавьте
+`.declaredSrgb8CleanSet(true, 82, 71, 61)` в цепочку примера перед `.finish()`.
+Здесь `82` — ID ограничения, `71` — presentation root, `61` — occurrence.
+Проверяется финальный encoded-sRGB8 результат этой точки с учётом композиции,
+а не только исходный цвет. `true` задаёт обязательное ограничение; `false`
+не ограничивает выдачу outputs. Результаты отдельных report-only ограничений
+текущий публичный `ProgramSnapshot` не раскрывает.
+
+Это явно выбранная, закреплённая версией пакета конвенция. Она не включается
+автоматически и не подтверждает человеческое восприятие, фактическую отрисовку
+или универсальную «чистоту» цвета.
+
 ## Подключение к внешнему sink
 
 Для сценария, где приложение само владеет DOM или другим renderer-surface,
@@ -68,8 +118,13 @@ try {
 (`setAll`, `revokeAll` или `confirmExact`) и должен вернуть `true` только после
 атомарной установки всего принадлежащего ему scope; `false` отклоняет update.
 Пакет не пишет DOM и не выдаёт authority из исходного или промежуточного Paint.
+В примере `applyOwnedPointIntent` и `revokeOwnedPointScope` реализует приложение:
+первая функция атомарно применяет intent и возвращает `boolean`, вторая
+возвращает управление только после отзыва всего принадлежащего sink scope.
 
 ```ts
+import { attachProgramWire } from "@labpics/colors";
+
 const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
   // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
   // затем одним действием обновляет собственный renderer-surface.
@@ -95,12 +150,9 @@ try {
     snapshot.free();
   }
 } finally {
-  // Сначала отзовите scope у внешнего владельца, затем подтвердите dispose.
-  try {
-    attachment.dispose(true);
-  } finally {
-    attachment.free();
-  }
+  revokeOwnedPointScope();
+  attachment.dispose(true);
+  attachment.free();
 }
 ```
 
@@ -114,6 +166,10 @@ binding epoch и отсутствием downstream point, а не доказат
 из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
 пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
 отзывается владельцем host до `dispose(true)`.
+
+`Symbol.dispose` и TypeScript `using` выполняют тот же защищённый `free()`.
+До выхода из `using` приложение должно отозвать scope и вызвать `dispose(true)`;
+автоматическое освобождение не подтверждает отзыв за внешнего владельца.
 
 ## Создание и инспекция certificate envelope
 

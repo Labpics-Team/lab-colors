@@ -230,7 +230,7 @@ async function browserConsumer(origin, fault) {
   try {
     const api = await import(`${origin}/index.js`);
     const wire = await import(`${origin}/program-wire/abi-v1.js`);
-    await api.init({ module_or_path: fetch(`${origin}/pkg/labcolors_bg.wasm`) });
+    await api.init();
     const builder = new wire.ProgramWireBuilderV1();
     // Неравные RGB-каналы и неединичная opacity отличают чтение snapshot от прежних констант.
     builder.source(11, [12, 34, 56]).fixedTarget(21, 11).surfaceInputPort(31).opacityInput(32, 0.875)
@@ -325,7 +325,7 @@ async function browserAttachmentConsumer(origin, fault) {
   const evidence = { acquired: [], released: [], readback: {} };
   let primary, result, attachment, snapshot, secondSnapshot, abstentionSnapshot, render, secondRender,
     authority, secondAuthority, preservedAuthority, element;
-  let freeBeforeDispose, cssBeforeFree, cssAfterFree;
+  let freeBeforeDispose, symbolDisposeBeforeRevoke, cssBeforeFree, cssAfterFree;
   let hostDisposed = false;
   let hostAcquired = false;
   try {
@@ -388,6 +388,17 @@ async function browserAttachmentConsumer(origin, fault) {
           hostState.reentrantFree = { rejected: false };
         } catch (error) {
           hostState.reentrantFree = {
+            rejected: true,
+            code: error.code,
+            operation: error.operation,
+            recognized: api.isProgramError(error),
+          };
+        }
+        try {
+          attachment[Symbol.dispose]();
+          hostState.reentrantSymbolDispose = { rejected: false };
+        } catch (error) {
+          hostState.reentrantSymbolDispose = {
             rejected: true,
             code: error.code,
             operation: error.operation,
@@ -462,7 +473,7 @@ async function browserAttachmentConsumer(origin, fault) {
           hostResource.release();
           attachment.dispose(true);
         } finally {
-          attachment.free();
+          attachment[Symbol.dispose]();
           released(evidence, "attachment", fault);
         }
       },
@@ -490,6 +501,17 @@ async function browserAttachmentConsumer(origin, fault) {
       freeBeforeDispose = { rejected: false };
     } catch (error) {
       freeBeforeDispose = {
+        rejected: true,
+        code: error.code,
+        operation: error.operation,
+        recognized: api.isProgramError(error),
+      };
+    }
+    try {
+      attachment[Symbol.dispose]();
+      symbolDisposeBeforeRevoke = { rejected: false };
+    } catch (error) {
+      symbolDisposeBeforeRevoke = {
         rejected: true,
         code: error.code,
         operation: error.operation,
@@ -702,7 +724,9 @@ async function browserAttachmentConsumer(origin, fault) {
       cssAfterForeignEpoch,
       reentrant: { outer: reentrant, nested: hostState.reentrant },
       reentrantFree: hostState.reentrantFree,
+      reentrantSymbolDispose: hostState.reentrantSymbolDispose,
       freeBeforeDispose,
+      symbolDisposeBeforeRevoke,
       cssBeforeFree,
       cssAfterFree,
       hostRejection,
@@ -1000,10 +1024,18 @@ export function verifyBrowserAttachmentConsumer(result) {
     || result.reentrantFree.recognized !== true
     || result.reentrantFree.code !== "program_attachment_busy"
     || result.reentrantFree.operation !== "attachmentFree"
+    || result.reentrantSymbolDispose?.rejected !== true
+    || result.reentrantSymbolDispose.recognized !== true
+    || result.reentrantSymbolDispose.code !== "program_attachment_busy"
+    || result.reentrantSymbolDispose.operation !== "attachmentFree"
     || result.freeBeforeDispose?.rejected !== true
     || result.freeBeforeDispose.code !== "program_attachment_revoke_unconfirmed"
     || result.freeBeforeDispose.operation !== "attachmentFree"
     || result.freeBeforeDispose.recognized !== true
+    || result.symbolDisposeBeforeRevoke?.rejected !== true
+    || result.symbolDisposeBeforeRevoke.code !== "program_attachment_revoke_unconfirmed"
+    || result.symbolDisposeBeforeRevoke.operation !== "attachmentFree"
+    || result.symbolDisposeBeforeRevoke.recognized !== true
     || result.cssAfterFree !== result.cssBeforeFree
     || typeof result.cssBeforeFree !== "string" || result.cssBeforeFree === ""
     || result.second?.rendererProvenance !== "unverified"

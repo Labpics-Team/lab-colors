@@ -101,7 +101,6 @@ pub(crate) mod relation;
     )
 )]
 pub(crate) mod release_registry;
-pub(crate) mod restorative_auto;
 pub mod scale;
 pub(crate) mod sha256;
 pub mod solve;
@@ -207,13 +206,6 @@ pub(crate) mod joint;
 
 pub(crate) mod selection_release;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "R-07 PR-A restorative-auto types are staged before upstream TQ substrates land"
-    )
-)]
 #[cfg(test)]
 mod selection_release_tests;
 

@@ -31,15 +31,15 @@ enum PhysicalLocus {
 /// color.s = 1.0;
 /// ```
 ///
-/// # Deprecation Notice (F-01)
-/// `LcsColor` is the legacy hybrid representation retained solely for
-/// solver curve interpolation. New code MUST use
-/// `ModeledLcsOccurrenceV1`
-/// via the `AdmittedLcsIdentityV1` gate (see `lcs_freeze.rs`).
+/// # Граница применения
+/// `LcsColor` сохраняется для интерполяции кривых решателя. Новые проверяемые
+/// цветовые графы создаются через публичный
+/// [`crate::program_wire::compile_program_wire_v1`]. Контекстное представление
+/// цвета внутри Program не является отдельным публичным API.
 #[deprecated(
     since = "0.0.0-f01",
-    note = "Use ModeledLcsOccurrenceV1 for all non-solver paths. \
-            See crates/labcolors-core/src/lcs_freeze.rs for the V1 gate."
+    note = "For new color-contract graphs use program_wire::compile_program_wire_v1; \
+            LcsColor remains available for solver curve interpolation."
 )]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LcsColor {
@@ -55,9 +55,8 @@ pub struct LcsColor {
     locus: PhysicalLocus,
 }
 
-// F-01: LcsColor impl block is deprecated but retained for solver curve
-// interpolation and internal round-trip tests. Migration to
-// ModeledLcsOccurrenceV1 is tracked in the solver migration plan.
+// Представление нужно действующим кривым решателя; Program владеет своим
+// контекстным представлением без преобразования через этот тип.
 #[allow(deprecated)]
 impl LcsColor {
     /// Координата CAM16-UCS `J′` в условиях просмотра построения.

@@ -220,6 +220,12 @@ ProgramAttachment.prototype.free = function guardedAttachmentFree(...args) {
   }
 };
 
+// Generated alias захватывает исходный free до установки шлюза. Оба способа
+// освобождения обязаны проверять busy и подтверждённый внешний revoke.
+if (Symbol.dispose) {
+  ProgramAttachment.prototype[Symbol.dispose] = ProgramAttachment.prototype.free;
+}
+
 export function attachProgramWire(...args) {
   const attachment = attachProgramWireWasm(...args);
   attachmentStates.set(attachment, { busy: false, disposed: false });
