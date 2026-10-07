@@ -984,8 +984,12 @@ impl ProgramAttachment {
 
     /// Потребляет attachment только после подтверждения внешнего revoke caller-ом.
     #[wasm_bindgen]
-    pub fn dispose(&self, confirmed: bool) -> Result<(), JsValue> {
+    pub fn dispose(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "boolean")] confirmed: JsValue,
+    ) -> Result<(), JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentDispose)?;
+        let confirmed = confirmed.as_bool() == Some(true);
         let result = self
             .inner
             .borrow_mut()

@@ -67,6 +67,13 @@ export class ProgramWireBuilderV1 {
     occurrence: number,
     criterion: ProgramWireWcag22CriterionV1,
   ): this;
+  /** Явная sRGB8-конвенция конечной point-композиции без гарантии восприятия или автоисправления. */
+  declaredSrgb8CleanSet(
+    hard: boolean,
+    id: number,
+    root: number,
+    occurrence: number,
+  ): this;
   exactIntrinsicRelationHard(
     id: number,
     reference: number,

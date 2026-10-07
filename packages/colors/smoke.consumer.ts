@@ -130,3 +130,21 @@ function scalarInputTypes(
 }
 
 void scalarInputTypes;
+
+function declaredCleanSetInputTypes(builder: ProgramWireBuilderV1): void {
+  const chained: ProgramWireBuilderV1 = builder.declaredSrgb8CleanSet(true, 81, 71, 61);
+  builder.declaredSrgb8CleanSet(false, 82, 71, 61).finish();
+  // @ts-expect-error hard — boolean без числового coercion.
+  builder.declaredSrgb8CleanSet(1, 81, 71, 61);
+  // @ts-expect-error constraint ID — number, не bigint.
+  builder.declaredSrgb8CleanSet(true, 81n, 71, 61);
+  // @ts-expect-error root ID — number, не string.
+  builder.declaredSrgb8CleanSet(true, 81, "71", 61);
+  // @ts-expect-error occurrence ID — number, не bigint.
+  builder.declaredSrgb8CleanSet(true, 81, 71, 61n);
+  // @ts-expect-error occurrence обязателен.
+  builder.declaredSrgb8CleanSet(true, 81, 71);
+  void chained;
+}
+
+void declaredCleanSetInputTypes;
