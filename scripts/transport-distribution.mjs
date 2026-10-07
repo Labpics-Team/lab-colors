@@ -4,6 +4,7 @@ import { chmod, copyFile, lstat, mkdir, readFile, readdir, writeFile } from "nod
 import { basename, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { distributionNotices, licenseInventory, verifyLicenseInventory } from "./distribution-licenses.mjs";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REPOSITORY = "https://github.com/Labpics-Team/lab-colors";
@@ -235,18 +236,6 @@ export function buildSbom(metadata, sourceSha) {
   };
 }
 
-function licenseInventory(sbom) {
-  return {
-    schemaVersion: 1,
-    components: sbom.components.map((component) => ({
-      ref: component["bom-ref"],
-      name: component.name,
-      version: component.version,
-      licenseExpressions: (component.licenses ?? []).map((entry) => entry.expression).sort(),
-    })),
-  };
-}
-
 async function fileEvidence(path, displayPath = basename(path)) {
   const status = await lstat(path);
   if (!status.isFile()) fail(`${displayPath} must be a regular file`);
@@ -301,6 +290,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     binary: canonicalBinaryName(predicate.build?.target),
     sbom: "transport.sbom.cdx.json",
     licenses: "transport.licenses.json",
+    notices: "NOTICES.txt",
     benchmark: "transport.benchmark.json",
   };
   const expectedEntries = ["transport.intoto.json", ...Object.values(canonicalPaths)].sort();
@@ -311,7 +301,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("transport distribution directory is not the canonical closed file set");
   }
   const seenPaths = new Set();
-  for (const key of ["binary", "sbom", "licenses", "benchmark"]) {
+  for (const key of ["binary", "sbom", "licenses", "notices", "benchmark"]) {
     const record = files?.[key];
     if (!record || !/^[0-9a-f]{64}$/u.test(record.sha256 ?? "") || !Number.isSafeInteger(record.bytes) || record.bytes <= 0) {
       fail(`transport attestation has malformed ${key} evidence`);
@@ -345,9 +335,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("transport SBOM contains a component without declared license expression");
   }
   const licenses = JSON.parse(await readFile(resolve(directory, files.licenses.path), "utf8"));
-  if (licenses.schemaVersion !== 1 || licenses.components?.length !== sbom.components.length) {
-    fail("transport license inventory is incomplete");
-  }
+  verifyLicenseInventory(licenses, sbom);
   const benchmark = JSON.parse(await readFile(resolve(directory, files.benchmark.path), "utf8"));
   if (benchmark.schemaVersion !== BENCHMARK_SCHEMA || benchmark.workload?.measuredRounds !== MEASURED_ROUNDS) {
     fail("transport benchmark receipt is malformed");
@@ -385,6 +373,8 @@ async function generate(options) {
   await writeFile(sbomPath, stableJson(sbom));
   const licensesPath = resolve(out, "transport.licenses.json");
   await writeFile(licensesPath, stableJson(licenseInventory(sbom)));
+  const noticesPath = resolve(out, "NOTICES.txt");
+  await writeFile(noticesPath, await distributionNotices(metadata, sbom));
 
   const benchmark = benchmarkPair(binaryPath, options.baselineBinary ?? null);
   benchmark.environment = {
@@ -405,6 +395,7 @@ async function generate(options) {
     binary: await fileEvidence(binaryPath, binaryName),
     sbom: await fileEvidence(sbomPath, "transport.sbom.cdx.json"),
     licenses: await fileEvidence(licensesPath, "transport.licenses.json"),
+    notices: await fileEvidence(noticesPath, "NOTICES.txt"),
     benchmark: await fileEvidence(benchmarkPath, "transport.benchmark.json"),
   };
   const cargoLock = await fileEvidence(resolve(REPO_ROOT, "Cargo.lock"), "Cargo.lock");

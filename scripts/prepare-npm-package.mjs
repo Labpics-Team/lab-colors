@@ -5,7 +5,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteGeneratedFile } from "./atomic-write.mjs";
-import { packageLicense, workspaceVersion } from "./cargo-workspace.mjs";
+import { workspaceVersion } from "./cargo-workspace.mjs";
+import { packageLicenseInputs, verifyPackageLicenses } from "./package-licenses.mjs";
+export { PACKAGE_LICENSE_SOURCES, packageLicenseInputs, verifyPackageLicenses } from "./package-licenses.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
@@ -27,41 +29,6 @@ const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_FILES = ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-
-// Файлы для потребителя берутся у владельца встроенных данных.
-export const PACKAGE_LICENSE_SOURCES = Object.freeze({
-  LICENSE: "LICENSE",
-  "NOTICE.md": "crates/labcolors-core/NOTICE.md",
-  "LICENSES/CC-BY-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
-  "LICENSES/CC-BY-SA-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
-});
-
-export async function packageLicenseInputs(packageJson, sourceRoot = REPO_ROOT) {
-  const expression = packageLicense(await readFile(resolve(sourceRoot,
-    "crates/labcolors-core/Cargo.toml"), "utf8"));
-  if (packageJson.license !== expression) {
-    throw new Error("npm license must match the embedded Core data license expression");
-  }
-  return Promise.all(Object.entries(PACKAGE_LICENSE_SOURCES).map(async ([path, source]) => {
-    if (!Array.isArray(packageJson.files) ||
-        packageJson.files.filter((entry) => entry === path).length !== 1) {
-      throw new Error(`npm files must include exactly one ${path}`);
-    }
-    const bytes = await readFile(resolve(sourceRoot, source));
-    if (bytes.length === 0) throw new Error(`canonical license is empty: ${source}`);
-    return { path, bytes };
-  }));
-}
-
-export async function verifyPackageLicenses(packageDirectory, sourceRoot = REPO_ROOT) {
-  const packageJson = JSON.parse(await readFile(resolve(packageDirectory, "package.json"), "utf8"));
-  const inputs = await packageLicenseInputs(packageJson, sourceRoot);
-  for (const { path, bytes } of inputs) {
-    if (!(await readFile(resolve(packageDirectory, path))).equals(bytes)) {
-      throw new Error(`packed license differs from canonical source: ${path}`);
-    }
-  }
-}
 
 function git(args) {
   return execFileSync("git", args, {

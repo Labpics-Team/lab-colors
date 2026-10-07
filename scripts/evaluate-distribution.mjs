@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { distributionNotices, licenseInventory, verifyLicenseInventory } from "./distribution-licenses.mjs";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REPOSITORY = "https://github.com/Labpics-Team/lab-colors";
@@ -294,18 +295,6 @@ export function buildSbom(metadata, sourceSha) {
   };
 }
 
-function licenseInventory(sbom) {
-  return {
-    schemaVersion: 1,
-    components: sbom.components.map((component) => ({
-      ref: component["bom-ref"],
-      name: component.name,
-      version: component.version,
-      licenseExpressions: (component.licenses ?? []).map((entry) => entry.expression).sort(),
-    })),
-  };
-}
-
 async function fileEvidence(path, displayPath = basename(path)) {
   const status = await lstat(path);
   if (!status.isFile()) fail(`${displayPath} must be a regular file`);
@@ -360,6 +349,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     binary: canonicalBinaryName(predicate.build?.target),
     sbom: "evaluate.sbom.cdx.json",
     licenses: "evaluate.licenses.json",
+    notices: "NOTICES.txt",
     benchmark: "evaluate.benchmark.json",
   };
   const expectedEntries = ["evaluate.intoto.json", ...Object.values(canonicalPaths)].sort();
@@ -370,7 +360,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("evaluate distribution directory is not the canonical closed file set");
   }
   const seenPaths = new Set();
-  for (const key of ["binary", "sbom", "licenses", "benchmark"]) {
+  for (const key of ["binary", "sbom", "licenses", "notices", "benchmark"]) {
     const record = files?.[key];
     if (!record || !/^[0-9a-f]{64}$/u.test(record.sha256 ?? "") || !Number.isSafeInteger(record.bytes) || record.bytes <= 0) {
       fail(`evaluate attestation has malformed ${key} evidence`);
@@ -404,9 +394,7 @@ export async function verifyBundle(directory, expectedSourceSha) {
     fail("evaluate SBOM contains a component without declared license expression");
   }
   const licenses = JSON.parse(await readFile(resolve(directory, files.licenses.path), "utf8"));
-  if (licenses.schemaVersion !== 1 || licenses.components?.length !== sbom.components.length) {
-    fail("evaluate license inventory is incomplete");
-  }
+  verifyLicenseInventory(licenses, sbom);
   const benchmark = JSON.parse(await readFile(resolve(directory, files.benchmark.path), "utf8"));
   if (benchmark.schemaVersion !== BENCHMARK_SCHEMA || benchmark.workload?.measuredRounds !== MEASURED_ROUNDS) {
     fail("evaluate benchmark receipt is malformed");
@@ -454,6 +442,8 @@ async function generate(options) {
   await writeFile(sbomPath, stableJson(sbom));
   const licensesPath = resolve(out, "evaluate.licenses.json");
   await writeFile(licensesPath, stableJson(licenseInventory(sbom)));
+  const noticesPath = resolve(out, "NOTICES.txt");
+  await writeFile(noticesPath, await distributionNotices(metadata, sbom));
 
   const benchmark = await benchmarkPair(
     binaryPath,
@@ -477,6 +467,7 @@ async function generate(options) {
     binary: await fileEvidence(binaryPath, binaryName),
     sbom: await fileEvidence(sbomPath, "evaluate.sbom.cdx.json"),
     licenses: await fileEvidence(licensesPath, "evaluate.licenses.json"),
+    notices: await fileEvidence(noticesPath, "NOTICES.txt"),
     benchmark: await fileEvidence(benchmarkPath, "evaluate.benchmark.json"),
   };
   const cargoLock = await fileEvidence(resolve(REPO_ROOT, "Cargo.lock"), "Cargo.lock");

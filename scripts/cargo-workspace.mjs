@@ -56,11 +56,19 @@ export function workspacePackageTable(cargoSource) {
   return packageTable(cargoSource, WORKSPACE_PACKAGE_HEADER, "workspace.package");
 }
 
+function literalLicense(table, label) {
+  const entries = [...table.matchAll(/^[ \t]*license[ \t]*=[ \t]*"([^"\r\n]+)"[ \t]*(?:#.*)?\r?$/gmu)];
+  if (entries.length !== 1) throw new Error(`${label}.license requires one literal SPDX expression`);
+  return entries[0][1];
+}
+
 export function packageLicense(cargoSource) {
   const table = packageTable(cargoSource, /^[ \t]*\[package\][ \t]*(?:#.*)?\r?$/mu, "package");
-  const entries = [...table.matchAll(/^[ \t]*license[ \t]*=[ \t]*"([^"\r\n]+)"[ \t]*(?:#.*)?\r?$/gmu)];
-  if (entries.length !== 1) throw new Error("[package].license requires one literal SPDX expression");
-  return entries[0][1];
+  return literalLicense(table, "[package]");
+}
+
+export function workspaceLicense(cargoSource) {
+  return literalLicense(workspacePackageTable(cargoSource), "[workspace.package]");
 }
 
 /** Читает release-версию только из `[workspace.package]`.
