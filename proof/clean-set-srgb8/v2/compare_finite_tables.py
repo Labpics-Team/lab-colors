@@ -90,7 +90,7 @@ def main():
     require(counts["visited"] == 256**3, "full cube visited")
     require(counts["visited"] == sum(counts[k] for k in ["accept_to_reject","reject_to_accept","rejection_payload_changes","unchanged"]), "outcome partition")
     result = {"schema":1,"scope":"Exact finite observable delta; no empirical superiority or historical provenance claim", "counts":counts,"examples":examples,"raw_different_columns":sum(old[k:k+2] != new[k:k+2] for k in range(0,len(old),2)),"raw_different_bytes":sum(a!=b for a,b in zip(old,new)),"old_raw_sha256":hashlib.sha256(old).hexdigest(),"new_raw_sha256":hashlib.sha256(new).hexdigest(),"new_codec_bytes":len(new_codec),"new_codec_records":(len(new_codec)-522)//3,"new_codec_sha256":hashlib.sha256(new_codec).hexdigest()}
-    args.output.joinpath("delta.json").write_text(json.dumps(result,indent=2)+"\n")
+    args.output.joinpath("delta.json").write_text(json.dumps(result,indent=2)+"\n", encoding='utf-8', newline='\n')
     args.output.joinpath("new-column-rle.bin").write_bytes(new_codec)
     print(json.dumps(result))
 

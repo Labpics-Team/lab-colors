@@ -23,7 +23,7 @@ def rejects(callback,label):
     raise ValueError('mutant survived '+label)
 def rat(x):
     return F(int(x['numerator']),int(x['denominator'])) if isinstance(x,dict) else F(x)
-def read(name):return json.loads((IN/name).read_text())
+def read(name):return json.loads((IN/name).read_text(encoding='utf-8'))
 def sha(name):return hashlib.sha256((IN/name).read_bytes()).hexdigest()
 def dot(a,b):return sum(x*y for x,y in zip(a,b))
 def cross(a,b):return (a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0])
@@ -40,8 +40,8 @@ for name,h in ref['input_sha256'].items():
 for name,h in mut['input_sha256'].items():require(sha(name)==h,'mutation input pin '+name)
 for name,data in full['files'].items():require(sha(name)==data['sha256'] and (IN/name).stat().st_size==data['bytes'],'file pin '+name)
 require(sha('intervals-full-primal.jsonl.gz')==full['primal_proof']['sha256'],'primal pin')
-cmf={int(r[0]):tuple(F(x) for x in r[1:4]) for r in csv.reader((IN/'cie-cmf.csv').open())}
-spd={int(r[0]):F(r[1]) for r in csv.reader((IN/'cie-d65.csv').open())}
+cmf={int(r[0]):tuple(F(x) for x in r[1:4]) for r in csv.reader((IN/'cie-cmf.csv').open(encoding='utf-8'))}
+spd={int(r[0]):F(r[1]) for r in csv.reader((IN/'cie-d65.csv').open(encoding='utf-8'))}
 require([r['wavelength_nm'] for r in p['generators']]==list(range(360,781)),'complete spectral domain')
 V=[tuple(rat(x) for x in row['xyz']) for row in p['generators']]
 require(V==[tuple(spd[n]*x for x in cmf[n]) for n in range(360,781)],'native decimal generator multiplication')
@@ -134,7 +134,7 @@ raw=(IN/'intervals-refined.raw').read_bytes();oldraw=(IN/'intervals-full.raw').r
 require(len(raw)==len(oldraw)==131072 and len(facemap)==524288,'binary lengths')
 derived=bytearray();counts=collections.Counter(empty=0,singleton=0,full=0,interval=0);input_kinds=collections.Counter();seen=set();endpoint_count=0;outcomes=collections.Counter();neutral_rejected=0
 bounds=[];saved_endpoint=None
-with gzip.open(IN/'intervals-full-primal.jsonl.gz','rt') as rows:
+with gzip.open(IN/'intervals-full-primal.jsonl.gz','rt', encoding='utf-8') as rows:
  for line in rows:
     cert=json.loads(line);c=cert['column'];require(type(c) is int and c==len(seen) and 0<=c<65536 and c not in seen,'ordered unique total column');seen.add(c);input_kinds[cert['kind']]+=1
     require(tuple(cert['faces'])==struct.unpack_from('<II',facemap,8*c),'face map column '+str(c))
@@ -233,5 +233,5 @@ for case in mut['cases']:
     mutation_results.append(record)
     progress('mutation_rejected',id=k)
 result={'verdict':'PASS','scope':'Exact finite nominal interval table and observable codec only','historical_upstream_candidate_commit':'d3224cd485701d7fa8448c19b0529f3931b03acb','historical_upstream_contract_commit':'25745723031e6ebda7111d97c426262392b67b36','table_sha256':hashlib.sha256(derived).hexdigest(),'verifier_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'arithmetic':'Exact integers and fractions.Fraction; no epsilon or floating optimizer','spectral_generators':len(V),'positive_ray_certificates':len(Q),'source_frontiers':len(brightness),'registered_faces':len(faces),'distinct_support_faces_checked':face.cache_info().currsize,'columns':len(seen),'input_certificate_kinds':dict(input_kinds),'corrections':len(corrections),'endpoint_primal_equalities':endpoint_count,'column_counts':dict(counts),'cube_outcomes':dict(outcomes),'cube_points':sum(outcomes.values()),'accepted_chromatic':outcomes['accepted']-256,'rejected_chromatic':outcomes['rejected'],'neutral_rejected_before_union':neutral_rejected,'mutations':mutation_results,'mutation_count':len(mutation_results),'runtime_seconds':time.monotonic()-START,'non_claims':['Human or perceptual validation','Physical applicability to displays','Continuous spectral model','Historical ac6 equivalence','Full REVIEW-01 readiness','Production admission or deployment']}
-(OUT/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+(OUT/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n', encoding='utf-8', newline='\n')
 progress('PASS',table_sha256=result['table_sha256'],mutation_count=len(mutation_results))

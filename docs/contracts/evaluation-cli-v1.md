@@ -54,7 +54,7 @@
 Граф: source `[128,128,129]`, opacity `0.5`, один surface input и source-over
 occurrence; фон `[128,128,127]`, объявленное ограничение final `[128,128,128]`.
 Выбран выпуск `exact-nominal-srgb8-point-clean-set-v2` с SHA-256
-`cb3a878163c30702def5a23dc2baf14c7bed022c99e43af407bfd8ded92cac53`.
+`5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c`.
 Старый выпуск v1 возвращает `unsupported_convention_release`; он не перенаправляется на новый набор.
 Этот пример проверяет подготовку входа, не заменяет независимый oracle цветовой
 математики. Одна команда `cargo run --quiet --locked -p labcolors-evaluate-cli --

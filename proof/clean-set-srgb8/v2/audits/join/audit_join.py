@@ -139,7 +139,7 @@ def solve(half_percent_units, anchor):
     return {'half_percent_units': half_percent_units, 'normal_constraint': anchor, 'solution_count': len(solutions), 'search_states': visits, 'solutions': solutions}
 
 
-saved = json.loads((ROOT / 'input/STIMULUS-JOIN.json').read_text())
+saved = json.loads((ROOT / 'input/STIMULUS-JOIN.json').read_text(encoding='utf-8'))
 expected = {row['label']: row['raw_stimulus_id'] for row in saved['rows']}
 require(len(expected) == 32 and set(expected.values()) == set(range(32)), 'saved candidate bijection')
 reports = []
@@ -154,6 +154,6 @@ for enclosure in (1, 2):
     reports.append(full)
 
 result = {'verdict': 'PASS_CONDITIONAL', 'claim': 'Exhaustive independent joint code-name and raw-id/label search confirms the saved mapping under all CVD constraints plus either normal green anchor, for both declared percent enclosures. Full Table3 is inconsistent.', 'source_naming_records': 2304, 'source_named_rows': 32, 'roster_sessions': len(roster), 'reports': reports, 'non_claims': ['Author-provided stimulus codebook', 'Resolution of full Table3 inconsistency', 'Independent experimental validation', 'Historical ac6 equivalence', 'Physical or human admission'], 'premises': ['First naming token is stimulus id; fourth is categorical code', 'Two sessions pooled; normals pooled NTF+NTM', 'Omitted published response frequencies are below 15%', 'Printed percentages lie within ±0.5 or ±1 percentage point', 'This explicitly conditional association is retained instead of repairing published cells']}
-(ROOT / sys.argv[1] / 'result.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
+(ROOT / sys.argv[1] / 'result.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8', newline='\n')
 print(json.dumps({key: value for key, value in result.items() if key != 'reports'}))
 print(json.dumps([{key: value for key, value in report.items() if key != 'solutions'} for report in reports]))

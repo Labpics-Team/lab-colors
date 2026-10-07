@@ -21,7 +21,7 @@ def require(condition, message):
 
 
 def read_json(path):
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 def sha(data):
@@ -158,7 +158,7 @@ def main():
         for checksum in metadata['checksums']:
             require(hashlib.new(checksum['hashMethod'], data).hexdigest() == checksum['checksum'], 'CIE published checksum')
         require(any(x['rightsURI'] == 'https://creativecommons.org/licenses/by-sa/4.0/' for x in metadata['rightsList']), 'CIE CC BY-SA4')
-        lines = data.decode().splitlines()
+        lines = data.decode(encoding='utf-8').splitlines()
         require(len(lines) == length, 'CIE native row count')
         wavelengths = [int(line.split(',')[0]) for line in lines]
         require(wavelengths == list(range(360 if name == 'cmf' else 300, 831)), 'CIE native wavelength census')
@@ -202,7 +202,7 @@ def main():
                   'Old ac6d965 derivation is not reconstructed; this is a new independent source closure.'],
     }
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
+    args.output.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n', encoding='utf-8', newline='\n')
     print(json.dumps(result,ensure_ascii=False))
 
 

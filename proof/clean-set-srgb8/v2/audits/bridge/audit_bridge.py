@@ -37,7 +37,7 @@ def nearest_even(decimal, bits):
             bits % 2 == 0 and decimal in (midpoint_lo, midpoint_hi))
 
 
-bridge = json.loads((ROOT / "input/bridge.json").read_text())
+bridge = json.loads((ROOT / "input/bridge.json").read_text(encoding='utf-8'))
 sources = {"decode": ("gamma_data.rs", "DECODE_8BIT", 256),
            "matrix": ("srgb.rs", "SRGB_TO_XYZ_D65", 9)}
 observed = []
@@ -49,7 +49,7 @@ for group, (filename, declaration, expected_count) in sources.items():
     require(hashlib.sha256(data).hexdigest() == binding["sha256"], "source SHA256")
     blob = b"blob " + str(len(data)).encode() + b"\0" + data
     require(hashlib.sha1(blob).hexdigest() == binding["git_blob_sha1"], "source Git blob")
-    source = data.decode()
+    source = data.decode(encoding='utf-8')
     initializer, = re.findall(r"\b" + declaration + r"\s*:[^=]+?=\s*\[(.*?)\];", source, re.S)
     tokens = re.findall(r"\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?", initializer)
     require(len(tokens) == expected_count, "complete source lexical census")
@@ -70,5 +70,5 @@ for group, (filename, declaration, expected_count) in sources.items():
 
 require(len(bridge["rows"]) == sum(item["literals"] for item in observed), "no unreviewed bridge rows")
 result = {"verdict": "PASS", "claim": "The pinned current Rust source literals round exactly to all 265 bridge dyadics under IEEE-754 binary64 nearest-even", "arithmetic": "integer bit decomposition and fractions.Fraction; no floating conversion", "groups": observed, "adjacent_wrong_bit_patterns_rejected": rejected_mutants, "non_claims": ["Compiler artifact execution", "Exact algebraic IEC transfer", "Historical ac6 identity", "Sato primary-source reconstruction", "Physical or human validation"]}
-(ROOT / sys.argv[1] / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+(ROOT / sys.argv[1] / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding='utf-8', newline='\n')
 print(json.dumps(result))

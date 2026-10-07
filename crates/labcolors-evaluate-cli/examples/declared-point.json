@@ -25,7 +25,7 @@
     ]
   },
   "profile": {
-    "conventionReleaseSha256": "cb3a878163c30702def5a23dc2baf14c7bed022c99e43af407bfd8ded92cac53",
+    "conventionReleaseSha256": "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c",
     "scope": "modeled-srgb8-point",
     "admission": "declared-package-policy-candidate",
     "human": "not-requested"

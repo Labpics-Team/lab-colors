@@ -25,8 +25,8 @@
     {
       "path": "NOMINAL-SPEC.md",
       "role": "model-specification-and-attribution",
-      "bytes": 11417,
-      "sha256": "4ffe3d3f8ac7a0bbb31d91ced78b910ba82b19bf23c4ff31c8119147c3642fb6",
+      "bytes": 12514,
+      "sha256": "48d04ca7bf8916fa8de4de0b9ea904a80e379f060e355cc03e294906904fc3eb",
       "license": "MIT"
     },
     {
@@ -39,22 +39,22 @@
     {
       "path": "SOURCE-PROVENANCE.json",
       "role": "source-provenance",
-      "bytes": 16335,
-      "sha256": "a3e67fc5987a8bf94d4bc26a3e5a541e9484b8376ef79b16801d0b09e7e28625",
+      "bytes": 18962,
+      "sha256": "96eb0435f6f7e412b72bf2086ac24f533c95f119aab55730dc9638b0ea0e1992",
       "license": "MIT"
     },
     {
       "path": "audit_primary_inputs.py",
       "role": "executable-verifier",
-      "bytes": 11600,
-      "sha256": "1e0f47a8a54386e9ae91a49f6be9dfa424aefe8d6bd60368c06c944f05b27147",
+      "bytes": 11664,
+      "sha256": "609835e871d2cfff8a8f9ba6fad9dbbba0758135b08e6650bd3b597b0e833e06",
       "license": "MIT"
     },
     {
       "path": "audits/bridge/audit_bridge.py",
       "role": "executable-verifier",
-      "bytes": 3906,
-      "sha256": "6026eb6fbefd7024e66b91c19fd918ae3f0529f0622d9aa757d3f38d70a14468",
+      "bytes": 3970,
+      "sha256": "cb00575dbe7550713319fa91a91c5437cc4a560e7c2fc8a504ab09fd4b930d86",
       "license": "MIT"
     },
     {
@@ -81,8 +81,8 @@
     {
       "path": "audits/join/audit_join.py",
       "role": "executable-verifier",
-      "bytes": 8670,
-      "sha256": "dbe14dfe9002bc64fb5b230389369041d57d251d54e92f21791b064563b09526",
+      "bytes": 8718,
+      "sha256": "bd1eb042764353c93badfc7087e7d16398e62add42c875ad66bc0c795f90e98c",
       "license": "MIT"
     },
     {
@@ -109,8 +109,8 @@
     {
       "path": "compare_finite_tables.py",
       "role": "executable-verifier",
-      "bytes": 5046,
-      "sha256": "e819ec56974eadc76aa2112a73b8093d2ec74eb0bb9238be22b331486c4ac7e1",
+      "bytes": 5078,
+      "sha256": "ef9fc3aabb38e51b0aa9df8b4a8953e488ac3444d19055a667881155e646945c",
       "license": "MIT"
     },
     {
@@ -221,8 +221,8 @@
     {
       "path": "geometry/verify_exact_v2.py",
       "role": "executable-verifier",
-      "bytes": 18999,
-      "sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+      "bytes": 19097,
+      "sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
       "license": "MIT"
     },
     {
@@ -319,8 +319,8 @@
     {
       "path": "verify_bundle.py",
       "role": "executable-verifier",
-      "bytes": 7479,
-      "sha256": "cfe64299b2fcf897faa6da2cda2533ca4467a7f6d11a1a7373301c28f23d7f6e",
+      "bytes": 7591,
+      "sha256": "9fa76ad0496321fdfadd02097837841c0edc8b6f770bccc030ebb5c8f3f6ff85",
       "license": "MIT"
     }
   ],

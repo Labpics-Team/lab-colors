@@ -23,7 +23,7 @@ def digest(path):
 
 
 def check_inputs():
-    manifest = json.loads((ROOT / 'PROOF-MANIFEST.json').read_text())
+    manifest = json.loads((ROOT / 'PROOF-MANIFEST.json').read_text(encoding='utf-8'))
     names = [item['path'] for item in manifest['files']]
     require(len(names) == len(set(names)), 'unique proof manifest paths')
     for item in manifest['files']:
@@ -50,7 +50,7 @@ def main():
     output = args.output.resolve()
     require(not output.exists(), 'result directory must be fresh')
     manifest = check_inputs()
-    bridge = json.loads((ROOT / 'geometry/input/bridge.json').read_text())
+    bridge = json.loads((ROOT / 'geometry/input/bridge.json').read_text(encoding='utf-8'))
     if args.product_root is not None:
         for binding in bridge['bindings']:
             require(digest(args.product_root / binding['path']) == binding['sha256'],
@@ -95,10 +95,10 @@ def main():
                               'seconds':round(time.monotonic()-started, 3)}), flush=True)
         require((dest / 'delta/new-column-rle.bin').read_bytes() == (ROOT / 'derived/new-column-rle.bin').read_bytes(),
                 'canonical codec output identity')
-        require(json.loads((dest / 'delta/delta.json').read_text()) ==
-                json.loads((ROOT / 'historical-v1/DELTA.json').read_text()),
+        require(json.loads((dest / 'delta/delta.json').read_text(encoding='utf-8')) ==
+                json.loads((ROOT / 'historical-v1/DELTA.json').read_text(encoding='utf-8')),
                 'historical output delta must reproduce its preserved record')
-        reports[mode] = {stage: json.loads((dest / stage / ('delta.json' if stage == 'delta' else 'result.json')).read_text())
+        reports[mode] = {stage: json.loads((dest / stage / ('delta.json' if stage == 'delta' else 'result.json')).read_text(encoding='utf-8'))
                          for stage in ('primary', 'bridge', 'join', 'geometry', 'delta')}
     if len(modes) == 2:
         comparable = json.loads(json.dumps(reports))
@@ -127,7 +127,7 @@ def main():
                         for stage in ('primary','bridge','join','geometry','delta')} for mode in modes},
         'limits':manifest['limits'],
     }
-    (output / 'result.json').write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n')
+    (output / 'result.json').write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n', encoding='utf-8', newline='\n')
     print(json.dumps(report,ensure_ascii=False),flush=True)
 
 

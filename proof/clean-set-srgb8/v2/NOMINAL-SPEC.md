@@ -93,14 +93,28 @@ primal решения на обеих границах доказывают пр
 
 ## Воспроизведение и границы вывода
 
-Только Python 3.10+ standard library, сеть и внешние checkout не нужны:
+Только Python 3.10+ standard library, сеть и внешние checkout не нужны.
+Для standalone-запуска перейдите в каталог, содержащий этот
+`NOMINAL-SPEC.md` и `verify_bundle.py` (сам каталог капсулы):
 
 ```sh
-python3 verify_bundle.py --output /tmp/nominal-v2-replay --mode both
+python3 -I -B verify_bundle.py --output-dir /tmp/nominal-v2-replay --mode both
 ```
 
-Каталог результата должен отсутствовать. Product full gate дополнительно
-передаёт `--product-root <checkout>` и связывает текущие Rust-источники.
+Путь результата можно заменить любым новым каталогом; он должен отсутствовать.
+Из корня **публичного product checkout** используйте его путь к капсуле
+и явно свяжите проверку с текущими Rust-источниками этого checkout:
+
+```sh
+python3 -I -B proof/clean-set-srgb8/v2/verify_bundle.py \
+  --output-dir /tmp/nominal-v2-product-replay --mode both --product-root .
+```
+
+Standalone-запуск из каталога капсулы не требует `--product-root`.
+Если этот параметр передаётся из другого рабочего каталога, укажите абсолютный
+путь к корню product checkout; `.` означает именно текущий рабочий каталог.
+Научные текстовые файлы читаются и записываются явно в UTF-8; выходные
+JSON используют LF независимо от locale и платформенного перевода строк.
 Обычный Python и `-O` должны дать одинаковые исходы. Проверки используют
 явные исключения, не отключаемые `assert`. Тестируются 11 предметных мутаций
 geometry gates, пять повреждений raw input и 529 соседних ошибочных битовых

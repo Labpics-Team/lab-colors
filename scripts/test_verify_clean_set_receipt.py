@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
@@ -536,6 +537,36 @@ class ReceiptHostileTests(unittest.TestCase):
             manifest_entry["sha256"] = _sha256(manifest)
             with self.assertRaisesRegex(VerificationError, "package license"):
                 fixture.verify()
+
+
+class ReceiptRefreshLocaleTests(unittest.TestCase):
+    def test_refresh_status_and_byte_bindings_do_not_depend_on_text_locale(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / os.fsdecode(b"refresh-\xce\xbb")
+            root.mkdir()
+            fixture = _fixture(root)
+            fixture.write_pin()
+            script = fixture.product / "scripts/refresh_clean_set_receipt.py"
+            shutil.copyfile(REPO_ROOT / "scripts/refresh_clean_set_receipt.py", script)
+            environment = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0",
+                           "PYTHONCOERCECLOCALE": "0", "PYTHONIOENCODING": "ascii"}
+            artifact = fixture.product / PRODUCT_ARTIFACT_PATHS["classifier_source"]
+            for changed in (False, True):
+                with self.subTest(changed=changed):
+                    if changed:
+                        artifact.write_bytes(artifact.read_bytes() + "\n# \u03bb\n".encode("utf-8"))
+                    process = subprocess.run([sys.executable, "-B", "-X", "utf8=0", str(script)],
+                                             cwd=fixture.product, env=environment, capture_output=True,
+                                             check=False, timeout=30)
+                    self.assertEqual(process.returncode, 0, process.stderr.decode("ascii"))
+                    self.assertEqual(process.stderr, b"")
+                    self.assertIn(b"Changed: 1 artifacts" if changed else b"No changes needed", process.stdout)
+                    receipt = fixture.receipt_path.read_bytes()
+                    entry = next(item for item in json.loads(receipt)["artifacts"]
+                                 if item["role"] == "classifier_source")
+                    self.assertEqual(entry["sha256"], _sha256(artifact.read_bytes()))
+                    self.assertEqual((fixture.product / RECEIPT_PIN_PATH).read_bytes(),
+                                     f"{_sha256(receipt)}  receipt-v2.json\n".encode("ascii"))
 
 
 class CapsuleReplayTests(unittest.TestCase):

@@ -17,7 +17,7 @@
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set.rs",
       "role": "classifier_source",
-      "sha256": "e30a75b9141b7284355f822c8e010c10afbe97e64ffa60cd2880f515bf4c8502"
+      "sha256": "2452f932c4355d4e3fa9be7659dc69166164b9aff2639da00eb074fe73da024b"
     },
     {
       "bytes": 4072,
@@ -164,14 +164,14 @@
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "cfc64cd62923262706e7b05ab21f8f707b9fbaac43551ccb220171f7a5a185ce"
+      "sha256": "9de2e6869837e7e7fc79fc7a5f8417ae441f02a7059b4b554281e88a1097f67f"
     },
     {
-      "bytes": 36237,
+      "bytes": 38286,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "bc1c554ba2a105cfb943cbec8402c768d3ce6a689526f4215d3a5035e99fdb3e"
+      "sha256": "fd599741bb6bb82cf71297a83de5f243210adb9038d948eae060d8b32b6186c1"
     }
   ],
   "excluded_claims": [
@@ -192,7 +192,7 @@
         "bytes": 4608,
         "path": "crates/labcolors-core/NOTICE.md",
         "role": "attribution_notice",
-        "sha256": "9b28f41ee9a69becbe8bb2b34852a21b8508e4f472e097eb4c75bd7ba4e763cc"
+        "sha256": "15badc6b2b868aff66b74ae34f6b1360c273c2b935f8061214dcdc56db7f7c39"
       },
       {
         "bytes": 18657,
@@ -224,10 +224,10 @@
   },
   "release_id": "exact-nominal-srgb8-point-clean-set-v2",
   "research": {
-    "commit": "eaa000ba44d5b64a7d570cb7e0b17b30334a6bfd",
+    "commit": "0adb410a92e943dad67161ce616e9f8c701d8a51",
     "object_format": "sha1",
     "release_path": "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule/release-v2.json",
-    "release_sha256": "cb3a878163c30702def5a23dc2baf14c7bed022c99e43af407bfd8ded92cac53",
+    "release_sha256": "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c",
     "repository": "https://github.com/Labpics-Team/agents-config"
   },
   "runtime_contract": {

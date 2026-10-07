@@ -1,7 +1,7 @@
 {
   "upstream_repository": "https://github.com/Labpics-Team/agents-config",
   "upstream_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
-  "geometry_verifier_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+  "geometry_verifier_sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
   "private_context_excluded": [
     "CLEANLINESS-DESIGN.md",
     "CLEANLINESS-EVIDENCE.md",
@@ -343,5 +343,50 @@
     ],
     "raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
     "codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+  },
+  "text_io_revision": {
+    "prior_proof_source_commit": "be996d60f3332dba5cda6be6f3894bc9c7db517a",
+    "prior_proof_manifest_sha256": "97556dfeb3ae5f945bf479fdfcc5095d17877782299af140791df66728cf1df0",
+    "prior_geometry_verifier_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+    "current_geometry_verifier_sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
+    "reason": "Explicit strict UTF-8 file I/O and fixed LF JSON output remove locale/platform dependence; scientific expressions, checks, constants and raw/codec bytes are unchanged.",
+    "files": [
+      {
+        "path": "audit_primary_inputs.py",
+        "prior_sha256": "1e0f47a8a54386e9ae91a49f6be9dfa424aefe8d6bd60368c06c944f05b27147",
+        "sha256": "609835e871d2cfff8a8f9ba6fad9dbbba0758135b08e6650bd3b597b0e833e06"
+      },
+      {
+        "path": "audits/bridge/audit_bridge.py",
+        "prior_sha256": "6026eb6fbefd7024e66b91c19fd918ae3f0529f0622d9aa757d3f38d70a14468",
+        "sha256": "cb00575dbe7550713319fa91a91c5437cc4a560e7c2fc8a504ab09fd4b930d86"
+      },
+      {
+        "path": "audits/join/audit_join.py",
+        "prior_sha256": "dbe14dfe9002bc64fb5b230389369041d57d251d54e92f21791b064563b09526",
+        "sha256": "bd1eb042764353c93badfc7087e7d16398e62add42c875ad66bc0c795f90e98c"
+      },
+      {
+        "path": "compare_finite_tables.py",
+        "prior_sha256": "e819ec56974eadc76aa2112a73b8093d2ec74eb0bb9238be22b331486c4ac7e1",
+        "sha256": "ef9fc3aabb38e51b0aa9df8b4a8953e488ac3444d19055a667881155e646945c"
+      },
+      {
+        "path": "geometry/verify_exact_v2.py",
+        "prior_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+        "sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8"
+      },
+      {
+        "path": "verify_bundle.py",
+        "prior_sha256": "cfe64299b2fcf897faa6da2cda2533ca4467a7f6d11a1a7373301c28f23d7f6e",
+        "sha256": "9fa76ad0496321fdfadd02097837841c0edc8b6f770bccc030ebb5c8f3f6ff85"
+      }
+    ],
+    "historical_stage_scope": "The existing source_refresh block describes only the earlier metadata-only source rebinding to e579/eaa. Its original checker-change description and receipts remain historical, not a description of this additional I/O revision.",
+    "documentation": "Standalone command now explicitly runs from the directory containing NOMINAL-SPEC.md and verify_bundle.py; the separate public-product-root example uses proof/clean-set-srgb8/v2/verify_bundle.py and --product-root .",
+    "review_comment_ids": [
+      4212411104,
+      4212411150
+    ]
   }
 }
