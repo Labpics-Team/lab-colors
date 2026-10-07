@@ -100,3 +100,60 @@ for (const [name, release] of [
     }
   });
 }
+
+for (const [name, makeConfirmation] of [
+  ["number", () => 1],
+  ["string", () => "1"],
+  ["array", () => [1]],
+  ["boxed true", () => new Boolean(true)],
+  ["boxed false", () => new Boolean(false)],
+  ["undefined", () => undefined],
+  ["null", () => null],
+  ["bigint", () => 1n],
+  ["symbol", () => Symbol("confirmation")],
+  ["coercion hook", (onCoercion) => ({ [Symbol.toPrimitive]: onCoercion })],
+]) {
+  test(`dispose requires primitive boolean confirmation: ${name}`, () => {
+    let coercions = 0;
+    const confirmed = makeConfirmation(() => {
+      coercions += 1;
+      throw new Error("caller-owned confirmation coercion must not execute");
+    });
+    const host = { point: null, calls: 0 };
+    const attachment = attachProgramWire(wire, 1, 91, 501, 71, 61, (intent) => {
+      host.calls += 1;
+      host.point = intent.point;
+      return true;
+    });
+    let first, authority, retry;
+    let unexpectedlyDisposed = false;
+    try {
+      first = observe(attachment, 1n);
+      const point = host.point;
+      const calls = host.calls;
+      assert.throws(() => {
+        attachment.dispose(confirmed);
+        unexpectedlyDisposed = true;
+      }, (error) => isProgramError(error)
+        && error.operation === "attachmentDispose"
+        && error.code === "program_attachment_revoke_unconfirmed");
+      assert.equal(coercions, 0);
+      assert.equal(host.point, point);
+      assert.equal(host.calls, calls);
+      assert.throws(() => attachment.free(), releaseError("program_attachment_revoke_unconfirmed"));
+      authority = attachment.materializationAuthority();
+      assert.equal(authority.revision(), 1n);
+      assert.deepEqual([...authority.terminalCompositeRgb()], [20, 20, 20]);
+      retry = observe(attachment, 2n);
+      assert.equal(retry.state, "ready");
+    } finally {
+      retry?.free();
+      authority?.free();
+      first?.free();
+      host.point = null;
+      if (!unexpectedlyDisposed) attachment.dispose(true);
+      attachment.free();
+    }
+    assert.equal(host.point, null);
+  });
+}

@@ -165,7 +165,9 @@ binding epoch и отсутствием downstream point, а не доказат
 включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
 из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
 пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
-отзывается владельцем host до `dispose(true)`.
+отзывается владельцем host до `dispose(true)`. Подтверждением служит только
+примитивный `true`; числа, строки и объекты не приводятся к boolean и получают
+`program_attachment_revoke_unconfirmed`.
 
 `Symbol.dispose` и TypeScript `using` выполняют тот же защищённый `free()`.
 До выхода из `using` приложение должно отозвать scope и вызвать `dispose(true)`;
