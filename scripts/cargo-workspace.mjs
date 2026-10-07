@@ -41,15 +41,26 @@ function assertNoMultilineStrings(source) {
 
 /** Изолирует workspace metadata от последующих TOML-таблиц.
  * Инвариант: возвращённый диапазон не содержит другую таблицу. */
-export function workspacePackageTable(cargoSource) {
+function packageTable(cargoSource, headerPattern, label) {
   assertNoMultilineStrings(cargoSource);
-  const header = WORKSPACE_PACKAGE_HEADER.exec(cargoSource);
+  const header = headerPattern.exec(cargoSource);
   if (header) {
     const remainder = cargoSource.slice(header.index + header[0].length);
     const nextTable = remainder.search(ANY_TABLE_HEADER);
     return nextTable < 0 ? remainder : remainder.slice(0, nextTable);
   }
-  throw new Error("workspace.package table is absent");
+  throw new Error(`${label} table is absent`);
+}
+
+export function workspacePackageTable(cargoSource) {
+  return packageTable(cargoSource, WORKSPACE_PACKAGE_HEADER, "workspace.package");
+}
+
+export function packageLicense(cargoSource) {
+  const table = packageTable(cargoSource, /^[ \t]*\[package\][ \t]*(?:#.*)?\r?$/mu, "package");
+  const entries = [...table.matchAll(/^[ \t]*license[ \t]*=[ \t]*"([^"\r\n]+)"[ \t]*(?:#.*)?\r?$/gmu)];
+  if (entries.length !== 1) throw new Error("[package].license requires one literal SPDX expression");
+  return entries[0][1];
 }
 
 /** Читает release-версию только из `[workspace.package]`.

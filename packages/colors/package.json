@@ -4,7 +4,7 @@
   "packageManager": "npm@11.9.0",
   "description": "Canonical Program wire compiler and certified color runtime. WASM core, zero runtime dependencies.",
   "type": "module",
-  "license": "MIT",
+  "license": "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0",
   "publishConfig": {
     "access": "public",
     "provenance": false
@@ -29,6 +29,9 @@
   },
   "files": [
     "LICENSE",
+    "NOTICE.md",
+    "LICENSES/CC-BY-4.0.txt",
+    "LICENSES/CC-BY-SA-4.0.txt",
     "build-metadata.json",
     "index.js",
     "index.d.ts",

@@ -614,6 +614,15 @@ function assertPrepackFixtureScriptClosure(scriptFiles) {
 }
 
 function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
+  for (const path of [
+    "LICENSE", "crates/labcolors-core/NOTICE.md",
+    "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
+    "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
+    "crates/labcolors-core/Cargo.toml",
+  ]) {
+    mkdirSync(dirname(join(fixture, path)), { recursive: true });
+    copyFileSync(join(root, path), join(fixture, path));
+  }
   const scripts = join(fixture, "scripts");
   mkdirSync(scripts, { recursive: true });
   // Инвариант: фикстура содержит весь граф относительных импортов prepack.
@@ -881,7 +890,7 @@ test("prepack includes the generated snippet despite wasm-pack gitignore without
     writeFileSync(join(generated, "LICENSE"), "nested licence must not ship\n");
     writeFileSync(join(generated, "package.json"), "{}\n");
     writeFileSync(join(generated, "unexpected.js"), "must not ship\n");
-    writeFileSync(join(fixture, ".gitignore"), "node_modules/\npackages/colors/pkg/\npackages/colors/evidence/\npackages/colors/LICENSE\npackages/colors/build-metadata.json\n");
+    writeFileSync(join(fixture, ".gitignore"), "node_modules/\npackages/colors/pkg/\npackages/colors/evidence/\npackages/colors/LICENSE\npackages/colors/NOTICE.md\npackages/colors/LICENSES/\npackages/colors/build-metadata.json\n");
     command("git", ["init", "--quiet"], fixture);
     command("git", ["add", "."], fixture);
     command("git", ["-c", "user.name=Lab Colors release test", "-c", "user.email=release-test@example.invalid", "commit", "--quiet", "-m", "fixture"], fixture);
@@ -905,7 +914,7 @@ test("prepack includes the generated snippet despite wasm-pack gitignore without
   }
 });
 
-test("canonical package inventory requires one exact snippet and has 18 members", async () => {
+test("canonical package inventory includes legal materials and one exact snippet", async () => {
   const { expectedPackedFiles } = await import(
     pathToFileURL(join(root, "scripts", "verify-package-release.mjs"))
   );
@@ -929,7 +938,7 @@ test("canonical package inventory requires one exact snippet and has 18 members"
     packageJson,
     'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
   );
-  assert.equal(inventory.length, 18);
+  assert.equal(inventory.length, 21);
   assert.deepEqual(
     inventory.filter((path) => path.startsWith("pkg/snippets/")),
     ["pkg/snippets/labcolors-wasm-0123456789abcdef/inline0.js"],
@@ -1031,4 +1040,64 @@ test("clean-consumer smoke закрепляет terminal Program wire", () => {
   ]) {
     assert.doesNotMatch(verifier, new RegExp(retired, "u"), `retired ${retired}`);
   }
+});
+
+
+test("npm carries canonical data attribution and rejects incomplete or altered legal materials", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-package-licenses-"));
+  try {
+    const scripts = copyPrepackFixture(fixture);
+    const { PACKAGE_LICENSE_SOURCES, packageLicenseInputs, verifyPackageLicenses } = await import(
+      pathToFileURL(join(scripts, "prepare-npm-package.mjs"))
+    );
+    const packageJson = JSON.parse(readFileSync(join(root, "packages/colors/package.json"), "utf8"));
+    const { packageLicense } = await import(pathToFileURL(join(scripts, "cargo-workspace.mjs")));
+    assert.equal(packageJson.license, packageLicense(readFileSync(join(fixture,
+      "crates/labcolors-core/Cargo.toml"), "utf8")));
+    const inputs = await packageLicenseInputs(packageJson);
+    assert.deepEqual(inputs.map(({ path }) => path), [
+      "LICENSE", "NOTICE.md", "LICENSES/CC-BY-4.0.txt", "LICENSES/CC-BY-SA-4.0.txt",
+    ]);
+    const installed = join(fixture, "installed");
+    mkdirSync(installed);
+    writeFileSync(join(installed, "package.json"), JSON.stringify(packageJson));
+    for (const { path, bytes } of inputs) {
+      mkdirSync(dirname(join(installed, path)), { recursive: true });
+      writeFileSync(join(installed, path), bytes);
+    }
+    await verifyPackageLicenses(installed);
+
+    for (const { path, bytes } of inputs) {
+      rmSync(join(installed, path));
+      await assert.rejects(verifyPackageLicenses(installed), { code: "ENOENT" });
+      writeFileSync(join(installed, path), "altered license\n");
+      await assert.rejects(verifyPackageLicenses(installed), /packed license differs/u);
+      writeFileSync(join(installed, path), bytes);
+      await verifyPackageLicenses(installed);
+
+      const source = join(fixture, PACKAGE_LICENSE_SOURCES[path]);
+      writeFileSync(source, "");
+      await assert.rejects(packageLicenseInputs(packageJson), /canonical license is empty/u);
+      writeFileSync(source, bytes);
+      await assert.rejects(packageLicenseInputs({
+        ...packageJson, files: packageJson.files.filter((entry) => entry !== path),
+      }), /npm files must include exactly one/u);
+    }
+    await assert.rejects(packageLicenseInputs({ ...packageJson, license: "MIT" }),
+      /npm license must match/u);
+    await verifyPackageLicenses(installed);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+
+test("package license parsing stays inside the Cargo package table", async () => {
+  const { packageLicense } = await import(pathToFileURL(join(root, "scripts/cargo-workspace.mjs")));
+  assert.equal(packageLicense('[package]\nlicense = "MIT AND CC-BY-4.0" # code and data\n[dependencies.other]\nlicense = "Apache-2.0"\n'), "MIT AND CC-BY-4.0");
+  assert.equal(packageLicense('[package]\r\nlicense = "MIT"\r\n'), "MIT");
+  assert.throws(() => packageLicense('[package]\n[dependencies.other]\nlicense = "MIT"\n'), /requires one literal/u);
+  assert.throws(() => packageLicense('[package]\nlicense = "MIT"\nlicense = "Apache-2.0"\n'), /requires one literal/u);
+  assert.throws(() => packageLicense('[package]\nlicense.workspace = true\n'), /requires one literal/u);
+  assert.throws(() => packageLicense('[workspace.package]\nlicense = "MIT"\n'), /package table is absent/u);
 });

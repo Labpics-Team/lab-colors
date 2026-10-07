@@ -32,6 +32,7 @@ import {
   REPO_ROOT,
   prepareNpmPackage,
   verifiedSourceSha,
+  verifyPackageLicenses,
 } from "./prepare-npm-package.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
@@ -1483,6 +1484,7 @@ async function verifyCleanConsumer(
     );
 
     const installed = resolve(consumer, "node_modules", ...packageJson.name.split("/"));
+    await verifyPackageLicenses(installed);
     const installedPackage = await readJson(resolve(installed, "package.json"));
     if (installedPackage.name !== packageJson.name || installedPackage.version !== packageJson.version) {
       fail(
@@ -1588,6 +1590,7 @@ export async function smokePackedPackage(tarballPath) {
       ],
       consumer,
     );
+    await verifyPackageLicenses(resolve(consumer, "node_modules/@labpics/colors"));
     const runtimePath = resolve(consumer, "smoke.mjs");
     await writeFile(runtimePath, runtimeSmokeSource());
     command(process.execPath, [runtimePath], consumer);

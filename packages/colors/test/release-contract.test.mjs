@@ -8,7 +8,7 @@ const pkg = JSON.parse(read("package.json"));
 
 test("terminal tar inventory is exact and excludes retired roots", () => {
   const required = new Set([
-    "LICENSE", "build-metadata.json", "index.js", "index.d.ts", "wcag22.d.ts",
+    "LICENSE", "NOTICE.md", "LICENSES/CC-BY-4.0.txt", "LICENSES/CC-BY-SA-4.0.txt", "build-metadata.json", "index.js", "index.d.ts", "wcag22.d.ts",
     "program-wire/abi-v1.js", "program-wire/abi-v1.d.ts",
     "evidence/wcag22-srgb8-v1.json", "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
