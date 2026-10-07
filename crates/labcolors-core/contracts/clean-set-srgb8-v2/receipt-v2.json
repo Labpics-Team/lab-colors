@@ -17,7 +17,7 @@
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set.rs",
       "role": "classifier_source",
-      "sha256": "613e283eeca5e88ac8d1704f95624cb32182990a0c1f39e6e21c3f93762244bc"
+      "sha256": "e30a75b9141b7284355f822c8e010c10afbe97e64ffa60cd2880f515bf4c8502"
     },
     {
       "bytes": 4072,
@@ -153,18 +153,18 @@
       "sha256": "3993db8120865c7e73576e731fba7279e59b23a1b4c1c29572143b2cb141c678"
     },
     {
-      "bytes": 21906,
+      "bytes": 21935,
       "license": "MIT",
       "path": "crates/labcolors-core/src/spaces/srgb.rs",
       "role": "srgb_matrix_source",
-      "sha256": "87f7d5fff7c426e40ac15d42f86798f774052f91486ae0d6c99b070ef60c77de"
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf"
     },
     {
       "bytes": 41529,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "98ddc13c048205aa816f9075920467da6e821ca58e6acae9c1534cee9dbe84b8"
+      "sha256": "cfc64cd62923262706e7b05ab21f8f707b9fbaac43551ccb220171f7a5a185ce"
     },
     {
       "bytes": 36237,
@@ -192,7 +192,7 @@
         "bytes": 4608,
         "path": "crates/labcolors-core/NOTICE.md",
         "role": "attribution_notice",
-        "sha256": "54ee6433d4b36015270a6e93372f0ea60c55d8cfcfa5f7e2d02378647f9d7dfd"
+        "sha256": "9b28f41ee9a69becbe8bb2b34852a21b8508e4f472e097eb4c75bd7ba4e763cc"
       },
       {
         "bytes": 18657,
@@ -224,10 +224,10 @@
   },
   "release_id": "exact-nominal-srgb8-point-clean-set-v2",
   "research": {
-    "commit": "0b71fd0c16a4da4c955e7dabd1096255aff9764b",
+    "commit": "eaa000ba44d5b64a7d570cb7e0b17b30334a6bfd",
     "object_format": "sha1",
     "release_path": "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule/release-v2.json",
-    "release_sha256": "49a1001f44572ee32f53288a64104c99285233b2d6a1f3347a17490a3189f89e",
+    "release_sha256": "cb3a878163c30702def5a23dc2baf14c7bed022c99e43af407bfd8ded92cac53",
     "repository": "https://github.com/Labpics-Team/agents-config"
   },
   "runtime_contract": {

@@ -30,7 +30,7 @@ def cross(a,b):return (a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[
 def progress(stage,**kwargs):print(json.dumps({'stage':stage,'seconds':round(time.monotonic()-START,3),**kwargs}),flush=True)
 p=read('profile-candidate.json');f=read('frontier-candidate.json');full=read('intervals-full.json');ref=read('intervals-refined.json');bridge=read('bridge.json');mut=read('mutation-corpus.json')
 require(sha('intervals-refined.raw')=='cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e','external table identity')
-identity_gate(sha('bridge.json'),'86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd')
+identity_gate(sha('bridge.json'),'cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab')
 source_names={'cmf':'cie-cmf.csv','spd':'cie-d65.csv','join':'join.json','bridge':'bridge.json','witnesses':'witnesses.json'}
 for key,name in source_names.items():require(sha(name)==p['source_pins'][key]['sha256'],'source pin '+key)
 require(f['profile_sha256']==sha('profile-candidate.json'),'frontier profile pin')
@@ -208,8 +208,8 @@ for case in mut['cases']:
         record['gate_error']=rejects(lambda:strict_policy_gate(B,B>=T),'strict policy mismatch')
         record['reason']='B equals T: strict predicate rejects, mutated non-strict predicate accepts'
     elif k=='output_binding_identity':
-        identity_gate(sha('bridge.json'),'86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd')
-        record['gate_error']=rejects(lambda:identity_gate(patch['bridge_sha256'],'86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd'),'identity mismatch')
+        identity_gate(sha('bridge.json'),'cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab')
+        record['gate_error']=rejects(lambda:identity_gate(patch['bridge_sha256'],'cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab'),'identity mismatch')
         record['reason']='external expected bridge SHA mismatch'
     elif k=='empty_sentinel':
         altered=bytearray(derived);altered[patch['byte_offset']]=patch['value'];c=w['column'];pair=list(altered[2*c:2*c+2])
@@ -232,6 +232,6 @@ for case in mut['cases']:
         record.update(reason='observable decision or Rejected interval changed',expected=expected,mutant=actual)
     mutation_results.append(record)
     progress('mutation_rejected',id=k)
-result={'verdict':'PASS','scope':'Exact finite nominal interval table and observable codec only','candidate_commit':'d3224cd485701d7fa8448c19b0529f3931b03acb','base_contract_commit':'25745723031e6ebda7111d97c426262392b67b36','table_sha256':hashlib.sha256(derived).hexdigest(),'verifier_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'arithmetic':'Exact integers and fractions.Fraction; no epsilon or floating optimizer','spectral_generators':len(V),'positive_ray_certificates':len(Q),'source_frontiers':len(brightness),'registered_faces':len(faces),'distinct_support_faces_checked':face.cache_info().currsize,'columns':len(seen),'input_certificate_kinds':dict(input_kinds),'corrections':len(corrections),'endpoint_primal_equalities':endpoint_count,'column_counts':dict(counts),'cube_outcomes':dict(outcomes),'cube_points':sum(outcomes.values()),'accepted_chromatic':outcomes['accepted']-256,'rejected_chromatic':outcomes['rejected'],'neutral_rejected_before_union':neutral_rejected,'mutations':mutation_results,'mutation_count':len(mutation_results),'runtime_seconds':time.monotonic()-START,'non_claims':['Human or perceptual validation','Physical applicability to displays','Continuous spectral model','Historical ac6 equivalence','Full REVIEW-01 readiness','Production admission or deployment']}
+result={'verdict':'PASS','scope':'Exact finite nominal interval table and observable codec only','historical_upstream_candidate_commit':'d3224cd485701d7fa8448c19b0529f3931b03acb','historical_upstream_contract_commit':'25745723031e6ebda7111d97c426262392b67b36','table_sha256':hashlib.sha256(derived).hexdigest(),'verifier_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'arithmetic':'Exact integers and fractions.Fraction; no epsilon or floating optimizer','spectral_generators':len(V),'positive_ray_certificates':len(Q),'source_frontiers':len(brightness),'registered_faces':len(faces),'distinct_support_faces_checked':face.cache_info().currsize,'columns':len(seen),'input_certificate_kinds':dict(input_kinds),'corrections':len(corrections),'endpoint_primal_equalities':endpoint_count,'column_counts':dict(counts),'cube_outcomes':dict(outcomes),'cube_points':sum(outcomes.values()),'accepted_chromatic':outcomes['accepted']-256,'rejected_chromatic':outcomes['rejected'],'neutral_rejected_before_union':neutral_rejected,'mutations':mutation_results,'mutation_count':len(mutation_results),'runtime_seconds':time.monotonic()-START,'non_claims':['Human or perceptual validation','Physical applicability to displays','Continuous spectral model','Historical ac6 equivalence','Full REVIEW-01 readiness','Production admission or deployment']}
 (OUT/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
 progress('PASS',table_sha256=result['table_sha256'],mutation_count=len(mutation_results))

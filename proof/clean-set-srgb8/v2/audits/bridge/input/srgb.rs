@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn display_equals_quantised_display_on_every_byte() {
+    fn display_equals_quantised_display_on_every_byte() -> Result<(), String> {
         // The identity `srgb_linear_and_display_from_hex` stands on: for every
         // 8-bit code, its `byte/255` display value equals `quantised_display` of
         // the linear decode, bit-for-bit — so the recheck primitive can take the
@@ -405,7 +405,7 @@ mod tests {
         for byte in 0u16..=255 {
             let b = byte as u8;
             let hex = format!("#{b:02X}{b:02X}{b:02X}");
-            let (linear, display) = srgb_linear_and_display_from_hex(&hex).unwrap();
+            let (linear, display) = srgb_linear_and_display_from_hex(&hex)?;
             let quantised = crate::solve::quantised_display(linear);
             for ch in 0..3 {
                 assert_eq!(
@@ -417,6 +417,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]

@@ -25,8 +25,8 @@
     {
       "path": "NOMINAL-SPEC.md",
       "role": "model-specification-and-attribution",
-      "bytes": 10460,
-      "sha256": "384f5b40dec9bd2fbafdf1406cffb003f39cf084b4d6f3ddef5748a5a553ad0f",
+      "bytes": 11417,
+      "sha256": "4ffe3d3f8ac7a0bbb31d91ced78b910ba82b19bf23c4ff31c8119147c3642fb6",
       "license": "MIT"
     },
     {
@@ -39,8 +39,8 @@
     {
       "path": "SOURCE-PROVENANCE.json",
       "role": "source-provenance",
-      "bytes": 10615,
-      "sha256": "e7df549b3420ed8a4663c93d8601288343351cb47865b4bdea05b3af93ac638e",
+      "bytes": 16335,
+      "sha256": "a3e67fc5987a8bf94d4bc26a3e5a541e9484b8376ef79b16801d0b09e7e28625",
       "license": "MIT"
     },
     {
@@ -61,7 +61,7 @@
       "path": "audits/bridge/input/bridge.json",
       "role": "nominal-bridge-source",
       "bytes": 253299,
-      "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+      "sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab",
       "license": "MIT"
     },
     {
@@ -74,8 +74,8 @@
     {
       "path": "audits/bridge/input/srgb.rs",
       "role": "nominal-bridge-source",
-      "bytes": 21906,
-      "sha256": "87f7d5fff7c426e40ac15d42f86798f774052f91486ae0d6c99b070ef60c77de",
+      "bytes": 21935,
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf",
       "license": "MIT"
     },
     {
@@ -124,7 +124,7 @@
       "path": "geometry/input/bridge.json",
       "role": "proof-input",
       "bytes": 253299,
-      "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+      "sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
@@ -145,7 +145,7 @@
       "path": "geometry/input/frontier-candidate.json",
       "role": "proof-input",
       "bytes": 1511089,
-      "sha256": "4c79ea932dafebaf741d295d4fe1be016ab31b5d9764a83cfbfe6b73d573a583",
+      "sha256": "ffe4c9094ddbc6ef54082269425285758283397bee146baccd06e94ffeb8ee20",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
@@ -166,7 +166,7 @@
       "path": "geometry/input/intervals-full.json",
       "role": "proof-input",
       "bytes": 1884826,
-      "sha256": "01e99b20ee0a2e9fa4775d6628b8f32c3ce894e0465bb0a9ec722bc51d9393db",
+      "sha256": "9ffc641881229c5bddc6c725d0c79a1ff0519f681f7b832cfe686ab2edd2f626",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
@@ -180,7 +180,7 @@
       "path": "geometry/input/intervals-refined.json",
       "role": "proof-input",
       "bytes": 38818,
-      "sha256": "038452b56b381a97e16f3b025f2311d380988070323f8620f8e1cd690ab7ead5",
+      "sha256": "0975b7a7d386b59fe739c5de561b527201ede96939ec4af01ce0f11329e18d04",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
@@ -201,14 +201,14 @@
       "path": "geometry/input/mutation-corpus.json",
       "role": "proof-input",
       "bytes": 7977,
-      "sha256": "32f9e8c9ca0a807ab1389901ab657da5016fbbf1ad7a44b07f23eb5f95b2ab1b",
+      "sha256": "ab9c0f7032f4aec1d4c79f756c54a784749aff82c3591e879ad24fe64b5f3a43",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
       "path": "geometry/input/profile-candidate.json",
       "role": "proof-input",
-      "bytes": 183706,
-      "sha256": "66959d07b881205361dd1ec073f8b85abb46233e5acb64295554caa609c895bf",
+      "bytes": 183669,
+      "sha256": "2aa2f539b5617b050c6dbe666a3e448570313c8dd00cff04705b972a749c8aff",
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
     },
     {
@@ -221,8 +221,8 @@
     {
       "path": "geometry/verify_exact_v2.py",
       "role": "executable-verifier",
-      "bytes": 18964,
-      "sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db",
+      "bytes": 18999,
+      "sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
       "license": "MIT"
     },
     {

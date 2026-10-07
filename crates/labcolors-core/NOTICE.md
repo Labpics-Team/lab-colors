@@ -47,7 +47,7 @@ Labpics связал лицензированные источники с объ
 
 - Выпуск: `exact-nominal-srgb8-point-clean-set-v2`.
 - Release SHA-256:
-  `49a1001f44572ee32f53288a64104c99285233b2d6a1f3347a17490a3189f89e`.
+  `cb3a878163c30702def5a23dc2baf14c7bed022c99e43af407bfd8ded92cac53`.
 - Raw table SHA-256:
   `cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e`.
 - Runtime codec SHA-256:

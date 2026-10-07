@@ -1,8 +1,21 @@
 {
   "upstream_repository": "https://github.com/Labpics-Team/agents-config",
   "upstream_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
-  "geometry_verifier_sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db",
-  "geometry_input_manifest": {
+  "geometry_verifier_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+  "private_context_excluded": [
+    "CLEANLINESS-DESIGN.md",
+    "CLEANLINESS-EVIDENCE.md",
+    "research journals",
+    "research readbacks"
+  ],
+  "independent_audits": {
+    "primary_arithmetic_base_commit": "8b00b3d90937b9e0bcf70133fc654f7cdb046513",
+    "primary_public_change": "Only archive file census158→9 and public acquisition subset; identical arithmetic/source checks.",
+    "bridge_commit": "c1650a8821739b8d3e850cb8576ce18558486555",
+    "join_commit": "9faab66269964ab5223335448d3b4f01f1f23a3d"
+  },
+  "source_scope": "Conditional nominal model; no old ac6 recovery, no HCE or physical/display admission",
+  "historical_geometry_input_manifest": {
     "schema": 1,
     "acquired_at_utc": "2026-10-07T20:36:10.338040+00:00",
     "repository": "https://github.com/Labpics-Team/agents-config",
@@ -187,17 +200,148 @@
       }
     ]
   },
-  "private_context_excluded": [
-    "CLEANLINESS-DESIGN.md",
-    "CLEANLINESS-EVIDENCE.md",
-    "research journals",
-    "research readbacks"
-  ],
-  "independent_audits": {
-    "primary_arithmetic_base_commit": "8b00b3d90937b9e0bcf70133fc654f7cdb046513",
-    "primary_public_change": "Only archive file census158\u21929 and public acquisition subset; identical arithmetic/source checks.",
-    "bridge_commit": "c1650a8821739b8d3e850cb8576ce18558486555",
-    "join_commit": "9faab66269964ab5223335448d3b4f01f1f23a3d"
-  },
-  "source_scope": "Conditional nominal model; no old ac6 recovery, no HCE or physical/display admission"
+  "historical_upstream_geometry_verifier_sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db",
+  "source_refresh": {
+    "reason": "The real public Rust exhaustive decoding test now propagates its Result instead of unwrap; the archived snapshot honestly follows that committed source. No scanner exemption, archival byte disguise, or scientific numerical change.",
+    "prior_proof_source_commit": "0b71fd0c16a4da4c955e7dabd1096255aff9764b",
+    "historical_source_commit": "c3d24f5d43136fe5824036a1e2868e7daef09b4a",
+    "prior_public_product_commit": "97ab0c74cc3dbb5417aec4380498bbe2d90d2371",
+    "new_product_source_commit": "e579f73135d359e3d40efdf959aca7d72b600608",
+    "source_path": "crates/labcolors-core/src/spaces/srgb.rs",
+    "old_source": {
+      "sha256": "87f7d5fff7c426e40ac15d42f86798f774052f91486ae0d6c99b070ef60c77de",
+      "git_blob_sha1": "c20d8940fbb7ae8e4a987ed4d622350187479b7c"
+    },
+    "new_source": {
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf",
+      "git_blob_sha1": "a5464ccbbd1265274fc366da83cffafc4001d7df"
+    },
+    "source_origin_policy": "Historical source bytes remain publicly retrievable by the preserved product Git commits. This new snapshot is not represented as historical original bytes.",
+    "certificate_provenance": "Profile, frontier and interval JSON documents are metadata-rebound copies of upstream numerical certificates, not byte-original producer outputs. Existing computed_utc, generator/script_sha256, numpy_version and elapsed fields describe historical numerical computation; current bindings and new verifier identity are explicitly declared here.",
+    "verifier_change": "Three expected bridge SHA anchors and two historical-origin result field labels changed; arithmetic, predicates, coverage and mutations unchanged.",
+    "immutable_mathematical_payloads": [
+      "all265bridge rows including tokens/bits/dyadics/rounding certificates",
+      "421generators",
+      "35queries and positive-ray certificates",
+      "32frontier primal/dual certificates and all threshold values",
+      "fullface and endpoint primal certificates",
+      "refined corrections",
+      "all11mutation cases",
+      "allprimary source files",
+      "raw and canonical codec bytes"
+    ],
+    "metadata_change_audit": [
+      {
+        "path": "geometry/input/bridge.json",
+        "old_sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+        "new_sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab",
+        "changed_json_paths": [
+          [
+            "product_commit"
+          ],
+          [
+            "created_utc"
+          ],
+          [
+            "bindings",
+            1,
+            "sha256"
+          ],
+          [
+            "bindings",
+            1,
+            "git_blob_sha1"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/profile-candidate.json",
+        "old_sha256": "66959d07b881205361dd1ec073f8b85abb46233e5acb64295554caa609c895bf",
+        "new_sha256": "2aa2f539b5617b050c6dbe666a3e448570313c8dd00cff04705b972a749c8aff",
+        "changed_json_paths": [
+          [
+            "source_pins",
+            "bridge",
+            "archive_path"
+          ],
+          [
+            "source_pins",
+            "bridge",
+            "sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/frontier-candidate.json",
+        "old_sha256": "4c79ea932dafebaf741d295d4fe1be016ab31b5d9764a83cfbfe6b73d573a583",
+        "new_sha256": "ffe4c9094ddbc6ef54082269425285758283397bee146baccd06e94ffeb8ee20",
+        "changed_json_paths": [
+          [
+            "profile_sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-full.json",
+        "old_sha256": "01e99b20ee0a2e9fa4775d6628b8f32c3ce894e0465bb0a9ec722bc51d9393db",
+        "new_sha256": "9ffc641881229c5bddc6c725d0c79a1ff0519f681f7b832cfe686ab2edd2f626",
+        "changed_json_paths": [
+          [
+            "pins",
+            "profile"
+          ],
+          [
+            "pins",
+            "frontier"
+          ],
+          [
+            "pins",
+            "bridge"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-refined.json",
+        "old_sha256": "038452b56b381a97e16f3b025f2311d380988070323f8620f8e1cd690ab7ead5",
+        "new_sha256": "0975b7a7d386b59fe739c5de561b527201ede96939ec4af01ce0f11329e18d04",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/mutation-corpus.json",
+        "old_sha256": "32f9e8c9ca0a807ab1389901ab657da5016fbbf1ad7a44b07f23eb5f95b2ab1b",
+        "new_sha256": "ab9c0f7032f4aec1d4c79f756c54a784749aff82c3591e879ad24fe64b5f3a43",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "profile-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "frontier-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-refined.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      }
+    ],
+    "raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+    "codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+  }
 }

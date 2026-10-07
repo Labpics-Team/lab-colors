@@ -14,8 +14,8 @@
       "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df"
     },
     "bridge": {
-      "archive_path": "colors-nominal-binary64-inputs-20261002/results/BINARY64-INPUTS.json",
-      "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd"
+      "archive_path": "audits/bridge/input/bridge.json",
+      "sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab"
     },
     "witnesses": {
       "archive_path": "colors-sato-exact-witnesses-20261002/results/WITNESSES.json",
