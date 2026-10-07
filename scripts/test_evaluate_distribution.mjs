@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { buildSbom, verifyBundle } from "./evaluate-distribution.mjs";
+import { benchmarkPairWithFixtures, buildSbom, describeFixturePair, verifyBundle } from "./evaluate-distribution.mjs";
 import { licenseInventory } from "./distribution-licenses.mjs";
 
 function metadataFixture() {
@@ -27,11 +27,14 @@ function metadataFixture() {
 }
 
 function benchmarkFixture() {
-  const summary = { n: 31, minMs: 1, medianMs: 1, p95Ms: 1 };
+  const summary = { n: 31, minMs: 1, medianMs: 1, p95Ms: 1, maxMs: 1 };
   return {
-    schemaVersion: 1,
-    workload: { id: "evaluate-declared-point-cli-process-v1", measuredRounds: 31 },
-    correctness: { goodTerminalSrgb8: [128, 128, 128], rejectedExit: 4 },
+    schemaVersion: 2,
+    source: { candidate: "a".repeat(40), baseline: null },
+    workload: { id: "evaluate-declared-point-cli-process-v2", measuredRounds: 31,
+      fixtures: describeFixturePair(requestFixtures("a".repeat(40), "c".repeat(64))) },
+    correctness: { goodTerminalSrgb8: [128, 128, 128], rejectedExit: 4,
+      rejectedCode: "rejected_by_convention", crossReleaseRefusals: "not-applicable" },
     candidate: { "stdin-json": summary, "file-json": summary, "stdin-jsonl": summary },
   };
 }
@@ -135,6 +138,27 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     await writeFile(join(dir, "evaluate.benchmark.json"), JSON.stringify(benchmarkFixture()));
     await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(statement));
 
+    for (const [mutate, message] of [
+      [(benchmark) => { benchmark.workload.fixtures.candidate.good.sha256 = "0".repeat(64); }, /fixture metadata differs/],
+      [(benchmark) => { benchmark.workload.fixtures.candidate.good.bytes += 1; }, /fixture metadata differs/],
+      [(benchmark) => { benchmark.workload.fixtures.candidate.good.normalizedSha256 = "0".repeat(64); }, /fixture metadata differs/],
+      [(benchmark) => { benchmark.workload.fixtures.candidate.sourceSha = "b".repeat(40); }, /fixture source identity mismatch/],
+      [(benchmark) => { benchmark.source.baseline = "b".repeat(40); }, /fixture source identity mismatch/],
+      [(benchmark) => { benchmark.source.candidate = "b".repeat(40); }, /fixture source identity mismatch/],
+      [(benchmark) => { benchmark.correctness.crossReleaseRefusals = "unsupported_convention_release"; }, /correctness is not/],
+      [(benchmark) => { benchmark.baseline = benchmark.candidate; }, /unbound baseline measurements/],
+    ]) {
+      const benchmark = benchmarkFixture();
+      mutate(benchmark);
+      await writeFile(join(dir, "evaluate.benchmark.json"), JSON.stringify(benchmark));
+      const altered = structuredClone(statement);
+      altered.predicate.evidence.benchmark = await rec("evaluate.benchmark.json");
+      await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(altered));
+      await assert.rejects(() => verifyBundle(dir, good), message);
+    }
+    await writeFile(join(dir, "evaluate.benchmark.json"), JSON.stringify(benchmarkFixture()));
+    await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(statement));
+
     await rm(join(dir, "evaluate.intoto.json"));
     await writeFile(join(dir, "outside-attestation.json"), JSON.stringify(statement));
     await symlink(join(dir, "outside-attestation.json"), join(dir, "evaluate.intoto.json"));
@@ -189,6 +213,95 @@ test("verifier rejects tampered source identity before trusting digest metadata"
     subjectMutant.subject[0].digest.sha256 = "0".repeat(64);
     await writeFile(join(dir, "evaluate.intoto.json"), JSON.stringify(subjectMutant));
     await assert.rejects(() => verifyBundle(dir, good), /subject does not bind/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+function requestFixtures(sourceSha, release) {
+  const request = {
+    formatVersion: 1, kind: "labcolors-declared-point-request-v1", programWireHex: "aa",
+    binding: { streamId: 7 }, observation: { revision: 1 },
+    profile: { conventionReleaseSha256: release, scope: "modeled-srgb8-point",
+      admission: "declared-package-policy-candidate", human: "not-requested" },
+  };
+  return {
+    sourceSha,
+    good: Buffer.from(JSON.stringify(request)),
+    rejected: Buffer.from(JSON.stringify({ ...request, programWireHex: "bb" })),
+  };
+}
+
+test("paired workloads bind each source and allow only the declared release to differ", () => {
+  const candidate = requestFixtures("a".repeat(40), "c".repeat(64));
+  const baseline = requestFixtures("b".repeat(40), "d".repeat(64));
+  const pair = describeFixturePair(candidate, baseline);
+  assert.equal(pair.comparison, "same-requests-except-convention-release");
+  assert.equal(pair.candidate.sourceSha, candidate.sourceSha);
+  assert.equal(pair.baseline.conventionReleaseSha256, "d".repeat(64));
+  assert.equal(pair.candidate.good.utf8, candidate.good.toString());
+  assert.equal(pair.candidate.good.normalizedSha256, pair.baseline.good.normalizedSha256);
+  for (const field of ["good", "rejected"]) {
+    const mutant = { ...baseline };
+    const request = JSON.parse(mutant[field]);
+    request.binding.streamId += 1;
+    mutant[field] = Buffer.from(JSON.stringify(request));
+    assert.throws(() => describeFixturePair(candidate, mutant), /differs beyond the convention release/);
+  }
+  for (const change of [
+    (request) => ` ${request.toString()}`,
+    (request) => JSON.stringify(JSON.parse(request), null, 2),
+    (request) => JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(request)).reverse())),
+  ]) {
+    assert.throws(() => describeFixturePair(candidate, { ...baseline, good: Buffer.from(change(baseline.good)) }),
+      /differs beyond the convention release/);
+  }
+  const rejected = JSON.parse(candidate.rejected);
+  rejected.profile.conventionReleaseSha256 = "e".repeat(64);
+  assert.throws(() => describeFixturePair({ ...candidate, rejected: Buffer.from(JSON.stringify(rejected)) }, baseline), /GOOD and REJECTED release identities differ/);
+  assert.throws(() => describeFixturePair({ ...candidate, sourceSha: "HEAD" }, baseline), /full lowercase Git SHA/);
+});
+
+test("paired benchmark exercises each release and enforces typed cross-release refusals", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "labcolors-evaluate-pair-test-"));
+  try {
+    const candidate = requestFixtures("a".repeat(40), "c".repeat(64));
+    const baseline = requestFixtures("b".repeat(40), "d".repeat(64));
+    const executable = async (name, release, behavior = "correct") => {
+      const path = join(dir, name);
+      await writeFile(path, `#!${process.execPath}\n` + `
+const fs = require("node:fs");
+const input = JSON.parse(fs.readFileSync(process.argv.length === 3 ? process.argv[2] : 0, "utf8"));
+const release = ${JSON.stringify(release)};
+let code = null;
+let exit = 0;
+if (input.profile.conventionReleaseSha256 !== release) {
+  code = ${JSON.stringify(behavior === "wrong-refusal" ? "unsupported_scope" : "unsupported_convention_release")}; exit = 3;
+} else if (input.programWireHex === "bb") { code = ${JSON.stringify(behavior === "wrong-rejected" ? "materialization_not_ready" : "rejected_by_convention")}; exit = 4; }
+if (code) { process.stderr.write(JSON.stringify({formatVersion: 1, ok: false, error: {domain:"clean-convention", code}})); process.exit(exit); }
+process.stdout.write(JSON.stringify({formatVersion: 1, kind:"labcolors-declared-point-report-v1", ok:true,
+  terminalSrgb8:[128,128,128], scope:"modeled-srgb8-point", admission:"declared-package-policy-candidate",
+  human:"not-requested", rendererProvenance:"unverified", conventionReleaseSha256:release})+"\\n");
+`);
+      await chmod(path, 0o755);
+      return path;
+    };
+    const current = await executable("candidate", "c".repeat(64));
+    const old = await executable("baseline", "d".repeat(64));
+    const result = await benchmarkPairWithFixtures(current, old, candidate, baseline);
+    assert.equal(result.schemaVersion, 2);
+    assert.equal(result.correctness.crossReleaseRefusals, "unsupported_convention_release");
+    assert.equal(result.baseline["stdin-json"].n, 31);
+    assert.ok(result.pairedRatios["stdin-json"] > 0);
+    const sameRelease = await benchmarkPairWithFixtures(current, current, candidate,
+      requestFixtures("b".repeat(40), "c".repeat(64)));
+    assert.equal(sameRelease.correctness.crossReleaseRefusals, "not-applicable");
+    const rejectedWrong = await executable("wrong-rejected", "d".repeat(64), "wrong-rejected");
+    await assert.rejects(() => benchmarkPairWithFixtures(current, rejectedWrong, candidate, baseline), /rejected_by_convention/);
+    const wrong = await executable("wrong", "d".repeat(64), "wrong-refusal");
+    await assert.rejects(() => benchmarkPairWithFixtures(current, wrong, candidate, baseline), /unsupported_convention_release/);
+    await assert.rejects(() => benchmarkPairWithFixtures(current, old, candidate, null), /baseline binary and fixtures must be provided together/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -17,7 +17,7 @@ fn profile() -> PointQualityProfileV1 {
             CleanConventionScopeV1::ModeledSrgb8Point,
             CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
         )
-        .unwrap(),
+        .expect("the packaged nominal release must admit its declared modeled-point profile"),
     )
 }
 fn attachment() -> ProgramAttachmentV1<Host> {
