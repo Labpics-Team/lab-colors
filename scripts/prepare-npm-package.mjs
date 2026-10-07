@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { atomicWriteGeneratedFile } from "./atomic-write.mjs";
-import { workspaceVersion } from "./cargo-workspace.mjs";
+import { packageLicense, workspaceVersion } from "./cargo-workspace.mjs";
 import {
   NUMERICAL_EVIDENCE_FILES,
   assertPackageEvidenceInventory,
@@ -16,7 +16,6 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 export const PACKAGE_DIR = resolve(REPO_ROOT, "packages/colors");
 
-const SOURCE_LICENSE = resolve(REPO_ROOT, "LICENSE");
 const PACKED_LICENSE = resolve(PACKAGE_DIR, "LICENSE");
 const PACKED_NPM_IGNORE = resolve(PACKAGE_DIR, "pkg/.npmignore");
 const BUILD_METADATA = resolve(PACKAGE_DIR, "build-metadata.json");
@@ -28,6 +27,41 @@ const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_FILES = ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"];
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+// Файлы для потребителя берутся у владельца встроенных данных.
+export const PACKAGE_LICENSE_SOURCES = Object.freeze({
+  LICENSE: "LICENSE",
+  "NOTICE.md": "crates/labcolors-core/NOTICE.md",
+  "LICENSES/CC-BY-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
+  "LICENSES/CC-BY-SA-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
+});
+
+export async function packageLicenseInputs(packageJson, sourceRoot = REPO_ROOT) {
+  const expression = packageLicense(await readFile(resolve(sourceRoot,
+    "crates/labcolors-core/Cargo.toml"), "utf8"));
+  if (packageJson.license !== expression) {
+    throw new Error("npm license must match the embedded Core data license expression");
+  }
+  return Promise.all(Object.entries(PACKAGE_LICENSE_SOURCES).map(async ([path, source]) => {
+    if (!Array.isArray(packageJson.files) ||
+        packageJson.files.filter((entry) => entry === path).length !== 1) {
+      throw new Error(`npm files must include exactly one ${path}`);
+    }
+    const bytes = await readFile(resolve(sourceRoot, source));
+    if (bytes.length === 0) throw new Error(`canonical license is empty: ${source}`);
+    return { path, bytes };
+  }));
+}
+
+export async function verifyPackageLicenses(packageDirectory, sourceRoot = REPO_ROOT) {
+  const packageJson = JSON.parse(await readFile(resolve(packageDirectory, "package.json"), "utf8"));
+  const inputs = await packageLicenseInputs(packageJson, sourceRoot);
+  for (const { path, bytes } of inputs) {
+    if (!(await readFile(resolve(packageDirectory, path))).equals(bytes)) {
+      throw new Error(`packed license differs from canonical source: ${path}`);
+    }
+  }
+}
 
 function git(args) {
   return execFileSync("git", args, {
@@ -61,33 +95,23 @@ export function verifiedSourceSha() {
 }
 
 /**
- * Copy the repository's canonical licence into the npm package atomically.
- *
- * `packages/colors/LICENSE` is a generated packing input, not a second source of
- * truth. The operation deliberately fails when the root licence is absent or
- * empty: publishing an unlicensed tarball is not a recoverable condition.
+ * Подготовить пакет с исходными лицензиями кода и встроенных данных.
+ * Канонические материалы проверяются до первой записи в каталог пакета.
  */
 export async function prepareNpmPackage() {
   // Must precede even generated/ignored writes. A rejected call leaves no new
   // metadata that could later be packed as if it described the current source.
   const sourceSha = verifiedSourceSha();
-  const [canonical, packageJsonSource] = await Promise.all([
-    readFile(SOURCE_LICENSE),
-    readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"),
-  ]);
-  const packageJson = JSON.parse(packageJsonSource);
+  const packageJson = JSON.parse(await readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"));
   assertPackageEvidenceInventory(packageJson.files);
-  if (canonical.length === 0) {
-    throw new Error(`canonical licence is empty: ${SOURCE_LICENSE}`);
-  }
+  const licenses = await packageLicenseInputs(packageJson);
 
-  await mkdir(PACKAGE_DIR, { recursive: true });
-  await atomicWriteGeneratedFile(PACKED_LICENSE, canonical);
-
-  const copied = await readFile(PACKED_LICENSE);
-  if (!copied.equals(canonical)) {
-    throw new Error("generated npm LICENSE differs from the canonical root LICENSE");
+  for (const { path, bytes } of licenses) {
+    const destination = resolve(PACKAGE_DIR, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await atomicWriteGeneratedFile(destination, bytes);
   }
+  await verifyPackageLicenses(PACKAGE_DIR);
 
   await mkdir(PACKED_NUMERICAL_EVIDENCE_DIR, { recursive: true });
   for (const file of NUMERICAL_EVIDENCE_FILES) {
