@@ -1,6 +1,6 @@
 use super::*;
 use crate::authority::test_support::{Host, point_attachment_for, point_wire};
-use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1 as RELEASE;
+use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2 as RELEASE;
 use crate::program_wire::{ProgramScenarioV1, compile_program_wire_v1};
 
 fn ready(source: [u8; 3], background: [u8; 3], expected: [u8; 3]) -> ProgramAttachmentV1<Host> {

@@ -1,0 +1,1638 @@
+{
+  "schema": "sato-exact-cohort-means/1",
+  "rule": "equal participant weights within each separate cohort",
+  "rows": [
+    {
+      "CohortId": "NTF",
+      "StimulusId": 0,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 367,
+        "denominator": 100
+      },
+      "mean_minus_midpoint": {
+        "numerator": -133,
+        "denominator": 100
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 1,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1473,
+        "denominator": 500
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1027,
+        "denominator": 500
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 2,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2239,
+        "denominator": 400
+      },
+      "mean_minus_midpoint": {
+        "numerator": 239,
+        "denominator": 400
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 3,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7113,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 2113,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 4,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 219,
+        "denominator": 80
+      },
+      "mean_minus_midpoint": {
+        "numerator": -181,
+        "denominator": 80
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 5,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 418,
+        "denominator": 125
+      },
+      "mean_minus_midpoint": {
+        "numerator": -207,
+        "denominator": 125
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 6,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 6249,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1249,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 7,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 18309,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 8309,
+        "denominator": 2000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 8,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1061,
+        "denominator": 400
+      },
+      "mean_minus_midpoint": {
+        "numerator": -939,
+        "denominator": 400
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 9,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1173,
+        "denominator": 400
+      },
+      "mean_minus_midpoint": {
+        "numerator": -827,
+        "denominator": 400
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 10,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 643,
+        "denominator": 100
+      },
+      "mean_minus_midpoint": {
+        "numerator": 143,
+        "denominator": 100
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 11,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 8993,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 3993,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 12,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 9007,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": -993,
+        "denominator": 2000
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 13,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 5623,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": -4377,
+        "denominator": 2000
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 14,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7257,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 2257,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 15,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 657,
+        "denominator": 80
+      },
+      "mean_minus_midpoint": {
+        "numerator": 257,
+        "denominator": 80
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 16,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 458,
+        "denominator": 125
+      },
+      "mean_minus_midpoint": {
+        "numerator": -167,
+        "denominator": 125
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 17,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 5411,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": -4589,
+        "denominator": 2000
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 18,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 5887,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 887,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 19,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1397,
+        "denominator": 200
+      },
+      "mean_minus_midpoint": {
+        "numerator": 397,
+        "denominator": 200
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 20,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 997,
+        "denominator": 500
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1503,
+        "denominator": 500
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 21,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 91,
+        "denominator": 50
+      },
+      "mean_minus_midpoint": {
+        "numerator": -159,
+        "denominator": 50
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 22,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2159,
+        "denominator": 400
+      },
+      "mean_minus_midpoint": {
+        "numerator": 159,
+        "denominator": 400
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 23,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 14161,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 4161,
+        "denominator": 2000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 24,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2127,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2873,
+        "denominator": 1000
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 25,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 304,
+        "denominator": 125
+      },
+      "mean_minus_midpoint": {
+        "numerator": -321,
+        "denominator": 125
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 26,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 11281,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1281,
+        "denominator": 2000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 27,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 6987,
+        "denominator": 1000
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1987,
+        "denominator": 1000
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 28,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2411,
+        "denominator": 400
+      },
+      "mean_minus_midpoint": {
+        "numerator": 411,
+        "denominator": 400
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 29,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7617,
+        "denominator": 2000
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2383,
+        "denominator": 2000
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 30,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1623,
+        "denominator": 250
+      },
+      "mean_minus_midpoint": {
+        "numerator": 373,
+        "denominator": 250
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTF",
+      "StimulusId": 31,
+      "participant_count": 10,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1871,
+        "denominator": 250
+      },
+      "mean_minus_midpoint": {
+        "numerator": 621,
+        "denominator": 250
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 0,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2293,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -957,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 1,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1927,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1323,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 2,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 13523,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 523,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 3,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 17403,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 4403,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 4,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3733,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2767,
+        "denominator": 1300
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 5,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1557,
+        "denominator": 520
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1043,
+        "denominator": 520
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 6,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7591,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1091,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 7,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 5493,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": 2243,
+        "denominator": 650
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 8,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3409,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": -3091,
+        "denominator": 1300
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 9,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 277,
+        "denominator": 104
+      },
+      "mean_minus_midpoint": {
+        "numerator": -243,
+        "denominator": 104
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 10,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1471,
+        "denominator": 260
+      },
+      "mean_minus_midpoint": {
+        "numerator": 171,
+        "denominator": 260
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 11,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 21417,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 8417,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 12,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2729,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -521,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 13,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7741,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -5259,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 14,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 15819,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 2819,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 15,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 19107,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 6107,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 16,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10229,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2771,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 17,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 9343,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -3657,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 18,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 15051,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 2051,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 19,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 4089,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": 839,
+        "denominator": 650
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 20,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7893,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -5107,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 21,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 8091,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -4909,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 22,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 13801,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 801,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 23,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 8117,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1617,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 24,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3903,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2597,
+        "denominator": 1300
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 25,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 6943,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -6057,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 26,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 12527,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -473,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 27,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2116,
+        "denominator": 325
+      },
+      "mean_minus_midpoint": {
+        "numerator": 491,
+        "denominator": 325
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 28,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3823,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": 573,
+        "denominator": 650
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 29,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2957,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -293,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 30,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7871,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1371,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "NTM",
+      "StimulusId": 31,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 9917,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 3417,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 0,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 11779,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1221,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 1,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10697,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2303,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 2,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1409,
+        "denominator": 260
+      },
+      "mean_minus_midpoint": {
+        "numerator": 109,
+        "denominator": 260
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 3,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1461,
+        "denominator": 200
+      },
+      "mean_minus_midpoint": {
+        "numerator": 461,
+        "denominator": 200
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 4,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10871,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2129,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 5,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2233,
+        "denominator": 520
+      },
+      "mean_minus_midpoint": {
+        "numerator": -367,
+        "denominator": 520
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 6,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 7191,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 691,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 7,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 893,
+        "denominator": 130
+      },
+      "mean_minus_midpoint": {
+        "numerator": 243,
+        "denominator": 130
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 8,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 1007,
+        "denominator": 325
+      },
+      "mean_minus_midpoint": {
+        "numerator": -618,
+        "denominator": 325
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 9,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 4447,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2053,
+        "denominator": 1300
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 10,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3137,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -113,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 11,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 18099,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 5099,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 12,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10613,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2387,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 13,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 8861,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -4139,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 14,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 6603,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 103,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 15,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 16181,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 3181,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 16,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10081,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2919,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 17,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 9271,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -3729,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 18,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3069,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -181,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 19,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 13837,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 837,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 20,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 5763,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": -737,
+        "denominator": 1300
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 21,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 27,
+        "denominator": 8
+      },
+      "mean_minus_midpoint": {
+        "numerator": -13,
+        "denominator": 8
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 22,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 13991,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 991,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 23,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 3007,
+        "denominator": 520
+      },
+      "mean_minus_midpoint": {
+        "numerator": 407,
+        "denominator": 520
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 24,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2187,
+        "denominator": 650
+      },
+      "mean_minus_midpoint": {
+        "numerator": -1063,
+        "denominator": 650
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 25,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 6543,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -6457,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 26,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 13579,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 579,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 27,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 17351,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": 4351,
+        "denominator": 2600
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 28,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 2861,
+        "denominator": 520
+      },
+      "mean_minus_midpoint": {
+        "numerator": 261,
+        "denominator": 520
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 29,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 10687,
+        "denominator": 2600
+      },
+      "mean_minus_midpoint": {
+        "numerator": -2313,
+        "denominator": 2600
+      },
+      "relation_to_5": "<",
+      "non_clean_canonical_ge_5": false,
+      "non_clean_sensitivity_gt_5": false
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 30,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 8147,
+        "denominator": 1300
+      },
+      "mean_minus_midpoint": {
+        "numerator": 1647,
+        "denominator": 1300
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    },
+    {
+      "CohortId": "CVD",
+      "StimulusId": 31,
+      "participant_count": 13,
+      "session_count_each": 2,
+      "mean": {
+        "numerator": 162,
+        "denominator": 25
+      },
+      "mean_minus_midpoint": {
+        "numerator": 37,
+        "denominator": 25
+      },
+      "relation_to_5": ">",
+      "non_clean_canonical_ge_5": true,
+      "non_clean_sensitivity_gt_5": true
+    }
+  ]
+}

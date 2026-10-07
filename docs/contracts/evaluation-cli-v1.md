@@ -53,7 +53,9 @@
 фиксируется в примере и сверяется с тем же каноническим сериализатором в тесте.
 Граф: source `[128,128,129]`, opacity `0.5`, один surface input и source-over
 occurrence; фон `[128,128,127]`, объявленное ограничение final `[128,128,128]`.
-Выбран существующий выпуск конвенции `67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6`.
+Выбран выпуск `exact-nominal-srgb8-point-clean-set-v2` с SHA-256
+`49a1001f44572ee32f53288a64104c99285233b2d6a1f3347a17490a3189f89e`.
+Старый выпуск v1 возвращает `unsupported_convention_release`; он не перенаправляется на новый набор.
 Этот пример проверяет подготовку входа, не заменяет независимый oracle цветовой
 математики. Одна команда `cargo run --quiet --locked -p labcolors-evaluate-cli --
 crates/labcolors-evaluate-cli/examples/declared-point.json` должна вернуть

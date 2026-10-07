@@ -1,0 +1,335 @@
+{
+  "schema": "lab-colors-public-nominal-proof/1",
+  "files": [
+    {
+      "path": "LICENSES/CC-BY-4.0.txt",
+      "role": "license-text",
+      "bytes": 18657,
+      "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+      "license": "LicenseRef-License-Text"
+    },
+    {
+      "path": "LICENSES/CC-BY-SA-4.0.txt",
+      "role": "license-text",
+      "bytes": 20138,
+      "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+      "license": "LicenseRef-License-Text"
+    },
+    {
+      "path": "LICENSES/MIT.txt",
+      "role": "license-text",
+      "bytes": 1064,
+      "sha256": "37ffb21a9e03804a978f4203134bf7a2088864b3dd3c0c5ee3809a3a99391c4b",
+      "license": "LicenseRef-License-Text"
+    },
+    {
+      "path": "NOMINAL-SPEC.md",
+      "role": "model-specification-and-attribution",
+      "bytes": 10460,
+      "sha256": "384f5b40dec9bd2fbafdf1406cffb003f39cf084b4d6f3ddef5748a5a553ad0f",
+      "license": "MIT"
+    },
+    {
+      "path": "NOTICE.md",
+      "role": "model-specification-and-attribution",
+      "bytes": 2545,
+      "sha256": "3d1e15a399f3065539fb50c49fe9002e9d6b486b8c764ddb9b7eafbddb6acc27",
+      "license": "MIT"
+    },
+    {
+      "path": "SOURCE-PROVENANCE.json",
+      "role": "source-provenance",
+      "bytes": 10615,
+      "sha256": "e7df549b3420ed8a4663c93d8601288343351cb47865b4bdea05b3af93ac638e",
+      "license": "MIT"
+    },
+    {
+      "path": "audit_primary_inputs.py",
+      "role": "executable-verifier",
+      "bytes": 11600,
+      "sha256": "1e0f47a8a54386e9ae91a49f6be9dfa424aefe8d6bd60368c06c944f05b27147",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/bridge/audit_bridge.py",
+      "role": "executable-verifier",
+      "bytes": 3906,
+      "sha256": "6026eb6fbefd7024e66b91c19fd918ae3f0529f0622d9aa757d3f38d70a14468",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/bridge/input/bridge.json",
+      "role": "nominal-bridge-source",
+      "bytes": 253299,
+      "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/bridge/input/gamma_data.rs",
+      "role": "nominal-bridge-source",
+      "bytes": 6012,
+      "sha256": "3993db8120865c7e73576e731fba7279e59b23a1b4c1c29572143b2cb141c678",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/bridge/input/srgb.rs",
+      "role": "nominal-bridge-source",
+      "bytes": 21906,
+      "sha256": "87f7d5fff7c426e40ac15d42f86798f774052f91486ae0d6c99b070ef60c77de",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/join/audit_join.py",
+      "role": "executable-verifier",
+      "bytes": 8670,
+      "sha256": "dbe14dfe9002bc64fb5b230389369041d57d251d54e92f21791b064563b09526",
+      "license": "MIT"
+    },
+    {
+      "path": "audits/join/input/STIMULUS-JOIN.json",
+      "role": "proof-input",
+      "bytes": 8416,
+      "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "audits/join/input/article.xml",
+      "role": "proof-input",
+      "bytes": 219103,
+      "sha256": "c151b4cc941299a493e3fd3e6b4ef88c34b7bc3566e74a9860dcab94dbdd44d4",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "audits/join/input/original-sato-data.zip",
+      "role": "proof-input",
+      "bytes": 237236,
+      "sha256": "22cdecae96e9fd2b1af1f09a4c4358cbacefb12cee82d7fa5374fcfe2ed8edad",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "compare_finite_tables.py",
+      "role": "executable-verifier",
+      "bytes": 5046,
+      "sha256": "e819ec56974eadc76aa2112a73b8093d2ec74eb0bb9238be22b331486c4ac7e1",
+      "license": "MIT"
+    },
+    {
+      "path": "derived/new-column-rle.bin",
+      "role": "canonical-runtime-codec",
+      "bytes": 11280,
+      "sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/bridge.json",
+      "role": "proof-input",
+      "bytes": 253299,
+      "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/cie-cmf.csv",
+      "role": "proof-input",
+      "bytes": 24021,
+      "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/cie-d65.csv",
+      "role": "proof-input",
+      "bytes": 6820,
+      "sha256": "e76f210bffff3d552ef7113025da5f325d5dfec200dd4b878b1a2f3a507032cb",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/frontier-candidate.json",
+      "role": "proof-input",
+      "bytes": 1511089,
+      "sha256": "4c79ea932dafebaf741d295d4fe1be016ab31b5d9764a83cfbfe6b73d573a583",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-full-faces.bin",
+      "role": "proof-input",
+      "bytes": 524288,
+      "sha256": "00853fee07c6aa6db44a44cd40b3c7f4383305df2297e89584c22900ed2e56f8",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-full-primal.jsonl.gz",
+      "role": "proof-input",
+      "bytes": 14521765,
+      "sha256": "39f264c825886d38885ba6215861bf909a228668f5de204bc47633959d4546b9",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-full.json",
+      "role": "proof-input",
+      "bytes": 1884826,
+      "sha256": "01e99b20ee0a2e9fa4775d6628b8f32c3ce894e0465bb0a9ec722bc51d9393db",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-full.raw",
+      "role": "proof-input",
+      "bytes": 131072,
+      "sha256": "fed4c4454ded379479f0f8991c826a2dd1176d647b12250f74bb6bc28d8eb476",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-refined.json",
+      "role": "proof-input",
+      "bytes": 38818,
+      "sha256": "038452b56b381a97e16f3b025f2311d380988070323f8620f8e1cd690ab7ead5",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/intervals-refined.raw",
+      "role": "canonical-raw-table",
+      "bytes": 131072,
+      "sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/join.json",
+      "role": "proof-input",
+      "bytes": 8416,
+      "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/mutation-corpus.json",
+      "role": "proof-input",
+      "bytes": 7977,
+      "sha256": "32f9e8c9ca0a807ab1389901ab657da5016fbbf1ad7a44b07f23eb5f95b2ab1b",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/profile-candidate.json",
+      "role": "proof-input",
+      "bytes": 183706,
+      "sha256": "66959d07b881205361dd1ec073f8b85abb46233e5acb64295554caa609c895bf",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/input/witnesses.json",
+      "role": "proof-input",
+      "bytes": 19777,
+      "sha256": "31a98acd8a180a852c238ab3ad1aaa3f67050da950c79d849ebe58cb8f67465b",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "geometry/verify_exact_v2.py",
+      "role": "executable-verifier",
+      "bytes": 18964,
+      "sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db",
+      "license": "MIT"
+    },
+    {
+      "path": "historical-v1/DELTA.json",
+      "role": "historical-output-comparison",
+      "bytes": 4233,
+      "sha256": "b4e4670998717659bcd95478e4a0ff752527bd8357345adf470066474d664f05",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "historical-v1/PIN.json",
+      "role": "historical-output-comparison",
+      "bytes": 727,
+      "sha256": "8512dfc3865560e239ebe95235b75db05aa1bc7369e8816be5a9698993bdd9a6",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "historical-v1/old-column-rle.bin",
+      "role": "historical-output-comparison",
+      "bytes": 11370,
+      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331",
+      "license": "CC-BY-4.0 AND CC-BY-SA-4.0"
+    },
+    {
+      "path": "primary/ACQUISITION.json",
+      "role": "sato-primary-source",
+      "bytes": 2649,
+      "sha256": "9b34dbffe0b530c099bdceef37c5eccda2ffe633492a7668a886adda4f5762cd",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "primary/colors-nominal-model-input-closure-20261002/primary/cie-cmf-metadata.json",
+      "role": "cie-primary-source",
+      "bytes": 3787,
+      "sha256": "03abcaecf4e63d77045ef57c4514b52c8bb1a46dd18e1f93a50044a0f4f481c8",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "path": "primary/colors-nominal-model-input-closure-20261002/primary/cie-cmf.csv",
+      "role": "cie-primary-source",
+      "bytes": 24021,
+      "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "path": "primary/colors-nominal-model-input-closure-20261002/primary/cie-d65-metadata.json",
+      "role": "cie-primary-source",
+      "bytes": 2577,
+      "sha256": "71994379b81c65db111f652e747a00b599b5456c2a8242e9a0d6f379f560a14e",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "path": "primary/colors-nominal-model-input-closure-20261002/primary/cie-d65.csv",
+      "role": "cie-primary-source",
+      "bytes": 6820,
+      "sha256": "e76f210bffff3d552ef7113025da5f325d5dfec200dd4b878b1a2f3a507032cb",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "path": "primary/colors-sato-exact-witnesses-20261002/results/COHORT-MEANS.json",
+      "role": "sato-primary-source",
+      "bytes": 39276,
+      "sha256": "b4c3f511f144cb7010898fcaec31549812c023acd02d210ae225483e43f68a0b",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "primary/colors-sato-input-identity-20261002/STIMULUS-JOIN.json",
+      "role": "sato-primary-source",
+      "bytes": 8416,
+      "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "primary/colors-sato-input-identity-20261002/primary/TableS1.docx",
+      "role": "sato-primary-source",
+      "bytes": 14965,
+      "sha256": "e09557fe44fd63ef4fb1995db19ce62e9b0c0fecb27d7c8aee1507adec36301d",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "primary/colors-sato-input-identity-20261002/primary/article.xml",
+      "role": "sato-primary-source",
+      "bytes": 219103,
+      "sha256": "c151b4cc941299a493e3fd3e6b4ef88c34b7bc3566e74a9860dcab94dbdd44d4",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "primary/colors-sato-input-identity-20261002/primary/original-sato-data.zip",
+      "role": "sato-primary-source",
+      "bytes": 237236,
+      "sha256": "22cdecae96e9fd2b1af1f09a4c4358cbacefb12cee82d7fa5374fcfe2ed8edad",
+      "license": "CC-BY-4.0"
+    },
+    {
+      "path": "verify_bundle.py",
+      "role": "executable-verifier",
+      "bytes": 7479,
+      "sha256": "cfe64299b2fcf897faa6da2cda2533ca4467a7f6d11a1a7373301c28f23d7f6e",
+      "license": "MIT"
+    }
+  ],
+  "limits": [
+    "DeclaredPackagePolicyCandidate; ModeledSrgb8Point only",
+    "Source column semantics are supported assumptions, not an explicit author codebook",
+    "Stimulus association conditional on disclosed naming constraints; full published Table3 conflict preserved",
+    "Discrete421-point360..780nm nominal model; no continuous-spectrum or measurement enclosure claim",
+    "Posthoc source-derived threshold; no independent holdout or human/physical/display validation",
+    "No HCE, renderer, production admission, or recovery/equivalence of old ac6 derivation"
+  ]
+}

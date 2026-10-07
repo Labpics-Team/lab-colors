@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Офлайн-верификатор точного product receipt для clean-set sRGB8.
 
-Receipt намеренно вынесен из исследовательского репозитория: он связывает один
-source-cone продукта с неизменяемым исследовательским коммитом, не копируя в
-продукт исходную таблицу, сертификаты, датасеты и исследовательские программы.
+Квитанция связывает один source-cone продукта с новым научным выпуском. Его
+минимальная публичная proof capsule поставляется вместе с исходниками: полное
+воспроизведение не требует частного репозитория, сети или чужого checkout.
+Режим product проверяет идентичности; full действительно исполняет доказательство.
 """
 
 from __future__ import annotations
@@ -16,30 +17,37 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
 
-RECEIPT_PATH = "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.json"
-RECEIPT_PIN_PATH = "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256"
+RECEIPT_PATH = "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.json"
+RECEIPT_PIN_PATH = "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.sha256"
 CODEC_PATH = (
-    "crates/labcolors-core/contracts/clean-set-srgb8-v1/"
+    "crates/labcolors-core/contracts/clean-set-srgb8-v2/"
     "point-clean-set-srgb8-column-rle-v1.bin"
 )
-RESEARCH_RELEASE_PATH = "evidence/point-clean-set-srgb8/release-v1.json"
-RESEARCH_COMMIT = "ac6d9654fc722334d8bc2054afb903770f2aad80"
+CAPSULE_PATH = "proof/clean-set-srgb8/v2"
+RELEASE_PATH = f"{CAPSULE_PATH}/release-v2.json"
+RESEARCH_REPOSITORY = "https://github.com/Labpics-Team/agents-config"
+RESEARCH_CAPSULE_PATH = (
+    "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule"
+)
+RESEARCH_RELEASE_PATH = f"{RESEARCH_CAPSULE_PATH}/release-v2.json"
+RESEARCH_COMMIT = "0b71fd0c16a4da4c955e7dabd1096255aff9764b"
 RESEARCH_RELEASE_SHA256 = (
-    "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6"
+    "49a1001f44572ee32f53288a64104c99285233b2d6a1f3347a17490a3189f89e"
 )
 
-RELEASE_ID = "exact-nominal-srgb8-point-clean-set-v1"
-RECEIPT_SCHEMA = "labcolors-exact-point-clean-set-product-receipt/1"
+RELEASE_ID = "exact-nominal-srgb8-point-clean-set-v2"
+RECEIPT_SCHEMA = "labcolors-exact-point-clean-set-product-receipt/2"
 CORE_LICENSE_EXPRESSION = "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0"
 DATA_LICENSE_EXPRESSION = "CC-BY-4.0 AND CC-BY-SA-4.0"
 
-CODEC_SHA256 = "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
-RAW_SHA256 = "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2"
+CODEC_SHA256 = "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+RAW_SHA256 = "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e"
 CODEC_HEADER = b"LPCC\x01\x01\x00\x00"
 # LPCC v1 связывает 256 green-колонок конечным смещением и трёхбайтовыми
 # записями; эти величины меняются только вместе с версией формата в заголовке.
@@ -47,11 +55,11 @@ CODEC_INDEX_ENTRIES = 256 + 1
 CODEC_INDEX_ENTRY_BYTES = 2
 CODEC_RECORD_BYTES = 3
 CODEC_BODY_OFFSET = len(CODEC_HEADER) + CODEC_INDEX_ENTRIES * CODEC_INDEX_ENTRY_BYTES
-CODEC_BYTES = 11_370
-CODEC_RECORDS = 3_616
+CODEC_BYTES = 11_280
+CODEC_RECORDS = 3_586
 RAW_BYTES = 131_072
 DOMAIN_POINTS = 16_777_216
-ACCEPTED_POINTS = 8_232_849
+ACCEPTED_POINTS = 8_342_111
 
 # Здесь Git читает только локальные неизменяемые объекты. 30 секунд — принятый
 # операционный предел быстрого отказа, а не замер скорости; менять его следует
@@ -63,6 +71,10 @@ EXCLUDED_CLAIMS = (
     "chromatic adaptation",
     "physical applicability of object-colour geometry to self-luminous display",
     "human cleanliness law or population guarantee",
+    "continuous-spectrum or full CIE wavelength-range theorem",
+    "published measurement-error enclosure for printed xyY values",
+    "unconditional raw-column interpretation or stimulus identity",
+    "independent human holdout validation of the fitted frontier",
 )
 
 # Первый точный product receipt намеренно связывает файлы целиком. После
@@ -88,6 +100,8 @@ PRODUCT_ARTIFACT_PATHS = {
     "runtime_codec": CODEC_PATH,
     "session_runtime_source": "crates/labcolors-core/src/session.rs",
     "signal_transport_source": "crates/labcolors-core/src/lcs_occurrence.rs",
+    "srgb_decode_source": "crates/labcolors-core/src/spaces/srgb/gamma_data.rs",
+    "srgb_matrix_source": "crates/labcolors-core/src/spaces/srgb.rs",
     "srgb8_source": "crates/labcolors-core/src/srgb8.rs",
     "verifier_source": "scripts/verify_clean_set_receipt.py",
     "verifier_tests": "scripts/test_verify_clean_set_receipt.py",
@@ -106,21 +120,15 @@ LEGAL_FILE_PATHS = {
     "mit_text": "LICENSE",
 }
 
-RESEARCH_ARTIFACT_LICENSES = {
-    "semantic_profile": "CC-BY-SA-4.0",
-    "policy_frontier": "CC-BY-SA-4.0",
-    "cie_1931_2deg_source": "CC-BY-SA-4.0",
-    "cie_d65_source": "CC-BY-SA-4.0",
-    "canonical_raw_table": "CC-BY-SA-4.0",
-    "runtime_codec_table": "CC-BY-SA-4.0",
-    "boundary_certificates": "CC-BY-SA-4.0",
-    "proof": "CC-BY-SA-4.0",
-    "generator": "MIT",
-    "generator_cie_reader": "MIT",
-    "independent_verifier": "MIT",
-    "verifier_cie_reader": "MIT",
-    "data_notice": "CC-BY-SA-4.0",
-}
+# The source release binds this complete public, offline proof capsule. These are
+# format limits, not numerical tolerances. They allow fail-closed input handling
+# before any archived verifier executes.
+CAPSULE_FILE_LIMIT = 128
+CAPSULE_FILE_BYTES_LIMIT = 32 * 1024 * 1024
+CAPSULE_TOTAL_BYTES_LIMIT = 64 * 1024 * 1024
+CAPSULE_REPLAY_TIMEOUT_SECONDS = 1200
+CAPSULE_LICENSES = {"MIT", "CC-BY-4.0", "CC-BY-SA-4.0", DATA_LICENSE_EXPRESSION, "LicenseRef-License-Text"}
+OLD_RELEASE_SHA256 = "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6"
 
 NOTICE_TOKENS = (
     "10.7717/peerj.2751",
@@ -258,7 +266,9 @@ def _portable_path(value: Any, label: str) -> str:
     return value
 
 
-def _read_regular_file_once(root: Path, relative_path: str, label: str) -> bytes:
+def _read_regular_file_once(
+    root: Path, relative_path: str, label: str, *, maximum_bytes: int | None = None,
+) -> bytes:
     path_text = _portable_path(relative_path, label)
     try:
         canonical_root = root.resolve(strict=True)
@@ -281,8 +291,12 @@ def _read_regular_file_once(root: Path, relative_path: str, label: str) -> bytes
         mode = current.stat().st_mode
         if not stat.S_ISREG(mode):
             _fail(f"{label} is not a regular file: {path_text}")
+        if maximum_bytes is not None and current.stat().st_size > maximum_bytes:
+            _fail(f"{label} exceeds its bounded size")
         with current.open("rb") as source:
-            data = source.read()
+            data = source.read() if maximum_bytes is None else source.read(maximum_bytes + 1)
+        if maximum_bytes is not None and len(data) > maximum_bytes:
+            _fail(f"{label} exceeds its bounded size")
     except OSError as error:
         _fail(f"{label} cannot be read: {error}")
     if not data:
@@ -333,9 +347,9 @@ def _parse_receipt_pin(data: bytes, label: str) -> str:
         source = data.decode("ascii", errors="strict")
     except UnicodeError as error:
         _fail(f"{label} is not ASCII: {error}")
-    expected_suffix = "  receipt-v1.json\n"
+    expected_suffix = "  receipt-v2.json\n"
     if not source.endswith(expected_suffix):
-        _fail(f"{label} must name receipt-v1.json with one terminal LF")
+        _fail(f"{label} must name receipt-v2.json with one terminal LF")
     digest = source[: -len(expected_suffix)]
     return _sha256_string(digest, f"{label} digest")
 
@@ -469,199 +483,126 @@ def _git_blob(root: Path, commit: str, path: str, label: str) -> bytes:
     return _git(root, ["cat-file", "blob", f"{commit}:{relative}"], label)
 
 
-def _verify_research(
-    research_root: Path,
-    research: Any,
+def _verify_capsule(
+    product: Path,
     runtime: dict[str, Any],
     product_codec: bytes,
     policy: VerifierPolicy,
-) -> None:
-    value = _exact_keys(
-        research,
-        ("commit", "object_format", "release_path", "release_sha256"),
-        "receipt.research",
-    )
-    commit = value["commit"]
-    if type(commit) is not str or GIT_SHA1_RE.fullmatch(commit) is None:
-        _fail("receipt research commit must be one lower-case 40-hex Git commit")
-    if commit != policy.research_commit:
-        _fail("receipt research commit differs from the admitted immutable commit")
-    _exact_string(value["object_format"], "sha1", "receipt.research.object_format")
-    _exact_string(value["release_path"], RESEARCH_RELEASE_PATH, "receipt.research.release_path")
-    _exact_string(
-        value["release_sha256"],
-        policy.research_release_sha256,
-        "receipt.research.release_sha256",
-    )
-
-    object_type = _git(research_root, ["cat-file", "-t", commit], "research commit").strip()
-    if object_type != b"commit":
-        _fail("receipt research commit does not name a commit object")
-    peeled = _git(
-        research_root,
-        ["rev-parse", "--verify", f"{commit}^{{commit}}"],
-        "research commit",
-    ).decode("ascii", errors="strict").strip()
-    if peeled != commit:
-        _fail("receipt research commit does not resolve to its exact object identity")
-
-    release_bytes = _git_blob(research_root, commit, RESEARCH_RELEASE_PATH, "research release")
+) -> dict[str, bytes]:
+    release_bytes = _read_regular_file_once(product, RELEASE_PATH, "scientific release", maximum_bytes=65536)
     if sha256(release_bytes) != policy.research_release_sha256:
-        _fail("research release blob differs from the admitted release SHA-256")
+        _fail("scientific release differs from the admitted release SHA-256")
     release = _exact_keys(
-        _parse_json(release_bytes, "research release", canonical=False),
-        ("artifacts", "bundle_root", "codec_id", "encoding_id", "license", "release_id", "schema"),
-        "research release",
+        _parse_json(release_bytes, "scientific release", canonical=True),
+        ("admission", "excluded_claims", "proof_capsule", "release_id", "runtime_contract", "schema", "supersedes"),
+        "scientific release",
     )
-    _exact_string(
-        release["bundle_root"],
-        "cleanliness-repository-v1",
-        "research release.bundle_root",
-    )
-    _exact_string(release["codec_id"], runtime["codec"]["id"], "research release.codec_id")
-    _exact_string(release["encoding_id"], runtime["raw"]["id"], "research release.encoding_id")
-    _exact_string(release["license"], "CC-BY-SA-4.0", "research release.license")
-    _exact_string(release["release_id"], RELEASE_ID, "research release.release_id")
-    _exact_string(
-        release["schema"],
-        "lab-point-clean-set-srgb8-release/1",
-        "research release.schema",
-    )
+    _exact_string(release["schema"], "lab-point-clean-set-srgb8-release/2", "scientific release.schema")
+    _exact_string(release["release_id"], RELEASE_ID, "scientific release.release_id")
+    _verify_admission(release["admission"], "scientific release.admission")
+    _verify_excluded_claims(release["excluded_claims"], "scientific release.excluded_claims")
+    if release["runtime_contract"] != runtime:
+        _fail("scientific release runtime contract differs from the product")
+    capsule = _exact_keys(release["proof_capsule"], ("bytes", "manifest", "sha256"), "proof capsule")
+    _exact_string(capsule["manifest"], "PROOF-MANIFEST.json", "proof capsule manifest")
+    manifest_bytes = _read_regular_file_once(product, f"{CAPSULE_PATH}/PROOF-MANIFEST.json", "proof manifest", maximum_bytes=131072)
+    if len(manifest_bytes) != _positive_int(capsule["bytes"], "proof manifest bytes") or sha256(manifest_bytes) != _sha256_string(capsule["sha256"], "proof manifest SHA-256"):
+        _fail("proof manifest differs from the admitted scientific release")
+    manifest = _exact_keys(_parse_json(manifest_bytes, "proof manifest", canonical=False),
+                           ("schema", "files", "limits"), "proof manifest")
+    _exact_string(manifest["schema"], "lab-colors-public-nominal-proof/1", "proof manifest.schema")
+    if type(manifest["limits"]) is not list or not manifest["limits"] or any(type(item) is not str for item in manifest["limits"]):
+        _fail("proof manifest requires explicit scientific limits")
+    files = manifest["files"]
+    if type(files) is not list or not 0 < len(files) <= CAPSULE_FILE_LIMIT:
+        _fail("proof manifest has an invalid bounded file census")
+    snapshots = {"PROOF-MANIFEST.json": manifest_bytes, "release-v2.json": release_bytes}
+    names = {name.casefold() for name in snapshots}
+    total = 0
+    for entry in files:
+        item = _exact_keys(entry, ("path", "role", "bytes", "sha256", "license"), "proof file")
+        name = _portable_path(item["path"], "proof file path")
+        if name.casefold() in names:
+            _fail("proof manifest has a duplicate or case-colliding file")
+        names.add(name.casefold())
+        if type(item["role"]) is not str or not item["role"]:
+            _fail("proof file requires a role")
+        if type(item["license"]) is not str or item["license"] not in CAPSULE_LICENSES:
+            _fail("proof file has an unsupported license")
+        expected = _positive_int(item["bytes"], "proof file bytes")
+        total += expected
+        if expected > CAPSULE_FILE_BYTES_LIMIT or total > CAPSULE_TOTAL_BYTES_LIMIT:
+            _fail("proof files exceed the bounded capsule size")
+        data = _read_regular_file_once(product, f"{CAPSULE_PATH}/{name}", f"proof file {name}", maximum_bytes=expected)
+        if len(data) != expected or sha256(data) != _sha256_string(item["sha256"], "proof file SHA-256"):
+            _fail("proof file identity differs from the admitted manifest")
+        snapshots[name] = data
+    for required in ("verify_bundle.py", "NOMINAL-SPEC.md", "NOTICE.md", "geometry/verify_exact_v2.py",
+                     "geometry/input/intervals-refined.raw", "derived/new-column-rle.bin", "historical-v1/DELTA.json"):
+        if required not in snapshots:
+            _fail(f"proof capsule lacks required artifact {required}")
+    if snapshots["derived/new-column-rle.bin"] != product_codec:
+        _fail("proof capsule codec differs from the product codec")
+    raw, accepted = _decode_codec(product_codec)
+    if snapshots["geometry/input/intervals-refined.raw"] != raw or accepted != ACCEPTED_POINTS:
+        _fail("proof capsule raw table differs from the product finite domain")
+    supersedes = _exact_keys(release["supersedes"], ("release_sha256", "derivation_status", "delta_sha256", "delta_path"), "scientific supersession")
+    _exact_string(supersedes["release_sha256"], OLD_RELEASE_SHA256, "superseded release")
+    _exact_string(supersedes["derivation_status"], "Unrecovered", "historical derivation status")
+    _exact_string(supersedes["delta_path"], "historical-v1/DELTA.json", "finite delta path")
+    _exact_string(supersedes["delta_sha256"], sha256(snapshots["historical-v1/DELTA.json"]), "finite delta identity")
+    return snapshots
 
-    artifacts = release["artifacts"]
-    if type(artifacts) is not list or len(artifacts) != len(RESEARCH_ARTIFACT_LICENSES):
-        _fail("research release has an incomplete artifact closure")
-    by_role: dict[str, tuple[dict[str, Any], bytes]] = {}
-    paths: set[str] = set()
-    casefold_paths: set[str] = set()
-    for index, entry in enumerate(artifacts):
-        item = _exact_keys(
-            entry,
-            ("bytes", "license", "path", "role", "sha256"),
-            f"research release artifact[{index}]",
-        )
-        role = item["role"]
-        if type(role) is not str or role not in RESEARCH_ARTIFACT_LICENSES or role in by_role:
-            _fail("research release has an unknown or duplicate artifact role")
-        path = _portable_path(item["path"], f"research release artifact[{index}].path")
-        if path in paths or path.casefold() in casefold_paths:
-            _fail("research release has a duplicate or case-colliding artifact path")
-        paths.add(path)
-        casefold_paths.add(path.casefold())
-        _exact_string(
-            item["license"],
-            RESEARCH_ARTIFACT_LICENSES[role],
-            f"research release artifact[{index}].license",
-        )
-        expected_bytes = _positive_int(
-            item["bytes"],
-            f"research release artifact[{index}].bytes",
-        )
-        expected_sha = _sha256_string(
-            item["sha256"],
-            f"research release artifact[{index}].sha256",
-        )
-        data = _git_blob(research_root, commit, path, f"research artifact {role}")
-        if len(data) != expected_bytes or sha256(data) != expected_sha:
-            _fail(f"research artifact {role} differs from release metadata")
-        by_role[role] = (item, data)
-    if set(by_role) != set(RESEARCH_ARTIFACT_LICENSES):
-        _fail("research release artifact roles differ from the admitted closure")
 
-    profile = _exact_keys(
-        _parse_json(by_role["semantic_profile"][1], "research profile", canonical=False),
-        (
-            "admission",
-            "excluded_claims",
-            "geometry",
-            "neutral_axis",
-            "nominal_bridge",
-            "output_release",
-            "policy",
-            "release_id",
-            "schema",
-        ),
-        "research profile",
-    )
-    proof = _exact_keys(
-        _parse_json(by_role["proof"][1], "research proof", canonical=False),
-        (
-            "admission",
-            "artifacts",
-            "certificate_encoding",
-            "codec_encoding",
-            "cone_certificates",
-            "counts",
-            "excluded_claims",
-            "generator_sha256",
-            "inputs",
-            "law",
-            "release_id",
-            "schema",
-            "witnesses",
-        ),
-        "research proof",
-    )
-    for label, document in (("research profile", profile), ("research proof", proof)):
-        _verify_admission(document["admission"], f"{label}.admission")
-        _verify_excluded_claims(document["excluded_claims"], f"{label}.excluded_claims")
-        _exact_string(document["release_id"], RELEASE_ID, f"{label}.release_id")
+def _verify_research_mirror(research: Path, snapshots: dict[str, bytes], policy: VerifierPolicy) -> None:
+    commit = policy.research_commit
+    if _git(research, ["cat-file", "-t", commit], "research commit").strip() != b"commit":
+        _fail("receipt research commit does not name a commit object")
+    for name, data in snapshots.items():
+        committed = _git_blob(research, commit, f"{RESEARCH_CAPSULE_PATH}/{name}", f"research {name}")
+        if committed != data:
+            _fail(f"committed research release blob differs from its public mirror: {name}")
 
-    proof_artifacts = _exact_keys(
-        proof["artifacts"],
-        (
-            "certificates_bytes",
-            "certificates_sha256",
-            "codec_bytes",
-            "codec_sha256",
-            "profile_sha256",
-            "table_bytes",
-            "table_sha256",
-        ),
-        "research proof.artifacts",
-    )
-    _exact_int(proof_artifacts["codec_bytes"], CODEC_BYTES, "research proof codec bytes")
-    _exact_string(proof_artifacts["codec_sha256"], CODEC_SHA256, "research proof codec SHA-256")
-    _exact_int(proof_artifacts["table_bytes"], RAW_BYTES, "research proof raw bytes")
-    _exact_string(proof_artifacts["table_sha256"], RAW_SHA256, "research proof raw SHA-256")
-    _exact_string(
-        proof_artifacts["profile_sha256"],
-        sha256(by_role["semantic_profile"][1]),
-        "research proof profile SHA-256",
-    )
 
-    counts = proof["counts"]
-    if type(counts) is not dict:
-        _fail("research proof.counts must be an object")
-    _exact_int(counts.get("cube_points"), DOMAIN_POINTS, "research proof cube points")
-    _exact_int(counts.get("neutral_points"), 256, "research proof neutral points")
-    accepted_chromatic = counts.get("accepted_chromatic")
-    neutral_points = counts.get("neutral_points")
-    if type(accepted_chromatic) is not int or type(neutral_points) is not int:
-        _fail("research proof accepted points must be integers")
-    _exact_int(
-        accepted_chromatic + neutral_points,
-        ACCEPTED_POINTS,
-        "research proof accepted points",
-    )
-
-    codec_encoding = proof["codec_encoding"]
-    if type(codec_encoding) is not dict:
-        _fail("research proof.codec_encoding must be an object")
-    _exact_int(codec_encoding.get("records"), CODEC_RECORDS, "research proof codec records")
-    _exact_string(
-        codec_encoding.get("header_hex"),
-        CODEC_HEADER.hex(),
-        "research proof codec header",
-    )
-    _exact_string(codec_encoding.get("id"), runtime["codec"]["id"], "research proof codec ID")
-
-    research_codec = by_role["runtime_codec_table"][1]
-    research_raw = by_role["canonical_raw_table"][1]
-    if research_codec != product_codec:
-        _fail("product codec bytes differ from the committed research codec")
-    if sha256(research_raw) != RAW_SHA256 or len(research_raw) != RAW_BYTES:
-        _fail("committed research raw table identity drifted")
+def _replay_capsule(product: Path, snapshots: dict[str, bytes]) -> None:
+    # Execute only the already authenticated byte snapshot. Dirty files, imports
+    # from the caller's CWD and PYTHONPATH cannot replace the admitted verifier.
+    with tempfile.TemporaryDirectory(prefix="labcolors-nominal-v2-") as temporary:
+        root = Path(temporary)
+        capsule = root / "capsule"
+        capsule.mkdir()
+        for name, data in snapshots.items():
+            path = capsule / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        output = root / "result"
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("PYTHON")}
+        command = [sys.executable, "-I", "-B", str(capsule / "verify_bundle.py"),
+                   "--output-dir", str(output), "--mode", "both", "--product-root", str(product.resolve())]
+        try:
+            process = subprocess.run(command, cwd=capsule, env=environment, capture_output=True,
+                                     timeout=CAPSULE_REPLAY_TIMEOUT_SECONDS, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            _fail(f"scientific replay did not complete: {error}")
+        if process.returncode != 0:
+            detail = process.stderr.decode("utf-8", errors="replace")[-2000:]
+            _fail(f"scientific replay failed: {detail}")
+        report = _parse_json(_read_regular_file_once(output, "result.json", "scientific replay result"),
+                             "scientific replay result", canonical=False)
+        if type(report) is not dict:
+            _fail("scientific replay result must be an object")
+        _exact_string(report.get("status"), "PASS_CONDITIONAL_NOMINAL", "scientific replay status")
+        _exact_string(report.get("proof_manifest_sha256"), sha256(snapshots["PROOF-MANIFEST.json"]), "replayed manifest")
+        _exact_string(report.get("table_sha256"), RAW_SHA256, "replayed table")
+        _exact_string(report.get("codec_sha256"), CODEC_SHA256, "replayed codec")
+        _exact_int(report.get("accepted_points"), ACCEPTED_POINTS, "replayed accepted points")
+        _exact_int(report.get("domain_points"), DOMAIN_POINTS, "replayed domain points")
+        if report.get("modes") != ["normal", "optimized"] or report.get("current_product_source_checked") is not True:
+            _fail("scientific replay omitted a required mode or current product source binding")
+        for name, expected in (("derived.raw", snapshots["geometry/input/intervals-refined.raw"]),
+                               ("derived-codec.bin", snapshots["derived/new-column-rle.bin"])):
+            if _read_regular_file_once(output, name, f"replayed {name}") != expected:
+                _fail(f"scientific replay output differs from the product: {name}")
 
 
 def verify_receipt(
@@ -670,6 +611,7 @@ def verify_receipt(
     expected_receipt_sha256: str,
     *,
     policy: VerifierPolicy = PRODUCTION_POLICY,
+    replay: bool = False,
 ) -> VerificationResult:
     product = Path(product_root)
     research = Path(research_root) if research_root is not None else None
@@ -817,9 +759,10 @@ def verify_receipt(
 
     research_descriptor = _exact_keys(
         receipt["research"],
-        ("commit", "object_format", "release_path", "release_sha256"),
+        ("commit", "object_format", "release_path", "release_sha256", "repository"),
         "receipt.research",
     )
+    _exact_string(research_descriptor["repository"], RESEARCH_REPOSITORY, "receipt research repository")
     commit = research_descriptor["commit"]
     if type(commit) is not str or GIT_SHA1_RE.fullmatch(commit) is None:
         _fail("receipt research commit must be one lower-case 40-hex Git commit")
@@ -836,9 +779,12 @@ def verify_receipt(
         "receipt research release SHA-256",
     )
 
+    snapshots = _verify_capsule(product, runtime, product_codec, policy)
     if research is not None:
-        _verify_research(research, research_descriptor, runtime, product_codec, policy)
-    return VerificationResult(expected_receipt, research is not None)
+        _verify_research_mirror(research, snapshots, policy)
+    if replay:
+        _replay_capsule(product, snapshots)
+    return VerificationResult(expected_receipt, replay)
 
 
 def verify_product_receipt(
@@ -893,9 +839,9 @@ def verify_core_package(source_root: Path | str, package_root: Path | str) -> No
         "LICENSES/CC-BY-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
         "LICENSES/CC-BY-SA-4.0.txt": "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
         "NOTICE.md": "crates/labcolors-core/NOTICE.md",
-        "contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin": CODEC_PATH,
-        "contracts/clean-set-srgb8-v1/receipt-v1.json": RECEIPT_PATH,
-        "contracts/clean-set-srgb8-v1/receipt-v1.sha256": RECEIPT_PIN_PATH,
+        "contracts/clean-set-srgb8-v2/point-clean-set-srgb8-column-rle-v1.bin": CODEC_PATH,
+        "contracts/clean-set-srgb8-v2/receipt-v2.json": RECEIPT_PATH,
+        "contracts/clean-set-srgb8-v2/receipt-v2.sha256": RECEIPT_PIN_PATH,
     }
     packaged: dict[str, bytes] = {}
     for package_path, source_path in copies.items():
@@ -905,11 +851,11 @@ def verify_core_package(source_root: Path | str, package_root: Path | str) -> No
             _fail(f"packaged {package_path} differs from canonical product bytes")
         packaged[package_path] = actual
 
-    codec = packaged["contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin"]
+    codec = packaged["contracts/clean-set-srgb8-v2/point-clean-set-srgb8-column-rle-v1.bin"]
     if len(codec) != CODEC_BYTES or sha256(codec) != CODEC_SHA256:
         _fail("packaged runtime codec identity differs from the admitted codec")
-    receipt = packaged["contracts/clean-set-srgb8-v1/receipt-v1.json"]
-    receipt_pin = packaged["contracts/clean-set-srgb8-v1/receipt-v1.sha256"]
+    receipt = packaged["contracts/clean-set-srgb8-v2/receipt-v2.json"]
+    receipt_pin = packaged["contracts/clean-set-srgb8-v2/receipt-v2.sha256"]
     if sha256(receipt) != _parse_receipt_pin(receipt_pin, "packaged receipt pin"):
         _fail("packaged receipt differs from its external pin")
     _validate_notice(packaged["NOTICE.md"], "packaged NOTICE.md")
@@ -929,10 +875,10 @@ def main(argv: list[str] | None = None) -> int:
 
     full_parser = subparsers.add_parser(
         "full",
-        help="verify product plus committed research closure",
+        help="replay the complete public scientific proof offline",
     )
     full_parser.add_argument("--product-root", required=True, type=Path)
-    full_parser.add_argument("--research-root", required=True, type=Path)
+    full_parser.add_argument("--research-root", type=Path, help="optionally also check the immutable research Git mirror")
 
     package_parser = subparsers.add_parser(
         "core-package",
@@ -956,9 +902,10 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.product_root,
                 arguments.research_root,
                 expected_receipt,
+                replay=True,
             )
             print(
-                "clean-set product receipt: PRODUCT_AND_RESEARCH_VERIFIED; "
+                "clean-set product receipt: PRODUCT_AND_EXACT_NOMINAL_REPLAY_VERIFIED; "
                 f"receipt_sha256={result.receipt_sha256}"
             )
         else:

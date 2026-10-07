@@ -25,8 +25,8 @@ use super::{
 };
 use crate::Srgb8;
 use crate::clean_set::{
-    ClosedRejectedBlueIntervalV1, EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
-    ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV1,
+    ClosedRejectedBlueIntervalV1, EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+    ExactNominalSrgb8CleanSetDecisionV1, ExactNominalSrgb8CleanSetV2,
 };
 use crate::program_wire::{
     AttachedMaterializationAuthorityV1, ProgramAttachmentV1,
@@ -38,7 +38,7 @@ use crate::sha256::Hasher;
 // Единственный существующий pin технической квитанции. Её полноту и связь
 // с классификатором/кодеком проверяет verify_clean_set_receipt.py, не новый реестр.
 const TECHNICAL_RECEIPT_PIN: &[u8] =
-    include_bytes!("../../contracts/clean-set-srgb8-v1/receipt-v1.sha256");
+    include_bytes!("../../contracts/clean-set-srgb8-v2/receipt-v2.sha256");
 
 /// Запрошенная область. Неподдержанные области дают отказ, не точечную замену.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +73,7 @@ impl CleanConventionSelectionV1 {
         scope: CleanConventionScopeV1,
         admission: CleanConventionAdmissionKindV1,
     ) -> Result<Self, CleanConventionErrorV1> {
-        if release != EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1 {
+        if release != EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2 {
             return Err(CleanConventionErrorV1::UnsupportedRelease);
         }
         if scope != CleanConventionScopeV1::ModeledSrgb8Point {
@@ -164,7 +164,7 @@ impl CleanConventionProofV1 {
         }
         let composite = materialization.terminal_composite();
         if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) =
-            ExactNominalSrgb8CleanSetV1.classify(composite)
+            ExactNominalSrgb8CleanSetV2.classify(composite)
         {
             return Err(CleanConventionErrorV1::RejectedByConvention {
                 composite,

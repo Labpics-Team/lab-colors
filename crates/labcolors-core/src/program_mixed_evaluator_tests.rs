@@ -748,8 +748,8 @@ fn clean_set_projection_probe_binds_pass_absence_rejection_and_interval() {
         ("final-owned domain absent", [0, 0, 0], [2, 0, 1, 0]),
         (
             "rejected with interval",
-            [0, 200, 71],
-            [2, 0x00_C8_47, 2, 0x47_65],
+            [0, 199, 64],
+            [2, 0x00_C7_40, 2, 0x40_6C],
         ),
     ] {
         let actual = clean_set_projection_probe(source);

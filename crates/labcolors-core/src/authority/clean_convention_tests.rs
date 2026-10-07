@@ -5,7 +5,7 @@ use crate::test_support::{AllocatorEvents, measured_allocator_events};
 
 fn selection() -> CleanConventionSelectionV1 {
     CleanConventionSelectionV1::select(
-        EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
+        EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
         CleanConventionScopeV1::ModeledSrgb8Point,
         CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
     )
@@ -40,7 +40,7 @@ fn ready(
 fn explicit_selection_rejects_foreign_release_scope_and_unearned_admission() {
     use CleanConventionAdmissionKindV1 as Kind;
     use CleanConventionScopeV1 as Scope;
-    let release = EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+    let release = EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
     let accepted = selection();
     assert_eq!(accepted.release(), release);
     assert_eq!(accepted.scope(), Scope::ModeledSrgb8Point);
@@ -359,7 +359,7 @@ fn receipt_identity_binds_selection_technical_pin_and_every_materialization_coor
         *hasher.finalize().as_bytes()
     }
     let mut release = b"labcolors.cc.release.v1\0".to_vec();
-    release.extend(EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1);
+    release.extend(EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2);
     release.push(1); // DeclaredPackagePolicyCandidate, не HumanAction.
     let release = digest(&release);
     let mut scope = b"labcolors.cc.applicability.v1\0".to_vec();
@@ -371,7 +371,7 @@ fn receipt_identity_binds_selection_technical_pin_and_every_materialization_coor
     provenance.extend(release);
     provenance.extend(scope);
     provenance.extend(include_bytes!(
-        "../../contracts/clean-set-srgb8-v1/receipt-v1.sha256"
+        "../../contracts/clean-set-srgb8-v2/receipt-v2.sha256"
     ));
     provenance.extend(b"modeled-point-v1\0");
     provenance.extend(material.content_identity());
@@ -399,5 +399,22 @@ fn receipt_identity_binds_selection_technical_pin_and_every_materialization_coor
     assert_eq!(
         receipt.descriptor().provenance_identity().as_bytes(),
         &digest(&provenance)
+    );
+}
+
+#[test]
+fn superseded_nominal_release_cannot_silently_select_the_new_set() {
+    let historical_release = [
+        0x67, 0xca, 0xda, 0xae, 0x38, 0xbb, 0xae, 0xa3, 0x09, 0x6d, 0xba, 0x69, 0x14, 0x2b, 0x5b,
+        0xf3, 0xd7, 0x77, 0x6b, 0x75, 0x74, 0xec, 0x22, 0x40, 0x22, 0xab, 0xbc, 0xd1, 0x19, 0xc4,
+        0x5c, 0xe6,
+    ];
+    assert_eq!(
+        CleanConventionSelectionV1::select(
+            historical_release,
+            CleanConventionScopeV1::ModeledSrgb8Point,
+            CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
+        ),
+        Err(CleanConventionErrorV1::UnsupportedRelease),
     );
 }
