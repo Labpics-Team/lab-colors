@@ -31,6 +31,8 @@ export {
 export const MAX_CERTIFICATE_ENVELOPE_BYTES = 2_097_152;
 
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const intrinsicBufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer").get;
+const intrinsicArrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get;
 const intrinsicByteLengthGetter = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   "byteLength",
@@ -99,6 +101,10 @@ function copyTypedArrayStorage(value, storage, invalid, {
     if (Reflect.apply(intrinsicTypedArrayTagGetter, value, []) !== storage.tag) {
       throw invalid();
     }
+    // A concurrent writer cannot participate in an atomic input snapshot.
+    // ArrayBuffer's intrinsic getter rejects shared storage, including other realms.
+    Reflect.apply(intrinsicArrayBufferByteLengthGetter,
+      Reflect.apply(intrinsicBufferGetter, value, []), []);
     byteLength = Reflect.apply(intrinsicByteLengthGetter, value, []);
     length = Reflect.apply(intrinsicLengthGetter, value, []);
     if (

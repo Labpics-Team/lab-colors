@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import init, { attachProgramWire, compileProgramWire, isProgramError } from "../index.js";
+import init, { attachProgramWire, compileProgramWire, decodeCertificateEnvelope, issueSourceCertificateEnvelope, isCertificateError, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
@@ -20,6 +20,29 @@ const programError = (operation, code) => (error) =>
   isProgramError(error) && error.operation === operation && error.code === code;
 
 const invalidInputs = [
+  ["shared storage", (Type, values) => {
+    const view = new Type(new SharedArrayBuffer(values.length * Type.BYTES_PER_ELEMENT));
+    view.set(values);
+    return view;
+  }],
+  ["growable shared storage", (Type, values) => {
+    const size = values.length * Type.BYTES_PER_ELEMENT;
+    const view = new Type(new SharedArrayBuffer(size, { maxByteLength: size + 64 }));
+    view.set(values);
+    return view;
+  }],
+  ["cross-realm shared storage", (Type, values) => runInNewContext(
+    "const view = new " + Type.name + "(new SharedArrayBuffer(" +
+    (values.length * Type.BYTES_PER_ELEMENT) + ")); view.set(" + JSON.stringify(values) + "); view;",
+  )],
+  ["shared storage with a disguised buffer prototype", (Type, values) => {
+    const buffer = new SharedArrayBuffer(values.length * Type.BYTES_PER_ELEMENT);
+    const view = new Type(buffer);
+    view.set(values);
+    Object.setPrototypeOf(buffer, ArrayBuffer.prototype);
+    Object.defineProperty(view, "buffer", { value: new ArrayBuffer(values.length * Type.BYTES_PER_ELEMENT) });
+    return view;
+  }],
   ["ordinary array", (_Type, values) => [...values]],
   ["wrapped array", (Type, values) => values.map((value) => value + 2 ** (8 * Type.BYTES_PER_ELEMENT))],
   ["fractional array", (_Type, values) => values.map((value) => value + 0.5)],
@@ -246,4 +269,23 @@ test("attachment busy refusal precedes input inspection during host reentry", ()
   } finally {
     first?.free(); attachment.dispose(true); attachment.free();
   }
+});
+
+
+test("certificate envelope requires owned storage even when shared bytes are valid", () => {
+  const original = issueSourceCertificateEnvelope();
+  const shared = new Uint8Array(new SharedArrayBuffer(original.length));
+  shared.set(original);
+  const before = decodeCertificateEnvelope(original);
+  assert.throws(() => decodeCertificateEnvelope(shared), (error) =>
+    isCertificateError(error) && error.code === "certificate_invalid_input");
+  assert.deepEqual(decodeCertificateEnvelope(original), before);
+});
+
+test("buffer admission reads intrinsic storage rather than a caller buffer getter", () => {
+  let reads = 0;
+  const value = new Uint8Array(wire);
+  Object.defineProperty(value, "buffer", { get() { reads += 1; throw new Error("caller buffer must not execute"); } });
+  const runtime = compileProgramWire(value, 1);
+  try { assert.equal(reads, 0); } finally { runtime.free(); }
 });
