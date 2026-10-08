@@ -7,6 +7,9 @@
 
 use super::*;
 
+#[path = "program_identity_ordering.rs"]
+mod ordering;
+
 const DOMAIN_V9: &[u8] = b"labcolors.program-content-identity.v9\0";
 // V9 резервирует фиксированную protocol boundary под type/family tag и полный
 // content digest. Каждый writer использует проверяемый push и отвергает
@@ -362,7 +365,7 @@ impl GraphBuilderV1 {
             });
         }
         for arcs in &mut adjacency {
-            arcs.sort_unstable();
+            ordering::sort(arcs);
         }
         Ok(CanonicalGraphV1 {
             colors: self.colors,
@@ -393,7 +396,7 @@ where
     }
 
     fn finish(&mut self) -> Result<(), ProgramCompileError> {
-        self.values.sort_unstable_by_key(|(key, _)| *key);
+        ordering::sort_by_key(&mut self.values, |(key, _)| *key);
         if self.values.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err(ProgramCompileError::InternalInvariant);
         }
@@ -1402,7 +1405,7 @@ where
         .try_reserve_exact(graph.colors.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     vertex_tags.extend(graph.colors.iter().map(VertexColorV1::tag));
-    vertex_tags.sort_unstable();
+    ordering::sort(&mut vertex_tags);
     vertex_tags.dedup();
 
     let mut edge_roles = Vec::new();
@@ -1417,7 +1420,7 @@ where
                 .map(|arc| arc.role as u8),
         );
     }
-    edge_roles.sort_unstable();
+    ordering::sort(&mut edge_roles);
     edge_roles.dedup();
     Ok((vertex_tags, edge_roles))
 }
@@ -1438,7 +1441,7 @@ impl PartitionV1 {
             .try_reserve_exact(graph.colors.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         order.extend(0..graph.colors.len());
-        order.sort_unstable_by(|left, right| {
+        ordering::sort_by(&mut order, |left, right| {
             graph.colors[*left]
                 .cmp(&graph.colors[*right])
                 .then_with(|| left.cmp(right))
@@ -1540,10 +1543,12 @@ fn refine_partition(
                         neighbour_cell: cell_of[arc.neighbour],
                     });
                 }
-                signature.sort_unstable();
+                ordering::sort(&mut signature);
                 records.push(RefinementRecordV1 { vertex, signature });
             }
-            records.sort_unstable_by(|left, right| left.signature.cmp(&right.signature));
+            ordering::sort_by(&mut records, |left, right| {
+                left.signature.cmp(&right.signature)
+            });
 
             let mut start = 0;
             while start < records.len() {
@@ -1727,7 +1732,7 @@ fn serialize_leaf(
                 .filter(|arc| arc.direction == 0)
                 .map(|arc| (arc.role, label_of[arc.neighbour])),
         );
-        outgoing.sort_unstable();
+        ordering::sort(&mut outgoing);
         for (role, target) in outgoing {
             output.push(role as u8);
             push_u64_bytes(&mut output, usize_as_u64(target)?);
@@ -2335,7 +2340,7 @@ mod tests {
                 .unwrap(),
             );
         }
-        colors.sort_unstable();
+        ordering::sort(&mut colors);
         colors.dedup();
         assert_eq!(colors.len(), 4);
     }
@@ -2360,8 +2365,8 @@ mod tests {
                 .iter()
                 .map(|arc| (arc.direction, arc.role, arc.neighbour))
                 .collect::<Vec<_>>();
-            left_arcs.sort_unstable();
-            right_arcs.sort_unstable();
+            ordering::sort(&mut left_arcs);
+            ordering::sort(&mut right_arcs);
             if left_arcs != right_arcs {
                 return false;
             }
@@ -2516,7 +2521,7 @@ mod tests {
 
     fn permutation_from_keys<const N: usize>(keys: [u64; N]) -> Vec<usize> {
         let mut images = (0..N).collect::<Vec<_>>();
-        images.sort_unstable_by_key(|index| (keys[*index], *index));
+        ordering::sort_by_key(&mut images, |index| (keys[*index], *index));
         let mut permutation = vec![0];
         permutation.extend(images.into_iter().map(|index| index + 1));
         permutation

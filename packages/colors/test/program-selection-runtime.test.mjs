@@ -114,3 +114,35 @@ test("missing, repeated and foreign assignments never acquire a runtime", () => 
     finally { accidental?.free(); }
   }
 });
+
+test("the declared cleanliness constraint judges each final composite before preference selection", () => {
+  function build(constrain) {
+    const b = new ProgramWireBuilderV2()
+      .finiteTarget(21, [candidate(201, 255, .5), candidate(202, 128)])
+      .selectionRelease(1n, [[state(1, [[21, 201]])], [state(2, [[21, 202]])]])
+      .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 41, 51, 64, .2, 1)
+      .presentationRoot(71, 61).presentationTarget(71, 61)
+      .wcag22VisibleUnary(true, 82, 61, 3).output(91, 41);
+    if (constrain) b.declaredSrgb8CleanSet(true, 81, 71, 61);
+    return b.finish();
+  }
+  // The released nominal point convention accepts [128,128,128] and rejects
+  // [128,128,129]. These are existing source-qualified boundary examples,
+  // not new measurements of human perception or automatic-edit effectiveness.
+  const chosen = compileProgramWire(build(true), 1);
+  const proposalOnly = compileProgramWire(build(false), 1);
+  const held = [];
+  try {
+    const accepted = observe(chosen, 1n, [[1, 1, 1]]); held.push(accepted);
+    assert.equal(accepted.state, "ready"); assert.deepEqual(output(accepted), [255, 255, 255]);
+    assert.equal(accepted.outputOpacity(0), .5);
+    const both = observe(chosen, 2n, [[1, 1, 1], [1, 1, 3]]); held.push(both);
+    assert.equal(both.state, "ready"); assert.deepEqual(output(both), [128, 128, 128]);
+    assert.equal(both.outputOpacity(0), 1);
+    const without = observe(proposalOnly, 1n, [[1, 1, 1], [1, 1, 3]]); held.push(without);
+    assert.deepEqual(output(without), [255, 255, 255]);
+    assert.equal(without.outputOpacity(0), .5);
+    assert.deepEqual(output(accepted), [255, 255, 255]);
+  } finally { for (const item of held.reverse()) item.free(); chosen.free(); proposalOnly.free(); }
+});

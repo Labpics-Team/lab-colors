@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 544,
+ "file_count": 545,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -173,14 +173,15 @@
   "crates/labcolors-core/src/program/attachment/proofs.rs": "24ef891f704e6f4f148ad9cf17fbfa100c2ca550",
   "crates/labcolors-core/src/program/attachment/support.rs": "6dcbda20fc590436518d6d0bf4afc4ce25eebb3c",
   "crates/labcolors-core/src/program/attachment/tests.rs": "800888f7221e27f85b721f82b1d217fe3133472b",
-  "crates/labcolors-core/src/program/wire.rs": "31e4f6211fc05fbcffe9d98ac770deee2e824856",
+  "crates/labcolors-core/src/program/wire.rs": "98ddcd6baf3b9a3efc555c71d86c0f5d9ea13075",
   "crates/labcolors-core/src/program/wire/proofs.rs": "60842192e718a8e4a2888096e765d4f4aa020f77",
   "crates/labcolors-core/src/program_api_tests.rs": "38e4e652cb437af68fa97473a5a2f0bfb6e9d6dc",
   "crates/labcolors-core/src/program_boundary_tests.rs": "5919c329c8ddd051911fba70cd81783ac5584ffd",
   "crates/labcolors-core/src/program_category_relation_tests.rs": "358ed125a036ccddcfa08b59726494ea499a390e",
   "crates/labcolors-core/src/program_clean_set_tests.rs": "c8aaf84f04272d7e722951fa9f4d9bfc659b7439",
   "crates/labcolors-core/src/program_family_tests.rs": "45a9069d138e7d27795400c63175b2c0918a48fc",
-  "crates/labcolors-core/src/program_identity.rs": "958e4e14dc36ae0beb24eed2cff71685dcfd321a",
+  "crates/labcolors-core/src/program_identity.rs": "f9782e2392ebb1449a5849cce4a306bf10b89a24",
+  "crates/labcolors-core/src/program_identity_ordering.rs": "deff76c520dbf6b37661147fd827fb5d162d84cf",
   "crates/labcolors-core/src/program_identity_tests.rs": "15d2188bf5090460898731aed79f669dd50d3101",
   "crates/labcolors-core/src/program_joint_integration_tests.rs": "b5758a5d18db20f1327b8da8c41dd166d407f612",
   "crates/labcolors-core/src/program_lcs_integration_tests.rs": "f0b887aebd6741192b958aae8bf96f5866ab7780",
@@ -303,7 +304,7 @@
   "packages/colors/test/program-runtime-browser-harness.test.mjs": "59dc87ce655a6dd0065afe777733433bb46b53fb",
   "packages/colors/test/program-scalar-admission.test.mjs": "fc65ec1d255f8836380b98d7497c722dff278714",
   "packages/colors/test/program-selection-builder.test.mjs": "eacaf966a48cdc07577d07e959f68f599bf238cb",
-  "packages/colors/test/program-selection-runtime.test.mjs": "79c72f8314ebb643f9901d6cc7e99a7aa6f2a625",
+  "packages/colors/test/program-selection-runtime.test.mjs": "c99b8a1b6594b22dcbd32c98b444fb68abf4dd4d",
   "packages/colors/test/program-wire-boundaries.test.mjs": "12e46ea5ac567a91c480ea338c9dcf139ec31411",
   "packages/colors/test/program-wire-input-access.test.mjs": "0d420cdb4072468e727b40278711a74a1c444141",
   "packages/colors/test/program-wire.test.mjs": "10f9caac95feb531fa2e3711cc9057e14e8bbbbd",
@@ -547,7 +548,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "80bed52bbd1ae98d5da27f3f0521cc687f9043404681814f8910f57c4564fc4b",
+ "record_sha256": "3da07e99620da9a05795010140aa73e78ba88c53aeff61c8e73d8f90835f3dd5",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

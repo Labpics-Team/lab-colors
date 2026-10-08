@@ -1536,4 +1536,119 @@ mod selection_v2_tests {
         }
         assert!(compile_program_wire(&bytes).is_ok());
     }
+    #[test]
+    fn finite_clean_set_keeps_the_same_final_composite_owner() {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .finite_target(
+                21,
+                &[
+                    (201, Srgb8::new([255; 3]), 0.5),
+                    (202, Srgb8::new([128; 3]), 1.0),
+                ],
+            )
+            .surface_input_port(31)
+            .solid_paint(41, 21)
+            .input_surface(51, 31)
+            .source_over_occurrence(61, 41, 51, 64.0, 0.2, 1)
+            .presentation_root(71, 61)
+            .presentation_target(71, 61)
+            .output(91, 41);
+        builder.hard_constraints_count += 1;
+        push_u32(&mut builder.hard_constraints, 81);
+        builder.hard_constraints.push(KIND_CLEAN_SET);
+        push_u32(&mut builder.hard_constraints, 71);
+        push_u32(&mut builder.hard_constraints, 61);
+        let ranks = vec![vec![(1, vec![(21, 201)])], vec![(2, vec![(21, 202)])]];
+        let bytes = finish(builder, 1, &ranks);
+        let draft = decode_program_wire(&bytes).unwrap();
+        match draft.compile() {
+            Ok(_) => (),
+            Err(error) => panic!("finite clean-set compile failed: {error:?}"),
+        }
+        let mut runtime = compile_program_wire(&bytes)
+            .unwrap()
+            .instantiate(1)
+            .unwrap();
+        let first = runtime.update_observed(1, &[scenario(1, 1)]).unwrap();
+        assert_eq!(first.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(first.outputs()[0].source(), Srgb8::new([255; 3]));
+        let both = runtime
+            .update_observed(
+                2,
+                &[
+                    scenario(1, 1),
+                    ProgramScenarioV1::new(2, vec![Srgb8::new([1, 1, 3])]),
+                ],
+            )
+            .unwrap();
+        assert_eq!(both.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(both.outputs()[0].source(), Srgb8::new([128; 3]));
+    }
+
+    #[test]
+    fn transport_matches_direct_release_materialisation_without_a_parallel_order() {
+        use crate::program_session::{
+            JointCandidateStateV1, TargetCandidateChoiceV1, TargetCandidateId, TargetId,
+        };
+        use crate::selection_release::{
+            SelectionCandidateKeyV1, SelectionReleaseV1, admit_selection_release_v1,
+            materialise_joint_selection_v1,
+        };
+        let revision = 0x1020_3040_5060_7080;
+        let key = |id: u32| SelectionCandidateKeyV1::new(Box::new(id.to_be_bytes()));
+        let release = SelectionReleaseV1::new(
+            revision,
+            vec![
+                vec![key(1)].into_boxed_slice(),
+                vec![key(2)].into_boxed_slice(),
+                vec![key(3)].into_boxed_slice(),
+            ]
+            .into_boxed_slice(),
+        );
+        let admitted = admit_selection_release_v1(release).unwrap();
+        let states: Vec<_> = [(1, 201), (2, 202), (3, 203)]
+            .into_iter()
+            .map(|(id, candidate)| {
+                (
+                    JointCandidateStateV1::new(vec![TargetCandidateChoiceV1::new(
+                        TargetId::new(21),
+                        TargetCandidateId::new(candidate),
+                    )]),
+                    key(id),
+                )
+            })
+            .collect();
+        let materialised = materialise_joint_selection_v1(&admitted, &states).unwrap();
+        let mut direct = decode_program_wire_v1(&declaration(false).finish().unwrap()).unwrap();
+        direct
+            .set_materialised_joint_selection(materialised)
+            .unwrap();
+        let compiled = direct.compile().unwrap();
+        let encoded = finish(declaration(false), revision, &groups());
+        assert_eq!(
+            check_program_wire(&encoded).unwrap(),
+            *compiled.content_identity().as_bytes()
+        );
+    }
+
+    #[test]
+    fn every_single_byte_mutation_preserves_typed_totality_and_checker_agreement() {
+        let bytes = finish(declaration(false), 9, &groups());
+        for offset in 0..bytes.len() {
+            for mask in [1, 0x80, 0xff] {
+                let mut mutated = bytes.clone();
+                mutated[offset] ^= mask;
+                let outcome = std::panic::catch_unwind(|| {
+                    let checked = check_program_wire(&mutated);
+                    let compiled = compile_program_wire(&mutated);
+                    assert_eq!(checked.is_ok(), compiled.is_ok());
+                    if let (Ok(identity), Ok(program)) = (checked, compiled) {
+                        assert_eq!(identity, program.content_identity());
+                    }
+                });
+                assert!(outcome.is_ok(), "byte {offset}, xor {mask}");
+            }
+        }
+    }
 }
