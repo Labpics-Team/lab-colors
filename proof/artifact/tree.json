@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 538,
+ "file_count": 539,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -542,7 +542,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "3c0a67da64062deeb013c44021263cb42ade151dbebbc3eba3b4e1b45166f154",
+ "record_sha256": "75cb1a804378edad642c61805adea94586b12890492e00b55a0901b6e958751b",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
