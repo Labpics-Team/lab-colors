@@ -682,19 +682,19 @@ fn verdict_index(constraint: program::ConstraintIdV1) -> usize {
 #[test]
 fn family_and_declared_point_convention_are_independent_hard_constraints_over_the_full_two_by_two()
 {
-    let predicate_member = Srgb8::new([0, 200, 70]);
-    let predicate_nonmember = Srgb8::new([0, 200, 71]);
+    let predicate_member = Srgb8::new([0, 199, 63]);
+    let predicate_nonmember = Srgb8::new([0, 199, 64]);
     let other = [[255, 0, 255]];
     let cases = [
         (
             predicate_member,
-            [[0, 200, 70]].as_slice(),
+            [[0, 199, 63]].as_slice(),
             program::StateKindV1::Ready,
             [program::VerdictV1::Pass, program::VerdictV1::Pass],
         ),
         (
             predicate_nonmember,
-            [[0, 200, 71]].as_slice(),
+            [[0, 199, 64]].as_slice(),
             program::StateKindV1::Failed,
             [program::VerdictV1::Pass, program::VerdictV1::Violation],
         ),

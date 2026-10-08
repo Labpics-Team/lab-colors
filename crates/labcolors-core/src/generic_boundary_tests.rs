@@ -95,6 +95,9 @@ fn unadmitted_cleanliness_and_retired_recipe_sources_are_absent() {
         "crates/labcolors-core/src/cleanliness/alpha_assessment.rs",
         "crates/labcolors-core/src/cleanliness/alpha_aggregation.rs",
         "crates/labcolors-core/src/field_presentation.rs",
+        "crates/labcolors-core/src/restorative_auto.rs",
+        "crates/labcolors-core/src/lcs_freeze.rs",
+        "crates/labcolors-core/src/incremental_runtime.rs",
         "crates/labcolors-wasm/src/engine.rs",
         "crates/labcolors-wasm/src/cache.rs",
         "crates/labcolors-wasm/src/config_dto.rs",
@@ -117,6 +120,10 @@ fn unadmitted_cleanliness_and_retired_recipe_sources_are_absent() {
         "AggregatedAlphaCleanEvidenceV1",
         "OwnedCompositionReferenceV1",
         "FieldPresentationRootV1",
+        "RestorativeOutcomeV1",
+        "TqDeltaHandleV1",
+        "LcsFreezeCertificateV1",
+        "IncrementalRuntimePhaseV1",
     ] {
         for (path, source) in &sources {
             assert!(

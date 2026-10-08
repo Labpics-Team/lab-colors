@@ -1,0 +1,392 @@
+{
+  "upstream_repository": "https://github.com/Labpics-Team/agents-config",
+  "upstream_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+  "geometry_verifier_sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
+  "private_context_excluded": [
+    "CLEANLINESS-DESIGN.md",
+    "CLEANLINESS-EVIDENCE.md",
+    "research journals",
+    "research readbacks"
+  ],
+  "independent_audits": {
+    "primary_arithmetic_base_commit": "8b00b3d90937b9e0bcf70133fc654f7cdb046513",
+    "primary_public_change": "Only archive file census158→9 and public acquisition subset; identical arithmetic/source checks.",
+    "bridge_commit": "c1650a8821739b8d3e850cb8576ce18558486555",
+    "join_commit": "9faab66269964ab5223335448d3b4f01f1f23a3d"
+  },
+  "source_scope": "Conditional nominal model; no old ac6 recovery, no HCE or physical/display admission",
+  "historical_geometry_input_manifest": {
+    "schema": 1,
+    "acquired_at_utc": "2026-10-07T20:36:10.338040+00:00",
+    "repository": "https://github.com/Labpics-Team/agents-config",
+    "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+    "prefix": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/",
+    "files": [
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/ARCHIVE-MANIFEST.json",
+        "path": "ARCHIVE-MANIFEST.json",
+        "git_blob": "9949a206a7316c356280ceb02dfca6349d6153c4",
+        "bytes": 5383,
+        "sha256": "16a0eefb253a227dc7957861bad302236e002097d79f8d14f538b2173d391d27"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/PROOF.md",
+        "path": "PROOF.md",
+        "git_blob": "6dc51b808be3833d2bf109d77f3af1bca29e4166",
+        "bytes": 6637,
+        "sha256": "6c1e4e68ecb40799dc6bb97fed61e5c708fa59857d3e6ea7a2933f74353e164e"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/README.md",
+        "path": "README.md",
+        "git_blob": "a537d33d974fb28026b50e093954c95be26ec0c2",
+        "bytes": 3471,
+        "sha256": "711d1ececbdeef368fd138996535cd9eb072f3ff0e3ca35f5fde12d1c38fa2b3"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/contract_v2.json",
+        "path": "contract_v2.json",
+        "git_blob": "3e9909f34d01580ebecf58ed3467f9754f69616a",
+        "bytes": 2553,
+        "sha256": "e100c33289874b7ccdac5c6434582668f3fa6a31b37cb79436b9fd6084d9c144"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/run-02/result.json",
+        "path": "historical/run-02/result.json",
+        "git_blob": "acfbeafd821ce6ab2fd05ec8f99ef8aecba73718",
+        "bytes": 6158,
+        "sha256": "e22ca62011a98362a1c8be167c451c572b8df9acdc09ab66d15052af608ba2d9"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/CLEANLINESS-DESIGN.md",
+        "path": "input/CLEANLINESS-DESIGN.md",
+        "git_blob": "c1b785dca05cb23ff030ed5461ac7f60dc67511d",
+        "bytes": 178974,
+        "sha256": "8c674660b92c7559766e602791d445fa3285649b8aa403a940c5ddd4aac94898"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/CLEANLINESS-EVIDENCE.md",
+        "path": "input/CLEANLINESS-EVIDENCE.md",
+        "git_blob": "26846f06adfa92588199bc564f28a649e41baa5a",
+        "bytes": 40207,
+        "sha256": "31a173979f8cd4687339ebf096d77dde8a9949952b4d997bdf2aa8d076a8022f"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/bridge.json",
+        "path": "input/bridge.json",
+        "git_blob": "963fcbeac42dedd565364d164e5030b4cb4760eb",
+        "bytes": 253299,
+        "sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/cie-cmf.csv",
+        "path": "input/cie-cmf.csv",
+        "git_blob": "9b4e3f73b4bb412a762a6d03cb8060bfea652a6e",
+        "bytes": 24021,
+        "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/cie-d65.csv",
+        "path": "input/cie-d65.csv",
+        "git_blob": "77fad96665b71b67c1254847b6846978c82ad245",
+        "bytes": 6820,
+        "sha256": "e76f210bffff3d552ef7113025da5f325d5dfec200dd4b878b1a2f3a507032cb"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/frontier-candidate.json",
+        "path": "input/frontier-candidate.json",
+        "git_blob": "b14beb816ba12ccbb5fbeab8bc4984d10deeee30",
+        "bytes": 1511089,
+        "sha256": "4c79ea932dafebaf741d295d4fe1be016ab31b5d9764a83cfbfe6b73d573a583"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-full-faces.bin",
+        "path": "input/intervals-full-faces.bin",
+        "git_blob": "d927fb4dbc7fabc099ce5701f7c1095ff45ce66e",
+        "bytes": 524288,
+        "sha256": "00853fee07c6aa6db44a44cd40b3c7f4383305df2297e89584c22900ed2e56f8"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-full-primal.jsonl.gz",
+        "path": "input/intervals-full-primal.jsonl.gz",
+        "git_blob": "25204872243210954f6015c3c45c34810ecc65f2",
+        "bytes": 14521765,
+        "sha256": "39f264c825886d38885ba6215861bf909a228668f5de204bc47633959d4546b9"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-full.json",
+        "path": "input/intervals-full.json",
+        "git_blob": "9bfb9eb301fe6d6c593c4c16807e15eb39bb2c7e",
+        "bytes": 1884826,
+        "sha256": "01e99b20ee0a2e9fa4775d6628b8f32c3ce894e0465bb0a9ec722bc51d9393db"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-full.raw",
+        "path": "input/intervals-full.raw",
+        "git_blob": "5925e186e75b086739022e537c36b4d7186e3a31",
+        "bytes": 131072,
+        "sha256": "fed4c4454ded379479f0f8991c826a2dd1176d647b12250f74bb6bc28d8eb476"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-refined.json",
+        "path": "input/intervals-refined.json",
+        "git_blob": "52e2cacff1034520c286b6dce61a34ae82e7cb9c",
+        "bytes": 38818,
+        "sha256": "038452b56b381a97e16f3b025f2311d380988070323f8620f8e1cd690ab7ead5"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/intervals-refined.raw",
+        "path": "input/intervals-refined.raw",
+        "git_blob": "b637eca6a3d2ae06e5c7586293c030af1c477732",
+        "bytes": 131072,
+        "sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/join.json",
+        "path": "input/join.json",
+        "git_blob": "184918763105919c2f57501c346131756dfc413c",
+        "bytes": 8416,
+        "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/mutation-corpus.json",
+        "path": "input/mutation-corpus.json",
+        "git_blob": "ce7252120dec2630fded59e82ae88b7343e1e9e2",
+        "bytes": 7977,
+        "sha256": "32f9e8c9ca0a807ab1389901ab657da5016fbbf1ad7a44b07f23eb5f95b2ab1b"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/profile-candidate.json",
+        "path": "input/profile-candidate.json",
+        "git_blob": "0ccf69ca8a87f7320a8930761880fb2cebf93c98",
+        "bytes": 183706,
+        "sha256": "66959d07b881205361dd1ec073f8b85abb46233e5acb64295554caa609c895bf"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/input/witnesses.json",
+        "path": "input/witnesses.json",
+        "git_blob": "768a5a156ec342c022c40d66930292430990f418",
+        "bytes": 19777,
+        "sha256": "31a98acd8a180a852c238ab3ad1aaa3f67050da950c79d849ebe58cb8f67465b"
+      },
+      {
+        "source_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+        "source_path": "plans/lab-colors/evidence/discrete-nominal-profile-20261002/interval-review/verify_exact_v2.py",
+        "path": "verify_exact_v2.py",
+        "git_blob": "1781923032fc4452b025a1a25225502cb86ff628",
+        "bytes": 18964,
+        "sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db"
+      }
+    ]
+  },
+  "historical_upstream_geometry_verifier_sha256": "4ad75e973417730b6c720d660507fded55b116f7d36888bccc31b334ff20b6db",
+  "source_refresh": {
+    "reason": "The real public Rust exhaustive decoding test now propagates its Result instead of unwrap; the archived snapshot honestly follows that committed source. No scanner exemption, archival byte disguise, or scientific numerical change.",
+    "prior_proof_source_commit": "0b71fd0c16a4da4c955e7dabd1096255aff9764b",
+    "historical_source_commit": "c3d24f5d43136fe5824036a1e2868e7daef09b4a",
+    "prior_public_product_commit": "97ab0c74cc3dbb5417aec4380498bbe2d90d2371",
+    "new_product_source_commit": "e579f73135d359e3d40efdf959aca7d72b600608",
+    "source_path": "crates/labcolors-core/src/spaces/srgb.rs",
+    "old_source": {
+      "sha256": "87f7d5fff7c426e40ac15d42f86798f774052f91486ae0d6c99b070ef60c77de",
+      "git_blob_sha1": "c20d8940fbb7ae8e4a987ed4d622350187479b7c"
+    },
+    "new_source": {
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf",
+      "git_blob_sha1": "a5464ccbbd1265274fc366da83cffafc4001d7df"
+    },
+    "source_origin_policy": "Historical source bytes remain publicly retrievable by the preserved product Git commits. This new snapshot is not represented as historical original bytes.",
+    "certificate_provenance": "Profile, frontier and interval JSON documents are metadata-rebound copies of upstream numerical certificates, not byte-original producer outputs. Existing computed_utc, generator/script_sha256, numpy_version and elapsed fields describe historical numerical computation; current bindings and new verifier identity are explicitly declared here.",
+    "verifier_change": "Three expected bridge SHA anchors and two historical-origin result field labels changed; arithmetic, predicates, coverage and mutations unchanged.",
+    "immutable_mathematical_payloads": [
+      "all265bridge rows including tokens/bits/dyadics/rounding certificates",
+      "421generators",
+      "35queries and positive-ray certificates",
+      "32frontier primal/dual certificates and all threshold values",
+      "fullface and endpoint primal certificates",
+      "refined corrections",
+      "all11mutation cases",
+      "allprimary source files",
+      "raw and canonical codec bytes"
+    ],
+    "metadata_change_audit": [
+      {
+        "path": "geometry/input/bridge.json",
+        "old_sha256": "86be18a027c5e69cf7537805018799839b4e5714b4c380b0e52ace5aff4cdccd",
+        "new_sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab",
+        "changed_json_paths": [
+          [
+            "product_commit"
+          ],
+          [
+            "created_utc"
+          ],
+          [
+            "bindings",
+            1,
+            "sha256"
+          ],
+          [
+            "bindings",
+            1,
+            "git_blob_sha1"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/profile-candidate.json",
+        "old_sha256": "66959d07b881205361dd1ec073f8b85abb46233e5acb64295554caa609c895bf",
+        "new_sha256": "2aa2f539b5617b050c6dbe666a3e448570313c8dd00cff04705b972a749c8aff",
+        "changed_json_paths": [
+          [
+            "source_pins",
+            "bridge",
+            "archive_path"
+          ],
+          [
+            "source_pins",
+            "bridge",
+            "sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/frontier-candidate.json",
+        "old_sha256": "4c79ea932dafebaf741d295d4fe1be016ab31b5d9764a83cfbfe6b73d573a583",
+        "new_sha256": "ffe4c9094ddbc6ef54082269425285758283397bee146baccd06e94ffeb8ee20",
+        "changed_json_paths": [
+          [
+            "profile_sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-full.json",
+        "old_sha256": "01e99b20ee0a2e9fa4775d6628b8f32c3ce894e0465bb0a9ec722bc51d9393db",
+        "new_sha256": "9ffc641881229c5bddc6c725d0c79a1ff0519f681f7b832cfe686ab2edd2f626",
+        "changed_json_paths": [
+          [
+            "pins",
+            "profile"
+          ],
+          [
+            "pins",
+            "frontier"
+          ],
+          [
+            "pins",
+            "bridge"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-refined.json",
+        "old_sha256": "038452b56b381a97e16f3b025f2311d380988070323f8620f8e1cd690ab7ead5",
+        "new_sha256": "0975b7a7d386b59fe739c5de561b527201ede96939ec4af01ce0f11329e18d04",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/mutation-corpus.json",
+        "old_sha256": "32f9e8c9ca0a807ab1389901ab657da5016fbbf1ad7a44b07f23eb5f95b2ab1b",
+        "new_sha256": "ab9c0f7032f4aec1d4c79f756c54a784749aff82c3591e879ad24fe64b5f3a43",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "profile-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "frontier-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-refined.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      }
+    ],
+    "raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+    "codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+  },
+  "text_io_revision": {
+    "prior_proof_source_commit": "be996d60f3332dba5cda6be6f3894bc9c7db517a",
+    "prior_proof_manifest_sha256": "97556dfeb3ae5f945bf479fdfcc5095d17877782299af140791df66728cf1df0",
+    "prior_geometry_verifier_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+    "current_geometry_verifier_sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
+    "reason": "Explicit strict UTF-8 file I/O and fixed LF JSON output remove locale/platform dependence; scientific expressions, checks, constants and raw/codec bytes are unchanged.",
+    "files": [
+      {
+        "path": "audit_primary_inputs.py",
+        "prior_sha256": "1e0f47a8a54386e9ae91a49f6be9dfa424aefe8d6bd60368c06c944f05b27147",
+        "sha256": "609835e871d2cfff8a8f9ba6fad9dbbba0758135b08e6650bd3b597b0e833e06"
+      },
+      {
+        "path": "audits/bridge/audit_bridge.py",
+        "prior_sha256": "6026eb6fbefd7024e66b91c19fd918ae3f0529f0622d9aa757d3f38d70a14468",
+        "sha256": "cb00575dbe7550713319fa91a91c5437cc4a560e7c2fc8a504ab09fd4b930d86"
+      },
+      {
+        "path": "audits/join/audit_join.py",
+        "prior_sha256": "dbe14dfe9002bc64fb5b230389369041d57d251d54e92f21791b064563b09526",
+        "sha256": "bd1eb042764353c93badfc7087e7d16398e62add42c875ad66bc0c795f90e98c"
+      },
+      {
+        "path": "compare_finite_tables.py",
+        "prior_sha256": "e819ec56974eadc76aa2112a73b8093d2ec74eb0bb9238be22b331486c4ac7e1",
+        "sha256": "ef9fc3aabb38e51b0aa9df8b4a8953e488ac3444d19055a667881155e646945c"
+      },
+      {
+        "path": "geometry/verify_exact_v2.py",
+        "prior_sha256": "0f3b1f3c5ebc537f0c92e12515aa56e12b6e299d1c3409cf442392f4d0a0e205",
+        "sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8"
+      },
+      {
+        "path": "verify_bundle.py",
+        "prior_sha256": "cfe64299b2fcf897faa6da2cda2533ca4467a7f6d11a1a7373301c28f23d7f6e",
+        "sha256": "9fa76ad0496321fdfadd02097837841c0edc8b6f770bccc030ebb5c8f3f6ff85"
+      }
+    ],
+    "historical_stage_scope": "The existing source_refresh block describes only the earlier metadata-only source rebinding to e579/eaa. Its original checker-change description and receipts remain historical, not a description of this additional I/O revision.",
+    "documentation": "Standalone command now explicitly runs from the directory containing NOMINAL-SPEC.md and verify_bundle.py; the separate public-product-root example uses proof/clean-set-srgb8/v2/verify_bundle.py and --product-root .",
+    "review_comment_ids": [
+      4212411104,
+      4212411150
+    ]
+  }
+}

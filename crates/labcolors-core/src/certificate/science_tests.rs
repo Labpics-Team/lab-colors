@@ -6,18 +6,18 @@ use crate::authority::clean_convention::{
 use crate::authority::evaluation::PointQualityProfileV1;
 use crate::authority::test_support::{Host, point_attachment_for};
 use crate::authority::{AuthorityExpectedCurrentV1, AuthorityStateV1};
-use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+use crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
 use crate::program_wire::{ProgramAttachmentV1, ProgramScenarioV1};
 use crate::sha256::Hasher;
 
 fn profile() -> PointQualityProfileV1 {
     PointQualityProfileV1::declared_point(
         CleanConventionSelectionV1::select(
-            EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
+            EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
             CleanConventionScopeV1::ModeledSrgb8Point,
             CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
         )
-        .unwrap(),
+        .expect("the packaged nominal release must admit its declared modeled-point profile"),
     )
 }
 fn attachment() -> ProgramAttachmentV1<Host> {
@@ -116,7 +116,7 @@ fn independent_wire_binds_exact_profile_subject_both_branches_and_color() {
     assert_eq!(b.len(), 302);
     assert_eq!(&b[..6], b"LCPQ\x00\x01");
     assert_eq!(&b[6..38], profile().identity());
-    assert_eq!(&b[38..70], EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1);
+    assert_eq!(&b[38..70], EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2);
     assert_eq!(&b[70..73], &[1, 1, 0]);
     assert_eq!(&b[73..105], evaluated.subject_identity());
     assert_eq!(b[105], 1);

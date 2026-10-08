@@ -485,20 +485,20 @@ fn category_identity_binds_the_exact_declared_family_edge() {
 fn cleanliness_and_category_are_independent_hard_constraints_over_the_full_two_by_two() {
     // Cleanliness-принадлежность не образует категорию, а категория не
     // расширяет cleanliness: все четыре комбинации вердиктов достижимы.
-    let clean_member = Srgb8::new([0, 200, 70]);
-    let clean_nonmember = Srgb8::new([0, 200, 71]);
+    let clean_member = Srgb8::new([0, 199, 63]);
+    let clean_nonmember = Srgb8::new([0, 199, 64]);
     let root = program::PresentationRootIdV1::new(22);
     let clean_constraint = program::ConstraintIdV1::new(23);
     let cases = [
         (
             clean_member,
-            [[0, 200, 70]].as_slice(),
+            [[0, 199, 63]].as_slice(),
             program::StateKindV1::Ready,
             [program::VerdictV1::Pass, program::VerdictV1::Pass],
         ),
         (
             clean_nonmember,
-            [[0, 200, 71]].as_slice(),
+            [[0, 199, 64]].as_slice(),
             program::StateKindV1::Failed,
             [program::VerdictV1::Pass, program::VerdictV1::Violation],
         ),

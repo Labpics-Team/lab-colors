@@ -13,18 +13,18 @@
       "sha256": "912d03c716e961f8747a620bbcdf90dbd2fd3c3305e72321f18ab1f13d11bb5c"
     },
     {
-      "bytes": 6373,
+      "bytes": 6528,
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set.rs",
       "role": "classifier_source",
-      "sha256": "584ede95e80aa1a4a66a1dc38b1441f661e6de6eac7513f4ab8945a21a39373e"
+      "sha256": "2452f932c4355d4e3fa9be7659dc69166164b9aff2639da00eb074fe73da024b"
     },
     {
-      "bytes": 3417,
+      "bytes": 4072,
       "license": "MIT",
       "path": "crates/labcolors-core/src/clean_set_tests.rs",
       "role": "classifier_tests",
-      "sha256": "30c7b3c5ce7b7f876c2cf475a2815b6ac8e53b9986e471864b03de1558978d99"
+      "sha256": "b08333ea4c34cf384f44a1549e6c073416e81601701d82c22f20b390006ae9c7"
     },
     {
       "bytes": 10826,
@@ -48,11 +48,11 @@
       "sha256": "4bb505186198527498c45e4c26e70d91e5378b6cbfbd75c501bf508aac001796"
     },
     {
-      "bytes": 12355,
+      "bytes": 12157,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "67653e2cf8d45fc273f224a648d5340bfcf7d3d8c5923fd772498a00bc3f7873"
+      "sha256": "85386e269feecb3928c5b3e48b42409492d963f5bed9ba40ec7e37670fb6d8c8"
     },
     {
       "bytes": 39465,
@@ -101,28 +101,28 @@
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_identity.rs",
       "role": "program_identity_source",
-      "sha256": "838a52278a2b901554bd74e3d06d95f48952916bf8406003d0aed98577e68ea6"
+      "sha256": "8a6247cfa18158ddb34b0f7624e89ed8068bd3fc31405ddb748225da633399e8"
     },
     {
       "bytes": 247430,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session.rs",
       "role": "program_source",
-      "sha256": "b431a8c8b86ed999614e840d0ac90a3a8e588881ae83331a00fbd8cd0e4c1840"
+      "sha256": "69344253aafcd5ea2dfc23fabb4c27953c7e01aa95ad33b1d9c10f5ad5c51647"
     },
     {
       "bytes": 21872,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_clean_set_tests.rs",
       "role": "program_tests",
-      "sha256": "d7dcb85a0741e8b12e68d170dc4019269733d8784273e3bad625d1131637de28"
+      "sha256": "b78712ad7857b1912bd99ad4929da41476c1e435622db4703eb6fd0117b96672"
     },
     {
-      "bytes": 11370,
+      "bytes": 11280,
       "license": "CC-BY-4.0 AND CC-BY-SA-4.0",
-      "path": "crates/labcolors-core/contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin",
+      "path": "crates/labcolors-core/contracts/clean-set-srgb8-v2/point-clean-set-srgb8-column-rle-v1.bin",
       "role": "runtime_codec",
-      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
+      "sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
     },
     {
       "bytes": 27832,
@@ -146,35 +146,53 @@
       "sha256": "c8d600491f92c86c79b33ae2643787c52bb616028a48cd66bd711ba27d0b19d7"
     },
     {
-      "bytes": 39653,
+      "bytes": 6012,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/spaces/srgb/gamma_data.rs",
+      "role": "srgb_decode_source",
+      "sha256": "3993db8120865c7e73576e731fba7279e59b23a1b4c1c29572143b2cb141c678"
+    },
+    {
+      "bytes": 21935,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/spaces/srgb.rs",
+      "role": "srgb_matrix_source",
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf"
+    },
+    {
+      "bytes": 41529,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "1fe3cb719f883b7968bf05bbf613353235445e55ad7942bb7f8a83145cb97b09"
+      "sha256": "9de2e6869837e7e7fc79fc7a5f8417ae441f02a7059b4b554281e88a1097f67f"
     },
     {
-      "bytes": 32381,
+      "bytes": 38286,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "1bf245f1e4c626981eb2c7a357a1ce3132078d2161731b476493a560896a7ddf"
+      "sha256": "fd599741bb6bb82cf71297a83de5f243210adb9038d948eae060d8b32b6186c1"
     }
   ],
   "excluded_claims": [
     "ideal algebraic IEC 61966-2-1 transfer semantics",
     "chromatic adaptation",
     "physical applicability of object-colour geometry to self-luminous display",
-    "human cleanliness law or population guarantee"
+    "human cleanliness law or population guarantee",
+    "continuous-spectrum or full CIE wavelength-range theorem",
+    "published measurement-error enclosure for printed xyY values",
+    "unconditional raw-column interpretation or stimulus identity",
+    "independent human holdout validation of the fitted frontier"
   ],
   "license_scope": {
     "codec_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
     "core_package_spdx": "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0",
     "legal_files": [
       {
-        "bytes": 2952,
+        "bytes": 4608,
         "path": "crates/labcolors-core/NOTICE.md",
         "role": "attribution_notice",
-        "sha256": "caf524260873a2daa9f727d81b9b49f571f444e9452d48099a516a8a9f9f7684"
+        "sha256": "15badc6b2b868aff66b74ae34f6b1360c273c2b935f8061214dcdc56db7f7c39"
       },
       {
         "bytes": 18657,
@@ -204,21 +222,22 @@
     "receipt_spdx": "CC-BY-4.0 AND CC-BY-SA-4.0",
     "software_spdx": "MIT"
   },
-  "release_id": "exact-nominal-srgb8-point-clean-set-v1",
+  "release_id": "exact-nominal-srgb8-point-clean-set-v2",
   "research": {
-    "commit": "ac6d9654fc722334d8bc2054afb903770f2aad80",
+    "commit": "0adb410a92e943dad67161ce616e9f8c701d8a51",
     "object_format": "sha1",
-    "release_path": "evidence/point-clean-set-srgb8/release-v1.json",
-    "release_sha256": "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6"
+    "release_path": "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule/release-v2.json",
+    "release_sha256": "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c",
+    "repository": "https://github.com/Labpics-Team/agents-config"
   },
   "runtime_contract": {
-    "accepted_points": 8232849,
+    "accepted_points": 8342111,
     "codec": {
-      "bytes": 11370,
+      "bytes": 11280,
       "header_hex": "4c50434301010000",
       "id": "green-column-red-run-start-rle-v1",
-      "records": 3616,
-      "sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331"
+      "records": 3586,
+      "sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
     },
     "domain_id": "encoded-srgb8-u8-cube-v1",
     "domain_points": 16777216,
@@ -227,8 +246,8 @@
     "raw": {
       "bytes": 131072,
       "id": "raw-dirty-blue-interval-u8-pair-v1",
-      "sha256": "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2"
+      "sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e"
     }
   },
-  "schema": "labcolors-exact-point-clean-set-product-receipt/1"
+  "schema": "labcolors-exact-point-clean-set-product-receipt/2"
 }

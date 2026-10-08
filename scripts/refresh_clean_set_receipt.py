@@ -10,8 +10,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RECEIPT_PATH = ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.json"
-PIN_PATH = ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v1/receipt-v1.sha256"
+RECEIPT_PATH = ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.json"
+PIN_PATH = ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.sha256"
 
 
 def canonical_json(value):
@@ -47,15 +47,15 @@ for entry in receipt.get("license_scope", {}).get("legal_files", []):
         changed_legal += 1
 
 if changed_artifacts == 0 and changed_legal == 0:
-    print("No changes needed — receipt already matches working tree.")
+    print("No changes needed: receipt already matches working tree.")
     sys.exit(0)
 
 new_receipt_bytes = canonical_json(receipt).encode("ascii")
 RECEIPT_PATH.write_bytes(new_receipt_bytes)
-print(f"Wrote {RECEIPT_PATH} ({len(new_receipt_bytes)} bytes)")
+print(f"Wrote {RECEIPT_PATH.relative_to(ROOT)} ({len(new_receipt_bytes)} bytes)")
 
-pin_content = f"{sha256hex(new_receipt_bytes)}  receipt-v1.json\n"
+pin_content = f"{sha256hex(new_receipt_bytes)}  receipt-v2.json\n"
 PIN_PATH.write_bytes(pin_content.encode("ascii"))
-print(f"Wrote {PIN_PATH}")
+print(f"Wrote {PIN_PATH.relative_to(ROOT)}")
 print(f"New receipt SHA-256: {sha256hex(new_receipt_bytes)}")
 print(f"Changed: {changed_artifacts} artifacts, {changed_legal} legal files")

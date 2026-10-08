@@ -865,13 +865,13 @@ fn declared_srgb8_clean_set_constraint_color(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     declared_srgb8_clean_set_constraint_color_for_release(
         mode_tag,
-        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,
+        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
     )
 }
 
 #[cfg(test)]
 fn clean_set_final_recheck_mutant_release_v1() -> [u8; 32] {
-    let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+    let mut release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
     // Инъекция меняет один заранее объявленный бит: тест доказывает, что
     // final-recheck связывает новый release, а не случайно другой дайджест.
     release[0] ^= 1;
@@ -2111,7 +2111,7 @@ mod tests {
 
     #[test]
     fn clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit() {
-        let source = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+        let source = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
         let mutant = clean_set_final_recheck_mutant_release_v1();
 
         assert_eq!(mutant[0], source[0] ^ 1);
@@ -2120,7 +2120,7 @@ mod tests {
 
     #[test]
     fn declared_clean_set_constraint_color_binds_every_release_digest_byte() {
-        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1;
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
         let baseline = declared_srgb8_clean_set_constraint_color_for_release(
             vertex_tag::CONSTRAINT_HARD,
             release,

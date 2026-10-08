@@ -1,0 +1,62 @@
+{
+  "repository": "https://github.com/Labpics-Team/agents-config",
+  "commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
+  "prefix": "plans/lab-colors/evidence/research-archive-20261002/",
+  "files": [
+    {
+      "path": "colors-nominal-model-input-closure-20261002/primary/cie-cmf-metadata.json",
+      "git_blob": "dd2da5d85425782eeffd3bb11bb58aed691950a5",
+      "bytes": 3787,
+      "sha256": "03abcaecf4e63d77045ef57c4514b52c8bb1a46dd18e1f93a50044a0f4f481c8"
+    },
+    {
+      "path": "colors-nominal-model-input-closure-20261002/primary/cie-cmf.csv",
+      "git_blob": "9b4e3f73b4bb412a762a6d03cb8060bfea652a6e",
+      "bytes": 24021,
+      "sha256": "fa663e3535a7e0763a745993a1f0a192eb0275ac46ad2d1befd7626841e713c1"
+    },
+    {
+      "path": "colors-nominal-model-input-closure-20261002/primary/cie-d65-metadata.json",
+      "git_blob": "4e6dc5ea196c7f2536e877598dcd4ff3bc57c598",
+      "bytes": 2577,
+      "sha256": "71994379b81c65db111f652e747a00b599b5456c2a8242e9a0d6f379f560a14e"
+    },
+    {
+      "path": "colors-nominal-model-input-closure-20261002/primary/cie-d65.csv",
+      "git_blob": "77fad96665b71b67c1254847b6846978c82ad245",
+      "bytes": 6820,
+      "sha256": "e76f210bffff3d552ef7113025da5f325d5dfec200dd4b878b1a2f3a507032cb"
+    },
+    {
+      "path": "colors-sato-exact-witnesses-20261002/results/COHORT-MEANS.json",
+      "git_blob": "a3acb55349c4a4023d6912a31cf85b60ca070d0e",
+      "bytes": 39276,
+      "sha256": "b4c3f511f144cb7010898fcaec31549812c023acd02d210ae225483e43f68a0b"
+    },
+    {
+      "path": "colors-sato-input-identity-20261002/STIMULUS-JOIN.json",
+      "git_blob": "184918763105919c2f57501c346131756dfc413c",
+      "bytes": 8416,
+      "sha256": "0521836a259d03195cd6d9bc1b4e31e53c96e0f097c2c6fb1e923eb8f60e43df"
+    },
+    {
+      "path": "colors-sato-input-identity-20261002/primary/TableS1.docx",
+      "git_blob": "c5fdddfb61e0e2415661895b18f9afea6a71f78f",
+      "bytes": 14965,
+      "sha256": "e09557fe44fd63ef4fb1995db19ce62e9b0c0fecb27d7c8aee1507adec36301d"
+    },
+    {
+      "path": "colors-sato-input-identity-20261002/primary/article.xml",
+      "git_blob": "b18a0546554e918a17a457b1e6b6a2ab4e49485c",
+      "bytes": 219103,
+      "sha256": "c151b4cc941299a493e3fd3e6b4ef88c34b7bc3566e74a9860dcab94dbdd44d4"
+    },
+    {
+      "path": "colors-sato-input-identity-20261002/primary/original-sato-data.zip",
+      "git_blob": "1772fca544a9ac78b58693cbac5ccaeb34638927",
+      "bytes": 237236,
+      "sha256": "22cdecae96e9fd2b1af1f09a4c4358cbacefb12cee82d7fa5374fcfe2ed8edad"
+    }
+  ],
+  "selection": "Minimal public primary-data closure; no research prose or journals included."
+}

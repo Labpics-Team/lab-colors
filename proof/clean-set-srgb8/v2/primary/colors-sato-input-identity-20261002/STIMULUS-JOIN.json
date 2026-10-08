@@ -1,0 +1,364 @@
+{
+  "schema": "sato-nominal-stimulus-identity-bridge/1",
+  "status": "UNIQUE_UNDER_EXPLICIT_NAMING_COUNT_AND_PERCENT_PREMISES",
+  "not_source_explicit_codebook": true,
+  "basis": "All CVD Table3 constraints plus either independent published normal green anchor; same unique full32 association under both percent enclosures. Row order and button-code order are not premises.",
+  "support_variants": [
+    {
+      "variant": "cvd_plus_normal_saturated_green_anchor",
+      "half_percent_units": 1
+    },
+    {
+      "variant": "cvd_plus_normal_saturated_green_anchor",
+      "half_percent_units": 2
+    },
+    {
+      "variant": "cvd_plus_normal_muted_green_anchor",
+      "half_percent_units": 1
+    },
+    {
+      "variant": "cvd_plus_normal_muted_green_anchor",
+      "half_percent_units": 2
+    }
+  ],
+  "raw_zip_sha256": "22cdecae96e9fd2b1af1f09a4c4358cbacefb12cee82d7fa5374fcfe2ed8edad",
+  "table_s1_docx_sha256": "e09557fe44fd63ef4fb1995db19ce62e9b0c0fecb27d7c8aee1507adec36301d",
+  "audit_sha256": "1dbb63a9e09157a8fd4f610d4743541f5b099659745ee75a63dc56f3017f7ec5",
+  "rows": [
+    {
+      "raw_stimulus_id": 0,
+      "label": "saturated red",
+      "table_s1_row_index": 2,
+      "xyY_decimal_tokens": {
+        "x": "0.57",
+        "y": "0.30",
+        "Y": "19.25"
+      }
+    },
+    {
+      "raw_stimulus_id": 1,
+      "label": "light red",
+      "table_s1_row_index": 3,
+      "xyY_decimal_tokens": {
+        "x": "0.41",
+        "y": "0.32",
+        "Y": "41.43"
+      }
+    },
+    {
+      "raw_stimulus_id": 2,
+      "label": "muted red",
+      "table_s1_row_index": 4,
+      "xyY_decimal_tokens": {
+        "x": "0.45",
+        "y": "0.31",
+        "Y": "19.32"
+      }
+    },
+    {
+      "raw_stimulus_id": 3,
+      "label": "dark red",
+      "table_s1_row_index": 5,
+      "xyY_decimal_tokens": {
+        "x": "0.50",
+        "y": "0.30",
+        "Y": "6.78"
+      }
+    },
+    {
+      "raw_stimulus_id": 4,
+      "label": "saturated orange",
+      "table_s1_row_index": 6,
+      "xyY_decimal_tokens": {
+        "x": "0.53",
+        "y": "0.40",
+        "Y": "41.57"
+      }
+    },
+    {
+      "raw_stimulus_id": 5,
+      "label": "light orange",
+      "table_s1_row_index": 7,
+      "xyY_decimal_tokens": {
+        "x": "0.40",
+        "y": "0.35",
+        "Y": "56.77"
+      }
+    },
+    {
+      "raw_stimulus_id": 6,
+      "label": "muted orange",
+      "table_s1_row_index": 8,
+      "xyY_decimal_tokens": {
+        "x": "0.43",
+        "y": "0.36",
+        "Y": "29.21"
+      }
+    },
+    {
+      "raw_stimulus_id": 7,
+      "label": "dark orange",
+      "table_s1_row_index": 9,
+      "xyY_decimal_tokens": {
+        "x": "0.46",
+        "y": "0.37",
+        "Y": "11.96"
+      }
+    },
+    {
+      "raw_stimulus_id": 8,
+      "label": "saturated yellow",
+      "table_s1_row_index": 10,
+      "xyY_decimal_tokens": {
+        "x": "0.43",
+        "y": "0.46",
+        "Y": "75.43"
+      }
+    },
+    {
+      "raw_stimulus_id": 9,
+      "label": "light yellow",
+      "table_s1_row_index": 11,
+      "xyY_decimal_tokens": {
+        "x": "0.22",
+        "y": "0.51",
+        "Y": "75.50"
+      }
+    },
+    {
+      "raw_stimulus_id": 10,
+      "label": "muted yellow",
+      "table_s1_row_index": 12,
+      "xyY_decimal_tokens": {
+        "x": "0.40",
+        "y": "0.41",
+        "Y": "41.78"
+      }
+    },
+    {
+      "raw_stimulus_id": 11,
+      "label": "dark yellow",
+      "table_s1_row_index": 13,
+      "xyY_decimal_tokens": {
+        "x": "0.43",
+        "y": "0.43",
+        "Y": "19.45"
+      }
+    },
+    {
+      "raw_stimulus_id": 12,
+      "label": "saturated chartreuse",
+      "table_s1_row_index": 14,
+      "xyY_decimal_tokens": {
+        "x": "0.39",
+        "y": "0.50",
+        "Y": "56.89"
+      }
+    },
+    {
+      "raw_stimulus_id": 13,
+      "label": "light chartreuse",
+      "table_s1_row_index": 15,
+      "xyY_decimal_tokens": {
+        "x": "0.36",
+        "y": "0.41",
+        "Y": "75.56"
+      }
+    },
+    {
+      "raw_stimulus_id": 14,
+      "label": "muted chartreuse",
+      "table_s1_row_index": 16,
+      "xyY_decimal_tokens": {
+        "x": "0.36",
+        "y": "0.42",
+        "Y": "41.65"
+      }
+    },
+    {
+      "raw_stimulus_id": 15,
+      "label": "dark chartreuse",
+      "table_s1_row_index": 17,
+      "xyY_decimal_tokens": {
+        "x": "0.36",
+        "y": "0.45",
+        "Y": "19.57"
+      }
+    },
+    {
+      "raw_stimulus_id": 16,
+      "label": "saturated green",
+      "table_s1_row_index": 18,
+      "xyY_decimal_tokens": {
+        "x": "0.23",
+        "y": "0.43",
+        "Y": "29.22"
+      }
+    },
+    {
+      "raw_stimulus_id": 17,
+      "label": "light green",
+      "table_s1_row_index": 19,
+      "xyY_decimal_tokens": {
+        "x": "0.28",
+        "y": "0.36",
+        "Y": "56.92"
+      }
+    },
+    {
+      "raw_stimulus_id": 18,
+      "label": "muted green",
+      "table_s1_row_index": 20,
+      "xyY_decimal_tokens": {
+        "x": "0.28",
+        "y": "0.37",
+        "Y": "29.42"
+      }
+    },
+    {
+      "raw_stimulus_id": 19,
+      "label": "dark green",
+      "table_s1_row_index": 21,
+      "xyY_decimal_tokens": {
+        "x": "0.26",
+        "y": "0.39",
+        "Y": "12.10"
+      }
+    },
+    {
+      "raw_stimulus_id": 20,
+      "label": "saturated cyan",
+      "table_s1_row_index": 22,
+      "xyY_decimal_tokens": {
+        "x": "0.22",
+        "y": "0.33",
+        "Y": "41.79"
+      }
+    },
+    {
+      "raw_stimulus_id": 21,
+      "label": "light cyan",
+      "table_s1_row_index": 23,
+      "xyY_decimal_tokens": {
+        "x": "0.26",
+        "y": "0.33",
+        "Y": "56.95"
+      }
+    },
+    {
+      "raw_stimulus_id": 22,
+      "label": "muted cyan",
+      "table_s1_row_index": 24,
+      "xyY_decimal_tokens": {
+        "x": "0.25",
+        "y": "0.33",
+        "Y": "29.34"
+      }
+    },
+    {
+      "raw_stimulus_id": 23,
+      "label": "dark cyan",
+      "table_s1_row_index": 25,
+      "xyY_decimal_tokens": {
+        "x": "0.22",
+        "y": "0.32",
+        "Y": "12.04"
+      }
+    },
+    {
+      "raw_stimulus_id": 24,
+      "label": "saturated blue",
+      "table_s1_row_index": 26,
+      "xyY_decimal_tokens": {
+        "x": "0.20",
+        "y": "0.23",
+        "Y": "29.02"
+      }
+    },
+    {
+      "raw_stimulus_id": 25,
+      "label": "light blue",
+      "table_s1_row_index": 27,
+      "xyY_decimal_tokens": {
+        "x": "0.26",
+        "y": "0.27",
+        "Y": "56.67"
+      }
+    },
+    {
+      "raw_stimulus_id": 26,
+      "label": "muted blue",
+      "table_s1_row_index": 28,
+      "xyY_decimal_tokens": {
+        "x": "0.24",
+        "y": "0.26",
+        "Y": "29.11"
+      }
+    },
+    {
+      "raw_stimulus_id": 27,
+      "label": "dark blue",
+      "table_s1_row_index": 29,
+      "xyY_decimal_tokens": {
+        "x": "0.22",
+        "y": "0.24",
+        "Y": "12.04"
+      }
+    },
+    {
+      "raw_stimulus_id": 28,
+      "label": "saturated purple",
+      "table_s1_row_index": 30,
+      "xyY_decimal_tokens": {
+        "x": "0.28",
+        "y": "0.14",
+        "Y": "11.63"
+      }
+    },
+    {
+      "raw_stimulus_id": 29,
+      "label": "light purple",
+      "table_s1_row_index": 31,
+      "xyY_decimal_tokens": {
+        "x": "0.29",
+        "y": "0.23",
+        "Y": "41.34"
+      }
+    },
+    {
+      "raw_stimulus_id": 30,
+      "label": "muted purple",
+      "table_s1_row_index": 32,
+      "xyY_decimal_tokens": {
+        "x": "0.29",
+        "y": "0.21",
+        "Y": "19.29"
+      }
+    },
+    {
+      "raw_stimulus_id": 31,
+      "label": "dark purple",
+      "table_s1_row_index": 33,
+      "xyY_decimal_tokens": {
+        "x": "0.29",
+        "y": "0.17",
+        "Y": "6.69"
+      }
+    }
+  ],
+  "numeric_representation": "Decimal source tokens retained as strings. No float conversion, averaging, normalization, geometry or T_policy calculation.",
+  "units": {
+    "table_s1_header": [
+      "CIE(1931) x, y, Y",
+      "x",
+      "y",
+      "Y"
+    ],
+    "explicit_unit_in_docx": null,
+    "article_context": "Measured chromaticity and luminance via CS-150; reference white and background Y explicitly reported in cd/m^2. Raw archive XYZ table has no units header.",
+    "normalization_applied": false
+  },
+  "retained_conflict": "Full Table3 source agreement is inconsistent for muted-chartreuse normal Green50/Yellow48; no source values corrected.",
+  "historical_ac6_identity_established": false,
+  "physical_calibration_proof": false
+}

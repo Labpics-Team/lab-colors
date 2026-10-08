@@ -226,8 +226,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
       - name: verify exact clean-set product receipt
         run: python3 scripts/verify_clean_set_receipt.py product --product-root "$GITHUB_WORKSPACE"
+      - name: replay the complete nominal clean-set proof offline
+        run: python3 scripts/verify_clean_set_receipt.py full --product-root "$GITHUB_WORKSPACE"
       - name: clean-set receipt verifier hostile tests
-        run: python3 scripts/test_verify_clean_set_receipt.py
+        run: |
+          python3 scripts/test_verify_clean_set_receipt.py
+          python3 -O scripts/test_verify_clean_set_receipt.py
       - name: toolchain env (runner.temp)
         run: |
           {

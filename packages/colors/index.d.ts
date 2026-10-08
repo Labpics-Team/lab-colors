@@ -67,6 +67,7 @@ export type ProgramAttachmentFreeErrorCode =
   | "program_attachment_busy";
 export type ProgramPhysicalIdentityErrorCode = "program_physical_identity";
 export type ProgramMaterializationErrorCode =
+  | "program_attachment_resource_exhausted"
   | "program_materialization_not_ready"
   | "program_materialization_paint_not_authority"
   | "program_materialization_stale_revision"

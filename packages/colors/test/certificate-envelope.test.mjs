@@ -155,18 +155,18 @@ test("WASM ingress refuses oversized input before linear-memory copy", () => {
   );
   const lyingSubclass = new (class extends Uint8Array {
     get byteLength() {
-      return 1;
+      throw new Error("caller byteLength must not execute");
     }
 
     get length() {
-      return 1_073_741_824;
+      throw new Error("caller length must not execute");
     }
   })(1);
   assert.throws(
     () => decodeCertificateEnvelope(lyingSubclass),
     (error) => {
       assert.equal(isCertificateError(error), true);
-      assert.equal(error.code, "certificate_invalid_input");
+      assert.equal(error.code, "certificate_truncated_input");
       return true;
     },
   );

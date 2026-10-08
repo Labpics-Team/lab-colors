@@ -1,0 +1,238 @@
+{
+  "status": "BoundedMutationCorpusPrepared",
+  "input_sha256": {
+    "profile-candidate.json": "2aa2f539b5617b050c6dbe666a3e448570313c8dd00cff04705b972a749c8aff",
+    "frontier-candidate.json": "ffe4c9094ddbc6ef54082269425285758283397bee146baccd06e94ffeb8ee20",
+    "intervals-full.json": "9ffc641881229c5bddc6c725d0c79a1ff0519f681f7b832cfe686ab2edd2f626",
+    "intervals-full-primal.jsonl.gz": "39f264c825886d38885ba6215861bf909a228668f5de204bc47633959d4546b9",
+    "intervals-refined.json": "0975b7a7d386b59fe739c5de561b527201ede96939ec4af01ce0f11329e18d04",
+    "intervals-refined.raw": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e"
+  },
+  "cases": [
+    {
+      "id": "threshold_numerator",
+      "patch": {
+        "target": "T_policy",
+        "value": "3588957245052642380250000000000001/736808358950889313866593271532810669"
+      },
+      "witness": {
+        "column": 1,
+        "endpoint": "upper",
+        "beta": "31564090613953508769053402778715021738478326458781224659753259827300470777680421734286660223463847/56018840630011758775570484706663478583414500108265697818925143846865195422764236800000000000000000",
+        "xyz_residual": [
+          "-4517571402214182682188733218004920918154222442321489271219374072563259945471136175262140843799989/5928996945455049036489618351913090349385620346104185663947091163641043468105954747246951113740864492354829596711976960000000000000",
+          "-30787012237585956449527160920773159434633250099041041635483505468676347693768349368975841444852383/23715987781820196145958473407652361397542481384416742655788364654564173872423818988987804454963457969419318386847907840000000000000",
+          "-112651176958393589508758583468357062759614973210570595488760475249608480266269230704290156606443/118579938909100980729792367038261806987712406922083713278941823272820869362119094944939022274817289847096591934239539200000000000"
+        ]
+      },
+      "expected_gate": "Exact endpoint primal equality rejects altered threshold."
+    },
+    {
+      "id": "threshold_denominator",
+      "patch": {
+        "target": "T_policy",
+        "value": "358895724505264238025000000000000/73680835895088931386659327153281067"
+      },
+      "witness": {
+        "column": 1,
+        "endpoint": "upper",
+        "beta": "517146060619014287672170951126466772104665734131453055944764045975014764955819042501177/917812684882112655778946821433974434356323148698260647295574795933713145399991074816000",
+        "xyz_residual": [
+          "6131270563551374674936743723566605949805337554344586530858281/1652011027333395620825106986226560243310650783673705491972500006933314829596711976960000000000000",
+          "41784287411481458876745024451316521201436358232518066737133307/6608044109333582483300427944906240973242603134694821967890000027733259318386847907840000000000000",
+          "152890742334672887130288738063454609251765933186595957645047/33040220546667912416502139724531204866213015673474109839450000138666296591934239539200000000000"
+        ]
+      },
+      "expected_gate": "Exact endpoint primal equality rejects altered threshold."
+    },
+    {
+      "id": "strict_frontier_equality",
+      "patch": {
+        "operator": ">="
+      },
+      "witness": {
+        "stimulus": 26,
+        "B": "3588957245052642380250000000000000/736808358950889313866593271532810669",
+        "T": "3588957245052642380250000000000000/736808358950889313866593271532810669",
+        "expected": "Rejected",
+        "mutant": "Accepted"
+      },
+      "expected_gate": "Canonical strict B > T rejects equality."
+    },
+    {
+      "id": "rgb_order",
+      "patch": {
+        "permutation": [
+          "green",
+          "red",
+          "blue"
+        ]
+      },
+      "witness": {
+        "rgb": [
+          0,
+          11,
+          0
+        ],
+        "expected": {
+          "Rejected": [
+            0,
+            198
+          ]
+        },
+        "mutant": {
+          "Rejected": [
+            0,
+            197
+          ]
+        }
+      },
+      "expected_gate": "Full observable differential rejects changed decision or payload."
+    },
+    {
+      "id": "interval_endpoint",
+      "patch": {
+        "byte_offset": 1,
+        "value": 198
+      },
+      "witness": {
+        "rgb": [
+          0,
+          0,
+          198
+        ],
+        "expected": "Accepted",
+        "mutant": {
+          "Rejected": [
+            0,
+            198
+          ]
+        }
+      },
+      "expected_gate": "Full observable differential rejects changed decision or payload."
+    },
+    {
+      "id": "empty_sentinel",
+      "patch": {
+        "byte_offset": 400,
+        "value": 254
+      },
+      "witness": {
+        "column": 200,
+        "expected": [
+          255,
+          0
+        ],
+        "mutant": [
+          254,
+          0
+        ]
+      },
+      "expected_gate": "Raw canonicality rejects lo>hi except 255/0 even if booleans agree."
+    },
+    {
+      "id": "neutral_widening",
+      "patch": {
+        "neutral": "red==green"
+      },
+      "witness": {
+        "rgb": [
+          0,
+          0,
+          1
+        ],
+        "expected": {
+          "Rejected": [
+            0,
+            197
+          ]
+        },
+        "mutant": "Accepted"
+      },
+      "expected_gate": "Full observable differential rejects changed decision or payload."
+    },
+    {
+      "id": "neutral_omission",
+      "patch": {
+        "neutral": "none"
+      },
+      "witness": {
+        "rgb": [
+          0,
+          0,
+          0
+        ],
+        "expected": "Accepted",
+        "mutant": {
+          "Rejected": [
+            0,
+            197
+          ]
+        }
+      },
+      "expected_gate": "Full observable differential rejects changed decision or payload."
+    },
+    {
+      "id": "table_bit",
+      "patch": {
+        "byte_offset": 1,
+        "xor": 1
+      },
+      "witness": {
+        "rgb": [
+          0,
+          0,
+          197
+        ],
+        "expected": {
+          "Rejected": [
+            0,
+            197
+          ]
+        },
+        "mutant": "Accepted"
+      },
+      "expected_gate": "Full observable differential rejects changed decision or payload."
+    },
+    {
+      "id": "output_matrix_identity",
+      "patch": {
+        "matrix_index": 1,
+        "value": "201302087200345/562949953421312"
+      },
+      "witness": {
+        "column": 1,
+        "endpoint": "upper",
+        "xyz_residual": [
+          "40034158796346803039775245344265423344869264017656660046066356177057142432993069/15487603381250583945235377995874002281037351096940988987242187564999826527469174784000000000000",
+          "-903821958344525683138382207596859509179925449850228659287065928919672134313877/12390082705000467156188302396699201824829880877552791189793750051999861221975339827200000000000",
+          "-297508061288406413412014726560765265331315396658005019954769086797995830769117/309752067625011678904707559917480045620747021938819779744843751299996530549383495680000000000"
+        ]
+      },
+      "expected_gate": "Pinned bridge and exact endpoint equality reject altered output."
+    },
+    {
+      "id": "output_binding_identity",
+      "patch": {
+        "bridge_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected_gate": "Expected external binding digest rejects replacement."
+    }
+  ],
+  "baseline_witness": {
+    "column": 1,
+    "endpoint": "upper",
+    "beta": "1034292121238028575344341902252933544208991011516980770101643068310003186470409019730179/1835625369764225311557893642867948866221326339547650386130539113574078723613138511462400",
+    "xyz_residual": [
+      "0/1",
+      "0/1",
+      "0/1"
+    ]
+  },
+  "script_sha256": "69d7364a5f8e63613f9f3ebbccc9cdd43b4dda4eb5fc282074f1a1b29a3ae453",
+  "limits": [
+    "Concrete differences checked with source-bound exact arithmetic.",
+    "Independent verifier mutation-run is not claimed.",
+    "Original files and product source remain unchanged."
+  ]
+}

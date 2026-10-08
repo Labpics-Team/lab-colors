@@ -12,10 +12,12 @@ import { ENVELOPE_LIMIT, referencePacket } from "./helpers/certificate-wire-refe
 // код ошибки не способен отличить ранний отказ от уже выполненного copy.
 const instrumentedBinding = `
 export const copierEntries = [];
+export let lastInput;
 export default async function init() {}
 export function initSync() {}
 export function issueSourceCertificateEnvelope() { throw new Error("Unexpected producer call in ingress test"); }
 export function decodeCertificateEnvelope(bytes) {
+  lastInput = bytes;
   copierEntries.push({ byteLength: bytes.byteLength, plain: Object.getPrototypeOf(bytes) === Uint8Array.prototype });
   if (bytes.byteLength > 2_097_152) {
     throw Object.assign(new Error("Certificate envelope operation failed"), {
@@ -47,7 +49,8 @@ test("certificate size refusal precedes entry into the generated WASM copier", a
     writeFile(join(directory, "pkg/labcolors.js"), instrumentedBinding),
   ]);
   const api = await import(pathToFileURL(join(directory, "index.js")).href);
-  const { copierEntries } = await import(pathToFileURL(join(directory, "pkg/labcolors.js")).href);
+  const generated = await import(pathToFileURL(join(directory, "pkg/labcolors.js")).href);
+  const { copierEntries } = generated;
   await api.default();
   assert.equal(api.MAX_CERTIFICATE_ENVELOPE_BYTES, ENVELOPE_LIMIT);
 
@@ -61,27 +64,37 @@ test("certificate size refusal precedes entry into the generated WASM copier", a
   assert.equal(copierEntries.at(-1).byteLength, ENVELOPE_LIMIT);
 
   const resizable = new ArrayBuffer(1, { maxByteLength: ENVELOPE_LIMIT + 1 });
+  new Uint8Array(resizable).set([0x41]);
+  let resizeReads = 0;
   class ChangesDuringValidation extends Uint8Array {
     get length() {
+      resizeReads += 1;
       resizable.resize(ENVELOPE_LIMIT + 1);
       Object.setPrototypeOf(this, Uint8Array.prototype);
       return 1;
     }
   }
-  const beforeResize = copierEntries.length;
-  assert.throws(() => api.decodeCertificateEnvelope(new ChangesDuringValidation(resizable)));
-  assert.equal(copierEntries.length, beforeResize, "resized input reached the generated WASM copier");
+  assert.equal(api.decodeCertificateEnvelope(new ChangesDuringValidation(resizable)), "generated-binding-entered");
+  assert.equal(resizeReads, 0);
+  assert.equal(resizable.byteLength, 1);
+  assert.deepEqual(copierEntries.at(-1), { byteLength: 1, plain: true });
+  assert.deepEqual([...generated.lastInput], [0x41]);
 
   const shrinking = new ArrayBuffer(2, { maxByteLength: 2 });
+  new Uint8Array(shrinking).set([0x42, 0x43]);
+  let shrinkReads = 0;
   class ShrinksDuringValidation extends Uint8Array {
     get length() {
+      shrinkReads += 1;
       shrinking.resize(1);
       return 2;
     }
   }
-  const beforeShrink = copierEntries.length;
-  assert.throws(() => api.decodeCertificateEnvelope(new ShrinksDuringValidation(shrinking)));
-  assert.equal(copierEntries.length, beforeShrink, "shrinking input was padded before the WASM copier");
+  assert.equal(api.decodeCertificateEnvelope(new ShrinksDuringValidation(shrinking)), "generated-binding-entered");
+  assert.equal(shrinkReads, 0);
+  assert.equal(shrinking.byteLength, 2);
+  assert.deepEqual(copierEntries.at(-1), { byteLength: 2, plain: true });
+  assert.deepEqual([...generated.lastInput], [0x42, 0x43]);
 
   for (const oversized of [
     new Uint8Array(ENVELOPE_LIMIT + 1),

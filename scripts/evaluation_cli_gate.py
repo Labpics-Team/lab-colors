@@ -38,7 +38,7 @@ MUTANTS = (
      "point_evaluation::tests::public_report_equals_direct_owner_chain_on_the_same_attachment"),
     ("point-report-hidden-release", CORE, CORE_COMMAND,
      "        convention_release,\n        CleanConventionScopeV1::ModeledSrgb8Point,",
-     "        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V1,\n        CleanConventionScopeV1::ModeledSrgb8Point,",
+     "        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,\n        CleanConventionScopeV1::ModeledSrgb8Point,",
      "point_evaluation::tests::public_entry_checks_final_composite_and_never_defaults_the_release"),
     ("cli-skip-evaluation", APP, CLI_COMMAND,
      "        let report = evaluate_request(&request)?;",

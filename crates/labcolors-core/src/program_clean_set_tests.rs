@@ -41,7 +41,7 @@ fn one_case(backdrop: &[Srgb8; 1]) -> [program::ScenarioV1<'_>; 1] {
 
 #[test]
 fn undeclared_exact_presentation_target_is_a_typed_compile_error() {
-    let mut draft = fixed_draft(Srgb8::new([0, 200, 71]));
+    let mut draft = fixed_draft(Srgb8::new([0, 199, 64]));
     draft.push_declared_srgb8_clean_set_hard(
         CONSTRAINT,
         program::PresentationRootIdV1::new(10),
@@ -64,7 +64,7 @@ fn undeclared_exact_presentation_target_is_a_typed_compile_error() {
 
 #[test]
 fn report_only_dirty_terminal_is_retained_as_a_typed_rejected_violation() {
-    let dirty = Srgb8::new([0, 200, 71]);
+    let dirty = Srgb8::new([0, 199, 64]);
     let mut draft = fixed_draft(dirty);
     draft.push_declared_srgb8_clean_set_report_only(CONSTRAINT, ROOT, OCCURRENCE);
     let owner = draft.compile().unwrap();
@@ -104,7 +104,7 @@ fn report_only_dirty_terminal_is_retained_as_a_typed_rejected_violation() {
         Some(program::DeclaredSrgb8CleanSetViolationKindV1::Rejected),
     );
     assert_eq!(evidence.visible(), Some(dirty));
-    assert_eq!(evidence.rejected_blue_interval(), Some([71, 101]));
+    assert_eq!(evidence.rejected_blue_interval(), Some([64, 108]));
 }
 
 #[test]
@@ -146,8 +146,8 @@ fn hard_absent_final_owned_domain_is_a_violation_not_a_pass() {
 fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
     let dirty_id = program::TargetCandidateIdV1::new(20);
     let clean_id = program::TargetCandidateIdV1::new(21);
-    let dirty = Srgb8::new([0, 200, 71]);
-    let clean = Srgb8::new([0, 200, 70]);
+    let dirty = Srgb8::new([0, 199, 64]);
+    let clean = Srgb8::new([0, 199, 63]);
     let mut draft = program::DraftV1::new();
     draft.push_source(SOURCE, dirty);
     draft.push_finite_target(
@@ -208,7 +208,7 @@ fn finite_search_skips_dirty_and_freshly_rechecks_the_first_clean_state() {
 
 #[test]
 fn two_clean_constraints_and_causal_reporting_share_one_phase_materialization() {
-    let mut draft = fixed_draft(Srgb8::new([0, 200, 71]));
+    let mut draft = fixed_draft(Srgb8::new([0, 199, 64]));
     draft.push_declared_srgb8_clean_set_report_only(CONSTRAINT, ROOT, OCCURRENCE);
     draft.push_declared_srgb8_clean_set_report_only(
         program::ConstraintIdV1::new(10),
@@ -276,7 +276,7 @@ fn downstream_occlusion_is_absent_even_when_the_inner_nominal_color_is_rejected(
     let clean_paint = program::PaintIdV1::new(13);
     let derived_surface = program::SurfaceIdV1::new(14);
     let terminal = program::OccurrenceIdV1::new(15);
-    let dirty = Srgb8::new([0, 200, 71]);
+    let dirty = Srgb8::new([0, 199, 64]);
     let mut draft = program::DraftV1::new();
     draft.push_source(SOURCE, dirty);
     draft.push_source(clean_source, Srgb8::new([255, 0, 0]));
@@ -336,7 +336,7 @@ fn nested_identity_draft(clean_target_occurrence: program::OccurrenceIdV1) -> pr
     let derived_surface = program::SurfaceIdV1::new(14);
     let terminal = program::OccurrenceIdV1::new(15);
     let mut draft = program::DraftV1::new();
-    draft.push_source(SOURCE, Srgb8::new([0, 200, 71]));
+    draft.push_source(SOURCE, Srgb8::new([0, 199, 64]));
     draft.push_source(upper_source, Srgb8::new([255, 0, 0]));
     draft.push_fixed_target(TARGET, SOURCE);
     draft.push_fixed_target(upper_target, upper_source);
@@ -539,7 +539,7 @@ fn finite_clean_owner(colors: &[Srgb8]) -> program::OwnerV1 {
 fn rejected_clean_search_states_do_not_add_hot_path_allocations() {
     let direct = finite_clean_owner(&[Srgb8::new([255, 0, 0])]);
     let rejected = finite_clean_owner(&[
-        Srgb8::new([0, 200, 71]),
+        Srgb8::new([0, 199, 64]),
         Srgb8::new([0, 200, 72]),
         Srgb8::new([0, 200, 73]),
         Srgb8::new([255, 0, 0]),

@@ -31,6 +31,7 @@ const SECTION_ORDER_V1 = Object.freeze([
 const KIND_EXACT_VISIBLE_UNARY = 1;
 const KIND_EXACT_INTRINSIC_RELATION = 4;
 const KIND_WCAG22_VISIBLE_UNARY = 9;
+const KIND_CLEAN_SET = 10;
 
 export const SURROUND_AVERAGE_V1 = 1;
 export const SURROUND_DIM_V1 = 2;
@@ -390,6 +391,18 @@ export class ProgramWireBuilderV1 {
     sink.u8(KIND_WCAG22_VISIBLE_UNARY);
     sink.u32(checkedOccurrence);
     sink.u8(checkedCriterion);
+    return this;
+  }
+
+  declaredSrgb8CleanSet(hard, id, root, occurrence) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedRoot = u32Value(root, "constraint presentation root");
+    const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
+    const sink = this.constraintEntry(hard);
+    sink.u32(checkedId);
+    sink.u8(KIND_CLEAN_SET);
+    sink.u32(checkedRoot);
+    sink.u32(checkedOccurrence);
     return this;
   }
 

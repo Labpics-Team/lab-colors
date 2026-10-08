@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/Labpics-Team/lab-colors",
+  "commit": "7e6fe7e9927ba214e9d19d6bfae2de44692da44a",
+  "path": "crates/labcolors-core/contracts/clean-set-srgb8-v1/point-clean-set-srgb8-column-rle-v1.bin",
+  "codec_sha256": "aa6aa7c0b630437f1c1ba8c2ceafb0dadf6551c42331559504076a6cd44e6331",
+  "raw_sha256": "97bcc9f793adb7f13bd70c89e9788c8ab61baf8c77e9f8cd80335ad767d71ae2",
+  "historical_research_commit": "ac6d9654fc722334d8bc2054afb903770f2aad80",
+  "historical_release_sha256": "67cadaae38bbaea3096dba69142b5bf3d7776b7574ec224022abbcd119c45ce6",
+  "historical_derivation_status": "Unrecovered. This capsule proves no source-model equivalence, historical provenance, or perceptual superiority over v1."
+}
