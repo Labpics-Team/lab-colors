@@ -173,7 +173,7 @@
   "crates/labcolors-core/src/program/attachment/proofs.rs": "24ef891f704e6f4f148ad9cf17fbfa100c2ca550",
   "crates/labcolors-core/src/program/attachment/support.rs": "6dcbda20fc590436518d6d0bf4afc4ce25eebb3c",
   "crates/labcolors-core/src/program/attachment/tests.rs": "800888f7221e27f85b721f82b1d217fe3133472b",
-  "crates/labcolors-core/src/program/wire.rs": "98ddcd6baf3b9a3efc555c71d86c0f5d9ea13075",
+  "crates/labcolors-core/src/program/wire.rs": "29e450569e5ff76020e8584b16ba12b604fc31b1",
   "crates/labcolors-core/src/program/wire/proofs.rs": "60842192e718a8e4a2888096e765d4f4aa020f77",
   "crates/labcolors-core/src/program_api_tests.rs": "38e4e652cb437af68fa97473a5a2f0bfb6e9d6dc",
   "crates/labcolors-core/src/program_boundary_tests.rs": "5919c329c8ddd051911fba70cd81783ac5584ffd",
@@ -547,7 +547,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "e5787fe5de9c4dfa6c3ff46063f25f7c92680f0ee11cfa1a49320bc65ffb0841",
+ "record_sha256": "7f463c5690f6e92b20b20a47bd56e8e6b60e85809d2445ab45be580280c475ed",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

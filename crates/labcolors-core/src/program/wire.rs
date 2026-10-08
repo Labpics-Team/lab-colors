@@ -1338,10 +1338,14 @@ mod selection_v2_tests {
         builder
     }
 
-    fn finish(builder: ProgramWireBuilderV1, revision: u64, groups: &[Vec<State>]) -> Vec<u8> {
+    fn finish(
+        builder: ProgramWireBuilderV1,
+        revision: u64,
+        groups: &[Vec<State>],
+    ) -> Result<Vec<u8>, String> {
         let start =
             10 + 12 + builder.sources.len() + builder.targets.len() + builder.families.len();
-        let mut bytes = builder.finish().unwrap();
+        let mut bytes = builder.finish().map_err(|error| format!("{error:?}"))?;
         let mut selection = Vec::new();
         push_u32(&mut selection, 1);
         selection.extend_from_slice(&revision.to_le_bytes());
@@ -1361,7 +1365,7 @@ mod selection_v2_tests {
         bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
         let len = bytes.len() as u32;
         bytes[6..10].copy_from_slice(&len.to_le_bytes());
-        bytes
+        Ok(bytes)
     }
 
     fn groups() -> Vec<Vec<State>> {
@@ -1377,8 +1381,8 @@ mod selection_v2_tests {
     }
 
     #[test]
-    fn finite_selection_is_reachable_through_public_program_compilation() {
-        let bytes = finish(declaration(false), 1, &groups());
+    fn finite_selection_is_reachable_through_public_program_compilation() -> Result<(), String> {
+        let bytes = finish(declaration(false), 1, &groups())?;
         assert!(check_program_wire(&bytes).is_ok());
         assert!(
             check_program_wire_v1(&bytes).is_err(),
@@ -1386,22 +1390,26 @@ mod selection_v2_tests {
         );
         assert!(compile_program_wire_v1(&bytes).is_err());
         let mut runtime = compile_program_wire(&bytes)
-            .unwrap()
+            .map_err(|error| format!("{error:?}"))?
             .instantiate(1)
-            .unwrap();
-        let white = runtime.update_observed(1, &[scenario(1, 255)]).unwrap();
+            .map_err(|error| format!("{error:?}"))?;
+        let white = runtime
+            .update_observed(1, &[scenario(1, 255)])
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(white.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(white.outputs()[0].source(), Srgb8::new([80; 3]));
         let paired = runtime
             .update_observed(2, &[scenario(1, 255), scenario(2, 100)])
-            .unwrap();
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(paired.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(paired.outputs()[0].source(), Srgb8::new([0; 3]));
         let conflict = runtime
             .update_observed(3, &[scenario(1, 255), scenario(2, 0)])
-            .unwrap();
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(conflict.state(), ProgramSnapshotStateV1::Failed);
-        let restored = runtime.update_observed(4, &[scenario(1, 255)]).unwrap();
+        let restored = runtime
+            .update_observed(4, &[scenario(1, 255)])
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(restored.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(restored.outputs()[0].source(), Srgb8::new([80; 3]));
         assert_eq!(
@@ -1409,11 +1417,14 @@ mod selection_v2_tests {
             Srgb8::new([80; 3]),
             "old snapshots are unchanged"
         );
+        Ok(())
     }
 
     #[test]
-    fn v1_finite_graph_stays_refused_without_an_admitted_selection() {
-        let bytes = declaration(false).finish().unwrap();
+    fn v1_finite_graph_stays_refused_without_an_admitted_selection() -> Result<(), String> {
+        let bytes = declaration(false)
+            .finish()
+            .map_err(|error| format!("{error:?}"))?;
         assert!(matches!(
             compile_program_wire(&bytes),
             Err(ProgramRuntimeErrorV1::Compile)
@@ -1422,43 +1433,54 @@ mod selection_v2_tests {
             compile_program_wire_v1(&bytes),
             Err(ProgramRuntimeErrorV1::Compile)
         ));
-        let mut selected = finish(declaration(false), 1, &groups());
+        let mut selected = finish(declaration(false), 1, &groups())?;
         selected[4..6].copy_from_slice(&1u16.to_le_bytes());
         assert!(matches!(
             compile_program_wire(&selected),
             Err(ProgramRuntimeErrorV1::Wire)
         ));
+        Ok(())
     }
 
     #[test]
-    fn authored_group_order_is_policy_while_tie_and_declaration_permutations_are_not() {
+    fn authored_group_order_is_policy_while_tie_and_declaration_permutations_are_not()
+    -> Result<(), String> {
         let tied = vec![vec![
             (9, vec![(21, 201)]),
             (2, vec![(21, 202)]),
             (1, vec![(21, 203)]),
         ]];
         let reversed = vec![tied[0].iter().cloned().rev().collect::<Vec<_>>()];
-        let a = finish(declaration(false), 7, &tied);
-        let b = finish(declaration(true), 7, &reversed);
+        let a = finish(declaration(false), 7, &tied)?;
+        let b = finish(declaration(true), 7, &reversed)?;
         assert_eq!(
-            check_program_wire(&a).unwrap(),
-            check_program_wire(&b).unwrap()
+            check_program_wire(&a).map_err(|error| format!("{error:?}"))?,
+            check_program_wire(&b).map_err(|error| format!("{error:?}"))?
         );
-        let mut runtime = compile_program_wire(&a).unwrap().instantiate(1).unwrap();
-        let snapshot = runtime.update_observed(1, &[scenario(1, 255)]).unwrap();
+        let mut runtime = compile_program_wire(&a)
+            .map_err(|error| format!("{error:?}"))?
+            .instantiate(1)
+            .map_err(|error| format!("{error:?}"))?;
+        let snapshot = runtime
+            .update_observed(1, &[scenario(1, 255)])
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(snapshot.outputs()[0].source(), Srgb8::new([0; 3]));
         assert_ne!(
-            check_program_wire(&a).unwrap(),
-            check_program_wire(&finish(declaration(false), 8, &tied)).unwrap()
+            check_program_wire(&a).map_err(|error| format!("{error:?}"))?,
+            check_program_wire(&finish(declaration(false), 8, &tied)?)
+                .map_err(|error| format!("{error:?}"))?
         );
         assert_ne!(
-            check_program_wire(&a).unwrap(),
-            check_program_wire(&finish(declaration(false), 7, &groups())).unwrap()
+            check_program_wire(&a).map_err(|error| format!("{error:?}"))?,
+            check_program_wire(&finish(declaration(false), 7, &groups())?)
+                .map_err(|error| format!("{error:?}"))?
         );
+        Ok(())
     }
 
     #[test]
-    fn complete_cartesian_domain_and_declared_keys_are_admitted_by_the_existing_owners() {
+    fn complete_cartesian_domain_and_declared_keys_are_admitted_by_the_existing_owners()
+    -> Result<(), String> {
         let original = groups();
         let invalid = vec![
             vec![],
@@ -1492,19 +1514,22 @@ mod selection_v2_tests {
             ],
         ];
         for invalid_groups in invalid {
-            assert!(compile_program_wire(&finish(declaration(false), 1, &invalid_groups)).is_err());
+            assert!(
+                compile_program_wire(&finish(declaration(false), 1, &invalid_groups)?).is_err()
+            );
         }
-        assert!(compile_program_wire(&finish(declaration(false), 1, &original)).is_ok());
+        assert!(compile_program_wire(&finish(declaration(false), 1, &original)?).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn nested_release_counts_cannot_exceed_the_single_section_budget() {
+    fn nested_release_counts_cannot_exceed_the_single_section_budget() -> Result<(), String> {
         let too_many = vec![vec![(
             1,
             vec![(21, 201); MAX_SECTION_ENTRIES_V1 as usize + 1],
         )]];
         assert!(matches!(
-            decode_program_wire(&finish(declaration(false), 1, &too_many)),
+            decode_program_wire(&finish(declaration(false), 1, &too_many)?),
             Err(ProgramWireErrorV1::ResourceExhausted {
                 section: WireSectionV1::JointSelection
             })
@@ -1514,16 +1539,17 @@ mod selection_v2_tests {
             vec![(2, vec![(21, 202); 2049])],
         ];
         assert!(matches!(
-            decode_program_wire(&finish(declaration(false), 1, &across_groups)),
+            decode_program_wire(&finish(declaration(false), 1, &across_groups)?),
             Err(ProgramWireErrorV1::ResourceExhausted {
                 section: WireSectionV1::JointSelection
             })
         ));
+        Ok(())
     }
 
     #[test]
-    fn truncated_selection_never_falls_back_to_unordered_candidates() {
-        let bytes = finish(declaration(false), u64::MAX, &groups());
+    fn truncated_selection_never_falls_back_to_unordered_candidates() -> Result<(), String> {
+        let bytes = finish(declaration(false), u64::MAX, &groups())?;
         for end in 0..bytes.len() {
             let mut partial = bytes[..end].to_vec();
             if end >= 10 {
@@ -1535,9 +1561,10 @@ mod selection_v2_tests {
             );
         }
         assert!(compile_program_wire(&bytes).is_ok());
+        Ok(())
     }
     #[test]
-    fn finite_clean_set_keeps_the_same_final_composite_owner() {
+    fn finite_clean_set_keeps_the_same_final_composite_owner() -> Result<(), String> {
         let mut builder = ProgramWireBuilderV1::new();
         builder
             .finite_target(
@@ -1560,17 +1587,18 @@ mod selection_v2_tests {
         push_u32(&mut builder.hard_constraints, 71);
         push_u32(&mut builder.hard_constraints, 61);
         let ranks = vec![vec![(1, vec![(21, 201)])], vec![(2, vec![(21, 202)])]];
-        let bytes = finish(builder, 1, &ranks);
-        let draft = decode_program_wire(&bytes).unwrap();
-        match draft.compile() {
-            Ok(_) => (),
-            Err(error) => panic!("finite clean-set compile failed: {error:?}"),
-        }
+        let bytes = finish(builder, 1, &ranks)?;
+        let draft = decode_program_wire(&bytes).map_err(|error| format!("{error:?}"))?;
+        let _compiled = draft
+            .compile()
+            .map_err(|error| format!("finite clean-set compile failed: {error:?}"))?;
         let mut runtime = compile_program_wire(&bytes)
-            .unwrap()
+            .map_err(|error| format!("{error:?}"))?
             .instantiate(1)
-            .unwrap();
-        let first = runtime.update_observed(1, &[scenario(1, 1)]).unwrap();
+            .map_err(|error| format!("{error:?}"))?;
+        let first = runtime
+            .update_observed(1, &[scenario(1, 1)])
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(first.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(first.outputs()[0].source(), Srgb8::new([255; 3]));
         let both = runtime
@@ -1581,13 +1609,15 @@ mod selection_v2_tests {
                     ProgramScenarioV1::new(2, vec![Srgb8::new([1, 1, 3])]),
                 ],
             )
-            .unwrap();
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(both.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(both.outputs()[0].source(), Srgb8::new([128; 3]));
+        Ok(())
     }
 
     #[test]
-    fn transport_matches_direct_release_materialisation_without_a_parallel_order() {
+    fn transport_matches_direct_release_materialisation_without_a_parallel_order()
+    -> Result<(), String> {
         use crate::program_session::{
             JointCandidateStateV1, TargetCandidateChoiceV1, TargetCandidateId, TargetId,
         };
@@ -1606,7 +1636,7 @@ mod selection_v2_tests {
             ]
             .into_boxed_slice(),
         );
-        let admitted = admit_selection_release_v1(release).unwrap();
+        let admitted = admit_selection_release_v1(release).map_err(|error| format!("{error:?}"))?;
         let states: Vec<_> = [(1, 201), (2, 202), (3, 203)]
             .into_iter()
             .map(|(id, candidate)| {
@@ -1619,22 +1649,30 @@ mod selection_v2_tests {
                 )
             })
             .collect();
-        let materialised = materialise_joint_selection_v1(&admitted, &states).unwrap();
-        let mut direct = decode_program_wire_v1(&declaration(false).finish().unwrap()).unwrap();
+        let materialised = materialise_joint_selection_v1(&admitted, &states)
+            .map_err(|error| format!("{error:?}"))?;
+        let mut direct = decode_program_wire_v1(
+            &declaration(false)
+                .finish()
+                .map_err(|error| format!("{error:?}"))?,
+        )
+        .map_err(|error| format!("{error:?}"))?;
         direct
             .set_materialised_joint_selection(materialised)
-            .unwrap();
-        let compiled = direct.compile().unwrap();
-        let encoded = finish(declaration(false), revision, &groups());
+            .map_err(|error| format!("{error:?}"))?;
+        let compiled = direct.compile().map_err(|error| format!("{error:?}"))?;
+        let encoded = finish(declaration(false), revision, &groups())?;
         assert_eq!(
-            check_program_wire(&encoded).unwrap(),
+            check_program_wire(&encoded).map_err(|error| format!("{error:?}"))?,
             *compiled.content_identity().as_bytes()
         );
+        Ok(())
     }
 
     #[test]
-    fn every_single_byte_mutation_preserves_typed_totality_and_checker_agreement() {
-        let bytes = finish(declaration(false), 9, &groups());
+    fn every_single_byte_mutation_preserves_typed_totality_and_checker_agreement()
+    -> Result<(), String> {
+        let bytes = finish(declaration(false), 9, &groups())?;
         for offset in 0..bytes.len() {
             for mask in [1, 0x80, 0xff] {
                 let mut mutated = bytes.clone();
@@ -1650,5 +1688,6 @@ mod selection_v2_tests {
                 assert!(outcome.is_ok(), "byte {offset}, xor {mask}");
             }
         }
+        Ok(())
     }
 }
