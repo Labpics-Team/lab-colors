@@ -96,14 +96,16 @@ test("renaming Program IDs preserves the physical result and its failure boundar
   const outcomes = [];
   for (const rename of [0, 5000]) {
     const runtime = compileProgramWire(graph(first, 3, second, 1, expected, rename), 7);
-    let snapshot;
+    let snapshot, failed;
     try {
       snapshot = runtime.updateObserved(1n, new Uint32Array([9]), new Uint8Array(backdrop), 1);
-      outcomes.push(plain(snapshot));
-    } finally { snapshot?.free(); runtime.free(); }
+      failed = runtime.updateObserved(2n, new Uint32Array([9]), new Uint8Array([0, 0, 0]), 1);
+      outcomes.push({ ready: plain(snapshot), failed: plain(failed) });
+    } finally { failed?.free(); snapshot?.free(); runtime.free(); }
   }
   assert.deepEqual(outcomes[0], outcomes[1]);
-  assert.equal(outcomes[0].state, "ready");
+  assert.equal(outcomes[0].ready.state, "ready");
+  assert.equal(outcomes[0].failed.state, "failed");
 });
 
 

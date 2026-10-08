@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import init, { attachProgramWire, compileProgramWire, decodeCertificateEnvelope, issueSourceCertificateEnvelope, isCertificateError, isProgramError } from "../index.js";
+import { referencePacket } from "./helpers/certificate-wire-reference.mjs";
+import init, { attachProgramWire, compileProgramWire, decodeCertificateEnvelope, isCertificateError, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
@@ -273,7 +274,7 @@ test("attachment busy refusal precedes input inspection during host reentry", ()
 
 
 test("certificate envelope requires owned storage even when shared bytes are valid", () => {
-  const original = issueSourceCertificateEnvelope();
+  const original = new Uint8Array(referencePacket().bytes);
   const shared = new Uint8Array(new SharedArrayBuffer(original.length));
   shared.set(original);
   const before = decodeCertificateEnvelope(original);
