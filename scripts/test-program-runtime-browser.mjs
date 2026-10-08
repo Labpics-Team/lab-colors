@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child-lifecycle.mjs";
+import { expectedPackedFiles } from "./verify-package-release.mjs";
 import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
 
 const LOOPBACK = "127.0.0.1";
@@ -205,11 +206,15 @@ async function request(base, path, method, body, signal) {
 }
 
 export async function packedBrowserFiles(installed) {
-  const paths = ["index.js", "package.json", "build-metadata.json", "program-wire/abi-v1.js", "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
+  const packageJson = JSON.parse(await readFile(join(installed, "package.json"), "utf8"));
   const runtimeSource = await readFile(join(installed, "pkg/labcolors.js"), "utf8");
-  paths.push(...await retainImportedRuntimeSnippets(installed, runtimeSource));
+  // The package owns its implementation files. The proof server serves only
+  // its declared browser assets, so internal refactors preserve the consumer.
+  await retainImportedRuntimeSnippets(installed, runtimeSource);
+  const declared = await expectedPackedFiles(packageJson, runtimeSource);
+  const paths = declared.filter((path) => /\.(?:m?js|json|wasm)$/u.test(path));
   return new Map(await Promise.all(
-    paths.map(async (path) => [`/${path}`, await readFile(join(installed, path))]),
+    paths.map(async (path) => ["/" + path, await readFile(join(installed, path))]),
   ));
 }
 
@@ -878,6 +883,73 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver, scenar
   return { ...result, ...outcome, ...evidence };
 }
 
+export function browserSelectionScenario(origin) {
+  return 'const done=arguments[arguments.length-1]; const browserCleanup=' + browserCleanup.toString()
+    + '; (' + browserSelectionConsumer.toString() + ')(' + JSON.stringify(origin)
+    + ').then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));';
+}
+
+async function browserSelectionConsumer(origin) {
+  const resources = [], handles = [], released = [];
+  let primary, result;
+  try {
+    const api = await import(origin + '/index.js');
+    const { ProgramWireBuilderV2 } = await import(origin + '/program-wire/abi-v2.js');
+    await api.init();
+    const graph = new ProgramWireBuilderV2()
+      .finiteTarget(21, [{ id: 201, rgb: [255, 255, 255], opacity: .5 },
+        { id: 202, rgb: [128, 128, 128], opacity: 1 }])
+      .selectionRelease(1n, [[{ id: 1, choices: [{ target: 21, candidate: 201 }] }],
+        [{ id: 2, choices: [{ target: 21, candidate: 202 }] }]])
+      .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 41, 51, 64, .2, 1)
+      .presentationRoot(71, 61).presentationTarget(71, 61)
+      .wcag22VisibleUnary(true, 82, 61, 3).declaredSrgb8CleanSet(true, 81, 71, 61)
+      .output(91, 41).finish();
+    const own = (name, handle) => {
+      handles.push({ name, handle });
+      resources.push({ name, release() { handle.free(); released.push(name); } });
+      return handle;
+    };
+    const runtime = own('selection-runtime', api.compileProgramWire(graph, 1));
+    const observe = (name, revision, backgrounds) => own(name, runtime.updateObserved(revision,
+      new Uint32Array(backgrounds.map((_, index) => index + 1)), new Uint8Array(backgrounds.flat()), 1));
+    const read = (snapshot) => ({ state: snapshot.state,
+      outputs: Array.from({ length: snapshot.outputCount() }, (_, i) => ({
+        rgb: Array.from(snapshot.outputRgb(i)), opacity: snapshot.outputOpacity(i),
+      })),
+    });
+    const first = observe('selection-first', 1n, [[1, 1, 1]]);
+    const original = read(first);
+    const all = observe('selection-all', 2n, [[1, 1, 1], [1, 1, 3]]);
+    const conflict = observe('selection-conflict', 3n, [[128, 128, 128]]);
+    const restored = observe('selection-restored', 4n, [[1, 1, 1]]);
+    result = { original, all: read(all), conflict: read(conflict),
+      restored: read(restored), preserved: read(first) };
+  } catch (error) { primary = error; }
+  const outcome = browserCleanup(primary, resources.toReversed());
+  return { ...result, ...outcome, acquired: handles.map(({ name }) => name),
+    released,
+    readback: Object.fromEntries(handles.map(({ name, handle }) => [name, handle.__wbg_ptr === 0])),
+  };
+}
+
+export function verifyBrowserSelection(result) {
+  const opaque = [{ rgb: [128, 128, 128], opacity: 1 }];
+  const original = { state: 'ready', outputs: [{ rgb: [255, 255, 255], opacity: .5 }] };
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'selection-runtime',
+    'selection-first', 'selection-all', 'selection-conflict', 'selection-restored'];
+  if (result.error || result.cleanupError
+    || ![result.original, result.preserved, result.restored].every((value) => isDeepStrictEqual(value, original))
+    || !isDeepStrictEqual(result.all, { state: 'ready', outputs: opaque })
+    || !isDeepStrictEqual(result.conflict, { state: 'failed', outputs: opaque })
+    || !isDeepStrictEqual(result.acquired, names)
+    || !isDeepStrictEqual(result.released, names.toReversed())
+    || names.some((name) => result.readback?.[name] !== true)) {
+    fail('browser finite selection drifted: ' + JSON.stringify(result));
+  }
+}
+
 export function verifyBrowserConsumer(result) {
   const equal = isDeepStrictEqual;
   const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [12, 34, 56], opacity: 0.875 }] };
@@ -1092,6 +1164,9 @@ async function main() {
   const attachmentResult = await runBrowserAttachmentProof({ tarball, timeout, chrome, driver });
   verifyBrowserAttachmentConsumer(attachmentResult);
   console.log(`LAB_COLORS_PROGRAM_ATTACHMENT_BROWSER_RESULT ${JSON.stringify(attachmentResult)}`);
+  const selection = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserSelectionScenario });
+  verifyBrowserSelection(selection);
+  console.log('LAB_COLORS_PROGRAM_SELECTION_BROWSER_RESULT ' + JSON.stringify(selection));
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);

@@ -118,10 +118,22 @@ test("packed ProgramWire subpath resolves with runtime and declarations", () => 
       { cwd: fixture, encoding: "utf8" },
     ).trim();
     assert.equal(output, "66");
+    const v2 = execFileSync(process.execPath, ["--input-type=module", "--eval",
+      'import { ProgramWireBuilderV2 } from "@labpics/colors/program-wire/abi-v2.js"; const bytes = new ProgramWireBuilderV2().selectionRelease(1n, [[{ id: 1, choices: [{ target: 21, candidate: 201 }] }]]).finish(); console.log(new DataView(bytes.buffer).getUint16(4,true));'],
+      { cwd: fixture, encoding: "utf8" }).trim();
+    assert.equal(v2, "2");
+    execFileSync(process.execPath, ["--input-type=module", "--eval",
+      'await import("@labpics/colors/program-wire/encoding.js").then(() => { throw new Error("internal encoder leaked"); }, e => { if (e.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw e; });'],
+      { cwd: fixture, stdio: ["ignore", "pipe", "pipe"] });
 
     writeFileSync(
       join(fixture, "smoke.ts"),
-      'import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";\nnew ProgramWireBuilderV1().source(1, [0, 0, 0]).finish();\n',
+      'import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";\n' +
+      'import { ProgramWireBuilderV2, type ProgramSelectionStateV2 } from "@labpics/colors/program-wire/abi-v2.js";\n' +
+      'new ProgramWireBuilderV1().source(1, [0, 0, 0]).finish();\n' +
+      'const state: ProgramSelectionStateV2 = { id: 1, choices: [{ target: 21, candidate: 201 }] };\n' +
+      'new ProgramWireBuilderV2().finiteTarget(21, [{ id: 201, rgb: [0,0,0], opacity: 1 }]).selectionRelease(1n, [[state]]).finish();\n' +
+      '// @ts-expect-error exact u64 revision uses bigint\nnew ProgramWireBuilderV2().selectionRelease(1, [[state]]);\n',
     );
     execFileSync(
       process.execPath,

@@ -22,30 +22,48 @@ import {
   runBrowserProof,
   reserveEphemeralPort,
   verifyBrowserConsumer,
+  verifyBrowserSelection,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
 
-test("packed browser files include only the runtime's exact generated snippet", async () => {
+test("packed browser files follow the package inventory through internal module changes", async () => {
   const installed = mkdtempSync(join(tmpdir(), "labcolors-browser-files-"));
   try {
     const snippet = "snippets/labcolors-wasm-0123456789abcdef/inline0.js";
-    for (const file of [
-      "index.js", "package.json", "build-metadata.json", "program-wire/abi-v1.js",
-      "pkg/labcolors_bg.wasm", `pkg/${snippet}`,
-    ]) {
-      const destination = join(installed, file);
+    const files = ["index.js", "build-metadata.json", "program-wire/abi-v1.js",
+      "program-wire/abi-v2.js", "program-wire/encoding.js", "support/new.mjs",
+      "pkg/labcolors.js", "pkg/labcolors_bg.wasm"];
+    const metadata = {
+      name: "@labpics/colors", version: "1.0.0", files,
+      exports: { ".": "./index.js", "./program-wire/abi-v2.js": "./program-wire/abi-v2.js" },
+      types: "./index.d.ts",
+    };
+    const write = (path, text) => {
+      const destination = join(installed, path);
       mkdirSync(dirname(destination), { recursive: true });
-      writeFileSync(destination, "fixture\n");
-    }
-    writeFileSync(join(installed, "pkg", "labcolors.js"), `import "./${snippet}";\n`);
-    writeFileSync(join(installed, "pkg", "unexpected.js"), "must not be served\n");
-    const files = await packedBrowserFiles(installed);
-    assert.deepEqual([...files.keys()].sort(), [
-      "/index.js", "/package.json", "/build-metadata.json",
-      "/pkg/labcolors.js", "/pkg/labcolors_bg.wasm",
-      `/pkg/${snippet}`, "/program-wire/abi-v1.js",
-    ].sort());
+      writeFileSync(destination, text);
+    };
+    for (const path of [...files, "pkg/" + snippet, "index.d.ts"])
+      write(path, "fixture\n");
+    write("package.json", JSON.stringify(metadata));
+    write("program-wire/abi-v1.js", 'import "./encoding.js";\n');
+    write("program-wire/encoding.js", 'import "../support/new.mjs";\n');
+    write("pkg/labcolors.js", 'import "./' + snippet + '";\n');
+    write("pkg/unexpected.js", "must not be served\n");
+    write("program-wire/unexpected.js", "must not be served\n");
+    const actual = await packedBrowserFiles(installed);
+    assert.deepEqual([...actual.keys()].sort(), [...files, "package.json", "pkg/" + snippet]
+      .map((path) => "/" + path).sort());
+    assert.equal(actual.get("/program-wire/abi-v1.js").toString(), 'import "./encoding.js";\n');
+    assert.equal(actual.has("/index.d.ts"), false);
+    rmSync(join(installed, "program-wire/encoding.js"));
+    await assert.rejects(packedBrowserFiles(installed), (error) => error.code === "ENOENT");
+    write("program-wire/encoding.js", "restored\n");
+    write("package.json", JSON.stringify({ ...metadata, files: [...files, "../outside.js"] }));
+    await assert.rejects(packedBrowserFiles(installed), /non-canonical package path/u);
+    write("package.json", JSON.stringify(metadata));
+    assert.deepEqual([...await packedBrowserFiles(installed)].map(([path]) => path), [...actual.keys()]);
   } finally {
     rmSync(installed, { recursive: true, force: true });
   }
@@ -675,4 +693,28 @@ test("release verifier invokes the browser proof with the exact snapshot identit
     () => browserProofInvocation("/tmp/exact.tgz", "A".repeat(64)),
     /lowercase SHA-256/u,
   );
+});
+
+
+test("browser selection readout requires every context, preserved snapshots and released resources", () => {
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'selection-runtime',
+    'selection-first', 'selection-all', 'selection-conflict', 'selection-restored'];
+  const original = { state: 'ready', outputs: [{ rgb: [255, 255, 255], opacity: .5 }] };
+  const good = { original, preserved: structuredClone(original), restored: structuredClone(original),
+    all: { state: 'ready', outputs: [{ rgb: [128, 128, 128], opacity: 1 }] },
+    conflict: { state: 'failed', outputs: [{ rgb: [128, 128, 128], opacity: 1 }] },
+    acquired: names, released: names.toReversed(), readback: Object.fromEntries(names.map((name) => [name, true])),
+  };
+  assert.doesNotThrow(() => verifyBrowserSelection(good));
+  for (const mutate of [
+    (x) => { x.all = structuredClone(original); },
+    (x) => { x.conflict.state = 'ready'; },
+    (x) => { x.restored.state = 'failed'; },
+    (x) => { x.preserved.outputs[0].rgb = [128, 128, 128]; },
+    (x) => { x.readback['selection-runtime'] = false; },
+    (x) => { x.released.shift(); },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserSelection(invalid), /browser finite selection drifted/u);
+  }
 });

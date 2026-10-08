@@ -39,7 +39,7 @@ test("Program errors narrow through stable code and operation fields", () => {
 test("package exports contain no legacy browser subpath", () => {
   assert.deepEqual(Object.keys(pkg.exports).sort(), [
     ".", "./build-metadata.json", "./package.json", "./pkg/labcolors_bg.wasm",
-    "./program-wire/abi-v1.js",
+    "./program-wire/abi-v1.js", "./program-wire/abi-v2.js",
   ]);
   for (const file of pkg.files) {
     assert.doesNotMatch(file, /apply-theme|watch-theme|adapt-theme|private-program/u);

@@ -10,8 +10,6 @@
 //! it; materialisation sorts exclusively by the admitted rank and the
 //! canonical key, so no evaluator ever ranks or selects.
 
-use std::collections::BTreeMap;
-
 use crate::program_session::{DeclaredJointSelectionV1, JointCandidateStateV1};
 use crate::sha256;
 
@@ -96,7 +94,7 @@ impl SelectionReleaseV1 {
 pub(crate) struct AdmittedSelectionReleaseV1 {
     revision: u64,
     identity: SelectionReleaseIdentityV1,
-    ranks: BTreeMap<Vec<u8>, usize>,
+    ranks: Box<[(Vec<u8>, usize)]>,
 }
 
 /// Единственный production-вход конечного выбора в Program.
@@ -141,7 +139,7 @@ pub(crate) fn admit_selection_release_v1(
     if release.rank_groups.is_empty() {
         return Err(SelectionReleaseErrorV1::EmptyRelease);
     }
-    let mut ranks: BTreeMap<Vec<u8>, usize> = BTreeMap::new();
+    let mut ranks = Vec::new();
     let mut hasher = sha256::Hasher::new();
     hasher.update(IDENTITY_DOMAIN_V1);
     hasher.update(&release.revision.to_be_bytes());
@@ -154,23 +152,25 @@ pub(crate) fn admit_selection_release_v1(
             .iter()
             .map(|key| key.as_bytes().to_vec())
             .collect::<Vec<_>>();
-        keys.sort();
+        keys.sort_unstable();
         hasher.update(&length_field_v1(keys.len())?);
         for key in keys {
             if key.is_empty() {
                 return Err(SelectionReleaseErrorV1::EmptyCandidateKey);
             }
-            if ranks.insert(key.clone(), rank).is_some() {
-                return Err(SelectionReleaseErrorV1::DuplicateCandidateKey);
-            }
+            ranks.push((key.clone(), rank));
             hasher.update(&length_field_v1(key.len())?);
             hasher.update(&key);
         }
     }
+    ranks.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    if ranks.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(SelectionReleaseErrorV1::DuplicateCandidateKey);
+    }
     Ok(AdmittedSelectionReleaseV1 {
         revision: release.revision,
         identity: SelectionReleaseIdentityV1(*hasher.finalize().as_bytes()),
-        ranks,
+        ranks: ranks.into_boxed_slice(),
     })
 }
 
@@ -194,7 +194,10 @@ impl AdmittedSelectionReleaseV1 {
 
     /// The preorder rank of one canonical key, when the release ranks it.
     pub(crate) fn rank_of(&self, key: &SelectionCandidateKeyV1) -> Option<usize> {
-        self.ranks.get(key.as_bytes()).copied()
+        self.ranks
+            .binary_search_by(|(stored, _)| stored.as_slice().cmp(key.as_bytes()))
+            .ok()
+            .map(|index| self.ranks[index].1)
     }
 
     /// Materialise the total order of one candidate set from the release.
@@ -210,22 +213,23 @@ impl AdmittedSelectionReleaseV1 {
             return Err(SelectionReleaseErrorV1::EmptyCandidateSet);
         }
         let mut ranked = Vec::with_capacity(candidates.len());
-        let mut bound: BTreeMap<&[u8], ()> = BTreeMap::new();
+        let mut bound = vec![false; self.ranks.len()];
         for (payload, key) in candidates {
-            let rank = self
+            let index = self
                 .ranks
-                .get(key.as_bytes())
-                .copied()
-                .ok_or(SelectionReleaseErrorV1::UnknownCandidateKey)?;
-            if bound.insert(key.as_bytes(), ()).is_some() {
+                .binary_search_by(|(stored, _)| stored.as_slice().cmp(key.as_bytes()))
+                .map_err(|_| SelectionReleaseErrorV1::UnknownCandidateKey)?;
+            if bound[index] {
                 return Err(SelectionReleaseErrorV1::DuplicateCandidateBinding);
             }
-            ranked.push((rank, key.as_bytes(), payload));
+            bound[index] = true;
+            ranked.push((self.ranks[index].1, key.as_bytes(), payload));
         }
-        if bound.len() != self.ranks.len() {
+        if candidates.len() != self.ranks.len() {
             return Err(SelectionReleaseErrorV1::MissingCandidateBinding);
         }
-        ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+        ranked
+            .sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
         Ok(ranked
             .into_iter()
             .map(|(_, _, payload)| payload.clone())
