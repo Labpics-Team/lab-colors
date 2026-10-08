@@ -272,7 +272,7 @@
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
   "packages/colors/README.md": "3ebca356a16252f3ad6806fb9ebcf022f735abe7",
-  "packages/colors/bench/wasm.json": "793494e97e382477c8f92e38a5834bc9724396b0",
+  "packages/colors/bench/wasm.json": "62eda54e6997aa9aa7b58d5f2719726c86b3a4eb",
   "packages/colors/index.d.ts": "17b984257b6b077d7640901c63c924f24794b44c",
   "packages/colors/index.js": "3856dfc54b69efbf30c9d2bdb3adbe34908e59ac",
   "packages/colors/package-lock.json": "fec80f65a6fa8668c4a657f0770522c5b2913ffd",
@@ -488,7 +488,7 @@
   "scripts/authority_mutation_gate.py": "64d53468d54f7623a188a156cf66e9da6510a3c0",
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "d737dcf8c3542effb720cdb2a360bdf33ae286a9",
-  "scripts/check-wasm-size-budget.mjs": "f86cf5105918570e04918188e6dfcb39c5c7d85b",
+  "scripts/check-wasm-size-budget.mjs": "78c311ee100b05b88973be4c92629abbc25a31c5",
   "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
   "scripts/distribution-licenses.mjs": "460174e7e5b433ca74d711b9bd35be0e54164cfe",
@@ -547,7 +547,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "0785782ab0d14e935b9ad77d7e282b32072c38ead3b47a8452de3ea3a5bdeca6",
+ "record_sha256": "19ff00d8e0a34e3b16887680d7b00c690b6c959d28ab6f6d5d1f8eac759a0298",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
