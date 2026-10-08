@@ -544,7 +544,7 @@ pub fn compile_program_wire(
     use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
     let stream_id = checked_u32(stream_id)
         .ok_or_else(|| to_program_js_error(E::Instantiate, ProgramOperation::CompileProgramWire))?;
-    let compiled = labcolors_core::program_wire::compile_program_wire_v1(bytes)
+    let compiled = labcolors_core::program_wire::compile_program_wire(bytes)
         .map_err(|error| to_program_js_error(error, ProgramOperation::CompileProgramWire))?;
     let session = compiled
         .instantiate(stream_id)
@@ -821,7 +821,7 @@ pub fn attach_program_wire(
     let sink_output = parse(sink_output)?;
     let presentation_root = parse(presentation_root)?;
     let occurrence = parse(occurrence)?;
-    let compiled = labcolors_core::program_wire::compile_program_wire_v1(bytes)
+    let compiled = labcolors_core::program_wire::compile_program_wire(bytes)
         .map_err(|error| to_program_js_error(error, ProgramOperation::AttachProgramWire))?;
     let inner = compiled
         .attach(

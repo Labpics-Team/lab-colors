@@ -28,6 +28,8 @@ pub(crate) const PROGRAM_WIRE_MAGIC_V1: [u8; 4] = *b"LCPW";
 /// Р•РґРёРЅСЃС‚РІРµРЅРЅР°СЏ РІРµСЂСЃРёСЏ, РєРѕС‚РѕСЂСѓСЋ РїРѕРЅРёРјР°РµС‚ СЌС‚РѕС‚ РґРµРєРѕРґРµСЂ. Field-СЃРµРєС†РёРё (C7e
 /// stage 2) РІРѕР№РґСѓС‚ РќРћР’РћР™ РІРµСЂСЃРёРµР№, Р° РЅРµ С„РѕСЂРєРѕРј С„РѕСЂРјР°С‚Р°.
 pub(crate) const PROGRAM_WIRE_VERSION_V1: u16 = 1;
+/// Explicit authored SelectionRelease envelope; V1 remains unchanged.
+pub(crate) const PROGRAM_WIRE_VERSION_V2: u16 = 2;
 /// Р’РµСЂС…РЅСЏСЏ РіСЂР°РЅРёС†Р° Р·Р°РїРёСЃРµР№ РѕРґРЅРѕР№ СЃРµРєС†РёРё: fail-closed budget pin РїРѕ РѕР±СЂР°Р·С†Сѓ
 /// evidence-bounds. Р—РЅР°С‡РµРЅРёРµ РЅР°РјРµСЂРµРЅРЅРѕ С‰РµРґСЂРѕРµ РґР»СЏ Р°РІС‚РѕСЂСЃРєРёС… РіСЂР°С„РѕРІ Рё
 /// РЅР°РјРµСЂРµРЅРЅРѕ С„Р°С‚Р°Р»СЊРЅРѕРµ РґР»СЏ hostile length-РїРѕР»РµР№.
@@ -168,6 +170,61 @@ impl<'a> WireReader<'a> {
     }
 }
 
+fn read_selection_release(
+    reader: &mut WireReader<'_>,
+) -> Result<crate::selection_release::MaterialisedSelectionV1, ProgramWireErrorV1> {
+    use crate::program_session::{
+        JointCandidateStateV1, TargetCandidateChoiceV1, TargetCandidateId, TargetId,
+    };
+    use crate::selection_release::{
+        SelectionCandidateKeyV1, SelectionReleaseV1, admit_selection_release_v1,
+        materialise_joint_selection_v1,
+    };
+
+    let start = reader.offset;
+    let revision = reader.read_u64()?;
+    let group_count = reader.read_count()?;
+    let mut groups = Vec::new();
+    let mut bindings = Vec::new();
+    let mut states_left = MAX_SECTION_ENTRIES_V1;
+    let mut choices_left = MAX_SECTION_ENTRIES_V1;
+    for _ in 0..group_count {
+        let count = reader.read_count()?;
+        states_left =
+            states_left
+                .checked_sub(count)
+                .ok_or(ProgramWireErrorV1::ResourceExhausted {
+                    section: WireSectionV1::JointSelection,
+                })?;
+        let mut keys = Vec::new();
+        for _ in 0..count {
+            let id = reader.read_u32()?;
+            let key = SelectionCandidateKeyV1::new(Box::new(id.to_be_bytes()));
+            let choices = reader.read_count()?;
+            choices_left =
+                choices_left
+                    .checked_sub(choices)
+                    .ok_or(ProgramWireErrorV1::ResourceExhausted {
+                        section: WireSectionV1::JointSelection,
+                    })?;
+            let mut state = Vec::new();
+            for _ in 0..choices {
+                state.push(TargetCandidateChoiceV1::new(
+                    TargetId::new(reader.read_u32()?),
+                    TargetCandidateId::new(reader.read_u32()?),
+                ));
+            }
+            keys.push(key.clone());
+            bindings.push((JointCandidateStateV1::new(state), key));
+        }
+        groups.push(keys.into_boxed_slice());
+    }
+    let release =
+        admit_selection_release_v1(SelectionReleaseV1::new(revision, groups.into_boxed_slice()))
+            .map_err(|_| reader.declaration_error(start))?;
+    materialise_joint_selection_v1(&release, &bindings).map_err(|_| reader.declaration_error(start))
+}
+
 /// Р”РµРєРѕРґРёСЂСѓРµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Р±Р°Р№С‚С‹ РІ Р°РІС‚РѕСЂСЃРєРёР№ Draft-РіСЂР°С„.
 ///
 /// Р’РѕР·РІСЂР°С‰Р°РµРјС‹Р№ [`DraftV1`] РґР°Р»СЊС€Рµ РїСЂРѕС…РѕРґРёС‚ Р°С‚РѕРјР°СЂРЅС‹Р№ `compile()`; СЃР°Рј РґРµРєРѕРґРµСЂ
@@ -175,6 +232,18 @@ impl<'a> WireReader<'a> {
 /// selection РЅР° wire v1 РЅРµРїСЂРµРґСЃС‚Р°РІРёРј (0 Р·Р°РїРёСЃРµР№ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ): РјР°С‚РµСЂРёР°Р»РёР·Р°С†РёСЏ
 /// РїРѕСЂСЏРґРєР° РїСЂРёРЅР°РґР»РµР¶РёС‚ `SelectionRelease`-РґРѕРїСѓСЃРєСѓ, РЅРµ Р°РІС‚РѕСЂСЃРєРёРј Р±Р°Р№С‚Р°Рј.
 pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWireErrorV1> {
+    decode_program_wire_version(bytes, Some(PROGRAM_WIRE_VERSION_V1))
+}
+
+/// Decode a supported envelope into the same admitted Program draft.
+pub(crate) fn decode_program_wire(bytes: &[u8]) -> Result<DraftV1, ProgramWireErrorV1> {
+    decode_program_wire_version(bytes, None)
+}
+
+fn decode_program_wire_version(
+    bytes: &[u8],
+    required: Option<u16>,
+) -> Result<DraftV1, ProgramWireErrorV1> {
     let mut reader = WireReader::new(bytes);
 
     // Header: magic + version + total_len (fail-closed РґРѕ С‡С‚РµРЅРёСЏ СЃРµРєС†РёР№).
@@ -183,7 +252,9 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
         return Err(ProgramWireErrorV1::InvalidMagic);
     }
     let version = reader.read_u16()?;
-    if version != PROGRAM_WIRE_VERSION_V1 {
+    if !matches!(version, PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2)
+        || required.is_some_and(|expected| version != expected)
+    {
         return Err(ProgramWireErrorV1::UnsupportedVersion { declared: version });
     }
     let declared_len = reader.read_u32()?;
@@ -254,8 +325,16 @@ pub(crate) fn decode_program_wire_v1(bytes: &[u8]) -> Result<DraftV1, ProgramWir
     // РјР°С‚РµСЂРёР°Р»РёР·СѓРµС‚СЃСЏ С‚РѕР»СЊРєРѕ РґРѕРїСѓСЃРєРѕРј SelectionRelease, РЅРµ Р°РІС‚РѕСЂСЃРєРёРјРё Р±Р°Р№С‚Р°РјРё.
     reader.enter(WireSectionV1::JointSelection);
     let joint_offset = reader.offset;
-    if reader.read_count()? != 0 {
-        return Err(reader.declaration_error(joint_offset));
+    let selection_count = reader.read_count()?;
+    match (version, selection_count) {
+        (_, 0) => {}
+        (PROGRAM_WIRE_VERSION_V2, 1) => {
+            let selection = read_selection_release(&mut reader)?;
+            draft
+                .set_materialised_joint_selection(selection)
+                .map_err(|_| reader.declaration_error(joint_offset))?;
+        }
+        _ => return Err(reader.declaration_error(joint_offset)),
     }
 
     // Surface input ports: id u32.
@@ -1225,3 +1304,236 @@ impl ProgramWireBuilderV1 {
 
 #[cfg(kani)]
 mod proofs;
+
+#[cfg(test)]
+mod selection_v2_tests {
+    use super::*;
+    use crate::program_wire::{
+        ProgramRuntimeErrorV1, ProgramScenarioV1, ProgramSnapshotStateV1, check_program_wire,
+        check_program_wire_v1, compile_program_wire, compile_program_wire_v1,
+    };
+
+    type State = (u32, Vec<(u32, u32)>);
+
+    fn declaration(reverse: bool) -> ProgramWireBuilderV1 {
+        let mut builder = ProgramWireBuilderV1::new();
+        let mut candidates = vec![
+            (201, Srgb8::new([180; 3]), 1.0),
+            (202, Srgb8::new([80; 3]), 1.0),
+            (203, Srgb8::new([0; 3]), 1.0),
+        ];
+        if reverse {
+            candidates.reverse();
+        }
+        builder
+            .finite_target(21, &candidates)
+            .surface_input_port(31)
+            .solid_paint(41, 21)
+            .input_surface(51, 31)
+            .source_over_occurrence(61, 41, 51, 64.0, 0.2, 1)
+            .presentation_root(71, 61)
+            .presentation_target(71, 61)
+            .wcag22_visible_unary(true, 81, 61, 3)
+            .output(91, 41);
+        builder
+    }
+
+    fn finish(builder: ProgramWireBuilderV1, revision: u64, groups: &[Vec<State>]) -> Vec<u8> {
+        let start =
+            10 + 12 + builder.sources.len() + builder.targets.len() + builder.families.len();
+        let mut bytes = builder.finish().unwrap();
+        let mut selection = Vec::new();
+        push_u32(&mut selection, 1);
+        selection.extend_from_slice(&revision.to_le_bytes());
+        push_u32(&mut selection, groups.len() as u32);
+        for group in groups {
+            push_u32(&mut selection, group.len() as u32);
+            for (id, choices) in group {
+                push_u32(&mut selection, *id);
+                push_u32(&mut selection, choices.len() as u32);
+                for (target, candidate) in choices {
+                    push_u32(&mut selection, *target);
+                    push_u32(&mut selection, *candidate);
+                }
+            }
+        }
+        bytes.splice(start..start + 4, selection);
+        bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
+        let len = bytes.len() as u32;
+        bytes[6..10].copy_from_slice(&len.to_le_bytes());
+        bytes
+    }
+
+    fn groups() -> Vec<Vec<State>> {
+        vec![
+            vec![(1, vec![(21, 201)])],
+            vec![(2, vec![(21, 202)])],
+            vec![(3, vec![(21, 203)])],
+        ]
+    }
+
+    fn scenario(id: u32, level: u8) -> ProgramScenarioV1 {
+        ProgramScenarioV1::new(id, vec![Srgb8::new([level; 3])])
+    }
+
+    #[test]
+    fn finite_selection_is_reachable_through_public_program_compilation() {
+        let bytes = finish(declaration(false), 1, &groups());
+        assert!(check_program_wire(&bytes).is_ok());
+        assert!(
+            check_program_wire_v1(&bytes).is_err(),
+            "strict legacy entry must not reinterpret V2"
+        );
+        assert!(compile_program_wire_v1(&bytes).is_err());
+        let mut runtime = compile_program_wire(&bytes)
+            .unwrap()
+            .instantiate(1)
+            .unwrap();
+        let white = runtime.update_observed(1, &[scenario(1, 255)]).unwrap();
+        assert_eq!(white.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(white.outputs()[0].source(), Srgb8::new([80; 3]));
+        let paired = runtime
+            .update_observed(2, &[scenario(1, 255), scenario(2, 100)])
+            .unwrap();
+        assert_eq!(paired.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(paired.outputs()[0].source(), Srgb8::new([0; 3]));
+        let conflict = runtime
+            .update_observed(3, &[scenario(1, 255), scenario(2, 0)])
+            .unwrap();
+        assert_eq!(conflict.state(), ProgramSnapshotStateV1::Failed);
+        let restored = runtime.update_observed(4, &[scenario(1, 255)]).unwrap();
+        assert_eq!(restored.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(restored.outputs()[0].source(), Srgb8::new([80; 3]));
+        assert_eq!(
+            white.outputs()[0].source(),
+            Srgb8::new([80; 3]),
+            "old snapshots are unchanged"
+        );
+    }
+
+    #[test]
+    fn v1_finite_graph_stays_refused_without_an_admitted_selection() {
+        let bytes = declaration(false).finish().unwrap();
+        assert!(matches!(
+            compile_program_wire(&bytes),
+            Err(ProgramRuntimeErrorV1::Compile)
+        ));
+        assert!(matches!(
+            compile_program_wire_v1(&bytes),
+            Err(ProgramRuntimeErrorV1::Compile)
+        ));
+        let mut selected = finish(declaration(false), 1, &groups());
+        selected[4..6].copy_from_slice(&1u16.to_le_bytes());
+        assert!(matches!(
+            compile_program_wire(&selected),
+            Err(ProgramRuntimeErrorV1::Wire)
+        ));
+    }
+
+    #[test]
+    fn authored_group_order_is_policy_while_tie_and_declaration_permutations_are_not() {
+        let tied = vec![vec![
+            (9, vec![(21, 201)]),
+            (2, vec![(21, 202)]),
+            (1, vec![(21, 203)]),
+        ]];
+        let reversed = vec![tied[0].iter().cloned().rev().collect::<Vec<_>>()];
+        let a = finish(declaration(false), 7, &tied);
+        let b = finish(declaration(true), 7, &reversed);
+        assert_eq!(
+            check_program_wire(&a).unwrap(),
+            check_program_wire(&b).unwrap()
+        );
+        let mut runtime = compile_program_wire(&a).unwrap().instantiate(1).unwrap();
+        let snapshot = runtime.update_observed(1, &[scenario(1, 255)]).unwrap();
+        assert_eq!(snapshot.outputs()[0].source(), Srgb8::new([0; 3]));
+        assert_ne!(
+            check_program_wire(&a).unwrap(),
+            check_program_wire(&finish(declaration(false), 8, &tied)).unwrap()
+        );
+        assert_ne!(
+            check_program_wire(&a).unwrap(),
+            check_program_wire(&finish(declaration(false), 7, &groups())).unwrap()
+        );
+    }
+
+    #[test]
+    fn complete_cartesian_domain_and_declared_keys_are_admitted_by_the_existing_owners() {
+        let original = groups();
+        let invalid = vec![
+            vec![],
+            vec![vec![]],
+            vec![original[0].clone()],
+            vec![
+                original[0].clone(),
+                original[1].clone(),
+                original[0].clone(),
+            ],
+            vec![
+                vec![(1, vec![(21, 201)])],
+                vec![(1, vec![(21, 202)])],
+                original[2].clone(),
+            ],
+            vec![vec![(1, vec![])], original[1].clone(), original[2].clone()],
+            vec![
+                vec![(1, vec![(99, 201)])],
+                original[1].clone(),
+                original[2].clone(),
+            ],
+            vec![
+                vec![(1, vec![(21, 999)])],
+                original[1].clone(),
+                original[2].clone(),
+            ],
+            vec![
+                vec![(1, vec![(21, 201), (21, 201)])],
+                original[1].clone(),
+                original[2].clone(),
+            ],
+        ];
+        for invalid_groups in invalid {
+            assert!(compile_program_wire(&finish(declaration(false), 1, &invalid_groups)).is_err());
+        }
+        assert!(compile_program_wire(&finish(declaration(false), 1, &original)).is_ok());
+    }
+
+    #[test]
+    fn nested_release_counts_cannot_exceed_the_single_section_budget() {
+        let too_many = vec![vec![(
+            1,
+            vec![(21, 201); MAX_SECTION_ENTRIES_V1 as usize + 1],
+        )]];
+        assert!(matches!(
+            decode_program_wire(&finish(declaration(false), 1, &too_many)),
+            Err(ProgramWireErrorV1::ResourceExhausted {
+                section: WireSectionV1::JointSelection
+            })
+        ));
+        let across_groups = vec![
+            vec![(1, vec![(21, 201); 2048])],
+            vec![(2, vec![(21, 202); 2049])],
+        ];
+        assert!(matches!(
+            decode_program_wire(&finish(declaration(false), 1, &across_groups)),
+            Err(ProgramWireErrorV1::ResourceExhausted {
+                section: WireSectionV1::JointSelection
+            })
+        ));
+    }
+
+    #[test]
+    fn truncated_selection_never_falls_back_to_unordered_candidates() {
+        let bytes = finish(declaration(false), u64::MAX, &groups());
+        for end in 0..bytes.len() {
+            let mut partial = bytes[..end].to_vec();
+            if end >= 10 {
+                partial[6..10].copy_from_slice(&(end as u32).to_le_bytes());
+            }
+            assert!(
+                compile_program_wire(&partial).is_err(),
+                "accepted truncated prefix {end}"
+            );
+        }
+        assert!(compile_program_wire(&bytes).is_ok());
+    }
+}

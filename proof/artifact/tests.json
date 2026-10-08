@@ -899,7 +899,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "7237ee13efc32d8418e4194fff57fc16d863e094f2750e8de7e6bf16416765db",
+ "record_sha256": "bdc2c11d4345e5b0388303ca39650b22309d98f675aebef1a14a44503bfa7271",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1666,6 +1666,12 @@
    "program::update_error_projection_tests::every_unreachable_core_failure_keeps_its_subject_and_witness_facts: test",
    "program::update_error_projection_tests::impossible_wcag_protocol_states_are_not_misreported_as_colour_failures: test",
    "program::update_error_projection_tests::resource_exhaustion_retains_its_exact_update_phase: test",
+   "program::wire::selection_v2_tests::authored_group_order_is_policy_while_tie_and_declaration_permutations_are_not: test",
+   "program::wire::selection_v2_tests::complete_cartesian_domain_and_declared_keys_are_admitted_by_the_existing_owners: test",
+   "program::wire::selection_v2_tests::finite_selection_is_reachable_through_public_program_compilation: test",
+   "program::wire::selection_v2_tests::nested_release_counts_cannot_exceed_the_single_section_budget: test",
+   "program::wire::selection_v2_tests::truncated_selection_never_falls_back_to_unordered_candidates: test",
+   "program::wire::selection_v2_tests::v1_finite_graph_stays_refused_without_an_admitted_selection: test",
    "program::wire::tests::builder_bytes_are_byte_identical_to_the_reference_wire: test",
    "program::wire::tests::builder_refuses_oversized_sections: test",
    "program::wire::tests::builder_roundtrip_preserves_identity_and_bytes: test",
@@ -2173,7 +2179,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1270,
+  "enabled_count": 1276,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

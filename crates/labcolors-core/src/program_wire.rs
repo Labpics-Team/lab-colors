@@ -10,7 +10,7 @@
 
 use crate::Srgb8;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
-use crate::program::wire::{ProgramWireErrorV1, decode_program_wire_v1};
+use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 
 /// РРјСЏ wire-СЃРµРєС†РёРё РІ РїСѓР±Р»РёС‡РЅРѕР№ РґРёР°РіРЅРѕСЃС‚РёРєРµ.
 ///
@@ -105,7 +105,24 @@ fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize)
 /// [`ProgramWireCheckErrorV1::Wire`] вЂ” Р±Р°Р№С‚С‹ РЅР°СЂСѓС€Р°СЋС‚ РєР°РЅРѕРЅ С„РѕСЂРјР°С‚Р°;
 /// [`ProgramWireCheckErrorV1::Compile`] вЂ” РіСЂР°С„ СЃРµРјР°РЅС‚РёС‡РµСЃРєРё РЅРµРІР°Р»РёРґРµРЅ.
 pub fn check_program_wire_v1(bytes: &[u8]) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
-    let draft = decode_program_wire_v1(bytes).map_err(|error| {
+    checked_draft(decode_program_wire_v1(bytes))
+}
+
+/// Check a supported Program envelope without creating runtime or writer authority.
+///
+/// V1 is unchanged; V2 additionally admits an explicit authored selection release.
+/// Both versions compile the same Core graph and return its content identity.
+///
+/// # Errors
+/// Returns a format, graph, resource or internal-invariant error at its original boundary.
+pub fn check_program_wire(bytes: &[u8]) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
+    checked_draft(decode_program_wire(bytes))
+}
+
+fn checked_draft(
+    decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
+) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
+    let draft = decoded.map_err(|error| {
         let (section, offset) = section_name(&error);
         ProgramWireCheckErrorV1::Wire { section, offset }
     })?;
@@ -1618,7 +1635,26 @@ pub enum ProgramRuntimeErrorV1 {
 /// artifact РѕР±РµСЃРїРµС‡РёРІР°РµС‚ РІС‹Р·С‹РІР°СЋС‰РёР№, Р° public trust-РїР°СЂР°РјРµС‚СЂ Р±СѓРґРµС‚ РѕС‚РґРµР»СЊРЅРѕР№
 /// РІРµСЂСЃРёРµР№ seam, РЅРµ silent assumption.
 pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
-    let draft = decode_program_wire_v1(bytes).map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+    compile_draft(decode_program_wire_v1(bytes))
+}
+
+/// Compile a supported Program envelope into the existing immutable runtime owner.
+///
+/// A V2 selection release orders the complete finite candidate space. Every
+/// observation still passes all hard constraints before the shared Session
+/// selects, rechecks and publishes a result. No scientific profile is implied.
+///
+/// # Errors
+/// Returns the same typed format, graph, resource and family admission failures
+/// as the V1-only entry point.
+pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
+    compile_draft(decode_program_wire(bytes))
+}
+
+fn compile_draft(
+    decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
+) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
+    let draft = decoded.map_err(|_| ProgramRuntimeErrorV1::Wire)?;
     let owner = draft.compile().map_err(|error| match error {
         crate::program::CompileErrorV1::ResourceExhausted => {
             ProgramRuntimeErrorV1::ResourceExhausted

@@ -25,7 +25,11 @@
       "default": "./program-wire/abi-v1.js"
     },
     "./build-metadata.json": "./build-metadata.json",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./program-wire/abi-v2.js": {
+      "types": "./program-wire/abi-v2.d.ts",
+      "default": "./program-wire/abi-v2.js"
+    }
   },
   "files": [
     "LICENSE",
@@ -38,6 +42,9 @@
     "wcag22.d.ts",
     "program-wire/abi-v1.js",
     "program-wire/abi-v1.d.ts",
+    "program-wire/encoding.js",
+    "program-wire/abi-v2.js",
+    "program-wire/abi-v2.d.ts",
     "evidence/wcag22-srgb8-v1.json",
     "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
