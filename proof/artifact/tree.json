@@ -300,7 +300,7 @@
   "packages/colors/test/program-clean-set-wire.test.mjs": "126508762d0f5409e517e23f96fc6ba774576acd",
   "packages/colors/test/program-composition-oracle.test.mjs": "c9b7dba3ecc744a2022d00a6bd6ac894a0c5c0bb",
   "packages/colors/test/program-error-admission.test.mjs": "d17772d8bd2682dc1f1da48396170a892078597b",
-  "packages/colors/test/program-runtime-browser-harness.test.mjs": "59dc87ce655a6dd0065afe777733433bb46b53fb",
+  "packages/colors/test/program-runtime-browser-harness.test.mjs": "384e1fac373491abc2827cd617052115a8b65af2",
   "packages/colors/test/program-scalar-admission.test.mjs": "fc65ec1d255f8836380b98d7497c722dff278714",
   "packages/colors/test/program-selection-builder.test.mjs": "eacaf966a48cdc07577d07e959f68f599bf238cb",
   "packages/colors/test/program-selection-runtime.test.mjs": "c99b8a1b6594b22dcbd32c98b444fb68abf4dd4d",
@@ -517,7 +517,7 @@
   "scripts/region_unittest_shard.py": "769cf4e32517707f96d3a904f909dbf8d78a7ea2",
   "scripts/release-evidence.mjs": "0867419482af8aecd61026870a429ef90b4532a8",
   "scripts/science_certificate_gate.py": "d948037ad2bfd0fba80109c618e45a1b6515c96a",
-  "scripts/test-program-runtime-browser.mjs": "5eae48bc01c5ea610df6cf88b7a3d08534f314f5",
+  "scripts/test-program-runtime-browser.mjs": "41b99c35d0bea00e615753b924fbd8dd76184873",
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "3930713ea0e082372615b45059261e80abf99c5c",
   "scripts/test_ci_peer_gate.py": "a6af99440f3d4be357cdc27c5a749c059b5535d1",
@@ -547,7 +547,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "19ff00d8e0a34e3b16887680d7b00c690b6c959d28ab6f6d5d1f8eac759a0298",
+ "record_sha256": "8b0c609af86edda5823317eebdf1af544b1b115d2a21b244c42fcf99ddb1d16a",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
