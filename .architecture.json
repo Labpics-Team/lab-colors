@@ -60,6 +60,24 @@
       "prefixes": [
         "docs/examples"
       ]
+    },
+    {
+      "id": "evaluation-cli",
+      "prefixes": [
+        "crates/labcolors-evaluate-cli"
+      ]
+    },
+    {
+      "id": "transport-cli",
+      "prefixes": [
+        "crates/labcolors-transport-cli"
+      ]
+    },
+    {
+      "id": "ci-projection",
+      "prefixes": [
+        ".github/actions/labpics-code-admission"
+      ]
     }
   ],
   "rules": []
