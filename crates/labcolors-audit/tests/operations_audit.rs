@@ -12,7 +12,7 @@ fn workspace_root() -> &'static Path {
 
 #[test]
 fn operations_includes_known_functions() {
-    let ops = extract_operations(workspace_root());
+    let ops = extract_operations(workspace_root()).expect("читаемый исходный fixture");
     // enumerate_production_artifacts is a known pub fn in labcolors-audit
     let found = ops
         .iter()
@@ -26,7 +26,7 @@ fn operations_includes_known_functions() {
 
 #[test]
 fn operations_excludes_test_modules() {
-    let ops = extract_operations(workspace_root());
+    let ops = extract_operations(workspace_root()).expect("читаемый исходный fixture");
     for op in &ops {
         assert!(
             !op.path.contains("/tests/") && !op.path.contains("/benches/"),
@@ -43,8 +43,8 @@ fn operations_excludes_test_modules() {
 
 #[test]
 fn operations_deterministic_order() {
-    let a = extract_operations(workspace_root());
-    let b = extract_operations(workspace_root());
+    let a = extract_operations(workspace_root()).expect("читаемый исходный fixture");
+    let b = extract_operations(workspace_root()).expect("читаемый исходный fixture");
     assert_eq!(a.len(), b.len(), "operation count differs between runs");
     for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         assert_eq!(x.path, y.path, "path mismatch at index {i}");
@@ -63,7 +63,7 @@ fn dropped_operation_detected() {
     // that audit_gate (another known pub fn) is present. If the extractor were
     // returning a hardcoded list, this would still pass — but combined with
     // operations_includes_known_functions it proves real parsing.
-    let ops = extract_operations(workspace_root());
+    let ops = extract_operations(workspace_root()).expect("читаемый исходный fixture");
     let found = ops.iter().any(|op| op.name == "audit_gate");
     assert!(
         found,

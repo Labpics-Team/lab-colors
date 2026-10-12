@@ -1,7 +1,7 @@
+use crate::input::{self, AuditInputError};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use syn::{Item, Visibility};
-use walkdir::WalkDir;
 
 /// Одна запись публичного API, извлечённая из исходников.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,69 +31,17 @@ pub struct ApiManifestEntry {
 /// Пропускает тестовые модули (`#[cfg(test)]`, пути с `/tests/`).
 /// Включает элементы с `#[wasm_bindgen]`.
 /// Результат отсортирован по (path, name) для детерминизма.
-pub fn extract_public_api(workspace_root: &Path) -> Vec<ApiManifestEntry> {
-    let crates_dir = workspace_root.join("crates");
-    if !crates_dir.is_dir() {
-        return Vec::new();
-    }
-
+pub fn extract_public_api(workspace_root: &Path) -> Result<Vec<ApiManifestEntry>, AuditInputError> {
     let mut entries = Vec::new();
-
-    for crate_entry in std::fs::read_dir(&crates_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-    {
-        let crate_path = crate_entry.path();
-        if !crate_path.is_dir() {
-            continue;
-        }
-        let crate_name = crate_entry.file_name().to_string_lossy().to_string();
-        let src_dir = crate_path.join("src");
-        if !src_dir.is_dir() {
-            continue;
-        }
-
-        for walk_entry in WalkDir::new(&src_dir).into_iter().filter_map(|e| e.ok()) {
-            let file_path = walk_entry.path();
-            if !file_path.is_file() {
-                continue;
-            }
-            if file_path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-
-            let rel = relative_path(workspace_root, file_path);
-
-            // Пропускаем тестовые файлы и директории tests/
-            if rel.contains("/tests/") || rel.contains("\\tests\\") {
-                continue;
-            }
-            let file_name = file_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if file_name.ends_with("_test.rs") || file_name.ends_with("_tests.rs") {
-                continue;
-            }
-
-            let content = match std::fs::read_to_string(file_path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let file = match syn::parse_file(&content) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-
-            extract_items_from_file(&file.items, &rel, &crate_name, &mut entries);
-        }
+    for path in input::rust_files(workspace_root)? {
+        let source = input::text(&path)?;
+        let file = input::rust(&path, &source)?;
+        let relative = input::relative(workspace_root, &path)?;
+        let crate_name = relative.split('/').nth(1).unwrap_or("");
+        extract_items_from_file(&file.items, &relative, crate_name, &mut entries);
     }
-
-    // Детерминированная сортировка
     entries.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.name.cmp(&b.name)));
-    entries
+    Ok(entries)
 }
 
 fn extract_items_from_file(
@@ -244,11 +192,4 @@ fn sha256_hex(input: &str) -> String {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
 }

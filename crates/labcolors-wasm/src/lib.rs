@@ -232,9 +232,9 @@ fn to_js_error(error: BindingError, operation: BindingOperation) -> JsValue {
 
 // Одна ошибка чтения сохраняет оба snapshot-владельца и прежний результат.
 #[inline(never)]
-fn output_index_error(index: usize) -> JsValue {
+fn output_index_error() -> JsValue {
     program_error(
-        &format!("internal_error: program output index {index} is out of bounds"),
+        "internal_error: program output index must be a u32 within snapshot bounds",
         "invalid_output_index",
         BindingOperation::ReadProgramOutput.key(),
     )
@@ -397,14 +397,7 @@ fn checked_u32(value: JsValue) -> Option<u32> {
 fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
     checked_u32(value)
         .map(|index| index as usize)
-        .ok_or_else(|| {
-            program_error(
-                "internal_error: program output index must be a u32 number",
-                "invalid_output_index",
-                BindingOperation::ReadProgramOutput.key(),
-            )
-            .into()
-        })
+        .ok_or_else(output_index_error)
 }
 
 /// Единственный публичный манифест численных возможностей.
@@ -531,7 +524,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -544,7 +537,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -557,7 +550,7 @@ impl ProgramSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 }
 
@@ -1061,7 +1054,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.slot())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -1075,7 +1068,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1089,7 +1082,7 @@ impl ProgramAttachedSnapshot {
             .outputs()
             .get(index)
             .map(|output| output.opacity())
-            .ok_or_else(|| output_index_error(index))
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen(js_name = hasRender)]

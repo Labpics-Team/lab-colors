@@ -11,7 +11,7 @@ fn workspace_root() -> &'static Path {
 
 #[test]
 fn dependencies_includes_syn_in_audit_crate() {
-    let deps = extract_dependencies(workspace_root());
+    let deps = extract_dependencies(workspace_root()).expect("читаемый исходный fixture");
     let has_syn = deps.iter().any(|d| {
         d.crate_name == "labcolors-audit" && d.dep_name == "syn" && d.section == "dependencies"
     });
@@ -20,7 +20,7 @@ fn dependencies_includes_syn_in_audit_crate() {
 
 #[test]
 fn dependencies_includes_toml_in_audit_crate() {
-    let deps = extract_dependencies(workspace_root());
+    let deps = extract_dependencies(workspace_root()).expect("читаемый исходный fixture");
     let has_toml = deps.iter().any(|d| {
         d.crate_name == "labcolors-audit" && d.dep_name == "toml" && d.section == "dependencies"
     });
@@ -29,8 +29,8 @@ fn dependencies_includes_toml_in_audit_crate() {
 
 #[test]
 fn dependencies_deterministic_order() {
-    let first = extract_dependencies(workspace_root());
-    let second = extract_dependencies(workspace_root());
+    let first = extract_dependencies(workspace_root()).expect("читаемый исходный fixture");
+    let second = extract_dependencies(workspace_root()).expect("читаемый исходный fixture");
     assert_eq!(first, second, "Two calls must produce identical output");
 
     // Verify sort invariant: (crate_name, section, dep_name) non-decreasing
@@ -53,7 +53,7 @@ fn dependencies_deterministic_order() {
 
 #[test]
 fn removed_dependency_detected() {
-    let deps = extract_dependencies(workspace_root());
+    let deps = extract_dependencies(workspace_root()).expect("читаемый исходный fixture");
     let audit_deps: Vec<&DependencyEntry> = deps
         .iter()
         .filter(|d| d.crate_name == "labcolors-audit" && d.section == "dependencies")
