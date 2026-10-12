@@ -1,6 +1,4 @@
-use labcolors_audit::{
-    ArtifactClass, Disposition, DispositionedArtifact, RawArtifact, assign_dispositions, audit_gate,
-};
+use labcolors_audit::{ArtifactClass, Disposition, DispositionedArtifact, RawArtifact, audit_gate};
 
 /// RED-proof тест: синтетический сирота обнаруживается гейтом.
 ///
