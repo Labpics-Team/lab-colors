@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use yaml_rust2::{Yaml, YamlLoader};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CiBuildManifest {
@@ -71,7 +72,10 @@ pub fn extract_ci_build(repo_root: &Path) -> Result<CiBuildManifest, String> {
     for entry in entries {
         let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("yml") {
+        if matches!(
+            path.extension().and_then(|s| s.to_str()),
+            Some("yml" | "yaml")
+        ) {
             if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
                 workflow_files.push(name.to_string());
             }
@@ -92,18 +96,26 @@ pub fn extract_ci_build(repo_root: &Path) -> Result<CiBuildManifest, String> {
     Ok(CiBuildManifest { workflows, build })
 }
 
-fn parse_workflow(file: &str, content: &str) -> Result<WorkflowEntry, String> {
-    let doc: serde_yaml::Value =
-        serde_yaml::from_str(content).map_err(|e| format!("YAML parse error in {file}: {e}"))?;
+fn field<'a>(value: &'a Yaml, key: &str) -> Option<&'a Yaml> {
+    value.as_hash()?.get(&Yaml::String(key.to_owned()))
+}
 
-    let name = doc
-        .get("name")
-        .and_then(|v| v.as_str())
+fn parse_workflow(file: &str, content: &str) -> Result<WorkflowEntry, String> {
+    let documents = YamlLoader::load_from_str(content)
+        .map_err(|error| format!("YAML parse error in {file}: {error}"))?;
+    let [doc] = documents.as_slice() else {
+        return Err(format!("workflow {file} must contain exactly one YAML document"));
+    };
+    if !doc.is_hash() {
+        return Err(format!("workflow {file} must be a YAML mapping"));
+    }
+
+    let name = field(doc, "name")
+        .and_then(Yaml::as_str)
         .unwrap_or("")
         .to_string();
-
-    let triggers = extract_triggers(&doc);
-    let jobs = extract_jobs(&doc);
+    let triggers = extract_triggers(doc);
+    let jobs = extract_jobs(doc).map_err(|error| format!("workflow {file}: {error}"))?;
 
     Ok(WorkflowEntry {
         file: file.to_string(),
@@ -113,74 +125,68 @@ fn parse_workflow(file: &str, content: &str) -> Result<WorkflowEntry, String> {
     })
 }
 
-fn extract_triggers(doc: &serde_yaml::Value) -> Vec<String> {
-    let on = match doc.get("on") {
-        Some(v) => v,
-        None => return Vec::new(),
-    };
-
-    match on {
-        serde_yaml::Value::String(s) => vec![s.clone()],
-        serde_yaml::Value::Sequence(seq) => seq
+fn extract_triggers(doc: &Yaml) -> Vec<String> {
+    match field(doc, "on") {
+        Some(Yaml::String(value)) => vec![value.clone()],
+        Some(Yaml::Array(values)) => values
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|value| value.as_str().map(str::to_owned))
             .collect(),
-        serde_yaml::Value::Mapping(map) => map
+        Some(Yaml::Hash(values)) => values
             .keys()
-            .filter_map(|k| k.as_str().map(|s| s.to_string()))
+            .filter_map(|key| key.as_str().map(str::to_owned))
             .collect(),
         _ => Vec::new(),
     }
 }
 
-fn extract_jobs(doc: &serde_yaml::Value) -> Vec<JobEntry> {
-    let jobs_map = match doc.get("jobs").and_then(|v| v.as_mapping()) {
-        Some(m) => m,
-        None => return Vec::new(),
+fn extract_jobs(doc: &Yaml) -> Result<Vec<JobEntry>, String> {
+    let Some(jobs_map) = field(doc, "jobs").and_then(Yaml::as_hash) else {
+        return Ok(Vec::new());
     };
-
     let mut jobs = Vec::new();
     for (key, value) in jobs_map {
         let id = key.as_str().unwrap_or("").to_string();
-        let mapping = match value.as_mapping() {
-            Some(m) => m,
-            None => continue,
-        };
-
-        let name = mapping
-            .get("name")
-            .and_then(|v| v.as_str())
+        if !value.is_hash() {
+            return Err(format!("job {id} must be a YAML mapping"));
+        }
+        let name = field(value, "name")
+            .and_then(Yaml::as_str)
             .unwrap_or(&id)
             .to_string();
-
-        let runs_on = mapping
-            .get("runs-on")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let timeout_minutes = mapping
-            .get("timeout-minutes")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32);
-
-        let needs = match mapping.get("needs") {
-            Some(serde_yaml::Value::String(s)) => vec![s.clone()],
-            Some(serde_yaml::Value::Sequence(seq)) => seq
+        let runs_on = field(value, "runs-on")
+            .and_then(Yaml::as_str)
+            .map(str::to_owned);
+        let timeout_minutes = match field(value, "timeout-minutes") {
+            None => None,
+            Some(Yaml::String(expression))
+                if expression.trim().starts_with("${{")
+                    && expression.trim().ends_with("}}") =>
+            {
+                // The host evaluates expressions; this projection records literal minutes only.
+                None
+            }
+            Some(timeout) => Some(
+                timeout
+                    .as_i64()
+                    .and_then(|number| u32::try_from(number).ok())
+                    .ok_or_else(|| format!("job {id} timeout-minutes must be a u32 integer"))?,
+            ),
+        };
+        let needs = match field(value, "needs") {
+            Some(Yaml::String(name)) => vec![name.clone()],
+            Some(Yaml::Array(names)) => names
                 .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter_map(|name| name.as_str().map(str::to_owned))
                 .collect(),
             _ => Vec::new(),
         };
 
-        // A job is a required check if it has no `if:` condition that could skip it
-        // and is not gated by `continue-on-error`. Simplified heuristic: jobs with
-        // `uses:` (reusable workflow calls) are always required.
+        // Structural hint only; repository rules own required-check policy.
         let is_required_check =
-            mapping.get("uses").is_some() || mapping.get("continue-on-error").is_none();
-
-        let steps = extract_steps(mapping);
-        let matrix = extract_matrix(mapping);
-
+            field(value, "uses").is_some() || field(value, "continue-on-error").is_none();
+        let steps = extract_steps(value);
+        let matrix = extract_matrix(value);
         jobs.push(JobEntry {
             id,
             name,
@@ -192,38 +198,29 @@ fn extract_jobs(doc: &serde_yaml::Value) -> Vec<JobEntry> {
             matrix,
         });
     }
-    jobs
+    Ok(jobs)
 }
 
-fn extract_steps(job: &serde_yaml::Mapping) -> Vec<StepEntry> {
-    let steps_seq = match job.get("steps").and_then(|v| v.as_sequence()) {
-        Some(s) => s,
-        None => return Vec::new(),
+fn extract_steps(job: &Yaml) -> Vec<StepEntry> {
+    let Some(steps) = field(job, "steps").and_then(Yaml::as_vec) else {
+        return Vec::new();
     };
-
-    steps_seq
+    steps
         .iter()
         .filter_map(|step| {
-            let m = step.as_mapping()?;
+            step.as_hash()?;
             Some(StepEntry {
-                name: m
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                uses: m
-                    .get("uses")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                run: m.get("run").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                name: field(step, "name").and_then(Yaml::as_str).map(str::to_owned),
+                uses: field(step, "uses").and_then(Yaml::as_str).map(str::to_owned),
+                run: field(step, "run").and_then(Yaml::as_str).map(str::to_owned),
             })
         })
         .collect()
 }
 
-fn extract_matrix(job: &serde_yaml::Mapping) -> Option<MatrixStrategy> {
-    let strategy = job.get("strategy")?.as_mapping()?;
-    let matrix = strategy.get("matrix")?.as_mapping()?;
-
+fn extract_matrix(job: &Yaml) -> Option<MatrixStrategy> {
+    let strategy = field(job, "strategy")?;
+    let matrix = field(strategy, "matrix")?.as_hash()?;
     let mut axes = HashMap::new();
     for (key, value) in matrix {
         let axis_name = key.as_str()?.to_string();
@@ -231,21 +228,18 @@ fn extract_matrix(job: &serde_yaml::Mapping) -> Option<MatrixStrategy> {
             continue;
         }
         let values: Vec<String> = value
-            .as_sequence()
+            .as_vec()
             .into_iter()
             .flatten()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|value| value.as_str().map(str::to_owned))
             .collect();
         if !values.is_empty() {
             axes.insert(axis_name, values);
         }
     }
-
-    let fail_fast = strategy
-        .get("fail-fast")
-        .and_then(|v| v.as_bool())
+    let fail_fast = field(strategy, "fail-fast")
+        .and_then(Yaml::as_bool)
         .unwrap_or(true);
-
     if axes.is_empty() {
         None
     } else {
@@ -391,8 +385,8 @@ mod tests {
     #[test]
     fn extract_triggers_from_mapping() {
         let yaml = "on:\n  push:\n    branches: [main]\n  pull_request:\n";
-        let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
-        let triggers = extract_triggers(&doc);
+        let workflow = parse_workflow("ci.yml", yaml).unwrap();
+        let triggers = workflow.triggers;
         assert!(triggers.contains(&"push".to_string()));
         assert!(triggers.contains(&"pull_request".to_string()));
     }
@@ -400,8 +394,8 @@ mod tests {
     #[test]
     fn extract_triggers_from_string() {
         let yaml = "on: push\n";
-        let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
-        let triggers = extract_triggers(&doc);
+        let workflow = parse_workflow("ci.yml", yaml).unwrap();
+        let triggers = workflow.triggers;
         assert_eq!(triggers, vec!["push"]);
     }
 
@@ -420,5 +414,122 @@ mod tests {
         assert_eq!(pairs[0].worker, "ci-worker.yml");
         assert_eq!(pairs[1].caller, "mutation.yml");
         assert_eq!(pairs[1].worker, "mutation-worker.yml");
+    }
+
+    #[test]
+    fn yaml12_on_key_and_job_fields_survive_projection() {
+        let workflow = parse_workflow(
+            "ci.yml",
+            r#"name: CI
+on: [push, pull_request]
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: [build, lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [native, wasm]
+    steps:
+      - name: Inspect
+        run: |
+          printf 'on: off\n'
+      - uses: owner/action@commit
+"#,
+        )
+        .unwrap();
+        assert_eq!(workflow.name, "CI");
+        assert_eq!(workflow.triggers, ["push", "pull_request"]);
+        let [job] = workflow.jobs.as_slice() else {
+            panic!("the workflow contains one job");
+        };
+        assert_eq!(job.id, "verify");
+        assert_eq!(job.name, "Verify");
+        assert_eq!(job.runs_on.as_deref(), Some("ubuntu-latest"));
+        assert_eq!(job.timeout_minutes, Some(12));
+        assert_eq!(job.needs, ["build", "lint"]);
+        assert_eq!(job.steps[0].run.as_deref(), Some("printf 'on: off\\n'\n"));
+        assert_eq!(job.steps[1].uses.as_deref(), Some("owner/action@commit"));
+        let matrix = job.matrix.as_ref().unwrap();
+        assert!(!matrix.fail_fast);
+        assert_eq!(matrix.axes["target"], ["native", "wasm"]);
+    }
+
+    #[test]
+    fn yaml_aliases_preserve_the_declared_sequence() {
+        let workflow = parse_workflow(
+            "ci.yml",
+            "on: push\nx-needs: &needs [build, lint]\njobs:\n  verify:\n    needs: *needs\n",
+        )
+        .unwrap();
+        assert_eq!(workflow.jobs[0].needs, ["build", "lint"]);
+    }
+
+    #[test]
+    fn ambiguous_or_incomplete_documents_are_rejected() {
+        for source in [
+            "",
+            "null",
+            "[]",
+            "on: push\non: pull_request\n",
+            "on: push\n---\non: pull_request\n",
+            "jobs: [",
+            "jobs:\n  verify: *missing\n",
+            "jobs:\n  verify: []\n",
+        ] {
+            assert!(parse_workflow("ci.yml", source).is_err(), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn timeout_projection_cannot_wrap_or_drop_invalid_values() {
+        for invalid in ["-1", "4294967296", "18446744073709551615", "1.5", "null"] {
+            let source = format!("jobs:\n  verify:\n    timeout-minutes: {invalid}\n");
+            assert!(parse_workflow("ci.yml", &source).is_err(), "{invalid}");
+        }
+        let workflow = parse_workflow(
+            "ci.yml",
+            "jobs:\n  verify:\n    timeout-minutes: 4294967295\n",
+        )
+        .unwrap();
+        assert_eq!(workflow.jobs[0].timeout_minutes, Some(u32::MAX));
+    }
+
+    #[test]
+    fn timeout_expressions_remain_owned_by_the_host() {
+        let workflow = parse_workflow(
+            "ci.yml",
+            "jobs:\n  verify:\n    timeout-minutes: ${{ inputs.timeout }}\n",
+        )
+        .unwrap();
+        assert_eq!(workflow.jobs[0].timeout_minutes, None);
+    }
+
+    #[test]
+    fn repository_workflows_use_the_public_extraction_path() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
+        let manifest = extract_ci_build(root).unwrap();
+        let expected = std::fs::read_dir(root.join(".github/workflows"))
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| {
+                matches!(
+                    entry.path().extension().and_then(|extension| extension.to_str()),
+                    Some("yml" | "yaml")
+                )
+            })
+            .count();
+        assert!(expected > 0);
+        assert_eq!(manifest.workflows.len(), expected);
+        assert!(manifest.workflows.iter().any(|workflow| {
+            workflow.file == "ci.yml"
+                && workflow.triggers.contains(&"pull_request".to_owned())
+                && !workflow.jobs.is_empty()
+        }));
     }
 }
