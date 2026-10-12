@@ -14,23 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 60f8b444ced1cfdbe657373d8fc5c6db44c76708
+          ref: 7703abcb2ce2a17afea9cefbec9cf5f582d21e5c
           persist-credentials: false
-      - name: Prepare reviewed metadata and immutable source archive
+      - name: Prepare the measured ceiling without moving any branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, json, subprocess
-          parent = '60f8b444ced1cfdbe657373d8fc5c6db44c76708'
+          parent = '7703abcb2ce2a17afea9cefbec9cf5f582d21e5c'
           repository = 'Labpics-Team/lab-colors'
-          observed = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          if observed != parent:
+          if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != parent:
               raise SystemExit('Unexpected source revision')
           output = Path('/tmp/colors-source-preparation')
           output.mkdir()
-          subprocess.run(['git', 'archive', '--format=tar', '--output=' + str(output/'source.tar'), parent], check=True)
           def api(path, value=None):
               command = ['gh', 'api', path]
               if value is not None:
@@ -39,16 +37,16 @@ jobs:
                                       text=True, capture_output=True, check=True)
               return json.loads(result.stdout)
           path = Path('packages/colors/bench/wasm.json')
-          budget = json.loads(path.read_text())
-          if budget['measurement']['rawBytes'] != 439731 or budget['policy']['maxRawBytes'] != 439731:
+          original_budget = path.read_bytes()
+          budget = json.loads(original_budget)
+          if budget['measurement']['rawBytes'] != 439355 or budget['policy']['maxRawBytes'] != 439731:
               raise SystemExit('Unexpected measured artifact policy')
-          budget['measurement']['rawBytes'] = 439355
-          budget['measurement']['source'] = 'github-actions-run-38310349135'
+          budget['policy']['maxRawBytes'] = budget['measurement']['rawBytes']
           content = json.dumps(budget, indent=2, ensure_ascii=False) + '\n'
           new_pin = hashlib.sha256(content.encode()).hexdigest()
           changes = {str(path): content}
           script = Path('scripts/check-wasm-size-budget.mjs')
-          old_pin = '1264352584f1fbe007c99c5fce648335632262a4155d76f7a10445b6354863d1'
+          old_pin = hashlib.sha256(original_budget).hexdigest()
           original = script.read_text()
           if original.count(old_pin) != 1:
               raise SystemExit('Unexpected budget source pin')
@@ -70,12 +68,12 @@ jobs:
               {'path': filename, 'mode': '100644', 'type': 'blob', 'content': data}
               for filename, data in sorted(changes.items())]})
           candidate = api(f'repos/{repository}/git/commits', {
-              'message': 'chore(wasm): bind the smaller reproducible runtime measurement',
+              'message': 'chore(wasm): lower the ceiling to the reproduced artifact size',
               'tree': tree['sha'], 'parents': [parent]})
           result = {'parent': parent, 'commit': candidate['sha'], 'tree': tree['sha'],
                     'changes': changes, 'runtime_bytes': 439355,
                     'runtime_sha256': '86fb4f9dff0396cdada9adf5723ead5e42bb80b09c38b71a389e9514c34775f7',
-                    'measurement_run': 38310349135}
+                    'measurement_run': 38313218498}
           (output/'prepared.json').write_text(json.dumps(result, ensure_ascii=False, indent=2))
           print(json.dumps({key: value for key, value in result.items() if key != 'changes'}))
           PY
