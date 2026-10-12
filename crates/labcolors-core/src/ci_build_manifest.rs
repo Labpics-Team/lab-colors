@@ -104,7 +104,9 @@ fn parse_workflow(file: &str, content: &str) -> Result<WorkflowEntry, String> {
     let documents = YamlLoader::load_from_str(content)
         .map_err(|error| format!("YAML parse error in {file}: {error}"))?;
     let [doc] = documents.as_slice() else {
-        return Err(format!("workflow {file} must contain exactly one YAML document"));
+        return Err(format!(
+            "workflow {file} must contain exactly one YAML document"
+        ));
     };
     if !doc.is_hash() {
         return Err(format!("workflow {file} must be a YAML mapping"));
@@ -160,8 +162,7 @@ fn extract_jobs(doc: &Yaml) -> Result<Vec<JobEntry>, String> {
         let timeout_minutes = match field(value, "timeout-minutes") {
             None => None,
             Some(Yaml::String(expression))
-                if expression.trim().starts_with("${{")
-                    && expression.trim().ends_with("}}") =>
+                if expression.trim().starts_with("${{") && expression.trim().ends_with("}}") =>
             {
                 // The host evaluates expressions; this projection records literal minutes only.
                 None
@@ -210,8 +211,12 @@ fn extract_steps(job: &Yaml) -> Vec<StepEntry> {
         .filter_map(|step| {
             step.as_hash()?;
             Some(StepEntry {
-                name: field(step, "name").and_then(Yaml::as_str).map(str::to_owned),
-                uses: field(step, "uses").and_then(Yaml::as_str).map(str::to_owned),
+                name: field(step, "name")
+                    .and_then(Yaml::as_str)
+                    .map(str::to_owned),
+                uses: field(step, "uses")
+                    .and_then(Yaml::as_str)
+                    .map(str::to_owned),
                 run: field(step, "run").and_then(Yaml::as_str).map(str::to_owned),
             })
         })
@@ -382,21 +387,25 @@ fn extract_worker_pairs(workflow_files: &[String]) -> Vec<WorkerPair> {
 mod tests {
     use super::*;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     #[test]
-    fn extract_triggers_from_mapping() {
+    fn extract_triggers_from_mapping() -> TestResult {
         let yaml = "on:\n  push:\n    branches: [main]\n  pull_request:\n";
-        let workflow = parse_workflow("ci.yml", yaml).unwrap();
+        let workflow = parse_workflow("ci.yml", yaml)?;
         let triggers = workflow.triggers;
         assert!(triggers.contains(&"push".to_string()));
         assert!(triggers.contains(&"pull_request".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn extract_triggers_from_string() {
+    fn extract_triggers_from_string() -> TestResult {
         let yaml = "on: push\n";
-        let workflow = parse_workflow("ci.yml", yaml).unwrap();
+        let workflow = parse_workflow("ci.yml", yaml)?;
         let triggers = workflow.triggers;
         assert_eq!(triggers, vec!["push"]);
+        Ok(())
     }
 
     #[test]
@@ -417,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn yaml12_on_key_and_job_fields_survive_projection() {
+    fn yaml12_on_key_and_job_fields_survive_projection() -> TestResult {
         let workflow = parse_workflow(
             "ci.yml",
             r#"name: CI
@@ -438,8 +447,7 @@ jobs:
           printf 'on: off\n'
       - uses: owner/action@commit
 "#,
-        )
-        .unwrap();
+        )?;
         assert_eq!(workflow.name, "CI");
         assert_eq!(workflow.triggers, ["push", "pull_request"]);
         let [job] = workflow.jobs.as_slice() else {
@@ -452,19 +460,20 @@ jobs:
         assert_eq!(job.needs, ["build", "lint"]);
         assert_eq!(job.steps[0].run.as_deref(), Some("printf 'on: off\\n'\n"));
         assert_eq!(job.steps[1].uses.as_deref(), Some("owner/action@commit"));
-        let matrix = job.matrix.as_ref().unwrap();
+        let matrix = job.matrix.as_ref().ok_or("matrix was lost")?;
         assert!(!matrix.fail_fast);
         assert_eq!(matrix.axes["target"], ["native", "wasm"]);
+        Ok(())
     }
 
     #[test]
-    fn yaml_aliases_preserve_the_declared_sequence() {
+    fn yaml_aliases_preserve_the_declared_sequence() -> TestResult {
         let workflow = parse_workflow(
             "ci.yml",
             "on: push\nx-needs: &needs [build, lint]\njobs:\n  verify:\n    needs: *needs\n",
-        )
-        .unwrap();
+        )?;
         assert_eq!(workflow.jobs[0].needs, ["build", "lint"]);
+        Ok(())
     }
 
     #[test]
@@ -484,7 +493,7 @@ jobs:
     }
 
     #[test]
-    fn timeout_projection_cannot_wrap_or_drop_invalid_values() {
+    fn timeout_projection_cannot_wrap_or_drop_invalid_values() -> TestResult {
         for invalid in ["-1", "4294967296", "18446744073709551615", "1.5", "null"] {
             let source = format!("jobs:\n  verify:\n    timeout-minutes: {invalid}\n");
             assert!(parse_workflow("ci.yml", &source).is_err(), "{invalid}");
@@ -492,34 +501,38 @@ jobs:
         let workflow = parse_workflow(
             "ci.yml",
             "jobs:\n  verify:\n    timeout-minutes: 4294967295\n",
-        )
-        .unwrap();
+        )?;
         assert_eq!(workflow.jobs[0].timeout_minutes, Some(u32::MAX));
+        Ok(())
     }
 
     #[test]
-    fn timeout_expressions_remain_owned_by_the_host() {
+    fn timeout_expressions_remain_owned_by_the_host() -> TestResult {
         let workflow = parse_workflow(
             "ci.yml",
             "jobs:\n  verify:\n    timeout-minutes: ${{ inputs.timeout }}\n",
-        )
-        .unwrap();
+        )?;
         assert_eq!(workflow.jobs[0].timeout_minutes, None);
+        Ok(())
     }
 
     #[test]
-    fn repository_workflows_use_the_public_extraction_path() {
+    fn repository_workflows_use_the_public_extraction_path() -> TestResult {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
-            .unwrap();
-        let manifest = extract_ci_build(root).unwrap();
-        let expected = std::fs::read_dir(root.join(".github/workflows"))
-            .unwrap()
-            .map(Result::unwrap)
+            .ok_or("workspace root is unavailable")?;
+        let manifest = extract_ci_build(root)?;
+        let entries =
+            std::fs::read_dir(root.join(".github/workflows"))?.collect::<Result<Vec<_>, _>>()?;
+        let expected = entries
+            .iter()
             .filter(|entry| {
                 matches!(
-                    entry.path().extension().and_then(|extension| extension.to_str()),
+                    entry
+                        .path()
+                        .extension()
+                        .and_then(|extension| extension.to_str()),
                     Some("yml" | "yaml")
                 )
             })
@@ -531,5 +544,6 @@ jobs:
                 && workflow.triggers.contains(&"pull_request".to_owned())
                 && !workflow.jobs.is_empty()
         }));
+        Ok(())
     }
 }

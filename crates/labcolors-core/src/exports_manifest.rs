@@ -601,7 +601,23 @@ fn parse_pub_use_grouped(use_rest: &str) -> Vec<ExportItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::process::Command;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[derive(Deserialize)]
+    struct WorkspaceMetadata {
+        packages: Vec<WorkspacePackage>,
+        workspace_members: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct WorkspacePackage {
+        id: String,
+        name: String,
+    }
 
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -613,15 +629,43 @@ mod tests {
     }
 
     #[test]
-    fn extracts_all_five_workspace_crates() {
-        let manifests = extract_exports_metadata(&workspace_root());
-        let names: Vec<&str> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
-        assert!(names.contains(&"labcolors-core"));
-        assert!(names.contains(&"labcolors-audit"));
-        assert!(names.contains(&"labcolors-conformance"));
-        assert!(names.contains(&"labcolors-ffi"));
-        assert!(names.contains(&"labcolors-wasm"));
-        assert_eq!(manifests.len(), 5);
+    fn extracts_the_complete_cargo_workspace() -> TestResult {
+        let root = workspace_root();
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "metadata",
+                "--format-version=1",
+                "--no-deps",
+                "--locked",
+                "--offline",
+            ])
+            .current_dir(&root)
+            .output()?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
+        }
+        let metadata: WorkspaceMetadata = serde_json::from_slice(&output.stdout)?;
+        let members: BTreeSet<_> = metadata.workspace_members.iter().collect();
+        let expected: BTreeSet<_> = metadata
+            .packages
+            .iter()
+            .filter(|package| members.contains(&package.id))
+            .map(|package| package.name.as_str())
+            .collect();
+        assert!(!expected.is_empty());
+        assert_eq!(expected.len(), members.len());
+
+        let manifests = extract_exports_metadata(&root);
+        let actual: BTreeSet<_> = manifests
+            .iter()
+            .map(|item| item.crate_name.as_str())
+            .collect();
+        assert_eq!(actual.len(), manifests.len(), "duplicate workspace export");
+        assert_eq!(
+            actual, expected,
+            "workspace members differ from Cargo metadata"
+        );
+        Ok(())
     }
 
     #[test]
@@ -678,16 +722,38 @@ mod tests {
     }
 
     #[test]
-    fn sabotage_missing_crate_fails() {
-        // This test documents the sabotage contract: if someone removes a crate
-        // from the workspace, the count assertion in extracts_all_five_workspace_crates
-        // will fail. We assert the invariant here explicitly.
-        let manifests = extract_exports_metadata(&workspace_root());
-        assert_eq!(
-            manifests.len(),
-            5,
-            "SABOTAGE: expected exactly 5 workspace crates; removal or addition breaks this"
-        );
+    fn missing_required_package_metadata_is_rejected() -> TestResult {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "labcolors-export-metadata-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&root)?;
+        let result = (|| -> TestResult {
+            fs::create_dir_all(root.join("crates/member/src"))?;
+            fs::write(
+                root.join("Cargo.toml"),
+                "[workspace]\nmembers = [\"crates/member\"]\n",
+            )?;
+            let manifest = root.join("crates/member/Cargo.toml");
+            fs::write(
+                &manifest,
+                "[package]\nname = \"member\"\nversion = \"1.0.0\"\n",
+            )?;
+            let healthy = extract_exports_metadata(&root);
+            if healthy.len() != 1 || healthy[0].crate_name != "member" {
+                return Err("valid fixture was not extracted".into());
+            }
+            fs::write(&manifest, "[package]\nversion = \"1.0.0\"\n")?;
+            if std::panic::catch_unwind(|| extract_exports_metadata(&root)).is_ok() {
+                return Err("missing package name was accepted".into());
+            }
+            Ok(())
+        })();
+        fs::remove_dir_all(root)?;
+        result
     }
 
     #[test]
