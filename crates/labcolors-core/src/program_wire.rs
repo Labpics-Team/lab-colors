@@ -2022,3 +2022,30 @@ mod runtime_tests {
         ));
     }
 }
+
+impl ProgramSnapshotStateV1 {
+    /// Стабильное wire-имя состояния. Новая ветвь требует явной проекции у владельца.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Ready => "ready",
+            Self::Stale => "stale",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_state_contract {
+    use super::ProgramSnapshotStateV1;
+
+    #[test]
+    fn wire_state_projection_preserves_every_lifecycle_state() {
+        use ProgramSnapshotStateV1::*;
+        assert_eq!(
+            [Waiting, Ready, Stale, Failed].map(ProgramSnapshotStateV1::key),
+            ["waiting", "ready", "stale", "failed"]
+        );
+    }
+}

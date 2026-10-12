@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, evaluateWcag22 } from "../index.js";
+import init, { compileProgramWire, evaluateWcag22, isBindingError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
@@ -14,6 +14,7 @@ const wire = new ProgramWireBuilderV1()
 
 const refusal = (code, operation) => (error) => {
   assert.ok(error instanceof Error);
+  assert.equal(isBindingError(error), true);
   assert.equal(error.code, code);
   assert.equal(error.operation, operation);
   return true;
@@ -46,4 +47,37 @@ test("output index refusal preserves a readable snapshot", () => {
     snapshot?.free();
     runtime.free();
   }
+});
+
+
+test("binding error classification observes one closed pair and never coerces", () => {
+  const allowed = new Map([
+    ["evaluateWcag22", ["invalid_color", "unknown_wcag22_criterion", "internal_error"]],
+    ["numericalCapabilityManifest", ["internal_error"]],
+    ["readProgramOutput", ["invalid_output_index"]],
+  ]);
+  const codes = [...new Set([...allowed.values()].flat()), "future", undefined, {}];
+  for (const operation of [...allowed.keys(), "future", undefined]) {
+    for (const code of codes) {
+      const error = Object.assign(new Error("arbitrary prose"), { code, operation });
+      assert.equal(isBindingError(error), allowed.get(operation)?.includes(code) ?? false);
+    }
+  }
+  for (const value of [null, undefined, {}, "invalid_color", new Error("invalid_color")])
+    assert.equal(isBindingError(value), false);
+  for (const property of ["code", "operation"]) {
+    let calls = 0;
+    const error = Object.assign(new Error("original"), { code: "invalid_color", operation: "evaluateWcag22" });
+    Object.defineProperty(error, property, { get() { calls += 1; throw new Error("inaccessible"); } });
+    assert.equal(isBindingError(error), false);
+    assert.equal(calls, 1);
+  }
+  let reads = 0;
+  const unstable = Object.assign(new Error("original"), { code: "invalid_color" });
+  Object.defineProperty(unstable, "operation", { get() { reads += 1; return reads === 1 ? "future" : "evaluateWcag22"; } });
+  assert.equal(isBindingError(unstable), false);
+  assert.equal(reads, 1);
+  const proxy = Proxy.revocable(new Error("original"), {});
+  proxy.revoke();
+  assert.equal(isBindingError(proxy.proxy), false);
 });

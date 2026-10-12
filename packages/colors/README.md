@@ -334,3 +334,16 @@ V2 допускает один выпуск выбора, до 4096 состоя
 V1 сохраняет прежние байты и отказывается от конечного графа без доступного ему
 выпуска выбора. Нативные функции с суффиксом `_v1` остаются строго V1; функции
 `check_program_wire` и `compile_program_wire` распознают обе поддерживаемые версии.
+
+
+### Ошибки оценки и чтения результата
+
+`isBindingError(error)` распознаёт `Error` по паре `operation` и `code`.
+Для `evaluateWcag22` причины: `invalid_color`, `unknown_wcag22_criterion`,
+`internal_error`. Для `numericalCapabilityManifest` доступен `internal_error`.
+Неверный индекс в `outputSlot`, `outputRgb` или `outputOpacity` возвращает
+`invalid_output_index` с операцией `readProgramOutput`; snapshot сохраняется.
+
+Текст `message` служит диагностикой. Проверка читает каждое поле один раз,
+не преобразует значения и возвращает `false` для неизвестной пары или ошибки
+чтения. Контракт принадлежит также прямым WASM-входам.

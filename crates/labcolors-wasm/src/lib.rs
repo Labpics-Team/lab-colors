@@ -209,17 +209,36 @@ fn to_certificate_producer_js_error(
     certificate_error(error.code(), "issueSourceCertificateEnvelope").into()
 }
 
-fn to_js_error(error: BindingError) -> JsError {
-    JsError::new(&error.to_string())
+#[derive(Clone, Copy)]
+enum BindingOperation {
+    EvaluateWcag22,
+    NumericalCapabilityManifest,
+    ReadProgramOutput,
 }
 
-// Одна диагностика обоих snapshot-владельцев; один String вместо reason и
-// последующего Display. Запрещённый индекс не создаёт output или authority.
+impl BindingOperation {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::EvaluateWcag22 => "evaluateWcag22",
+            Self::NumericalCapabilityManifest => "numericalCapabilityManifest",
+            Self::ReadProgramOutput => "readProgramOutput",
+        }
+    }
+}
+
+fn to_js_error(error: BindingError, operation: BindingOperation) -> JsValue {
+    program_error(&error.to_string(), error.code(), operation.key()).into()
+}
+
+// Одна ошибка чтения сохраняет оба snapshot-владельца и прежний результат.
 #[inline(never)]
-fn output_index_error(index: usize) -> JsError {
-    JsError::new(&format!(
-        "internal_error: program output index {index} is out of bounds"
-    ))
+fn output_index_error(index: usize) -> JsValue {
+    program_error(
+        &format!("internal_error: program output index {index} is out of bounds"),
+        "invalid_output_index",
+        BindingOperation::ReadProgramOutput.key(),
+    )
+    .into()
 }
 
 #[derive(Clone, Copy)]
@@ -375,26 +394,32 @@ fn checked_u32(value: JsValue) -> Option<u32> {
     }
 }
 
-fn checked_output_index(value: JsValue) -> Result<usize, JsError> {
+fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
     checked_u32(value)
         .map(|index| index as usize)
         .ok_or_else(|| {
-            to_js_error(BindingError::Internal {
-                reason: "program output index must be a u32 number".to_string(),
-            })
+            program_error(
+                "internal_error: program output index must be a u32 number",
+                "invalid_output_index",
+                BindingOperation::ReadProgramOutput.key(),
+            )
+            .into()
         })
 }
 
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
-pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsError> {
+pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsValue> {
     let json = terminal_projection::capability_manifest_json();
     js_sys::JSON::parse(&json)
         .map(JsValue::unchecked_into)
         .map_err(|_| {
-            to_js_error(BindingError::Internal {
-                reason: "capability manifest не распарсился как JSON".to_string(),
-            })
+            to_js_error(
+                BindingError::Internal {
+                    reason: "capability manifest не распарсился как JSON".to_string(),
+                },
+                BindingOperation::NumericalCapabilityManifest,
+            )
         })
 }
 
@@ -404,10 +429,11 @@ pub fn evaluate_wcag22(
     foreground_hex: &str,
     background_hex: &str,
     criterion: &str,
-) -> Result<JsWcag22AssessmentV1, JsError> {
+) -> Result<JsWcag22AssessmentV1, JsValue> {
     use labcolors_core::wcag22::Wcag22CriterionV1 as C;
+    let project = |error| to_js_error(error, BindingOperation::EvaluateWcag22);
     let criterion = C::parse(criterion).ok_or_else(|| {
-        to_js_error(BindingError::UnknownWcag22Criterion {
+        project(BindingError::UnknownWcag22Criterion {
             requested: criterion.to_string(),
         })
     })?;
@@ -415,7 +441,7 @@ pub fn evaluate_wcag22(
         labcolors_core::wcag22::evaluate_wcag22_hex(foreground_hex, background_hex, criterion)
             .map_err(|error| {
                 use labcolors_core::wcag22::Wcag22EvaluationErrorV1 as E;
-                to_js_error(match error {
+                project(match error {
                     E::InvalidSrgb8 { field, reason } => BindingError::InvalidColor {
                         reason: format!("{field}: {reason}"),
                     },
@@ -424,11 +450,11 @@ pub fn evaluate_wcag22(
                     },
                 })
             })?;
-    let json = terminal_projection::wcag22_json(&assessment).map_err(to_js_error)?;
+    let json = terminal_projection::wcag22_json(&assessment).map_err(project)?;
     js_sys::JSON::parse(&json)
         .map(JsValue::unchecked_into)
         .map_err(|_| {
-            to_js_error(BindingError::Internal {
+            project(BindingError::Internal {
                 reason: "WCAG22 projection не распарсился как JSON".to_string(),
             })
         })
@@ -487,7 +513,7 @@ impl ProgramSnapshot {
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
-        snapshot_state_key(self.inner.state()).to_string()
+        self.inner.state().key().to_string()
     }
 
     #[wasm_bindgen(js_name = outputCount)]
@@ -499,7 +525,7 @@ impl ProgramSnapshot {
     pub fn output_slot(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<u32, JsError> {
+    ) -> Result<u32, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .outputs()
@@ -512,7 +538,7 @@ impl ProgramSnapshot {
     pub fn output_rgb(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<Box<[u8]>, JsError> {
+    ) -> Result<Box<[u8]>, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .outputs()
@@ -525,7 +551,7 @@ impl ProgramSnapshot {
     pub fn output_opacity(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<f64, JsError> {
+    ) -> Result<f64, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .outputs()
@@ -720,17 +746,6 @@ impl labcolors_core::program_wire::ProgramPointSinkHostV1 for JsPointSinkHostV1 
         } else {
             Ok(())
         }
-    }
-}
-
-fn snapshot_state_key(state: labcolors_core::program_wire::ProgramSnapshotStateV1) -> &'static str {
-    use labcolors_core::program_wire::ProgramSnapshotStateV1 as S;
-    match state {
-        S::Waiting => "waiting",
-        S::Ready => "ready",
-        S::Stale => "stale",
-        S::Failed => "failed",
-        _ => "unknown",
     }
 }
 
@@ -1027,7 +1042,7 @@ pub struct ProgramAttachedSnapshot {
 impl ProgramAttachedSnapshot {
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
-        snapshot_state_key(self.inner.snapshot().state()).to_string()
+        self.inner.snapshot().state().key().to_string()
     }
 
     #[wasm_bindgen(js_name = outputCount)]
@@ -1039,7 +1054,7 @@ impl ProgramAttachedSnapshot {
     pub fn output_slot(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<u32, JsError> {
+    ) -> Result<u32, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .snapshot()
@@ -1053,7 +1068,7 @@ impl ProgramAttachedSnapshot {
     pub fn output_rgb(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<Box<[u8]>, JsError> {
+    ) -> Result<Box<[u8]>, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .snapshot()
@@ -1067,7 +1082,7 @@ impl ProgramAttachedSnapshot {
     pub fn output_opacity(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<f64, JsError> {
+    ) -> Result<f64, JsValue> {
         let index = checked_output_index(index)?;
         self.inner
             .snapshot()
