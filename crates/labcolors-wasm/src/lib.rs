@@ -129,7 +129,7 @@ const bindingFailures = [
 
 export function bindingFailure(kind, reason) {
   const [code, operation] = bindingFailures[kind];
-  return programError(`: `, code, operation);
+  return programError(code + ": " + reason, code, operation);
 }
 
 export function certificateError(code, operation) {
