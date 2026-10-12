@@ -207,10 +207,10 @@
         "sha256": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5"
       },
       {
-        "bytes": 1705,
+        "bytes": 1749,
         "path": "crates/labcolors-core/Cargo.toml",
         "role": "core_manifest",
-        "sha256": "9b785bea206d3f1192c35b1873c779e56ef84710133f9828fb7f08c44a18378b"
+        "sha256": "7f41d6933c723138e2056dc33a3fff51effb0af7e15c158e5d5ecf2110dd3310"
       },
       {
         "bytes": 1064,

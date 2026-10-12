@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
-serde_yaml = { version = "0.9", optional = true }
+yaml-rust2 = { version = "0.13", default-features = false, optional = true }
 toml = { version = "0.8", optional = true }
 
 [features]
@@ -19,9 +19,9 @@ toml = { version = "0.8", optional = true }
 # adapter may disable defaults and then enable only capabilities it projects.
 default = []
 # EXT-09 extractor modules (exports_manifest, ci_build_manifest) require
-# serde/toml/serde_yaml. Gated to preserve the zero-runtime-dependency
+# serde/toml/yaml-rust2. Gated to preserve the zero-runtime-dependency
 # invariant for default and private-fixture builds.
-ext09-extractor = ["dep:serde", "dep:serde_yaml", "dep:toml"]
+ext09-extractor = ["dep:serde", "dep:yaml-rust2", "dep:toml"]
 # Один закрытый package-private consumer исполняет staged Program, не превращая
 # Program во второй публичный authoring root. Публичный runtime feature не включает.
 private-fixture = []
@@ -30,6 +30,7 @@ private-fixture = []
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(labcolors_private_fixture_unshared_v1)'] }
 
 [dev-dependencies]
+serde_json = "1"
 pretty_assertions = "1.4"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 # Property/fuzz engine for mathematical invariants; pin is workspace-owned.

@@ -221,9 +221,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Receipt pins exact source bytes at PR head; ephemeral merge commits
-          # can alter files via main-side changes, breaking the integrity seal.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # PR receipts bind the proposed head; push and merge queue bind their event SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: verify exact clean-set product receipt
         run: python3 scripts/verify_clean_set_receipt.py product --product-root "$GITHUB_WORKSPACE"
       - name: replay the complete nominal clean-set proof offline
@@ -245,7 +244,9 @@ jobs:
           toolchain: ${{ env.MSRV_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo check on declared MSRV
-        run: cargo check --workspace --all-targets --locked
+        run: |
+          cargo check --workspace --all-targets --locked
+          cargo check -p labcolors-core --all-targets --features ext09-extractor --locked
 
   lint:
     name: clippy + rustfmt
@@ -545,6 +546,9 @@ jobs:
       - name: cargo test private-fixture feature
         if: ${{ matrix.lane == 'private-fixture' }}
         run: cargo test -p labcolors-core --lib --features private-fixture --locked
+      - name: optional repository extractor contracts
+        if: ${{ matrix.lane == 'proof-contracts' }}
+        run: cargo test -p labcolors-core --lib --features ext09-extractor --locked
       - name: exhaustive 24-bit family membership oracle
         if: ${{ matrix.lane == 'proof-contracts' }}
         shell: bash
