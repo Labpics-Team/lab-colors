@@ -74,8 +74,7 @@ pub struct DispositionedArtifact {
 
 /// Вердикт audit_gate: агрегированный результат проверки конформности.
 ///
-/// Считается pass только когда нет Orphaned и Defective.
-/// NotAssessed допустим, но выносится в отчёт отдельным списком.
+/// Успех требует непустой полной оценки без Orphaned, Defective и NotAssessed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditVerdict {
     pub passed: bool,

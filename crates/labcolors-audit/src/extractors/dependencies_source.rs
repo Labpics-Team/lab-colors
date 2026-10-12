@@ -1,4 +1,4 @@
-use std::fs;
+use crate::input::{self, AuditInputError};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -33,27 +33,12 @@ struct PackageSection {
 /// Извлекает зависимости всех крейтов workspace из `crates/*/Cargo.toml`.
 ///
 /// Результат детерминированно отсортирован по (crate_name, section, dep_name).
-pub fn extract_dependencies(workspace_root: &Path) -> Vec<DependencyEntry> {
+pub fn extract_dependencies(
+    workspace_root: &Path,
+) -> Result<Vec<DependencyEntry>, AuditInputError> {
     let mut entries = Vec::new();
-    let crates_dir = workspace_root.join("crates");
-
-    let dir_entries = match fs::read_dir(&crates_dir) {
-        Ok(e) => e,
-        Err(_) => return entries,
-    };
-
-    for entry in dir_entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let cargo_toml_path = path.join("Cargo.toml");
-        if !cargo_toml_path.is_file() {
-            continue;
-        }
-        if let Some(crate_entries) = parse_cargo_toml(&cargo_toml_path) {
-            entries.extend(crate_entries);
-        }
+    for path in input::crate_directories(workspace_root)? {
+        entries.extend(parse_cargo_toml(&path.join("Cargo.toml"))?);
     }
 
     entries.sort_by(|a, b| {
@@ -63,13 +48,17 @@ pub fn extract_dependencies(workspace_root: &Path) -> Vec<DependencyEntry> {
             .then_with(|| a.dep_name.cmp(&b.dep_name))
     });
 
-    entries
+    Ok(entries)
 }
 
-fn parse_cargo_toml(path: &Path) -> Option<Vec<DependencyEntry>> {
-    let content = fs::read_to_string(path).ok()?;
-    let manifest: CargoToml = toml::from_str(&content).ok()?;
-    let crate_name = manifest.package.as_ref()?.name.clone();
+fn parse_cargo_toml(path: &Path) -> Result<Vec<DependencyEntry>, AuditInputError> {
+    let content = input::text(path)?;
+    let manifest: CargoToml = toml::from_str(&content)
+        .map_err(|error| AuditInputError::invalid(path, error.to_string()))?;
+    let crate_name = manifest
+        .package
+        .ok_or_else(|| AuditInputError::invalid(path, "отсутствует package.name"))?
+        .name;
 
     let mut entries = Vec::new();
 
@@ -92,7 +81,7 @@ fn parse_cargo_toml(path: &Path) -> Option<Vec<DependencyEntry>> {
         &mut entries,
     );
 
-    Some(entries)
+    Ok(entries)
 }
 
 fn collect_section(

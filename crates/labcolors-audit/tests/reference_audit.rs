@@ -38,35 +38,18 @@ fn synthetic_orphan_is_detected_by_gate() {
     assert_eq!(verdict.total_artifacts, 1);
 }
 
-/// Floor-тест: реальное дерево (stub-реализация) не производит сирот.
-///
-/// На этапе scaffold enumerate возвращает пустой вектор, поэтому
-/// вердикт должен быть pass с нулями по всем счётчикам. Когда enumerate
-/// начнёт извлекать реальные артефакты, этот тест станет floor:
-/// количество Orphaned не должно превышать документированный baseline.
+/// Неполная оценка настоящего дерева сохраняет найденные артефакты и явный отказ.
 #[test]
-fn real_tree_stub_produces_zero_orphans() {
-    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+fn real_tree_reports_its_unassessed_inventory() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("audit crate has parent workspace root");
-
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
-    let dispositioned = assign_dispositions(&raw);
-    let verdict = audit_gate(&dispositioned);
-
-    // Scaffold invariant: stub enumerate returns empty → zero everything.
-    // When real extraction lands, this assertion becomes a floor check
-    // against documented NotAssessed rows, not a hard zero.
-    assert_eq!(
-        verdict.orphaned_count, 0,
-        "stub scanner must not produce orphans; real implementation \
-         should document expected NotAssessed count instead"
-    );
-    assert_eq!(
-        verdict.defective_count, 0,
-        "stub scanner must not produce defective artifacts"
-    );
-    assert!(verdict.passed, "empty scan must pass the gate");
+        .and_then(std::path::Path::parent)
+        .expect("корень workspace");
+    let (verdict, entries) = labcolors_audit::run_full_audit(root).expect("читаемое дерево");
+    assert!(!entries.is_empty());
+    assert_eq!(verdict.total_artifacts, entries.len());
+    assert!(verdict.not_assessed_count > 0);
+    assert!(!verdict.passed);
 }
 
 /// Контроль контракта: Defective тоже ломает гейт.
@@ -92,9 +75,9 @@ fn defective_artifact_fails_gate() {
     assert_eq!(verdict.defective_count, 1);
 }
 
-/// NotAssessed alone does NOT fail the gate — but is counted separately.
+/// Неоценённый артефакт сохраняет пробел покрытия в итоговом отказе.
 #[test]
-fn not_assessed_passes_gate_with_warning_count() {
+fn not_assessed_prevents_a_complete_verdict() {
     let dispositioned = vec![DispositionedArtifact {
         raw: RawArtifact {
             class: ArtifactClass::SemanticBranch,
@@ -112,7 +95,7 @@ fn not_assessed_passes_gate_with_warning_count() {
 
     let verdict = audit_gate(&dispositioned);
 
-    assert!(verdict.passed, "NotAssessed alone must not fail the gate");
+    assert!(!verdict.passed, "NotAssessed prevents a complete verdict");
     assert_eq!(verdict.not_assessed_count, 1);
     assert_eq!(verdict.orphaned_count, 0);
     assert_eq!(verdict.defective_count, 0);
@@ -126,7 +109,8 @@ fn ext07_wasm_boundary_floor() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     let wasm_count = raw
         .iter()
         .filter(|a| a.class == ArtifactClass::WasmBoundary)
@@ -147,7 +131,8 @@ fn ext07_native_boundary_floor() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     let native_count = raw
         .iter()
         .filter(|a| a.class == ArtifactClass::NativeBoundary)
@@ -168,7 +153,8 @@ fn ext07_wasm_boundary_no_phantom() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     for artifact in raw
         .iter()
         .filter(|a| a.class == ArtifactClass::WasmBoundary)
@@ -190,7 +176,8 @@ fn ext07_native_boundary_no_phantom() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     for artifact in raw
         .iter()
         .filter(|a| a.class == ArtifactClass::NativeBoundary)
@@ -218,7 +205,8 @@ fn ext_parallel_ssot_floor() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     let ssot_count = raw
         .iter()
         .filter(|a| a.class == ArtifactClass::ParallelSsot)
@@ -243,7 +231,8 @@ fn ext_parallel_ssot_no_phantom() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     for artifact in raw
         .iter()
         .filter(|a| a.class == ArtifactClass::ParallelSsot)
@@ -269,7 +258,8 @@ fn ext_parallel_ssot_key_format() {
         .and_then(|p| p.parent())
         .expect("audit crate has grandparent workspace root");
 
-    let raw = labcolors_audit::enumerate_production_artifacts(source_root);
+    let raw = labcolors_audit::enumerate_production_artifacts(source_root)
+        .expect("читаемый исходный fixture");
     for artifact in raw
         .iter()
         .filter(|a| a.class == ArtifactClass::ParallelSsot)

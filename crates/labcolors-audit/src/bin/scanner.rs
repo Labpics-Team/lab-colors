@@ -1,43 +1,37 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-use labcolors_audit::{assign_dispositions, audit_gate, enumerate_production_artifacts};
-
-fn main() {
-    let source_root = std::env::args()
+fn run() -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let root = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-
-    eprintln!(
-        "AUD-01 scanner: enumerating artifacts in {}",
-        source_root.display()
-    );
-    let raw = enumerate_production_artifacts(&source_root);
-    eprintln!("  found {} raw artifacts", raw.len());
-
-    let dispositioned = assign_dispositions(&raw);
-    let verdict = audit_gate(&dispositioned);
-
-    let json = serde_json::to_string_pretty(&verdict).expect("AuditVerdict serializes");
-    println!("{json}");
-
-    if !verdict.passed {
-        eprintln!(
-            "AUD-01 GATE FAILED: {} orphaned, {} defective (total {})",
-            verdict.orphaned_count, verdict.defective_count, verdict.total_artifacts
-        );
-        std::process::exit(1);
-    }
-
-    if verdict.not_assessed_count > 0 {
-        eprintln!(
-            "AUD-01 gate passed with {} NotAssessed artifacts — coverage incomplete",
-            verdict.not_assessed_count
-        );
+    let (verdict, _) = labcolors_audit::run_full_audit(&root)?;
+    let mut output = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut output, &verdict)?;
+    writeln!(output)?;
+    output.flush()?;
+    if verdict.passed {
+        Ok(ExitCode::SUCCESS)
     } else {
         eprintln!(
-            "AUD-01 gate passed: all {} artifacts accounted for",
+            "Аудит не завершён успешно: {} без оценки, {} без основания, {} дефектных из {}.",
+            verdict.not_assessed_count,
+            verdict.orphaned_count,
+            verdict.defective_count,
             verdict.total_artifacts
         );
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Аудит не выполнен: {error}");
+            ExitCode::from(2)
+        }
     }
 }

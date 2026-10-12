@@ -5,8 +5,8 @@
 //! targets and public API items. Feature-gated exports carry their gate name so
 //! downstream tooling can distinguish always-available surface from opt-in caps.
 
+use crate::input::{self, AuditInputError};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 /// Complete export/metadata manifest for one workspace crate.
@@ -131,20 +131,17 @@ pub enum ExportItem {
     },
 }
 
-/// Extracts export/metadata manifests for every workspace member under
-/// `workspace_root/crates/*`.
-///
-/// The returned vector is sorted by crate name for determinism. Parsing is
-/// intentionally strict: missing required fields panic so sabotage (deleted
-/// metadata, broken workspace inheritance) fails tests loudly rather than
-/// silently producing partial output.
-pub fn extract_exports_metadata(workspace_root: &Path) -> Vec<CrateExportManifest> {
-    let crates_dir = workspace_root.join("crates");
+/// Извлекает метаданные пакетов; недоступный или повреждённый вход прерывает оценку.
+pub fn extract_exports_metadata(
+    workspace_root: &Path,
+) -> Result<Vec<CrateExportManifest>, AuditInputError> {
+    // Общая граница проверяет доступность всех исходников, включая вложенные пути.
+    for path in input::rust_files(workspace_root)? {
+        let source = input::text(&path)?;
+        input::rust(&path, &source)?;
+    }
     let workspace_toml_path = workspace_root.join("Cargo.toml");
-    let workspace_toml: toml::Value = fs::read_to_string(&workspace_toml_path)
-        .expect("workspace Cargo.toml readable")
-        .parse()
-        .expect("workspace Cargo.toml parses");
+    let workspace_toml = input::manifest(&workspace_toml_path)?;
     let workspace_package = workspace_toml
         .get("workspace")
         .and_then(|w| w.get("package"))
@@ -152,31 +149,21 @@ pub fn extract_exports_metadata(workspace_root: &Path) -> Vec<CrateExportManifes
         .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()));
 
     let mut manifests = Vec::new();
-    let entries = match fs::read_dir(&crates_dir) {
-        Ok(iter) => iter,
-        Err(_) => return manifests,
-    };
-
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let cargo_path = entry.path().join("Cargo.toml");
-        if !cargo_path.exists() {
-            continue;
-        }
-        let raw = fs::read_to_string(&cargo_path).expect("crate Cargo.toml readable");
-        let value: toml::Value = raw.parse().expect("crate Cargo.toml parses");
-        let pkg = value.get("package").expect("[package] table present");
+    for path in input::crate_directories(workspace_root)? {
+        let cargo_path = path.join("Cargo.toml");
+        let value = input::manifest(&cargo_path)?;
+        let pkg = value
+            .get("package")
+            .ok_or_else(|| AuditInputError::invalid(&cargo_path, "отсутствует [package]"))?;
 
         let crate_name = pkg
             .get("name")
             .and_then(|v| v.as_str())
-            .expect("package.name present")
+            .ok_or_else(|| AuditInputError::invalid(&cargo_path, "отсутствует package.name"))?
             .to_string();
 
-        let version =
-            resolve_workspace_string(pkg, &workspace_package, "version").expect("version resolved");
+        let version = resolve_workspace_string(pkg, &workspace_package, "version")
+            .ok_or_else(|| AuditInputError::invalid(&cargo_path, "не определена версия пакета"))?;
         let description = resolve_workspace_string(pkg, &workspace_package, "description");
         let license = resolve_workspace_string(pkg, &workspace_package, "license");
 
@@ -184,11 +171,11 @@ pub fn extract_exports_metadata(workspace_root: &Path) -> Vec<CrateExportManifes
         let dependencies = parse_dependencies(&value);
         let targets = parse_targets(&value, &crate_name);
 
-        let lib_rs = entry.path().join("src").join("lib.rs");
-        let public_api = if lib_rs.exists() {
-            parse_public_api(&lib_rs)
-        } else {
-            Vec::new()
+        let lib_rs = path.join("src").join("lib.rs");
+        let public_api = match std::fs::symlink_metadata(&lib_rs) {
+            Ok(_) => parse_public_api(&lib_rs)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(AuditInputError::new(&lib_rs, error)),
         };
 
         manifests.push(CrateExportManifest {
@@ -204,7 +191,7 @@ pub fn extract_exports_metadata(workspace_root: &Path) -> Vec<CrateExportManifes
     }
 
     manifests.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
-    manifests
+    Ok(manifests)
 }
 
 fn resolve_workspace_string(
@@ -373,8 +360,9 @@ fn parse_targets(value: &toml::Value, crate_name: &str) -> Vec<TargetDef> {
 ///
 /// Items marked `pub(crate)` are NOT part of the public export surface and
 /// are intentionally skipped — including them would be a sabotage vector.
-fn parse_public_api(path: &Path) -> Vec<ExportItem> {
-    let src = fs::read_to_string(path).expect("lib.rs readable");
+fn parse_public_api(path: &Path) -> Result<Vec<ExportItem>, AuditInputError> {
+    let src = input::text(path)?;
+    input::rust(path, &src)?;
     let mut out = Vec::new();
     let lines: Vec<&str> = src.lines().collect();
     let mut i = 0;
@@ -427,7 +415,7 @@ fn parse_public_api(path: &Path) -> Vec<ExportItem> {
             i += 1;
         }
     }
-    out
+    Ok(out)
 }
 
 fn extract_cfg_feature(line: &str) -> Option<String> {
@@ -583,7 +571,8 @@ mod tests {
 
     #[test]
     fn extracts_all_declared_workspace_consumers() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let names: Vec<_> = manifests
             .iter()
             .map(|item| item.crate_name.as_str())
@@ -603,7 +592,8 @@ mod tests {
 
     #[test]
     fn resolves_workspace_inherited_metadata() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let audit = manifests
             .iter()
             .find(|m| m.crate_name == "labcolors-audit")
@@ -615,7 +605,8 @@ mod tests {
 
     #[test]
     fn core_has_known_public_modules() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let core = manifests
             .iter()
             .find(|m| m.crate_name == "labcolors-core")
@@ -642,7 +633,8 @@ mod tests {
 
     #[test]
     fn feature_gated_private_fixture_is_tracked() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let core = manifests
             .iter()
             .find(|m| m.crate_name == "labcolors-core")
@@ -656,7 +648,8 @@ mod tests {
 
     #[test]
     fn missing_or_substituted_consumer_does_not_match_the_workspace_contract() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let names: Vec<_> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
         assert_eq!(names, REQUIRED_CRATES);
         // Контроли проверяют ту же норму имён, не уменьшают исторический count.
@@ -673,7 +666,8 @@ mod tests {
 
     #[test]
     fn sabotage_fake_crate_not_present() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let names: Vec<&str> = manifests.iter().map(|m| m.crate_name.as_str()).collect();
         assert!(
             !names.contains(&"labcolors-fake"),
@@ -683,7 +677,8 @@ mod tests {
 
     #[test]
     fn reexports_include_solve_surface() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let core = manifests
             .iter()
             .find(|m| m.crate_name == "labcolors-core")
@@ -708,7 +703,8 @@ mod tests {
 
     #[test]
     fn pub_crate_items_excluded_from_surface() {
-        let manifests = extract_exports_metadata(&workspace_root());
+        let manifests =
+            extract_exports_metadata(&workspace_root()).expect("читаемый исходный fixture");
         let core = manifests
             .iter()
             .find(|m| m.crate_name == "labcolors-core")

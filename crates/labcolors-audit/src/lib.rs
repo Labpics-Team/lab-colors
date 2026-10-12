@@ -1,7 +1,10 @@
 pub mod dispose;
 pub mod enumerate;
 pub mod extractors;
+mod input;
 pub mod types;
+
+pub use input::AuditInputError;
 
 pub use dispose::assign_dispositions;
 pub use enumerate::enumerate_production_artifacts;
@@ -9,11 +12,7 @@ pub use types::{ArtifactClass, AuditVerdict, Disposition, DispositionedArtifact,
 
 use std::path::Path;
 
-/// Стадия 3: вынесение вердикта по диспозиционированным артефактам.
-///
-/// Pass = нет Orphaned и Defective. NotAssessed допустим, но считается
-/// отдельно: при наличии только NotAssessed вердикт passed=true, но
-/// not_assessed_count > 0 сигнализирует о незавершённости покрытия.
+/// Полный успешный вердикт требует непустого инвентаря без дефектов и пробелов оценки.
 pub fn audit_gate(dispositioned: &[DispositionedArtifact]) -> AuditVerdict {
     let total_artifacts = dispositioned.len();
     let orphaned_count = dispositioned
@@ -30,7 +29,10 @@ pub fn audit_gate(dispositioned: &[DispositionedArtifact]) -> AuditVerdict {
         .count();
 
     AuditVerdict {
-        passed: orphaned_count == 0 && defective_count == 0,
+        passed: total_artifacts > 0
+            && orphaned_count == 0
+            && defective_count == 0
+            && not_assessed_count == 0,
         orphaned_count,
         defective_count,
         not_assessed_count,
@@ -42,9 +44,11 @@ pub fn audit_gate(dispositioned: &[DispositionedArtifact]) -> AuditVerdict {
 ///
 /// Удобная обёртка для CLI и интеграционных тестов. Возвращает вердикт
 /// и полный список диспозиционированных артефактов для детального отчёта.
-pub fn run_full_audit(source_root: &Path) -> (AuditVerdict, Vec<DispositionedArtifact>) {
-    let raw = enumerate_production_artifacts(source_root);
+pub fn run_full_audit(
+    source_root: &Path,
+) -> Result<(AuditVerdict, Vec<DispositionedArtifact>), AuditInputError> {
+    let raw = enumerate_production_artifacts(source_root)?;
     let dispositioned = assign_dispositions(&raw);
     let verdict = audit_gate(&dispositioned);
-    (verdict, dispositioned)
+    Ok((verdict, dispositioned))
 }

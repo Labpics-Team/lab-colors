@@ -11,7 +11,7 @@ fn workspace_root() -> &'static Path {
 
 #[test]
 fn api_manifest_includes_known_public_functions() {
-    let entries = extract_public_api(workspace_root());
+    let entries = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
     // enumerate_production_artifacts is a known pub fn in labcolors-audit
     let found = entries
         .iter()
@@ -25,7 +25,7 @@ fn api_manifest_includes_known_public_functions() {
 
 #[test]
 fn api_manifest_excludes_test_modules() {
-    let entries = extract_public_api(workspace_root());
+    let entries = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
     for entry in &entries {
         assert!(
             !entry.path.contains("/tests/"),
@@ -42,8 +42,8 @@ fn api_manifest_excludes_test_modules() {
 
 #[test]
 fn api_manifest_deterministic_order() {
-    let first = extract_public_api(workspace_root());
-    let second = extract_public_api(workspace_root());
+    let first = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
+    let second = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
     assert_eq!(
         first.len(),
         second.len(),
@@ -61,7 +61,7 @@ fn api_manifest_deterministic_order() {
 
 #[test]
 fn api_manifest_entries_have_nonempty_signatures() {
-    let entries = extract_public_api(workspace_root());
+    let entries = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
     assert!(
         !entries.is_empty(),
         "Manifest should not be empty for this workspace"
@@ -95,7 +95,7 @@ fn dropped_item_detected() {
     // We check that removing a known pub item would decrease the count.
     // Since we can't mutate sources in tests, we verify the invariant indirectly:
     // the manifest contains at least one fn from labcolors-audit itself.
-    let entries = extract_public_api(workspace_root());
+    let entries = extract_public_api(workspace_root()).expect("читаемый исходный fixture");
     let audit_fns: Vec<&ApiManifestEntry> = entries
         .iter()
         .filter(|e| e.crate_name == "labcolors-audit" && e.kind == "fn")

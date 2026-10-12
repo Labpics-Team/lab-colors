@@ -1,8 +1,8 @@
 use std::path::Path;
 
+use crate::input::{self, AuditInputError};
 use sha2::{Digest, Sha256};
-use syn::{File, ImplItem, Item, ItemFn, ItemImpl, Visibility};
-use walkdir::WalkDir;
+use syn::{ImplItem, Item, ItemFn, ItemImpl, Visibility};
 
 /// Одна извлечённая публичная операция (функция или метод).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,49 +26,13 @@ pub struct OperationEntry {
 /// Обходит `workspace_root/crates/**/*.rs`, парсит каждый файл через `syn`,
 /// собирает `pub fn` (не геттеры/сеттеры) и публичные методы в `impl`.
 /// Результат детерминированно отсортирован по `(path, name)`.
-pub fn extract_operations(workspace_root: &Path) -> Vec<OperationEntry> {
+pub fn extract_operations(workspace_root: &Path) -> Result<Vec<OperationEntry>, AuditInputError> {
     let mut entries = Vec::new();
-    let crates_dir = workspace_root.join("crates");
-
-    if !crates_dir.is_dir() {
-        return entries;
-    }
-
-    for dir_entry in WalkDir::new(&crates_dir).into_iter().filter_map(|e| e.ok()) {
-        let path = dir_entry.path();
-
-        let is_rs_file = path.is_file() && path.extension().is_some_and(|ext| ext == "rs");
-        if !is_rs_file {
-            continue;
-        }
-
-        // Исключаем тестовые модули и build.rs
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        if file_name == "build.rs"
-            || file_name.ends_with("_test.rs")
-            || file_name.ends_with("_tests.rs")
-        {
-            continue;
-        }
-
-        // Исключаем файлы внутри директорий tests/ или benches/
-        let rel = relative_path(workspace_root, path);
-        if rel.contains("/tests/") || rel.contains("/benches/") {
-            continue;
-        }
-
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let file: File = match syn::parse_str(&content) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-
+    for path in input::rust_files(workspace_root)? {
+        let content = input::text(&path)?;
+        let file = input::rust(&path, &content)?;
+        let rel = input::relative(workspace_root, &path)?;
         let crate_name = extract_crate_name(&rel);
-
         for item in &file.items {
             match item {
                 Item::Fn(f) if is_pub_fn(f) => {
@@ -91,7 +55,7 @@ pub fn extract_operations(workspace_root: &Path) -> Vec<OperationEntry> {
     }
 
     entries.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.name.cmp(&b.name)));
-    entries
+    Ok(entries)
 }
 
 fn collect_impl_methods(
@@ -148,11 +112,4 @@ fn extract_crate_name(rel_path: &str) -> String {
         .and_then(|rest| rest.split('/').next())
         .unwrap_or("unknown")
         .to_string()
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
 }
