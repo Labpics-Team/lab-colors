@@ -574,7 +574,6 @@ dependencies = [
  "sha2",
  "syn",
  "toml 0.8.23",
- "walkdir",
 ]
 
 [[package]]

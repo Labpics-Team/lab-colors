@@ -8,9 +8,9 @@
 
 use std::path::Path;
 
+use crate::input::{self, AuditInputError};
 use sha2::{Digest, Sha256};
-use syn::{Expr, ExprIf, ExprMatch, File, Item, Pat, Stmt};
-use walkdir::WalkDir;
+use syn::{Expr, ExprIf, ExprMatch, Item, Pat, Stmt};
 
 /// Kind of semantic branch / conformance decision site.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,53 +55,20 @@ pub struct ConformanceBranchEntry {
 /// Traverses `workspace_root/crates/**/*.rs`, parses each file with `syn`,
 /// and collects `match` arms, `if` conditions, and `cfg!()` gates. Results are
 /// deterministically sorted by `(path, line)`.
-pub fn extract_conformance_branches(workspace_root: &Path) -> Vec<ConformanceBranchEntry> {
+pub fn extract_conformance_branches(
+    workspace_root: &Path,
+) -> Result<Vec<ConformanceBranchEntry>, AuditInputError> {
     let mut entries = Vec::new();
-    let crates_dir = workspace_root.join("crates");
-
-    if !crates_dir.is_dir() {
-        return entries;
-    }
-
-    for dir_entry in WalkDir::new(&crates_dir).into_iter().filter_map(|e| e.ok()) {
-        let path = dir_entry.path();
-
-        let is_rs_file = path.is_file() && path.extension().is_some_and(|ext| ext == "rs");
-        if !is_rs_file {
-            continue;
-        }
-
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        if file_name == "build.rs"
-            || file_name.ends_with("_test.rs")
-            || file_name.ends_with("_tests.rs")
-        {
-            continue;
-        }
-
-        let rel = relative_path(workspace_root, path);
-        if rel.contains("/tests/") || rel.contains("/benches/") {
-            continue;
-        }
-
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let file: File = match syn::parse_str(&content) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-
+    for path in input::rust_files(workspace_root)? {
+        let content = input::text(&path)?;
+        let file = input::rust(&path, &content)?;
+        let rel = input::relative(workspace_root, &path)?;
         let crate_name = extract_crate_name(&rel);
         let lines: Vec<&str> = content.lines().collect();
-
         collect_from_items(&file.items, &rel, &crate_name, &lines, &mut entries);
     }
-
     entries.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.line.cmp(&b.line)));
-    entries
+    Ok(entries)
 }
 
 fn collect_from_items(
@@ -371,13 +338,6 @@ fn extract_crate_name(rel_path: &str) -> String {
         .to_string()
 }
 
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,7 +354,8 @@ mod tests {
 
     #[test]
     fn extracts_at_least_one_branch() {
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         assert!(
             !entries.is_empty(),
             "SABOTAGE: extractor must find at least one conformance branch in workspace"
@@ -403,7 +364,8 @@ mod tests {
 
     #[test]
     fn all_entries_have_nonempty_condition() {
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         for entry in &entries {
             assert!(
                 !entry.condition.is_empty(),
@@ -416,7 +378,8 @@ mod tests {
 
     #[test]
     fn all_entries_have_valid_fingerprint() {
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         for entry in &entries {
             let expected = fingerprint(entry.kind.clone(), &entry.condition);
             assert_eq!(
@@ -429,7 +392,8 @@ mod tests {
 
     #[test]
     fn results_are_deterministically_sorted() {
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         for window in entries.windows(2) {
             let a = &window[0];
             let b = &window[1];
@@ -453,7 +417,8 @@ mod tests {
 
     #[test]
     fn no_entries_from_test_files() {
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         for entry in &entries {
             assert!(
                 !entry.path.contains("/tests/"),
@@ -479,7 +444,8 @@ mod tests {
         // This test anchors against phantom-only output: if someone replaces the
         // extractor with a stub returning fake entries, this assertion fails because
         // real decision sites won't be found.
-        let entries = extract_conformance_branches(&workspace_root());
+        let entries =
+            extract_conformance_branches(&workspace_root()).expect("читаемый исходный fixture");
         let has_core_branch = entries.iter().any(|e| {
             e.crate_name == "labcolors-core"
                 && matches!(e.kind, BranchKind::MatchArm | BranchKind::IfCondition)

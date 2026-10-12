@@ -20,7 +20,8 @@ fn workspace_root() -> &'static std::path::Path {
 /// удалённых рецептов. Пустой или частичный скан не проходит тот же критерий.
 #[test]
 fn parallel_ssot_covers_current_marker_sources() {
-    let artifacts = enumerate_production_artifacts(workspace_root());
+    let artifacts =
+        enumerate_production_artifacts(workspace_root()).expect("читаемый исходный fixture");
     let required = [
         ("crates/labcolors-core/src/lpc.rs", "grounded:"),
         ("crates/labcolors-core/src/lpc.rs", "ssot-tracked:"),
@@ -64,7 +65,7 @@ fn parallel_ssot_covers_current_marker_sources() {
 fn public_claim_floor_count() {
     let source_root = workspace_root();
 
-    let artifacts = enumerate_production_artifacts(source_root);
+    let artifacts = enumerate_production_artifacts(source_root).expect("читаемый исходный fixture");
     let claim_count = artifacts
         .iter()
         .filter(|a| a.class == ArtifactClass::PublicClaim)
@@ -85,8 +86,8 @@ fn public_claim_floor_count() {
 fn parallel_ssot_and_public_claim_are_deterministic() {
     let source_root = workspace_root();
 
-    let first = enumerate_production_artifacts(source_root);
-    let second = enumerate_production_artifacts(source_root);
+    let first = enumerate_production_artifacts(source_root).expect("читаемый исходный fixture");
+    let second = enumerate_production_artifacts(source_root).expect("читаемый исходный fixture");
 
     let first_ssot: Vec<_> = first
         .iter()
@@ -123,7 +124,7 @@ fn parallel_ssot_and_public_claim_are_deterministic() {
 fn new_classes_dispose_to_not_assessed() {
     let source_root = workspace_root();
 
-    let raw = enumerate_production_artifacts(source_root);
+    let raw = enumerate_production_artifacts(source_root).expect("читаемый исходный fixture");
     let dispositioned = assign_dispositions(&raw);
 
     for artifact in &dispositioned {

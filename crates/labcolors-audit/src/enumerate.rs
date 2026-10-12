@@ -1,105 +1,45 @@
-use std::fs;
 use std::path::Path;
 
+use crate::input::{self, AuditInputError, InputResult};
 use crate::types::{ArtifactClass, RawArtifact};
 
-/// РЎС‚Р°РґРёСЏ 1: РёР·РІР»РµС‡РµРЅРёРµ СЃС‹СЂС‹С… Р°СЂС‚РµС„Р°РєС‚РѕРІ РёР· РёСЃС…РѕРґРЅРѕРіРѕ РґРµСЂРµРІР°.
-///
-/// РћР±С…РѕРґРёС‚ `source_root`, РёР·РІР»РµРєР°СЏ С‚СЂРё РєР»Р°СЃСЃР° Р°СЂС‚РµС„Р°РєС‚РѕРІ:
-/// - `ProductionSourceFile` вЂ” РєР°Р¶РґС‹Р№ `.rs` С„Р°Р№Р» РІ `crates/`, РёСЃРєР»СЋС‡Р°СЏ С‚РµСЃС‚С‹, Р±РµРЅС‡Рё Рё build.rs
-/// - `PublicExport` вЂ” СЃС‚СЂРѕРєРё `pub use` РІ `src/lib.rs` РєР°Р¶РґРѕРіРѕ РєСЂРµР№С‚Р°
-/// - `CiBuildReleaseDeclaration` вЂ” С„Р°Р№Р»С‹ `.github/workflows/*.yml`
-pub fn enumerate_production_artifacts(source_root: &Path) -> Vec<RawArtifact> {
+/// Извлекает синтаксический инвентарь Rust и CI из полного читаемого дерева.
+/// Отсутствующий каталог, ссылка или повреждённый исходник прерывают весь обход.
+pub fn enumerate_production_artifacts(
+    source_root: &Path,
+) -> Result<Vec<RawArtifact>, AuditInputError> {
     let mut artifacts = Vec::new();
-
-    // 1. ProductionSourceFile + PublicExport РёР· crates/
-    let crates_dir = source_root.join("crates");
-    if crates_dir.is_dir() {
-        collect_rust_artifacts(source_root, &crates_dir, &mut artifacts);
-    }
-
-    // 2. CiBuildReleaseDeclaration РёР· .github/workflows/
-    let workflows_dir = source_root.join(".github").join("workflows");
-    if workflows_dir.is_dir() {
-        collect_ci_artifacts(source_root, &workflows_dir, &mut artifacts);
-    }
-
-    // 3. WasmBoundary из crates/labcolors-wasm/src/
-    let wasm_src = source_root
-        .join("crates")
-        .join("labcolors-wasm")
-        .join("src");
-    if wasm_src.is_dir() {
-        collect_wasm_boundaries(source_root, &wasm_src, &mut artifacts);
-    }
-
-    // 4. NativeBoundary из crates/labcolors-ffi/src/
-    let ffi_src = source_root.join("crates").join("labcolors-ffi").join("src");
-    if ffi_src.is_dir() {
-        collect_native_boundaries(source_root, &ffi_src, &mut artifacts);
-    }
-
-    artifacts.sort_by(|a, b| {
-        let class_a = class_discriminant(a.class);
-        let class_b = class_discriminant(b.class);
-        class_a
-            .cmp(&class_b)
-            .then_with(|| a.module.cmp(&b.module))
-            .then_with(|| a.line.cmp(&b.line))
-    });
-
-    artifacts
-}
-
-fn collect_rust_artifacts(root: &Path, dir: &Path, out: &mut Vec<RawArtifact>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        if path.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            // РСЃРєР»СЋС‡Р°РµРј РґРёСЂРµРєС‚РѕСЂРёРё tests/ Рё benches/ РЅР° Р»СЋР±РѕРј СѓСЂРѕРІРЅРµ
-            if name == "tests" || name == "benches" {
-                continue;
-            }
-            collect_rust_artifacts(root, &path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-
-            // РСЃРєР»СЋС‡Р°РµРј build.rs
-            if file_name == "build.rs" {
-                continue;
-            }
-            // РСЃРєР»СЋС‡Р°РµРј *_tests.rs Рё *_test.rs
-            if file_name.ends_with("_tests.rs") || file_name.ends_with("_test.rs") {
-                continue;
-            }
-
-            let rel = relative_path(root, &path);
-
-            // ProductionSourceFile
-            out.push(RawArtifact {
-                class: ArtifactClass::ProductionSourceFile,
-                module: rel.clone(),
-                line: 1,
-                raw_key: rel.clone(),
-                raw_value: None,
-            });
-
-            // PublicExport + PublicClaim: сканируем только src/lib.rs
-            if file_name == "lib.rs" && is_lib_rs(&path) {
-                collect_public_exports(&path, &rel, out);
-                collect_public_claims(&path, &rel, out);
-            }
-
-            // ParallelSsot: маркеры SSOT-TRACKED / GROUNDED в production-коде
-            collect_parallel_ssot(&path, &rel, out);
+    for path in input::rust_files(source_root)? {
+        let content = input::text(&path)?;
+        input::rust(&path, &content)?;
+        let module = input::relative(source_root, &path)?;
+        artifacts.push(RawArtifact {
+            class: ArtifactClass::ProductionSourceFile,
+            module: module.clone(),
+            line: 1,
+            raw_key: module.clone(),
+            raw_value: None,
+        });
+        if path.file_name().is_some_and(|name| name == "lib.rs") && is_lib_rs(&path) {
+            collect_public_exports(&content, &module, &mut artifacts);
+            collect_public_claims(&content, &module, &mut artifacts);
         }
+        collect_parallel_ssot(&content, &module, &mut artifacts);
+        collect_boundaries(&content, &module, &mut artifacts);
     }
+    collect_ci_artifacts(
+        source_root,
+        &source_root.join(".github/workflows"),
+        &mut artifacts,
+    )?;
+    artifacts.sort_by(|left, right| {
+        class_discriminant(left.class)
+            .cmp(&class_discriminant(right.class))
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.raw_key.cmp(&right.raw_key))
+    });
+    Ok(artifacts)
 }
 
 fn is_lib_rs(path: &Path) -> bool {
@@ -108,16 +48,10 @@ fn is_lib_rs(path: &Path) -> bool {
         .is_some_and(|name| name == "src")
 }
 
-fn collect_public_exports(lib_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
-    let content = match fs::read_to_string(lib_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
+fn collect_public_exports(content: &str, module: &str, out: &mut Vec<RawArtifact>) {
     for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("pub use") {
-            // РР·РІР»РµРєР°РµРј РїСѓС‚СЊ РїРѕСЃР»Рµ "pub use"
             let reexported = trimmed
                 .strip_prefix("pub use")
                 .unwrap_or("")
@@ -138,38 +72,33 @@ fn collect_public_exports(lib_path: &Path, module: &str, out: &mut Vec<RawArtifa
     }
 }
 
-fn collect_ci_artifacts(root: &Path, workflows_dir: &Path, out: &mut Vec<RawArtifact>) {
-    let entries = match fs::read_dir(workflows_dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
+fn collect_ci_artifacts(
+    root: &Path,
+    directory: &Path,
+    out: &mut Vec<RawArtifact>,
+) -> InputResult<()> {
+    for entry in input::directory(directory)? {
         let path = entry.path();
-        if path.is_file()
-            && path
-                .extension()
-                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "yml" || extension == "yaml")
         {
-            let rel = relative_path(root, &path);
-            let file_name = entry.file_name().to_string_lossy().to_string();
-
+            input::text(&path)?;
+            let module = input::relative(root, &path)?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .ok_or_else(|| AuditInputError::invalid(&path, "путь не является UTF-8"))?;
             out.push(RawArtifact {
                 class: ArtifactClass::CiBuildReleaseDeclaration,
-                module: rel,
+                module,
                 line: 1,
-                raw_key: file_name,
+                raw_key: name.to_owned(),
                 raw_value: None,
             });
         }
     }
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    Ok(())
 }
 
 /// Извлечение маркеров `// SSOT-TRACKED` и `// GROUNDED` из production-кода.
@@ -177,12 +106,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 /// Каждый маркер — декларация параллельного SSOT: константа в коде
 /// синхронизирована с внешним источником (docs/empirical-inventory.md или
 /// опубликованный стандарт). raw_value содержит описание после тире.
-fn collect_parallel_ssot(file_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
-    let content = match fs::read_to_string(file_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
+fn collect_parallel_ssot(content: &str, module: &str, out: &mut Vec<RawArtifact>) {
     for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
 
@@ -216,12 +140,7 @@ fn collect_parallel_ssot(file_path: &Path, module: &str, out: &mut Vec<RawArtifa
 /// Секции `//! # Заголовок` в `lib.rs` крейтов декларируют архитектурные
 /// законы, контракты и инварианты — публичные утверждения о поведении,
 /// подлежащие верификации. raw_value содержит текст заголовка секции.
-fn collect_public_claims(lib_path: &Path, module: &str, out: &mut Vec<RawArtifact>) {
-    let content = match fs::read_to_string(lib_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
+fn collect_public_claims(content: &str, module: &str, out: &mut Vec<RawArtifact>) {
     for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
 
@@ -259,101 +178,34 @@ fn class_discriminant(class: ArtifactClass) -> u8 {
     }
 }
 
-/// Извлечение WasmBoundary артефактов из crates/labcolors-wasm/src/.
-///
-/// Сканирует все .rs файлы в wasm crate на наличие #[wasm_bindgen] атрибутов.
-/// Каждый атрибут маркирует публичную JS-доступную функцию, struct или impl блок.
-fn collect_wasm_boundaries(root: &Path, wasm_src: &Path, out: &mut Vec<RawArtifact>) {
-    for path in collect_rs_files(wasm_src) {
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
+/// Атрибуты транспортной границы ищутся в источниках независимо от имени пакета.
+fn collect_boundaries(content: &str, module: &str, out: &mut Vec<RawArtifact>) {
+    let mut lines = content.lines().enumerate().peekable();
+    while let Some((index, line)) = lines.next() {
+        let value = line.trim();
+        let class = if value == "#[wasm_bindgen]" || value.starts_with("#[wasm_bindgen(") {
+            ArtifactClass::WasmBoundary
+        } else if value == "#[uniffi::export]" || value.starts_with("#[uniffi::export(") {
+            ArtifactClass::NativeBoundary
+        } else {
+            continue;
         };
-
-        let rel = relative_path(root, &path);
-        let mut lines = content.lines().enumerate().peekable();
-
-        while let Some((line_idx, line)) = lines.next() {
-            let trimmed = line.trim();
-            if trimmed == "#[wasm_bindgen]" {
-                let decl = lines.peek().map(|(_, l)| l.trim()).unwrap_or("");
-
-                let signature = if decl.starts_with("pub fn ")
-                    || decl.starts_with("pub struct ")
-                    || decl.starts_with("impl ")
-                    || decl.starts_with("extern ")
-                {
-                    decl.to_string()
-                } else {
-                    format!("#[wasm_bindgen] at L{}", line_idx + 1)
-                };
-
-                out.push(RawArtifact {
-                    class: ArtifactClass::WasmBoundary,
-                    module: rel.clone(),
-                    line: line_idx + 1,
-                    raw_key: signature,
-                    raw_value: None,
-                });
-            }
-        }
-    }
-}
-
-/// Итеративный обход всех .rs файлов в директории (без рекурсии).
-fn collect_rs_files(dir: &Path) -> Vec<std::path::PathBuf> {
-    let mut result = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(current) = stack.pop() {
-        let entries = match fs::read_dir(&current) {
-            Ok(entries) => entries,
-            Err(_) => continue,
+        let declaration = lines.peek().map(|(_, line)| line.trim()).unwrap_or("");
+        let signature = if declaration.starts_with("pub fn ")
+            || declaration.starts_with("pub struct ")
+            || declaration.starts_with("impl ")
+            || declaration.starts_with("extern ")
+        {
+            declaration.to_owned()
+        } else {
+            format!("{value} at L{}", index + 1)
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.is_file() && path.extension().is_some_and(|e| e == "rs") {
-                result.push(path);
-            }
-        }
-    }
-    result
-}
-
-/// Извлечение NativeBoundary артефактов из crates/labcolors-ffi/src/.
-///
-/// Сканирует все .rs файлы в ffi crate на наличие #[uniffi::export] атрибутов.
-/// Каждый атрибут маркирует публичную FFI-доступную функцию.
-fn collect_native_boundaries(root: &Path, ffi_src: &Path, out: &mut Vec<RawArtifact>) {
-    for path in collect_rs_files(ffi_src) {
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let rel = relative_path(root, &path);
-        let mut lines = content.lines().enumerate().peekable();
-
-        while let Some((line_idx, line)) = lines.next() {
-            let trimmed = line.trim();
-            if trimmed == "#[uniffi::export]" {
-                let decl = lines.peek().map(|(_, l)| l.trim()).unwrap_or("");
-
-                let signature = if decl.starts_with("pub fn ") {
-                    decl.to_string()
-                } else {
-                    format!("#[uniffi::export] at L{}", line_idx + 1)
-                };
-
-                out.push(RawArtifact {
-                    class: ArtifactClass::NativeBoundary,
-                    module: rel.clone(),
-                    line: line_idx + 1,
-                    raw_key: signature,
-                    raw_value: None,
-                });
-            }
-        }
+        out.push(RawArtifact {
+            class,
+            module: module.to_owned(),
+            line: index + 1,
+            raw_key: signature,
+            raw_value: None,
+        });
     }
 }
