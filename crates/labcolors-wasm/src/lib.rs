@@ -119,6 +119,19 @@ export function programFailure(kind, operation) {
   );
 }
 
+const bindingFailures = [
+  ["invalid_color", "evaluateWcag22"],
+  ["unknown_wcag22_criterion", "evaluateWcag22"],
+  ["internal_error", "evaluateWcag22"],
+  ["internal_error", "numericalCapabilityManifest"],
+  ["invalid_output_index", "readProgramOutput"],
+];
+
+export function bindingFailure(kind, reason) {
+  const [code, operation] = bindingFailures[kind];
+  return programError(`: `, code, operation);
+}
+
 export function certificateError(code, operation) {
   return programError(
     "Certificate envelope operation failed",
@@ -174,6 +187,9 @@ extern "C" {
     #[wasm_bindgen(js_name = programFailure)]
     fn program_failure_error(kind: u32, operation: &str) -> js_sys::Error;
 
+    #[wasm_bindgen(js_name = bindingFailure)]
+    fn binding_failure_error(kind: u32, reason: &str) -> js_sys::Error;
+
     #[wasm_bindgen(js_name = certificateError)]
     fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
 
@@ -209,34 +225,33 @@ fn to_certificate_producer_js_error(
     certificate_error(error.code(), "issueSourceCertificateEnvelope").into()
 }
 
-#[derive(Clone, Copy)]
-enum BindingOperation {
-    EvaluateWcag22,
-    NumericalCapabilityManifest,
-    ReadProgramOutput,
+// Локальные теги единственной JS-проекции отказов оценки и чтения.
+#[repr(u32)]
+enum BindingFailure {
+    InvalidColor,
+    UnknownWcag22Criterion,
+    Wcag22Internal,
+    ManifestInternal,
+    OutputIndex,
 }
 
-impl BindingOperation {
-    const fn key(self) -> &'static str {
-        match self {
-            Self::EvaluateWcag22 => "evaluateWcag22",
-            Self::NumericalCapabilityManifest => "numericalCapabilityManifest",
-            Self::ReadProgramOutput => "readProgramOutput",
+fn to_js_error(error: BindingError) -> JsValue {
+    let (kind, reason) = match &error {
+        BindingError::InvalidColor { reason } => (BindingFailure::InvalidColor, reason.as_str()),
+        BindingError::UnknownWcag22Criterion { requested } => {
+            (BindingFailure::UnknownWcag22Criterion, requested.as_str())
         }
-    }
-}
-
-fn to_js_error(error: BindingError, operation: BindingOperation) -> JsValue {
-    program_error(&error.to_string(), error.code(), operation.key()).into()
+        BindingError::Internal { reason } => (BindingFailure::Wcag22Internal, reason.as_str()),
+    };
+    binding_failure_error(kind as u32, reason).into()
 }
 
 // Одна ошибка чтения сохраняет оба snapshot-владельца и прежний результат.
 #[inline(never)]
 fn output_index_error() -> JsValue {
-    program_error(
-        "internal_error: program output index must be a u32 within snapshot bounds",
-        "invalid_output_index",
-        BindingOperation::ReadProgramOutput.key(),
+    binding_failure_error(
+        BindingFailure::OutputIndex as u32,
+        "program output index must be a u32 within snapshot bounds",
     )
     .into()
 }
@@ -407,12 +422,11 @@ pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2
     js_sys::JSON::parse(&json)
         .map(JsValue::unchecked_into)
         .map_err(|_| {
-            to_js_error(
-                BindingError::Internal {
-                    reason: "capability manifest не распарсился как JSON".to_string(),
-                },
-                BindingOperation::NumericalCapabilityManifest,
+            binding_failure_error(
+                BindingFailure::ManifestInternal as u32,
+                "capability manifest не распарсился как JSON",
             )
+            .into()
         })
 }
 
@@ -424,7 +438,7 @@ pub fn evaluate_wcag22(
     criterion: &str,
 ) -> Result<JsWcag22AssessmentV1, JsValue> {
     use labcolors_core::wcag22::Wcag22CriterionV1 as C;
-    let project = |error| to_js_error(error, BindingOperation::EvaluateWcag22);
+    let project = to_js_error;
     let criterion = C::parse(criterion).ok_or_else(|| {
         project(BindingError::UnknownWcag22Criterion {
             requested: criterion.to_string(),
