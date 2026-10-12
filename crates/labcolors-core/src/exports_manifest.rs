@@ -644,6 +644,7 @@ mod tests {
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
         }
+        // Cargo owns membership; an unsupported location must not silently lose a member.
         let metadata: WorkspaceMetadata = serde_json::from_slice(&output.stdout)?;
         let members: BTreeSet<_> = metadata.workspace_members.iter().collect();
         let expected: BTreeSet<_> = metadata
@@ -747,8 +748,17 @@ mod tests {
                 return Err("valid fixture was not extracted".into());
             }
             fs::write(&manifest, "[package]\nversion = \"1.0.0\"\n")?;
-            if std::panic::catch_unwind(|| extract_exports_metadata(&root)).is_ok() {
-                return Err("missing package name was accepted".into());
+            match std::panic::catch_unwind(|| extract_exports_metadata(&root)) {
+                Ok(_) => return Err("missing package name was accepted".into()),
+                Err(payload) => {
+                    let message = payload
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                        .or_else(|| payload.downcast_ref::<&str>().copied());
+                    if message != Some("package.name present") {
+                        return Err("unexpected panic while validating package name".into());
+                    }
+                }
             }
             Ok(())
         })();
