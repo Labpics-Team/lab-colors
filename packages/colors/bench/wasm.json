@@ -32,7 +32,7 @@
     "rawBytes": 439355
   },
   "policy": {
-    "maxRawBytes": 439731,
+    "maxRawBytes": 439355,
     "basis": "measured-reproducible-program-wire-v2",
     "gzip": "diagnostic-only"
   }
