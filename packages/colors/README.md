@@ -105,14 +105,15 @@ try {
 Проверяется финальный encoded-sRGB8 результат этой точки с учётом композиции,
 а не только исходный цвет. `true` задаёт обязательное ограничение; `false`
 не ограничивает выдачу outputs. Результаты отдельных report-only ограничений
-текущий публичный `ProgramSnapshot` не раскрывает.
+публичный `ProgramSnapshot` не раскрывает.
 
 Это явно выбранная, закреплённая версией пакета конвенция. Она не включается
 автоматически и не подтверждает человеческое восприятие, фактическую отрисовку
 или универсальную «чистоту» цвета.
 
 Контракт использует закреплённый в пакете выпуск
-`exact-nominal-srgb8-point-clean-set-v2`; его точная SHA-256 указана в `NOTICE.md`.
+`exact-nominal-srgb8-point-clean-set-v2`; его точная SHA-256 указана в `NOTICE.md`
+пакета (в репозитории — `crates/labcolors-core/NOTICE.md`).
 Это условная дискретная nominal-модель с воспроизводимым выводом, а не гарантия
 человеческого восприятия. При обновлении пакета сохранённый wire следует заново
 компилировать и оценивать: семантическая идентичность Program включает выпуск
@@ -163,7 +164,7 @@ try {
 }
 ```
 
-`materializationAuthority()` читает только текущий успешно установленный
+`materializationAuthority()` читает только успешно установленный
 attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —
 модельная terminal materialization с проверенными identity, revision, sink stamp,
 binding epoch и отсутствием downstream point, а не доказательство browser paint
@@ -187,6 +188,11 @@ binding epoch и отсутствием downstream point, а не доказат
 payload или identity. Например, после `await init()`:
 
 ```ts
+import {
+  decodeCertificateEnvelope,
+  issueSourceCertificateEnvelope,
+} from "@labpics/colors";
+
 const bytes = issueSourceCertificateEnvelope();
 const metadata = decodeCertificateEnvelope(bytes);
 ```
@@ -228,7 +234,7 @@ materialization authority нельзя. Producer capability и admission ledger 
 
 - Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
 - Обновление атомарно: отказ не публикует частичный state.
-- Output появляется только вместе с сертификатом полного hard-support. Это внутренняя проверка в рамках Session, а не публичный переносимый сертификат или гарантия конечного видимого результата приложения.
+- Output появляется только при выполненных всех обязательных (`hard: true`) ограничениях. Это внутренняя проверка в рамках Session, а не публичный переносимый сертификат или гарантия конечного видимого результата приложения.
 - Канонические байты имеют одну `ContentIdentity`.
 - Невалидные wire-байты, графы, observation и resource bounds возвращают typed-отказы; fallback отсутствует.
 - DOM и CSS не входят в ядро. Применение output принадлежит приложению.
@@ -285,8 +291,6 @@ Attachment сохраняет те же классы в `program_attachment_reso
 
 - `evaluateWcag22` — точная оценка WCAG 2.2 в finite sRGB8/Q55-профиле.
 - `numericalCapabilityManifest` — манифест численных возможностей и доказательств сборки.
-
-Публикация registry/deploy не является частью этого изменения: пакет проверяется из точного CI tarball до отдельного release-гейта.
 
 ## Снимок входных массивов
 
