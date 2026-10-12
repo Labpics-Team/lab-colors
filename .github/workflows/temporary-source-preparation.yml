@@ -1,0 +1,87 @@
+name: temporary source preparation
+on:
+  push:
+    branches: [maintenance/colors-source-preparation-20261012]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: github.repository == 'Labpics-Team/lab-colors' && github.actor == 'lemone112'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 60f8b444ced1cfdbe657373d8fc5c6db44c76708
+          persist-credentials: false
+      - name: Prepare reviewed metadata and immutable source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, json, subprocess
+          parent = '60f8b444ced1cfdbe657373d8fc5c6db44c76708'
+          repository = 'Labpics-Team/lab-colors'
+          observed = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if observed != parent:
+              raise SystemExit('Unexpected source revision')
+          output = Path('/tmp/colors-source-preparation')
+          output.mkdir()
+          subprocess.run(['git', 'archive', '--format=tar', '--output=' + str(output/'source.tar'), parent], check=True)
+          def api(path, value=None):
+              command = ['gh', 'api', path]
+              if value is not None:
+                  command += ['--method', 'POST', '--input', '-']
+              result = subprocess.run(command, input=json.dumps(value) if value is not None else None,
+                                      text=True, capture_output=True, check=True)
+              return json.loads(result.stdout)
+          path = Path('packages/colors/bench/wasm.json')
+          budget = json.loads(path.read_text())
+          if budget['measurement']['rawBytes'] != 439731 or budget['policy']['maxRawBytes'] != 439731:
+              raise SystemExit('Unexpected measured artifact policy')
+          budget['measurement']['rawBytes'] = 439355
+          budget['measurement']['source'] = 'github-actions-run-38310349135'
+          content = json.dumps(budget, indent=2, ensure_ascii=False) + '\n'
+          new_pin = hashlib.sha256(content.encode()).hexdigest()
+          changes = {str(path): content}
+          script = Path('scripts/check-wasm-size-budget.mjs')
+          old_pin = '1264352584f1fbe007c99c5fce648335632262a4155d76f7a10445b6354863d1'
+          original = script.read_text()
+          if original.count(old_pin) != 1:
+              raise SystemExit('Unexpected budget source pin')
+          changes[str(script)] = original.replace(old_pin, new_pin)
+          record_path = 'proof/artifact/tree.json'
+          record = json.loads(Path(record_path).read_text())
+          for filename, data in changes.items():
+              raw = data.encode()
+              identity = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+              if filename not in record['files']:
+                  raise SystemExit('Measured source omitted from inventory')
+              record['files'][filename] = identity
+          record.pop('record_sha256')
+          record['record_sha256'] = hashlib.sha256(json.dumps(record, sort_keys=True,
+              separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+          changes[record_path] = json.dumps(record, sort_keys=True, indent=1, ensure_ascii=False) + '\n'
+          commit = api(f'repos/{repository}/git/commits/{parent}')
+          tree = api(f'repos/{repository}/git/trees', {'base_tree': commit['tree']['sha'], 'tree': [
+              {'path': filename, 'mode': '100644', 'type': 'blob', 'content': data}
+              for filename, data in sorted(changes.items())]})
+          candidate = api(f'repos/{repository}/git/commits', {
+              'message': 'chore(wasm): bind the smaller reproducible runtime measurement',
+              'tree': tree['sha'], 'parents': [parent]})
+          result = {'parent': parent, 'commit': candidate['sha'], 'tree': tree['sha'],
+                    'changes': changes, 'runtime_bytes': 439355,
+                    'runtime_sha256': '86fb4f9dff0396cdada9adf5723ead5e42bb80b09c38b71a389e9514c34775f7',
+                    'measurement_run': 38310349135}
+          (output/'prepared.json').write_text(json.dumps(result, ensure_ascii=False, indent=2))
+          print(json.dumps({key: value for key, value in result.items() if key != 'changes'}))
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: colors-source-preparation-${{ github.run_id }}
+          path: /tmp/colors-source-preparation/
+          if-no-files-found: error
+          retention-days: 1
