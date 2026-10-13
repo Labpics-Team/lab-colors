@@ -168,3 +168,21 @@ test('storage findings change fingerprints when job-level execution context chan
   }
   assert.equal(fingerprints.size,cases.length);
 });
+
+
+test('nearest env setting wins over unrelated outer aliases and values',t=>{
+  const f=fixture(t), path=join(f.root,'workflow.yml');
+  const cases=[
+    ['env: &common {MODE: test}', '    env: *common', '        env: {DOCKER_BUILD_RECORD_UPLOAD: false}',false],
+    ['env: &common {MODE: test}', '    env: *common', '',true],
+    ['env: {DOCKER_BUILD_RECORD_UPLOAD: true}', '    env: {MODE: test}', '        env: {DOCKER_BUILD_RECORD_UPLOAD: false}',false],
+    ['env: {DOCKER_BUILD_RECORD_UPLOAD: false}', '    env: {MODE: test}', '        env: {DOCKER_BUILD_RECORD_UPLOAD: true}',true],
+    ['env: {DOCKER_BUILD_RECORD_UPLOAD: false}', '    env: {MODE: test}', '',false],
+  ];
+  for (const [root,job,step,rejected] of cases){
+    const lines=[root,'jobs:','  build:',job,'    steps:','      - uses: docker/build-push-action@v6',step,''].filter(Boolean);
+    writeFileSync(path,lines.join('\n'));
+    const found=storageFindings(f.root,[path],f.scan,f.config);
+    assert.equal(found.length>0,rejected,lines.join('\n'));
+  }
+});

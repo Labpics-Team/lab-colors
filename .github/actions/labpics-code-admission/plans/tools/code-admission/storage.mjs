@@ -136,22 +136,35 @@ export function storageFindings(root, paths, scan, config) {
     const step = ancestors[0];
     const affectingFields = ancestors.flatMap(mapping =>
       fields(mapping).filter(item => item.key === 'if' || item.key === 'env'))
-      .map(item => item.text);
+      .map(item => item.key === 'env' ? (childMapping(item)?.text ?? item.text) : item.text);
     const effectFailure = (item, message) =>
       failure(item, message, [step.text, ...affectingFields]);
     if (/^docker\//i.test(use.value)) {
+      // GitHub Actions resolves env from step outward. Once a nearer scope
+      // defines this key, a farther alias cannot change the effective value.
       const scopes = ancestors.map(mapping => fields(mapping).find(item => item.key === 'env'))
         .filter(Boolean).map(item => childMapping(item));
-      if (scopes.some(mapping => !mapping)) effectFailure(ancestors[0], 'Окружение producer должно быть явным YAML mapping.');
-      for (const mapping of scopes.filter(Boolean)) {
-        const names = fields(mapping).map(item => item.key);
-        if (names.length !== new Set(names).size) failure(mapping, 'Повторный env делает хранение неоднозначным.');
+      let disabled = false, decided = false;
+      for (const scope of scopes) {
+        if (!scope) {
+          effectFailure(step, 'Неизвестное окружение может скрывать настройки хранения.');
+          decided = true;
+          break;
+        }
+        const names = fields(scope).map(item => item.key);
+        if (names.length !== new Set(names).size) {
+          effectFailure(scope, 'Повторный env делает хранение неоднозначным.');
+          decided = true;
+          break;
+        }
+        const setting = fields(scope).find(item => item.key === 'DOCKER_BUILD_RECORD_UPLOAD');
+        if (!setting) continue;
+        decided = true;
+        disabled = String(setting.value ?? '').toLowerCase() === 'false';
+        if (!disabled) effectFailure(step, 'Образ и summary сохраняются; автоматическая копия Docker build record должна быть отключена через DOCKER_BUILD_RECORD_UPLOAD=false.');
+        break;
       }
-      const configuration = scopes.filter(Boolean).flatMap(mapping => fields(mapping))
-        .find(item => item.key === 'DOCKER_BUILD_RECORD_UPLOAD');
-      if (String(configuration?.value ?? '').toLowerCase() !== 'false') {
-        effectFailure(ancestors[0], 'Образ и summary сохраняются; автоматическая копия Docker build record должна быть отключена через DOCKER_BUILD_RECORD_UPLOAD=false.');
-      }
+      if (!decided && !disabled) effectFailure(step, 'Образ и summary сохраняются; автоматическая копия Docker build record должна быть отключена через DOCKER_BUILD_RECORD_UPLOAD=false.');
       continue;
     }
     const conditions = ancestors.flatMap(mapping => fields(mapping).filter(item => item.key === 'if'));
