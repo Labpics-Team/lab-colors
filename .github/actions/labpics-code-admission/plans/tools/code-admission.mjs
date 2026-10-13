@@ -171,7 +171,7 @@ export const collectBypassFindings = (root, configTargets = []) => {
   return findings;
 };
 
-const commandJson = (runtime, args, { allowedStatuses = [0], cwd, home = process.env.HOME } = {}) => {
+export const commandJson = (runtime, args, { allowedStatuses = [0], cwd, home = process.env.HOME } = {}) => {
   const result = runtime.run(args, {
     cwd,
     encoding: "utf8",
@@ -180,7 +180,7 @@ const commandJson = (runtime, args, { allowedStatuses = [0], cwd, home = process
     timeout: 120000,
     env: { PATH: process.env.PATH, HOME: home, NO_COLOR: "1" },
   });
-  if (result.error) throw new Error(`${command} failed to start: ${result.error.message}`);
+  if (result.error) throw new Error(`Qualified structural analyzer failed to start: ${result.error.message}`);
   if (!allowedStatuses.includes(result.status)) {
     throw new Error(`Structural analyzer exited ${result.status}; diagnosticDigest=${sha256(result.stderr ?? "")}`);
   }

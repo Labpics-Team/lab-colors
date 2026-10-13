@@ -86,7 +86,7 @@ test("native qualification использует те же разрешения �
 test("native YAML distinguishes ordinary retention from a one-day failure or explicit delivery", t => {
   const f = fixture(t), path = join(f.root, 'workflow.yml');
   const cases = [
-    [undefined, 1, true], ["always()", 1, true], ["failure() || true", 1, true],
+    [undefined, 1, true], ["always()", 1, true], ["failure() || true", 1, true], ["failure() || success()", 1, true],
     ["failure()", 1, false], ["${{ failure() && steps.test.outcome == 'failure' }}", 1, false],
     ["github.event_name == 'workflow_dispatch'", 1, false],
     ["github.ref_type == 'tag'", 1, false], ["!failure()", 1, true],
@@ -141,4 +141,30 @@ test('native Docker record setting follows the nearest environment owner', t => 
     writeFileSync(path, 'env: {DOCKER_BUILD_RECORD_UPLOAD: "false"}\njobs:\n  build:\n    steps:\n      - uses: docker/build-push-action@v6\n'+override);
     assert.equal(storageFindings(f.root, [path], f.scan, f.config).length > 0, rejected);
   }
+});
+
+
+test('unrelated job env alias does not become a storage violation', t => {
+  const f=fixture(t), path=join(f.root,'build.yml');
+  writeFileSync(path, 'env: &common {MODE: test}\njobs:\n  build:\n    env: *common\n    steps:\n      - uses: docker/build-push-action@v6\n        env: {DOCKER_BUILD_RECORD_UPLOAD: false}\n');
+  assert.equal(storageFindings(f.root,[path],f.scan,f.config).length,0);
+  writeFileSync(path, 'jobs:\n  build:\n    steps: &producer\n      - uses: actions/upload-artifact@v4\n        with: {retention-days: 1}\n  other:\n    steps: *producer\n');
+  assert.ok(storageFindings(f.root,[path],f.scan,f.config).length>0);
+});
+
+test('storage findings change fingerprints when job-level execution context changes', t => {
+  const f=fixture(t), path=join(f.root,'build.yml');
+  const cases=[
+    "    if: always()",
+    "    if: success()",
+    "    if: success() && inputs.ready",
+  ];
+  const fingerprints=new Set();
+  for (const condition of cases) {
+    writeFileSync(path,"jobs:\n  build:\n"+condition+"\n    steps:\n      - uses: actions/upload-artifact@v4\n        with: {retention-days: 1}\n");
+    const findings=storageFindings(f.root,[path],f.scan,f.config);
+    assert.ok(findings.length);
+    fingerprints.add(findings.find(item=>item.message.startsWith('Успешный обычный'))?.fingerprint);
+  }
+  assert.equal(fingerprints.size,cases.length);
 });

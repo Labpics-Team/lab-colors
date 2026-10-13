@@ -101,10 +101,10 @@ export function storageFindings(root, paths, scan, config) {
   const mappings = [...read('block_mapping'), ...read('flow_mapping')];
   const pairs = [...read('block_mapping_pair'), ...read('flow_pair')].map(pair).filter(Boolean);
   const findings = [];
-  const failure = (item, message) => {
+  const failure = (item, message, context = []) => {
     const path = relative(root, item.file).split(sep).join('/');
     if (!path || path.startsWith('../')) throw new TypeError('YAML source escaped the snapshot');
-    findings.push({ fingerprint: `storage:${path}:${digest(item.text)}`, source: 'policy',
+    findings.push({ fingerprint: `storage:${path}:${digest(JSON.stringify([message, item.text, ...context]))}`, source: 'policy',
       rule: 'lab-ci-retained-output', path, line: item.range.start.line + 1, message });
   };
   for (const item of read('ERROR')) failure(item, 'Неоднозначный YAML не определяет разрешённый путь хранения CI.');
@@ -118,9 +118,13 @@ export function storageFindings(root, paths, scan, config) {
     failure(item, 'Исполняемое действие задаётся явно; ссылка или расширение YAML скрывает эффект хранения.');
   }
   const effects = actionPairs.filter(item => /^(actions\/upload-artifact|docker\/build-push-action|docker\/bake-action)(?:@|$)/i.test(item.value ?? ''));
-  const effectFiles = new Set(effects.map(item => item.file));
-  for (const alias of read('alias').filter(item => effectFiles.has(item.file))) {
-    failure(alias, 'Повторное YAML-поддерево рядом с хранением требует явных шагов: его условия могут зависеть от места вызова.');
+  // YAML aliases inside step sequences can hide the action itself or its
+  // storage inputs. Aliases in unrelated job/root data do not change the step.
+  const stepFields = pairs.filter(item => item.key === 'steps');
+  for (const alias of read('alias')) {
+    if (stepFields.some(item => item.file === alias.file && contains(range(item), range(alias)))) {
+      failure(alias, 'Шаг CI с YAML alias скрывает исполняемое действие или его настройки хранения.');
+    }
   }
   for (const use of effects) {
     const ancestors = parents(use);
@@ -129,23 +133,28 @@ export function storageFindings(root, paths, scan, config) {
       const names = fields(mapping).map(item => item.key);
       if (names.length !== new Set(names).size) failure(mapping, 'Повторный ключ YAML делает условия хранения неоднозначными.');
     }
+    const step = ancestors[0];
+    const affectingFields = ancestors.flatMap(mapping =>
+      fields(mapping).filter(item => item.key === 'if' || item.key === 'env'))
+      .map(item => item.text);
+    const effectFailure = (item, message) =>
+      failure(item, message, [step.text, ...affectingFields]);
     if (/^docker\//i.test(use.value)) {
       const scopes = ancestors.map(mapping => fields(mapping).find(item => item.key === 'env'))
         .filter(Boolean).map(item => childMapping(item));
-      if (scopes.some(mapping => !mapping)) failure(ancestors[0], 'Окружение producer должно быть явным YAML mapping.');
+      if (scopes.some(mapping => !mapping)) effectFailure(ancestors[0], 'Окружение producer должно быть явным YAML mapping.');
       for (const mapping of scopes.filter(Boolean)) {
         const names = fields(mapping).map(item => item.key);
         if (names.length !== new Set(names).size) failure(mapping, 'Повторный env делает хранение неоднозначным.');
       }
       const configuration = scopes.filter(Boolean).flatMap(mapping => fields(mapping))
         .find(item => item.key === 'DOCKER_BUILD_RECORD_UPLOAD');
-      if (configuration?.value !== 'false') {
-        failure(ancestors[0], 'Образ и summary сохраняются; автоматическая копия Docker build record должна быть отключена через DOCKER_BUILD_RECORD_UPLOAD=false.');
+      if (String(configuration?.value ?? '').toLowerCase() !== 'false') {
+        effectFailure(ancestors[0], 'Образ и summary сохраняются; автоматическая копия Docker build record должна быть отключена через DOCKER_BUILD_RECORD_UPLOAD=false.');
       }
       continue;
     }
     const conditions = ancestors.flatMap(mapping => fields(mapping).filter(item => item.key === 'if'));
-    const step = ancestors[0];
     const withPair = fields(step).find(item => item.key === 'with');
     const withMapping = withPair && childMapping(withPair);
     if (withMapping) {
@@ -154,9 +163,9 @@ export function storageFindings(root, paths, scan, config) {
     }
     const retention = withMapping && fields(withMapping).find(item => item.key === 'retention-days');
     if (conditions.every(item => item.value === null || mayRetainOnSuccess(item.value))) {
-      failure(step, 'Успешный обычный CI хранит результат в log/summary и передаёт малые значения через outputs. Архив нужен только для отказа, явного экспорта или выпуска версии.');
+      effectFailure(step, 'Успешный обычный CI хранит результат в log/summary и передаёт малые значения через outputs. Архив нужен только для отказа, явного экспорта или выпуска версии.');
     } else if (retention?.value !== '1') {
-      failure(step, 'Actions хранит временный результат один день; долговечный результат принадлежит выпуску или исследованию.');
+      effectFailure(step, 'Actions хранит временный результат один день; долговечный результат принадлежит выпуску или исследованию.');
     }
   }
   return findings;
