@@ -9,35 +9,31 @@ name: publish worker
 # `uses:` ключ `environment` не поддерживается, и именно объявление внутри
 # reusable-воркфлоу заставляет GitHub резолвить environment-секрет.
 #
-# Publish ничего не собирает и не перепаковывает. Он принимает только immutable
-# attempt-scoped artifact `colors-release-$GITHUB_SHA-attempt-$RUN_ATTEMPT` из
-# canonical successful push-run
-# `.github/workflows/ci.yml` для exact tag SHA. Отдельно требуется canonical
-# successful push-run `.github/workflows/native-conformance.yml`. Имена jobs
-# проверяются только внутри выбранных run IDs, поэтому чужой check-run с таким
-# же display name не может удовлетворить gate.
-#
-# Provenance-аттестация отключена (package.json publishConfig.provenance:false):
-# npm выдаёт sigstore provenance только публичным репозиториям. При открытии
-# репозитория вернуть provenance и короткоживущую аутентификацию.
-#
-# Caller (publish.yml) вызывает worker из того же коммита. Граф заданий и гейты
-# проверяются вместе с release snapshot; своих inputs у worker нет.
+# Публикация принимает пакет текущего выпуска после проверки его source SHA,
+# манифеста и байтов. Проверка пакета выполняется без environment credentials.
+# Canonical push CI и Swift для того же SHA остаются обязательными.
 
 on:
   workflow_call:
-
-env:
-  # Node 24.14.0 ships the npm 11.9.0 release packer/publisher contract.
-  NODE_TOOLCHAIN: "24.14.0"
-  NPM_TOOLCHAIN: "11.9.0"
 
 permissions:
   contents: read
   actions: read
 
 jobs:
+  prepare:
+    if: >-
+      github.repository == 'Labpics-Team/lab-colors' &&
+      github.event_name == 'push' && github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'colors-v')
+    uses: ./.github/workflows/package-worker.yml
+    permissions:
+      contents: read
   publish:
+    needs: prepare
+    env:
+      NODE_TOOLCHAIN: ${{ needs.prepare.outputs.node }}
+      NPM_TOOLCHAIN: ${{ needs.prepare.outputs.npm }}
     runs-on: ubuntu-latest
     # Environment secrets are resolved for this job. Keep the trust boundary
     # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
@@ -140,7 +136,6 @@ jobs:
                 sha: expectedSha,
               },
               requiredJobs: [
-                "Node 22 consumer floor",
                 "formal core (Kani)",
                 "MSRV workspace check",
                 "clippy + rustfmt",
@@ -215,16 +210,27 @@ jobs:
               throw new Error(`${spec.path} run ${run.id}: ${run.status}/${run.conclusion ?? "none"}`);
             }
             const references = run.referenced_workflows;
-            if (!Array.isArray(references) || references.length !== 1) {
-              throw new Error(
-                `${spec.path} run ${run.id}: expected exactly one immutable worker reference`,
-              );
+            if (!Array.isArray(references) || references.length === 0 || references.length > 16) {
+              throw new Error(`${spec.path} run ${run.id}: immutable workflow references are incomplete`);
             }
-            const [reference] = references;
-            if (reference?.path !== spec.worker.path || reference?.sha !== spec.worker.sha) {
-              throw new Error(
-                `${spec.path} run ${run.id}: worker reference does not match the admitted worker`,
-              );
+            const primary = references.filter(reference =>
+              reference?.path === spec.worker.path && reference?.sha === spec.worker.sha);
+            if (primary.length !== 1 || new Set(references.map(reference => reference?.path)).size !== references.length) {
+              throw new Error(`${spec.path} run ${run.id}: primary worker is missing or repeated`);
+            }
+            if (spec.key === 'ci') {
+              for (const reference of references) {
+                const expectedPrefix = repository + '/.github/workflows/';
+                const expectedSuffix = '@' + expectedSha;
+                const path = reference?.path;
+                const name = typeof path === 'string' && path.startsWith(expectedPrefix) && path.endsWith(expectedSuffix)
+                  ? path.slice(expectedPrefix.length, -expectedSuffix.length) : '';
+                if (!/^[A-Za-z0-9_-]+\.ya?ml$/u.test(name) || reference?.sha !== expectedSha) {
+                  throw new Error(`${spec.path} run ${run.id}: workflow escaped the admitted source revision`);
+                }
+              }
+            } else if (references.length !== 1) {
+              throw new Error(`${spec.path} run ${run.id}: native worker reference is ambiguous`);
             }
             return run;
           }
@@ -277,13 +283,11 @@ jobs:
             process.exitCode = 1;
           });
           NODE
-      - name: download immutable exact-SHA release artifact from canonical CI run
+      - name: download verified package from the isolated preparation job
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
-          path: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.canonical-runs.outputs.ci_run_id }}
+          name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
@@ -295,7 +299,7 @@ jobs:
       - name: validate manifest identity and byte-exact tarball
         id: verified-artifact
         env:
-          ARTIFACT_DIR: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ steps.canonical-runs.outputs.ci_run_attempt }}
+          ARTIFACT_DIR: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
           EXPECTED_SHA: ${{ github.sha }}
           EXPECTED_TAG: ${{ github.ref_name }}
           EXPECTED_NODE: ${{ env.NODE_TOOLCHAIN }}
