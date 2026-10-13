@@ -86,7 +86,7 @@ jobs:
             --tool-version-output "$(cargo mutants --version)" \
             --output "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json"
       - name: upload exact population manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-manifest
           path: ${{ runner.temp }}/mutation-manifest/mutation-manifest.json
@@ -208,7 +208,7 @@ jobs:
             --exit-code "$mutants_exit"
       - name: upload immutable shard evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/mutation-shard-${{ matrix.shard }}
@@ -261,7 +261,7 @@ jobs:
             2>&1 | tee -a "$diagnostic"
       - name: upload report-only aggregate
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-report
           path: ${{ runner.temp }}/mutation-report
