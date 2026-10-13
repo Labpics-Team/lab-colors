@@ -27,9 +27,11 @@ def validate(ci, package, release):
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
                     'test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"',
                     'node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"']:
-        if command not in owner:
-            raise AssertionError("package verification missing: "+command)
-    if "actions/download-artifact" in owner:
+        blocks=re.findall(r"(?ms)^      - .*?(?=^      - |\Z)",owner)
+        matches=[block for block in blocks if command in block]
+        if len(matches)!=1 or "\n        if:" in matches[0] or "continue-on-error:" in matches[0]:
+            raise AssertionError("package verification missing or conditional: "+command)
+    if "uses: actions/download-artifact@" in owner:
         raise AssertionError("local consumers depend on external storage")
     uploads=re.findall(r"(?ms)^      - name: upload verified npm tarball and manifest\n(.*?)(?=^      - name:|\Z)",owner)
     if len(uploads)!=1 or "retention-days: 1\n" not in uploads[0]:
@@ -71,7 +73,7 @@ class CiStorageTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     validate(*values)
         values=list(self.sources)
-        values[1]+='\n# prohibited transport\nactions/download-artifact\n'
+        values[1]+='\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000\n'
         with self.assertRaises(AssertionError):
             validate(*values)
 

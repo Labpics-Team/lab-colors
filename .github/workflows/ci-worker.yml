@@ -698,7 +698,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      artifact-name: ${{ steps.artifact-name.outputs.value }}
+      subject-name: ${{ steps.handoff.outputs.subject-name }}
+      subject-digest: ${{ steps.handoff.outputs.subject-digest }}
+      sbom: ${{ steps.handoff.outputs.sbom }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -726,7 +728,7 @@ jobs:
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: distribution verifier hostile tests
-        run: node --test scripts/test_transport_distribution.mjs
+        run: node --test scripts/test_transport_distribution.mjs scripts/test_distribution_outputs.mjs
       - name: build exact candidate transport artifact
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/transport-candidate-target
@@ -784,19 +786,11 @@ jobs:
             --dir "$EVIDENCE_DIR" \
             --source-sha "$SOURCE_SHA"
           find "$EVIDENCE_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
-      - name: bind immutable artifact name to producer attempt
-        id: artifact-name
+      - name: pass verified subject and SBOM to the isolated attester
+        id: handoff
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: echo "value=transport-distribution-${SOURCE_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - name: upload immutable transport distribution packet
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.artifact-name.outputs.value }}
-          path: ${{ runner.temp }}/transport-distribution
-          if-no-files-found: error
-          include-hidden-files: false
-          retention-days: 90
+        run: node scripts/ci/distribution_outputs.mjs "$RUNNER_TEMP/transport-distribution" transport.intoto.json "$SOURCE_SHA"
 
   transport-distribution-attestation:
     name: transport distribution signed attestations
@@ -809,27 +803,42 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: download exact no-rebuild distribution packet
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.transport-distribution.outputs.artifact-name }}
-          path: ${{ runner.temp }}/transport-distribution
+      - name: materialize the producer SBOM without executing its checkout
+        env:
+          CI_SBOM: ${{ needs.transport-distribution.outputs.sbom }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = os.environ["CI_SBOM"]
+          if not value or len(value.encode()) > 60 * 1024:
+              raise ValueError("missing or oversized producer SBOM")
+          document = json.loads(value)
+          if document.get("bomFormat") != "CycloneDX":
+              raise ValueError("unknown producer SBOM")
+          with (Path(os.environ["RUNNER_TEMP"]) / "distribution.sbom.json").open("x") as stream:
+              stream.write(value)
+          PY
       - name: attest binary build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/transport-distribution/labcolors-transport
+          subject-name: ${{ needs.transport-distribution.outputs.subject-name }}
+          subject-digest: ${{ needs.transport-distribution.outputs.subject-digest }}
       - name: attest binary SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/transport-distribution/labcolors-transport
-          sbom-path: ${{ runner.temp }}/transport-distribution/transport.sbom.cdx.json
+          subject-name: ${{ needs.transport-distribution.outputs.subject-name }}
+          subject-digest: ${{ needs.transport-distribution.outputs.subject-digest }}
+          sbom-path: ${{ runner.temp }}/distribution.sbom.json
 
   evaluate-distribution:
     name: evaluate distribution evidence
     runs-on: ubuntu-latest
     timeout-minutes: 25
     outputs:
-      artifact-name: ${{ steps.artifact-name.outputs.value }}
+      subject-name: ${{ steps.handoff.outputs.subject-name }}
+      subject-digest: ${{ steps.handoff.outputs.subject-digest }}
+      sbom: ${{ steps.handoff.outputs.sbom }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -857,7 +866,7 @@ jobs:
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: distribution verifier hostile tests
-        run: node --test scripts/test_evaluate_distribution.mjs
+        run: node --test scripts/test_evaluate_distribution.mjs scripts/test_distribution_outputs.mjs
       - name: build exact candidate evaluate artifact
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-candidate-target
@@ -915,19 +924,11 @@ jobs:
             --dir "$EVIDENCE_DIR" \
             --source-sha "$SOURCE_SHA"
           find "$EVIDENCE_DIR" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
-      - name: bind immutable artifact name to producer attempt
-        id: artifact-name
+      - name: pass verified subject and SBOM to the isolated attester
+        id: handoff
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: echo "value=evaluate-distribution-${SOURCE_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-      - name: upload immutable evaluate distribution packet
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.artifact-name.outputs.value }}
-          path: ${{ runner.temp }}/evaluate-distribution
-          if-no-files-found: error
-          include-hidden-files: false
-          retention-days: 90
+        run: node scripts/ci/distribution_outputs.mjs "$RUNNER_TEMP/evaluate-distribution" evaluate.intoto.json "$SOURCE_SHA"
 
   evaluate-distribution-attestation:
     name: evaluate distribution signed attestations
@@ -940,20 +941,33 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: download exact no-rebuild distribution packet
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.evaluate-distribution.outputs.artifact-name }}
-          path: ${{ runner.temp }}/evaluate-distribution
+      - name: materialize the producer SBOM without executing its checkout
+        env:
+          CI_SBOM: ${{ needs.evaluate-distribution.outputs.sbom }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = os.environ["CI_SBOM"]
+          if not value or len(value.encode()) > 60 * 1024:
+              raise ValueError("missing or oversized producer SBOM")
+          document = json.loads(value)
+          if document.get("bomFormat") != "CycloneDX":
+              raise ValueError("unknown producer SBOM")
+          with (Path(os.environ["RUNNER_TEMP"]) / "distribution.sbom.json").open("x") as stream:
+              stream.write(value)
+          PY
       - name: attest binary build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/evaluate-distribution/labcolors-evaluate
+          subject-name: ${{ needs.evaluate-distribution.outputs.subject-name }}
+          subject-digest: ${{ needs.evaluate-distribution.outputs.subject-digest }}
       - name: attest binary SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: ${{ runner.temp }}/evaluate-distribution/labcolors-evaluate
-          sbom-path: ${{ runner.temp }}/evaluate-distribution/evaluate.sbom.cdx.json
+          subject-name: ${{ needs.evaluate-distribution.outputs.subject-name }}
+          subject-digest: ${{ needs.evaluate-distribution.outputs.subject-digest }}
+          sbom-path: ${{ runner.temp }}/distribution.sbom.json
 
   audit:
     name: cargo audit (rustsec)
