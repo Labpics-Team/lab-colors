@@ -644,6 +644,9 @@ jobs:
       # extract | verify в одном шаге удалена. Sabotage-suites extractors и
       # anti-vacuum мутанты гейта исполняются здесь же, иначе их существование в
       # дереве не является гейтом.
+      - name: tracked documentation bytes and protocol domain parity
+        if: ${{ matrix.lane == 'proof-contracts' }}
+        run: python3 scripts/test_document_bytes.py
       - name: artifact matrix - pinned records reproduce
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/artifact_matrix.py check
