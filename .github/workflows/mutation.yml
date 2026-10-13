@@ -1,7 +1,7 @@
 name: mutation (scheduled, report-only)
 
 # Тонкий caller: только расписание, concurrency и права. Job graph, шардирование и
-# пины закреплены в immutable mutation-worker.yml на полном commit SHA —
+# пины принадлежат worker того же коммита, что и caller —
 # каждый job исполняется на одноразовой эфемерной GitHub-hosted VM без секретов
 # и общего состояния. Своих inputs у worker нет by design.
 
@@ -24,4 +24,4 @@ jobs:
     name: mutation
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/mutation-worker.yml@1461bc2ed60142aed3a8723e618b883be6418156
+    uses: ./.github/workflows/mutation-worker.yml

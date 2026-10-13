@@ -2799,6 +2799,12 @@ jobs:
         workflow = (
             repo / ".github" / "workflows" / "mutation-worker.yml"
         ).read_text(encoding="utf-8-sig")
+        caller = (repo / ".github" / "workflows" / "mutation.yml").read_text(encoding="utf-8-sig")
+        self.assertEqual(caller.count("uses: ./.github/workflows/mutation-worker.yml"), 1)
+        self.assertNotIn("Labpics-Team/lab-colors/.github/workflows/mutation-worker.yml@", caller)
+        self.assertEqual(workflow.count("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"), 3)
+        self.assertEqual(workflow.count("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1"), 3)
+        self.assertNotIn("upload-artifact@ea165f8", workflow)
         config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8-sig")
         ci = (repo / ".github" / "workflows" / "ci-worker.yml").read_text(
             encoding="utf-8"
