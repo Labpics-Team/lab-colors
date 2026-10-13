@@ -522,7 +522,7 @@ digest, поэтому состав дельты иной. Конкретные 
 Преимидж не является top-level artifact, поэтому общая формула identity выше к
 нему неприменима; координата вычисляется как
 
-`SHA256("labcolors.proof-region.comparator-source-identity.v2 " ||
+`SHA256("labcolors.proof-region.comparator-source-identity.v2\x00" ||
 u64be(payload_length) || u8(kind) || восемь digest-ов подряд)`,
 
 где digest-ы идут в порядке объявления полей манифеста, без magic и без длин:
