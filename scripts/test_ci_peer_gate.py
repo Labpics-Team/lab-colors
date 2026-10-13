@@ -145,7 +145,7 @@ class PeerGateTest(unittest.TestCase):
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:
         try:
-            workflow = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+            workflow = (REPO / ".github/workflows/package-worker.yml").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise AssertionError("cannot read browser workflow as UTF-8") from error
     anchor = "      - name: terminal Program in real browser\n"
