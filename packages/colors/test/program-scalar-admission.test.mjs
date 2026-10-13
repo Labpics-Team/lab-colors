@@ -125,7 +125,7 @@ for (const method of ["outputSlot", "outputRgb", "outputOpacity"]) {
       for (const value of [-0.5, 0.5, 2 ** 32, -(2 ** 32), "0", null, false, NaN]) {
         assert.throws(() => snapshot[method](value), Error);
       }
-      for (const index of [1, 0xffff_ffff]) {
+      for (const index of [1, 2, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff]) {
         assert.throws(() => snapshot[method](index), bindingError("invalid_output_index", "readProgramOutput"));
       }
       assert.deepEqual(read(snapshot), expected);
