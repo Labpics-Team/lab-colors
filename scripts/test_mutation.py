@@ -1815,12 +1815,18 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("    if: ${{ always() }}\n", formal)
         self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
         self.assertIn("--phase assemble", formal)
-        self.assertIn("merge-multiple: true", formal)
-        self.assertIn("run: python3 scripts/test_verify_core_formal.py", formal)
-        self.assertIn(
-            "name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}",
-            formal,
-        )
+        self.assertIn("formal_outputs.py restore", formal)
+        self.assertIn("--parts 10", formal)
+        self.assertIn("python3 scripts/test_verify_core_formal.py", formal)
+        self.assertIn("python3 scripts/test_formal_outputs.py", formal)
+        self.assertIn('cat "$RUNNER_TEMP/core-formal/receipt.json"', formal)
+        self.assertNotIn("actions/upload-artifact", formal)
+        self.assertNotIn("actions/download-artifact", formal)
+        for kind in ("positive", "mutants"):
+            self.assertIn("formal_outputs.py publish", jobs["formal-" + kind])
+            self.assertNotIn("actions/upload-artifact", jobs["formal-" + kind])
+            for index in range(5):
+                self.assertIn("needs.formal-" + kind + ".outputs." + kind + "_" + str(index), formal)
 
         aggregate = jobs["test"]
         self.assertIn("    name: test\n", aggregate)
@@ -1928,7 +1934,6 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(
             set(ci_ephemeral),
             {
-                "node-consumer-floor",
                 "formal-positive",
                 "formal-mutants",
                 "formal-core",
@@ -1947,7 +1952,6 @@ class MutationTruthTest(unittest.TestCase):
                 "evaluate-distribution",
                 "evaluate-distribution-attestation",
                 "audit",
-                "wasm",
             },
         )
         native_blocks = workflow_job_blocks(
@@ -2007,6 +2011,7 @@ class MutationTruthTest(unittest.TestCase):
             name: (workflows / name).read_text(encoding="utf-8-sig")
             for name in (
                 "ci-worker.yml",
+                "package-worker.yml",
                 "mutation-worker.yml",
                 "native-conformance-worker.yml",
                 "publish-worker.yml",
@@ -2026,6 +2031,10 @@ class MutationTruthTest(unittest.TestCase):
         for worker_name, source in workers.items():
             for job_name, block in workflow_job_blocks(source, worker_name).items():
                 with self.subTest(worker=worker_name, job=job_name):
+                    if re.search(r"(?m)^    uses: \./\.github/workflows/[a-z-]+\.yml$", block):
+                        self.assertNotIn("    steps:", block)
+                        self.assertNotIn("    runs-on:", block)
+                        continue
                     timeout = re.search(
                         r"(?m)^    timeout-minutes: ([1-9][0-9]*)\n",
                         block,
@@ -2034,7 +2043,7 @@ class MutationTruthTest(unittest.TestCase):
                     assert timeout is not None
                     self.assertLess(int(timeout.group(1)), 360)
 
-        wasm = workflow_job_blocks(workers["ci-worker.yml"], "ci-worker.yml")[
+        wasm = workflow_job_blocks(workers["package-worker.yml"], "package-worker.yml")[
             "wasm"
         ]
         self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
@@ -2173,8 +2182,8 @@ class MutationTruthTest(unittest.TestCase):
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
         self.assertIn("references.length !== 1", workflow)
-        self.assertIn("reference?.path !== spec.worker.path", workflow)
-        self.assertIn("reference?.sha !== spec.worker.sha", workflow)
+        self.assertIn("reference?.path === spec.worker.path", workflow)
+        self.assertIn("reference?.sha === spec.worker.sha", workflow)
         self.assertIn(
             '"pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",',
             workflow,
@@ -2217,13 +2226,18 @@ const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const sha = '0123456789abcdef0123456789abcdef01234567';
 const prefix = 'Labpics-Team/lab-colors/.github/workflows/';
 const names = [
-  ['Node 22 consumer floor', 'formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
+  ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
   ['swift conformance (self-hosted Linux, pinned toolchain)'],
 ];
 const mutations = {
   valid: () => {},
+  validClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha}); },
+  escapedClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + '../other.yml@' + sha, sha}); },
+  staleClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + 'a'.repeat(40), sha}); },
+  wrongDigestClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha: 'a'.repeat(40)}); },
+  foreignClosure: (runs) => { runs[0].referenced_workflows.push({path: 'foreign/repo/.github/workflows/package-worker.yml@' + sha, sha}); },
   staleCIPath: (runs) => { runs[0].referenced_workflows[0].path = prefix + 'ci-worker.yml@' + 'a'.repeat(40); },
   staleCISha: (runs) => { runs[0].referenced_workflows[0].sha = 'a'.repeat(40); },
   staleNative: (runs) => { runs[1].referenced_workflows[0].sha = 'a'.repeat(40); },
@@ -2293,7 +2307,7 @@ const mutations = {
       },
     };
     await vm.runInNewContext(input.script, context, { timeout: 1000 });
-    if (label === 'valid') {
+    if (label === 'valid' || label === 'validClosure') {
       assert.equal(process.exitCode, 0, errors.join('\n'));
       assert.equal(output, 'ci_run_id=100\nci_run_attempt=2\nnative_run_id=101\n');
     } else {

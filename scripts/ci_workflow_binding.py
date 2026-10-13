@@ -16,6 +16,7 @@ import unittest
 WORKFLOW_PATHS: Final = (
     ".github/workflows/ci.yml",
     ".github/workflows/ci-worker.yml",
+    ".github/workflows/package-worker.yml",
 )
 LOCAL_WORKER: Final = "./.github/workflows/ci-worker.yml"
 SHA_PATTERN: Final = re.compile(r"[0-9a-f]{40}")
