@@ -908,7 +908,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ab632f8b875f9c8338c0debae70cbf63d12f7ed78d1a5d3a5d2fdc84e7031fa9",
+ "record_sha256": "34a657afed2cb23377820212cbc2fdab3bd74bb250dc4b21b539e93c8a559f98",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1964,6 +1964,7 @@
    "program_wire::runtime_tests::update_failure_preserves_previous_ready_snapshot: test",
    "program_wire::runtime_tests::update_projection_retains_infrastructure_class_and_semantic_refusals: test",
    "program_wire::runtime_tests::wire_runtime_compiles_instantiates_updates_and_returns_certified_outputs: test",
+   "program_wire::snapshot_state_contract::wire_state_projection_preserves_every_lifecycle_state: test",
    "program_wire::tests::canonical_bytes_yield_the_compiled_content_identity: test",
    "program_wire::tests::format_pins_are_part_of_the_contract: test",
    "program_wire::tests::semantic_defects_surface_as_compile_refusals: test",
@@ -2205,7 +2206,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1293,
+  "enabled_count": 1294,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

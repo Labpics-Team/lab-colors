@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, isProgramError } from "../index.js";
+import init, { compileProgramWire, isBindingError, isProgramError } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
@@ -24,6 +24,8 @@ const read = (snapshot) => ({
 const expected = { state: "ready", count: 1, slot: 91, rgb: [20, 20, 20], opacity: 1 };
 const programError = (code, operation) => (error) =>
   isProgramError(error) && error.code === code && error.operation === operation;
+const bindingError = (code, operation) => (error) =>
+  isBindingError(error) && error.code === code && error.operation === operation;
 
 // Даже на старом дефектном артефакте неожиданный успешный вызов не оставляет
 // owning snapshot/runtime: RED доказывает неверный допуск, не утечку теста.
@@ -123,10 +125,8 @@ for (const method of ["outputSlot", "outputRgb", "outputOpacity"]) {
       for (const value of [-0.5, 0.5, 2 ** 32, -(2 ** 32), "0", null, false, NaN]) {
         assert.throws(() => snapshot[method](value), Error);
       }
-      for (const index of [1, 0xffff_ffff]) {
-        assert.throws(() => snapshot[method](index), {
-          message: `internal_error: program output index ${index} is out of bounds`,
-        });
+      for (const index of [1, 2, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff]) {
+        assert.throws(() => snapshot[method](index), bindingError("invalid_output_index", "readProgramOutput"));
       }
       assert.deepEqual(read(snapshot), expected);
     } finally {

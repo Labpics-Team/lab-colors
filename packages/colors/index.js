@@ -445,3 +445,25 @@ export function initSync(input) {
 }
 
 export default init;
+
+
+/** Читает закрытую пару операции и причины без преобразований и разбора message. */
+export function isBindingError(error) {
+  try {
+    if (!(error instanceof Error)) return false;
+    const operation = error.operation;
+    const code = error.code;
+    switch (operation) {
+      case "evaluateWcag22":
+        return code === "invalid_color" || code === "unknown_wcag22_criterion" || code === "internal_error";
+      case "numericalCapabilityManifest":
+        return code === "internal_error";
+      case "readProgramOutput":
+        return code === "invalid_output_index";
+      default:
+        return false;
+    }
+  } catch {
+    return false;
+  }
+}

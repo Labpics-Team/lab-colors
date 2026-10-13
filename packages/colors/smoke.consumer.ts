@@ -6,11 +6,13 @@ import init, {
   decodeCertificateEnvelope,
   evaluateWcag22,
   isCertificateError,
+  isBindingError,
   isProgramError,
   numericalCapabilityManifest,
 } from "@labpics/colors";
 import type {
   CertificateErrorCode,
+  BindingError,
   ProgramErrorCode,
   ProgramOperation,
   UntrustedCertificateEnvelopeV1,
@@ -148,3 +150,7 @@ function declaredCleanSetInputTypes(builder: ProgramWireBuilderV1): void {
 }
 
 void declaredCleanSetInputTypes;
+
+const readBindingFailure = (error: unknown): BindingError["code"] | undefined =>
+  isBindingError(error) ? error.code : undefined;
+void readBindingFailure;

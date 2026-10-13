@@ -198,3 +198,14 @@ export declare function attachProgramWire(
   occurrence: number,
   host: ProgramPointSinkHost,
 ): ProgramAttachment;
+
+
+export type BindingError = Error & (
+  | Readonly<{
+      operation: "evaluateWcag22";
+      code: "invalid_color" | "unknown_wcag22_criterion" | "internal_error";
+    }>
+  | Readonly<{ operation: "numericalCapabilityManifest"; code: "internal_error" }>
+  | Readonly<{ operation: "readProgramOutput"; code: "invalid_output_index" }>
+);
+export declare function isBindingError(error: unknown): error is BindingError;
