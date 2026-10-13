@@ -548,7 +548,7 @@
   "scripts/test_verify_core_formal.py": "85372064d897d0bb7048b8aa7436817eb6a74e67",
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
   "scripts/transport-distribution.mjs": "0ffdd393185b048db61bc56bfe1ae64c2408ee0d",
-  "scripts/verify-package-release.mjs": "fff683ed1264de11469d986debafd5b9f39bd1ba",
+  "scripts/verify-package-release.mjs": "063790f80d9385e514b454a0bf39ce23334d0abf",
   "scripts/verify_clean_set_receipt.py": "9a59b4b6707c115f029eae019d0b065f7678281f",
   "scripts/verify_core_formal.py": "40de7eaf567d998344595dded5bd5eaac5debb91",
   "scripts/verify_point_support_surplus.py": "24785f2d6cc56c88e12b0c50643f8f25365b3f6c",
@@ -556,7 +556,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "decebae23b9d496013a0505370bdb3eeb7b118dd41067306de7ca809f0b29a28",
+ "record_sha256": "55ce3018d88dd69ffdbde798e264ae8233c7b0b12c2e4b516004ab8b12bef2d6",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

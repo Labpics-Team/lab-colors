@@ -1166,6 +1166,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "evaluateWcag22",
   "init",
   "initSync",
+  "isBindingError",
   "isCertificateError",
   "isProgramError",
   "issueSourceCertificateEnvelope",
@@ -1198,6 +1199,11 @@ assert.deepEqual(metadata.wasm.map(({ role }) => role), ["runtime"]);
 assert.equal(metadata.wasm[0].path, "pkg/labcolors_bg.wasm");
 assert.equal(metadata.wasm[0].bytes, wasm.length);
 await colors.init({ module_or_path: wasm });
+assert.throws(
+  () => colors.evaluateWcag22("#GGGGGG", "#FFFFFF", "sc-1.4.3-text-default"),
+  (error) => colors.isBindingError(error) &&
+    error.operation === "evaluateWcag22" && error.code === "invalid_color",
+);
 
 assert.equal(colors.MAX_CERTIFICATE_ENVELOPE_BYTES, 2_097_152);
 const issuedSource = colors.issueSourceCertificateEnvelope();
@@ -1352,10 +1358,12 @@ import init, {
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
+  isBindingError,
   isCertificateError,
   isProgramError,
   issueSourceCertificateEnvelope,
   numericalCapabilityManifest,
+  type BindingError,
   type CertificateDecodeErrorCode,
   type CertificateErrorCode,
   type CertificateProducerErrorCode,
@@ -1386,8 +1394,11 @@ const assessment: Wcag22AssessmentV1 = evaluateWcag22("#000000", "#FFFFFF", crit
 const capability: NumericalCapabilityManifestV2 = numericalCapabilityManifest();
 const programFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
   isProgramError(error) ? [error.code, error.operation] : undefined;
+const bindingFailure = (error: unknown): BindingError["code"] | undefined =>
+  isBindingError(error) ? error.code : undefined;
 void boot;
 void programFailure;
+void bindingFailure;
 void assessment;
 void capability;
 const certificateMetadata: UntrustedCertificateEnvelopeV1 = decodeCertificateEnvelope(new Uint8Array());
