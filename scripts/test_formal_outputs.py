@@ -94,6 +94,20 @@ class FormalOutputTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 OUTPUTS.collect(root)
 
+    def test_mutant_manifest_selects_every_named_negative_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            fragment={"kind":"mutants","shard_index":0,"shard_count":5,
+                      "negative_sha256":{"one":"0"*64,"two":"1"*64}}
+            (root/"fragment-mutants-0.json").write_text(json.dumps(fragment))
+            for name in ["one","two"]:
+                (root/("negative-"+name+".json")).write_text("{}\n")
+            self.assertEqual({"fragment-mutants-0.json","negative-one.json","negative-two.json"},
+                             set(OUTPUTS.collect(root)))
+            (root/"negative-two.json").unlink()
+            with self.assertRaises(FileNotFoundError):
+                OUTPUTS.collect(root)
+
 
 if __name__ == "__main__":
     unittest.main()

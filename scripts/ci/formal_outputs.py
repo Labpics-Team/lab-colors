@@ -89,7 +89,7 @@ def collect(directory: Path) -> dict[str, str]:
     if fragment.get("kind") == "positive":
         names = [fragment.get("file", "positive.json")]
     elif fragment.get("kind") == "mutants":
-        names = [row["file"] for row in fragment["mutants"]]
+        names = ["negative-" + name + ".json" for name in fragment["negative_sha256"]]
     else:
         raise ValueError("неизвестный вид формальной части")
     if not names or len(set(names)) != len(names) or fragment_path.name in names:
