@@ -85,6 +85,12 @@ jobs:
       max-parallel: 5
       matrix:
         shard: [0, 1, 2, 3, 4]
+    outputs:
+      positive_0: ${{ steps.handoff.outputs.positive_0 }}
+      positive_1: ${{ steps.handoff.outputs.positive_1 }}
+      positive_2: ${{ steps.handoff.outputs.positive_2 }}
+      positive_3: ${{ steps.handoff.outputs.positive_3 }}
+      positive_4: ${{ steps.handoff.outputs.positive_4 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -113,14 +119,9 @@ jobs:
             --shard-index "${{ matrix.shard }}" \
             --shard-count 5 \
             --output-dir "$RUNNER_TEMP/core-formal"
-      - name: preserve positive formal fragment
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: core-formal-fragment-positive-${{ matrix.shard }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/core-formal
-          if-no-files-found: warn
-          retention-days: 7
+      - name: pass verified JSON reports to the assembler
+        id: handoff
+        run: python3 scripts/ci/formal_outputs.py publish "$RUNNER_TEMP/core-formal"
 
 
   formal-mutants:
@@ -134,6 +135,12 @@ jobs:
       max-parallel: 5
       matrix:
         shard: [0, 1, 2, 3, 4]
+    outputs:
+      mutants_0: ${{ steps.handoff.outputs.mutants_0 }}
+      mutants_1: ${{ steps.handoff.outputs.mutants_1 }}
+      mutants_2: ${{ steps.handoff.outputs.mutants_2 }}
+      mutants_3: ${{ steps.handoff.outputs.mutants_3 }}
+      mutants_4: ${{ steps.handoff.outputs.mutants_4 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -162,14 +169,10 @@ jobs:
             --shard-index "${{ matrix.shard }}" \
             --shard-count 5 \
             --output-dir "$RUNNER_TEMP/core-formal"
-      - name: preserve mutant formal fragment
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: core-formal-fragment-mutants-${{ matrix.shard }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/core-formal
-          if-no-files-found: warn
-          retention-days: 7
+      - name: pass verified JSON reports to the assembler
+        id: handoff
+        run: python3 scripts/ci/formal_outputs.py publish "$RUNNER_TEMP/core-formal"
+
 
   formal-core:
     name: formal core (Kani)
@@ -192,26 +195,30 @@ jobs:
         with:
           persist-credentials: false
       - name: verifier contract hostile tests
-        run: python3 scripts/test_verify_core_formal.py
-      - name: collect immutable formal fragments
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: core-formal-fragment-*-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/core-formal
-          merge-multiple: true
+        run: |
+          python3 scripts/test_verify_core_formal.py
+          python3 scripts/test_formal_outputs.py
+      - name: restore every formal report from producer outputs
+        env:
+          CI_FORMAL_PART_0: ${{ needs.formal-positive.outputs.positive_0 }}
+          CI_FORMAL_PART_1: ${{ needs.formal-positive.outputs.positive_1 }}
+          CI_FORMAL_PART_2: ${{ needs.formal-positive.outputs.positive_2 }}
+          CI_FORMAL_PART_3: ${{ needs.formal-positive.outputs.positive_3 }}
+          CI_FORMAL_PART_4: ${{ needs.formal-positive.outputs.positive_4 }}
+          CI_FORMAL_PART_5: ${{ needs.formal-mutants.outputs.mutants_0 }}
+          CI_FORMAL_PART_6: ${{ needs.formal-mutants.outputs.mutants_1 }}
+          CI_FORMAL_PART_7: ${{ needs.formal-mutants.outputs.mutants_2 }}
+          CI_FORMAL_PART_8: ${{ needs.formal-mutants.outputs.mutants_3 }}
+          CI_FORMAL_PART_9: ${{ needs.formal-mutants.outputs.mutants_4 }}
+        run: python3 scripts/ci/formal_outputs.py restore "$RUNNER_TEMP/core-formal" --parts 10
       - name: require exact proof and mutant completeness
         run: |
           python3 scripts/verify_core_formal.py \
             --phase assemble \
             --input-dir "$RUNNER_TEMP/core-formal" \
             --output-dir "$RUNNER_TEMP/core-formal"
-      - name: preserve exact verification and counterexamples
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: core-formal-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/core-formal
-          if-no-files-found: error
-          retention-days: 7
+      - name: show complete verification receipt
+        run: cat "$RUNNER_TEMP/core-formal/receipt.json"
 
   msrv:
     name: MSRV workspace check

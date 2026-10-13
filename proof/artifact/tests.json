@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 289,
+   "count": 295,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -732,6 +732,12 @@
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_unlisted_file_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_unknown_mode_exits_64",
     "test_extract_source_files.EXT01SourceFilesTests.test_verify_passes_on_current_tree",
+    "test_formal_outputs.FormalOutputTests.test_collection_follows_the_fragment_and_preserves_declared_files",
+    "test_formal_outputs.FormalOutputTests.test_colliding_parts_leave_no_destination",
+    "test_formal_outputs.FormalOutputTests.test_empty_malformed_duplicate_and_external_names_refuse",
+    "test_formal_outputs.FormalOutputTests.test_json_report_bytes_survive_generated_messages",
+    "test_formal_outputs.FormalOutputTests.test_output_and_expansion_limits_do_not_allow_partial_results",
+    "test_formal_outputs.FormalOutputTests.test_truncation_corruption_and_trailing_streams_refuse",
     "test_mutation.AuthorityMutationShardContractTest.test_external_scopes_do_not_execute_core_mutants",
     "test_mutation.AuthorityMutationShardContractTest.test_required_scopes_partition_every_semantic_mutant_once",
     "test_mutation.CliGateWiringTest.test_required_gate_calls_both_science_and_cli_probes",
@@ -899,7 +905,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "a9bd6cf0806584cc2042d24f32897393af0bfa297a086c45888a33c3930c9aad",
+ "record_sha256": "bfa758fabf40b18fb5edf20dbdc25ae20516d5186a802ec35a50261641c652c1",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

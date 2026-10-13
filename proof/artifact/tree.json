@@ -1,10 +1,10 @@
 {
  "class": "tree",
- "file_count": 546,
+ "file_count": 548,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
-  ".github/workflows/ci-worker.yml": "49f14019640853b7a4038b6916d476959ccfc798",
+  ".github/workflows/ci-worker.yml": "a902371591a7e95f492a3a33bca2aba2be396fa8",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/code-admission-public.yml": "08a1173b4bfe336827dc0d2db65e961ba0cf58b6",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
@@ -491,6 +491,7 @@
   "scripts/browser-child-lifecycle.mjs": "c4fec5823877cf1d84c4541cb5fa6d1559c88c4a",
   "scripts/cargo-workspace.mjs": "d737dcf8c3542effb720cdb2a360bdf33ae286a9",
   "scripts/check-wasm-size-budget.mjs": "a7bcba3fdd4a1639d7ac82f832edc21f298e4a23",
+  "scripts/ci/formal_outputs.py": "bc6c37b95fe572fc1562811860f86ce1394f16c3",
   "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
   "scripts/ci_workflow_binding.py": "2a320f9e77b0210a94b9eeb63366b7fbd1acbf6c",
   "scripts/distribution-licenses.mjs": "460174e7e5b433ca74d711b9bd35be0e54164cfe",
@@ -533,6 +534,7 @@
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
+  "scripts/test_formal_outputs.py": "9e6487336718972515f72886a53c42360a0a90c0",
   "scripts/test_mutation.py": "d85fb77259f81f0319fed9f09af16bc6f9b7accf",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
@@ -549,7 +551,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "f7b6819c3a857758f23371e68a9dbacc3d5c6dbae9212f417d107ac48bf2a160",
+ "record_sha256": "e9c7bf1d901775921fd799a9a1bc9b625fda7bdd5a10bd5f363c2aa139b14028",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
