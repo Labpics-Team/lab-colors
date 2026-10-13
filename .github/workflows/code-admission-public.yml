@@ -1,5 +1,6 @@
 name: code-admission-public
 on:
+  workflow_call:
   pull_request:
   merge_group:
 permissions:
@@ -16,7 +17,8 @@ jobs:
       - name: Checkout immutable carrier root
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -29,8 +31,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "${{ github.workflow_sha }}" ]]
+          [[ "$(git rev-parse HEAD)" == "${{ job.workflow_sha }}" ]]
           node .github/actions/labpics-code-admission/verify.mjs --root .github/actions/labpics-code-admission
+      - name: Qualify the exact native storage and source rules
+        working-directory: .github/actions/labpics-code-admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$(mktemp -d "$RUNNER_TEMP/storage-parser.XXXXXXXX")"
+          trap 'rm -rf -- "$tools"' EXIT
+          bash plans/tools/code-admission/install-tools.sh "$tools" ast-grep
+          CODE_ADMISSION_AST_GREP="$tools/ast-grep" node --test plans/tools/code-admission/native.test.mjs plans/tools/code-admission-storage.test.mjs
       - name: Checkout immutable integration candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

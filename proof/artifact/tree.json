@@ -6,7 +6,7 @@
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
   ".github/workflows/ci-worker.yml": "49f14019640853b7a4038b6916d476959ccfc798",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
-  ".github/workflows/code-admission-public.yml": "08a1173b4bfe336827dc0d2db65e961ba0cf58b6",
+  ".github/workflows/code-admission-public.yml": "d570c631c39d7ae1d85bbc62155f0db91db960e4",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
   ".github/workflows/full-domain-corpus.yml": "ce4a1ad54e0e947539dfe3cefb6b995ae816a867",
   ".github/workflows/full-domain-run.yml": "84b0957c9ff5eb89e48cc4007b67ea6c73f30d5a",
@@ -549,7 +549,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "f7b6819c3a857758f23371e68a9dbacc3d5c6dbae9212f417d107ac48bf2a160",
+ "record_sha256": "a12eb478d6e7bb4d886f7cde1bced87530dbc17927f8e6e5dd2c399a2ac323dd",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

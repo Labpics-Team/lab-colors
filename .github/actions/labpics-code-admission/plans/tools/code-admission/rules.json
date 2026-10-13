@@ -27,8 +27,245 @@
     "id": "lab-go-panic",
     "language": "go",
     "pattern": "panic($VALUE)",
-    "message": "Предпочитайте явную ошибку или доказанное невозможное состояние вместо panic().",
+    "message": "Предпочитайте явную ошибку вместо panic(); прямой net/http.ErrAbortHandler разрешён при доказанной привязке импорта.",
     "positive": "package main\nfunc f() { panic(\"boom\") }\n",
-    "negative": "package main\nfunc f() error { return nil }\n"
+    "negative": "package p\nimport \"net/http\"\nfunc f() { panic(http.ErrAbortHandler) }\n",
+    "allow": {
+      "all": [
+        {
+          "pattern": "panic($HTTP.ErrAbortHandler)"
+        },
+        {
+          "any": [
+            {
+              "all": [
+                {
+                  "pattern": "panic(http.ErrAbortHandler)"
+                },
+                {
+                  "inside": {
+                    "kind": "source_file",
+                    "stopBy": "end",
+                    "all": [
+                      {
+                        "has": {
+                          "pattern": {
+                            "context": "import \"net/http\"",
+                            "selector": "import_spec"
+                          },
+                          "stopBy": "end"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "inside": {
+                "kind": "source_file",
+                "stopBy": "end",
+                "all": [
+                  {
+                    "has": {
+                      "pattern": {
+                        "context": "import $HTTP \"net/http\"",
+                        "selector": "import_spec"
+                      },
+                      "stopBy": "end"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "inside": {
+            "kind": "source_file",
+            "stopBy": "end",
+            "all": [
+              {
+                "not": {
+                  "has": {
+                    "kind": "ERROR",
+                    "stopBy": "end"
+                  }
+                }
+              },
+              {
+                "not": {
+                  "has": {
+                    "all": [
+                      {
+                        "any": [
+                          {
+                            "kind": "identifier"
+                          },
+                          {
+                            "kind": "type_identifier"
+                          },
+                          {
+                            "kind": "package_identifier"
+                          }
+                        ]
+                      },
+                      {
+                        "pattern": "$HTTP"
+                      },
+                      {
+                        "not": {
+                          "any": [
+                            {
+                              "inside": {
+                                "kind": "selector_expression",
+                                "field": "operand"
+                              }
+                            },
+                            {
+                              "inside": {
+                                "kind": "qualified_type",
+                                "field": "package"
+                              }
+                            },
+                            {
+                              "inside": {
+                                "pattern": {
+                                  "context": "import $HTTP \"net/http\"",
+                                  "selector": "import_spec"
+                                },
+                                "field": "name"
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ],
+                    "stopBy": "end"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "controls": [
+      {
+        "name": "default-grouped-import",
+        "source": "package p\nimport (\"net/http\")\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 0
+      },
+      {
+        "name": "named-import",
+        "source": "package p\nimport web \"net/http\"\nfunc f(w web.ResponseWriter, r *web.Request) { panic(web.ErrAbortHandler) }\n",
+        "matches": 0
+      },
+      {
+        "name": "named-grouped-import",
+        "source": "package p\nimport (web \"net/http\")\nfunc f() { panic(web.ErrAbortHandler) }\n",
+        "matches": 0
+      },
+      {
+        "name": "explicit-http-import",
+        "source": "package p\nimport http \"net/http\"\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 0
+      },
+      {
+        "name": "mixed-lawful-and-ordinary",
+        "source": "package p\nimport \"net/http\"\nfunc f(userValue any) { if userValue == nil { panic(http.ErrAbortHandler) }; panic(userValue) }\n",
+        "matches": 1
+      },
+      {
+        "name": "other-http-error",
+        "source": "package p\nimport \"net/http\"\nfunc f() { panic(http.ErrHandlerTimeout) }\n",
+        "matches": 1
+      },
+      {
+        "name": "wrapped-abort",
+        "source": "package p\nimport (\"net/http\"; \"fmt\")\nfunc f() { panic(fmt.Errorf(\"%w\", http.ErrAbortHandler)) }\n",
+        "matches": 1
+      },
+      {
+        "name": "sentinel-variable",
+        "source": "package p\nimport \"net/http\"\nfunc f() { err := http.ErrAbortHandler; panic(err) }\n",
+        "matches": 1
+      },
+      {
+        "name": "wrong-import",
+        "source": "package p\nimport http \"example.invalid/http\"\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "missing-import",
+        "source": "package p\nvar http struct { ErrAbortHandler error }\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "blank-import",
+        "source": "package p\nimport _ \"net/http\"\nvar http struct { ErrAbortHandler error }\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "different-alias",
+        "source": "package p\nimport web \"net/http\"\nvar http struct { ErrAbortHandler error }\nvar _ = web.MethodGet\nfunc f() { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "local-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f() { http := struct { ErrAbortHandler error }{}; panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "parameter-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f(http struct { ErrAbortHandler error }) { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "alias-parameter-shadow",
+        "source": "package p\nimport web \"net/http\"\nvar _ = web.MethodGet\nfunc f(web struct { ErrAbortHandler error }) { panic(web.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "range-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f(values []struct { ErrAbortHandler error }) { for _, http := range values { panic(http.ErrAbortHandler) } }\n",
+        "matches": 1
+      },
+      {
+        "name": "type-switch-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f(value any) { switch http := value.(type) { case struct { ErrAbortHandler error }: panic(http.ErrAbortHandler) } }\n",
+        "matches": 1
+      },
+      {
+        "name": "named-result-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f() (http struct { ErrAbortHandler error }) { panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "closure-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\nfunc f() { http := struct { ErrAbortHandler error }{}; func() { panic(http.ErrAbortHandler) }() }\n",
+        "matches": 1
+      },
+      {
+        "name": "type-shadow",
+        "source": "package p\nimport \"net/http\"\nvar _ = http.MethodGet\ntype local int\nfunc (local) ErrAbortHandler() {}\nfunc f() { type http = local; panic(http.ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "shadow-in-other-function-is-conservative",
+        "source": "package p\nimport \"net/http\"\nfunc f() { panic(http.ErrAbortHandler) }\nfunc g(http int) { _ = http }\n",
+        "matches": 1
+      },
+      {
+        "name": "dot-import-is-conservative",
+        "source": "package p\nimport . \"net/http\"\nfunc f() { panic(ErrAbortHandler) }\n",
+        "matches": 1
+      },
+      {
+        "name": "ordinary-value",
+        "source": "package p\nfunc f(value any) { panic(value) }\n",
+        "matches": 1
+      }
+    ]
   }
 ]

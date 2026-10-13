@@ -16,9 +16,14 @@ import { isAbsolute, basename, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hasInlineScannerControl, scannerConfigurationPath } from "./code-admission/controls.mjs";
+import { runStructuralRule } from "./code-admission/structural.mjs";
+import { storageFindings, isStorageSource } from "./code-admission/storage.mjs";
 import { materializeSnapshot } from "./code-admission/snapshot.mjs";
 import { prepareQualifiedExecutable } from "./code-admission/identity.mjs";
 import { blockingSecurityFindings, createTrivySession } from "./code-admission/trivy.mjs";
+import { qualifyGoFindings } from "./code-admission/go-scope.mjs";
+import { qualifyForgeFindings } from "./code-admission/forge-artifact.mjs";
+import { qualifyReviewedNpmFindings } from "./code-admission/reviewed-npm-patches.mjs";
 
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const MAX_TEXT_FILE = 64 * 1024 * 1024;
@@ -213,8 +218,9 @@ export const validateStructuralRules = (value) => {
     if (ids.has(id)) throw new Error(`duplicate structural rule id: ${id}`);
     if (!AST_EXTENSIONS[language]) throw new Error(`unsupported structural rule language: ${language}`);
     if (!pattern || !message) throw new Error(`structural rule ${id} requires pattern and message`);
+    if (rule.allow !== undefined && (!rule.allow || typeof rule.allow !== "object" || Array.isArray(rule.allow) || Object.keys(rule.allow).length === 0)) throw new Error(`structural rule ${id} has an invalid allowance`);
     ids.add(id);
-    return Object.freeze({ id, language, pattern, message });
+    return Object.freeze({ id, language, pattern, message, ...(rule.allow === undefined ? {} : { allow: rule.allow }) });
   });
 };
 
@@ -229,15 +235,8 @@ const astFindings = ({ root, runtime, rules, policyDirectory }) => {
     for (let offset = 0; offset < inputs.length; offset += 128) {
       const chunk = inputs.slice(offset, offset + 128);
       if (chunk.length === 0) continue;
-      const report = commandJson(runtime, [
-        "run", "--config", config, "--threads", "2",
-        ...["hidden", "dot", "exclude", "global", "parent", "vcs"].flatMap(kind => ["--no-ignore", kind]),
-        "--pattern", rule.pattern,
-        "--lang", rule.language,
-        "--json=compact",
-        "--color", "never",
-        ...chunk,
-      ], { allowedStatuses: [0, 1], cwd: policyDirectory, home: policyDirectory });
+      const report = runStructuralRule(rule, chunk, args => commandJson(runtime, args,
+        { allowedStatuses: [0, 1], cwd: policyDirectory, home: policyDirectory }), config);
       findings.push(...normalizeAstMatches(report.map((match) => ({
         ...match,
         ruleId: rule.id,
@@ -278,6 +277,15 @@ const inspectSnapshots = ({ base, candidate, trusted, astGrep, astDigest, astRul
   try {
     baseAst = astFindings({ root: base, runtime: astRuntime, rules, policyDirectory });
     candidateAst = astFindings({ root: candidate, runtime: astRuntime, rules, policyDirectory });
+    for (const [root, findings] of [[base, baseAst], [candidate, candidateAst]]) {
+      const paths = trackedFiles(root).filter(file => {
+        const path = canonicalRelative(root, file);
+        return isStorageSource(path);
+      });
+      findings.push(...storageFindings(root, paths, args => commandJson(astRuntime, args,
+        { allowedStatuses: [0, 1], cwd: policyDirectory, home: policyDirectory }),
+      join(policyDirectory, "ast-grep-policy.yml")));
+    }
   } finally { astRuntime.close(); }
   const session = createTrivySession(trivy, cacheDir, trivyDigest);
   let candidateScan;
@@ -289,7 +297,9 @@ const inspectSnapshots = ({ base, candidate, trusted, astGrep, astDigest, astRul
   const candidateBypass = collectBypassFindings(candidate, candidateScan.evidence.configTargets);
   const candidateTrivy = candidateScan.findings;
   const sourceControls = candidateBypass.filter(finding => finding.kind === "scanner-control");
-  const blocking = [...blockingSecurityFindings(candidateTrivy), ...sourceControls];
+  const applicability = [...qualifyGoFindings(candidate, candidateTrivy, cacheDir), ...qualifyForgeFindings(candidate, candidateTrivy, cacheDir), ...qualifyReviewedNpmFindings(candidate, candidateTrivy, cacheDir)];
+  const qualified = new Set(applicability.filter(item => item.status === "not-affected" || item.status === "code-fixed").map(item => item.fingerprint));
+  const blocking = [...blockingSecurityFindings(candidateTrivy).filter(item => !qualified.has(item.fingerprint)), ...sourceControls];
   const baseFindings = [...baseAst, ...baseBypass];
   const candidateFindings = [...candidateAst, ...candidateBypass];
   const added = multisetDifference(baseFindings, candidateFindings)
@@ -298,7 +308,7 @@ const inspectSnapshots = ({ base, candidate, trusted, astGrep, astDigest, astRul
   return {
     valid: added.length === 0 && blocking.length === 0,
     structural: { tool: { name: "ast-grep", binaryDigest: astDigest }, rulesDigest: astRulesDigest },
-    security: { mode: "strict-candidate", findings: candidateTrivy, sourceControls, blocking, evidence: candidateScan.evidence, baselineEvidence: null, baselineReason: "not-scanned-no-security-grandfathering" },
+    security: { mode: "strict-candidate", applicability, findings: candidateTrivy, sourceControls, blocking, evidence: candidateScan.evidence, baselineEvidence: null, baselineReason: "not-scanned-no-security-grandfathering" },
     sbom: candidateScan.sbom,
     baseCount: baseFindings.length,
     candidateCount: candidateFindings.length,

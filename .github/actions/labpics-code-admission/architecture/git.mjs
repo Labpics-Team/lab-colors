@@ -3,6 +3,7 @@ import path from 'node:path';
 import { classifyPath, graphEligible, isOid, repoPath } from './model.mjs';
 const MAX_BUFFER = 96 * 1024 * 1024;
 const decoder = new TextDecoder('utf-8', { fatal: true });
+const sourceDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const cleanToken = v => v?.replace(/^\n+/, '');
 export class GitReader {
     constructor(directory) {
@@ -115,7 +116,7 @@ export class GitReader {
             try {
                 if (b.includes(0))
                     throw new Error('binary');
-                files.set(p, decoder.decode(b));
+                files.set(p, sourceDecoder.decode(b));
             }
             catch {
                 omitted.push({ path: p, reason: 'binary-or-non-UTF8' });

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { fileDigest, prepareQualifiedExecutable } from "./identity.mjs";
+import { runStructuralRule } from "./structural.mjs";
 
 const MAX_OUTPUT = 8 * 1024 * 1024;
 const sha256 = value => createHash("sha256").update(value).digest("hex");
@@ -16,19 +17,10 @@ const argument = (name) => {
   return index === -1 ? undefined : process.argv[index + 1];
 };
 
-const runPattern = ({ runtime, rule, path, environment }) => {
-  const result = runtime.run([
-    "run",
-    "--pattern", rule.pattern,
-    "--lang", rule.language,
-    "--json=compact",
-    "--color", "never",
-    path,
-  ], {
-    encoding: "utf8",
-    maxBuffer: MAX_OUTPUT,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: environment,
+const runPattern = ({ runtime, rule, path, environment, config }) => runStructuralRule(rule, [path], args => {
+  const result = runtime.run(args, {
+    encoding: "utf8", maxBuffer: MAX_OUTPUT, stdio: ["ignore", "pipe", "pipe"],
+    env: environment, cwd: environment.HOME,
   });
   if (result.error) throw new Error(`${rule.id}: ast-grep failed to start: ${result.error.message}`);
   if (![0, 1].includes(result.status)) {
@@ -39,7 +31,7 @@ const runPattern = ({ runtime, rule, path, environment }) => {
   } catch (error) {
     throw new Error(`${rule.id}: ast-grep returned invalid JSON: ${error.message}`);
   }
-};
+}, config);
 
 const astGrep = argument("--ast-grep");
 const rulesPath = argument("--rules");
@@ -59,6 +51,8 @@ try {
   root = mkdtempSync(join(tmpdir(), "labpics-ast-qualification-"));
   runtime = prepareQualifiedExecutable(binary, binaryDigest, root, "ast-grep qualification binary");
   const environment = { PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", HOME: root, TMPDIR: root, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", NO_COLOR: "1" };
+  const config = join(root, "sgconfig.yml");
+  writeFileSync(config, "ruleDirs: []\n");
   const ids = new Set();
 
   for (const rule of rules) {
@@ -79,15 +73,27 @@ try {
     writeFileSync(positivePath, rule.positive);
     writeFileSync(negativePath, rule.negative);
 
-    const positive = runPattern({ runtime, rule: { ...rule, language }, path: positivePath, environment });
-    const negative = runPattern({ runtime, rule: { ...rule, language }, path: negativePath, environment });
+    const positive = runPattern({ runtime, rule: { ...rule, language }, path: positivePath, environment, config });
+    const negative = runPattern({ runtime, rule: { ...rule, language }, path: negativePath, environment, config });
     if (!Array.isArray(positive) || positive.length === 0) {
       throw new Error(`${id}: positive contrast was not detected`);
     }
     if (!Array.isArray(negative) || negative.length !== 0) {
       throw new Error(`${id}: negative contrast was incorrectly detected`);
     }
-    receipts.push({ ruleId: id, positive: positive.length, negative: 0 });
+    const controls = [];
+    if (rule.controls !== undefined && !Array.isArray(rule.controls)) throw new Error(`${id}: invalid controls`);
+    for (const [index, control] of (rule.controls ?? []).entries()) {
+      if (!control || typeof control.name !== "string" || !control.name ||
+          typeof control.source !== "string" || !control.source ||
+          !Number.isSafeInteger(control.matches) || control.matches < 0) throw new Error(`${id}: invalid control`);
+      const path = join(root, `${id}.control-${index}.${extension}`);
+      writeFileSync(path, control.source);
+      const found = runPattern({ runtime, rule: { ...rule, language }, path, environment, config });
+      if (found.length !== control.matches) throw new Error(`${id}: ${control.name}: expected ${control.matches}, got ${found.length}`);
+      controls.push({ name: control.name, matches: found.length });
+    }
+    receipts.push({ ruleId: id, positive: positive.length, negative: 0, ...(controls.length ? { controls } : {}) });
     console.error(`${id}: positive=${positive.length} negative=0`);
   }
   console.log(JSON.stringify({ schema: "labpics.ast-grep/native-qualification/v1", binaryDigest, rulesDigest, rules: receipts }));
