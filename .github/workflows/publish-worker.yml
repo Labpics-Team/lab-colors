@@ -304,6 +304,7 @@ jobs:
           EXPECTED_TAG: ${{ github.ref_name }}
           EXPECTED_NODE: ${{ env.NODE_TOOLCHAIN }}
           EXPECTED_NPM: ${{ env.NPM_TOOLCHAIN }}
+          EXPECTED_TARBALL_SHA256: ${{ needs.prepare.outputs.tarball_sha256 }}
         run: |
           node <<'NODE'
           const { createHash } = require("node:crypto");
@@ -700,6 +701,7 @@ jobs:
           const expectedTag = process.env.EXPECTED_TAG;
           const expectedNode = process.env.EXPECTED_NODE;
           const expectedNpm = process.env.EXPECTED_NPM;
+          const expectedTarballSha256 = process.env.EXPECTED_TARBALL_SHA256;
           const output = process.env.GITHUB_OUTPUT;
           const runnerTemp = process.env.RUNNER_TEMP;
           const workspace = process.env.GITHUB_WORKSPACE;
@@ -714,6 +716,9 @@ jobs:
             !workspace
           ) {
             fail("validator is missing required environment");
+          }
+          if (!/^[0-9a-f]{64}$/u.test(expectedTarballSha256 ?? "")) {
+            fail("verified tarball digest is missing or non-canonical");
           }
           if (process.versions.node !== expectedNode) {
             fail(`Node ${process.versions.node} != ${expectedNode}`);
@@ -793,6 +798,10 @@ jobs:
           const digest = sha256(bytes);
           if (!/^[0-9a-f]{64}$/u.test(evidence.sha256) || evidence.sha256 !== digest) {
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
+          }
+          // Only bytes admitted by the preparation job may reach archive parsing.
+          if (digest !== expectedTarballSha256) {
+            fail("tarball differs from the verified preparation output");
           }
           const tarball = materializeVerifiedTarball(bytes, digest, runnerTemp);
           const listedMembers = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
