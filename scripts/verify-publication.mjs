@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyPackageRelease } from "./verify-package-release.mjs";
 
@@ -112,7 +112,10 @@ export async function qualifyPublication({ manifest, tarball }) {
     };
     await writeFile(env.NPM_CONFIG_USERCONFIG, "", { flag: "wx", mode: 0o600 });
     let sequence = 0;
-    async function run(label, bytes = originalBytes, edit = () => {}, rebind = false) {
+    async function run(label, {
+      bytes = originalBytes, edit = () => {}, rebind = false,
+      verifiedSha256 = digest(bytes), workspace = ROOT,
+    } = {}) {
       const root = join(directory, String(sequence++));
       const artifacts = join(root, "artifacts");
       const temporary = join(root, "temporary");
@@ -130,10 +133,14 @@ export async function qualifyPublication({ manifest, tarball }) {
       const output = join(root, "output");
       const result = spawnSync(process.execPath, [script], {
         cwd: ROOT, encoding: "utf8", timeout: 120_000, maxBuffer: 2 * 1024 * 1024,
-        env: { ...env, ARTIFACT_DIR: artifacts, RUNNER_TEMP: temporary, TMPDIR: temporary, GITHUB_OUTPUT: output },
+        env: {
+          ...env, ARTIFACT_DIR: artifacts, RUNNER_TEMP: temporary,
+          TMPDIR: temporary, GITHUB_OUTPUT: output, GITHUB_WORKSPACE: workspace,
+          EXPECTED_TARBALL_SHA256: verifiedSha256,
+        },
       });
       if (result.error) throw result.error;
-      assert.equal(result.signal, null, result.label + " was terminated");
+      assert.equal(result.signal, null, label + " was terminated");
       let outputs = "";
       try { outputs = await readFile(output, "utf8"); }
       catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -160,10 +167,40 @@ export async function qualifyPublication({ manifest, tarball }) {
       assert.match(result.stderr, reason, result.label + " failed for another reason");
     }
     await accepted(await run("prepared package"));
-    rejected(await run("foreign source", originalBytes, (input) => { input.sourceSha = "0".repeat(40); }), /manifest sourceSha/u);
-    rejected(await run("foreign version", originalBytes, (input) => { input.npm = "999.0.0"; }), /manifest npm/u);
-    rejected(await run("lost reproducibility", originalBytes, (input) => { input.reproducibility.byteIdentical = false; }), /reproducibility contract/u);
-    rejected(await run("changed bytes", Buffer.concat([originalBytes, Buffer.from([0])])), /tarball bytes|tarball sha256/u);
+    rejected(await run("foreign source", { edit: (input) => { input.sourceSha = "0".repeat(40); } }), /manifest sourceSha/u);
+    rejected(await run("foreign version", { edit: (input) => { input.npm = "999.0.0"; } }), /manifest npm/u);
+    rejected(await run("lost reproducibility", { edit: (input) => { input.reproducibility.byteIdentical = false; } }), /reproducibility contract/u);
+    rejected(await run("changed bytes", { bytes: Buffer.concat([originalBytes, Buffer.from([0])]) }), /tarball bytes|tarball sha256/u);
+    for (const verifiedSha256 of ["", "invalid", "0".repeat(63), "A".repeat(64)]) {
+      rejected(await run("invalid preparation digest", { verifiedSha256 }), /verified tarball digest/u);
+    }
+    rejected(await run("foreign preparation digest", { verifiedSha256: "0".repeat(64) }), /verified preparation output/u);
+
+    // A source fixture varies only the checked-out package contract. The archive,
+    // tag and manifest keep their independent identity, and ROOT remains untouched.
+    for (const [label, editSource] of [
+      ["matching source copy", () => {}],
+      ["foreign source name", (source) => { source.name = "@other/colors"; }],
+      ["foreign source version", (source) => { source.version += "-other"; }],
+    ]) {
+      const workspace = await mkdtemp(join(directory, "source-"));
+      for (const path of [
+        "packages/colors/package.json",
+        "scripts/point-support-release-contract.cjs",
+        "scripts/inspect-npm-tarball.py",
+      ]) {
+        const destination = join(workspace, path);
+        await mkdir(dirname(destination), { recursive: true });
+        await copyFile(join(ROOT, path), destination);
+      }
+      const sourcePath = join(workspace, "packages/colors/package.json");
+      const source = JSON.parse(await readFile(sourcePath, "utf8"));
+      editSource(source);
+      await writeFile(sourcePath, JSON.stringify(source));
+      const result = await run(label, { workspace });
+      if (label === "matching source copy") await accepted(result);
+      else rejected(result, /source package identity differs from the release tag/u);
+    }
 
     for (const [mode, reason] of [
       ["control", null],
@@ -173,11 +210,16 @@ export async function qualifyPublication({ manifest, tarball }) {
       ["missing", /inventory|member|declared|missing/iu],
     ]) {
       const edited = repackPublicationTarball(tarball, mode, env);
-      const result = await run("repacked " + mode, edited, () => {}, true);
-      if (reason === null) await accepted(result);
-      else rejected(result, reason);
+      const result = await run("repacked " + mode, { bytes: edited, rebind: true });
+      if (reason === null) {
+        await accepted(result);
+        assert.notEqual(digest(edited), digest(originalBytes), "substitution control must change archive bytes");
+        rejected(await run("self-consistent archive substitution", {
+          bytes: edited, rebind: true, verifiedSha256: digest(originalBytes),
+        }), /verified preparation output/u);
+      } else rejected(result, reason);
     }
-    console.log("Publication admission: prepared archive and re-encoding accepted; 8 substitutions rejected without outputs");
+    console.log("Publication admission: prepared archive, source copy and re-encoding accepted; invalid sources, evidence and delivery refused without outputs");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
