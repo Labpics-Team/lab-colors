@@ -26,6 +26,62 @@ export function artifactAdmissionScript(workflow) {
   }).join("\n");
 }
 
+export function repackPublicationTarball(tarball, mode, env) {
+  // stdlib tarfile edits a copy of the already-qualified archive, never the
+  // source tree. A positive re-encoding control prevents format errors from
+  // being mistaken for successful detection of a semantic substitution.
+  const editTar = `import copy, gzip, io, json, sys, tarfile
+mode = sys.argv[2]
+raw = io.BytesIO()
+changed = False
+with tarfile.open(sys.argv[1], 'r:gz') as source, tarfile.open(fileobj=raw, mode='w', format=tarfile.USTAR_FORMAT) as target:
+    for item in source:
+        if not item.isfile():
+            raise ValueError('qualified archive contains a non-file')
+        data = source.extractfile(item).read()
+        if item.name == 'package/NOTICE.md' and mode == 'missing':
+            changed = True
+            continue
+        if item.name == 'package/package.json':
+            package = json.loads(data)
+            if mode == 'exports':
+                package['exports']['./unreviewed'] = './index.js'
+                changed = True
+            elif mode == 'files':
+                package['files'].append('README.md')
+                changed = True
+            elif mode == 'extra':
+                package['files'].append('unreviewed.js')
+                changed = True
+            elif mode == 'missing':
+                package['files'].remove('NOTICE.md')
+            if mode in ('exports', 'files', 'extra', 'missing'):
+                data = json.dumps(package, ensure_ascii=False).encode('utf-8')
+        member = copy.copy(item)
+        member.size = len(data)
+        member.pax_headers = {}
+        target.addfile(member, io.BytesIO(data))
+    if mode == 'extra':
+        data = b'export const unreviewed = true;\\n'
+        member = tarfile.TarInfo('package/unreviewed.js')
+        member.size = len(data)
+        member.mode = 0o644
+        target.addfile(member, io.BytesIO(data))
+    members_end = raw.tell()
+if mode != 'control' and not changed:
+    raise ValueError('archive mutation did not reach its target')
+# tarfile.close() pads to a record; npm admission requires exactly two end blocks.
+payload = raw.getvalue()[:members_end] + bytes(2 * tarfile.BLOCKSIZE)
+sys.stdout.buffer.write(gzip.compress(payload, mtime=0))
+`;
+  const edited = spawnSync("python3", ["-c", editTar, tarball, mode], {
+    cwd: ROOT, env, timeout: 30_000, maxBuffer: 64 * 1024 * 1024,
+  });
+  if (edited.error) throw edited.error;
+  assert.equal(edited.status, 0, edited.stderr.toString("utf8"));
+  return edited.stdout;
+}
+
 // Preserve the publisher's real parser and IO. Only the source artifact and
 // process environment vary; this path never extracts or executes npm publish.
 export async function qualifyPublication({ manifest, tarball }) {
@@ -109,50 +165,6 @@ export async function qualifyPublication({ manifest, tarball }) {
     rejected(await run("lost reproducibility", originalBytes, (input) => { input.reproducibility.byteIdentical = false; }), /reproducibility contract/u);
     rejected(await run("changed bytes", Buffer.concat([originalBytes, Buffer.from([0])])), /tarball bytes|tarball sha256/u);
 
-    // stdlib tarfile edits a copy of the already-qualified archive, never the
-    // source tree. A positive re-encoding control prevents format errors from
-    // being mistaken for successful detection of a semantic substitution.
-    const editTar = `import copy, gzip, io, json, sys, tarfile
-mode = sys.argv[2]
-raw = io.BytesIO()
-changed = False
-with tarfile.open(sys.argv[1], 'r:gz') as source, tarfile.open(fileobj=raw, mode='w', format=tarfile.USTAR_FORMAT) as target:
-    for item in source:
-        if not item.isfile():
-            raise ValueError('qualified archive contains a non-file')
-        data = source.extractfile(item).read()
-        if item.name == 'package/NOTICE.md' and mode == 'missing':
-            changed = True
-            continue
-        if item.name == 'package/package.json':
-            package = json.loads(data)
-            if mode == 'exports':
-                package['exports']['./unreviewed'] = './index.js'
-                changed = True
-            elif mode == 'files':
-                package['files'].append('README.md')
-                changed = True
-            elif mode == 'extra':
-                package['files'].append('unreviewed.js')
-                changed = True
-            elif mode == 'missing':
-                package['files'].remove('NOTICE.md')
-            if mode in ('exports', 'files', 'extra', 'missing'):
-                data = json.dumps(package, ensure_ascii=False).encode('utf-8')
-        member = copy.copy(item)
-        member.size = len(data)
-        member.pax_headers = {}
-        target.addfile(member, io.BytesIO(data))
-    if mode == 'extra':
-        data = b'export const unreviewed = true;\\n'
-        member = tarfile.TarInfo('package/unreviewed.js')
-        member.size = len(data)
-        member.mode = 0o644
-        target.addfile(member, io.BytesIO(data))
-if mode != 'control' and not changed:
-    raise ValueError('archive mutation did not reach its target')
-sys.stdout.buffer.write(gzip.compress(raw.getvalue(), mtime=0))
-`;
     for (const [mode, reason] of [
       ["control", null],
       ["exports", /packed package exports differ/u],
@@ -160,12 +172,8 @@ sys.stdout.buffer.write(gzip.compress(raw.getvalue(), mtime=0))
       ["extra", /inventory|member|declared|unexpected/iu],
       ["missing", /inventory|member|declared|missing/iu],
     ]) {
-      const edited = spawnSync("python3", ["-c", editTar, tarball, mode], {
-        cwd: ROOT, env, timeout: 30_000, maxBuffer: 64 * 1024 * 1024,
-      });
-      if (edited.error) throw edited.error;
-      assert.equal(edited.status, 0, edited.stderr.toString("utf8"));
-      const result = await run("repacked " + mode, edited.stdout, () => {}, true);
+      const edited = repackPublicationTarball(tarball, mode, env);
+      const result = await run("repacked " + mode, edited, () => {}, true);
       if (reason === null) await accepted(result);
       else rejected(result, reason);
     }

@@ -313,7 +313,7 @@
   "packages/colors/test/program-wire.test.mjs": "10f9caac95feb531fa2e3711cc9057e14e8bbbbd",
   "packages/colors/test/public-api-cleanup.test.mjs": "e1ea85803e118881c88183ff0ee41771e85712a2",
   "packages/colors/test/public-claims.test.mjs": "d3ac2b42a3d1b6a079c1a84f20aa0efac3b3d7d5",
-  "packages/colors/test/publish-ci-admission.test.mjs": "3791065d867c8046156601cf1a4e12857c9fbf0e",
+  "packages/colors/test/publish-ci-admission.test.mjs": "b5ff3736a36e73795e8ea9d5ffaa0879b68f85a3",
   "packages/colors/test/release-contract.test.mjs": "0d2e4835ea40c9e8e0ee011e90012396817550d3",
   "packages/colors/test/release-provenance.test.mjs": "0a73bf8675611f550f54f37ec4976a9eccdf7b63",
   "packages/colors/test/sink.test.mjs": "1eb3c3dd57e61371ab5d9163bafb1024d157bcea",
@@ -551,7 +551,7 @@
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
   "scripts/transport-distribution.mjs": "0ffdd393185b048db61bc56bfe1ae64c2408ee0d",
   "scripts/verify-package-release.mjs": "063790f80d9385e514b454a0bf39ce23334d0abf",
-  "scripts/verify-publication.mjs": "197039a06c0caf2b0068b2f94fdcb840603ec89a",
+  "scripts/verify-publication.mjs": "913b92474bfa868a0f9527c2131edc8e9ae2f08b",
   "scripts/verify_clean_set_receipt.py": "9a59b4b6707c115f029eae019d0b065f7678281f",
   "scripts/verify_core_formal.py": "40de7eaf567d998344595dded5bd5eaac5debb91",
   "scripts/verify_point_support_surplus.py": "24785f2d6cc56c88e12b0c50643f8f25365b3f6c",
@@ -559,7 +559,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "1bffc732d515dbf9c385b44f2b472a690035a6351675d8cd369b9d52e433e1fe",
+ "record_sha256": "d1b861161a3d4c0207c718593eba23271b55a46df6b7cfc27218a6053c3c134d",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

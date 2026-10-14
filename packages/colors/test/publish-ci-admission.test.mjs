@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { repackPublicationTarball } from "../../../scripts/verify-publication.mjs";
 
 const workflow = (name) => readFileSync(new URL("../../../.github/workflows/" + name, import.meta.url), "utf8");
 const publisher = workflow("publish-worker.yml");
@@ -166,4 +172,68 @@ test("publication inventory and exports match the source package contract", () =
   const source = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.deepEqual(actual.files, source.files, "publication must retain the source package inventory");
   assert.deepEqual(actual.exports, source.exports, "publication must retain the source public API");
+});
+
+test("publication repacking controls remain canonical and preserve zero-filled payloads", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "colors-publication-repack-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const tarball = join(directory, "source.tgz");
+  const repacked = join(directory, "repacked.tgz");
+  const inventory = join(directory, "inventory.json");
+  const inspector = fileURLToPath(new URL("../../../scripts/inspect-npm-tarball.py", import.meta.url));
+  const env = { PATH: process.env.PATH };
+  // Include full zero blocks and partial blocks: trimming NUL bytes would erase
+  // real file contents as well as the padding appended by tarfile.close().
+  for (const size of [0, 511, 512, 513, 8192]) {
+    const files = {
+      "package.json": Buffer.from(JSON.stringify({
+        files: ["NOTICE.md", "payload.bin"], exports: { ".": "./index.js" },
+      })),
+      "NOTICE.md": Buffer.from("synthetic attribution\n"),
+      "payload.bin": Buffer.alloc(size),
+    };
+    execFileSync("python3", ["-c", `import base64, io, json, sys, tarfile
+with tarfile.open(sys.argv[1], 'w:gz', format=tarfile.USTAR_FORMAT) as target:
+    for name, encoded in json.load(sys.stdin).items():
+        data = base64.b64decode(encoded)
+        member = tarfile.TarInfo('package/' + name)
+        member.size = len(data)
+        target.addfile(member, io.BytesIO(data))
+`, tarball], {
+      env, input: JSON.stringify(Object.fromEntries(
+        Object.entries(files).map(([name, bytes]) => [name, bytes.toString("base64")]),
+      )),
+    });
+    for (const mode of ["control", "exports", "files", "extra", "missing"]) {
+      writeFileSync(repacked, repackPublicationTarball(tarball, mode, env));
+      const expected = Object.keys(files).filter((name) => mode !== "missing" || name !== "NOTICE.md");
+      if (mode === "extra") expected.push("unreviewed.js");
+      writeFileSync(inventory, JSON.stringify({ schemaVersion: 1, files: expected.sort() }));
+      const result = spawnSync("python3", [inspector,
+        "--tarball", repacked, "--declared-inventory-json", inventory,
+      ], { env, encoding: "utf8" });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, `${mode}, payload size ${size}: ${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.verdict, "canonical");
+      for (const member of report.members) {
+        if (mode !== "control" && member.normalizedPath === "package.json") continue;
+        const bytes = member.normalizedPath === "unreviewed.js"
+          ? Buffer.from("export const unreviewed = true;\n") : files[member.normalizedPath];
+        assert.equal(member.size, bytes.length);
+        assert.equal(member.sha256, createHash("sha256").update(bytes).digest("hex"));
+      }
+      if (mode === "control" && size === 513) {
+        writeFileSync(repacked, gzipSync(Buffer.concat([
+          gunzipSync(readFileSync(repacked)), Buffer.alloc(512),
+        ])));
+        const padded = spawnSync("python3", [inspector,
+          "--tarball", repacked, "--declared-inventory-json", inventory,
+        ], { env, encoding: "utf8" });
+        assert.ifError(padded.error);
+        assert.equal(padded.status, 1);
+        assert.match(padded.stderr, /tar stream must end with exactly two zero blocks/u);
+      }
+    }
+  }
 });
