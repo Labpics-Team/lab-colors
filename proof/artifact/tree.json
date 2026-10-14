@@ -557,7 +557,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "c6826215fb350eb1e9402a3fc3d00db3cdd955bd1f249fd3cb1f40506130c7f2",
+ "record_sha256": "89794c3cd640ea8fd467e1723f738518b5694469bb2db117c42645c1014536f3",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
