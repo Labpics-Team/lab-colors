@@ -11,6 +11,9 @@ on:
       npm:
         description: Verified packer npm version
         value: ${{ jobs.wasm.outputs.npm }}
+      tarball_sha256:
+        description: SHA-256 of the verified npm archive
+        value: ${{ jobs.wasm.outputs.tarball_sha256 }}
 permissions:
   contents: read
 
@@ -39,6 +42,7 @@ jobs:
     outputs:
       node: ${{ steps.packer.outputs.node }}
       npm: ${{ steps.packer.outputs.npm }}
+      tarball_sha256: ${{ steps.verified-release-identity.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
