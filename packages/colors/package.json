@@ -53,14 +53,14 @@
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts",
-    "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"
+    "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"
   ],
   "scripts": {
     "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
-    "release:verify": "node ../../scripts/verify-package-release.mjs"
+    "release:verify": "node ../../scripts/verify-publication.mjs"
   },
   "devDependencies": {
     "es-module-lexer": "1.7.0",
