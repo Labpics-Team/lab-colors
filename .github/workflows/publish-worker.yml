@@ -304,6 +304,7 @@ jobs:
           EXPECTED_TAG: ${{ github.ref_name }}
           EXPECTED_NODE: ${{ env.NODE_TOOLCHAIN }}
           EXPECTED_NPM: ${{ env.NPM_TOOLCHAIN }}
+          EXPECTED_TARBALL_SHA256: ${{ needs.prepare.outputs.tarball_sha256 }}
         run: |
           node <<'NODE'
           const { createHash } = require("node:crypto");
@@ -334,36 +335,16 @@ jobs:
 
           const TAR_INSPECTOR_SHA256 =
             "c838aac0b1f918113d55839a77b913d1d4225dda39063c57f80efeb9fc153022";
-          const EXPECTED_PACKAGE_FILES = [
-            "LICENSE",
-            "build-metadata.json",
-            "index.js",
-            "index.d.ts",
-            "wcag22.d.ts",
-            "program-wire/abi-v1.js",
-            "program-wire/abi-v1.d.ts",
-            "evidence/wcag22-srgb8-v1.json",
-            "evidence/wcag22-srgb8-q55-v1.bin",
-            "evidence/wcag22-srgb8-q55-proof-v1.json",
-            "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
-            "pkg/labcolors.js",
-            "pkg/labcolors.d.ts",
-            "pkg/labcolors_bg.wasm",
-            "pkg/labcolors_bg.wasm.d.ts",
-            "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
-          ];
-          const EXPECTED_PACKAGE_EXPORTS = {
-            ".": { types: "./index.d.ts", default: "./index.js" },
-            "./pkg/labcolors_bg.wasm": "./pkg/labcolors_bg.wasm",
-            "./program-wire/abi-v1.js": {
-              types: "./program-wire/abi-v1.d.ts",
-              default: "./program-wire/abi-v1.js",
-            },
-            "./build-metadata.json": "./build-metadata.json",
-            "./package.json": "./package.json",
-          };
+          // The checked-out tag owns the package surface. Artifact declarations
+          // must match this source; they cannot authorize their own contents.
+          const sourcePackage = JSON.parse(readFileSync(
+            join(process.env.GITHUB_WORKSPACE, "packages/colors/package.json"), "utf8",
+          ));
+          const EXPECTED_PACKAGE_FILES = sourcePackage.files;
+          const EXPECTED_PACKAGE_EXPORTS = sourcePackage.exports;
           const EXPECTED_SNIPPET_PATTERN =
             /^pkg\/snippets\/labcolors-wasm-[0-9a-f]{16}\/inline0\.js$/u;
+          const DECLARED_SNIPPET = "pkg/snippets/labcolors-wasm-" + "[0-9a-f]".repeat(16) + "/inline0.js";
 
           function expectedTarInventory(packageFiles, snippetFiles) {
             if (
@@ -373,14 +354,12 @@ jobs:
             ) {
               fail("worker generated snippet inventory is not canonical");
             }
-            return [
-              ...packageFiles.filter(
-                (path) => path !== "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
-              ),
+            return [...new Set([
+              ...packageFiles.filter((path) => path !== DECLARED_SNIPPET),
               ...snippetFiles,
               "README.md",
               "package.json",
-            ].sort((left, right) =>
+            ])].sort((left, right) =>
               Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
             );
           }
@@ -390,10 +369,15 @@ jobs:
           }
 
           if (
-            EXPECTED_PACKAGE_FILES.length !== 16 ||
-            new Set(EXPECTED_PACKAGE_FILES).size !== 16 ||
-              EXPECTED_PACKAGE_FILES.filter((path) => path.includes("[0-9a-f]")).length !== 1 ||
-              EXPECTED_PACKAGE_FILES.some((path) => path.includes("?") || path.includes("*"))
+            !Array.isArray(EXPECTED_PACKAGE_FILES) ||
+            EXPECTED_PACKAGE_FILES.length === 0 ||
+            new Set(EXPECTED_PACKAGE_FILES).size !== EXPECTED_PACKAGE_FILES.length ||
+            EXPECTED_PACKAGE_FILES.filter((path) => path === DECLARED_SNIPPET).length !== 1 ||
+            EXPECTED_PACKAGE_FILES.some((path) => typeof path !== "string" ||
+              (path !== DECLARED_SNIPPET && !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/u.test(path)) ||
+              path.split("/").some((part) => part === "." || part === "..")) ||
+            !EXPECTED_PACKAGE_EXPORTS || typeof EXPECTED_PACKAGE_EXPORTS !== "object" ||
+            Array.isArray(EXPECTED_PACKAGE_EXPORTS)
           ) {
             fail("worker package inventory allowlist is not canonical");
           }
@@ -717,6 +701,7 @@ jobs:
           const expectedTag = process.env.EXPECTED_TAG;
           const expectedNode = process.env.EXPECTED_NODE;
           const expectedNpm = process.env.EXPECTED_NPM;
+          const expectedTarballSha256 = process.env.EXPECTED_TARBALL_SHA256;
           const output = process.env.GITHUB_OUTPUT;
           const runnerTemp = process.env.RUNNER_TEMP;
           const workspace = process.env.GITHUB_WORKSPACE;
@@ -731,6 +716,9 @@ jobs:
             !workspace
           ) {
             fail("validator is missing required environment");
+          }
+          if (!/^[0-9a-f]{64}$/u.test(expectedTarballSha256 ?? "")) {
+            fail("verified tarball digest is missing or non-canonical");
           }
           if (process.versions.node !== expectedNode) {
             fail(`Node ${process.versions.node} != ${expectedNode}`);
@@ -749,6 +737,9 @@ jobs:
 
           const manifest = JSON.parse(readFileSync(manifests[0], "utf8"));
           const expectedVersion = expectedTag.slice("colors-v".length);
+          if (sourcePackage.name !== "@labpics/colors" || sourcePackage.version !== expectedVersion) {
+            fail("source package identity differs from the release tag");
+          }
           if (manifest.schemaVersion !== 6) fail(`manifest schema ${manifest.schemaVersion}`);
           exactKeys(
             manifest,
@@ -808,15 +799,16 @@ jobs:
           if (!/^[0-9a-f]{64}$/u.test(evidence.sha256) || evidence.sha256 !== digest) {
             fail(`tarball sha256 ${digest} != manifest ${evidence.sha256}`);
           }
+          // Only bytes admitted by the preparation job may reach archive parsing.
+          if (digest !== expectedTarballSha256) {
+            fail("tarball differs from the verified preparation output");
+          }
           const tarball = materializeVerifiedTarball(bytes, digest, runnerTemp);
           const listedMembers = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" })
             .split("\n")
             .filter((path) => path.startsWith("package/pkg/snippets/"))
             .map((path) => path.slice("package/".length));
           const expectedInventory = expectedTarInventory(EXPECTED_PACKAGE_FILES, listedMembers);
-          if (expectedInventory.length !== 18) {
-            fail(`expected exactly 18 admitted tar members, got ${expectedInventory.length}`);
-          }
           const tarInspection = inspectCanonicalTarball(
             tarball,
             bytes,
