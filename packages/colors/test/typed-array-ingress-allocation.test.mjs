@@ -122,6 +122,42 @@ test("snapshot allocation failures keep operation-specific codes before the copi
       }
     }
   }
+  // A detached or out-of-bounds view reports zero intrinsic length, yet
+  // cannot be copied. Refuse both arrays before allocating either snapshot.
+  const detachedIdsBuffer = new ArrayBuffer(4);
+  const detachedIds = new NativeIds(detachedIdsBuffer);
+  structuredClone(detachedIdsBuffer, { transfer: [detachedIdsBuffer] });
+  const detachedSurfacesBuffer = new ArrayBuffer(3);
+  const detachedSurfaces = new NativeBytes(detachedSurfacesBuffer);
+  structuredClone(detachedSurfacesBuffer, { transfer: [detachedSurfacesBuffer] });
+  const unavailable = [
+    ["detached ids", detachedIds, new NativeBytes(0)],
+    ["detached surfaces", ids, detachedSurfaces],
+  ];
+  const resizable = new ArrayBuffer(8, { maxByteLength: 8 });
+  if (typeof resizable.resize === "function") {
+    const outOfBoundsIds = new NativeIds(resizable, 4, 1);
+    const outOfBoundsSurfaces = new NativeBytes(resizable, 4, 4);
+    resizable.resize(2);
+    unavailable.push(
+      ["out-of-bounds ids", outOfBoundsIds, new NativeBytes(0)],
+      ["out-of-bounds surfaces", ids, outOfBoundsSurfaces],
+    );
+  }
+  for (const [caseName, givenIds, givenSurfaces] of unavailable) {
+    for (const [operation, code, invoke] of [
+      ["updateObserved", "program_update", () => runtime.updateObserved(2n, givenIds, givenSurfaces, 0)],
+      ["attachmentUpdateObserved", "program_attachment_update",
+        () => attachment.updateObserved(2n, givenIds, givenSurfaces, 0)],
+    ]) {
+      const allocationBefore = allocations;
+      const copierBefore = generated.copierCalls;
+      assert.throws(invoke, (error) => api.isProgramError(error) &&
+        error.operation === operation && error.code === code, caseName);
+      assert.equal(allocations, allocationBefore, caseName + " allocated a snapshot");
+      assert.equal(generated.copierCalls, copierBefore, caseName + " reached the copier");
+    }
+  }
   let coerced = false;
   const hostileScalar = { valueOf() { coerced = true; throw new Error("unexpected coercion"); } };
   for (const count of [-1, 0x1_0000_0000, 1.5, Infinity, NaN, "1", 1n, hostileScalar]) {

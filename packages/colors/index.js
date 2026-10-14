@@ -45,6 +45,7 @@ const intrinsicSet = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   "set",
 ).value;
+const intrinsicAt = Object.getOwnPropertyDescriptor(typedArrayPrototype, "at").value;
 const intrinsicTypedArrayTagGetter = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   Symbol.toStringTag,
@@ -96,6 +97,9 @@ function inspectTypedArrayStorage(value, storage, invalid) {
     if (Reflect.apply(intrinsicTypedArrayTagGetter, value, []) !== storage.tag) {
       throw invalid();
     }
+    // ValidateTypedArrayBounds rejects detached and out-of-bounds views even
+    // when intrinsic byteLength/length both report zero. at(0) is read-only.
+    Reflect.apply(intrinsicAt, value, [0]);
     // A concurrent writer cannot participate in an atomic input snapshot.
     // ArrayBuffer's intrinsic getter rejects shared storage, including other realms.
     Reflect.apply(intrinsicArrayBufferByteLengthGetter,
