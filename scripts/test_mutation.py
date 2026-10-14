@@ -2185,14 +2185,25 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("reference?.path === spec.worker.path", workflow)
         self.assertIn("reference?.sha === spec.worker.sha", workflow)
         self.assertIn(
-            '"pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",',
+            'join(process.env.GITHUB_WORKSPACE, "packages/colors/package.json"), "utf8",',
+            workflow,
+        )
+        self.assertIn("const EXPECTED_PACKAGE_FILES = sourcePackage.files;", workflow)
+        self.assertIn("const EXPECTED_PACKAGE_EXPORTS = sourcePackage.exports;", workflow)
+        self.assertIn(
+            'const DECLARED_SNIPPET = "pkg/snippets/labcolors-wasm-" + "[0-9a-f]".repeat(16) + "/inline0.js";',
             workflow,
         )
         self.assertIn(
             "/^pkg\\/snippets\\/labcolors-wasm-[0-9a-f]{16}\\/inline0\\.js$/u;",
             workflow,
         )
-        self.assertIn("expected exactly 18 admitted tar members", workflow)
+        self.assertIn(
+            "const expectedInventory = expectedTarInventory(EXPECTED_PACKAGE_FILES, listedMembers);",
+            workflow,
+        )
+        self.assertIn("packed package files declaration differs from the admitted inventory", workflow)
+        self.assertIn("packed package exports differ from the admitted public surface", workflow)
 
         def canonical_worker_name(display_name: str) -> str:
             return display_name.rsplit(" / ", 1)[-1]
