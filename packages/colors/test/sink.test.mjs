@@ -26,9 +26,14 @@ function makeFakeElement(initialProps = {}, initialPriorities = {}) {
       },
       setProperty(k, v, priority = "") {
         mutations.push(["set", k, String(v)]);
-        props.set(k, String(v));
-        if (priority) priorities.set(k, priority);
-        else priorities.delete(k);
+        if (String(v) === "") {
+          props.delete(k);
+          priorities.delete(k);
+        } else {
+          props.set(k, String(v));
+          if (priority) priorities.set(k, priority);
+          else priorities.delete(k);
+        }
       },
       removeProperty(k) {
         mutations.push(["remove", k]);
@@ -315,7 +320,7 @@ test("R11: missing CSSOM read capabilities refuse before registration", () => {
 
 test("R12: rollback retains empty values, presence, priority and owned keys", () => {
   const element = makeFakeElement(
-    { "--lab-x": "", "--lab-z": "#stable" },
+    { "--lab-x": "#old", "--lab-z": "#stable" },
     { "--lab-x": "important" },
   );
   const lease = attachOutputBindingSet(element, ["--lab-x", "--lab-y"]);
@@ -329,7 +334,7 @@ test("R12: rollback retains empty values, presence, priority and owned keys", ()
     /write rejected/,
   );
   assert.equal(element.props.has("--lab-x"), true);
-  assert.equal(element.props.get("--lab-x"), "");
+  assert.equal(element.props.get("--lab-x"), "#old");
   assert.equal(element.priorities.get("--lab-x"), "important");
   assert.equal(element.props.has("--lab-y"), false);
   assert.equal(element.props.get("--lab-z"), "#stable");
@@ -352,5 +357,47 @@ test("R13: a throwing or inconsistent CSSOM reader refuses before the first writ
     assert.equal(element.props.get("--lab-x"), "#old");
     assert.deepEqual(element.mutations, []);
     assert.deepEqual([...lease.keys()], ["--lab-x"]);
+  }
+});
+
+
+test("R14: an enumerated empty declaration refuses before CSSOM can erase it", () => {
+  const element = makeFakeElement(
+    { "--lab-empty": "", "--lab-stable": "#old" },
+    { "--lab-empty": "important" },
+  );
+  const lease = attachOutputBindingSet(element, ["--lab-empty", "--lab-new"]);
+  assert.throws(
+    () => lease.commit({ "--lab-empty": "#changed", "--lab-new": "#new" }),
+    /coherent CSSOM snapshot/,
+  );
+  assert.deepEqual(element.mutations, []);
+  assert.equal(element.props.has("--lab-empty"), true);
+  assert.equal(element.props.get("--lab-empty"), "");
+  assert.equal(element.priorities.get("--lab-empty"), "important");
+  assert.equal(element.props.get("--lab-stable"), "#old");
+});
+
+test("R15: duplicated or missing enumeration names cannot silently erase properties", () => {
+  const fixtures = [
+    (style) => { style.item = () => null; },
+    (style) => { style.item = () => ""; },
+    (style) => { style.item = () => "--lab-x"; },
+  ];
+  for (const corruptEnumeration of fixtures) {
+    const element = makeFakeElement({
+      "--lab-x": "#original",
+      "--lab-y": "#other",
+    });
+    const lease = attachOutputBindingSet(element, ["--lab-x", "--lab-new"]);
+    corruptEnumeration(element.style);
+    assert.throws(
+      () => lease.commit({ "--lab-x": "#changed", "--lab-new": "#new" }),
+      /enumeration/,
+    );
+    assert.equal(element.props.get("--lab-x"), "#original");
+    assert.equal(element.props.get("--lab-y"), "#other");
+    assert.equal(element.props.has("--lab-new"), false);
+    assert.deepEqual(element.mutations, []);
   }
 });

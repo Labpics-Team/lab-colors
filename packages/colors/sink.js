@@ -49,8 +49,14 @@ const readKey = (style, key) => {
     throw new TypeError("sink: style enumeration is invalid");
   }
   let present = false;
+  const enumerated = new Set();
   for (let i = 0; i < length; i++) {
-    if (style.item(i) === key) present = true;
+    const name = style.item(i);
+    if (typeof name !== "string" || name === "" || enumerated.has(name)) {
+      throw new TypeError("sink: style enumeration cannot be restored");
+    }
+    enumerated.add(name);
+    if (name === key) present = true;
   }
   const value = style.getPropertyValue(key);
   const priority = style.getPropertyPriority(key);
@@ -58,6 +64,7 @@ const readKey = (style, key) => {
     typeof value !== "string" ||
     typeof priority !== "string" ||
     (priority !== "" && priority !== "important") ||
+    (present && value === "") ||
     (!present && (value !== "" || priority !== ""))
   ) {
     throw new TypeError("sink: style cannot provide a coherent CSSOM snapshot");
