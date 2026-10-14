@@ -204,3 +204,28 @@ test("physical scalar admission never coerces caller-owned objects", () => {
     assert.deepEqual(builder.finish(), before);
   }
 });
+
+test("wire header u32 bound rejects oversized sparse section before allocation", () => {
+  const builder = new ProgramWireBuilderV1();
+  const section = builder.section("sources");
+  section.sink.bytes.length = 0xffff_ffff;
+  assert.throws(() => builder.finish(), typed(PROGRAM_WIRE_TOO_MANY_ENTRIES));
+  assert.equal(section.count, 0);
+});
+
+test("wire refuses corrupted section counts before serialization", () => {
+  for (const count of [-1, 0.5, NaN, Infinity]) {
+    const builder = new ProgramWireBuilderV1();
+    builder.section("sources").count = count;
+    assert.throws(() => builder.finish(), typed(PROGRAM_WIRE_INVALID_DECLARATION));
+  }
+});
+
+
+test("wire refuses invalid section byte lengths before copying", () => {
+  for (const length of [-1, NaN, Infinity]) {
+    const builder = new ProgramWireBuilderV1();
+    builder.section("sources").sink.bytes = { length };
+    assert.throws(() => builder.finish(), typed(PROGRAM_WIRE_INVALID_DECLARATION));
+  }
+});
