@@ -45,6 +45,7 @@ const intrinsicSet = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   "set",
 ).value;
+const intrinsicAt = Object.getOwnPropertyDescriptor(typedArrayPrototype, "at").value;
 const intrinsicTypedArrayTagGetter = Object.getOwnPropertyDescriptor(
   typedArrayPrototype,
   Symbol.toStringTag,
@@ -90,17 +91,15 @@ function certificateIngressError(code) {
 // Generated bindings копируют массив до Rust. Проверяем реальный storage,
 // не вызывая пользовательские getters, instanceof hooks или prototype traps,
 // и передаём copier-у только собственный fixed-length snapshot.
-function copyTypedArrayStorage(value, storage, invalid, {
-  requiredLength,
-  maximumBytes,
-  tooLarge = invalid,
-  allocation = invalid,
-} = {}) {
+function inspectTypedArrayStorage(value, storage, invalid) {
   let byteLength, length;
   try {
     if (Reflect.apply(intrinsicTypedArrayTagGetter, value, []) !== storage.tag) {
       throw invalid();
     }
+    // ValidateTypedArrayBounds rejects detached and out-of-bounds views even
+    // when intrinsic byteLength/length both report zero. at(0) is read-only.
+    Reflect.apply(intrinsicAt, value, [0]);
     // A concurrent writer cannot participate in an atomic input snapshot.
     // ArrayBuffer's intrinsic getter rejects shared storage, including other realms.
     Reflect.apply(intrinsicArrayBufferByteLengthGetter,
@@ -110,7 +109,6 @@ function copyTypedArrayStorage(value, storage, invalid, {
     if (
       !Number.isSafeInteger(byteLength) || byteLength < 0 ||
       length * storage.bytesPerElement !== byteLength ||
-      (requiredLength !== undefined && length !== requiredLength) ||
       Object.getOwnPropertyDescriptor(value, "byteLength") !== undefined ||
       Object.getOwnPropertyDescriptor(value, "length") !== undefined
     ) {
@@ -119,9 +117,18 @@ function copyTypedArrayStorage(value, storage, invalid, {
   } catch {
     throw invalid();
   }
-  if (maximumBytes !== undefined && byteLength > maximumBytes) {
-    throw tooLarge();
-  }
+  return { byteLength, length };
+}
+
+function copyTypedArrayStorage(value, storage, invalid, {
+  requiredLength,
+  maximumBytes,
+  tooLarge = invalid,
+  allocation = invalid,
+} = {}, inspected = inspectTypedArrayStorage(value, storage, invalid)) {
+  const { byteLength, length } = inspected;
+  if (requiredLength !== undefined && length !== requiredLength) throw invalid();
+  if (maximumBytes !== undefined && byteLength > maximumBytes) throw tooLarge();
   try {
     if (
       Reflect.apply(intrinsicByteLengthGetter, value, []) !== byteLength ||
@@ -163,13 +170,38 @@ function programIngressError(operation, code) {
   return error;
 }
 
-function copyProgramInput(value, storage, operation, code, requiredLength) {
+function copyProgramInput(value, storage, operation, code, requiredLength, inspected) {
   const resource = operation === "attachmentUpdateObserved" || operation === "materializationAuthority"
     ? "program_attachment_resource_exhausted" : "program_resource_exhausted";
   return copyTypedArrayStorage(value, storage, () => programIngressError(operation, code), {
     requiredLength,
     allocation: () => programIngressError(operation, resource),
-  });
+  }, inspected);
+}
+
+// The two arrays describe one observation matrix. Admit both shapes before
+// either snapshot allocation or the generated WASM copier can run.
+function copyObservedInputs(scenarioIds, surfaces, surfaceCount, operation) {
+  const code = operation === "updateObserved" ? "program_update" : "program_attachment_update";
+  const invalid = () => programIngressError(operation, code);
+  if (
+    typeof surfaceCount !== "number" ||
+    !Number.isInteger(surfaceCount) ||
+    surfaceCount < 0 ||
+    surfaceCount > 0xffff_ffff
+  ) {
+    throw invalid();
+  }
+  const scenarios = inspectTypedArrayStorage(scenarioIds, scenarioStorage, invalid);
+  const pixels = inspectTypedArrayStorage(surfaces, byteStorage, invalid);
+  const expectedBytes = scenarios.length * surfaceCount * 3;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes !== pixels.byteLength) {
+    throw invalid();
+  }
+  return [
+    copyProgramInput(scenarioIds, scenarioStorage, operation, code, undefined, scenarios),
+    copyProgramInput(surfaces, byteStorage, operation, code, undefined, pixels),
+  ];
 }
 
 export function compileProgramWire(bytes, streamId) {
@@ -180,9 +212,8 @@ export function compileProgramWire(bytes, streamId) {
 
 const runtimeUpdateObserved = ProgramRuntime.prototype.updateObserved;
 ProgramRuntime.prototype.updateObserved = function updateObserved(revision, scenarioIds, surfaces, surfaceCount) {
-  return runtimeUpdateObserved.call(this, revision,
-    copyProgramInput(scenarioIds, scenarioStorage, "updateObserved", "program_update"),
-    copyProgramInput(surfaces, byteStorage, "updateObserved", "program_update"), surfaceCount);
+  const [ownedIds, ownedSurfaces] = copyObservedInputs(scenarioIds, surfaces, surfaceCount, "updateObserved");
+  return runtimeUpdateObserved.call(this, revision, ownedIds, ownedSurfaces, surfaceCount);
 };
 
 // Идентичность и тело принадлежат Core; аргументы вызывающего кода не передаются.
@@ -250,8 +281,7 @@ for (const [method, operation] of [
   ProgramAttachment.prototype[method] = function guardedAttachmentOperation(...args) {
     const result = withAttachmentOperation(this, operation, () => {
       if (method === "updateObserved") {
-        args[1] = copyProgramInput(args[1], scenarioStorage, operation, "program_attachment_update");
-        args[2] = copyProgramInput(args[2], byteStorage, operation, "program_attachment_update");
+        [args[1], args[2]] = copyObservedInputs(args[1], args[2], args[3], operation);
       } else if (method === "materializationAuthorityFor") {
         args[1] = copyProgramInput(args[1], byteStorage, operation, "program_materialization_stale_identity", 32);
       }

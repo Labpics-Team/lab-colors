@@ -61,6 +61,7 @@ test("snapshot allocation failures keep operation-specific codes before the copi
   const generated = await import(pathToFileURL(join(directory, "pkg/labcolors.js")).href);
   const bytes = new NativeBytes(32);
   const ids = new NativeIds([1]);
+  const surfaces = new NativeBytes([12, 34, 56]);
   const runtime = new api.ProgramRuntime();
   const attachment = api.attachProgramWire(bytes, 1, 1, 1, 1, 1, () => true);
   const calls = generated.copierCalls;
@@ -69,8 +70,8 @@ test("snapshot allocation failures keep operation-specific codes before the copi
   for (const [operation, code, invoke] of [
     ["compileProgramWire", "program_resource_exhausted", () => api.compileProgramWire(bytes, 1)],
     ["attachProgramWire", "program_resource_exhausted", () => api.attachProgramWire(bytes, 1, 1, 1, 1, 1, () => true)],
-    ["updateObserved", "program_resource_exhausted", () => runtime.updateObserved(1n, ids, bytes, 1)],
-    ["attachmentUpdateObserved", "program_attachment_resource_exhausted", () => attachment.updateObserved(1n, ids, bytes, 1)],
+    ["updateObserved", "program_resource_exhausted", () => runtime.updateObserved(1n, ids, surfaces, 1)],
+    ["attachmentUpdateObserved", "program_attachment_resource_exhausted", () => attachment.updateObserved(1n, ids, surfaces, 1)],
     ["materializationAuthority", "program_attachment_resource_exhausted", () => attachment.materializationAuthorityFor(1n, bytes, 1n)],
   ]) {
     assert.throws(invoke, (error) => api.isProgramError(error) && error.operation === operation && error.code === code);
@@ -85,11 +86,95 @@ test("snapshot allocation failures keep operation-specific codes before the copi
   assert.equal(generated.copierCalls, calls);
 
   refuse = false;
-  runtime.updateObserved(1n, ids, bytes, 1);
-  attachment.updateObserved(1n, ids, bytes, 1);
+  runtime.updateObserved(1n, ids, surfaces, 1);
+  attachment.updateObserved(1n, ids, surfaces, 1);
   attachment.materializationAuthorityFor(1n, bytes, 1n);
   api.decodeCertificateEnvelope(bytes);
   assert.equal(generated.copierCalls, calls + 4);
+
+  // Exhaustive small-shape matrix: malformed input must be refused before
+  // either typed-array allocation or either generated WASM entry.
+  for (let scenarioCount = 0; scenarioCount <= 3; scenarioCount++) {
+    for (let surfaceCount = 0; surfaceCount <= 3; surfaceCount++) {
+      for (let byteCount = 0; byteCount <= 29; byteCount++) {
+        const givenIds = new NativeIds(scenarioCount);
+        const givenSurfaces = new NativeBytes(byteCount);
+        const matching = scenarioCount * surfaceCount * 3 === byteCount;
+        for (const [operation, code, invoke] of [
+          ["updateObserved", "program_update",
+            () => runtime.updateObserved(2n, givenIds, givenSurfaces, surfaceCount)],
+          ["attachmentUpdateObserved", "program_attachment_update",
+            () => attachment.updateObserved(2n, givenIds, givenSurfaces, surfaceCount)],
+        ]) {
+          const allocationBefore = allocations;
+          const copierBefore = generated.copierCalls;
+          if (matching) {
+            invoke();
+          } else {
+            assert.throws(invoke, (error) => api.isProgramError(error) &&
+              error.operation === operation && error.code === code);
+          }
+          assert.equal(allocations - allocationBefore, matching ? 2 : 0,
+            operation + " copied an invalid " + scenarioCount + "x" + surfaceCount + "x" + byteCount + " matrix");
+          assert.equal(generated.copierCalls - copierBefore, matching ? 1 : 0,
+            operation + " forwarded an invalid " + scenarioCount + "x" + surfaceCount + "x" + byteCount + " matrix");
+        }
+      }
+    }
+  }
+  // A detached or out-of-bounds view reports zero intrinsic length, yet
+  // cannot be copied. Refuse both arrays before allocating either snapshot.
+  const detachedIdsBuffer = new ArrayBuffer(4);
+  const detachedIds = new NativeIds(detachedIdsBuffer);
+  structuredClone(detachedIdsBuffer, { transfer: [detachedIdsBuffer] });
+  const detachedSurfacesBuffer = new ArrayBuffer(3);
+  const detachedSurfaces = new NativeBytes(detachedSurfacesBuffer);
+  structuredClone(detachedSurfacesBuffer, { transfer: [detachedSurfacesBuffer] });
+  const unavailable = [
+    ["detached ids", detachedIds, new NativeBytes(0)],
+    ["detached surfaces", ids, detachedSurfaces],
+  ];
+  const resizable = new ArrayBuffer(8, { maxByteLength: 8 });
+  if (typeof resizable.resize === "function") {
+    const outOfBoundsIds = new NativeIds(resizable, 4, 1);
+    const outOfBoundsSurfaces = new NativeBytes(resizable, 4, 4);
+    resizable.resize(2);
+    unavailable.push(
+      ["out-of-bounds ids", outOfBoundsIds, new NativeBytes(0)],
+      ["out-of-bounds surfaces", ids, outOfBoundsSurfaces],
+    );
+  }
+  for (const [caseName, givenIds, givenSurfaces] of unavailable) {
+    for (const [operation, code, invoke] of [
+      ["updateObserved", "program_update", () => runtime.updateObserved(2n, givenIds, givenSurfaces, 0)],
+      ["attachmentUpdateObserved", "program_attachment_update",
+        () => attachment.updateObserved(2n, givenIds, givenSurfaces, 0)],
+    ]) {
+      const allocationBefore = allocations;
+      const copierBefore = generated.copierCalls;
+      assert.throws(invoke, (error) => api.isProgramError(error) &&
+        error.operation === operation && error.code === code, caseName);
+      assert.equal(allocations, allocationBefore, caseName + " allocated a snapshot");
+      assert.equal(generated.copierCalls, copierBefore, caseName + " reached the copier");
+    }
+  }
+  let coerced = false;
+  const hostileScalar = { valueOf() { coerced = true; throw new Error("unexpected coercion"); } };
+  for (const count of [-1, 0x1_0000_0000, 1.5, Infinity, NaN, "1", 1n, hostileScalar]) {
+    for (const [operation, code, invoke] of [
+      ["updateObserved", "program_update", () => runtime.updateObserved(2n, ids, surfaces, count)],
+      ["attachmentUpdateObserved", "program_attachment_update",
+        () => attachment.updateObserved(2n, ids, surfaces, count)],
+    ]) {
+      const allocationBefore = allocations;
+      const copierBefore = generated.copierCalls;
+      assert.throws(invoke, (error) => api.isProgramError(error) &&
+        error.operation === operation && error.code === code);
+      assert.equal(allocations, allocationBefore);
+      assert.equal(generated.copierCalls, copierBefore);
+    }
+  }
+  assert.equal(coerced, false, "scalar admission must never call user conversion hooks");
   attachment.dispose(true);
   attachment.free();
 });
