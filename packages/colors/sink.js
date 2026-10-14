@@ -27,23 +27,42 @@ export class LeaseConflictError extends Error {
 
 const registry = new WeakMap();
 
-// Минимальный контракт CSSStyleDeclaration: setProperty/removeProperty плюс
-// getPropertyValue для rollback. Test doubles без getPropertyValue получают
-// presence-only fallback через live-список; значение тогда восстановлено быть
-// не может, и это осознанное ограничение таких doubles, а не тихий успех.
+// Rollback requires a complete CSSOM read surface. Presence, original value
+// and !important priority are captured before the first mutating call.
+const requireReadableStyle = (style) => {
+  if (
+    typeof style.setProperty !== "function" ||
+    typeof style.removeProperty !== "function" ||
+    typeof style.getPropertyValue !== "function" ||
+    typeof style.getPropertyPriority !== "function" ||
+    typeof style.item !== "function" ||
+    !Number.isSafeInteger(style.length) ||
+    style.length < 0
+  ) {
+    throw new TypeError("sink: target style must support lossless CSSOM reads and writes");
+  }
+};
+
 const readKey = (style, key) => {
-  if (typeof style.getPropertyValue === "function") {
-    const value = style.getPropertyValue(key);
-    return value === "" || value === undefined || value === null
-      ? { present: false, value: "" }
-      : { present: true, value: String(value) };
+  const length = style.length;
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new TypeError("sink: style enumeration is invalid");
   }
-  if (typeof style.length === "number" && typeof style.item === "function") {
-    for (let i = 0; i < style.length; i++) {
-      if (style.item(i) === key) return { present: true, value: "" };
-    }
+  let present = false;
+  for (let i = 0; i < length; i++) {
+    if (style.item(i) === key) present = true;
   }
-  return { present: false, value: "" };
+  const value = style.getPropertyValue(key);
+  const priority = style.getPropertyPriority(key);
+  if (
+    typeof value !== "string" ||
+    typeof priority !== "string" ||
+    (priority !== "" && priority !== "important") ||
+    (!present && (value !== "" || priority !== ""))
+  ) {
+    throw new TypeError("sink: style cannot provide a coherent CSSOM snapshot");
+  }
+  return { present, value, priority };
 };
 
 const removeKey = (style, key) => {
@@ -80,6 +99,7 @@ export function attachOutputBindingSet(element, initialKeys) {
   ) {
     throw new TypeError("sink: target must be an element with style.setProperty");
   }
+  requireReadableStyle(element.style);
   let bindingSet = registry.get(element);
   if (!bindingSet) {
     bindingSet = { leases: new Set(), ownedKeys: new Set(), isWriting: false };
@@ -134,7 +154,7 @@ export function attachOutputBindingSet(element, initialKeys) {
       } else {
         for (const [key, prior] of previous) {
           try {
-            if (prior.present) style.setProperty(key, prior.value);
+            if (prior.present) style.setProperty(key, prior.value, prior.priority);
             else removeKey(style, key);
           } catch {
             // Исходный writer упал; rollback делает best-effort восстановление,

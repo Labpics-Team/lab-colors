@@ -285,7 +285,7 @@
   "packages/colors/program-wire/abi-v2.d.ts": "1c29db7a70437ec49fb7fd257587aab4d45911dc",
   "packages/colors/program-wire/abi-v2.js": "50bf6e5abc9adb06732682aad2bc10b154984609",
   "packages/colors/program-wire/encoding.js": "03cea814d697e74aacc1d4dbc0eafa09b1b2dc79",
-  "packages/colors/sink.js": "f3c1a5b7b376504360e6ce95e15288c2b2960745",
+  "packages/colors/sink.js": "9f37525f03492bf213cf2114325320f34cce968e",
   "packages/colors/smoke.consumer.ts": "aa8e47246ddd4ef85b8a52675fa68dfa25948e73",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
   "packages/colors/test/binding-errors.test.mjs": "188d62099c7333d1b4d949571eb2b94c9075e749",
@@ -315,7 +315,7 @@
   "packages/colors/test/public-claims.test.mjs": "d3ac2b42a3d1b6a079c1a84f20aa0efac3b3d7d5",
   "packages/colors/test/release-contract.test.mjs": "0d2e4835ea40c9e8e0ee011e90012396817550d3",
   "packages/colors/test/release-provenance.test.mjs": "0a73bf8675611f550f54f37ec4976a9eccdf7b63",
-  "packages/colors/test/sink.test.mjs": "c83dfc01bc3cee13e5f2bf2cb61a1b5a8d56e9fe",
+  "packages/colors/test/sink.test.mjs": "ce07810df0bf581db0e1c8c273037b0f120bc649",
   "packages/colors/test/typed-array-ingress-allocation.test.mjs": "3ae87579f5360e10b3620227880e137672ed3478",
   "packages/colors/test/wasm-size-budget.test.mjs": "56fb6fcdf8fce8c7a50a079be11173081152993e",
   "packages/colors/test/wcag22.test.mjs": "c760abae74d8642ad8346136e05c8cca07019896",
@@ -557,7 +557,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "45000ab34278b4b9ab4083aa996e124e048a1c1513148ae76efeb295d8ca09f7",
+ "record_sha256": "d3062ae1d0839fb64777d369135cef037c0a4a01c28cce599fcbd27921cd4fee",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
