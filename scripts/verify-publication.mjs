@@ -60,7 +60,7 @@ export async function qualifyPublication({ manifest, tarball }) {
       const root = join(directory, String(sequence++));
       const artifacts = join(root, "artifacts");
       const temporary = join(root, "temporary");
-      await Promise.all([mkdir(artifacts, { recursive: true }), mkdir(temporary)]);
+      await Promise.all([mkdir(artifacts, { recursive: true }), mkdir(temporary, { recursive: true })]);
       const input = structuredClone(record);
       if (rebind) input.artifacts.tarball = {
         path: ".release/" + digest(bytes) + ".tgz", bytes: bytes.length, sha256: digest(bytes),
@@ -77,7 +77,7 @@ export async function qualifyPublication({ manifest, tarball }) {
         env: { ...env, ARTIFACT_DIR: artifacts, RUNNER_TEMP: temporary, TMPDIR: temporary, GITHUB_OUTPUT: output },
       });
       if (result.error) throw result.error;
-      assert.equal(result.signal, null, label + " was terminated");
+      assert.equal(result.signal, null, result.label + " was terminated");
       let outputs = "";
       try { outputs = await readFile(output, "utf8"); }
       catch (error) { if (error.code !== "ENOENT") throw error; }
