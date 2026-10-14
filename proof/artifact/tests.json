@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 301,
+   "count": 303,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -677,6 +677,8 @@
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
     "test_document_bytes.DocumentBytesTests.test_control_bytes_refuse_without_rejecting_normal_whitespace",
     "test_document_bytes.DocumentBytesTests.test_documented_domain_separator_matches_protocol_source",
+    "test_document_bytes.DocumentBytesTests.test_mojibake_detector_distinguishes_corruption_from_valid_cyrillic",
+    "test_document_bytes.DocumentBytesTests.test_rust_comments_are_readable_utf8_without_double_encoding",
     "test_document_bytes.DocumentBytesTests.test_tracked_documents_are_utf8_without_hidden_controls",
     "test_extract_ci_build.EXT09CIBuildTests.test_extract_produces_valid_manifest_schema",
     "test_extract_ci_build.EXT09CIBuildTests.test_manifest_sha256_self_consistent",
@@ -911,7 +913,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "1014ad5539c0da87a075661abc3bfd501c4ec697cde60a0e978e4a746da3970c",
+ "record_sha256": "bc8a7c6ffb5817c28c065500acc0e75d7634b50ca23655eed8cd44e7b5c761f4",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

@@ -34,6 +34,25 @@ def tracked_documents():
     )
 
 
+def recovered_cyrillic_comment(line: str) -> str | None:
+    """Recognize exactly reversible UTF-8 misread as Windows-1251."""
+    signatures = ("Рґ", "Рµ", "СЃ", "Рѕ", "Рё", "Р°", "вЂ", "Рї", "С‚", "Рљ", "Рџ", "РЎ", "Р\x98")
+    if not any(signature in line for signature in signatures):
+        return None
+    try:
+        raw = bytearray()
+        for character in line:
+            ordinal = ord(character)
+            if 128 <= ordinal <= 159:
+                raw.append(ordinal)
+            else:
+                raw.extend(character.encode("cp1251"))
+        text = raw.decode("utf-8", "strict")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return None
+    return text if text != line else None
+
+
 class DocumentBytesTests(unittest.TestCase):
     def test_control_bytes_refuse_without_rejecting_normal_whitespace(self):
         for value in (0, 1, 8, 11, 12, 14, 31, 127):
@@ -51,6 +70,39 @@ class DocumentBytesTests(unittest.TestCase):
                 data = path.read_bytes()
                 self.assertIsNone(control_at(data), "hidden control byte in tracked document")
                 data.decode("utf-8", "strict")
+
+    def test_rust_comments_are_readable_utf8_without_double_encoding(self):
+        output = subprocess.run(
+            ["git", "ls-files", "-z", "--", "crates"],
+            cwd=ROOT, check=True, capture_output=True,
+        )
+        filenames = [
+            ROOT / Path(raw.decode("utf-8", "strict"))
+            for raw in output.stdout.split(b"\0")
+            if raw and Path(raw.decode("utf-8", "strict")).suffix == ".rs"
+        ]
+        self.assertTrue(filenames)
+        for path in filenames:
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                self.assertFalse(path.is_symlink())
+                for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                    if not line.lstrip().startswith(("//", "*")):
+                        continue
+                    self.assertFalse(
+                        any(128 <= ord(character) <= 159 for character in line),
+                        f"control character in Rust comment at line {index}",
+                    )
+                    self.assertIsNone(
+                        recovered_cyrillic_comment(line),
+                        f"double-encoded Rust comment at line {index}",
+                    )
+
+    def test_mojibake_detector_distinguishes_corruption_from_valid_cyrillic(self):
+        readable = "/// Строковая проекция принадлежит автору."
+        corrupted = readable.encode("utf-8").decode("cp1251")
+        self.assertEqual(recovered_cyrillic_comment(corrupted), readable)
+        self.assertIsNone(recovered_cyrillic_comment(readable))
+        self.assertIsNone(recovered_cyrillic_comment("/// Рёбра задают порядок вычислений."))
 
     def test_documented_domain_separator_matches_protocol_source(self):
         module = ast.parse(SOURCE.read_text(encoding="utf-8"))

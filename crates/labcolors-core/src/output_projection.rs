@@ -319,7 +319,7 @@ impl CssColor4DisplayP3SolidV1 {
 }
 
 /// Outcome of the P3-domain encoded recheck.
-/// Satisfies roadmap requirement: "final encoded recheck РґРµР»Р°РµС‚СЃСЏ РІ P3 domain."
+/// Satisfies roadmap requirement: "final encoded recheck делается в P3 domain."
 ///
 /// `max_channel_delta` is stored as IEEE 754 binary64 bits (`u64`) so that
 /// this type can derive `Eq`. Floating-point `f64` does not implement `Eq`

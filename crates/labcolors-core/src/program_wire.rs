@@ -12,30 +12,30 @@ use crate::Srgb8;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 
-/// РРјСЏ wire-СЃРµРєС†РёРё РІ РїСѓР±Р»РёС‡РЅРѕР№ РґРёР°РіРЅРѕСЃС‚РёРєРµ.
+/// Имя wire-секции в публичной диагностике.
 ///
-/// РЎС‚СЂРѕРєРѕРІР°СЏ РїСЂРѕРµРєС†РёСЏ РЅР°РјРµСЂРµРЅРЅРѕ: РїСѓР±Р»РёС‡РЅС‹Р№ С‚РёРї РЅРµ С‚СЏРЅРµС‚ РІРЅСѓС‚СЂРµРЅРЅРёРµ enum'С‹
-/// С„РѕСЂРјР°С‚Р°, Р° Р·Р°РєСЂС‹С‚С‹Р№ СЃР»РѕРІР°СЂСЊ РёРјС‘РЅ вЂ” РєРѕРЅС‚СЂР°РєС‚ РІРµСЂСЃРёРё v1.
+/// Строковая проекция намеренно: публичный тип не тянет внутренние enum'ы
+/// формата, а закрытый словарь имён — контракт версии v1.
 pub type ProgramWireSectionNameV1 = &'static str;
 
-/// РџСѓР±Р»РёС‡РЅС‹Р№ typed-РѕС‚РєР°Р· РїСЂРѕРІРµСЂРєРё wire-Р±Р°Р№С‚РѕРІ.
+/// Публичный typed-отказ проверки wire-байтов.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgramWireCheckErrorV1 {
-    /// Р‘Р°Р№С‚С‹ РЅР°СЂСѓС€Р°СЋС‚ РєР°РЅРѕРЅ С„РѕСЂРјР°С‚Р°: РЅРµРІР°Р»РёРґРЅС‹Р№ Р·Р°РіРѕР»РѕРІРѕРє, РґР»РёРЅР°, Р·Р°РїРёСЃСЊ РёР»Рё
-    /// wire-limit. `section`/`offset` СѓРєР°Р·С‹РІР°СЋС‚ РЅР° РЅР°С‡Р°Р»Рѕ РЅР°СЂСѓС€РёРІС€РµР№ Р·Р°РїРёСЃРё;
-    /// РґР»СЏ Р·Р°РіРѕР»РѕРІРѕС‡РЅС‹С… РѕС‚РєР°Р·РѕРІ СЃРµРєС†РёСЏ вЂ” `"header"`.
+    /// Байты нарушают канон формата: невалидный заголовок, длина, запись или
+    /// wire-limit. `section`/`offset` указывают на начало нарушившей записи;
+    /// для заголовочных отказов секция — `"header"`.
     Wire {
-        /// РЎРµРєС†РёСЏ С„РѕСЂРјР°С‚Р°, РІ РєРѕС‚РѕСЂРѕР№ Р·Р°С„РёРєСЃРёСЂРѕРІР°РЅ РѕС‚РєР°Р·.
+        /// Секция формата, в которой зафиксирован отказ.
         section: ProgramWireSectionNameV1,
-        /// РЎРјРµС‰РµРЅРёРµ РЅР°С‡Р°Р»Р° Р·Р°РїРёСЃРё РІ Р±Р°Р№С‚Р°С… (0 РґР»СЏ Р·Р°РіРѕР»РѕРІРѕС‡РЅС‹С… РѕС‚РєР°Р·РѕРІ).
+        /// Смещение начала записи в байтах (0 для заголовочных отказов).
         offset: usize,
     },
-    /// Р‘Р°Р№С‚С‹ РєР°РЅРѕРЅРЅС‹, РЅРѕ РіСЂР°С„ РѕС‚РІРµСЂРіРЅСѓС‚ СЃРµРјР°РЅС‚РёС‡РµСЃРєРѕР№ РєРѕРјРїРёР»СЏС†РёРµР№.
+    /// Байты канонны, но граф отвергнут семантической компиляцией.
     ///
-    /// Р”РµС‚Р°Р»РёР·Р°С†РёСЏ РєР»Р°СЃСЃР° РЅР°РјРµСЂРµРЅРЅРѕ РЅРµ РїСѓР±Р»РёРєСѓРµС‚СЃСЏ РІ v1: РїРѕР»РЅС‹Р№ typed
-    /// compile-РєРѕРЅС‚СЂР°РєС‚ РїСѓР±Р»РёРєСѓРµС‚ Р°С‚РѕРјР°СЂРЅС‹Р№ C7c; РїСЂРµР¶РґРµРІСЂРµРјРµРЅРЅР°СЏ СЃС‚СЂРѕРєРѕРІР°СЏ
-    /// РїСЂРѕРµРєС†РёСЏ 62 РІРЅСѓС‚СЂРµРЅРЅРёС… РєР»Р°СЃСЃРѕРІ СЃС‚Р°Р»Р° Р±С‹ Hyrum-РєРѕРЅС‚СЂР°РєС‚РѕРј РґРѕ РЅРµРіРѕ.
+    /// Детализация класса намеренно не публикуется в v1: полный typed
+    /// compile-контракт публикует атомарный C7c; преждевременная строковая
+    /// проекция 62 внутренних классов стала бы Hyrum-контрактом до него.
     Compile,
     /// Недостаточно ресурсов для семантической компиляции.
     ResourceExhausted,
@@ -93,17 +93,17 @@ fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize)
     }
 }
 
-/// РџСЂРѕРІРµСЂСЏРµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ wire-Р±Р°Р№С‚С‹ Рё РІРѕР·РІСЂР°С‰Р°РµС‚ content identity РіСЂР°С„Р°.
+/// Проверяет канонические wire-байты и возвращает content identity графа.
 ///
-/// Identity вЂ” SHA-256 РєР°РЅРѕРЅРёС‡РµСЃРєРѕРіРѕ РїСЂРѕРѕР±СЂР°Р·Р° СЃРєРѕРјРїРёР»РёСЂРѕРІР°РЅРЅРѕРіРѕ СЃРѕРґРµСЂР¶Р°РЅРёСЏ
-/// (РёРЅРІР°СЂРёР°РЅС‚РЅР° Рє РїРµСЂРµРёРјРµРЅРѕРІР°РЅРёСЋ РєР»РёРµРЅС‚СЃРєРёС… ID). РЈСЃРїРµС… РґРѕРєР°Р·С‹РІР°РµС‚: Р±Р°Р№С‚С‹
-/// РєР°РЅРѕРЅРЅС‹, РіСЂР°С„ РєРѕРјРїРёР»РёСЂСѓРµРј, identity Р°РґСЂРµСЃСѓРµРјР° вЂ” РЅРёС‡РµРіРѕ Р±РѕР»СЊС€Рµ; РЅРёРєР°РєРѕР№
-/// runtime-authority СЌС‚РѕС‚ РІС‹Р·РѕРІ РЅРµ РІС‹РґР°С‘С‚.
+/// Identity — SHA-256 канонического прообраза скомпилированного содержания
+/// (инвариантна к переименованию клиентских ID). Успех доказывает: байты
+/// канонны, граф компилируем, identity адресуема — ничего больше; никакой
+/// runtime-authority этот вызов не выдаёт.
 ///
 /// # Errors
 ///
-/// [`ProgramWireCheckErrorV1::Wire`] вЂ” Р±Р°Р№С‚С‹ РЅР°СЂСѓС€Р°СЋС‚ РєР°РЅРѕРЅ С„РѕСЂРјР°С‚Р°;
-/// [`ProgramWireCheckErrorV1::Compile`] вЂ” РіСЂР°С„ СЃРµРјР°РЅС‚РёС‡РµСЃРєРё РЅРµРІР°Р»РёРґРµРЅ.
+/// [`ProgramWireCheckErrorV1::Wire`] — байты нарушают канон формата;
+/// [`ProgramWireCheckErrorV1::Compile`] — граф семантически невалиден.
 pub fn check_program_wire_v1(bytes: &[u8]) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
     checked_draft(decode_program_wire_v1(bytes))
 }
@@ -161,20 +161,20 @@ mod tests {
         builder.finish().unwrap()
     }
 
-    /// РЈСЃРїРµС… РІРѕР·РІСЂР°С‰Р°РµС‚ 32-Р±Р°Р№С‚РЅСѓСЋ identity, СЂР°РІРЅСѓСЋ identity РїСЂСЏРјРѕР№ РєРѕРјРїРёР»СЏС†РёРё.
+    /// Успех возвращает 32-байтную identity, равную identity прямой компиляции.
     #[test]
     fn canonical_bytes_yield_the_compiled_content_identity() {
         let identity = check_program_wire_v1(&canonical_reference_bytes()).unwrap();
         assert_eq!(identity.len(), 32);
         assert_ne!(identity, [0; 32], "identity must be a real digest");
-        // Determinism: РѕРґРЅРё Р±Р°Р№С‚С‹ вЂ” РѕРґРЅР° identity.
+        // Determinism: одни байты — одна identity.
         assert_eq!(
             identity,
             check_program_wire_v1(&canonical_reference_bytes()).unwrap()
         );
     }
 
-    /// Р‘Р°Р№С‚РѕРІС‹Р№ РґРµС„РµРєС‚ вЂ” Wire-РѕС‚РєР°Р· СЃ СЃРµРєС†РёРµР№; runtime РЅРµ РІС‹РґР°С‘С‚СЃСЏ.
+    /// Байтовый дефект — Wire-отказ с секцией; runtime не выдаётся.
     #[test]
     fn wire_defects_surface_the_section() {
         let mut bytes = canonical_reference_bytes();
@@ -188,10 +188,10 @@ mod tests {
         ));
     }
 
-    /// РЎРµРјР°РЅС‚РёС‡РµСЃРєРёР№ РґРµС„РµРєС‚ вЂ” Compile-РѕС‚РєР°Р· Р±РµР· Р±Р°Р№С‚РѕРІРѕР№ РґРёР°РіРЅРѕСЃС‚РёРєРё.
+    /// Семантический дефект — Compile-отказ без байтовой диагностики.
     #[test]
     fn semantic_defects_surface_as_compile_refusals() {
-        // Paint -> dangling target: РєР°РЅРѕРЅРЅС‹Рµ Р±Р°Р№С‚С‹, РЅРµРІР°Р»РёРґРЅС‹Р№ РіСЂР°С„.
+        // Paint -> dangling target: канонные байты, невалидный граф.
         let mut builder = ProgramWireBuilderV1::new();
         builder.solid_paint(41, 999).output(91, 41);
         let bytes = builder.finish().unwrap();
@@ -201,7 +201,7 @@ mod tests {
         ));
     }
 
-    /// РњР°РіРёСЏ Рё РІРµСЂСЃРёСЏ вЂ” РєРѕРЅС‚СЂР°РєС‚ С„РѕСЂРјР°С‚Р°: СЃРґРІРёРі Р»СЋР±РѕРіРѕ РёР· РЅРёС… Р»РѕРјР°РµС‚ РєР°РЅРѕРЅ.
+    /// Магия и версия — контракт формата: сдвиг любого из них ломает канон.
     #[test]
     fn format_pins_are_part_of_the_contract() {
         assert_eq!(PROGRAM_WIRE_MAGIC_V1, *b"LCPW");
@@ -214,15 +214,15 @@ mod fixture_migration_tests {
     use super::*;
     use crate::program::wire::ProgramWireBuilderV1;
 
-    /// РњРёРіСЂР°С†РёРѕРЅРЅРѕРµ РґРѕРєР°Р·Р°С‚РµР»СЊСЃС‚РІРѕ (СЃСЂРµР· 6 wire-СѓР·Р»Р°): 11-СѓР·Р»РѕРІС‹Р№ РіСЂР°С„
-    /// РїСЂРёРІР°С‚РЅРѕРіРѕ fixture ABI v2 РїРѕР»РЅРѕСЃС‚СЊСЋ РІС‹СЂР°Р¶Р°РµС‚СЃСЏ РџРЈР‘Р›РР§РќРћР™ wire-РіСЂР°РјРјР°С‚РёРєРѕР№
-    /// Рё РґР°С‘С‚ Р¶РёРІСѓСЋ content identity С‡РµСЂРµР· РµРґРёРЅСЃС‚РІРµРЅРЅС‹Р№ РїСѓР±Р»РёС‡РЅС‹Р№ seam.
+    /// Миграционное доказательство (срез 6 wire-узла): 11-узловый граф
+    /// приватного fixture ABI v2 полностью выражается ПУБЛИЧНОЙ wire-грамматикой
+    /// и даёт живую content identity через единственный публичный seam.
     ///
-    /// Р­С‚Рѕ СѓСЃР»РѕРІРёРµ РІС…РѕРґР° РІ C7c: РїРѕСЃР»Рµ РїСѓР±Р»РёРєР°С†РёРё РїРѕР»РЅРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р° fixture ABI
-    /// РѕСЃС‚Р°С‘С‚СЃСЏ compat-СЃР»РѕРµРј, Р° РїСѓР±Р»РёС‡РЅР°СЏ РіСЂР°РјРјР°С‚РёРєР° СѓР¶Рµ СЃРµРіРѕРґРЅСЏ РїРѕРєСЂС‹РІР°РµС‚ РµРіРѕ
-    /// С‚РѕРїРѕР»РѕРіРёСЋ (source -> fixed target -> solid paint -> opacity paint ->
+    /// Это условие входа в C7c: после публикации полного контракта fixture ABI
+    /// остаётся compat-слоем, а публичная грамматика уже сегодня покрывает его
+    /// топологию (source -> fixed target -> solid paint -> opacity paint ->
     /// input surface -> source-over occurrence -> presentation root/target ->
-    /// exact visible hard -> output). РРґРµРЅС‚РёС„РёРєР°С‚РѕСЂС‹ вЂ” С‚Рµ Р¶Рµ ordinals, С‡С‚Рѕ Рё РІ
+    /// exact visible hard -> output). Идентификаторы — те же ordinals, что и в
     /// private_fixture.rs (AUTHORED_SOURCE=1 .. OUTPUT=17).
     #[test]
     fn the_private_fixture_graph_is_expressible_in_the_public_grammar() {
@@ -242,15 +242,15 @@ mod fixture_migration_tests {
             .output(17, 4);
         let bytes = builder.finish().unwrap();
 
-        // РџСѓР±Р»РёС‡РЅС‹Р№ seam: Р±Р°Р№С‚С‹ РєР°РЅРѕРЅРЅС‹... РЅРѕ exact-constraint СЃ РїСЂРѕРёР·РІРѕР»СЊРЅС‹Рј
-        // expected РґРѕ attachment РЅРµРІС‹РїРѕР»РЅРёРј вЂ” РєРѕРјРїРёР»СЏС†РёСЏ РіСЂР°С„Р° С‚РµРј РЅРµ РјРµРЅРµРµ
-        // РѕР±СЏР·Р°РЅР° РїСЂРѕР№С‚Рё (constraint РёСЃРїРѕР»РЅСЏРµС‚СЃСЏ РІ runtime, РЅРµ РїСЂРё compile).
+        // Публичный seam: байты канонны... но exact-constraint с произвольным
+        // expected до attachment невыполним — компиляция графа тем не менее
+        // обязана пройти (constraint исполняется в runtime, не при compile).
         let identity = check_program_wire_v1(&bytes).expect(
             "the fixture topology must be canonical and compilable through the public seam",
         );
         assert_ne!(identity, [0; 32]);
 
-        // Determinism РїРѕРІРµСЂС… РїРѕР»РЅРѕРіРѕ fixture-РіСЂР°С„Р°.
+        // Determinism поверх полного fixture-графа.
         assert_eq!(identity, check_program_wire_v1(&bytes).unwrap());
     }
 }
@@ -551,24 +551,24 @@ mod fv01_red_tests {
     }
 }
 
-/// РџРѕР»РЅРѕСЃС‚СЊСЋ СЃРєРѕРјРїРёР»РёСЂРѕРІР°РЅРЅС‹Р№ Program Р±РµР· runtime-authority.
+/// Полностью скомпилированный Program без runtime-authority.
 ///
-/// Р’Р»Р°РґРµРµС‚ immutable РіСЂР°С„РѕРј Рё content identity; Session РїРѕСЏРІР»СЏРµС‚СЃСЏ С‚РѕР»СЊРєРѕ
-/// С‡РµСЂРµР· consuming [`Self::instantiate`], РїРѕСЌС‚РѕРјСѓ РѕРґРёРЅ runtime РЅРµ РјРѕР¶РµС‚ РјРѕР»С‡Р°
-/// СЂР°Р·РґРµР»РёС‚СЊ РІР»Р°РґРµР»СЊС†Р° СЃ РґСЂСѓРіРёРј.
+/// Владеет immutable графом и content identity; Session появляется только
+/// через consuming [`Self::instantiate`], поэтому один runtime не может молча
+/// разделить владельца с другим.
 pub struct CompiledProgramV1 {
     owner: crate::program::OwnerV1,
 }
 
-/// Р•РґРёРЅСЃС‚РІРµРЅРЅС‹Р№ runtime-РІР»Р°РґРµР»РµС† РѕРґРЅРѕР№ Session РїСѓР±Р»РёС‡РЅРѕРіРѕ Program.
+/// Единственный runtime-владелец одной Session публичного Program.
 pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
 }
 
-/// РћРґРёРЅ СЃС†РµРЅР°СЂРёР№ РЅР°Р±Р»СЋРґР°РµРјРѕР№ СЃСЂРµРґС‹: РЅРµРїСЂРѕР·СЂР°С‡РЅС‹Р№ ID Рё Р·РЅР°С‡РµРЅРёСЏ surface inputs
-/// РІ РєР°РЅРѕРЅРёС‡РµСЃРєРѕРј РїРѕСЂСЏРґРєРµ, РѕР±СЉСЏРІР»РµРЅРЅРѕРј Program.
+/// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
+/// в каноническом порядке, объявленном Program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramScenarioV1 {
     id: u32,
@@ -576,14 +576,14 @@ pub struct ProgramScenarioV1 {
 }
 
 impl ProgramScenarioV1 {
-    /// РЎРѕР·РґР°С‘С‚ owned-СЃС†РµРЅР°СЂРёР№; РєР°СЂРґРёРЅР°Р»СЊРЅРѕСЃС‚СЊ СЃРІРµСЂСЏРµС‚СЃСЏ СЃ Program РїСЂРё update.
+    /// Создаёт owned-сценарий; кардинальность сверяется с Program при update.
     #[must_use]
     pub fn new(id: u32, surfaces: Vec<crate::Srgb8>) -> Self {
         Self { id, surfaces }
     }
 }
 
-/// Lifecycle-РєР»Р°СЃСЃ РѕРґРЅРѕРіРѕ РѕРїСѓР±Р»РёРєРѕРІР°РЅРЅРѕРіРѕ snapshot.
+/// Lifecycle-класс одного опубликованного snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgramSnapshotStateV1 {
@@ -593,7 +593,7 @@ pub enum ProgramSnapshotStateV1 {
     Failed,
 }
 
-/// РћРґРёРЅ СЃРµСЂС‚РёС„РёС†РёСЂРѕРІР°РЅРЅС‹Р№ Paint output.
+/// Один сертифицированный Paint output.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgramPaintOutputV1 {
     slot: u32,
@@ -602,26 +602,26 @@ pub struct ProgramPaintOutputV1 {
 }
 
 impl ProgramPaintOutputV1 {
-    /// РќРµРїСЂРѕР·СЂР°С‡РЅС‹Р№ РєР»РёРµРЅС‚СЃРєРёР№ output slot.
+    /// Непрозрачный клиентский output slot.
     #[must_use]
     pub const fn slot(self) -> u32 {
         self.slot
     }
 
-    /// РЎРµСЂС‚РёС„РёС†РёСЂРѕРІР°РЅРЅС‹Р№ encoded sRGB8 source.
+    /// Сертифицированный encoded sRGB8 source.
     #[must_use]
     pub const fn source(self) -> crate::Srgb8 {
         self.source
     }
 
-    /// РЎРµСЂС‚РёС„РёС†РёСЂРѕРІР°РЅРЅР°СЏ straight opacity РІ `0..=1`.
+    /// Сертифицированная straight opacity в `0..=1`.
     #[must_use]
     pub const fn opacity(self) -> f64 {
         self.opacity
     }
 }
 
-/// Owned snapshot Session РїРѕСЃР»Рµ Р°С‚РѕРјР°СЂРЅРѕРіРѕ update.
+/// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
     state: ProgramSnapshotStateV1,
@@ -1613,8 +1613,8 @@ fn attachment_snapshot_from_commit(
     Ok(ProgramAttachedSnapshotV1 { snapshot, render })
 }
 
-/// Typed-РѕС‚РєР°Р· РїСѓР±Р»РёС‡РЅРѕРіРѕ runtime-СЃРµР°РјР°. Payload РІРЅСѓС‚СЂРµРЅРЅРёС… РІР°СЂРёР°РЅС‚РѕРІ РЅРµ
-/// СЂР°СЃРєСЂС‹РІР°РµС‚СЃСЏ РїСЂРµР¶РґРµРІСЂРµРјРµРЅРЅРѕ; enum non_exhaustive РґР»СЏ СЌРІРѕР»СЋС†РёРё.
+/// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
+/// раскрывается преждевременно; enum non_exhaustive для эволюции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProgramRuntimeErrorV1 {
@@ -1629,11 +1629,11 @@ pub enum ProgramRuntimeErrorV1 {
     InternalInvariant,
 }
 
-/// РљРѕРјРїРёР»РёСЂСѓРµС‚ РєР°РЅРѕРЅРёС‡РµСЃРєРёРµ Program wire bytes РІ immutable owner.
+/// Компилирует канонические Program wire bytes в immutable owner.
 ///
-/// Family-РіСЂР°С„С‹ РІ РїРµСЂРІРѕРј РїСѓР±Р»РёС‡РЅРѕРј runtime-СЃСЂРµР·Рµ РѕС‚РєР»РѕРЅСЏСЋС‚СЃСЏ: РґРѕРІРµСЂРёРµ Рє family
-/// artifact РѕР±РµСЃРїРµС‡РёРІР°РµС‚ РІС‹Р·С‹РІР°СЋС‰РёР№, Р° public trust-РїР°СЂР°РјРµС‚СЂ Р±СѓРґРµС‚ РѕС‚РґРµР»СЊРЅРѕР№
-/// РІРµСЂСЃРёРµР№ seam, РЅРµ silent assumption.
+/// Family-графы в первом публичном runtime-срезе отклоняются: доверие к family
+/// artifact обеспечивает вызывающий, а public trust-параметр будет отдельной
+/// версией seam, не silent assumption.
 pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
     compile_draft(decode_program_wire_v1(bytes))
 }
@@ -1671,13 +1671,13 @@ fn compile_draft(
 }
 
 impl CompiledProgramV1 {
-    /// Content identity immutable РіСЂР°С„Р°.
+    /// Content identity immutable графа.
     #[must_use]
     pub fn content_identity(&self) -> [u8; 32] {
         *self.owner.content_identity().as_bytes()
     }
 
-    /// Consuming instantiate: owner Рё session РїРµСЂРµС…РѕРґСЏС‚ РѕРґРЅРѕРјСѓ runtime.
+    /// Consuming instantiate: owner и session переходят одному runtime.
     pub fn instantiate(self, stream_id: u32) -> Result<ProgramSessionV1, ProgramRuntimeErrorV1> {
         let session = self
             .owner
@@ -1700,11 +1700,11 @@ impl CompiledProgramV1 {
 }
 
 impl ProgramSessionV1 {
-    /// РђС‚РѕРјР°СЂРЅРѕ РїСЂРёРјРµРЅСЏРµС‚ observed update Рё РІРѕР·РІСЂР°С‰Р°РµС‚ owned snapshot.
+    /// Атомарно применяет observed update и возвращает owned snapshot.
     ///
-    /// РџРѕРґРіРѕС‚РѕРІР»РµРЅРЅС‹Р№ РїРµСЂРµС…РѕРґ Р»РёР±Рѕ commit'РёС‚СЃСЏ С†РµР»РёРєРѕРј, Р»РёР±Рѕ РїСЂРё Р»СЋР±РѕРј РѕС‚РєР°Р·Рµ
-    /// Session СЃРѕС…СЂР°РЅСЏРµС‚ РїСЂРµРґС‹РґСѓС‰РёРµ head/lifecycle/evidence вЂ” Р·Р°РєРѕРЅ РІРЅСѓС‚СЂРµРЅРЅРµР№
-    /// `PreparedSessionTransitionV1` РЅРµ РѕСЃР»Р°Р±Р»СЏРµС‚СЃСЏ РїСѓР±Р»РёС‡РЅРѕР№ РѕР±С‘СЂС‚РєРѕР№.
+    /// Подготовленный переход либо commit'ится целиком, либо при любом отказе
+    /// Session сохраняет предыдущие head/lifecycle/evidence — закон внутренней
+    /// `PreparedSessionTransitionV1` не ослабляется публичной обёрткой.
     pub fn update_observed(
         &mut self,
         revision: u64,
@@ -1723,7 +1723,7 @@ impl ProgramSessionV1 {
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
     }
 
-    /// РђС‚РѕРјР°СЂРЅРѕ РїСЂРёРјРµРЅСЏРµС‚ Unknown update СЃ РЅРµРїСЂРѕР·СЂР°С‡РЅРѕР№ РїСЂРёС‡РёРЅРѕР№.
+    /// Атомарно применяет Unknown update с непрозрачной причиной.
     pub fn update_unknown(
         &mut self,
         revision: u64,
@@ -1972,7 +1972,7 @@ mod runtime_tests {
         assert_eq!(first.state(), ProgramSnapshotStateV1::Ready);
         let refused = session.update_observed(2, &[]);
         assert!(matches!(refused, Err(ProgramRuntimeErrorV1::Update)));
-        // РЎР»РµРґСѓСЋС‰РёР№ РІР°Р»РёРґРЅС‹Р№ update РґРѕР»Р¶РµРЅ РїСЂРѕРґРѕР»Р¶РёС‚СЊ С‚Сѓ Р¶Рµ Session Рё СЃРЅРѕРІР° Ready.
+        // Следующий валидный update должен продолжить ту же Session и снова Ready.
         let second = session
             .update_observed(
                 2,
