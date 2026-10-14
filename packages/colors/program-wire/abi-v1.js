@@ -286,15 +286,30 @@ export class ProgramWireBuilderV1 {
     header.u16(PROGRAM_WIRE_VERSION_V1);
     header.u32(0); // patched below
 
+    // Check the u32 envelope before copying section payloads. New nested
+    // declarations cannot silently truncate the header length.
+    let declaredLength = header.bytes.length + SECTION_ORDER_V1.length * 4;
+    for (const name of SECTION_ORDER_V1) {
+      const { count, sink } = this.section(name);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        invalid("section " + name + " has an invalid entry count");
+      }
+      const payloadLength = sink.bytes.length;
+      if (!Number.isSafeInteger(payloadLength) || payloadLength < 0) {
+        invalid("section " + name + " has an invalid payload length");
+      }
+      if (count > MAX_SECTION_ENTRIES_V1 || payloadLength > 0xffff_ffff - declaredLength) {
+        throw new ProgramWireError(
+          PROGRAM_WIRE_TOO_MANY_ENTRIES,
+          "section " + name + " exceeds the wire length or count limit",
+        );
+      }
+      declaredLength += payloadLength;
+    }
+
     const body = new ByteSink();
     for (const name of SECTION_ORDER_V1) {
       const { count, sink } = this.section(name);
-      if (count > MAX_SECTION_ENTRIES_V1) {
-        throw new ProgramWireError(
-          PROGRAM_WIRE_TOO_MANY_ENTRIES,
-          `section ${name} exceeds the wire limit: ${count}`,
-        );
-      }
       body.u32(count);
       // Поэлементно: spread разворачивает массив в аргументы вызова и падает
       // на больших секциях (лимит аргументов V8), а не по нашему typed-отказу.
@@ -304,6 +319,9 @@ export class ProgramWireBuilderV1 {
     }
 
     const total = header.bytes.length + body.bytes.length;
+    if (total !== declaredLength) {
+      invalid("wire sections changed during emission");
+    }
     const bytes = new Uint8Array(total);
     bytes.set(header.bytes, 0);
     bytes.set(body.bytes, header.bytes.length);
