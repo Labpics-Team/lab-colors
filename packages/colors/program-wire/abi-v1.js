@@ -12,7 +12,9 @@ import {
   invalid,
   u32Value,
   byteValue,
-  f64Value,
+  opacityValue,
+  positiveF64Value,
+  positiveUnitRatioValue,
   memberValue,
   SURROUND_VALUES_V1,
   WCAG22_CRITERIA_V1,
@@ -90,7 +92,7 @@ export class ProgramWireBuilderV1 {
         return {
           id: u32Value(inputProperty(candidate, "id", "candidate id"), "candidate[" + index + "] id"),
           rgb: rgbBytes(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
-          opacity: f64Value(inputProperty(candidate, "opacity", "candidate opacity"), "candidate[" + index + "] opacity"),
+          opacity: opacityValue(inputProperty(candidate, "opacity", "candidate opacity"), "candidate[" + index + "] opacity"),
         };
       },
     );
@@ -126,7 +128,7 @@ export class ProgramWireBuilderV1 {
 
   opacityInput(id, value) {
     const checkedId = u32Value(id, "opacity input id");
-    const checkedValue = f64Value(value, "opacity input value");
+    const checkedValue = opacityValue(value, "opacity input value");
     const sink = this.entry("opacityInputs");
     sink.u32(checkedId);
     sink.f64Bits(checkedValue);
@@ -179,8 +181,8 @@ export class ProgramWireBuilderV1 {
     const checkedId = u32Value(id, "occurrence id");
     const checkedSubject = u32Value(subject, "occurrence subject");
     const checkedAgainst = u32Value(against, "occurrence surface");
-    const checkedLuminance = f64Value(adaptingLuminance, "occurrence adapting luminance");
-    const checkedRatio = f64Value(backgroundRatio, "occurrence background ratio");
+    const checkedLuminance = positiveF64Value(adaptingLuminance, "occurrence adapting luminance");
+    const checkedRatio = positiveUnitRatioValue(backgroundRatio, "occurrence background ratio");
     const checkedSurround = memberValue(surround, SURROUND_VALUES_V1, "occurrence surround");
     const sink = this.entry("occurrences");
     sink.u32(checkedId);

@@ -79,10 +79,29 @@ export function byteValue(value, what) {
 }
 
 export function f64Value(value, what) {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    invalid(`${what} must be a non-NaN number (received type ${typeof value})`);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    invalid(`${what} must be a finite binary64 number (received type ${typeof value})`);
   }
   return value;
+}
+
+// Wire producers admit the same physical domains as Core, before emitting bytes.
+export function opacityValue(value, what) {
+  const admitted = f64Value(value, what);
+  if (admitted < 0 || admitted > 1) invalid(`${what} must be in [0, 1]`);
+  return admitted === 0 ? 0 : admitted;
+}
+
+export function positiveF64Value(value, what) {
+  const admitted = f64Value(value, what);
+  if (admitted <= 0) invalid(`${what} must be positive`);
+  return admitted;
+}
+
+export function positiveUnitRatioValue(value, what) {
+  const admitted = positiveF64Value(value, what);
+  if (admitted > 1) invalid(`${what} must be in (0, 1]`);
+  return admitted;
 }
 
 export function memberValue(value, allowed, what) {

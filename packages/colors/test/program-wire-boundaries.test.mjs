@@ -139,3 +139,68 @@ for (const kind of ["finite", "relation"]) {
     });
   }
 }
+
+// The same physical ranges are admitted by Rust PaintValueV1,
+// AdmittedOpacityV1 and AppearanceContextV1.
+const physicalDomains = [
+  ["finite paint opacity",
+    (builder, value) => builder.finiteTarget(8, [{ id: 1, rgb: [20, 30, 40], opacity: value }]),
+    [-0.1, -Number.MIN_VALUE, 1 + Number.EPSILON, 2, Infinity, -Infinity, NaN, undefined]],
+  ["opacity input",
+    (builder, value) => builder.opacityInput(8, value),
+    [-0.1, -Number.MIN_VALUE, 1 + Number.EPSILON, 2, Infinity, -Infinity, NaN, undefined]],
+  ["adapting luminance",
+    (builder, value) => builder.sourceOverOccurrence(8, 1, 2, value, 0.2, 1),
+    [0, -0, -Number.MIN_VALUE, -1, Infinity, -Infinity, NaN, undefined]],
+  ["background luminance ratio",
+    (builder, value) => builder.sourceOverOccurrence(8, 1, 2, 64, value, 1),
+    [0, -0, -Number.MIN_VALUE, -1, 1 + Number.EPSILON, 2, Infinity, -Infinity, NaN, undefined]],
+];
+
+for (const [domain, declare, invalidValues] of physicalDomains) {
+  for (const value of invalidValues) {
+    test(`${domain}: ${String(value)} refuses before changing wire`, () => {
+      const builder = new ProgramWireBuilderV1().source(11, [20, 20, 20]);
+      const before = builder.finish();
+      assert.throws(() => declare(builder, value), typed(PROGRAM_WIRE_INVALID_DECLARATION));
+      assert.deepEqual(builder.finish(), before);
+    });
+  }
+}
+
+test("binary64 domain boundaries preserve finite admissible values", () => {
+  for (const opacity of [0, Number.MIN_VALUE, 0.5, 1]) {
+    assert.ok(new ProgramWireBuilderV1()
+      .finiteTarget(1, [{ id: 1, rgb: [0, 0, 0], opacity }]).finish().length > 0);
+    assert.ok(new ProgramWireBuilderV1().opacityInput(1, opacity).finish().length > 0);
+  }
+  for (const adapting of [Number.MIN_VALUE, 1, 64, Number.MAX_VALUE]) {
+    assert.ok(new ProgramWireBuilderV1()
+      .sourceOverOccurrence(1, 2, 3, adapting, Number.MIN_VALUE, 1)
+      .finish().length > 0);
+  }
+  assert.ok(new ProgramWireBuilderV1()
+    .sourceOverOccurrence(1, 2, 3, 64, 1, 1).finish().length > 0);
+});
+
+test("negative zero and positive zero produce identical canonical opacity wires", () => {
+  for (const declare of [
+    (alpha) => new ProgramWireBuilderV1().opacityInput(1, alpha).finish(),
+    (alpha) => new ProgramWireBuilderV1()
+      .finiteTarget(1, [{ id: 1, rgb: [0, 0, 0], opacity: alpha }]).finish(),
+  ]) {
+    assert.deepEqual(declare(-0), declare(0));
+  }
+});
+
+test("physical scalar admission never coerces caller-owned objects", () => {
+  for (const [, declare] of physicalDomains) {
+    let conversions=0;
+    const value = { valueOf() { conversions++; throw new Error("coercion called"); } };
+    const builder = new ProgramWireBuilderV1().source(1, [0, 0, 0]);
+    const before = builder.finish();
+    assert.throws(() => declare(builder, value), typed(PROGRAM_WIRE_INVALID_DECLARATION));
+    assert.equal(conversions, 0);
+    assert.deepEqual(builder.finish(), before);
+  }
+});
