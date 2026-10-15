@@ -6,9 +6,9 @@
 
 ## Установка
 
-```sh
-npm install @labpics/colors@^1
-```
+Команда установки проверенного архива указана на [странице актуального релиза](https://github.com/Labpics-Team/lab-colors/releases/latest).
+Она использует прямой URL конкретной версии, поэтому сохранённый lockfile
+не зависит от будущих обновлений. Имя пакета и импорты остаются `@labpics/colors`.
 
 [Готовый пример адаптации к фону](https://github.com/Labpics-Team/lab-colors/blob/main/docs/how-to/adapt-contrast.md) показывает выбор цвета и отказ при несовместимых требованиях.
 
