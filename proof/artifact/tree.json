@@ -538,7 +538,7 @@
   "scripts/test_extract_conformance.py": "505c896a99fbaa407b8f96c29b9ad777fac3fd65",
   "scripts/test_extract_decisions.py": "c4a0fed4353cb190c00d5055d6dc9a8f690cb4b4",
   "scripts/test_extract_exports_metadata.py": "cf889e812eb7fd7880afdb559abd0c6d1700864d",
-  "scripts/test_extract_human_ratings.py": "15ffdf48880d94854061e5739651312af02170e3",
+  "scripts/test_extract_human_ratings.py": "aa4ad22aea6f4e9660f92b64d1e24525249eaab6",
   "scripts/test_extract_operations.py": "456840c41d2859bf3ecd0680836d4c3e049cb209",
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
@@ -561,7 +561,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "a0e7a7b5cefc7d5653b11767a34e5302b0f9873f585d6218e1913c776694ac1d",
+ "record_sha256": "6880468d40854d16be2f1b22665a29075016505a2a267e831bf0dfcefeb91d1e",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
