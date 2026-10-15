@@ -42,6 +42,6 @@ test("README Node.js first route initializes a fresh module and emits the sessio
 
 test("package version marks the terminal major contract", () => {
   const pkg = JSON.parse(read("package.json"));
-  assert.equal(pkg.version, "1.0.0");
+  assert.match(pkg.version, /^1\.\d+\.\d+$/u);
   assert.match(pkg.description, /Program wire/u);
 });

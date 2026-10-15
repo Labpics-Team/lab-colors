@@ -128,3 +128,14 @@ test("semantic refusal never becomes successful through retries", async () => {
   assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl]);
   assert.deepEqual(delays, []);
 });
+
+test("the publication caller explicitly forwards only its declared environment credential", () => {
+  const caller = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../../../.github/workflows/publish-worker.yml", import.meta.url), "utf8");
+  assert.match(caller, /\n    secrets:\n      NPM_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}\n/u);
+  assert.match(worker, /\n  workflow_call:\n    secrets:\n      NPM_TOKEN:\n        required: true\n/u);
+  assert.doesNotMatch(caller, /secrets:\s*inherit/u);
+  const preparation = worker.split("\n  prepare:\n")[1].split("\n  publish:\n")[0];
+  assert.doesNotMatch(preparation, /secrets:|environment:/u);
+  assert.match(worker, /if \[\[ -z "\$NODE_AUTH_TOKEN" \]\]; then\n            echo "npm-publish NPM_TOKEN is unavailable" >&2\n            exit 1\n          fi\n          actual_sha256=/u);
+});

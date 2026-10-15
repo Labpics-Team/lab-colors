@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "packageManager": "npm@11.9.0",
   "description": "Canonical Program wire compiler and certified color runtime. WASM core, zero runtime dependencies.",
   "type": "module",

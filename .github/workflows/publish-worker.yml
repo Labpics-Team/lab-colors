@@ -1,20 +1,15 @@
 name: publish worker
 
-# Публикация @labpics/colors в npm по тегу colors-vX.Y.Z.
-#
-# Публикация идёт через explicit granular token: npm не поддерживает безтокенный
-# trust flow на собственных раннерах. Secret `NPM_TOKEN` хранится в environment
-# `npm-publish`, выдаёт write только пакету @labpics/colors и передаётся ровно
-# publish-step. Environment ОБЪЯВЛЕН НА JOB'Е ЗДЕСЬ, а не в caller'е: у job'а с
-# `uses:` ключ `environment` не поддерживается, и именно объявление внутри
-# reusable-воркфлоу заставляет GitHub резолвить environment-секрет.
-#
-# Публикация принимает пакет текущего выпуска после проверки его source SHA,
-# манифеста и байтов. Проверка пакета выполняется без environment credentials.
-# Canonical push CI и Swift для того же SHA остаются обязательными.
+# Публикует проверенный архив без повторной сборки.
+# NPM_TOKEN передаётся caller'ом явно и разрешается из npm-publish environment.
+# Значение доступно только шагу npm publish; подготовка и публичная проверка
+# выполняются в отдельных заданиях без environment и без передачи секрета.
 
 on:
   workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: true
 
 permissions:
   contents: read
@@ -1266,6 +1261,10 @@ jobs:
           TARBALL_SHA256: ${{ steps.verified-artifact.outputs.sha256 }}
         run: |
           set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "npm-publish NPM_TOKEN is unavailable" >&2
+            exit 1
+          fi
           actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"
           actual_sha256="${actual_sha256%% *}"
           if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$TARBALL_SHA256" ]]; then

@@ -148,6 +148,10 @@ def load_publish_worker() -> tuple[str, str]:
 # this golden, never silently mutating the script.
 CANONICAL_PUBLISH_SCRIPT = (
     "set -euo pipefail\n"
+    'if [[ -z "$NODE_AUTH_TOKEN" ]]; then\n'
+    '  echo "npm-publish NPM_TOKEN is unavailable" >&2\n'
+    "  exit 1\n"
+    "fi\n"
     'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"\n'
     'actual_sha256="${actual_sha256%% *}"\n'
     'if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ '
@@ -2507,6 +2511,18 @@ console.log('9 numerical promotion scenarios passed');
             '--@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"'
         )
         mutants = {
+            "missing credential presence guard": script.replace(
+                'if [[ -z "$NODE_AUTH_TOKEN" ]]; then\n'
+                '  echo "npm-publish NPM_TOKEN is unavailable" >&2\n'
+                '  exit 1\nfi\n',
+                "",
+                1,
+            ),
+            "inverted credential presence guard": script.replace(
+                'if [[ -z "$NODE_AUTH_TOKEN" ]]; then',
+                'if [[ -n "$NODE_AUTH_TOKEN" ]]; then',
+                1,
+            ),
             "second npm publish": script.replace(
                 expected_publish,
                 expected_publish + '\nnpm publish "$TARBALL_PATH"',
@@ -2740,7 +2756,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ./.github/workflows/publish-worker.yml"""
+    uses: ./.github/workflows/publish-worker.yml
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}"""
         self.assertEqual(active, expected)
 
         hostile_bindings = (
