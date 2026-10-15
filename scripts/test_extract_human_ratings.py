@@ -1,8 +1,9 @@
 """Published rows and hostile records exercise the same descriptive readout."""
 from dataclasses import asdict, replace
 from fractions import Fraction
-from itertools import permutations
+from itertools import permutations, product
 import json
+from math import prod
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import unittest
 from extract_human_ratings import (
     ARCHIVE, CAPSULE, Rating, comparisons, document, load,
     paired_counts, ranks, repeat_correlation, summarize, validate,
+    participant_support, proportion_interval, PROPORTION_GRID,
 )
 
 
@@ -170,6 +172,150 @@ class HumanRatingsTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(pair_process.stdout), document("comparisons"))
         self.assertEqual(pair_process.stderr, "")
+
+    def test_support_distinguishes_equal_means_and_preserves_each_person(self):
+        unanimous = tuple(replace(row, centipoints=400) for row in fixture())
+        divided = tuple(replace(row, centipoints=0 if row.observer == 1 else 800)
+                        for row in fixture())
+        self.assertEqual(summarize(unanimous), summarize(divided))
+        good = participant_support(unanimous, {"group": 2}, range(3))
+        split = participant_support(divided, {"group": 2}, range(3))
+        self.assertEqual([row["below_midpoint"] for row in good["rows"]], [2, 2, 2])
+        self.assertEqual([row["below_midpoint"] for row in split["rows"]], [1, 1, 1])
+        self.assertEqual(split, participant_support(reversed(divided), {"group": 2}, range(3)))
+        self.assertEqual(split["family_size"], 3)
+        self.assertEqual((split["participants"], split["responses"]), (2, 12))
+        self.assertEqual(split["per_cell_alpha"], {"numerator": 1, "denominator": 60})
+        row = split["rows"][0]
+        self.assertEqual(row["observers"], 2)
+        self.assertEqual(row["below_fraction"], {"numerator": 1, "denominator": 2})
+        self.assertEqual(row["simultaneous_interval"], {
+            name: {"numerator": value.numerator, "denominator": value.denominator}
+            for name, value in zip(("lower", "upper"), proportion_interval(1, 2, Fraction(1, 60)))
+        })
+        no_adjustment = proportion_interval(1, 2)
+        adjusted = proportion_interval(1, 2, Fraction(1, 60))
+        self.assertLess(adjusted[0], no_adjustment[0])
+        self.assertGreater(adjusted[1], no_adjustment[1])
+
+    def test_support_midpoint_equality_and_session_disagreement_stay_visible(self):
+        for first, second, crossings in [
+            (400, 400, 0), (400, 500, 0), (400, 600, 1),
+            (500, 400, 0), (500, 500, 0), (500, 600, 0),
+            (600, 400, 1), (600, 500, 0), (600, 600, 0),
+        ]:
+            rows = (Rating("cleanliness", "group", 1, 1, 0, first),
+                    Rating("cleanliness", "group", 1, 2, 0, second))
+            with self.subTest(first=first, second=second):
+                result = participant_support(rows, {"group": 1}, range(1))["rows"][0]
+                self.assertEqual(result["changed_midpoint_side"], crossings)
+        rows = tuple(replace(row, centipoints=400 if row.observer == 1
+                             else 0 if row.session == 1 else 1000) for row in fixture())
+        for row in participant_support(rows, {"group": 2}, range(3))["rows"]:
+            self.assertEqual(row["observers"], 2)
+            self.assertEqual((row["below_midpoint"], row["at_midpoint"], row["above_midpoint"]), (1, 1, 0))
+            self.assertEqual(row["both_sessions_below"], 1)
+            self.assertEqual(row["changed_midpoint_side"], 1)
+            self.assertEqual(row["mean"], {"numerator": 9, "denominator": 2})
+        for partial in (rows[:-1], rows + rows, (), (None,),
+                        tuple(row for row in rows if row.stimulus != 2),
+                        tuple(row for row in rows if row.observer != 2)):
+            with self.assertRaises(ValueError):
+                participant_support(partial, {"group": 2}, range(3))
+        with self.assertRaises(ValueError):
+            participant_support(rows[:-1] + (replace(rows[-1], centipoints=True),), {"group": 2}, range(3))
+
+    def test_binomial_intervals_enclose_analytic_and_published_references(self):
+        step = Fraction(1, PROPORTION_GRID)
+        lower, upper = proportion_interval(1, 1)
+        self.assertLessEqual(lower, Fraction(1, 40))
+        self.assertLess(Fraction(1, 40) - lower, step)
+        self.assertEqual(upper, 1)
+        self.assertEqual(proportion_interval(0, 1), (0, 1 - lower))
+        # Независимые многочлены хвоста: n=2,k=1 → 2p-p²; n=3,k=2 → 3p²-2p³.
+        for trials, successes, polynomial in [
+            (2, 1, lambda p: 2 * p - p * p),
+            (3, 2, lambda p: 3 * p * p - 2 * p * p * p),
+        ]:
+            lower, _ = proportion_interval(successes, trials)
+            self.assertLessEqual(polynomial(lower), Fraction(1, 40))
+            self.assertGreater(polynomial(lower + step), Fraction(1, 40))
+        lower, upper = proportion_interval(13, 13)
+        self.assertLessEqual(lower ** 13, Fraction(1, 40))
+        self.assertGreater((lower + step) ** 13, Fraction(1, 40))
+        self.assertLess(lower, Fraction(9, 10))
+        self.assertEqual(upper, 1)
+        # Опубликованный пример SciPy1.14.1, BinomTestResult.proportion_ci.
+        lower, upper = proportion_interval(7, 50)
+        self.assertAlmostEqual(float(lower), 0.05819170033997342, places=8)
+        self.assertAlmostEqual(float(upper), 0.26739600249700846, places=8)
+
+    def test_binomial_coverage_by_enumerating_individual_bernoulli_histories(self):
+        for n in range(1, 7):
+            for alpha in (Fraction(1, 20), Fraction(1, 100)):
+                intervals = [proportion_interval(k, n, alpha) for k in range(n + 1)]
+                for numerator in range(11):
+                    p = Fraction(numerator, 10)
+                    coverage = Fraction(0)
+                    for history in product((0, 1), repeat=n):
+                        lower, upper = intervals[sum(history)]
+                        if lower <= p <= upper:
+                            coverage += prod(p if bit else 1 - p for bit in history)
+                    self.assertGreaterEqual(coverage, 1 - alpha)
+                for k in range(n + 1):
+                    lower, upper = intervals[k]
+                    self.assertLessEqual(lower, Fraction(k, n))
+                    self.assertGreaterEqual(upper, Fraction(k, n))
+                    self.assertEqual((lower, upper), (1 - intervals[n-k][1], 1 - intervals[n-k][0]))
+                    if k:
+                        self.assertLessEqual(intervals[k-1][0], lower)
+                        self.assertLessEqual(intervals[k-1][1], upper)
+        for k, n, alpha in [(True, 2, Fraction(1, 20)), (1, False, Fraction(1, 20)),
+                            (0, 0, Fraction(1, 20)), (-1, 3, Fraction(1, 20)),
+                            (4, 3, Fraction(1, 20)), (1, 2, 0.05), (1, 2, Fraction(0)),
+                            (1, 2, Fraction(1)), (1.0, 2, Fraction(1, 20))]:
+            with self.assertRaises(ValueError):
+                proportion_interval(k, n, alpha)
+
+    def test_source_support_keeps_all_cells_and_matches_raw_participant_sums(self):
+        ratings = load()
+        report = document("support")
+        self.assertEqual(report["support_method"]["family_size"], 96)
+        self.assertEqual(report["support_method"]["participants"], 36)
+        self.assertEqual(report["support_method"]["responses"], 2304)
+        self.assertEqual(report["support_method"]["per_cell_alpha"], {"numerator": 1, "denominator": 1920})
+        self.assertEqual(report["support_method"]["population_transfer"], "not-established")
+        self.assertEqual(len(report["rows"]), 96)
+        expected = {}
+        for row in ratings:
+            if row.scale == "cleanliness":
+                key = (row.cohort, row.stimulus, row.observer)
+                expected[key] = expected.get(key, 0) + Fraction(row.centipoints, 200)
+        for row in report["rows"]:
+            individuals = [value for (cohort, stimulus, _), value in expected.items()
+                           if (cohort, stimulus) == (row["cohort"], row["stimulus"])]
+            self.assertEqual(len(individuals), row["observers"])
+            self.assertEqual(row["below_midpoint"], sum(value < 5 for value in individuals))
+            self.assertEqual(row["at_midpoint"], sum(value == 5 for value in individuals))
+            self.assertEqual(row["above_midpoint"], sum(value > 5 for value in individuals))
+            mean = sum(individuals) / len(individuals)
+            self.assertEqual(row["mean"], {"numerator": mean.numerator, "denominator": mean.denominator})
+        summaries = []
+        for cohort in ("NTF", "NTM", "CVD"):
+            rows = [row for row in report["rows"] if row["cohort"] == cohort]
+            below = [row for row in rows if Fraction(**row["mean"]) < 5]
+            maximum = max(Fraction(row["observers"] - row["below_midpoint"], row["observers"]) for row in below)
+            summaries.append({"cohort": cohort, "cells": len(rows), "mean_below_midpoint": len(below),
+                              "unanimous_among_below_means": sum(row["below_midpoint"] == row["observers"] for row in below),
+                              "max_not_below_share_among_below_means": str(maximum)})
+        print("PUBLISHED_CLEANLINESS_SUPPORT " + json.dumps(summaries, sort_keys=True))
+
+    def test_support_cli_under_optimization_exports_the_entire_family(self):
+        script = Path(__file__).with_name("extract_human_ratings.py")
+        command = [sys.executable, "-I", "-OO", str(script), "--mode", "support"]
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
+        self.assertEqual(json.loads(result.stdout), document("support"))
+        self.assertEqual(result.stderr, "")
 
 
 if __name__ == "__main__":
