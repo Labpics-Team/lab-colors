@@ -40,8 +40,15 @@ test("README Node.js first route initializes a fresh module and emits the sessio
   assert.deepEqual(JSON.parse(result), [{ slot: 91, rgb: [20, 20, 20], opacity: 1 }]);
 });
 
-test("package version marks the terminal major contract", () => {
+test("пакет 1.x предоставляет Program API", async () => {
   const pkg = JSON.parse(read("package.json"));
   assert.match(pkg.version, /^1\.\d+\.\d+$/u);
-  assert.match(pkg.description, /Program wire/u);
+
+  const api = await import("@labpics/colors");
+  for (const name of ["compileProgramWire", "ProgramRuntime", "ProgramSnapshot"]) {
+    assert.equal(typeof api[name], "function", name);
+  }
+  for (const name of ["RoleRecipe", "ThemeConfig", "resolveTheme", "applyTheme"]) {
+    assert.equal(Object.hasOwn(api, name), false, name);
+  }
 });

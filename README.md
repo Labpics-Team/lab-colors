@@ -53,6 +53,16 @@ cargo test --workspace --locked
 Версия Rust указана в [Cargo.toml](Cargo.toml). Команды сборки и проверки
 npm-пакета находятся в [package.json](packages/colors/package.json).
 
+## Зависимости
+
+У `labcolors-core` по умолчанию ноль рантайм-зависимостей.
+Необязательная возможность `ext09-extractor` подключает зависимости из
+[манифеста ядра](crates/labcolors-core/Cargo.toml).
+
+```sh
+cargo tree -p labcolors-core --edges=no-dev
+```
+
 ## Лицензии
 
 Код: [MIT](LICENSE). Встроенные данные: CC-BY-4.0 и CC-BY-SA-4.0.
