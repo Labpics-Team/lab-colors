@@ -53,6 +53,9 @@ cargo test --workspace --locked
 [GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
 показывает результаты CI.
 
+[Документация](docs/README.md) собирает рабочие инструкции, контракты,
+архитектурные решения и исследования по отдельным вопросам.
+
 ## Зависимости
 
 У `labcolors-core` по умолчанию ноль рантайм-зависимостей. Необязательная
