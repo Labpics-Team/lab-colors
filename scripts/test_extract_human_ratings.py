@@ -151,6 +151,13 @@ class HumanRatingsTests(unittest.TestCase):
         self.assertEqual(report["source"], document()["source"])
         self.assertEqual(result.stderr, "")
 
+        pair_process = subprocess.run(
+            [sys.executable, "-I", "-OO", str(script), "--mode", "comparisons"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        self.assertEqual(json.loads(pair_process.stdout), document("comparisons"))
+        self.assertEqual(pair_process.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()
