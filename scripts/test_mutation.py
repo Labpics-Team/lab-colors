@@ -148,8 +148,12 @@ def load_publish_worker() -> tuple[str, str]:
 # this golden, never silently mutating the script.
 CANONICAL_PUBLISH_SCRIPT = (
     "set -euo pipefail\n"
-    'if [[ -z "$NODE_AUTH_TOKEN" ]]; then\n'
-    '  echo "npm-publish NPM_TOKEN is unavailable" >&2\n'
+    'if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then\n'
+    '  echo "npm OIDC identity is unavailable" >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then\n'
+    '  echo "legacy npm token is not permitted" >&2\n'
     "  exit 1\n"
     "fi\n"
     'actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"\n'
@@ -2511,16 +2515,21 @@ console.log('9 numerical promotion scenarios passed');
             '--@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"'
         )
         mutants = {
-            "missing credential presence guard": script.replace(
-                'if [[ -z "$NODE_AUTH_TOKEN" ]]; then\n'
-                '  echo "npm-publish NPM_TOKEN is unavailable" >&2\n'
+            "missing OIDC identity guard": script.replace(
+                'if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then\n'
+                '  echo "npm OIDC identity is unavailable" >&2\n'
                 '  exit 1\nfi\n',
                 "",
                 1,
             ),
-            "inverted credential presence guard": script.replace(
-                'if [[ -z "$NODE_AUTH_TOKEN" ]]; then',
-                'if [[ -n "$NODE_AUTH_TOKEN" ]]; then',
+            "inverted OIDC identity guard": script.replace(
+                'if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then',
+                'if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then',
+                1,
+            ),
+            "legacy token bypass": script.replace(
+                'if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then',
+                'if [[ -z "${NODE_AUTH_TOKEN:-}" ]]; then',
                 1,
             ),
             "second npm publish": script.replace(
@@ -2756,9 +2765,8 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ./.github/workflows/publish-worker.yml
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}"""
+      id-token: write
+    uses: ./.github/workflows/publish-worker.yml"""
         self.assertEqual(active, expected)
 
         hostile_bindings = (
