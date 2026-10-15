@@ -120,56 +120,57 @@ impl ProgramContentIdentityV9 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct VertexColorV1 {
-    len: u8,
-    bytes: [u8; COLOR_CAPACITY],
+    // Длина предшествует payload: сравнение ключей сохраняет порядок V9
+    // и выполняется одной операцией над фиксированным массивом.
+    bytes: [u8; COLOR_CAPACITY + 1],
 }
 
 impl VertexColorV1 {
     fn new(tag: u8) -> Self {
         let mut value = Self {
-            len: 1,
-            bytes: [0; COLOR_CAPACITY],
+            bytes: [0; COLOR_CAPACITY + 1],
         };
-        value.bytes[0] = tag;
+        value.bytes[0] = 1;
+        value.bytes[1] = tag;
         value
     }
 
+    fn len(&self) -> u8 {
+        self.bytes[0]
+    }
+
     fn push_u8(&mut self, value: u8) -> Result<(), ProgramCompileError> {
-        let index = usize::from(self.len);
-        let slot = self
-            .bytes
-            .get_mut(index)
+        self.push_bytes(&[value])
+    }
+
+    fn push_bytes(&mut self, values: &[u8]) -> Result<(), ProgramCompileError> {
+        let start = usize::from(self.len()) + 1;
+        let end = start
+            .checked_add(values.len())
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        *slot = value;
-        self.len = self
-            .len
-            .checked_add(1)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
+        self.bytes
+            .get_mut(start..end)
+            .ok_or(ProgramCompileError::InternalInvariant)?
+            .copy_from_slice(values);
+        self.bytes[0] =
+            u8::try_from(end - 1).map_err(|_| ProgramCompileError::InternalInvariant)?;
         Ok(())
     }
 
     fn push_u64(&mut self, value: u64) -> Result<(), ProgramCompileError> {
-        for byte in value.to_be_bytes() {
-            self.push_u8(byte)?;
-        }
-        Ok(())
+        self.push_bytes(&value.to_be_bytes())
     }
 
     fn push_srgb8(&mut self, value: Srgb8) -> Result<(), ProgramCompileError> {
-        for byte in value.bytes() {
-            self.push_u8(byte)?;
-        }
-        Ok(())
+        self.push_bytes(&value.bytes())
     }
 
     fn as_slice(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
+        &self.bytes[1..=usize::from(self.len())]
     }
 
     const fn tag(&self) -> u8 {
-        // `new` делает tag частью типа вершины до любого fallible writer-а;
-        // фиксированный backing array поэтому не требует slice-индексации.
-        self.bytes[0]
+        self.bytes[1]
     }
 }
 
@@ -437,9 +438,7 @@ fn joint_selection_color(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::JOINT_SELECTION);
     color.push_u8(release_tag::SELECTION_RELEASE_IDENTITY_V1)?;
-    for byte in selection.release_identity().as_bytes() {
-        color.push_u8(*byte)?;
-    }
+    color.push_bytes(selection.release_identity().as_bytes())?;
     Ok(color)
 }
 
@@ -475,9 +474,7 @@ fn family_color(family: &FamilyDeclarationV2) -> Result<VertexColorV1, ProgramCo
     let semantic = family.semantic();
     let mut color = VertexColorV1::new(vertex_tag::FAMILY);
     color.push_u8(release_tag::FAMILY_SEMANTIC_RELEASE_VERTEX_V2)?;
-    for byte in semantic.as_bytes() {
-        color.push_u8(*byte)?;
-    }
+    color.push_bytes(semantic.as_bytes())?;
     Ok(color)
 }
 
@@ -884,9 +881,7 @@ fn declared_srgb8_clean_set_constraint_color_for_release(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(mode_tag);
     color.push_u8(release_tag::DECLARED_SRGB8_CLEAN_SET_FAMILY_V1)?;
-    for byte in release {
-        color.push_u8(byte)?;
-    }
+    color.push_bytes(&release)?;
     Ok(color)
 }
 
@@ -1431,6 +1426,10 @@ struct PartitionV1 {
     cells: Vec<Vec<usize>>,
 }
 
+/// Клетки однородны по цвету вершины и полным типизированным спискам соседних клеток.
+/// Конструктор принадлежит завершённому уточнению разбиения.
+struct EquitablePartitionV1(PartitionV1);
+
 impl PartitionV1 {
     fn initial(graph: &CanonicalGraphV1) -> Result<Self, ProgramCompileError> {
         let mut order = Vec::new();
@@ -1490,41 +1489,57 @@ struct RefinementRecordV1 {
     signature: Vec<RefinementAtomV1>,
 }
 
+fn partition_cells(
+    partition: &PartitionV1,
+    vertex_count: usize,
+) -> Result<Vec<usize>, ProgramCompileError> {
+    let mut cell_of = Vec::new();
+    cell_of
+        .try_reserve_exact(vertex_count)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    cell_of.resize(vertex_count, usize::MAX);
+    for (cell_index, cell) in partition.cells.iter().enumerate() {
+        for &vertex in cell {
+            let slot = cell_of
+                .get_mut(vertex)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if *slot != usize::MAX {
+                return Err(ProgramCompileError::InternalInvariant);
+            }
+            *slot = cell_index;
+        }
+    }
+    if cell_of.contains(&usize::MAX) {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
+    Ok(cell_of)
+}
+
 fn refine_partition(
     graph: &CanonicalGraphV1,
     mut partition: PartitionV1,
-) -> Result<PartitionV1, ProgramCompileError> {
+) -> Result<EquitablePartitionV1, ProgramCompileError> {
     loop {
-        let mut cell_of = Vec::new();
-        cell_of
-            .try_reserve_exact(graph.colors.len())
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        cell_of.resize(graph.colors.len(), usize::MAX);
-        for (cell_index, cell) in partition.cells.iter().enumerate() {
-            for &vertex in cell {
-                let slot = cell_of
-                    .get_mut(vertex)
-                    .ok_or(ProgramCompileError::InternalInvariant)?;
-                if *slot != usize::MAX {
-                    return Err(ProgramCompileError::InternalInvariant);
-                }
-                *slot = cell_index;
-            }
+        if partition.is_discrete() {
+            return Ok(EquitablePartitionV1(partition));
         }
-        if cell_of.contains(&usize::MAX) {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
+        let cell_of = partition_cells(&partition, graph.colors.len())?;
 
         let mut next_cells = Vec::new();
         next_cells
             .try_reserve_exact(graph.colors.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for cell in &partition.cells {
+        let previous_count = partition.cells.len();
+        for cell in partition.cells {
+            if cell.len() == 1 {
+                next_cells.push(cell);
+                continue;
+            }
             let mut records = Vec::new();
             records
                 .try_reserve_exact(cell.len())
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            for &vertex in cell {
+            for &vertex in &cell {
                 let arcs = graph
                     .adjacency
                     .get(vertex)
@@ -1563,9 +1578,9 @@ fn refine_partition(
             }
         }
 
-        if next_cells.len() == partition.cells.len() {
+        if next_cells.len() == previous_count {
             partition.cells = next_cells;
-            return Ok(partition);
+            return Ok(EquitablePartitionV1(partition));
         }
         partition.cells = next_cells;
     }
@@ -1621,7 +1636,7 @@ fn individualize(
 }
 
 struct SearchFrameV1 {
-    partition: PartitionV1,
+    partition: EquitablePartitionV1,
     branch_cell: Option<usize>,
     candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
@@ -1630,10 +1645,10 @@ struct SearchFrameV1 {
 }
 
 impl SearchFrameV1 {
-    fn new(partition: PartitionV1) -> Result<Self, ProgramCompileError> {
-        let branch_cell = partition.first_non_singleton();
+    fn new(partition: EquitablePartitionV1) -> Result<Self, ProgramCompileError> {
+        let branch_cell = partition.0.first_non_singleton();
         let candidates = match branch_cell {
-            Some(index) => copy_vertices(&partition.cells[index])?,
+            Some(index) => copy_vertices(&partition.0.cells[index])?,
             None => Vec::new(),
         };
         Ok(Self {
@@ -1708,10 +1723,11 @@ fn serialize_leaf(
     push_u64_bytes(&mut output, usize_as_u64(graph.colors.len())?);
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
+    let mut outgoing = Vec::new();
     for cell in &partition.cells {
         let vertex = cell[0];
         let color = graph.colors[vertex];
-        push_u64_bytes(&mut output, u64::from(color.len));
+        push_u64_bytes(&mut output, u64::from(color.len()));
         output.extend_from_slice(color.as_slice());
 
         let outgoing_count = graph.adjacency[vertex]
@@ -1719,9 +1735,9 @@ fn serialize_leaf(
             .filter(|arc| arc.direction == 0)
             .count();
         push_u64_bytes(&mut output, usize_as_u64(outgoing_count)?);
-        let mut outgoing = Vec::new();
+        outgoing.clear();
         outgoing
-            .try_reserve_exact(outgoing_count)
+            .try_reserve(outgoing_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         outgoing.extend(
             graph.adjacency[vertex]
@@ -1730,7 +1746,7 @@ fn serialize_leaf(
                 .map(|arc| (arc.role, label_of[arc.neighbour])),
         );
         ordering::sort(&mut outgoing);
-        for (role, target) in outgoing {
+        for &(role, target) in &outgoing {
             output.push(role as u8);
             push_u64_bytes(&mut output, usize_as_u64(target)?);
         }
@@ -1800,23 +1816,8 @@ fn candidate_is_in_explored_orbit(
         return Ok(false);
     }
     let vertex_count = automorphisms[0].len();
-    let mut cell_of = Vec::new();
-    cell_of
-        .try_reserve_exact(vertex_count)
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    cell_of.resize(vertex_count, usize::MAX);
-    for (cell_index, cell) in partition.cells.iter().enumerate() {
-        for &vertex in cell {
-            let slot = cell_of
-                .get_mut(vertex)
-                .ok_or(ProgramCompileError::InternalInvariant)?;
-            if *slot != usize::MAX {
-                return Err(ProgramCompileError::InternalInvariant);
-            }
-            *slot = cell_index;
-        }
-    }
-    if cell_of.contains(&usize::MAX) || candidate >= vertex_count {
+    let cell_of = partition_cells(partition, vertex_count)?;
+    if candidate >= vertex_count {
         return Err(ProgramCompileError::InternalInvariant);
     }
 
@@ -1868,33 +1869,94 @@ fn candidate_is_in_explored_orbit(
     Ok(seen[candidate])
 }
 
-/// Для одноцветных вершин с одинаковыми полными списками инцидентности
-/// транспозиция сохраняет все типизированные рёбра. Это точное дешёвое
-/// отсечение обрабатывает повторы до выделения общей перестановки.
-fn candidate_is_exact_twin(
+/// Обходит компоненту после удаления уже различённых вершин. В каждой клетке
+/// должна остаться единственная вершина компоненты: тогда соответствие двух
+/// компонент задаётся самой клеткой без перебора перестановок.
+fn unique_component_by_cell(
     graph: &CanonicalGraphV1,
+    partition: &PartitionV1,
+    cell_of: &[usize],
+    root: usize,
+    by_cell: &mut [usize],
+    pending: &mut Vec<usize>,
+) -> bool {
+    by_cell.fill(usize::MAX);
+    pending.clear();
+    by_cell[cell_of[root]] = root;
+    pending.push(root);
+    let mut cursor = 0;
+    while cursor < pending.len() {
+        let vertex = pending[cursor];
+        cursor += 1;
+        for arc in &graph.adjacency[vertex] {
+            let cell = cell_of[arc.neighbour];
+            if partition.cells[cell].len() == 1 {
+                continue;
+            }
+            match by_cell[cell] {
+                usize::MAX => {
+                    by_cell[cell] = arc.neighbour;
+                    pending.push(arc.neighbour);
+                }
+                previous if previous == arc.neighbour => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+/// В устойчивом разбиении две компоненты с единственной вершиной каждой клетки
+/// совпадают по направлениям, ролям и кратностям рёбер. Соответствие по клеткам
+/// задаёт их точную транспозицию; одноэлементные клетки фиксируют внешнюю границу.
+fn candidate_is_component_twin(
+    graph: &CanonicalGraphV1,
+    equitable: &EquitablePartitionV1,
     explored: &[usize],
     candidate: usize,
 ) -> Result<bool, ProgramCompileError> {
-    let candidate_color = graph
-        .colors
-        .get(candidate)
-        .ok_or(ProgramCompileError::InternalInvariant)?;
-    let candidate_arcs = graph
-        .adjacency
-        .get(candidate)
-        .ok_or(ProgramCompileError::InternalInvariant)?;
+    if explored.is_empty() {
+        return Ok(false);
+    }
+    let candidate_arcs = &graph.adjacency[candidate];
+    if explored.iter().any(|&vertex| {
+        graph.colors[vertex] == graph.colors[candidate]
+            && graph.adjacency[vertex] == *candidate_arcs
+    }) {
+        return Ok(true);
+    }
+    let partition = &equitable.0;
+    let cell_of = partition_cells(partition, graph.colors.len())?;
+    let mut by_cell = Vec::new();
+    by_cell
+        .try_reserve_exact(partition.cells.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    by_cell.resize(partition.cells.len(), usize::MAX);
+    let mut pending = Vec::new();
+    pending
+        .try_reserve_exact(partition.cells.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    if !unique_component_by_cell(
+        graph,
+        partition,
+        &cell_of,
+        candidate,
+        &mut by_cell,
+        &mut pending,
+    ) {
+        return Ok(false);
+    }
     for &representative in explored {
-        if graph
-            .colors
-            .get(representative)
-            .ok_or(ProgramCompileError::InternalInvariant)?
-            == candidate_color
-            && graph
-                .adjacency
-                .get(representative)
-                .ok_or(ProgramCompileError::InternalInvariant)?
-                == candidate_arcs
+        if candidate != representative
+            && cell_of[candidate] == cell_of[representative]
+            && unique_component_by_cell(
+                graph,
+                partition,
+                &cell_of,
+                representative,
+                &mut by_cell,
+                &mut pending,
+            )
         {
             return Ok(true);
         }
@@ -1927,7 +1989,7 @@ fn canonical_search_impl(
                     .last_mut()
                     .ok_or(ProgramCompileError::InternalInvariant)?;
                 frame.leaf_pending = false;
-                serialize_leaf(graph, &frame.partition)?
+                serialize_leaf(graph, &frame.partition.0)?
             };
             stack.pop();
             // Диагностический счётчик не участвует в admission: насыщение не
@@ -1964,14 +2026,17 @@ fn canonical_search_impl(
             while frame.next_candidate < frame.candidates.len() {
                 let candidate = frame.candidates[frame.next_candidate];
                 frame.next_candidate += 1;
-                if candidate_is_exact_twin(graph, &frame.explored_candidates, candidate)?
-                    || candidate_is_in_explored_orbit(
-                        &frame.partition,
-                        &frame.explored_candidates,
-                        candidate,
-                        &automorphisms,
-                    )?
-                {
+                if candidate_is_component_twin(
+                    graph,
+                    &frame.partition,
+                    &frame.explored_candidates,
+                    candidate,
+                )? || candidate_is_in_explored_orbit(
+                    &frame.partition.0,
+                    &frame.explored_candidates,
+                    candidate,
+                    &automorphisms,
+                )? {
                     continue;
                 }
                 frame
@@ -1994,7 +2059,7 @@ fn canonical_search_impl(
                         .ok_or(ProgramCompileError::InternalInvariant)?;
                     Some(refine_partition(
                         graph,
-                        individualize(&frame.partition, cell, candidate)?,
+                        individualize(&frame.partition.0, cell, candidate)?,
                     )?)
                 }
                 None => None,
@@ -2065,31 +2130,43 @@ mod ordering {
     }
 
     pub(crate) fn sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
-        fn sift<T>(
-            values: &mut [T],
+        sort_indices(values.len(), &mut |left, right, swap| {
+            if swap {
+                values.swap(left, right);
+                false
+            } else {
+                compare(&values[left], &values[right]).is_lt()
+            }
+        });
+    }
+
+    // Один цикл сортировки обслуживает все типы записей холодного компилятора.
+    // Передача операций по индексам сохраняет владение элементами и обходится без аллокаций.
+    #[inline(never)]
+    fn sort_indices(n: usize, operation: &mut dyn FnMut(usize, usize, bool) -> bool) {
+        fn sift(
             mut root: usize,
             end: usize,
-            cmp: &mut impl FnMut(&T, &T) -> Ordering,
+            operation: &mut dyn FnMut(usize, usize, bool) -> bool,
         ) {
             while root < end / 2 {
                 let mut child = root * 2 + 1;
-                if child + 1 < end && cmp(&values[child], &values[child + 1]).is_lt() {
+                if child + 1 < end && operation(child, child + 1, false) {
                     child += 1;
                 }
-                if !cmp(&values[root], &values[child]).is_lt() {
+                if !operation(root, child, false) {
                     break;
                 }
-                values.swap(root, child);
+                operation(root, child, true);
                 root = child;
             }
         }
-        let n = values.len();
         for root in (0..n / 2).rev() {
-            sift(values, root, n, &mut compare);
+            sift(root, n, operation);
         }
         for end in (1..n).rev() {
-            values.swap(0, end);
-            sift(values, 0, end, &mut compare);
+            operation(0, end, true);
+            sift(0, end, operation);
         }
     }
 
@@ -2708,6 +2785,187 @@ mod tests {
         let (renamed, _) = canonical_search(&renamed).unwrap();
 
         assert_eq!(canonical, renamed);
+    }
+
+    #[test]
+    fn fixed_color_key_preserves_length_first_order_and_bounds() {
+        let mut colors = Vec::new();
+        for length in 0..COLOR_CAPACITY {
+            for tag in [0, 1, 128, 255] {
+                let mut color = VertexColorV1::new(tag);
+                let payload = vec![tag ^ length as u8; length];
+                color.push_bytes(&payload).unwrap();
+                assert_eq!(usize::from(color.len()), length + 1);
+                assert_eq!(color.as_slice()[0], tag);
+                assert_eq!(&color.as_slice()[1..], payload);
+                colors.push(color);
+            }
+        }
+        for left in &colors {
+            for right in &colors {
+                assert_eq!(
+                    left.cmp(right),
+                    (left.len(), left.as_slice()).cmp(&(right.len(), right.as_slice()))
+                );
+            }
+        }
+        let mut full = *colors.last().unwrap();
+        let before = full;
+        assert_eq!(full.push_u8(1), Err(ProgramCompileError::InternalInvariant));
+        assert_eq!(
+            full.push_u64(1),
+            Err(ProgramCompileError::InternalInvariant)
+        );
+        assert_eq!(full, before);
+    }
+
+    fn repeated_component_graph(count: usize) -> CanonicalGraphV1 {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+        for _ in 0..count {
+            let source = graph
+                .add_member(VertexColorV1::new(vertex_tag::SOURCE))
+                .unwrap();
+            let target = graph
+                .add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))
+                .unwrap();
+            graph
+                .add_edge(target, source, EdgeRoleV1::TargetSource)
+                .unwrap();
+        }
+        graph.finish().unwrap()
+    }
+
+    #[test]
+    fn repeated_components_are_canonicalized_with_one_leaf() {
+        let graph = repeated_component_graph(32);
+        let (preimage, leaves) = canonical_search_with_test_fuel(&graph, 128).unwrap();
+        assert!(!preimage.is_empty());
+        assert_eq!(leaves, 1);
+    }
+
+    #[test]
+    fn component_interchange_checks_direction_role_multiplicity_and_boundary() {
+        for defect in 0..5 {
+            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+            let mut sources = Vec::new();
+            for index in 0..2 {
+                let source = graph
+                    .add_member(VertexColorV1::new(vertex_tag::SOURCE))
+                    .unwrap();
+                let target = graph
+                    .add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))
+                    .unwrap();
+                sources.push(source);
+                let (from, to) = if defect == 1 && index == 0 {
+                    (source, target)
+                } else {
+                    (target, source)
+                };
+                let role = if defect == 2 && index == 0 {
+                    EdgeRoleV1::ProgramMember
+                } else {
+                    EdgeRoleV1::TargetSource
+                };
+                graph.add_edge(from, to, role).unwrap();
+                // Совпадающие петли и кратные рёбра допустимы; их различие существенно.
+                graph
+                    .add_edge(source, source, EdgeRoleV1::TargetSource)
+                    .unwrap();
+                graph
+                    .add_edge(source, source, EdgeRoleV1::TargetSource)
+                    .unwrap();
+                if defect == 3 && index == 0 {
+                    graph
+                        .add_edge(source, source, EdgeRoleV1::TargetSource)
+                        .unwrap();
+                }
+                if defect == 4 && index == 0 {
+                    graph
+                        .add_edge(target, 0, EdgeRoleV1::ProgramMember)
+                        .unwrap();
+                }
+            }
+            let graph = graph.finish().unwrap();
+            let partition =
+                refine_partition(&graph, PartitionV1::initial(&graph).unwrap()).unwrap();
+            assert_eq!(
+                candidate_is_component_twin(&graph, &partition, &sources[..1], sources[1]).unwrap(),
+                defect == 0,
+                "changed incidence {defect}",
+            );
+        }
+    }
+
+    #[test]
+    fn equitable_components_with_repeated_cells_are_not_interchangeable() {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+        let mut roots = Vec::new();
+        for length in [3, 6] {
+            let mut vertices = Vec::new();
+            for index in 0..length {
+                let tag = [
+                    vertex_tag::SOURCE,
+                    vertex_tag::TARGET_FIXED,
+                    vertex_tag::PAINT_SOLID,
+                ][index % 3];
+                vertices.push(graph.add_member(VertexColorV1::new(tag)).unwrap());
+            }
+            for index in 0..length {
+                graph
+                    .add_edge(
+                        vertices[index],
+                        vertices[(index + 1) % length],
+                        EdgeRoleV1::TargetSource,
+                    )
+                    .unwrap();
+            }
+            roots.push(vertices[0]);
+        }
+        let graph = graph.finish().unwrap();
+        let partition = refine_partition(&graph, PartitionV1::initial(&graph).unwrap()).unwrap();
+        assert!(
+            partition
+                .0
+                .cells
+                .iter()
+                .any(|cell| cell.contains(&roots[0]) && cell.contains(&roots[1]))
+        );
+        assert!(!candidate_is_component_twin(&graph, &partition, &roots[..1], roots[1]).unwrap());
+        assert!(!candidate_is_component_twin(&graph, &partition, &roots[1..], roots[0]).unwrap());
+    }
+
+    fn exhaustive_preimage(graph: &CanonicalGraphV1, partition: PartitionV1) -> Vec<u8> {
+        let partition = refine_partition(graph, partition).unwrap().0;
+        match partition.first_non_singleton() {
+            None => serialize_leaf(graph, &partition).unwrap().preimage,
+            Some(cell) => partition.cells[cell]
+                .iter()
+                .map(|&vertex| {
+                    exhaustive_preimage(graph, individualize(&partition, cell, vertex).unwrap())
+                })
+                .min()
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn pruning_keeps_exact_bytes_on_every_four_vertex_digraph() {
+        for mask in 0..=0x0fff {
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            assert_eq!(
+                canonical_preimage(&graph).unwrap(),
+                exhaustive_preimage(&graph, PartitionV1::initial(&graph).unwrap()),
+                "directed edge mask {mask:#05x}",
+            );
+        }
+        for count in 1..=5 {
+            let graph = repeated_component_graph(count);
+            assert_eq!(
+                canonical_preimage(&graph).unwrap(),
+                exhaustive_preimage(&graph, PartitionV1::initial(&graph).unwrap()),
+                "components {count}",
+            );
+        }
     }
 
     proptest! {

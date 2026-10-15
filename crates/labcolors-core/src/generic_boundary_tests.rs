@@ -2271,7 +2271,7 @@ fn program_identity_binds_lcs_releases_only_through_lcs_constraint_content() {
         "pub(super) const PROGRAM_SCHEMA_V9: u8 = 9;",
         "pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;",
         "color.push_u8(release_tag::SELECTION_RELEASE_IDENTITY_V1)?;",
-        "for byte in selection.release_identity().as_bytes()",
+        "selection.release_identity().as_bytes()",
     ] {
         assert!(
             PROGRAM_IDENTITY_SOURCE.contains(required),
