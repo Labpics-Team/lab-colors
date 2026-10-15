@@ -1,8 +1,8 @@
 name: publish
 
 # Публикация по тегу использует worker из того же Git-снимка.
-# Caller передаёт только NPM_TOKEN. Значение выбирает npm-publish environment
-# внутри задания публикации; сборка и проверка опубликованного пакета его не получают.
+# Доверенная OIDC-идентичность существует только в job публикации,
+# а не у сборки, проверки архива или consumer readback.
 
 concurrency:
   group: npm-publish
@@ -22,6 +22,5 @@ jobs:
     permissions:
       contents: read
       actions: read
+      id-token: write
     uses: ./.github/workflows/publish-worker.yml
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

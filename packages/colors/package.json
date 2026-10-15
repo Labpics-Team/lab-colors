@@ -1,13 +1,12 @@
 {
   "name": "@labpics/colors",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "packageManager": "npm@11.9.0",
   "description": "Canonical Program wire compiler and certified color runtime. WASM core, zero runtime dependencies.",
   "type": "module",
   "license": "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0",
   "publishConfig": {
-    "access": "public",
-    "provenance": false
+    "access": "public"
   },
   "repository": {
     "type": "git",

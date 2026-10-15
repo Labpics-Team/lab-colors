@@ -129,13 +129,29 @@ test("semantic refusal never becomes successful through retries", async () => {
   assert.deepEqual(delays, []);
 });
 
-test("the publication caller explicitly forwards only its declared environment credential", () => {
+test("trusted npm publishing grants OIDC only to the verified publisher", () => {
   const caller = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
   const worker = readFileSync(new URL("../../../.github/workflows/publish-worker.yml", import.meta.url), "utf8");
-  assert.match(caller, /\n    secrets:\n      NPM_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}\n/u);
-  assert.match(worker, /\n  workflow_call:\n    secrets:\n      NPM_TOKEN:\n        required: true\n/u);
-  assert.doesNotMatch(caller, /secrets:\s*inherit/u);
-  const preparation = worker.split("\n  prepare:\n")[1].split("\n  publish:\n")[0];
-  assert.doesNotMatch(preparation, /secrets:|environment:/u);
-  assert.match(worker, /if \[\[ -z "\$NODE_AUTH_TOKEN" \]\]; then\n            echo "npm-publish NPM_TOKEN is unavailable" >&2\n            exit 1\n          fi\n          actual_sha256=/u);
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.match(caller, /name: publish\n/u);
+  assert.match(caller, /uses: \.\/\.github\/workflows\/publish-worker\.yml/u);
+  assert.match(caller, /id-token: write/u);
+  assert.doesNotMatch(caller, /secrets:|NPM_TOKEN|secrets: inherit/u);
+  const [top, afterPrepare] = worker.split("\n  prepare:\n");
+  assert.equal(top.split("workflow_call:").length, 2);
+  assert.doesNotMatch(top, /NPM_TOKEN|id-token: write|secrets:/u);
+  const [prepare, afterPublish] = afterPrepare.split("\n  publish:\n");
+  const [publish, verify] = afterPublish.split("\n  verify-publication:\n");
+  assert.ok(prepare && publish && verify);
+  assert.doesNotMatch(prepare, /id-token: write|NPM_TOKEN|environment:/u);
+  assert.match(publish, /environment: npm-publish/u);
+  assert.match(publish, /permissions:\n      contents: read\n      actions: read\n      id-token: write/u);
+  assert.match(publish, /ACTIONS_ID_TOKEN_REQUEST_URL/u);
+  assert.match(publish, /ACTIONS_ID_TOKEN_REQUEST_TOKEN/u);
+  assert.match(publish, /legacy npm token is not permitted/u);
+  assert.doesNotMatch(publish, /registry-url: "https:\/\/registry\.npmjs\.org"|secrets\.NPM_TOKEN/u);
+  assert.doesNotMatch(verify, /id-token: write|NPM_TOKEN|environment: npm-publish/u);
+  assert.equal(pkg.repository.url, "https://github.com/Labpics-Team/lab-colors");
+  assert.deepEqual(pkg.publishConfig, { access: "public" });
+  assert.match(pkg.packageManager, /^npm@11\./u);
 });

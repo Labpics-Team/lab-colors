@@ -1,15 +1,11 @@
 name: publish worker
 
 # Публикует проверенный архив без повторной сборки.
-# NPM_TOKEN передаётся caller'ом явно и разрешается из npm-publish environment.
-# Значение доступно только шагу npm publish; подготовка и публичная проверка
-# выполняются в отдельных заданиях без environment и без передачи секрета.
+# npm проверяет OIDC вызывающего publish.yml и environment npm-publish.
+# Подготовка и публичная проверка не получают OIDC permission или секреты.
 
 on:
   workflow_call:
-    secrets:
-      NPM_TOKEN:
-        required: true
 
 permissions:
   contents: read
@@ -32,9 +28,8 @@ jobs:
       NODE_TOOLCHAIN: ${{ needs.prepare.outputs.node }}
       NPM_TOOLCHAIN: ${{ needs.prepare.outputs.npm }}
     runs-on: ubuntu-latest
-    # Environment secrets are resolved for this job. Keep the trust boundary
-    # intrinsic to the immutable worker so PR/workflow_call/wrong-repository
-    # invocations are skipped before `npm-publish` can expose NPM_TOKEN.
+    # OIDC publisher remains scoped to this job; untrusted refs are rejected
+    # before npm can obtain a short-lived publishing identity.
     if: >-
       github.repository == 'Labpics-Team/lab-colors' &&
       github.event_name == 'push' &&
@@ -45,6 +40,10 @@ jobs:
     # перекалибровать по фактическим publish-прогонам.
     timeout-minutes: 15
     environment: npm-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -292,7 +291,8 @@ jobs:
           # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
-          registry-url: "https://registry.npmjs.org"
+          # No registry-url: setup-node would insert an authToken placeholder
+          # that suppresses npm OIDC authentication when no token is provided.
       - name: validate manifest identity and byte-exact tarball
         id: verified-artifact
         env:
@@ -1252,17 +1252,20 @@ jobs:
             process.exitCode = 1;
           });
           NODE
-      # The snapshot is tamper-evident, not immutable against same-UID code. Keep this
-      # token-bearing step adjacent; never insert checked-out or artifact code between them.
-      - name: npm publish verified CI tarball (granular token, no rebuild/repack)
+      # The snapshot is tamper-evident, not immutable against same-UID code. Keep
+      # the pre-publish hash recheck adjacent to the sole npm publish command.
+      - name: npm publish verified CI tarball (trusted OIDC, no rebuild/repack)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}
           TARBALL_SHA256: ${{ steps.verified-artifact.outputs.sha256 }}
         run: |
           set -euo pipefail
-          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
-            echo "npm-publish NPM_TOKEN is unavailable" >&2
+          if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "npm OIDC identity is unavailable" >&2
+            exit 1
+          fi
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            echo "legacy npm token is not permitted" >&2
             exit 1
           fi
           actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"
