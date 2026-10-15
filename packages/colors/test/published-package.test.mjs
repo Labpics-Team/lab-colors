@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { downloadPublishedPackage } from "../../../scripts/verify-published-package.mjs";
+import {
+  downloadPublishedPackage, waitForPublishedPackage,
+} from "../../../scripts/verify-published-package.mjs";
 
 const bytes = Buffer.from("independently verified archive");
 const sha = (algorithm, value, encoding = "hex") => createHash(algorithm).update(value).digest(encoding);
@@ -98,6 +100,7 @@ test("publication readback consumes the publisher digest in its own credential-f
   assert.match(readback[1], /needs: \[prepare, publish\]/u);
   assert.match(readback[1], /EXPECTED_TARBALL_SHA256: \$\{\{ needs\.publish\.outputs\.tarball_sha256 \}\}/u);
   assert.match(readback[1], /node scripts\/verify-published-package\.mjs/u);
+  assert.match(readback[1], /timeout-minutes: 30/u);
   assert.doesNotMatch(readback[1], /secrets\.|environment:|NODE_AUTH_TOKEN/u);
 });
 
@@ -154,4 +157,70 @@ test("trusted npm publishing grants OIDC only to the verified publisher", () => 
   assert.equal(pkg.repository.url, "https://github.com/Labpics-Team/lab-colors");
   assert.deepEqual(pkg.publishConfig, { access: "public" });
   assert.match(pkg.packageManager, /^npm@11\./u);
+});
+
+test("npm scanning delay eventually admits only the verified public archive", async () => {
+  const calls = [];
+  const waits = [];
+  let misses = 0;
+  const healthy = registry();
+  const fetcher = async (url, options) => {
+    calls.push(url);
+    if (url === metadataUrl && misses++ < 3) {
+      return new Response(null, { status: 404 });
+    }
+    return healthy.fetcher(url, options);
+  };
+  const archive = await waitForPublishedPackage(expected, fetcher, async (ms) => { waits.push(ms); });
+  assert.deepEqual(archive, bytes);
+  assert.deepEqual(waits, [15_000, 15_000, 15_000]);
+  assert.equal(calls.filter((url) => url === metadataUrl).length, 4);
+  assert.equal(calls.filter((url) => url === archiveUrl).length, 1);
+});
+
+test("publication availability has a finite wall-clock and attempt budget", async () => {
+  let ticks = 0;
+  const waits = [];
+  let attempts = 0;
+  const notVisible = async () => { attempts += 1; return new Response(null, { status: 404 }); };
+  await assert.rejects(
+    waitForPublishedPackage(expected, notVisible, async (ms) => {
+      waits.push(ms); ticks += ms;
+    }, () => ticks, 30_000),
+    /HTTP 404/u,
+  );
+  assert.deepEqual(waits, [15_000, 15_000]);
+  assert.equal(attempts, 3);
+  let foreverAttempts = 0;
+  await assert.rejects(
+    waitForPublishedPackage(expected, async () => {
+      foreverAttempts += 1;
+      return new Response(null, { status: 503 });
+    }, async () => {}, () => 0),
+    /HTTP 503/u,
+  );
+  assert.equal(foreverAttempts, 81);
+  await assert.rejects(waitForPublishedPackage(expected, notVisible,
+    async () => {}, () => 0, -1), /invalid publication visibility budget/u);
+});
+
+test("visibility waiting cannot hide compromised source, archive or authorization", async () => {
+  const delays = [];
+  for (const [metadataRow, archived, problem] of [
+    [{ ...metadata(), name: "some-other-package" }, bytes, /package identity differs/u],
+    [metadata(), Buffer.from("an unrelated archive"), /verified publication/u],
+    [{ ...metadata(), dist: { ...metadata().dist, integrity: "sha512-broken" } }, bytes, /integrity differs/u],
+  ]) {
+    const fixture = registry(metadataRow, () => new Response(archived));
+    await assert.rejects(waitForPublishedPackage(expected, fixture.fetcher,
+      async (ms) => { delays.push(ms); }), problem);
+    assert.deepEqual(fixture.calls, [metadataUrl].concat(metadataRow.name === expected.name ? [archiveUrl] : []));
+  }
+  let calls = 0;
+  await assert.rejects(waitForPublishedPackage(expected, async () => {
+    calls += 1;
+    return new Response(null, { status: 401 });
+  }, async (ms) => { delays.push(ms); }), /HTTP 401/u);
+  assert.equal(calls, 1);
+  assert.deepEqual(delays, []);
 });

@@ -92,10 +92,39 @@ export async function downloadPublishedPackage(expected, fetcher = fetch, wait =
   }
 }
 
+// npm scans newly published versions before making them public. Publication
+// success is authoritative; temporary 404s on the readback path are not.
+// Bound both wall-clock wait and attempt count. Identity/integrity refusals
+// remain terminal and never cause another publish.
+export async function waitForPublishedPackage(
+  expected, fetcher = fetch, wait = pause, now = Date.now, budgetMs = 20 * 60_000,
+) {
+  if (!Number.isSafeInteger(budgetMs) || budgetMs < 0 || budgetMs > 20 * 60_000) {
+    fail("invalid publication visibility budget");
+  }
+  const deadline = now() + budgetMs;
+  for (let attempt = 0; attempt < 81; attempt += 1) {
+    try {
+      return await downloadOnce(expected, fetcher);
+    } catch (error) {
+      const remaining = deadline - now();
+      if (!temporary(error) || remaining <= 0 || attempt === 80) throw error;
+      await wait(Math.min(15_000, remaining));
+    }
+  }
+  fail("publication visibility attempt limit exceeded");
+}
+
 async function main() {
   const source = JSON.parse(await readFile(new URL("../packages/colors/package.json", import.meta.url), "utf8"));
   const sha256 = process.env.EXPECTED_TARBALL_SHA256;
-  const bytes = await downloadPublishedPackage({ name: source.name, version: source.version, sha256 });
+  const bytes = await waitForPublishedPackage(
+    { name: source.name, version: source.version, sha256 }, fetch,
+    async (ms) => {
+      console.log("Waiting for npm malware scanning to expose the verified version");
+      await pause(ms);
+    },
+  );
   const root = await mkdtemp(join(tmpdir(), "colors-published-"));
   try {
     const tarball = join(root, "package.tgz");
