@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 311,
+   "count": 317,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -714,10 +714,16 @@
     "test_extract_human_ratings.HumanRatingsTests.test_all_published_scales_retain_their_observers_and_native_endpoints",
     "test_extract_human_ratings.HumanRatingsTests.test_archive_substitution_refuses_before_decompression",
     "test_extract_human_ratings.HumanRatingsTests.test_average_hides_reversal_but_readout_retains_it",
+    "test_extract_human_ratings.HumanRatingsTests.test_binomial_coverage_by_enumerating_individual_bernoulli_histories",
+    "test_extract_human_ratings.HumanRatingsTests.test_binomial_intervals_enclose_analytic_and_published_references",
     "test_extract_human_ratings.HumanRatingsTests.test_cli_reproduces_the_same_source_and_native_rows_under_optimization",
     "test_extract_human_ratings.HumanRatingsTests.test_complete_observers_are_order_independent",
     "test_extract_human_ratings.HumanRatingsTests.test_every_paired_observer_is_counted_once",
     "test_extract_human_ratings.HumanRatingsTests.test_missing_repeated_or_foreign_records_refuse",
+    "test_extract_human_ratings.HumanRatingsTests.test_source_support_keeps_all_cells_and_matches_raw_participant_sums",
+    "test_extract_human_ratings.HumanRatingsTests.test_support_cli_under_optimization_exports_the_entire_family",
+    "test_extract_human_ratings.HumanRatingsTests.test_support_distinguishes_equal_means_and_preserves_each_person",
+    "test_extract_human_ratings.HumanRatingsTests.test_support_midpoint_equality_and_session_disagreement_stay_visible",
     "test_extract_human_ratings.HumanRatingsTests.test_tied_ranks_and_constant_observers_stay_distinct",
     "test_extract_operations.EXT04OperationsTests.test_extract_produces_valid_manifest_schema",
     "test_extract_operations.EXT04OperationsTests.test_manifest_sha256_self_consistent",
@@ -921,7 +927,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "173ed6857cb8f262e3eaca7f40bb2c7ae2cdd267e7a76b6bd07de6b758b7993c",
+ "record_sha256": "fe8663ab5b587a2c0af789e39902ddf8be1d1d1faa9ddca9996471123e1b38e9",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

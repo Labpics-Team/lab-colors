@@ -4,10 +4,12 @@ import argparse
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from fractions import Fraction
+from functools import lru_cache
 from hashlib import sha256
 from itertools import combinations
 from io import BytesIO
 import json
+from math import comb
 from pathlib import Path
 import re
 from runpy import run_path
@@ -185,12 +187,92 @@ def summarize(ratings):
     return result
 
 
+# Шаг сетки ограничивает только наружное округление концов интервала.
+# Он не задаёт порог человеческой оценки или статистический уровень доверия.
+PROPORTION_GRID = 1 << 32
+
+
+@lru_cache(maxsize=256)
+def _binomial_lower(successes, trials, tail):
+    if successes == 0:
+        return Fraction(0)
+    lo, hi = 0, PROPORTION_GRID
+    denominator = PROPORTION_GRID ** trials
+    while hi - lo > 1:
+        midpoint = (lo + hi) // 2
+        numerator = sum(comb(trials, k) * midpoint ** k *
+                        (PROPORTION_GRID - midpoint) ** (trials - k)
+                        for k in range(successes, trials + 1))
+        if numerator * tail.denominator <= tail.numerator * denominator:
+            lo = midpoint
+        else:
+            hi = midpoint
+    return Fraction(lo, PROPORTION_GRID)
+
+
+def proportion_interval(successes, trials, alpha=Fraction(1, 20)):
+    """Наружная рациональная оболочка двустороннего интервала Clopper–Pearson."""
+    require(type(successes) is int and type(trials) is int and
+            0 <= successes <= trials and trials > 0, "binomial counts")
+    require(type(alpha) is Fraction and 0 < alpha < 1, "binomial tail probability")
+    # Симметрия бернуллиевских исходов задаёт верхний конец через нижний.
+    lower = _binomial_lower(successes, trials, alpha / 2)
+    upper = 1 - _binomial_lower(trials - successes, trials, alpha / 2)
+    return lower, upper
+
+
+def participant_support(ratings, cohorts=COHORTS, stimuli=range(32)):
+    """Согласие людей по clean–dirty с сохранением двухсессионной единицы выборки."""
+    ratings = tuple(ratings)
+    require(all(type(row) is Rating for row in ratings), "rating type")
+    clean = tuple(row for row in ratings if row.scale == "cleanliness")
+    clean = validate(clean, cohorts, ("cleanliness",), stimuli)
+    groups = grouped(clean)
+    family_size = sum(len({key[2] for key in values}) for _, values in groups)
+    alpha = Fraction(1, 20 * family_size)
+    rows = []
+    for (_, cohort), values in groups:
+        observers = sorted({key[0] for key in values})
+        for stimulus in sorted({key[2] for key in values}):
+            paired = [(values[p, 1, stimulus], values[p, 2, stimulus]) for p in observers]
+            totals = [first + second for first, second in paired]
+            # 500 сотых балла — середина исходной шкалы. Равенство хранится
+            # отдельно; порог является описательной политикой, а не выводом авторов.
+            below = sum(total < 1000 for total in totals)
+            equal = sum(total == 1000 for total in totals)
+            lower, upper = proportion_interval(below, len(observers), alpha)
+            rows.append({
+                "cohort": cohort, "stimulus": stimulus, "observers": len(observers),
+                "mean": fraction(Fraction(sum(totals), 200 * len(observers))),
+                "below_midpoint": below, "at_midpoint": equal,
+                "above_midpoint": len(observers) - below - equal,
+                "both_sessions_below": sum(a < 500 and b < 500 for a, b in paired),
+                "changed_midpoint_side": sum((a < 500) != (b < 500) for a, b in paired),
+                "below_fraction": fraction(Fraction(below, len(observers))),
+                "simultaneous_interval": {"lower": fraction(lower), "upper": fraction(upper)},
+            })
+    return {
+        "policy": "two-session-mean-strictly-below-scale-midpoint",
+        "scale": "cleanliness", "midpoint_centipoints": 500,
+        "method": "clopper-pearson-bonferroni",
+        "family_size": family_size, "familywise_alpha": fraction(Fraction(1, 20)),
+        "per_cell_alpha": fraction(alpha),
+        "endpoint_outward_error_at_most": fraction(Fraction(1, PROPORTION_GRID)),
+        "sampling_assumption": "independent-identically-distributed-participants-within-cohort",
+        "population_transfer": "not-established",
+        "rows": rows,
+    }
+
+
 def document(mode="summary"):
     ratings = load()
-    require(mode in ("summary", "ratings", "comparisons"), "report mode")
-    payload = (summarize(ratings) if mode == "summary" else comparisons(ratings)
-               if mode == "comparisons" else [asdict(row) for row in ratings])
+    require(mode in ("summary", "ratings", "comparisons", "support"), "report mode")
+    support = participant_support(ratings) if mode == "support" else None
+    payload = (support["rows"] if support is not None else summarize(ratings) if mode == "summary"
+               else comparisons(ratings) if mode == "comparisons" else [asdict(row) for row in ratings])
     return {
+        **({"support_method": {key: value for key, value in support.items() if key != "rows"}}
+           if support is not None else {}),
         "schema_version": 1,
         "source": {"doi": "10.7717/peerj.2751", "archive_sha256": SOURCE_SHA256,
                    "license": "CC-BY-4.0", "unit": "observer-within-cohort",
@@ -208,7 +290,7 @@ def document(mode="summary"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("summary", "ratings", "comparisons"), default="summary")
+    parser.add_argument("--mode", choices=("summary", "ratings", "comparisons", "support"), default="summary")
     args = parser.parse_args()
     print(json.dumps(document(args.mode), ensure_ascii=False, allow_nan=False,
                      sort_keys=True, separators=(",", ":")))
