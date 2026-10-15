@@ -1,67 +1,63 @@
 # Lab Colors
 
-Компилятор и runtime цветовых контрактов для приложений и дизайн-систем.
-Вы объявляете источники цвета, связи, подложки и ограничения. Lab Colors
-проверяет граф и вычисляет допустимые результаты при изменении наблюдаемых
-условий. Приложение задаёт смысл токенов и применяет полученные цвета.
+Библиотека адаптивных цветов для интерфейсов и дизайн-систем.
+Вы задаёте цвета, фоны и ограничения, например контраст текста.
+Lab Colors выбирает подходящие значения с учётом наложения слоёв
+и пересчитывает результат, когда приложение передаёт изменения фона.
 
-## Начать работу
+[![npm](https://img.shields.io/npm/v/%40labpics%2Fcolors)](https://www.npmjs.com/package/@labpics/colors)
+[![CI](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml/badge.svg)](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
+[![Код: MIT](https://img.shields.io/badge/code-MIT-blue)](LICENSE)
 
-Для JavaScript и TypeScript используйте пакет `@labpics/colors` с ядром на
-Rust/WASM. [Установка и первый пример](packages/colors/README.md#установка)
-показывают путь от объявления графа до чтения цвета: `compileProgramWire` →
-`updateObserved` → outputs.
-
-Для оценки из командной строки запустите пример из корня checkout с Rust
-версии, указанной в [Cargo.toml](Cargo.toml), или новее:
+## Установка
 
 ```sh
-cargo run --quiet --locked -p labcolors-evaluate-cli -- \
-  crates/labcolors-evaluate-cli/examples/declared-point.json
+npm install @labpics/colors@^1
 ```
 
-Результат — JSON-отчёт с оценкой объявленной sRGB8-точки и LCEN-сертификатом.
-[Руководство CLI](crates/labcolors-evaluate-cli/README.md) описывает вход,
-ожидаемый результат и коды отказов.
+JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
+[Настройка для браузера и Node.js](packages/colors/README.md#первый-запуск).
 
-## Границы библиотеки
+## Цвет под фон
 
-- **Приложение** владеет именами токенов, состояниями компонентов, дизайном и
-  отображением. Для ядра идентификаторы токенов непрозрачны.
-- **[Core](crates/labcolors-core/README.md)** владеет цветовой математикой,
-  графом зависимостей и проверкой ограничений. ProgramWire v1/v2 задаёт бинарный
-  формат графа (v2 добавляет явный порядок выбора конечных вариантов);
-  недопустимые входы возвращают явные ошибки.
-- **WASM и CLI** передают запросы ядру. Отдельный
-  [labcolors-transport](crates/labcolors-transport-cli/README.md) разбирает,
-  сериализует и инспектирует LCEN-envelope без вычисления цвета.
+[Готовый пример](docs/how-to/adapt-contrast.md) выбирает чёрный или белый текст
+по требованию контраста WCAG 2.2. На белом фоне получается чёрный текст,
+на чёрном получается белый. Приложение задаёт варианты цвета и их приоритет.
 
-Проверка относится к объявленной модели и переданным наблюдениям. Она не
-подтверждает фактическую отрисовку браузера или человеческое восприятие;
-DOM и CSS остаются у приложения.
+Если один цвет должен подходить сразу для нескольких фонов, библиотека
+проверяет каждый из них. Когда подходящего варианта нет, она возвращает
+`failed`. Пример показывает оба исхода и обработку результата.
+
+## Как это устроено
+
+Цвета, их связи, слои и ограничения образуют граф. Компилятор проверяет его,
+а runtime принимает изменения фона и вычисляет результат. Имена токенов,
+состояния компонентов и применение цветов в DOM или CSS задаёт приложение.
+
+Проверки относятся к переданным цветам и фонам. Отрисовку и читаемость
+готового интерфейса проверяйте в самом приложении.
+
+## Документация
+
+[JavaScript и WASM](packages/colors/README.md) ·
+[Ядро на Rust](crates/labcolors-core/README.md) ·
+[Оценка через CLI](crates/labcolors-evaluate-cli/README.md) ·
+[Все руководства](docs/README.md).
 
 ## Разработка
-
-Проверка Rust workspace из корня репозитория:
 
 ```sh
 cargo test --workspace --locked
 ```
 
-Требования к инструментам и команды JS/WASM-пакета указаны в
-[packages/colors/package.json](packages/colors/package.json).
-[GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
-показывает результаты CI.
-
-[Документация](docs/README.md) собирает рабочие инструкции, контракты,
-архитектурные решения и исследования по отдельным вопросам.
+Версия Rust указана в [Cargo.toml](Cargo.toml). Команды сборки и проверки
+npm-пакета находятся в [package.json](packages/colors/package.json).
 
 ## Зависимости
 
-У `labcolors-core` по умолчанию ноль рантайм-зависимостей. Необязательная
-возможность `ext09-extractor` подключает зависимости из
-[манифеста Core](crates/labcolors-core/Cargo.toml). Проверить конфигурацию по
-умолчанию:
+У `labcolors-core` по умолчанию ноль рантайм-зависимостей.
+Необязательная возможность `ext09-extractor` подключает зависимости из
+[манифеста ядра](crates/labcolors-core/Cargo.toml).
 
 ```sh
 cargo tree -p labcolors-core --edges=no-dev
@@ -69,6 +65,6 @@ cargo tree -p labcolors-core --edges=no-dev
 
 ## Лицензии
 
-Исходный код — [MIT](LICENSE). Для встроенных данных действуют CC-BY-4.0 и
-CC-BY-SA-4.0; источники и условия использования перечислены в
+Код: [MIT](LICENSE). Встроенные данные: CC-BY-4.0 и CC-BY-SA-4.0.
+Источники и условия использования перечислены в
 [NOTICE.md](crates/labcolors-core/NOTICE.md).
