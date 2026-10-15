@@ -18,6 +18,8 @@
 
 - [Оценка через CLI](contracts/evaluation-cli-v1.md): вход, результат
   и ошибки.
+- [Человеческие оценки](contracts/human-ratings.md): исходные ответы и формат
+  воспроизводимого отчёта.
 - [Core](../crates/labcolors-core/README.md): цветовая математика и граф.
 - [Транспорт](../crates/labcolors-transport-cli/README.md):
   конверты и сериализация.
