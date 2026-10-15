@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 558,
+ "file_count": 560,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -15,7 +15,7 @@
   ".github/workflows/native-conformance-worker.yml": "34d201ace30579065747e79bcc65b2e9f00028da",
   ".github/workflows/native-conformance.yml": "ec18ec6120ee417ccbc926b5280a57e5c7bb2dd5",
   ".github/workflows/package-worker.yml": "5b4cadab81fabc1a25de76661c787139de2c143b",
-  ".github/workflows/publish-worker.yml": "d0a77685de6a2fd9d25b07018f96181d790f1878",
+  ".github/workflows/publish-worker.yml": "d269e7d1a64c50c0515bdf3d5d62fc1672d42d3d",
   ".github/workflows/publish.yml": "7578d2b2839d670543d85ab650731223558c6a58",
   ".github/workflows/verification-lanes.yml": "ae83870463f8ef5bc4e351e71a710c991cb2563b",
   "Cargo.lock": "fe11e3f96ce66d10ab67d2f8f8eb77b82fe5634b",
@@ -274,7 +274,7 @@
   "crates/labcolors-wasm/tests/data/labui.config.prod.json": "e147e4ae1e5d55d74ddec31435af201d1d2a4347",
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
-  "packages/colors/README.md": "401e2c4470855040b0b362a62252b81abfba9add",
+  "packages/colors/README.md": "754762074e5db5f7764e40fcfebb26f94a0b3c67",
   "packages/colors/bench/wasm.json": "68d235726e53dea98b90df07b7732775820c53b5",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
@@ -314,6 +314,7 @@
   "packages/colors/test/public-api-cleanup.test.mjs": "e1ea85803e118881c88183ff0ee41771e85712a2",
   "packages/colors/test/public-claims.test.mjs": "d3ac2b42a3d1b6a079c1a84f20aa0efac3b3d7d5",
   "packages/colors/test/publish-ci-admission.test.mjs": "b5ff3736a36e73795e8ea9d5ffaa0879b68f85a3",
+  "packages/colors/test/published-package.test.mjs": "fe587c5b5855dd3a9ed9ba52c8f4ef5a2e775853",
   "packages/colors/test/release-contract.test.mjs": "0d2e4835ea40c9e8e0ee011e90012396817550d3",
   "packages/colors/test/release-provenance.test.mjs": "0a73bf8675611f550f54f37ec4976a9eccdf7b63",
   "packages/colors/test/sink.test.mjs": "1eb3c3dd57e61371ab5d9163bafb1024d157bcea",
@@ -552,8 +553,9 @@
   "scripts/test_verify_core_formal.py": "85372064d897d0bb7048b8aa7436817eb6a74e67",
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
   "scripts/transport-distribution.mjs": "0ffdd393185b048db61bc56bfe1ae64c2408ee0d",
-  "scripts/verify-package-release.mjs": "063790f80d9385e514b454a0bf39ce23334d0abf",
+  "scripts/verify-package-release.mjs": "b54b9d1620e19d70dd830d0762777cb3497b8f85",
   "scripts/verify-publication.mjs": "f8bfeae013cf412a4e7095b59b9e036e19935b0b",
+  "scripts/verify-published-package.mjs": "80795c96e0b77930613175befc0e9ed49a7a66d0",
   "scripts/verify_clean_set_receipt.py": "9a59b4b6707c115f029eae019d0b065f7678281f",
   "scripts/verify_core_formal.py": "40de7eaf567d998344595dded5bd5eaac5debb91",
   "scripts/verify_point_support_surplus.py": "24785f2d6cc56c88e12b0c50643f8f25365b3f6c",
@@ -561,7 +563,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "69b9f783ae0acad32edf2033cd8edf9a77964c7dbd81ea18c6bd056827325b8b",
+ "record_sha256": "6a8d7429b4006cb2dd501bcffb98f384f81e9bef3f5c46120722e76a6f6d516c",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

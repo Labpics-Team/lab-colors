@@ -1605,6 +1605,18 @@ export async function smokePackedPackage(tarballPath) {
     const runtimePath = resolve(consumer, "smoke.mjs");
     await writeFile(runtimePath, runtimeSmokeSource());
     command(process.execPath, [runtimePath], consumer);
+    const tutorial = await readFile(resolve(REPO_ROOT, "docs/how-to/adapt-contrast.md"), "utf8");
+    const examples = [...tutorial.matchAll(/^```js\r?\n([\s\S]*?)^```$/gmu)];
+    if (examples.length !== 1) fail("adaptive contrast tutorial must contain one runnable JavaScript example");
+    const examplePath = join(consumer, "adaptive-color.mjs");
+    await writeFile(examplePath, examples[0][1]);
+    const actual = command(process.execPath, [examplePath], consumer).trim().split("\n").map((line) => JSON.parse(line));
+    const expected = [
+      { state: "ready", rgb: [0, 0, 0] },
+      { state: "ready", rgb: [255, 255, 255] },
+      { state: "failed", rgb: null },
+    ];
+    if (!isDeepStrictEqual(actual, expected)) fail("installed adaptive contrast example returned unexpected states or colors");
   } finally {
     await rm(consumer, { recursive: true, force: true });
   }
