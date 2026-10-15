@@ -274,7 +274,7 @@
   "crates/labcolors-wasm/tests/data/labui.config.prod.json": "e147e4ae1e5d55d74ddec31435af201d1d2a4347",
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
-  "packages/colors/README.md": "6bd0fb04effa78b1f462045e7f1746a72894c087",
+  "packages/colors/README.md": "f4da888c7f7b76144caa75681c013a013ddf2380",
   "packages/colors/bench/wasm.json": "68d235726e53dea98b90df07b7732775820c53b5",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
@@ -563,7 +563,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "893bf842a56d23ee311b77c3939ec435db515aaf964819dc63f4a24e283f0766",
+ "record_sha256": "dcbec97d777bae18498b28bf18d95c0c24a69cf77fb0368c6aef5aea3b0abb63",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
