@@ -1261,14 +1261,14 @@ jobs:
           TARBALL_SHA256: ${{ steps.verified-artifact.outputs.sha256 }}
         run: |
           set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "npm-publish NPM_TOKEN is unavailable" >&2
+            exit 1
+          fi
           actual_sha256="$(sha256sum --binary -- "$TARBALL_PATH")"
           actual_sha256="${actual_sha256%% *}"
           if [[ ! "$TARBALL_SHA256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$TARBALL_SHA256" ]]; then
             echo "verified tarball changed before npm publish" >&2
-            exit 1
-          fi
-          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
-            echo "npm-publish NPM_TOKEN is unavailable" >&2
             exit 1
           fi
           npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"

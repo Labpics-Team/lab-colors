@@ -137,5 +137,5 @@ test("the publication caller explicitly forwards only its declared environment c
   assert.doesNotMatch(caller, /secrets:\s*inherit/u);
   const preparation = worker.split("\n  prepare:\n")[1].split("\n  publish:\n")[0];
   assert.doesNotMatch(preparation, /secrets:|environment:/u);
-  assert.match(worker, /if \[\[ -z "\$NODE_AUTH_TOKEN" \]\]; then\n            echo "npm-publish NPM_TOKEN is unavailable" >&2\n            exit 1\n          fi\n          npm publish/u);
+  assert.match(worker, /if \[\[ -z "\$NODE_AUTH_TOKEN" \]\]; then\n            echo "npm-publish NPM_TOKEN is unavailable" >&2\n            exit 1\n          fi\n          actual_sha256=/u);
 });
