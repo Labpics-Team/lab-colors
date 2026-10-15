@@ -44,6 +44,19 @@ class HumanRatingsTests(unittest.TestCase):
         self.assertEqual(nonlinear_report["individual_repeat_spearman"]["median"], 1)
         self.assertTrue(all(person["spearman"] == 1
                             for person in nonlinear_report["individuals"]))
+        forwards = (100, 300, 800)
+        backwards = tuple(reversed(forwards))
+        contradictory = tuple(
+            Rating("cleanliness", "group", observer, session, stimulus,
+                   (forwards if observer == session else backwards)[stimulus])
+            for observer in (1, 2) for session in (1, 2)
+            for stimulus in range(3)
+        )
+        contradiction = summarize(checked(contradictory))[0]
+        self.assertEqual(contradiction["cohort_mean_repeat_spearman"], 1)
+        self.assertEqual(contradiction["individual_repeat_spearman"]["median"], -1)
+        self.assertTrue(all(person["spearman"] == -1
+                            for person in contradiction["individuals"]))
 
     def test_missing_repeated_or_foreign_records_refuse(self):
         rows = fixture()
