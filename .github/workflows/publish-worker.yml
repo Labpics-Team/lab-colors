@@ -31,6 +31,8 @@ jobs:
       contents: read
   publish:
     needs: prepare
+    outputs:
+      tarball_sha256: ${{ steps.verified-artifact.outputs.sha256 }}
     env:
       NODE_TOOLCHAIN: ${{ needs.prepare.outputs.node }}
       NPM_TOOLCHAIN: ${{ needs.prepare.outputs.npm }}
@@ -1271,3 +1273,23 @@ jobs:
             exit 1
           fi
           npm publish --ignore-scripts --@labpics:registry=https://registry.npmjs.org "$TARBALL_PATH"
+
+  verify-publication:
+    name: installed public package
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ needs.prepare.outputs.node }}
+          package-manager-cache: false
+      - name: install the exact public archive and run its consumer examples
+        env:
+          EXPECTED_TARBALL_SHA256: ${{ needs.publish.outputs.tarball_sha256 }}
+        run: node scripts/verify-published-package.mjs

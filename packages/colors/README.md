@@ -7,8 +7,10 @@
 ## Установка
 
 ```sh
-npm install @labpics/colors
+npm install @labpics/colors@^1
 ```
+
+[Готовый пример адаптации к фону](https://github.com/Labpics-Team/lab-colors/blob/main/docs/how-to/adapt-contrast.md) показывает выбор цвета и отказ при несовместимых требованиях.
 
 ## Первый маршрут
 
