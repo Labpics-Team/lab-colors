@@ -1,24 +1,30 @@
-# @labpics/colors
+# Lab Colors
 
-Компилятор и runtime проверяемых цветовых Program-графов.
+Библиотека адаптивных цветов для интерфейсов и дизайн-систем.
+Вы задаёте цвета, фоны и ограничения, например контраст текста.
+Lab Colors выбирает подходящие значения с учётом наложения слоёв
+и пересчитывает результат, когда приложение передаёт изменения фона.
 
-Клиент передаёт канонические Program wire-байты. Ядро атомарно проверяет граф, создаёт Session, принимает наблюдения среды и возвращает только сертифицированные Paint outputs. Recipe-меню ролей и специальные Material/Glow runtime-пути удалены из публичного API.
+[![npm](https://img.shields.io/npm/v/%40labpics%2Fcolors)](https://www.npmjs.com/package/@labpics/colors)
+[![CI](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml/badge.svg)](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
+[![Код: MIT](https://img.shields.io/badge/code-MIT-blue)](https://github.com/Labpics-Team/lab-colors/blob/main/LICENSE)
 
 ## Установка
-
-Установите пакет из публичного npm:
 
 ```sh
 npm install @labpics/colors@^1
 ```
 
-Пакет содержит проверенный Rust/WASM runtime. Сохранённый lockfile закрепляет
-конкретную версию; для побайтовой проверки отдельно доступен
-[неизменяемый релиз](https://github.com/Labpics-Team/lab-colors/releases/latest).
+JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
+Сохраните lockfile, чтобы закрепить версию.
 
-[Готовый пример адаптации к фону](https://github.com/Labpics-Team/lab-colors/blob/main/docs/how-to/adapt-contrast.md) показывает выбор цвета и отказ при несовместимых требованиях.
+[Пример подбора цвета под фон](https://github.com/Labpics-Team/lab-colors/blob/main/docs/how-to/adapt-contrast.md)
+выбирает чёрный или белый текст по требованию контраста WCAG 2.2
+и показывает отказ, когда ни один вариант не подходит.
 
-## Первый маршрут
+<a id="первый-маршрут"></a>
+
+## Первый запуск
 
 Инициализируйте WASM один раз выбранным способом, затем выполните общий пример
 ниже в том же модуле.

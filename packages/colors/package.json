@@ -2,7 +2,7 @@
   "name": "@labpics/colors",
   "version": "1.0.2",
   "packageManager": "npm@11.9.0",
-  "description": "Canonical Program wire compiler and certified color runtime. WASM core, zero runtime dependencies.",
+  "description": "Библиотека адаптивных цветов для интерфейсов и дизайн-систем.",
   "type": "module",
   "license": "MIT AND CC-BY-4.0 AND CC-BY-SA-4.0",
   "publishConfig": {
@@ -70,14 +70,14 @@
   "sideEffects": false,
   "keywords": [
     "color",
-    "oklch",
     "contrast",
-    "apca",
-    "wcag",
-    "theme",
+    "accessibility",
+    "design-system",
     "design-tokens",
+    "rust",
+    "typescript",
     "wasm",
-    "labpics"
+    "wcag"
   ],
   "engines": {
     "node": ">=22.11.0"
