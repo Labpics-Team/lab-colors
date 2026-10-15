@@ -254,6 +254,8 @@ def participant_support(ratings, cohorts=COHORTS, stimuli=range(32)):
     return {
         "policy": "two-session-mean-strictly-below-scale-midpoint",
         "scale": "cleanliness", "midpoint_centipoints": 500,
+        "participants": len({(row.cohort, row.observer) for row in clean}),
+        "responses": len(clean),
         "method": "clopper-pearson-bonferroni",
         "family_size": family_size, "familywise_alpha": fraction(Fraction(1, 20)),
         "per_cell_alpha": fraction(alpha),

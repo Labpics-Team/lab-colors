@@ -184,6 +184,7 @@ class HumanRatingsTests(unittest.TestCase):
         self.assertEqual([row["below_midpoint"] for row in split["rows"]], [1, 1, 1])
         self.assertEqual(split, participant_support(reversed(divided), {"group": 2}, range(3)))
         self.assertEqual(split["family_size"], 3)
+        self.assertEqual((split["participants"], split["responses"]), (2, 12))
         self.assertEqual(split["per_cell_alpha"], {"numerator": 1, "denominator": 60})
         row = split["rows"][0]
         self.assertEqual(row["observers"], 2)
@@ -270,6 +271,8 @@ class HumanRatingsTests(unittest.TestCase):
         ratings = load()
         report = document("support")
         self.assertEqual(report["support_method"]["family_size"], 96)
+        self.assertEqual(report["support_method"]["participants"], 36)
+        self.assertEqual(report["support_method"]["responses"], 2304)
         self.assertEqual(report["support_method"]["per_cell_alpha"], {"numerator": 1, "denominator": 1920})
         self.assertEqual(report["support_method"]["population_transfer"], "not-established")
         self.assertEqual(len(report["rows"]), 96)
