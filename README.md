@@ -53,8 +53,8 @@ cargo test --workspace --locked
 [GitHub Actions](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
 показывает результаты CI.
 
-[Отчёт человеческих оценок](docs/contracts/human-ratings.md) описывает
-воспроизводимый разбор опубликованных ответов по исходным участникам и шкалам.
+[Документация](docs/README.md) собирает рабочие инструкции, контракты,
+архитектурные решения и исследования по отдельным вопросам.
 
 ## Зависимости
 
