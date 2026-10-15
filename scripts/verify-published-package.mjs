@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { setTimeout as pause } from "node:timers/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { smokePackedPackage } from "./verify-package-release.mjs";
@@ -12,18 +13,31 @@ const hash = (algorithm, bytes, encoding = "hex") =>
   createHash(algorithm).update(bytes).digest(encoding);
 const fail = (message) => { throw new Error(`Published package: ${message}`); };
 
+class RegistryHttpError extends Error {
+  constructor(status, url) {
+    super(`Published package: HTTP ${status} for ${url}`);
+    this.status = status;
+  }
+}
+
+const transientStatuses = new Set([404, 408, 425, 429, 500, 502, 503, 504]);
+const transientCodes = new Set(["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]);
+const temporary = (error) =>
+  (error instanceof RegistryHttpError && transientStatuses.has(error.status)) ||
+  error?.name === "TimeoutError" || transientCodes.has(error?.cause?.code ?? error?.code);
+
 async function readBounded(url, limit, fetcher) {
   const response = await fetcher(url, {
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) {
-    await response.body?.cancel();
-    fail(`HTTP ${response.status} for ${url}`);
+    await response.body?.cancel().catch(() => {});
+    throw new RegistryHttpError(response.status, url);
   }
   const declared = response.headers.get("content-length");
   if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) {
-    await response.body?.cancel();
+    await response.body?.cancel().catch(() => {});
     fail("response exceeds its byte limit");
   }
   if (!response.body) fail("response has no body");
@@ -46,7 +60,7 @@ async function readBounded(url, limit, fetcher) {
 }
 
 /** Сверяет публичные байты с независимым результатом подготовительного задания. */
-export async function downloadPublishedPackage({ name, version, sha256 }, fetcher = fetch) {
+async function downloadOnce({ name, version, sha256 }, fetcher) {
   if (typeof name !== "string" || !name || typeof version !== "string" || !version ||
       !/^[0-9a-f]{64}$/u.test(sha256 ?? "")) {
     fail("expected package identity is incomplete");
@@ -64,6 +78,18 @@ export async function downloadPublishedPackage({ name, version, sha256 }, fetche
     fail("registry integrity differs from the archive");
   }
   return bytes;
+}
+
+/** Повторяет только временный отказ чтения; неверные байты остаются ошибкой. */
+export async function downloadPublishedPackage(expected, fetcher = fetch, wait = pause) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await downloadOnce(expected, fetcher);
+    } catch (error) {
+      if (attempt === 2 || !temporary(error)) throw error;
+      await wait(1000 * (2 ** attempt));
+    }
+  }
 }
 
 async function main() {

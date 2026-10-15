@@ -68,7 +68,7 @@ test("untrusted locations never receive a second request", async () => {
 test("registry failures and mismatched integrity remain explicit failures", async () => {
   for (const status of [404, 429, 500, 503]) {
     const fixture = registry(metadata(), () => new Response("unavailable", { status }));
-    await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher), new RegExp(`HTTP ${status}`, "u"));
+    await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher, async () => {}), new RegExp(`HTTP ${status}`, "u"));
   }
   const record = metadata(); record.dist.integrity = "sha512-wrong";
   await assert.rejects(downloadPublishedPackage(expected, registry(record).fetcher), /integrity differs/u);
@@ -99,4 +99,32 @@ test("publication readback consumes the publisher digest in its own credential-f
   assert.match(readback[1], /EXPECTED_TARBALL_SHA256: \$\{\{ needs\.publish\.outputs\.tarball_sha256 \}\}/u);
   assert.match(readback[1], /node scripts\/verify-published-package\.mjs/u);
   assert.doesNotMatch(readback[1], /secrets\.|environment:|NODE_AUTH_TOKEN/u);
+});
+
+test("transient registry failures recover with a bounded retry budget", async () => {
+  const delays = [];
+  const healthy = registry();
+  let attempts = 0;
+  const fetcher = async (url, options) => {
+    if (url === metadataUrl && attempts++ < 2) return new Response(null, { status: attempts === 1 ? 404 : 503 });
+    return healthy.fetcher(url, options);
+  };
+  assert.deepEqual(await downloadPublishedPackage(expected, fetcher, async (ms) => { delays.push(ms); }), bytes);
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+  let failures = 0;
+  await assert.rejects(downloadPublishedPackage(expected, async () => {
+    failures += 1;
+    throw new DOMException("request timed out", "TimeoutError");
+  }, async () => {}), /timed out/u);
+  assert.equal(failures, 3);
+});
+
+test("semantic refusal never becomes successful through retries", async () => {
+  const record = metadata(); record.dist.integrity = "sha512-wrong";
+  const fixture = registry(record);
+  const delays = [];
+  await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher, async (ms) => { delays.push(ms); }), /integrity differs/u);
+  assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl]);
+  assert.deepEqual(delays, []);
 });
