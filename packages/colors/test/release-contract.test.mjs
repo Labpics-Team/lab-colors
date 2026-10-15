@@ -25,7 +25,9 @@ test("terminal tar inventory is exact and excludes retired roots", () => {
 });
 
 test("terminal package has one root and no legacy subpath", () => {
-  assert.equal(pkg.version, "1.0.0");
+  const lock = JSON.parse(read("package-lock.json"));
+  assert.equal(pkg.version, lock.version);
+  assert.equal(pkg.version, lock.packages[""].version);
   assert.deepEqual(Object.keys(pkg.exports).sort(), [
     ".", "./build-metadata.json", "./package.json", "./pkg/labcolors_bg.wasm",
     "./program-wire/abi-v1.js", "./program-wire/abi-v2.js",

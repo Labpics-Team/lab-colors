@@ -1,14 +1,8 @@
 name: publish
 
-# Тонкий caller: триггер по тегу, concurrency и права. Локальный uses выбирает
-# publish-worker.yml из того же коммита, поэтому squash не оставляет публикацию
-# на старом release-контракте. Гейты CI и byte-exact артефакта проверяются вместе
-# с этим snapshot; worker не принимает inputs и исполняется на эфемерной VM.
-#
-# `environment: npm-publish` объявлен НА JOB'Е ВНУТРИ worker'а, а не здесь: job с
-# `uses:` не поддерживает ключ `environment`; объявление внутри reusable-worker
-# заставляет GitHub резолвить его собственный environment-секрет NPM_TOKEN.
-# Caller secrets не наследуются: worker не должен получать весь repo/org secret set.
+# Публикация по тегу использует worker из того же Git-снимка.
+# Caller передаёт только NPM_TOKEN. Значение выбирает npm-publish environment
+# внутри задания публикации; сборка и проверка опубликованного пакета его не получают.
 
 concurrency:
   group: npm-publish
@@ -29,3 +23,5 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/publish-worker.yml
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
