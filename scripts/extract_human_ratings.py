@@ -247,7 +247,7 @@ def participant_support(ratings, cohorts=COHORTS, stimuli=range(32)):
                 "below_midpoint": below, "at_midpoint": equal,
                 "above_midpoint": len(observers) - below - equal,
                 "both_sessions_below": sum(a < 500 and b < 500 for a, b in paired),
-                "changed_midpoint_side": sum((a < 500) != (b < 500) for a, b in paired),
+                "changed_midpoint_side": sum((a - 500) * (b - 500) < 0 for a, b in paired),
                 "below_fraction": fraction(Fraction(below, len(observers))),
                 "simultaneous_interval": {"lower": fraction(lower), "upper": fraction(upper)},
             })

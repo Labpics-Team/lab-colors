@@ -199,6 +199,16 @@ class HumanRatingsTests(unittest.TestCase):
         self.assertGreater(adjusted[1], no_adjustment[1])
 
     def test_support_midpoint_equality_and_session_disagreement_stay_visible(self):
+        for first, second, crossings in [
+            (400, 400, 0), (400, 500, 0), (400, 600, 1),
+            (500, 400, 0), (500, 500, 0), (500, 600, 0),
+            (600, 400, 1), (600, 500, 0), (600, 600, 0),
+        ]:
+            rows = (Rating("cleanliness", "group", 1, 1, 0, first),
+                    Rating("cleanliness", "group", 1, 2, 0, second))
+            with self.subTest(first=first, second=second):
+                result = participant_support(rows, {"group": 1}, range(1))["rows"][0]
+                self.assertEqual(result["changed_midpoint_side"], crossings)
         rows = tuple(replace(row, centipoints=400 if row.observer == 1
                              else 0 if row.session == 1 else 1000) for row in fixture())
         for row in participant_support(rows, {"group": 2}, range(3))["rows"]:
