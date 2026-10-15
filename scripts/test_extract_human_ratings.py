@@ -1,5 +1,5 @@
 """Published rows and hostile records exercise the same descriptive readout."""
-from dataclasses import replace
+from dataclasses import asdict, replace
 from fractions import Fraction
 from itertools import permutations
 import json
@@ -35,6 +35,15 @@ class HumanRatingsTests(unittest.TestCase):
             self.assertEqual(summarize(shuffled), baseline)
             self.assertEqual(comparisons(shuffled), comparisons(rows))
         self.assertEqual(baseline[0]["individual_repeat_spearman"]["median"], 1)
+        nonlinear = tuple(
+            replace(row, centipoints=(100, 200, 950)[row.stimulus])
+            if row.session == 2 else row for row in rows
+        )
+        nonlinear_report = summarize(checked(nonlinear))[0]
+        self.assertEqual(nonlinear_report["cohort_mean_repeat_spearman"], 1)
+        self.assertEqual(nonlinear_report["individual_repeat_spearman"]["median"], 1)
+        self.assertTrue(all(person["spearman"] == 1
+                            for person in nonlinear_report["individuals"]))
 
     def test_missing_repeated_or_foreign_records_refuse(self):
         rows = fixture()
@@ -73,6 +82,8 @@ class HumanRatingsTests(unittest.TestCase):
         reverse = paired_counts([-300, 200, 0, 0], [-100, 400, 0, -200])
         self.assertEqual(reverse["repeat_order"], result["repeat_order"])
         self.assertEqual(reverse["two_session_mean_order"]["right_lower"], 2)
+        self.assertEqual(paired_counts([200, -100], [100, 200])["mean_right_minus_left"],
+                         {"numerator": 1, "denominator": 1})
 
     def test_tied_ranks_and_constant_observers_stay_distinct(self):
         self.assertEqual(ranks([7, 1, 7, 3]), [Fraction(7, 2), 1, Fraction(7, 2), 2])
@@ -114,6 +125,13 @@ class HumanRatingsTests(unittest.TestCase):
         for row in pairs:
             self.assertEqual(sum(row["two_session_mean_order"].values()), row["observers"])
             self.assertEqual(sum(row["repeat_order"].values()), row["observers"])
+            if row["scale"] == "cleanliness":
+                left, right = (expected[(row["cohort"], row[key])] for key in
+                               ("left_stimulus", "right_stimulus"))
+                difference = (Fraction(right["numerator"], right["denominator"]) -
+                              Fraction(left["numerator"], left["denominator"]))
+                self.assertEqual(row["mean_right_minus_left"],
+                                 {"numerator": difference.numerator, "denominator": difference.denominator})
         compact = [{key: row[key] for key in ("cohort", "cohort_mean_repeat_spearman", "individual_repeat_spearman")}
                    for row in report["rows"] if row["scale"] == "cleanliness"]
         print("PUBLISHED_CLEANLINESS_REPEATABILITY " + json.dumps(compact, allow_nan=False))
@@ -127,6 +145,9 @@ class HumanRatingsTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["observers"], 36)
         self.assertEqual(len({(r["scale"], r["cohort"], r["observer"], r["session"], r["stimulus"])
                               for r in report["rows"]}), len(report["rows"]))
+        self.assertTrue(all(type(row["centipoints"]) is int
+                            for row in report["rows"]))
+        self.assertEqual(report["rows"], [asdict(row) for row in load()])
         self.assertEqual(report["source"], document()["source"])
         self.assertEqual(result.stderr, "")
 
