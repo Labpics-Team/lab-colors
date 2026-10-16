@@ -4,7 +4,7 @@
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
-  ".github/workflows/ci-worker.yml": "f1b974de0c26bbb0bc21fb9e014b456e08bb94a6",
+  ".github/workflows/ci-worker.yml": "17ea7876b20d8ac956500104ca077709940de21a",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/code-admission-public.yml": "08a1173b4bfe336827dc0d2db65e961ba0cf58b6",
   ".github/workflows/dual-proof.yml": "e4ec5e1d75dbaf041de171eb550f1954991c43fd",
@@ -546,7 +546,7 @@
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
   "scripts/test_formal_outputs.py": "4da9c69f940462e6482c80490feb16da9fa09516",
-  "scripts/test_mutation.py": "611a33cad485436f9ad51f3de5ffba358432526f",
+  "scripts/test_mutation.py": "cdef1a20c835dfe80ab2660db2764a8062088716",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_transport_distribution.mjs": "483eff5cdcdedd9507ef7ed6d1444e8ee6ffb2f1",
@@ -564,7 +564,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "cc1ba900be5e5f9ed70639647b4e0a59ffdec4908f1ac46fc5612a54daaa42cd",
+ "record_sha256": "ebdb8ec69341412ea27f9eb8a2157265489af1a200372021b83e433f3a3a9275",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
