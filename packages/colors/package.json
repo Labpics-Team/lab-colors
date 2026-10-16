@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "packageManager": "npm@11.9.0",
   "description": "Библиотека адаптивных цветов для интерфейсов и дизайн-систем.",
   "type": "module",
