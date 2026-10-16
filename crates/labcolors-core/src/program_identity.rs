@@ -2788,13 +2788,14 @@ mod tests {
     }
 
     #[test]
-    fn fixed_color_key_preserves_length_first_order_and_bounds() {
+    fn fixed_color_key_preserves_length_first_order_and_bounds() -> Result<(), ProgramCompileError>
+    {
         let mut colors = Vec::new();
         for length in 0..COLOR_CAPACITY {
             for tag in [0, 1, 128, 255] {
                 let mut color = VertexColorV1::new(tag);
                 let payload = vec![tag ^ length as u8; length];
-                color.push_bytes(&payload).unwrap();
+                color.push_bytes(&payload)?;
                 assert_eq!(usize::from(color.len()), length + 1);
                 assert_eq!(color.as_slice()[0], tag);
                 assert_eq!(&color.as_slice()[1..], payload);
@@ -2809,7 +2810,9 @@ mod tests {
                 );
             }
         }
-        let mut full = *colors.last().unwrap();
+        let mut full = *colors
+            .last()
+            .ok_or(ProgramCompileError::InternalInvariant)?;
         let before = full;
         assert_eq!(full.push_u8(1), Err(ProgramCompileError::InternalInvariant));
         assert_eq!(
@@ -2817,44 +2820,37 @@ mod tests {
             Err(ProgramCompileError::InternalInvariant)
         );
         assert_eq!(full, before);
+        Ok(())
     }
 
-    fn repeated_component_graph(count: usize) -> CanonicalGraphV1 {
-        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+    fn repeated_component_graph(count: usize) -> Result<CanonicalGraphV1, ProgramCompileError> {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
         for _ in 0..count {
-            let source = graph
-                .add_member(VertexColorV1::new(vertex_tag::SOURCE))
-                .unwrap();
-            let target = graph
-                .add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))
-                .unwrap();
-            graph
-                .add_edge(target, source, EdgeRoleV1::TargetSource)
-                .unwrap();
+            let source = graph.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+            let target = graph.add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))?;
+            graph.add_edge(target, source, EdgeRoleV1::TargetSource)?;
         }
-        graph.finish().unwrap()
+        graph.finish()
     }
 
     #[test]
-    fn repeated_components_are_canonicalized_with_one_leaf() {
-        let graph = repeated_component_graph(32);
-        let (preimage, leaves) = canonical_search_with_test_fuel(&graph, 128).unwrap();
+    fn repeated_components_are_canonicalized_with_one_leaf() -> Result<(), ProgramCompileError> {
+        let graph = repeated_component_graph(32)?;
+        let (preimage, leaves) = canonical_search_with_test_fuel(&graph, 128)?;
         assert!(!preimage.is_empty());
         assert_eq!(leaves, 1);
+        Ok(())
     }
 
     #[test]
-    fn component_interchange_checks_direction_role_multiplicity_and_boundary() {
+    fn component_interchange_checks_direction_role_multiplicity_and_boundary()
+    -> Result<(), ProgramCompileError> {
         for defect in 0..5 {
-            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
             let mut sources = Vec::new();
             for index in 0..2 {
-                let source = graph
-                    .add_member(VertexColorV1::new(vertex_tag::SOURCE))
-                    .unwrap();
-                let target = graph
-                    .add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))
-                    .unwrap();
+                let source = graph.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+                let target = graph.add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))?;
                 sources.push(source);
                 let (from, to) = if defect == 1 && index == 0 {
                     (source, target)
@@ -2866,39 +2862,32 @@ mod tests {
                 } else {
                     EdgeRoleV1::TargetSource
                 };
-                graph.add_edge(from, to, role).unwrap();
+                graph.add_edge(from, to, role)?;
                 // Совпадающие петли и кратные рёбра допустимы; их различие существенно.
-                graph
-                    .add_edge(source, source, EdgeRoleV1::TargetSource)
-                    .unwrap();
-                graph
-                    .add_edge(source, source, EdgeRoleV1::TargetSource)
-                    .unwrap();
+                graph.add_edge(source, source, EdgeRoleV1::TargetSource)?;
+                graph.add_edge(source, source, EdgeRoleV1::TargetSource)?;
                 if defect == 3 && index == 0 {
-                    graph
-                        .add_edge(source, source, EdgeRoleV1::TargetSource)
-                        .unwrap();
+                    graph.add_edge(source, source, EdgeRoleV1::TargetSource)?;
                 }
                 if defect == 4 && index == 0 {
-                    graph
-                        .add_edge(target, 0, EdgeRoleV1::ProgramMember)
-                        .unwrap();
+                    graph.add_edge(target, 0, EdgeRoleV1::ProgramMember)?;
                 }
             }
-            let graph = graph.finish().unwrap();
-            let partition =
-                refine_partition(&graph, PartitionV1::initial(&graph).unwrap()).unwrap();
+            let graph = graph.finish()?;
+            let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
             assert_eq!(
-                candidate_is_component_twin(&graph, &partition, &sources[..1], sources[1]).unwrap(),
+                candidate_is_component_twin(&graph, &partition, &sources[..1], sources[1])?,
                 defect == 0,
                 "changed incidence {defect}",
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn equitable_components_with_repeated_cells_are_not_interchangeable() {
-        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM)).unwrap();
+    fn equitable_components_with_repeated_cells_are_not_interchangeable()
+    -> Result<(), ProgramCompileError> {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
         let mut roots = Vec::new();
         for length in [3, 6] {
             let mut vertices = Vec::new();
@@ -2908,21 +2897,19 @@ mod tests {
                     vertex_tag::TARGET_FIXED,
                     vertex_tag::PAINT_SOLID,
                 ][index % 3];
-                vertices.push(graph.add_member(VertexColorV1::new(tag)).unwrap());
+                vertices.push(graph.add_member(VertexColorV1::new(tag))?);
             }
             for index in 0..length {
-                graph
-                    .add_edge(
-                        vertices[index],
-                        vertices[(index + 1) % length],
-                        EdgeRoleV1::TargetSource,
-                    )
-                    .unwrap();
+                graph.add_edge(
+                    vertices[index],
+                    vertices[(index + 1) % length],
+                    EdgeRoleV1::TargetSource,
+                )?;
             }
             roots.push(vertices[0]);
         }
-        let graph = graph.finish().unwrap();
-        let partition = refine_partition(&graph, PartitionV1::initial(&graph).unwrap()).unwrap();
+        let graph = graph.finish()?;
+        let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
         assert!(
             partition
                 .0
@@ -2930,42 +2917,61 @@ mod tests {
                 .iter()
                 .any(|cell| cell.contains(&roots[0]) && cell.contains(&roots[1]))
         );
-        assert!(!candidate_is_component_twin(&graph, &partition, &roots[..1], roots[1]).unwrap());
-        assert!(!candidate_is_component_twin(&graph, &partition, &roots[1..], roots[0]).unwrap());
+        assert!(!candidate_is_component_twin(
+            &graph,
+            &partition,
+            &roots[..1],
+            roots[1]
+        )?);
+        assert!(!candidate_is_component_twin(
+            &graph,
+            &partition,
+            &roots[1..],
+            roots[0]
+        )?);
+        Ok(())
     }
 
-    fn exhaustive_preimage(graph: &CanonicalGraphV1, partition: PartitionV1) -> Vec<u8> {
-        let partition = refine_partition(graph, partition).unwrap().0;
+    fn exhaustive_preimage(
+        graph: &CanonicalGraphV1,
+        partition: PartitionV1,
+    ) -> Result<Vec<u8>, ProgramCompileError> {
+        let partition = refine_partition(graph, partition)?.0;
         match partition.first_non_singleton() {
-            None => serialize_leaf(graph, &partition).unwrap().preimage,
-            Some(cell) => partition.cells[cell]
-                .iter()
-                .map(|&vertex| {
-                    exhaustive_preimage(graph, individualize(&partition, cell, vertex).unwrap())
-                })
-                .min()
-                .unwrap(),
+            None => Ok(serialize_leaf(graph, &partition)?.preimage),
+            Some(cell) => {
+                let mut best: Option<Vec<u8>> = None;
+                for &vertex in &partition.cells[cell] {
+                    let preimage =
+                        exhaustive_preimage(graph, individualize(&partition, cell, vertex)?)?;
+                    if best.as_ref().is_none_or(|current| preimage < *current) {
+                        best = Some(preimage);
+                    }
+                }
+                best.ok_or(ProgramCompileError::InternalInvariant)
+            }
         }
     }
 
     #[test]
-    fn pruning_keeps_exact_bytes_on_every_four_vertex_digraph() {
+    fn pruning_keeps_exact_bytes_on_every_four_vertex_digraph() -> Result<(), ProgramCompileError> {
         for mask in 0..=0x0fff {
             let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
             assert_eq!(
-                canonical_preimage(&graph).unwrap(),
-                exhaustive_preimage(&graph, PartitionV1::initial(&graph).unwrap()),
+                canonical_preimage(&graph)?,
+                exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?,
                 "directed edge mask {mask:#05x}",
             );
         }
         for count in 1..=5 {
-            let graph = repeated_component_graph(count);
+            let graph = repeated_component_graph(count)?;
             assert_eq!(
-                canonical_preimage(&graph).unwrap(),
-                exhaustive_preimage(&graph, PartitionV1::initial(&graph).unwrap()),
+                canonical_preimage(&graph)?,
+                exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?,
                 "components {count}",
             );
         }
+        Ok(())
     }
 
     proptest! {
