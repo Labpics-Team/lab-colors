@@ -279,8 +279,8 @@
   "packages/colors/bench/wasm.json": "ee64f5a58b1df05bfe747411157baa08f995a9d4",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
-  "packages/colors/package-lock.json": "d33c53a5f5b5eb45c8d2a3956800d68413c57457",
-  "packages/colors/package.json": "ffdffcdffc6db407f3b9f602b4fc82372533552f",
+  "packages/colors/package-lock.json": "9afce10f6147f8adcc5000ff978211d5ec10fe36",
+  "packages/colors/package.json": "809a948416cffbaff376fa7ceaa9d9f0fd54df3d",
   "packages/colors/program-wire/abi-v1.d.ts": "58579f110625794ebf563958ed7c1bb5d206d14d",
   "packages/colors/program-wire/abi-v1.js": "d84a6287bc3ccca3a407ebaceee85b5e6fcd8672",
   "packages/colors/program-wire/abi-v2.d.ts": "1c29db7a70437ec49fb7fd257587aab4d45911dc",
@@ -564,7 +564,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "d267d1f681dbf1b8509f2ac9afd6aa53665d0463501007bac239d0b9e2d5d2ca",
+ "record_sha256": "cc1ba900be5e5f9ed70639647b4e0a59ffdec4908f1ac46fc5612a54daaa42cd",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
