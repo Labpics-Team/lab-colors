@@ -13,10 +13,15 @@ def canonical(value: dict) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def build_file_manifest(repo: Path, scope: str, kind: str, paths: list[Path]) -> dict:
     files = [
         {"path": path.relative_to(repo).as_posix(),
-         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+         "sha256": file_sha256(path)}
         for path in sorted(paths)
     ]
     payload = {"class": kind, "schema_version": 1, "root": scope,

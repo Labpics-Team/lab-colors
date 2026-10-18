@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 335,
+   "count": 337,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -675,10 +675,12 @@
     "test_ci_peer_gate.PeerGateTest.test_wrong_head_and_wrong_event_do_not_satisfy_admission",
     "test_ci_storage.CiStorageTests.test_current_package_graph_retains_only_the_release_handoff",
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
+    "test_document_bytes.DocumentBytesTests.test_c1_controls_are_rejected_through_the_document_check",
     "test_document_bytes.DocumentBytesTests.test_control_bytes_refuse_without_rejecting_normal_whitespace",
     "test_document_bytes.DocumentBytesTests.test_documented_domain_separator_matches_protocol_source",
     "test_document_bytes.DocumentBytesTests.test_mojibake_detector_distinguishes_corruption_from_valid_cyrillic",
     "test_document_bytes.DocumentBytesTests.test_product_documents_exclude_agent_work_records",
+    "test_document_bytes.DocumentBytesTests.test_report_examples_do_not_classify_the_document_as_a_work_record",
     "test_document_bytes.DocumentBytesTests.test_rust_comments_are_readable_utf8_without_double_encoding",
     "test_document_bytes.DocumentBytesTests.test_tracked_documents_are_utf8_without_hidden_controls",
     "test_document_bytes.DocumentBytesTests.test_work_record_check_covers_every_tracked_text_extension",
@@ -945,7 +947,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "e7ee09c51a420e1186cbc29ef274cec559f7ee61070ef065f6bd131157811316",
+ "record_sha256": "c0eaa62ebebe76700da1e03c324bc03b8562ce05fe240661759caf87730886de",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

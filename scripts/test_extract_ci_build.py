@@ -200,13 +200,13 @@ class WorkflowInventoryTests(unittest.TestCase):
         record['files'].append({'path': '../outside.txt', 'sha256': '0' * 64})
         record['file_count'] += 1
         self.reseal(record)
-        original = Path.read_bytes
+        original = Path.open
         observed = []
-        def read(path):
+        def read(path, *args, **kwargs):
             observed.append(path)
             self.assertTrue(path.is_relative_to(self.workflows))
-            return original(path)
-        with patch.object(Path, 'read_bytes', read):
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'open', read):
             self.reject(record, 'MISSING')
         self.assertEqual(observed, [self.workflows / 'one.yml'])
 
