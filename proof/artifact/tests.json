@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 317,
+   "count": 325,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -688,7 +688,13 @@
     "test_extract_ci_build.EXT09CIBuildTests.test_unknown_mode_exits_64",
     "test_extract_ci_build.EXT09CIBuildTests.test_verify_passes_on_current_tree",
     "test_extract_claims.EXT06ClaimsTests.test_extract_produces_valid_manifest_schema",
+    "test_extract_claims.EXT06ClaimsTests.test_inaccessible_nested_tree_fails_instead_of_certifying_partial_claims",
+    "test_extract_claims.EXT06ClaimsTests.test_invalid_json_is_manifest_input_error",
     "test_extract_claims.EXT06ClaimsTests.test_manifest_sha256_self_consistent",
+    "test_extract_claims.EXT06ClaimsTests.test_missing_one_source_root_is_not_silently_skipped",
+    "test_extract_claims.EXT06ClaimsTests.test_nested_source_symlink_is_rejected",
+    "test_extract_claims.EXT06ClaimsTests.test_resealed_omission_is_rejected_against_sources",
+    "test_extract_claims.EXT06ClaimsTests.test_resealed_source_digest_is_rejected_against_sources",
     "test_extract_claims.EXT06ClaimsTests.test_sabotage_claim_count_mismatch_detected",
     "test_extract_claims.EXT06ClaimsTests.test_sabotage_tampered_manifest_hash_detected",
     "test_extract_claims.EXT06ClaimsTests.test_unknown_mode_exits_64",
@@ -747,7 +753,9 @@
     "test_extract_resources.EXT07ResourcesTests.test_unknown_mode_exits_64",
     "test_extract_resources.EXT07ResourcesTests.test_verify_passes_on_current_tree",
     "test_extract_source_files.EXT01SourceFilesTests.test_extract_produces_valid_manifest_schema",
+    "test_extract_source_files.EXT01SourceFilesTests.test_forged_manifest_sha256_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_manifest_sha256_self_consistent",
+    "test_extract_source_files.EXT01SourceFilesTests.test_resealed_wrong_file_count_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_content_drift_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_missing_file_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_unlisted_file_detected",
@@ -927,7 +935,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "d86bca60522bcde11c22703611d63e25d061c3e56c61cdce77e12335ad2e3a68",
+ "record_sha256": "572e356ce66555d7b5b87f69230d9d630d39093ff20b662171c0e6ab594c4997",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

@@ -8,10 +8,14 @@ Verifies that the claims extractor:
 4. Passes on the current production tree (GREEN proof).
 """
 import hashlib
+import io
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +30,14 @@ def run_extractor(mode: str, stdin_data: bytes | None = None) -> subprocess.Comp
         input=stdin_data,
         cwd=str(REPO_ROOT),
     )
+
+
+def reseal(manifest: dict) -> bytes:
+    """Forge a valid self-hash to exercise the verifier's source comparison."""
+    payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    manifest["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return json.dumps(manifest, sort_keys=True).encode()
 
 
 class EXT06ClaimsTests(unittest.TestCase):
@@ -84,6 +96,105 @@ class EXT06ClaimsTests(unittest.TestCase):
         verify = run_extractor("verify", stdin_data=tampered)
         self.assertNotEqual(verify.returncode, 0, "verify should fail on count mismatch")
         self.assertIn(b"claim_count mismatch", verify.stderr)
+
+    def test_resealed_omission_is_rejected_against_sources(self):
+        """Dropping a real claim with a corrected count and hash must fail."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        self.assertGreater(manifest["claim_count"], 1)
+        manifest["claims"].pop(0)
+        manifest["claim_count"] = len(manifest["claims"])
+        verify = run_extractor("verify", stdin_data=reseal(manifest))
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"differs from current source claims", verify.stderr)
+
+    def test_resealed_source_digest_is_rejected_against_sources(self):
+        """A consistent record cannot substitute a source file's digest."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        self.assertTrue(manifest["claims"])
+        manifest["claims"][0]["source_sha256"] = "0" * 64
+        verify = run_extractor("verify", stdin_data=reseal(manifest))
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"differs from current source claims", verify.stderr)
+
+    def test_missing_one_source_root_is_not_silently_skipped(self):
+        """One present root does not make absent siblings optional."""
+        import extract_claims as extractor
+        self.assertTrue(extractor.SRC_ROOTS[0].is_dir())
+        missing = REPO_ROOT / "crates" / "nonexistent-claim-root" / "src"
+        with patch.object(extractor, "SRC_ROOTS", [extractor.SRC_ROOTS[0], missing]):
+            with self.assertRaisesRegex(FileNotFoundError, "source root is missing"):
+                extractor.extract_claims()
+
+    def test_nested_source_symlink_is_rejected(self):
+        """A source symlink cannot bypass the inventory or escape its scope."""
+        import extract_claims as extractor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            (target / "claim.rs").write_text("fn claim() {}\n", encoding="utf-8")
+            (root / "alias").symlink_to(target, target_is_directory=True)
+            with patch.object(extractor, "SRC_ROOTS", [root]):
+                with self.assertRaisesRegex(ValueError, "symlink in source tree"):
+                    extractor.extract_claims()
+
+    def test_inaccessible_nested_tree_fails_instead_of_certifying_partial_claims(self):
+        """A scandir error must reach both the extractor and its public CLI."""
+        import extract_claims as extractor
+        import source_tree
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sources"
+            root.mkdir()
+            nested = root / "hidden"
+            nested.mkdir()
+            (root / "a.rs").write_text("assert!(true);\n", encoding="utf-8")
+            (nested / "b.rs").write_text("assert!(false);\n", encoding="utf-8")
+
+            with patch.object(extractor, "SRC_ROOTS", [root]), patch.object(
+                extractor, "REPO_ROOT", root.parent
+            ):
+                # Positive control: the same complete tree is admitted.
+                full = extractor.build_manifest(extractor.extract_claims())
+                self.assertEqual(full["claim_count"], 2)
+                extractor.verify_manifest(full)
+
+                original_scandir = source_tree.os.scandir
+
+                def deny_nested(path):
+                    if Path(path) == nested:
+                        raise PermissionError("injected nested directory refusal")
+                    return original_scandir(path)
+
+                with patch("source_tree.os.scandir", side_effect=deny_nested):
+                    with self.assertRaisesRegex(PermissionError, "injected nested"):
+                        extractor.extract_claims()
+                    with self.assertRaisesRegex(PermissionError, "injected nested"):
+                        extractor.verify_manifest(full)
+
+                    # Exercise the entrypoint, not only its internal helper.
+                    input_stream = io.TextIOWrapper(
+                        io.BytesIO(json.dumps(full).encode()), encoding="utf-8"
+                    )
+                    error_output = io.StringIO()
+                    with patch.object(extractor.sys, "argv", ["extract_claims.py", "verify"]), patch.object(
+                        extractor.sys, "stdin", input_stream
+                    ), redirect_stderr(error_output):
+                        with self.assertRaises(SystemExit) as exit_status:
+                            extractor.main()
+                    self.assertEqual(exit_status.exception.code, 1)
+                    self.assertIn("unable to enumerate claims", error_output.getvalue())
+                    self.assertNotIn("EXT-06 VERIFY OK", error_output.getvalue())
+
+    def test_invalid_json_is_manifest_input_error(self):
+        """Corrupt input is distinct from failure to enumerate sources."""
+        verify = run_extractor("verify", stdin_data=b"{invalid json")
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"invalid manifest input", verify.stderr)
 
     def test_manifest_sha256_self_consistent(self):
         """GREEN: manifest_sha256 matches recomputed canonical hash."""
