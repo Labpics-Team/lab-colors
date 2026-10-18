@@ -504,7 +504,7 @@
   "scripts/evaluate-distribution.mjs": "bb0804cd15f21c774e625e05f00c688b06f09ed5",
   "scripts/evaluation_cli_gate.py": "cfa472f90acbc8e7ba1f09f222641d4fc6b83c2b",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
-  "scripts/extract_claims.py": "296a5441e60df8aa37a3a5eb283be3f06f7d8df6",
+  "scripts/extract_claims.py": "21b57ec036f2a175311104705b5a8220b5da351f",
   "scripts/extract_conformance.py": "0e789f62225cd4d26f3616b525229691a94656e3",
   "scripts/extract_decisions.py": "f69535cc169239f41160ee11322f7957dcef1ad5",
   "scripts/extract_exports_metadata.py": "ff4caa6e8f5e6a34c3d2388f5855e1ce1b9767a0",
@@ -536,7 +536,7 @@
   "scripts/test_document_bytes.py": "ec29094fba12ddfb1ff99e98973fff31483365c9",
   "scripts/test_evaluate_distribution.mjs": "30cc62f79d393c36f8b846586b845af7454dcd52",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
-  "scripts/test_extract_claims.py": "316f7c292f0330d138af063defa2c882e7366112",
+  "scripts/test_extract_claims.py": "102110c04829b203afa347d71987cac5db93dbb1",
   "scripts/test_extract_conformance.py": "505c896a99fbaa407b8f96c29b9ad777fac3fd65",
   "scripts/test_extract_decisions.py": "c4a0fed4353cb190c00d5055d6dc9a8f690cb4b4",
   "scripts/test_extract_exports_metadata.py": "cf889e812eb7fd7880afdb559abd0c6d1700864d",
@@ -564,7 +564,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "cc1ba900be5e5f9ed70639647b4e0a59ffdec4908f1ac46fc5612a54daaa42cd",
+ "record_sha256": "8d61eb8633fb40196b8623f013e8811eb0d7cbe83956936ad2864ddd53ca2ba8",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

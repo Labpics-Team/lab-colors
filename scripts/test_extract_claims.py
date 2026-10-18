@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,14 @@ def run_extractor(mode: str, stdin_data: bytes | None = None) -> subprocess.Comp
         input=stdin_data,
         cwd=str(REPO_ROOT),
     )
+
+
+def reseal(manifest: dict) -> bytes:
+    """Forge a valid self-hash to exercise the verifier's source comparison."""
+    payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    manifest["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return json.dumps(manifest, sort_keys=True).encode()
 
 
 class EXT06ClaimsTests(unittest.TestCase):
@@ -84,6 +93,38 @@ class EXT06ClaimsTests(unittest.TestCase):
         verify = run_extractor("verify", stdin_data=tampered)
         self.assertNotEqual(verify.returncode, 0, "verify should fail on count mismatch")
         self.assertIn(b"claim_count mismatch", verify.stderr)
+
+    def test_resealed_omission_is_rejected_against_sources(self):
+        """Dropping a real claim with a corrected count and hash must fail."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        self.assertGreater(manifest["claim_count"], 1)
+        manifest["claims"].pop(0)
+        manifest["claim_count"] = len(manifest["claims"])
+        verify = run_extractor("verify", stdin_data=reseal(manifest))
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"differs from current source claims", verify.stderr)
+
+    def test_resealed_source_digest_is_rejected_against_sources(self):
+        """A consistent record cannot substitute a source file's digest."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        self.assertTrue(manifest["claims"])
+        manifest["claims"][0]["source_sha256"] = "0" * 64
+        verify = run_extractor("verify", stdin_data=reseal(manifest))
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"differs from current source claims", verify.stderr)
+
+    def test_missing_one_source_root_is_not_silently_skipped(self):
+        """One present root does not make absent siblings optional."""
+        import extract_claims as extractor
+        self.assertTrue(extractor.SRC_ROOTS[0].is_dir())
+        missing = REPO_ROOT / "crates" / "nonexistent-claim-root" / "src"
+        with patch.object(extractor, "SRC_ROOTS", [extractor.SRC_ROOTS[0], missing]):
+            with self.assertRaisesRegex(FileNotFoundError, "source root is missing"):
+                extractor.extract_claims()
 
     def test_manifest_sha256_self_consistent(self):
         """GREEN: manifest_sha256 matches recomputed canonical hash."""

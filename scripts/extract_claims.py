@@ -7,9 +7,10 @@ sections (# Panics, # Safety, # Invariants). Each claim carries path, line,
 kind, trimmed expression, and file SHA-256 for sabotage detection.
 
 Sabotage controls:
-- Fails if crates/labcolors-core/src/ is missing.
+- Refuses missing/unreadable source roots instead of certifying a partial inventory.
 - Fails if manifest_sha256 does not match recomputed canonical hash.
 - Fails if claim_count != actual claims.
+- Compares every recorded claim with a fresh extraction from the current sources.
 
 Exit evidence: JSON manifest on stdout with schema:
 {
@@ -22,6 +23,7 @@ Exit evidence: JSON manifest on stdout with schema:
 """
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -49,16 +51,32 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def rust_sources(src_root: Path) -> list[Path]:
+    """Enumerate the complete declared tree; inaccessible paths cannot mean absence."""
+    if not src_root.is_dir() or src_root.is_symlink():
+        raise FileNotFoundError(f"source root is missing or not a real directory: {src_root}")
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    files = []
+    for directory, subdirs, names in os.walk(src_root, onerror=fail):
+        # Following symlinks can escape the proof scope or introduce cycles;
+        # skipping them would instead silently certify an incomplete tree.
+        for name in [*subdirs, *names]:
+            path = Path(directory) / name
+            if path.is_symlink():
+                raise ValueError(f"symlink in source tree: {path}")
+        subdirs.sort()
+        files.extend(Path(directory) / name for name in names if name.endswith(".rs"))
+    return sorted(files)
+
+
 def extract_claims() -> list[dict]:
     claims = []
-    found_any_root = False
 
     for src_root in SRC_ROOTS:
-        if not src_root.is_dir():
-            continue
-        found_any_root = True
-
-        for rs_file in sorted(src_root.rglob("*.rs")):
+        for rs_file in rust_sources(src_root):
             rel = rs_file.relative_to(REPO_ROOT).as_posix()
             text = rs_file.read_text(encoding="utf-8")
             file_hash = sha256_file(rs_file)
@@ -85,10 +103,6 @@ def extract_claims() -> list[dict]:
                         "expression": expr[:200],  # truncate long expressions
                         "source_sha256": file_hash,
                     })
-
-    if not found_any_root:
-        print("SABOTAGE: no crate source roots found", file=sys.stderr)
-        sys.exit(1)
 
     # Deterministic sort by (path, line)
     claims.sort(key=lambda c: (c["path"], c["line"]))
@@ -130,31 +144,29 @@ def verify_manifest(manifest: dict) -> None:
         print("SABOTAGE: claim_count mismatch", file=sys.stderr)
         sys.exit(1)
 
-    # Verify each claim's source file exists
-    seen_files = set()
-    for claim in manifest["claims"]:
-        fpath = REPO_ROOT / claim["path"]
-        seen_files.add(claim["path"])
-        if not fpath.is_file():
-            errors.append(f"SOURCE_MISSING: {claim['path']}")
-    if errors:
-        print("SABOTAGE FAILURES:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
+    # A self-consistent, freshly rehashed manifest can still omit a real claim
+    # or lie about its source digest. Compare the full live extraction instead
+    # of trusting paths supplied by the manifest being verified.
+    current = build_manifest(extract_claims())
+    if manifest != current:
+        print("SABOTAGE: manifest differs from current source claims", file=sys.stderr)
         sys.exit(1)
 
 
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
-    if mode == "extract":
-        claims = extract_claims()
-        manifest = build_manifest(claims)
-        print(json.dumps(manifest, sort_keys=True, indent=2))
-    elif mode == "verify":
-        raw = sys.stdin.buffer.read().decode("utf-8-sig")
-        manifest = json.loads(raw)
-        verify_manifest(manifest)
-        print(f"EXT-06 VERIFY OK: {manifest['claim_count']} claims", file=sys.stderr)
+    if mode in ("extract", "verify"):
+        try:
+            if mode == "extract":
+                print(json.dumps(build_manifest(extract_claims()), sort_keys=True, indent=2))
+            else:
+                raw = sys.stdin.buffer.read().decode("utf-8-sig")
+                manifest = json.loads(raw)
+                verify_manifest(manifest)
+                print(f"EXT-06 VERIFY OK: {manifest['claim_count']} claims", file=sys.stderr)
+        except (OSError, ValueError) as error:
+            print(f"SABOTAGE: unable to enumerate claims: {error}", file=sys.stderr)
+            sys.exit(1)
     else:
         print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)
         sys.exit(64)
