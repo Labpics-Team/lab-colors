@@ -16,9 +16,10 @@ ALLOWED_CONTROLS = {9, 10, 13}
 
 
 def control_at(data: bytes):
+    """Return a Unicode character position, never classify UTF-8 continuation bytes."""
     return next(
-        ((index, value) for index, value in enumerate(data)
-         if (value < 32 and value not in ALLOWED_CONTROLS) or value == 127),
+        ((index, ord(value)) for index, value in enumerate(data.decode("utf-8", "strict"))
+         if (ord(value) < 32 and ord(value) not in ALLOWED_CONTROLS) or 127 <= ord(value) <= 159),
         None,
     )
 
@@ -56,6 +57,24 @@ def recovered_cyrillic_comment(line: str) -> str | None:
     return text if text != line else None
 
 
+def prose_outside_fences(text: str) -> str:
+    """Keep document fields separate from fenced examples."""
+    lines = []
+    fence = None
+    for line in text.splitlines():
+        if fence:
+            closing = re.fullmatch(r" {0,3}(`+|~+)[\t ]*", line)
+            if closing and closing[1][0] == fence[0] and len(closing[1]) >= len(fence):
+                fence = None
+            continue
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if opening and not (opening[1][0] == "`" and "`" in opening[2]):
+            fence = opening[1]
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def work_record_reason(path: Path, text: str) -> str | None:
     """Reject agent work records, not product protocols or reproducible test data."""
     # Only repository work roots have this meaning. Product reference topics
@@ -64,6 +83,7 @@ def work_record_reason(path: Path, text: str) -> str | None:
         return "agent work directory"
     # A plan remains a plan after a rename. Recognize its owned schema rather
     # than a list of old filenames or ordinary words such as 'dependency plan'.
+    text = text.removeprefix("\ufeff").replace("\r\n", "\n")
     if text.startswith("---\n"):
         frontmatter = text.split("\n---", 1)[0]
         keys = set(re.findall(r"^([a-z][a-z_-]*):", frontmatter, re.MULTILINE))
@@ -71,7 +91,7 @@ def work_record_reason(path: Path, text: str) -> str | None:
             return "agent plan frontmatter"
     fields = {
         key.strip().casefold()
-        for key in re.findall(r"^\*\*([^*\n]+):\*\*", text, re.MULTILINE)
+        for key in re.findall(r"^\*\*([^*\n]+):\*\*", prose_outside_fences(text), re.MULTILINE)
     }
     if {"status", "branch"} <= fields or {"baseline sha", "head at validation"} <= fields:
         return "work-session status or review report"
@@ -181,6 +201,43 @@ class DocumentBytesTests(unittest.TestCase):
         for name, text in allowed:
             with self.subTest(path=name):
                 self.assertIsNone(work_record_reason(Path(name), text))
+
+    def test_report_examples_do_not_classify_the_document_as_a_work_record(self):
+        for fence in ("```", "~~~~", "````"):
+            with self.subTest(fence=fence):
+                inner = ["```"] if fence == "````" else []
+                example = "\n".join(["# Contract", fence + "markdown", *inner,
+                                      "**Status:** COMPLETE", "**Branch:** example", fence])
+                path = Path("docs/contract.md")
+                self.assertIsNone(work_record_reason(path, example))
+                report = example + "\n**Status:** COMPLETE\n**Branch:** actual-work\n"
+                self.assertEqual(work_record_reason(path, report), "work-session status or review report")
+
+    def test_c1_controls_are_rejected_through_the_document_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = root / "sample.txt"
+            with patch(__name__ + ".ROOT", root), patch(__name__ + ".PROTOCOL", document), patch(
+                __name__ + ".tracked_documents", return_value=[document]
+            ):
+                def run_check():
+                    # unittest subTest records failures instead of raising them.
+                    # Use a separate case/result to observe the real checker outcome.
+                    result = unittest.TestResult()
+                    case = DocumentBytesTests("test_tracked_documents_are_utf8_without_hidden_controls")
+                    case.run(result)
+                    self.assertEqual(result.testsRun, 1)
+                    self.assertEqual(result.errors, [])
+                    return result
+
+                document.write_text("Цвет и движение 色彩\n", encoding="utf-8")
+                self.assertTrue(run_check().wasSuccessful())
+                for value in (0x80, 0x85, 0x9b, 0x9f):
+                    document.write_text("Цвет" + chr(value), encoding="utf-8")
+                    with self.subTest(value=value):
+                        result = run_check()
+                        self.assertEqual(len(result.failures), 1)
+                        self.assertIn("hidden control", result.failures[0][1])
 
     def test_documented_domain_separator_matches_protocol_source(self):
         module = ast.parse(SOURCE.read_text(encoding="utf-8"))

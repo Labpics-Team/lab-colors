@@ -139,5 +139,21 @@ class EXT01SourceFilesTests(unittest.TestCase):
         self.assertEqual(result.returncode, 64)
 
 
+
+    def test_resealed_foreign_schema_is_rejected(self):
+        extract = run_extractor('extract')
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        current = json.loads(extract.stdout)
+        for mutation in [{'class': 'other'}, {'schema_version': True}, {'root': '../other'}]:
+            with self.subTest(mutation=mutation):
+                record = {**current, **mutation}
+                payload = {k: v for k, v in record.items() if k != 'manifest_sha256'}
+                record['manifest_sha256'] = hashlib.sha256(
+                    json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+                ).hexdigest()
+                result = run_extractor('verify', stdin_data=json.dumps(record).encode())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b'EXT-01 VERIFY OK', result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

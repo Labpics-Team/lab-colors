@@ -30,7 +30,8 @@ python3 scripts/extract_claims.py extract > /tmp/colors-claims.json
 python3 scripts/extract_claims.py verify < /tmp/colors-claims.json
 ```
 
-Манифест исходников описывает `.rs`-файлы `crates/labcolors-core/src`.
+Манифест исходников описывает все `.rs`-файлы `crates/labcolors-core/src`,
+включая тестовые модули. Он не определяет достижимость кода при исполнении.
 Манифест утверждений перечисляет синтаксические маркеры в объявленных ему
 исходных корнях; он не устанавливает истинность самих утверждений.
 Оба проверяющих инструмента сопоставляют запись с текущим читаемым деревом.
@@ -39,6 +40,17 @@ python3 scripts/extract_claims.py verify < /tmp/colors-claims.json
 `extract` и `verify` на одном дереве проверяют согласованность записи с ним,
 но не сравнивают изменение с предыдущей версией. За этот отдельный вопрос
 отвечает закреплённый инвентарь и ревью изменения.
+
+## Сверить файлы GitHub Actions
+
+```sh
+python3 scripts/extract_ci_build.py extract > /tmp/colors-workflows.json
+python3 scripts/extract_ci_build.py verify < /tmp/colors-workflows.json
+```
+
+Учитываются файлы `.yml` и `.yaml` непосредственно в `.github/workflows`.
+Проверяются схема, число записей, контрольная сумма и текущий состав файлов.
+Файлы во вложенных каталогах не являются точками входа workflow.
 
 ## Проверить репозиторные метаданные на Rust
 
