@@ -8,11 +8,13 @@ Verifies that the claims extractor:
 4. Passes on the current production tree (GREEN proof).
 """
 import hashlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 from pathlib import Path
 
@@ -139,6 +141,54 @@ class EXT06ClaimsTests(unittest.TestCase):
             with patch.object(extractor, "SRC_ROOTS", [root]):
                 with self.assertRaisesRegex(ValueError, "symlink in source tree"):
                     extractor.extract_claims()
+
+    def test_inaccessible_nested_tree_fails_instead_of_certifying_partial_claims(self):
+        """A scandir error must reach both the extractor and its public CLI."""
+        import extract_claims as extractor
+        import source_tree
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sources"
+            root.mkdir()
+            nested = root / "hidden"
+            nested.mkdir()
+            (root / "a.rs").write_text("assert!(true);\n", encoding="utf-8")
+            (nested / "b.rs").write_text("assert!(false);\n", encoding="utf-8")
+
+            with patch.object(extractor, "SRC_ROOTS", [root]), patch.object(
+                extractor, "REPO_ROOT", root.parent
+            ):
+                # Positive control: the same complete tree is admitted.
+                full = extractor.build_manifest(extractor.extract_claims())
+                self.assertEqual(full["claim_count"], 2)
+                extractor.verify_manifest(full)
+
+                original_scandir = source_tree.os.scandir
+
+                def deny_nested(path):
+                    if Path(path) == nested:
+                        raise PermissionError("injected nested directory refusal")
+                    return original_scandir(path)
+
+                with patch("source_tree.os.scandir", side_effect=deny_nested):
+                    with self.assertRaisesRegex(PermissionError, "injected nested"):
+                        extractor.extract_claims()
+                    with self.assertRaisesRegex(PermissionError, "injected nested"):
+                        extractor.verify_manifest(full)
+
+                    # Exercise the entrypoint, not only its internal helper.
+                    input_stream = io.TextIOWrapper(
+                        io.BytesIO(json.dumps(full).encode()), encoding="utf-8"
+                    )
+                    error_output = io.StringIO()
+                    with patch.object(extractor.sys, "argv", ["extract_claims.py", "verify"]), patch.object(
+                        extractor.sys, "stdin", input_stream
+                    ), redirect_stderr(error_output):
+                        with self.assertRaises(SystemExit) as exit_status:
+                            extractor.main()
+                    self.assertEqual(exit_status.exception.code, 1)
+                    self.assertIn("unable to enumerate claims", error_output.getvalue())
+                    self.assertNotIn("EXT-06 VERIFY OK", error_output.getvalue())
 
     def test_invalid_json_is_manifest_input_error(self):
         """Corrupt input is distinct from failure to enumerate sources."""

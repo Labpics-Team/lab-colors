@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 324,
+   "count": 325,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -688,6 +688,7 @@
     "test_extract_ci_build.EXT09CIBuildTests.test_unknown_mode_exits_64",
     "test_extract_ci_build.EXT09CIBuildTests.test_verify_passes_on_current_tree",
     "test_extract_claims.EXT06ClaimsTests.test_extract_produces_valid_manifest_schema",
+    "test_extract_claims.EXT06ClaimsTests.test_inaccessible_nested_tree_fails_instead_of_certifying_partial_claims",
     "test_extract_claims.EXT06ClaimsTests.test_invalid_json_is_manifest_input_error",
     "test_extract_claims.EXT06ClaimsTests.test_manifest_sha256_self_consistent",
     "test_extract_claims.EXT06ClaimsTests.test_missing_one_source_root_is_not_silently_skipped",
@@ -934,7 +935,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "4a2d60cbc0ddb93ef52ce453e82a37f74ad269a1fe42b636d0229f0837c7fdd5",
+ "record_sha256": "572e356ce66555d7b5b87f69230d9d630d39093ff20b662171c0e6ab594c4997",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

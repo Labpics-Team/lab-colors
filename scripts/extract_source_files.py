@@ -143,7 +143,11 @@ def main() -> None:
             except (OSError, ValueError) as error:
                 print(f"SABOTAGE: invalid manifest input: {error}", file=sys.stderr)
                 sys.exit(1)
-            verify_manifest(manifest)
+            try:
+                verify_manifest(manifest)
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: unable to enumerate sources: {error}", file=sys.stderr)
+                sys.exit(1)
             print(f"EXT-01 VERIFY OK: {manifest['file_count']} files", file=sys.stderr)
     else:
         print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)

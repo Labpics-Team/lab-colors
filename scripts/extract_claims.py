@@ -149,7 +149,11 @@ def main() -> None:
             except (OSError, ValueError) as error:
                 print(f"SABOTAGE: invalid manifest input: {error}", file=sys.stderr)
                 sys.exit(1)
-            verify_manifest(manifest)
+            try:
+                verify_manifest(manifest)
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: unable to enumerate claims: {error}", file=sys.stderr)
+                sys.exit(1)
             print(f"EXT-06 VERIFY OK: {manifest['claim_count']} claims", file=sys.stderr)
     else:
         print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)
