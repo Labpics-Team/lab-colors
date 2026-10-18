@@ -27,8 +27,10 @@ bash bindings/swift/ci/run-conformance.sh
 [Скрипт](ci/run-conformance.sh) проверяет требуемые версии Rust и Swift,
 собирает Rust-библиотеку, генерирует биндинги и запускает Swift-тесты.
 Версии и образ CI принадлежат
-[workflow](../../.github/workflows/native-conformance-worker.yml),
-а не независимому списку настроек в этой инструкции.
+[исполняемому workflow](../../.github/workflows/native-conformance-worker.yml).
+[Workflow запуска](../../.github/workflows/native-conformance.yml) выбирает
+его точную ревизию; при воспроизведении используйте настройки этой ревизии,
+а не произвольный экземпляр worker из другой ветки.
 
 Обязательная автоматическая проверка выполняется на Linux x86_64.
 Ручной macOS/arm64-прогон не заменяет проверки на Apple-платформах;
