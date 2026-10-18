@@ -11,6 +11,7 @@ def regular_sources(src_root: Path, suffixes: set[str], *, recursive: bool = Tru
     def fail(error: OSError) -> None:
         raise error
 
+    endings = tuple(suffixes)
     files = []
     for directory, subdirs, names in os.walk(src_root, onerror=fail):
         for name in [*subdirs, *names]:
@@ -19,7 +20,7 @@ def regular_sources(src_root: Path, suffixes: set[str], *, recursive: bool = Tru
                 raise ValueError(f"symlink in source tree: {path}")
         for name in names:
             path = Path(directory) / name
-            if path.suffix in suffixes:
+            if name.endswith(endings):
                 if not path.is_file():
                     raise ValueError(f"not a regular source file: {path}")
                 files.append(path)

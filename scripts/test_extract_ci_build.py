@@ -180,6 +180,20 @@ class WorkflowInventoryTests(unittest.TestCase):
         forged['manifest_sha256'] = '0' * 64
         self.reject(forged)
 
+    def test_hidden_file_names_are_not_omitted_from_declared_suffixes(self):
+        from source_tree import rust_sources
+        names = [".rs", ".yml", ".yaml", ".hidden.yml", ".hidden.yaml", "one.yml", "one.yaml", "backup.yml.bak"]
+        for name in names:
+            (self.workflows / name).write_text("fixture\n", encoding="utf-8")
+        manifest = self.ci.extract_manifest()
+        self.assertEqual([entry["path"] for entry in manifest["files"]], [
+            ".github/workflows/.hidden.yaml", ".github/workflows/.hidden.yml",
+            ".github/workflows/.yaml", ".github/workflows/.yml",
+            ".github/workflows/one.yaml", ".github/workflows/one.yml",
+        ])
+        self.ci.verify_manifest(manifest)
+        self.assertEqual(rust_sources(self.workflows), [self.workflows / ".rs"])
+
     def test_missing_workflow_root_is_not_an_admitted_empty_inventory(self):
         empty = self.ci.extract_manifest()
         self.ci.verify_manifest(empty)
