@@ -56,7 +56,9 @@ def recovered_cyrillic_comment(line: str) -> str | None:
 
 def work_record_reason(path: Path, text: str) -> str | None:
     """Reject agent work records, not product protocols or reproducible test data."""
-    if any(part.casefold() in {"plans", "handoffs", "worklogs"} for part in path.parts[:-1]):
+    # Only repository work roots have this meaning. Product reference topics
+    # may legitimately use the same word at any deeper level.
+    if len(path.parts) > 1 and path.parts[0].casefold() in {"plans", "handoffs", "worklogs"}:
         return "agent work directory"
     # A plan remains a plan after a rename. Recognize its owned schema rather
     # than a list of old filenames or ordinary words such as 'dependency plan'.
@@ -148,6 +150,8 @@ class DocumentBytesTests(unittest.TestCase):
                 self.assertIsNotNone(work_record_reason(Path(name), text))
         allowed = (
             ("docs/contracts/dependency-plan.md", "# Compiled dependency plan\nA plan is a runtime graph."),
+            ("docs/contracts/plans/dependency-plan.md", "# Compiled dependency plan\nA plan is a runtime graph."),
+            ("docs/contracts/handoffs/transport.md", "# Handoff transport\nThe envelope carries a sequence number."),
             ("docs/decisions/0010-solver.md", "# Solver\n**Status:** Accepted\n## Decision"),
             ("proof/region/v1/PROTOCOL.md", "# Protocol\nThe status field identifies a terminal outcome."),
             ("crates/labcolors-core/tests/data/README.md", "# Measured fixtures\nSource snapshot: 2026-07-02."),
