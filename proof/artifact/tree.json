@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 561,
+ "file_count": 562,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -504,7 +504,7 @@
   "scripts/evaluate-distribution.mjs": "bb0804cd15f21c774e625e05f00c688b06f09ed5",
   "scripts/evaluation_cli_gate.py": "cfa472f90acbc8e7ba1f09f222641d4fc6b83c2b",
   "scripts/extract_ci_build.py": "16d2a20a2d89721af01bc2f7aefdd155df6281f7",
-  "scripts/extract_claims.py": "21b57ec036f2a175311104705b5a8220b5da351f",
+  "scripts/extract_claims.py": "be04b2d8656f2bc1c7677dc1daf56be418f64472",
   "scripts/extract_conformance.py": "0e789f62225cd4d26f3616b525229691a94656e3",
   "scripts/extract_decisions.py": "f69535cc169239f41160ee11322f7957dcef1ad5",
   "scripts/extract_exports_metadata.py": "ff4caa6e8f5e6a34c3d2388f5855e1ce1b9767a0",
@@ -512,7 +512,7 @@
   "scripts/extract_operations.py": "cd5e5266a446ea2dbf8fccfe769dacccc577b022",
   "scripts/extract_public_api.py": "95102381093636044d139f6515c071df0f9d2ebe",
   "scripts/extract_resources.py": "df80efd34421847ec93c354e7ad8aec1835ba238",
-  "scripts/extract_source_files.py": "b53d7a1b29a8c8fe1bc25fbd714526ea3d1b2277",
+  "scripts/extract_source_files.py": "c74b0a6c87d60cd79ffb64e81a289ac7e16dde7d",
   "scripts/formal_contracts.py": "97e1522f4eda424b103b70a9b7117102b9885218",
   "scripts/generate_wcag22_q55.py": "c9290543f32dda8b30bb1158178858da23ae1e8d",
   "scripts/golden_ref.py": "a83290aa760befda468bfa5ae60b7da86319ae2d",
@@ -527,6 +527,7 @@
   "scripts/region_unittest_shard.py": "769cf4e32517707f96d3a904f909dbf8d78a7ea2",
   "scripts/release-evidence.mjs": "0867419482af8aecd61026870a429ef90b4532a8",
   "scripts/science_certificate_gate.py": "d948037ad2bfd0fba80109c618e45a1b6515c96a",
+  "scripts/source_tree.py": "e9c3ae6950803cf1275ad68e6ae89a533105304e",
   "scripts/test-program-runtime-browser.mjs": "41b99c35d0bea00e615753b924fbd8dd76184873",
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "3930713ea0e082372615b45059261e80abf99c5c",
@@ -544,7 +545,7 @@
   "scripts/test_extract_operations.py": "456840c41d2859bf3ecd0680836d4c3e049cb209",
   "scripts/test_extract_public_api.py": "b469f67a6eab62509295170856e67035db979139",
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
-  "scripts/test_extract_source_files.py": "bf046bedcc56cd996f377e1b57b2a014d3952211",
+  "scripts/test_extract_source_files.py": "50560cb14afe3ff22e5e3f32b0ac2b5221ed208e",
   "scripts/test_formal_outputs.py": "4da9c69f940462e6482c80490feb16da9fa09516",
   "scripts/test_mutation.py": "611a33cad485436f9ad51f3de5ffba358432526f",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
@@ -564,7 +565,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "8d61eb8633fb40196b8623f013e8811eb0d7cbe83956936ad2864ddd53ca2ba8",
+ "record_sha256": "0ee4d6f918a8297fe277ac2487567192d6c86d2b127735b4d01de9b305a4c96e",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

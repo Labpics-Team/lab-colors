@@ -23,10 +23,11 @@ Exit evidence: JSON manifest on stdout with schema:
 """
 import hashlib
 import json
-import os
 import re
 import sys
 from pathlib import Path
+
+from source_tree import rust_sources
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOTS = [
@@ -49,27 +50,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def rust_sources(src_root: Path) -> list[Path]:
-    """Enumerate the complete declared tree; inaccessible paths cannot mean absence."""
-    if not src_root.is_dir() or src_root.is_symlink():
-        raise FileNotFoundError(f"source root is missing or not a real directory: {src_root}")
-
-    def fail(error: OSError) -> None:
-        raise error
-
-    files = []
-    for directory, subdirs, names in os.walk(src_root, onerror=fail):
-        # Following symlinks can escape the proof scope or introduce cycles;
-        # skipping them would instead silently certify an incomplete tree.
-        for name in [*subdirs, *names]:
-            path = Path(directory) / name
-            if path.is_symlink():
-                raise ValueError(f"symlink in source tree: {path}")
-        subdirs.sort()
-        files.extend(Path(directory) / name for name in names if name.endswith(".rs"))
-    return sorted(files)
 
 
 def extract_claims() -> list[dict]:

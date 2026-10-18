@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 320,
+   "count": 322,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -750,7 +750,9 @@
     "test_extract_resources.EXT07ResourcesTests.test_unknown_mode_exits_64",
     "test_extract_resources.EXT07ResourcesTests.test_verify_passes_on_current_tree",
     "test_extract_source_files.EXT01SourceFilesTests.test_extract_produces_valid_manifest_schema",
+    "test_extract_source_files.EXT01SourceFilesTests.test_forged_manifest_sha256_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_manifest_sha256_self_consistent",
+    "test_extract_source_files.EXT01SourceFilesTests.test_resealed_wrong_file_count_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_content_drift_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_missing_file_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_unlisted_file_detected",
@@ -930,7 +932,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "482f8695d04a46e7ec3b3f12cb371abf23a4c8b0465410dbd7e1557373c0441a",
+ "record_sha256": "c8f0656d28230b342ccd1d06d7714c7fcd58a85fc00a53e7f6e17ec38de94757",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
