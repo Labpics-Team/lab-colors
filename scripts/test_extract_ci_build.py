@@ -193,5 +193,33 @@ class WorkflowInventoryTests(unittest.TestCase):
         with self.assertRaises((SystemExit, ValueError, OSError)):
             self.ci.extract_manifest()
 
+
+    def test_record_paths_never_select_files_to_read(self):
+        (self.workflows / 'one.yml').write_text('name: One\n', encoding='utf-8')
+        record = self.ci.extract_manifest()
+        record['files'].append({'path': '../outside.txt', 'sha256': '0' * 64})
+        record['file_count'] += 1
+        self.reseal(record)
+        original = Path.read_bytes
+        observed = []
+        def read(path):
+            observed.append(path)
+            self.assertTrue(path.is_relative_to(self.workflows))
+            return original(path)
+        with patch.object(Path, 'read_bytes', read):
+            self.reject(record, 'MISSING')
+        self.assertEqual(observed, [self.workflows / 'one.yml'])
+
+    def test_directory_listing_failure_reaches_the_consumer(self):
+        import source_tree
+        manifest = self.ci.extract_manifest()
+        original = source_tree.os.scandir
+        def unavailable(path):
+            if Path(path) == self.workflows:
+                raise PermissionError('injected inventory failure')
+            return original(path)
+        with patch('source_tree.os.scandir', side_effect=unavailable):
+            self.reject(manifest)
+
 if __name__ == "__main__":
     unittest.main()

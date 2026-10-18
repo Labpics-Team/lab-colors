@@ -600,7 +600,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 332,
+   "count": 335,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -691,7 +691,9 @@
     "test_extract_ci_build.EXT09CIBuildTests.test_unknown_mode_exits_64",
     "test_extract_ci_build.EXT09CIBuildTests.test_verify_passes_on_current_tree",
     "test_extract_ci_build.WorkflowInventoryTests.test_both_workflow_extensions_are_complete_and_nested_data_is_excluded",
+    "test_extract_ci_build.WorkflowInventoryTests.test_directory_listing_failure_reaches_the_consumer",
     "test_extract_ci_build.WorkflowInventoryTests.test_missing_workflow_root_is_not_an_admitted_empty_inventory",
+    "test_extract_ci_build.WorkflowInventoryTests.test_record_paths_never_select_files_to_read",
     "test_extract_ci_build.WorkflowInventoryTests.test_verify_rejects_resealed_metadata_and_duplicate_records",
     "test_extract_ci_build.WorkflowInventoryTests.test_workflow_symlink_is_refused_instead_of_followed",
     "test_extract_claims.EXT06ClaimsTests.test_extract_produces_valid_manifest_schema",
@@ -762,6 +764,7 @@
     "test_extract_source_files.EXT01SourceFilesTests.test_extract_produces_valid_manifest_schema",
     "test_extract_source_files.EXT01SourceFilesTests.test_forged_manifest_sha256_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_manifest_sha256_self_consistent",
+    "test_extract_source_files.EXT01SourceFilesTests.test_resealed_foreign_schema_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_resealed_wrong_file_count_is_rejected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_content_drift_detected",
     "test_extract_source_files.EXT01SourceFilesTests.test_sabotage_missing_file_detected",
@@ -942,7 +945,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "7a089b195b3d338fb507c4421a5fbeb9bdd8b4d1d92e3029c6c5b2b074044e40",
+ "record_sha256": "e7ee09c51a420e1186cbc29ef274cec559f7ee61070ef065f6bd131157811316",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
