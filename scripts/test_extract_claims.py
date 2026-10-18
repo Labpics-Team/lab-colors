@@ -11,6 +11,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -125,6 +126,25 @@ class EXT06ClaimsTests(unittest.TestCase):
         with patch.object(extractor, "SRC_ROOTS", [extractor.SRC_ROOTS[0], missing]):
             with self.assertRaisesRegex(FileNotFoundError, "source root is missing"):
                 extractor.extract_claims()
+
+    def test_nested_source_symlink_is_rejected(self):
+        """A source symlink cannot bypass the inventory or escape its scope."""
+        import extract_claims as extractor
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            target.mkdir()
+            (target / "claim.rs").write_text("fn claim() {}\n", encoding="utf-8")
+            (root / "alias").symlink_to(target, target_is_directory=True)
+            with patch.object(extractor, "SRC_ROOTS", [root]):
+                with self.assertRaisesRegex(ValueError, "symlink in source tree"):
+                    extractor.extract_claims()
+
+    def test_invalid_json_is_manifest_input_error(self):
+        """Corrupt input is distinct from failure to enumerate sources."""
+        verify = run_extractor("verify", stdin_data=b"{invalid json")
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"invalid manifest input", verify.stderr)
 
     def test_manifest_sha256_self_consistent(self):
         """GREEN: manifest_sha256 matches recomputed canonical hash."""

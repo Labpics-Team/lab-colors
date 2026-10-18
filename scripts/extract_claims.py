@@ -136,17 +136,21 @@ def verify_manifest(manifest: dict) -> None:
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
     if mode in ("extract", "verify"):
-        try:
-            if mode == "extract":
+        if mode == "extract":
+            try:
                 print(json.dumps(build_manifest(extract_claims()), sort_keys=True, indent=2))
-            else:
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: unable to enumerate claims: {error}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            try:
                 raw = sys.stdin.buffer.read().decode("utf-8-sig")
                 manifest = json.loads(raw)
-                verify_manifest(manifest)
-                print(f"EXT-06 VERIFY OK: {manifest['claim_count']} claims", file=sys.stderr)
-        except (OSError, ValueError) as error:
-            print(f"SABOTAGE: unable to enumerate claims: {error}", file=sys.stderr)
-            sys.exit(1)
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: invalid manifest input: {error}", file=sys.stderr)
+                sys.exit(1)
+            verify_manifest(manifest)
+            print(f"EXT-06 VERIFY OK: {manifest['claim_count']} claims", file=sys.stderr)
     else:
         print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)
         sys.exit(64)

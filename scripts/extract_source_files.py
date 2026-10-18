@@ -130,17 +130,21 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
 
     if mode in ("extract", "verify"):
-        try:
-            if mode == "extract":
+        if mode == "extract":
+            try:
                 print(json.dumps(extract_manifest(), sort_keys=True, indent=2))
-            else:
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: unable to enumerate sources: {error}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            try:
                 raw = sys.stdin.buffer.read().decode("utf-8-sig")
                 manifest = json.loads(raw)
-                verify_manifest(manifest)
-                print(f"EXT-01 VERIFY OK: {manifest['file_count']} files", file=sys.stderr)
-        except (OSError, ValueError) as error:
-            print(f"SABOTAGE: unable to enumerate sources: {error}", file=sys.stderr)
-            sys.exit(1)
+            except (OSError, ValueError) as error:
+                print(f"SABOTAGE: invalid manifest input: {error}", file=sys.stderr)
+                sys.exit(1)
+            verify_manifest(manifest)
+            print(f"EXT-01 VERIFY OK: {manifest['file_count']} files", file=sys.stderr)
     else:
         print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)
         sys.exit(64)
