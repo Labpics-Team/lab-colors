@@ -12,7 +12,12 @@ import hashlib
 import json
 import subprocess
 import sys
+import io
+import tempfile
+import copy
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -112,6 +117,81 @@ class EXT09CIBuildTests(unittest.TestCase):
         result = run_extractor("bogus-mode")
         self.assertEqual(result.returncode, 64)
 
+
+
+
+class WorkflowInventoryTests(unittest.TestCase):
+    def setUp(self):
+        import extract_ci_build as ci
+        self.ci = ci
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.workflows = self.root / '.github' / 'workflows'
+        self.workflows.mkdir(parents=True)
+        for attribute, value in [('REPO_ROOT', self.root), ('WORKFLOWS_ROOT', self.workflows)]:
+            patcher = patch.object(ci, attribute, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def reseal(record):
+        body = {k: v for k, v in record.items() if k != 'manifest_sha256'}
+        record['manifest_sha256'] = hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(',', ':')).encode()
+        ).hexdigest()
+        return record
+
+    def reject(self, record, reason=None):
+        stream = io.StringIO()
+        with redirect_stderr(stream), self.assertRaises((SystemExit, ValueError, OSError)):
+            self.ci.verify_manifest(record)
+        if reason:
+            self.assertIn(reason, stream.getvalue())
+
+    def test_both_workflow_extensions_are_complete_and_nested_data_is_excluded(self):
+        for name in ['first.yml', 'second.yaml']:
+            (self.workflows / name).write_text('name: Example\n', encoding='utf-8')
+        nested = self.workflows / 'samples'
+        nested.mkdir()
+        (nested / 'ignored.yaml').write_text('fixture\n', encoding='utf-8')
+        manifest = self.ci.extract_manifest()
+        self.assertEqual([e['path'] for e in manifest['files']],
+                         ['.github/workflows/first.yml', '.github/workflows/second.yaml'])
+        self.ci.verify_manifest(manifest)
+        (self.workflows / 'second.yaml').write_text('name: Changed\n', encoding='utf-8')
+        self.reject(manifest, 'DRIFT')
+
+    def test_verify_rejects_resealed_metadata_and_duplicate_records(self):
+        (self.workflows / 'one.yml').write_text('name: One\n', encoding='utf-8')
+        current = self.ci.extract_manifest()
+        self.ci.verify_manifest(current)
+        mutations = [
+            {'class': 'unrelated'}, {'schema_version': True}, {'root': '../another'},
+            {'file_count': 99}, {'extra': 'unknown'},
+            {'files': current['files'] * 2, 'file_count': 2},
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                forged = copy.deepcopy(current)
+                forged.update(mutation)
+                self.reject(self.reseal(forged))
+        forged = copy.deepcopy(current)
+        forged['manifest_sha256'] = '0' * 64
+        self.reject(forged)
+
+    def test_missing_workflow_root_is_not_an_admitted_empty_inventory(self):
+        empty = self.ci.extract_manifest()
+        self.ci.verify_manifest(empty)
+        self.workflows.rmdir()
+        self.reject(empty)
+
+    def test_workflow_symlink_is_refused_instead_of_followed(self):
+        target = self.root / 'external.yml'
+        target.write_text('name: External\n', encoding='utf-8')
+        (self.workflows / 'borrowed.yml').symlink_to(target)
+        with self.assertRaises((SystemExit, ValueError, OSError)):
+            self.ci.extract_manifest()
 
 if __name__ == "__main__":
     unittest.main()

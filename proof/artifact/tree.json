@@ -527,7 +527,7 @@
   "scripts/test_distribution_outputs.mjs": "bb2fd1aac381a8a37fcd656c2d183f690b9c3686",
   "scripts/test_document_bytes.py": "044080f617c51c04f5985b437aacbf4eb87e6d7b",
   "scripts/test_evaluate_distribution.mjs": "30cc62f79d393c36f8b846586b845af7454dcd52",
-  "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
+  "scripts/test_extract_ci_build.py": "2c2c1d65a10d779647882e56f111d7d4c48011c3",
   "scripts/test_extract_claims.py": "672e37923e2243a16d27b1557c98e3a6bbeb0104",
   "scripts/test_extract_conformance.py": "505c896a99fbaa407b8f96c29b9ad777fac3fd65",
   "scripts/test_extract_decisions.py": "c4a0fed4353cb190c00d5055d6dc9a8f690cb4b4",
@@ -556,7 +556,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "b431a0c5b72bbcd7205d1e8c4f53ce92c74d40b8d94f7d3cb1094e97f4a8e8eb",
+ "record_sha256": "7654a71f0c958b5322bccc3c22a679bd0704155013a0ba5a39ab5378c27b49fc",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
