@@ -1,6 +1,7 @@
 """Проверка опубликованного текста и доменного разделителя протокола."""
 
 import ast
+import re
 from pathlib import Path
 import subprocess
 import unittest
@@ -53,6 +54,26 @@ def recovered_cyrillic_comment(line: str) -> str | None:
     return text if text != line else None
 
 
+def work_record_reason(path: Path, text: str) -> str | None:
+    """Reject agent work records, not product protocols or reproducible test data."""
+    if any(part.casefold() in {"plans", "handoffs", "worklogs"} for part in path.parts[:-1]):
+        return "agent work directory"
+    # A plan remains a plan after a rename. Recognize its owned schema rather
+    # than a list of old filenames or ordinary words such as 'dependency plan'.
+    if text.startswith("---\n"):
+        frontmatter = text.split("\n---", 1)[0]
+        keys = set(re.findall(r"^([a-z][a-z_-]*):", frontmatter, re.MULTILINE))
+        if {"track", "revision", "owns"} <= keys:
+            return "agent plan frontmatter"
+    fields = {
+        key.strip().casefold()
+        for key in re.findall(r"^\*\*([^*\n]+):\*\*", text, re.MULTILINE)
+    }
+    if {"status", "branch"} <= fields or {"baseline sha", "head at validation"} <= fields:
+        return "work-session status or review report"
+    return None
+
+
 class DocumentBytesTests(unittest.TestCase):
     def test_control_bytes_refuse_without_rejecting_normal_whitespace(self):
         for value in (0, 1, 8, 11, 12, 14, 31, 127):
@@ -103,6 +124,37 @@ class DocumentBytesTests(unittest.TestCase):
         self.assertEqual(recovered_cyrillic_comment(corrupted), readable)
         self.assertIsNone(recovered_cyrillic_comment(readable))
         self.assertIsNone(recovered_cyrillic_comment("/// Рёбра задают порядок вычислений."))
+
+    def test_product_documents_exclude_agent_work_records(self):
+        failures = []
+        for path in tracked_documents():
+            if path.suffix.lower() not in {".md", ".mdx", ".rst"}:
+                continue
+            relative = path.relative_to(ROOT)
+            reason = work_record_reason(relative, path.read_text(encoding="utf-8-sig"))
+            if reason:
+                failures.append(f"{relative.as_posix()}: {reason}")
+        self.assertEqual(failures, [], "agent plans and run reports do not belong to the product")
+
+    def test_work_record_check_distinguishes_product_contracts(self):
+        rejected = (
+            ("docs/innocent-name.md", "---\ntrack: colors\nrevision: 9\nowns: [core]\n---\n# Work"),
+            ("docs/reference.md", "# Projection\n**Status:** COMPLETE\n**Branch:** work/example"),
+            ("docs/check.md", "# Review\n**Baseline SHA:** aaaa\n**HEAD at validation:** bbbb"),
+            ("plans/next.md", "# Next implementation steps"),
+        )
+        for name, text in rejected:
+            with self.subTest(path=name):
+                self.assertIsNotNone(work_record_reason(Path(name), text))
+        allowed = (
+            ("docs/contracts/dependency-plan.md", "# Compiled dependency plan\nA plan is a runtime graph."),
+            ("docs/decisions/0010-solver.md", "# Solver\n**Status:** Accepted\n## Decision"),
+            ("proof/region/v1/PROTOCOL.md", "# Protocol\nThe status field identifies a terminal outcome."),
+            ("crates/labcolors-core/tests/data/README.md", "# Measured fixtures\nSource snapshot: 2026-07-02."),
+        )
+        for name, text in allowed:
+            with self.subTest(path=name):
+                self.assertIsNone(work_record_reason(Path(name), text))
 
     def test_documented_domain_separator_matches_protocol_source(self):
         module = ast.parse(SOURCE.read_text(encoding="utf-8"))
