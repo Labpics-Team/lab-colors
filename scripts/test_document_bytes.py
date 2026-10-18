@@ -220,12 +220,24 @@ class DocumentBytesTests(unittest.TestCase):
             with patch(__name__ + ".ROOT", root), patch(__name__ + ".PROTOCOL", document), patch(
                 __name__ + ".tracked_documents", return_value=[document]
             ):
-                document.write_text("Цвет и движение — 色彩\n", encoding="utf-8")
-                self.test_tracked_documents_are_utf8_without_hidden_controls()
+                def run_check():
+                    # unittest subTest records failures instead of raising them.
+                    # Use a separate case/result to observe the real checker outcome.
+                    result = unittest.TestResult()
+                    case = DocumentBytesTests("test_tracked_documents_are_utf8_without_hidden_controls")
+                    case.run(result)
+                    self.assertEqual(result.testsRun, 1)
+                    self.assertEqual(result.errors, [])
+                    return result
+
+                document.write_text("Цвет и движение 色彩\n", encoding="utf-8")
+                self.assertTrue(run_check().wasSuccessful())
                 for value in (0x80, 0x85, 0x9b, 0x9f):
                     document.write_text("Цвет" + chr(value), encoding="utf-8")
-                    with self.subTest(value=value), self.assertRaisesRegex(AssertionError, "hidden control"):
-                        self.test_tracked_documents_are_utf8_without_hidden_controls()
+                    with self.subTest(value=value):
+                        result = run_check()
+                        self.assertEqual(len(result.failures), 1)
+                        self.assertIn("hidden control", result.failures[0][1])
 
     def test_documented_domain_separator_matches_protocol_source(self):
         module = ast.parse(SOURCE.read_text(encoding="utf-8"))
