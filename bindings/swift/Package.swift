@@ -1,7 +1,7 @@
 // swift-tools-version:5.9
-// SwiftPM-пакет нативного биндинга labcolors. Линкует СТАТИЧЕСКУЮ Rust-библиотеку
-// (`liblabcolors.a`) + сгенерированные UniFFI Swift-биндинги, и прогоняет
-// conformance-пак против рантайм-ядра. Активный CI-гейт собирает пакет в pinned
+// SwiftPM-пакет нативного биндинга labcolors связывает Rust-библиотеку
+// со сгенерированными UniFFI Swift-биндингами и проверяет
+// conformance-векторы против ядра. Активный CI-гейт собирает пакет в pinned
 // Swift-контейнере на Linux x86_64; ручной macOS/arm64 path не является
 // достигнутой аттестацией. Файлы в `Sources/LabColors` и
 // `Sources/labcolorsFFI` генерирует uniffi-bindgen ПЕРЕД `swift test` (см.
@@ -25,7 +25,7 @@ let package = Package(
             path: "Sources/LabColors"
         ),
         // Conformance-тесты: грузят закоммиченные векторы из ../../conformance,
-        // сверяют их с выходом FFI. Линкуют статическую Rust-библиотеку из
+        // сверяют их с выходом FFI. Линкуют Rust-библиотеку из
         // target/debug (путь относительно корня пакета bindings/swift).
         .testTarget(
             name: "LabColorsConformanceTests",

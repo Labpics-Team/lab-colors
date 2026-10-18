@@ -4,7 +4,9 @@ import ast
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "proof/region/v1/PROTOCOL.md"
@@ -130,13 +132,33 @@ class DocumentBytesTests(unittest.TestCase):
     def test_product_documents_exclude_agent_work_records(self):
         failures = []
         for path in tracked_documents():
-            if path.suffix.lower() not in {".md", ".mdx", ".rst"}:
-                continue
             relative = path.relative_to(ROOT)
             reason = work_record_reason(relative, path.read_text(encoding="utf-8-sig"))
             if reason:
                 failures.append(f"{relative.as_posix()}: {reason}")
         self.assertEqual(failures, [], "agent plans and run reports do not belong to the product")
+
+    def test_work_record_check_covers_every_tracked_text_extension(self):
+        # Exercise the document check itself: a helper-only case would miss a
+        # filter that drops .txt between enumeration and classification.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "plans").mkdir()
+            for extension in TEXT_EXTENSIONS:
+                document = root / "plans" / ("next" + extension)
+                document.write_text("Next implementation steps\n", encoding="utf-8")
+                with self.subTest(extension=extension), patch(
+                    __name__ + ".ROOT", root
+                ), patch(__name__ + ".tracked_documents", return_value=[document]):
+                    with self.assertRaisesRegex(AssertionError, "agent plans and run reports"):
+                        self.test_product_documents_exclude_agent_work_records()
+            # A saved text fixture must pass through the same consumer path.
+            fixture = root / "samples.txt"
+            fixture.write_text("0 1 2\n", encoding="utf-8")
+            with patch(__name__ + ".ROOT", root), patch(
+                __name__ + ".tracked_documents", return_value=[fixture]
+            ):
+                self.test_product_documents_exclude_agent_work_records()
 
     def test_work_record_check_distinguishes_product_contracts(self):
         rejected = (

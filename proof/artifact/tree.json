@@ -21,7 +21,7 @@
   "Cargo.lock": "e365295ef5e3c6f58d1bdde2f6fe4011c06c508f",
   "Cargo.toml": "8b359932de31f097f2de1e6cc16c39b99e3c048f",
   "bindings/swift/.gitignore": "2ec0ad76ff72010cb0f1b1afa7239eebbda6e8a0",
-  "bindings/swift/Package.swift": "fd52fb46a7c20ba1fd7ad9d2d6bd100a8e9c5d88",
+  "bindings/swift/Package.swift": "619d69620f3c298bd1b5a78023d60c86a170d7f9",
   "bindings/swift/README.md": "0ed15cb9e431ded99bb0a8dda8020c026823f787",
   "bindings/swift/Sources/labcolorsFFI/.gitkeep": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
   "bindings/swift/Tests/LabColorsConformanceTests/ConformanceTests.swift": "9a8f52f5216fdd7ab3d27e44501b8df0593f293b",
@@ -525,7 +525,7 @@
   "scripts/test_ci_peer_gate.py": "a30f1b4957d4a5ede7b2ee24d40e62e4de23da1a",
   "scripts/test_ci_storage.py": "d0e92a6ddb898266773d0b9d27b79244b2145c8a",
   "scripts/test_distribution_outputs.mjs": "bb2fd1aac381a8a37fcd656c2d183f690b9c3686",
-  "scripts/test_document_bytes.py": "d48399691a114987fe8fd28a0cc2ecc212515ce9",
+  "scripts/test_document_bytes.py": "044080f617c51c04f5985b437aacbf4eb87e6d7b",
   "scripts/test_evaluate_distribution.mjs": "30cc62f79d393c36f8b846586b845af7454dcd52",
   "scripts/test_extract_ci_build.py": "735eccfb049f690df0b49ebff14c6310a2996c81",
   "scripts/test_extract_claims.py": "672e37923e2243a16d27b1557c98e3a6bbeb0104",
@@ -556,7 +556,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "a62509d5f54a68666c8dc1e783da2ac2ce1a8ea745c75f80936215824b38536e",
+ "record_sha256": "b431a0c5b72bbcd7205d1e8c4f53ce92c74d40b8d94f7d3cb1094e97f4a8e8eb",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
