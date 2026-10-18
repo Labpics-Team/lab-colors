@@ -1,9 +1,12 @@
 """Проверка опубликованного текста и доменного разделителя протокола."""
 
 import ast
+import re
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = ROOT / "proof/region/v1/PROTOCOL.md"
@@ -51,6 +54,28 @@ def recovered_cyrillic_comment(line: str) -> str | None:
     except (UnicodeEncodeError, UnicodeDecodeError):
         return None
     return text if text != line else None
+
+
+def work_record_reason(path: Path, text: str) -> str | None:
+    """Reject agent work records, not product protocols or reproducible test data."""
+    # Only repository work roots have this meaning. Product reference topics
+    # may legitimately use the same word at any deeper level.
+    if len(path.parts) > 1 and path.parts[0].casefold() in {"plans", "handoffs", "worklogs"}:
+        return "agent work directory"
+    # A plan remains a plan after a rename. Recognize its owned schema rather
+    # than a list of old filenames or ordinary words such as 'dependency plan'.
+    if text.startswith("---\n"):
+        frontmatter = text.split("\n---", 1)[0]
+        keys = set(re.findall(r"^([a-z][a-z_-]*):", frontmatter, re.MULTILINE))
+        if {"track", "revision", "owns"} <= keys:
+            return "agent plan frontmatter"
+    fields = {
+        key.strip().casefold()
+        for key in re.findall(r"^\*\*([^*\n]+):\*\*", text, re.MULTILINE)
+    }
+    if {"status", "branch"} <= fields or {"baseline sha", "head at validation"} <= fields:
+        return "work-session status or review report"
+    return None
 
 
 class DocumentBytesTests(unittest.TestCase):
@@ -103,6 +128,59 @@ class DocumentBytesTests(unittest.TestCase):
         self.assertEqual(recovered_cyrillic_comment(corrupted), readable)
         self.assertIsNone(recovered_cyrillic_comment(readable))
         self.assertIsNone(recovered_cyrillic_comment("/// Рёбра задают порядок вычислений."))
+
+    def test_product_documents_exclude_agent_work_records(self):
+        failures = []
+        for path in tracked_documents():
+            relative = path.relative_to(ROOT)
+            reason = work_record_reason(relative, path.read_text(encoding="utf-8-sig"))
+            if reason:
+                failures.append(f"{relative.as_posix()}: {reason}")
+        self.assertEqual(failures, [], "agent plans and run reports do not belong to the product")
+
+    def test_work_record_check_covers_every_tracked_text_extension(self):
+        # Exercise the document check itself: a helper-only case would miss a
+        # filter that drops .txt between enumeration and classification.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "plans").mkdir()
+            for extension in TEXT_EXTENSIONS:
+                document = root / "plans" / ("next" + extension)
+                document.write_text("Next implementation steps\n", encoding="utf-8")
+                with self.subTest(extension=extension), patch(
+                    __name__ + ".ROOT", root
+                ), patch(__name__ + ".tracked_documents", return_value=[document]):
+                    with self.assertRaisesRegex(AssertionError, "agent plans and run reports"):
+                        self.test_product_documents_exclude_agent_work_records()
+            # A saved text fixture must pass through the same consumer path.
+            fixture = root / "samples.txt"
+            fixture.write_text("0 1 2\n", encoding="utf-8")
+            with patch(__name__ + ".ROOT", root), patch(
+                __name__ + ".tracked_documents", return_value=[fixture]
+            ):
+                self.test_product_documents_exclude_agent_work_records()
+
+    def test_work_record_check_distinguishes_product_contracts(self):
+        rejected = (
+            ("docs/innocent-name.md", "---\ntrack: colors\nrevision: 9\nowns: [core]\n---\n# Work"),
+            ("docs/reference.md", "# Projection\n**Status:** COMPLETE\n**Branch:** work/example"),
+            ("docs/check.md", "# Review\n**Baseline SHA:** aaaa\n**HEAD at validation:** bbbb"),
+            ("plans/next.md", "# Next implementation steps"),
+        )
+        for name, text in rejected:
+            with self.subTest(path=name):
+                self.assertIsNotNone(work_record_reason(Path(name), text))
+        allowed = (
+            ("docs/contracts/dependency-plan.md", "# Compiled dependency plan\nA plan is a runtime graph."),
+            ("docs/contracts/plans/dependency-plan.md", "# Compiled dependency plan\nA plan is a runtime graph."),
+            ("docs/contracts/handoffs/transport.md", "# Handoff transport\nThe envelope carries a sequence number."),
+            ("docs/decisions/0010-solver.md", "# Solver\n**Status:** Accepted\n## Decision"),
+            ("proof/region/v1/PROTOCOL.md", "# Protocol\nThe status field identifies a terminal outcome."),
+            ("crates/labcolors-core/tests/data/README.md", "# Measured fixtures\nSource snapshot: 2026-07-02."),
+        )
+        for name, text in allowed:
+            with self.subTest(path=name):
+                self.assertIsNone(work_record_reason(Path(name), text))
 
     def test_documented_domain_separator_matches_protocol_source(self):
         module = ast.parse(SOURCE.read_text(encoding="utf-8"))

@@ -15,15 +15,13 @@ description = "WASM bindings for the labcolors-core contrast engine, packaged as
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# WASM-граница владеет JSON-конфигом и browser bindings для point-evaluator-ов;
+# WASM-граница владеет JSON-проекциями результатов и browser bindings;
 # `labcolors-core` остаётся без runtime-зависимостей.
 labcolors-core = { path = "../labcolors-core", default-features = false }
 wasm-bindgen = { workspace = true }
-# js-sys ships with the wasm-bindgen toolchain (no new third-party tree). It is
-# used by existing JavaScript boundary code.
+# JavaScript-объекты внешней границы.
 js-sys = "0.3"
-# Derive-only: thiserror is a proc-macro with no runtime code, so it adds
-# nothing to the WASM bundle while giving matchable, well-described errors.
+# Типизированные ошибки WASM-границы.
 thiserror = "2"
 # JSON-декодирование принадлежит только WASM-границе; Core не получает serde.
 # Raw release-WASM закреплён exact size ratchet в `packages/colors/bench/wasm.json`.
@@ -33,18 +31,9 @@ serde_json = "1"
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 labcolors-conformance = { path = "../labcolors-conformance" }
-# Native criterion bench of the solve cache-MISS path (`benches/resolve.rs`),
-# over the real labui config via the same load_config path. Mirrors
-# labcolors-core's `forward` bench. dev-only — never in the WASM bundle.
-# Feature set matches labcolors-core exactly: plots are intentionally off
-# (no `plotters`, no gnuplot requirement) — criterion 0.5 degrades to
-# text-only output; nothing in the repo consumes the HTML reports.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-
-
 # wasm-pack invokes wasm-opt with these flags. `-Oz` optimises hard for size;
 # the feature-enable flags match what modern Rust emits and 2023+ browsers run
-# (the epic's target), so the optimiser does not reject the toolchain's output.
+# so the optimiser accepts the declared toolchain output.
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 
@@ -52,7 +41,7 @@ wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
 default = []
 # Opt-in dev aid: routes Rust panics to the browser console with a readable
 # stack. OFF by default and never enabled in the release bundle — production
-# errors are returned as structured values, never panics (task requirement).
+# expected errors are returned as structured values.
 console_panic = ["dep:console_error_panic_hook"]
 
 [dependencies.console_error_panic_hook]

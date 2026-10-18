@@ -3065,12 +3065,23 @@ class CoreConsumerProjectionTest(unittest.TestCase):
                     else: package["dependencies"].append(copy.deepcopy(dep))
                     with self.assertRaisesRegex(SystemExit, consumer):
                         execute(altered)
-        # Имя прежней optional-библиотеки не разрешает сделать её обязательной.
-        altered = copy.deepcopy(metadata)
-        core = next(p for p in altered["packages"] if p["name"] == "labcolors-core")
-        core["dependencies"].append({"name":"serde", "kind":None, "optional":False})
-        with self.assertRaisesRegex(SystemExit, "zero runtime dependencies"):
-            execute(altered)
+        # Нулевая зависимость ядра относится ко всем feature/target-наборам,
+        # а не только к default. Dev-only инструменты остаются допустимы.
+        for optional in (False, True):
+            for target in (None, "cfg(target_arch = \"wasm32\")"):
+                with self.subTest(optional=optional, target=target):
+                    altered = copy.deepcopy(metadata)
+                    core = next(p for p in altered["packages"] if p["name"] == "labcolors-core")
+                    core["dependencies"].append({
+                        "name": "repository-parser", "kind": None,
+                        "optional": optional, "target": target,
+                    })
+                    with self.assertRaisesRegex(SystemExit, "zero runtime dependencies"):
+                        execute(altered)
+        allowed = copy.deepcopy(metadata)
+        core = next(p for p in allowed["packages"] if p["name"] == "labcolors-core")
+        core["dependencies"].append({"name": "test-oracle", "kind": "dev", "optional": False})
+        execute(allowed)
 
 
 if __name__ == "__main__":
