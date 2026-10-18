@@ -1,6 +1,6 @@
 [package]
 name = "labcolors-audit"
-description = "AUD-01 scanner: 3-stage pipeline (enumerate → dispose → gate) for production artifact conformance auditing."
+description = "Offline source, API and artifact auditing for Lab Colors."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

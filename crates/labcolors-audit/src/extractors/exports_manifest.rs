@@ -625,9 +625,20 @@ mod tests {
         );
         assert!(module_names.contains(&"wcag22"), "missing pub mod wcag22");
         assert!(module_names.contains(&"solve"), "missing pub mod solve");
+        for repository_module in [
+            "source_manifest",
+            "claims_manifest",
+            "exports_manifest",
+            "ci_build_manifest",
+        ] {
+            assert!(
+                !module_names.contains(&repository_module),
+                "repository tool leaked into Core: {repository_module}"
+            );
+        }
         assert!(
-            module_names.contains(&"source_manifest"),
-            "missing pub mod source_manifest"
+            core.dependencies.is_empty(),
+            "Core must not depend on repository parsers"
         );
     }
 

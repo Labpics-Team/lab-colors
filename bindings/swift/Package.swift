@@ -18,15 +18,14 @@ let package = Package(
         // labcolorsFFI.h + labcolorsFFI.modulemap → переименовывается в
         // module.modulemap в CI). Экспортирует extern-C FFI-символы ядра.
         .systemLibrary(name: "labcolorsFFI", path: "Sources/labcolorsFFI"),
-        // Сгенерированный labcolors.swift + hand-written typed byte wrapper.
+        // Модуль labcolors.swift, сгенерированный из текущего FFI-контракта.
         .target(
             name: "LabColors",
             dependencies: ["labcolorsFFI"],
             path: "Sources/LabColors"
         ),
         // Conformance-тесты: грузят закоммиченные векторы из ../../conformance,
-        // сверяют их с выходом FFI и отдельно проверяют типизированный Glow
-        // decision contract. Линкуют статическую Rust-библиотеку из
+        // сверяют их с выходом FFI. Линкуют статическую Rust-библиотеку из
         // target/debug (путь относительно корня пакета bindings/swift).
         .testTarget(
             name: "LabColorsConformanceTests",

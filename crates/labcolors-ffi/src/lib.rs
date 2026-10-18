@@ -221,10 +221,9 @@ pub struct Solved {
     pub lc: f64,
     /// WCAG-ratio на отданном hex.
     pub wcag_ratio: f64,
-    /// Frozen pre-cutover report: a caller-owned hard predicate over final
-    /// emitted bytes moved the analytic candidate. `solve_contrast` declares no
-    /// such predicate, so its value is `false`; recipe boundaries may report
-    /// `true`. It never participates in selection.
+    /// Признак корректировки по дополнительному условию конечной эмиссии.
+    /// `solve_contrast` не задаёт такое условие и возвращает `false`.
+    /// Поле результата не участвует в выборе цвета.
     pub floor_override: bool,
 }
 
@@ -264,12 +263,6 @@ pub enum ColorError {
         /// Человекочитаемая причина.
         reason: String,
     },
-    /// Неизвестный ключ позиции лестницы.
-    #[error("неизвестная позиция лестницы: {key}")]
-    UnknownLadderPosition {
-        /// Запрошенный ключ.
-        key: String,
-    },
     /// Resolver не вернул цвет. Категория отделяет доказанную недостижимость
     /// от unresolved и rejected исходов.
     #[error("solve failure {category:?}/{code}")]
@@ -278,12 +271,6 @@ pub enum ColorError {
         category: FailureCategory,
         /// Стабильный машинный код конкретной причины.
         code: String,
-    },
-    /// Невалидный low-level Glow request на публичной границе.
-    #[error("невалидный glow request: {reason}")]
-    InvalidGlowRequest {
-        /// Человекочитаемая причина.
-        reason: String,
     },
     /// FFI-adapter получил internal postcondition failure либо вариант core-
     /// контракта, который эта версия нативной поверхности не умеет представить
