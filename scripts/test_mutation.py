@@ -1960,6 +1960,7 @@ class MutationTruthTest(unittest.TestCase):
                 "evaluate-distribution",
                 "evaluate-distribution-attestation",
                 "audit",
+                "security",
             },
         )
         native_blocks = workflow_job_blocks(
