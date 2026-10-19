@@ -1,112 +1,32 @@
 #!/usr/bin/env python3
-"""EXT-09: CI/build/release declarations artifact class extractor.
+"""Inventory of direct .yml and .yaml workflow files in .github/workflows.
 
-Produces a finite manifest of all GitHub Actions workflow files in
-.github/workflows/ with their SHA-256 digests.
-
-Sabotage controls:
-- Fails if any listed file is missing from disk.
-- This script pins nothing by itself: `extract | verify` in one run proves only
-  self-consistency. Drift against the repository is detected by
-  scripts/artifact_matrix.py (proof/artifact/tree.json), not here.
-- Fails if an unexpected .yml file appears (new file without manifest update).
-
-Exit evidence: JSON manifest on stdout with schema:
-{
-  "class": "ci-build-release",
-  "schema_version": 1,
-  "root": ".github/workflows",
-  "file_count": <int>,
-  "files": [{"path": "<relative>", "sha256": "<hex>"}],
-  "manifest_sha256": "<hex of canonical JSON excluding this field>"
-}
+Nested directories are not GitHub workflow entrypoints. Verification checks
+schema, count, self-hash and the complete current file set. Paths from an input
+record are never used for file access. Unreadable inputs and links are refused.
+Historical drift is checked separately by scripts/artifact_matrix.py.
 """
-import hashlib
-import json
 import sys
 from pathlib import Path
+
+from file_manifest import build_file_manifest, run_file_manifest, verify_file_manifest
+from source_tree import regular_sources
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_ROOT = REPO_ROOT / ".github" / "workflows"
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def extract_manifest() -> dict:
-    if not WORKFLOWS_ROOT.is_dir():
-        print(f"SABOTAGE: workflows root missing: {WORKFLOWS_ROOT}", file=sys.stderr)
-        sys.exit(1)
-
-    files = []
-    for yml_file in sorted(WORKFLOWS_ROOT.glob("*.yml")):
-        rel = yml_file.relative_to(REPO_ROOT).as_posix()
-        digest = sha256_file(yml_file)
-        files.append({"path": rel, "sha256": digest})
-
-    manifest = {
-        "class": "ci-build-release",
-        "schema_version": 1,
-        "root": ".github/workflows",
-        "file_count": len(files),
-        "files": files,
-    }
-
-    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-    manifest["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
-
-    return manifest
+    paths = regular_sources(WORKFLOWS_ROOT, {".yml", ".yaml"}, recursive=False)
+    return build_file_manifest(REPO_ROOT, ".github/workflows", "ci-build-release", paths)
 
 
 def verify_manifest(manifest: dict) -> None:
-    """Sabotage: verify every listed file exists and matches digest."""
-    errors = []
-    seen_paths = set()
-
-    for entry in manifest["files"]:
-        path = REPO_ROOT / entry["path"]
-        seen_paths.add(entry["path"])
-        if not path.is_file():
-            errors.append(f"MISSING: {entry['path']}")
-            continue
-        actual = sha256_file(path)
-        if actual != entry["sha256"]:
-            errors.append(
-                f"DRIFT: {entry['path']} expected={entry['sha256'][:16]}… "
-                f"actual={actual[:16]}…"
-            )
-
-    for yml_file in sorted(WORKFLOWS_ROOT.glob("*.yml")):
-        rel = yml_file.relative_to(REPO_ROOT).as_posix()
-        if rel not in seen_paths:
-            errors.append(f"UNLISTED: {rel}")
-
-    if errors:
-        print("SABOTAGE FAILURES:", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
-        sys.exit(1)
+    verify_file_manifest(manifest, extract_manifest())
 
 
 def main() -> None:
-    mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
-
-    if mode == "extract":
-        manifest = extract_manifest()
-        print(json.dumps(manifest, sort_keys=True, indent=2))
-    elif mode == "verify":
-        raw = sys.stdin.buffer.read().decode("utf-8-sig")
-        manifest = json.loads(raw)
-        verify_manifest(manifest)
-        print(f"EXT-09 VERIFY OK: {manifest['file_count']} files", file=sys.stderr)
-    else:
-        print(f"Unknown mode: {mode}. Use 'extract' or 'verify'.", file=sys.stderr)
-        sys.exit(64)
+    raise SystemExit(run_file_manifest(extract_manifest, verify_manifest, "EXT-09", sys.argv[1:]))
 
 
 if __name__ == "__main__":

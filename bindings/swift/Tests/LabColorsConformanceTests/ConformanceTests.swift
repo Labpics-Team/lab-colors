@@ -14,10 +14,6 @@ final class ConformanceTests: XCTestCase {
 
     static let driftTol = 1e-6
 
-    // Compile V1 permits one 64-KiB packed result. With a 32-byte partition,
-    // the remaining 65,504 bytes hold 2,047 32-byte edge columns; 256 × 2,047
-    // gives the exact work count. The strict protocol grammar independently
-    // reaches its 657,380-byte ceiling when opaque IDs consume their 64-KiB cap.
     // MARK: - Локация закоммиченных векторов (относительно этого файла)
 
     static var vectorsDir: URL = {

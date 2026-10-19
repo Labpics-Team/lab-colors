@@ -43,10 +43,7 @@ pub mod alpha;
 pub(crate) mod appearance;
 pub mod authority;
 pub mod certificate;
-pub mod claims_manifest;
 pub(crate) mod constraints;
-#[cfg(feature = "ext09-extractor")]
-pub mod exports_manifest;
 pub mod hash;
 pub mod lcs;
 #[expect(
@@ -104,7 +101,6 @@ pub(crate) mod release_registry;
 pub mod scale;
 pub(crate) mod sha256;
 pub mod solve;
-pub mod source_manifest;
 
 pub mod curve;
 
@@ -231,13 +227,6 @@ mod contextual_region_tests;
 mod contextual_region_formula_tests;
 
 pub mod compiled_dependency_plan;
-
-#[cfg(feature = "ext09-extractor")]
-#[expect(
-    dead_code,
-    reason = "CI build manifest extraction is staged before its offline proof consumer"
-)]
-pub(crate) mod ci_build_manifest;
 
 #[cfg(test)]
 mod compiled_dependency_plan_tests;

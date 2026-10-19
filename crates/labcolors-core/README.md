@@ -27,10 +27,10 @@ assert_eq!(composite, [0x17, 0x16, 0x1F]);
 # }
 ```
 
-Гарантии точного композитинга не распространяются на неизвестный рендерер,
-дисплей, пространственное поле размытия или зависящий от платформы профиль Glow
-`legacy-platform-dependent-v1`. Версионированные границы описаны в
-conformance-пакете и закреплённой коммитом документации релиза.
+Точность относится к объявленной операции encoded-sRGB8. Она не удостоверяет
+неизвестный рендерер, дисплей или пространственное поле размытия.
+[Conformance-пакет](../../conformance/README.md) различает точный композит,
+численный допуск измерений и квантованный результат решателя.
 
 ## Точная оценка WCAG 2.2 и независимый оракул
 
@@ -81,5 +81,13 @@ fallible `try_to_bytes()`, а Rust consumer заимствует private capabil
 key даёт `Accepted`, повтор тех же bytes — `DuplicateNoop`, другой binding —
 `BindingConflict`. Missing/foreign attestation, tuple mismatch, future schema,
 unknown selectors, truncation, digest mismatch и исчерпание capacity дают
-закрытые typed errors без изменения предыдущего state. Persistence, network
-relay, remote authentication и science semantics принадлежат будущим ревизиям.
+закрытые typed errors без изменения предыдущего state. Хранение между
+процессами, сеть и удалённая аутентификация не входят в этот контракт.
+Научная оценка объявленной точки имеет отдельный `point_evaluation`-вход.
+
+## Инструменты разработки
+
+Core не читает исходники, Cargo-манифесты или CI-конфигурацию в runtime.
+Файловый аудит выполняют `labcolors-audit` и отдельные Python-инструменты;
+[руководство](../../docs/how-to/source-audit.md) описывает их область.
+Build-script отдельно формирует descriptor исходного дерева для сертификата.

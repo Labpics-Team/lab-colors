@@ -110,11 +110,50 @@ class EXT01SourceFilesTests(unittest.TestCase):
         recomputed = hashlib.sha256(canonical).hexdigest()
         self.assertEqual(claimed, recomputed)
 
+    def test_forged_manifest_sha256_is_rejected(self):
+        """A record with unchanged file entries but a false seal cannot pass."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        manifest["manifest_sha256"] = "0" * 64
+        verify = run_extractor("verify", stdin_data=json.dumps(manifest).encode())
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"HASH: manifest_sha256 mismatch", verify.stderr)
+
+    def test_resealed_wrong_file_count_is_rejected(self):
+        """Rehashing after changing file_count cannot certify a false inventory."""
+        extract = run_extractor("extract")
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        manifest = json.loads(extract.stdout)
+        manifest["file_count"] += 1
+        payload = {k: v for k, v in manifest.items() if k != "manifest_sha256"}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        manifest["manifest_sha256"] = hashlib.sha256(canonical).hexdigest()
+        verify = run_extractor("verify", stdin_data=json.dumps(manifest).encode())
+        self.assertNotEqual(verify.returncode, 0)
+        self.assertIn(b"COUNT: file_count does not match entries", verify.stderr)
+
     def test_unknown_mode_exits_64(self):
         """RED: invalid mode returns exit code 64 (usage error)."""
         result = run_extractor("bogus-mode")
         self.assertEqual(result.returncode, 64)
 
+
+
+    def test_resealed_foreign_schema_is_rejected(self):
+        extract = run_extractor('extract')
+        self.assertEqual(extract.returncode, 0, extract.stderr.decode())
+        current = json.loads(extract.stdout)
+        for mutation in [{'class': 'other'}, {'schema_version': True}, {'root': '../other'}]:
+            with self.subTest(mutation=mutation):
+                record = {**current, **mutation}
+                payload = {k: v for k, v in record.items() if k != 'manifest_sha256'}
+                record['manifest_sha256'] = hashlib.sha256(
+                    json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+                ).hexdigest()
+                result = run_extractor('verify', stdin_data=json.dumps(record).encode())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b'EXT-01 VERIFY OK', result.stderr)
 
 if __name__ == "__main__":
     unittest.main()

@@ -347,37 +347,35 @@ mod tests {
         Ok((verified.source().to_hex(), verified.opacity().value()))
     }
 
-    /// Живые Figma-пары нейтральной лестницы (`reference/labui-figma-structure.md`
-    /// §2 — альфы и тинт, §4 — композиты; фоны Backgrounds/Neutral/Primary):
-    /// (композит, α, фон). Тинт всех 12 пар — один: `#787880`.
+    /// Измеренные encoded-sRGB композиты: (результат, α, фон).
+    /// Снимок Figma от 2026-07-02, не утверждение о текущем рендерере.
+    /// Источник: <https://github.com/Labpics-Team/lab-colors/blob/d1129987b8e121c7191e5e96dc354df36748af95/reference/labui-figma-structure.md>.
     const TINT: &str = "#787880";
     const BG_LIGHT: &str = "#FFFFFF";
     const BG_DARK: &str = "#101012";
-    const FIGMA_PAIRS: &[(&str, f64, &str)] = &[
-        ("#E4E4E6", 0.20, BG_LIGHT), // Fills/Neutral/Primary light
-        ("#35353A", 0.36, BG_DARK),  // Fills/Neutral/Primary dark
-        ("#E9E9EB", 0.16, BG_LIGHT), // Fills/Neutral/Secondary light
-        ("#313135", 0.32, BG_DARK),  // Fills/Neutral/Secondary dark
-        ("#EFEFF0", 0.12, BG_LIGHT), // Fills/Neutral/Tertiary light
-        ("#29292C", 0.24, BG_DARK),  // Fills/Neutral/Tertiary dark
-        ("#F4F4F5", 0.08, BG_LIGHT), // Fills/Neutral/Quaternary light
-        ("#212124", 0.16, BG_DARK),  // Fills/Neutral/Quaternary dark
-        ("#E9E9EB", 0.16, BG_LIGHT), // Border/Neutral/Base light
-        ("#252528", 0.20, BG_DARK),  // Border/Neutral/Base dark
-        ("#F4F4F5", 0.08, BG_LIGHT), // Border/Neutral/Soft light
-        ("#1C1C1F", 0.12, BG_DARK),  // Border/Neutral/Soft dark
+    const MEASURED_COMPOSITE_PAIRS: &[(&str, f64, &str)] = &[
+        ("#E4E4E6", 0.20, BG_LIGHT),
+        ("#35353A", 0.36, BG_DARK),
+        ("#E9E9EB", 0.16, BG_LIGHT),
+        ("#313135", 0.32, BG_DARK),
+        ("#EFEFF0", 0.12, BG_LIGHT),
+        ("#29292C", 0.24, BG_DARK),
+        ("#F4F4F5", 0.08, BG_LIGHT),
+        ("#212124", 0.16, BG_DARK),
+        ("#E9E9EB", 0.16, BG_LIGHT),
+        ("#252528", 0.20, BG_DARK),
+        ("#F4F4F5", 0.08, BG_LIGHT),
+        ("#1C1C1F", 0.12, BG_DARK),
     ];
 
-    /// Прямой ход воспроизводит все 12 живых Figma-композитов побайтно —
-    /// пространство закона (гамма-кодированный sRGB) подтверждено измерением,
-    /// а не памятью.
+    /// Эталонный source-over воспроизводит сохранённые измерения побайтно.
     #[test]
-    fn figma_neutral_ladder_pairs_roundtrip() {
-        for (solid, alpha, bg) in FIGMA_PAIRS {
+    fn measured_encoded_composites_roundtrip() {
+        for (solid, alpha, bg) in MEASURED_COMPOSITE_PAIRS {
             let got = composite_hex(TINT, *alpha, bg).unwrap();
             assert_eq!(
                 &got, solid,
-                "композит {TINT}@{alpha} над {bg} разошёлся с Figma-композитом"
+                "композит {TINT}@{alpha} над {bg} разошёлся с измеренным композитом"
             );
         }
     }
@@ -598,14 +596,14 @@ mod tests {
         assert_eq!(composite_over_srgb8(tint, alpha, [0; 3]).unwrap(), [0; 3]);
     }
 
-    /// Обратный ход на живых парах: восстановленный тинт отклоняется от
+    /// Обратный ход на сохранённых парах: восстановленный тинт отклоняется от
     /// канонического не более чем на границу квантования 0.5/(255·α) на канал,
     /// а его композит воспроизводит опорный hex побайтно (что и является
     /// продуктовой гарантией: полупрозрачная пара красит ровно тот же цвет).
     #[test]
-    fn inversion_recovers_figma_tint_within_quantisation_bound() {
+    fn inversion_recovers_measured_tint_within_quantisation_bound() {
         let true_tint = srgb_encoded_from_hex(TINT).unwrap();
-        for (solid, alpha, bg) in FIGMA_PAIRS {
+        for (solid, alpha, bg) in MEASURED_COMPOSITE_PAIRS {
             let s = srgb_encoded_from_hex(solid).unwrap();
             let b = srgb_encoded_from_hex(bg).unwrap();
             let tint = invert_composite_encoded(s, *alpha, b)
@@ -799,7 +797,7 @@ mod tests {
         }
     }
 
-    /// Публичные физические hex-обёртки: roundtrip на живой Figma-паре и
+    /// Публичные физические hex-обёртки: roundtrip на сохранённой измеренной паре и
     /// честный Err (не паника) на невалидном hex.
     #[test]
     fn hex_wrappers_roundtrip_and_reject_invalid_hex() {

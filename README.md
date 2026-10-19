@@ -55,9 +55,9 @@ npm-пакета находятся в [package.json](packages/colors/package.js
 
 ## Зависимости
 
-У `labcolors-core` по умолчанию ноль рантайм-зависимостей.
-Необязательная возможность `ext09-extractor` подключает зависимости из
-[манифеста ядра](crates/labcolors-core/Cargo.toml).
+У `labcolors-core` ноль рантайм-зависимостей во всех наборах возможностей.
+Инвентаризация исходников и метаданных выполняется отдельно:
+[инструменты аудита](docs/how-to/source-audit.md) не входят в API цветового ядра.
 
 ```sh
 cargo tree -p labcolors-core --edges=no-dev

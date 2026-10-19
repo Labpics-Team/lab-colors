@@ -17,7 +17,7 @@ env:
   CARGO_TERM_COLOR: always
   # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
   # To update: pick the new stable from https://forge.rust-lang.org/ and change
-  # this single value вЂ” every job below consumes it via the `toolchain` input.
+  # this value; each job consumes it through the `toolchain` input.
   RUST_TOOLCHAIN: 1.96.0
   # Public minimum, tested independently from the development toolchain.
   MSRV_TOOLCHAIN: 1.85.0
@@ -33,11 +33,6 @@ env:
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
 
 jobs:
-  # Единый envelope: при переходе с DE-02 на GitHub-hosted раннеры старый
-  # 25-минутный конверт (двойной худший successful job из 20 main-прогонов)
-  # поднят до 40 минут — history-replay на новом железе ещё невозможен, запас
-  # берётся сверху. Перекалибровать по фактическим main-прогонам, а не под один
-  # медленный прогон.
   formal-positive:
     name: formal core positive (${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -218,22 +213,18 @@ jobs:
       - name: cargo check on declared MSRV
         run: |
           cargo check --workspace --all-targets --locked
-          cargo check -p labcolors-core --all-targets --features ext09-extractor --locked
+          cargo check -p labcolors-core --all-targets --all-features --locked
 
   lint:
     name: clippy + rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Isolate RUSTUP_HOME/CARGO_HOME per job under runner.temp. Эфемерная VM
-    # одноразовая, поэтому прежний класс гонок за общий $HOME закрыт по
-    # построению; изоляция оставлена инвариантом и стоит ноль. На DE-02 /tmp
-    # был 8ГБ tmpfs и per-run toolchain'ы (~600 МБ каждый) выедали его за ~12
-    # job'ов (ENOSPC-каскад, 2026-07-03) — rustup/cargo остаются в runner.temp.
+    # Каждый job использует собственные toolchain-каталоги в runner.temp.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain has no semver tags вЂ” pinned by commit SHA.
+      # dtolnay/rust-toolchain has no semver tags; the action is pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
       - name: toolchain env (runner.temp)
@@ -292,10 +283,8 @@ jobs:
         # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
         # (link to a private/renamed/removed item, or bare brackets rustdoc reads
         # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
-        # rustdoc warning вЂ” including broken_intra_doc_links вЂ” to an error;
-        # --no-deps keeps the gate on our own crates only. This stops a stale doc
-        # reference from merging silently (main was green with ~81 broken links
-        # because cargo doc was never gated вЂ” #26).
+        # rustdoc warning, including broken_intra_doc_links, to an error;
+        # --no-deps limits documentation checks to workspace crates.
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: staged Program is absent from the resolved public API
         run: |
@@ -518,9 +507,6 @@ jobs:
       - name: cargo test private-fixture feature
         if: ${{ matrix.lane == 'private-fixture' }}
         run: cargo test -p labcolors-core --lib --features private-fixture --locked
-      - name: optional repository extractor contracts
-        if: ${{ matrix.lane == 'proof-contracts' }}
-        run: cargo test -p labcolors-core --lib --features ext09-extractor --locked
       - name: exhaustive 24-bit family membership oracle
         if: ${{ matrix.lane == 'proof-contracts' }}
         shell: bash
@@ -557,17 +543,12 @@ jobs:
           core = packages["labcolors-core"]
           if core["features"].get("default") != []:
               raise SystemExit("labcolors-core default capability set drifted")
-          # Diagnostic: log all labcolors-core dependencies for debugging
-          for dep in core["dependencies"]:
-              if dep["kind"] is None:
-                  print(f"  core dep: {dep['name']} optional={dep.get('optional', 'MISSING')} kind={dep['kind']}", file=sys.stderr)
-
-          # Признак optional приходит из pinned Cargo, имя зависимости не даёт исключения.
+          # Ни optional, ни target-specific normal-edge не делает парсер
+          # репозитория частью цветовой математики. Dev-only oracle допустим.
           runtime_dependencies = [
               dependency
               for dependency in core["dependencies"]
               if dependency["kind"] is None
-              and not dependency.get("optional", False)
           ]
           if runtime_dependencies:
               names = sorted(dependency["name"] for dependency in runtime_dependencies)
@@ -1001,9 +982,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
-        # Must be >=0.22 вЂ” older versions cannot parse RUSTSEC entries that use
+        # Must be >=0.22; older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
+        # Add $CARGO_HOME/bin to PATH explicitly: with a custom CARGO_HOME the
         # toolchain action does not add it, and standalone `cargo install`
         # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
         # `cargo audit` only survived by resolving as a cargo subcommand).
@@ -1017,7 +998,7 @@ jobs:
       # warnings to failures. continue-on-error is intentionally absent (false)
       # so the gate actually blocks. If a finding is a false positive or accepted
       # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
-      # with a comment вЂ” never by disabling the whole gate.
+      # with a comment, never by disabling the whole check.
       - name: cargo audit
         run: cargo audit --deny warnings
 
