@@ -2,15 +2,23 @@
 use labcolors::*;
 use std::sync::{Arc, Mutex, Weak};
 
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
 fn fixtures() -> serde_json::Value {
-    serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json")).unwrap()
+    serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
+        .expect("committed Program fixtures must be valid JSON")
 }
 fn wire(name: &str) -> Vec<u8> {
     let fixtures = fixtures();
-    let hex = fixtures[name].as_str().unwrap();
+    let hex = fixtures[name]
+        .as_str()
+        .expect("named wire fixture must be a hex string");
+    assert_eq!(hex.len() % 2, 0, "wire fixture must contain whole bytes");
     (0..hex.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16).expect("wire fixture must use hexadecimal bytes")
+        })
         .collect()
 }
 fn code(error: LabColorsError) -> String {
@@ -25,70 +33,82 @@ fn expect_error<T>(result: Result<T, LabColorsError>, expected: &str) {
 }
 
 #[test]
-fn portable_history_and_owned_snapshots_survive_thread_migration() {
+fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult {
     fn send_sync<T: Send + Sync>() {}
     send_sync::<ProgramRuntime>();
     send_sync::<ProgramAttachment>();
     send_sync::<ProgramSnapshot>();
-    let runtime = compile_program_wire(wire("adaptive"), 1).unwrap();
-    let first = runtime
-        .update_observed(1, vec![1], vec![255; 3], 1)
-        .unwrap();
+    let runtime = compile_program_wire(wire("adaptive"), 1)?;
+    let first = runtime.update_observed(1, vec![1], vec![255; 3], 1)?;
     assert_eq!(first.state(), "ready");
-    assert_eq!(first.output_rgb(0).unwrap(), [0; 3]);
+    assert_eq!(first.output_rgb(0)?, [0; 3]);
     let worker = runtime.clone();
-    let second =
-        std::thread::spawn(move || worker.update_observed(2, vec![1], vec![0; 3], 1).unwrap())
-            .join()
-            .unwrap();
-    assert_eq!(second.output_rgb(0).unwrap(), [255; 3]);
-    assert_eq!(first.output_rgb(0).unwrap(), [0; 3]);
-    assert_eq!(first.output_slot(0).unwrap(), 91);
-    assert_eq!(first.output_opacity(0).unwrap(), 1.0);
+    let second = std::thread::spawn(move || worker.update_observed(2, vec![1], vec![0; 3], 1))
+        .join()
+        .expect("migrated runtime must not panic")?;
+    assert_eq!(second.output_rgb(0)?, [255; 3]);
+    assert_eq!(first.output_rgb(0)?, [0; 3]);
+    assert_eq!(first.output_slot(0)?, 91);
+    assert_eq!(first.output_opacity(0)?, 1.0);
     expect_error(first.output_rgb(1), "invalid_output_index");
-    for row in fixtures()["history"].as_array().unwrap().iter().skip(2) {
-        let revision = row["revision"].as_u64().unwrap();
+    for row in fixtures()["history"]
+        .as_array()
+        .expect("history must be an array")
+        .iter()
+        .skip(2)
+    {
+        let revision = row["revision"]
+            .as_u64()
+            .expect("fixture revision must be UInt64");
         let snapshot = if let Some(reason) = row["unknownReason"].as_u64() {
-            runtime.update_unknown(revision, reason as u32).unwrap()
+            runtime.update_unknown(revision, u32::try_from(reason)?)?
         } else {
-            let backgrounds = row["backgrounds"].as_array().unwrap();
-            let ids = (1..=backgrounds.len() as u32).collect();
-            let bytes = backgrounds
-                .iter()
-                .flat_map(|rgb| {
-                    rgb.as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|v| v.as_u64().unwrap() as u8)
-                })
-                .collect();
-            runtime.update_observed(revision, ids, bytes, 1).unwrap()
+            let backgrounds = row["backgrounds"]
+                .as_array()
+                .expect("observed step must declare backgrounds");
+            let ids = (1..=u32::try_from(backgrounds.len())?).collect();
+            let mut bytes = Vec::new();
+            for background in backgrounds {
+                for channel in background
+                    .as_array()
+                    .expect("background fixture must contain RGB channels")
+                {
+                    bytes.push(u8::try_from(
+                        channel.as_u64().expect("fixture channel must be unsigned"),
+                    )?);
+                }
+            }
+            runtime.update_observed(revision, ids, bytes, 1)?
         };
-        assert_eq!(snapshot.state(), row["state"].as_str().unwrap());
+        assert_eq!(
+            snapshot.state(),
+            row["state"]
+                .as_str()
+                .expect("fixture state must be a string")
+        );
         if row.get("rgb").is_some() {
-            assert_eq!(snapshot.output_rgb(0).unwrap(), [0; 3]);
+            assert_eq!(snapshot.output_rgb(0)?, [0; 3]);
         }
     }
+    Ok(())
 }
 
 #[test]
-fn malformed_conflicting_and_old_observations_do_not_consume_a_revision() {
-    let runtime = compile_program_wire(wire("adaptive"), 1).unwrap();
+fn malformed_conflicting_and_old_observations_do_not_consume_a_revision() -> TestResult {
+    let runtime = compile_program_wire(wire("adaptive"), 1)?;
     expect_error(
         runtime.update_observed(1, vec![1], vec![255; 2], 1),
         "program_update",
     );
     assert_eq!(
         runtime
-            .update_observed(1, vec![1], vec![255; 3], 1)
-            .unwrap()
+            .update_observed(1, vec![1], vec![255; 3], 1)?
             .state(),
         "ready"
     );
     assert_eq!(
         runtime
-            .update_observed(1, vec![1], vec![255; 3], 1)
-            .unwrap()
+            .update_observed(1, vec![1], vec![255; 3], 1)?
             .state(),
         "ready"
     );
@@ -98,19 +118,19 @@ fn malformed_conflicting_and_old_observations_do_not_consume_a_revision() {
     );
     assert_eq!(
         runtime
-            .update_observed(2, vec![1], vec![0; 3], 1)
-            .unwrap()
-            .output_rgb(0)
-            .unwrap(),
+            .update_observed(2, vec![1], vec![0; 3], 1)?
+            .output_rgb(0)?,
         [255; 3]
     );
     expect_error(runtime.update_unknown(1, 7), "program_update");
     expect_error(compile_program_wire(vec![0; 80], 1), "program_wire");
+    Ok(())
 }
 
 #[derive(Default)]
 struct HostState {
     reject: bool,
+    fail: bool,
     reenter: bool,
     sequence: u64,
     installed: Option<Vec<u8>>,
@@ -125,15 +145,26 @@ impl ProgramPointSinkHost for Host {
         &self,
         intent: ProgramPointSinkIntent,
     ) -> Result<bool, ProgramPointSinkCallbackError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .expect("test host lock must not be poisoned");
         state.calls += 1;
         if state.reenter {
-            let owner = self.owner.lock().unwrap().upgrade().unwrap();
+            let owner = self
+                .owner
+                .lock()
+                .expect("test owner lock must not be poisoned")
+                .upgrade()
+                .expect("test attachment must remain alive during callback");
             expect_error(owner.update_unknown(99, 7), "program_attachment_busy");
             expect_error(owner.materialization_authority(), "program_attachment_busy");
             expect_error(owner.dispose(false), "program_attachment_busy");
         }
         assert_eq!(intent.expected_sequence, state.sequence);
+        if state.fail {
+            return Err(ProgramPointSinkCallbackError::InvocationFailed);
+        }
         if state.reject {
             return Ok(false);
         }
@@ -147,7 +178,7 @@ impl ProgramPointSinkHost for Host {
 }
 
 #[test]
-fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() {
+fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() -> TestResult {
     let state = Arc::new(Mutex::new(HostState::default()));
     let owner = Arc::new(Mutex::new(Weak::new()));
     let attachment = attach_program_wire(
@@ -161,37 +192,51 @@ fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() {
             state: state.clone(),
             owner: owner.clone(),
         }),
-    )
-    .unwrap();
-    *owner.lock().unwrap() = Arc::downgrade(&attachment);
-    state.lock().unwrap().reenter = true;
-    let first = attachment
-        .update_observed(1, vec![1], vec![255; 3], 1)
-        .unwrap();
-    let render = first.render().unwrap();
-    let authority = attachment.materialization_authority().unwrap();
+    )?;
+    *owner.lock().expect("test owner lock must not be poisoned") = Arc::downgrade(&attachment);
+    state
+        .lock()
+        .expect("test host lock must not be poisoned")
+        .reenter = true;
+    let first = attachment.update_observed(1, vec![1], vec![255; 3], 1)?;
+    let render = first
+        .render()
+        .expect("ready attached snapshot must expose its installed render");
+    let authority = attachment.materialization_authority()?;
     assert_eq!(authority.terminal_composite_rgb(), [0; 3]);
-    assert_eq!(authority.renderer_provenance().unwrap(), "unverified");
+    assert_eq!(authority.renderer_provenance()?, "unverified");
     assert_eq!(render.sink_output(), 501);
     assert_eq!(render.content_identity(), authority.content_identity());
     assert_eq!(render.context_identity(), authority.context_identity());
-    state.lock().unwrap().reject = true;
+    state
+        .lock()
+        .expect("test host lock must not be poisoned")
+        .fail = true;
+    expect_error(
+        attachment.update_observed(2, vec![1], vec![0; 3], 1),
+        "program_attachment_host_protocol",
+    );
+    assert_eq!(attachment.materialization_authority()?.revision(), 1);
+    {
+        let mut host = state.lock().expect("test host lock must not be poisoned");
+        assert_eq!(host.installed, Some(vec![0; 3]));
+        host.fail = false;
+        host.reject = true;
+    }
     expect_error(
         attachment.update_observed(2, vec![1], vec![0; 3], 1),
         "program_attachment_host_rejected",
     );
-    assert_eq!(
-        attachment.materialization_authority().unwrap().revision(),
-        1
-    );
-    assert_eq!(state.lock().unwrap().installed, Some(vec![0; 3]));
-    state.lock().unwrap().reject = false;
+    assert_eq!(attachment.materialization_authority()?.revision(), 1);
+    {
+        let mut host = state.lock().expect("test host lock must not be poisoned");
+        assert_eq!(host.installed, Some(vec![0; 3]));
+        host.reject = false;
+    }
     assert_eq!(
         attachment
-            .update_observed(2, vec![1], vec![0; 3], 1)
-            .unwrap()
-            .output_rgb(0)
-            .unwrap(),
+            .update_observed(2, vec![1], vec![0; 3], 1)?
+            .output_rgb(0)?,
         [255; 3]
     );
     expect_error(
@@ -207,12 +252,12 @@ fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() {
         attachment.dispose(false),
         "program_attachment_revoke_unconfirmed",
     );
-    assert_eq!(
-        attachment.materialization_authority().unwrap().revision(),
-        2
-    );
-    state.lock().unwrap().installed = None;
-    attachment.dispose(true).unwrap();
+    assert_eq!(attachment.materialization_authority()?.revision(), 2);
+    state
+        .lock()
+        .expect("test host lock must not be poisoned")
+        .installed = None;
+    attachment.dispose(true)?;
     expect_error(
         attachment.update_unknown(3, 7),
         "program_attachment_already_disposed",
@@ -221,7 +266,14 @@ fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() {
         attachment.dispose(true),
         "program_attachment_already_disposed",
     );
-    assert!(state.lock().unwrap().calls >= 3);
+    assert!(
+        state
+            .lock()
+            .expect("test host lock must not be poisoned")
+            .calls
+            >= 4
+    );
+    Ok(())
 }
 
 #[test]

@@ -118,7 +118,9 @@ fn missing_operations<'a>(portable: &'a Surface, native: &Surface) -> Vec<&'a st
 
 #[test]
 fn native_surface_covers_every_exported_wasm_operation() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("audit crate must have a workspace directory");
     let mut portable = Surface::new();
     let mut native = Surface::new();
     module_surface(
@@ -150,12 +152,12 @@ fn native_surface_covers_every_exported_wasm_operation() {
             .write(true)
             .create_new(true)
             .open(path)
-            .unwrap();
+            .expect("native inventory output must be a new writable file");
         serde_json::to_writer(
             file,
             &serde_json::json!({"schemaVersion": 1, "operations": native}),
         )
-        .unwrap();
+        .expect("native operation inventory must be serializable");
     }
 }
 
@@ -167,7 +169,7 @@ fn discovery_detects_added_operations_and_ignores_test_helpers() {
         #[cfg(test)] mod tests { #[wasm_bindgen] pub fn fixture() {} }
         #[cfg(test)] #[wasm_bindgen] pub fn isolated_fixture() {}
         #[cfg(not(test))] #[wasm_bindgen] pub fn production() {}
-    "#).unwrap();
+    "#).expect("discovery fixture must be valid Rust");
     let mut found = Surface::new();
     exported_items(&source.items, "wasm_bindgen", &mut found);
     assert_eq!(
@@ -179,7 +181,8 @@ fn discovery_detects_added_operations_and_ignores_test_helpers() {
         ])
     );
     let original = found.clone();
-    let additional = syn::parse_file("#[wasm_bindgen] pub fn next_capability() {}").unwrap();
+    let additional = syn::parse_file("#[wasm_bindgen] pub fn next_capability() {}")
+        .expect("added-operation fixture must parse");
     exported_items(&additional.items, "wasm_bindgen", &mut found);
     assert_eq!(
         missing_operations(&found, &original),

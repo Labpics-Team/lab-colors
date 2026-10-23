@@ -54,12 +54,14 @@ private func reflectedJSON(_ value: Any) throws -> Any {
 private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private let lock = NSLock()
     private var rejected = false
+    private var callbackFailure = false
     private var reentrant = false
     private var point: Data?
     private var sequence: UInt64 = 0
     private weak var owner: ProgramAttachment?
     func configure(owner: ProgramAttachment, reentrant: Bool) { lock.lock(); defer { lock.unlock() }; self.owner = owner; self.reentrant = reentrant }
     func reject(_ value: Bool) { lock.lock(); defer { lock.unlock() }; rejected = value }
+    func fail(_ value: Bool) { lock.lock(); defer { lock.unlock() }; callbackFailure = value }
     func installed() -> Data? { lock.lock(); defer { lock.unlock() }; return point }
     func revoke() { lock.lock(); defer { lock.unlock() }; point = nil }
     func tryInstall(intent: ProgramPointSinkIntent) throws -> Bool {
@@ -71,6 +73,7 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
         }
         lock.lock(); defer { lock.unlock() }
         XCTAssertEqual(intent.expectedSequence, sequence)
+        if callbackFailure { throw ProgramPointSinkCallbackError.InvocationFailed }
         if rejected { return false }
         if intent.operation != .confirmExact { XCTAssertEqual(intent.desiredSequence, sequence + 1) }
         sequence = intent.desiredSequence; point = intent.point?.source
@@ -143,6 +146,11 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertEqual(authority.terminalCompositeRgb(), Data([0, 0, 0]))
         XCTAssertEqual(authority.contentIdentity(), render.contentIdentity())
         XCTAssertEqual(authority.contextIdentity(), render.contextIdentity())
+        host.fail(true)
+        XCTAssertThrowsError(try attachment.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)) { assertCode($0, "program_attachment_host_protocol") }
+        XCTAssertEqual(try attachment.materializationAuthority().revision(), 1)
+        XCTAssertEqual(host.installed(), Data([0, 0, 0]))
+        host.fail(false)
         host.reject(true)
         XCTAssertThrowsError(try attachment.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)) { assertCode($0, "program_attachment_host_rejected") }
         XCTAssertEqual(try attachment.materializationAuthority().revision(), 1)

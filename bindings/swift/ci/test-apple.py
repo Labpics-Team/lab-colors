@@ -31,6 +31,18 @@ def extract_surface(consumer: Path, modules: Path, platform: str, variant: str |
         raise ValueError("compiled SDK module or matching ABI slice is missing")
     entry = matches[0]
     headers = framework / entry["LibraryIdentifier"] / entry["HeadersPath"]
+    # Xcode materializes the dependency beside the Swift module and records
+    # that module map in the compiled import. Reuse that exact map rather than
+    # importing a second copy from the XCFramework during symbol extraction.
+    installed_headers = modules / "include"
+    installed_map = installed_headers / "module.modulemap"
+    if installed_map.is_file():
+        if installed_map.read_bytes() != (headers / "module.modulemap").read_bytes():
+            raise ValueError("consumer compiled a different native module map")
+        if (installed_headers / "labcolorsFFI.h").read_bytes() != (headers / "labcolorsFFI.h").read_bytes():
+            raise ValueError("consumer compiled a different native header")
+        headers = installed_headers
+
     sdk = "macosx" if platform == "macos" else "iphonesimulator" if variant == "simulator" else "iphoneos"
     output = consumer / "Symbols" / sdk
     output.mkdir(parents=True)
