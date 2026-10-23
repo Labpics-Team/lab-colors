@@ -86,8 +86,9 @@ fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult
                 .as_str()
                 .expect("fixture state must be a string")
         );
-        if row.get("rgb").is_some() {
-            assert_eq!(snapshot.output_rgb(0)?, [0; 3]);
+        if let Some(rgb) = row.get("rgb") {
+            let expected: [u8; 3] = serde_json::from_value(rgb.clone())?;
+            assert_eq!(snapshot.output_rgb(0)?, expected);
         }
     }
     Ok(())
