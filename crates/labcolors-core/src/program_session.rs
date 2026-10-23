@@ -23,9 +23,9 @@
 //! separate typed capability; neither claim is renderer observation or
 //! human-subject evidence.
 
+use crate::shared::{Shared, Weak};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use crate::shared::{Shared, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{

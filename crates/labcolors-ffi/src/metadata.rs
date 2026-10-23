@@ -28,16 +28,36 @@ pub fn numerical_capability_manifest() -> NumericalCapabilityManifest {
         schema_version: value.schema_version,
         coverage: value.coverage.key().into(),
         checksum: value.checksum.hex(),
-        sites: value.sites.iter().map(|site| NumericalCapabilitySite {
-            site_id: site.site_id.key().into(),
-            stable_outcomes: site.stable_outcomes.iter().map(|v| v.key().into()).collect(),
-            compatibility_releases: site.compatibility_releases.iter().map(|v| v.key().into()).collect(),
-            evidence_classes: site.evidence_classes.iter().map(|v| v.key().into()).collect(),
-            artifact_ids: site.artifact_ids.iter().map(|v| v.key().into()).collect(),
-            bound_ids: site.bound_ids.iter().map(|v| v.key().into()).collect(),
-            proof_ids: site.proof_ids.iter().map(|v| v.key().into()).collect(),
-            runtime_attestations: site.runtime_attestations.iter().map(|v| v.key().into()).collect(),
-        }).collect(),
+        sites: value
+            .sites
+            .iter()
+            .map(|site| NumericalCapabilitySite {
+                site_id: site.site_id.key().into(),
+                stable_outcomes: site
+                    .stable_outcomes
+                    .iter()
+                    .map(|v| v.key().into())
+                    .collect(),
+                compatibility_releases: site
+                    .compatibility_releases
+                    .iter()
+                    .map(|v| v.key().into())
+                    .collect(),
+                evidence_classes: site
+                    .evidence_classes
+                    .iter()
+                    .map(|v| v.key().into())
+                    .collect(),
+                artifact_ids: site.artifact_ids.iter().map(|v| v.key().into()).collect(),
+                bound_ids: site.bound_ids.iter().map(|v| v.key().into()).collect(),
+                proof_ids: site.proof_ids.iter().map(|v| v.key().into()).collect(),
+                runtime_attestations: site
+                    .runtime_attestations
+                    .iter()
+                    .map(|v| v.key().into())
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -61,17 +81,29 @@ pub struct UntrustedCertificateEnvelope {
 #[uniffi::export]
 pub fn issue_source_certificate_envelope() -> Result<Vec<u8>, LabColorsError> {
     let refusal = |e: labcolors_core::certificate::CertificateProducerErrorV1| {
-        LabColorsError::new(&format!("certificate_{}", e.code()), "issueSourceCertificateEnvelope")
+        LabColorsError::new(
+            &format!("certificate_{}", e.code()),
+            "issueSourceCertificateEnvelope",
+        )
     };
     labcolors_core::certificate::issue_source_certificate_v1()
-        .map_err(refusal)?.try_to_bytes().map_err(refusal)
+        .map_err(refusal)?
+        .try_to_bytes()
+        .map_err(refusal)
 }
 
 #[uniffi::export]
-pub fn decode_certificate_envelope(bytes: Vec<u8>) -> Result<UntrustedCertificateEnvelope, LabColorsError> {
-    use labcolors_core::certificate::{CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1, UntrustedEnvelopeV1};
+pub fn decode_certificate_envelope(
+    bytes: Vec<u8>,
+) -> Result<UntrustedCertificateEnvelope, LabColorsError> {
+    use labcolors_core::certificate::{
+        CERTIFICATE_ENVELOPE_SCHEMA_VERSION_V1, UntrustedEnvelopeV1,
+    };
     let value = UntrustedEnvelopeV1::decode(&bytes).map_err(|e| {
-        LabColorsError::new(&format!("certificate_{}", e.code()), "decodeCertificateEnvelope")
+        LabColorsError::new(
+            &format!("certificate_{}", e.code()),
+            "decodeCertificateEnvelope",
+        )
     })?;
     let key = value.admission_key();
     Ok(UntrustedCertificateEnvelope {

@@ -11,88 +11,138 @@ pub enum LabColorsError {
 
 impl LabColorsError {
     pub(crate) fn new(code: &str, operation: &str) -> Self {
-        Self::Refused { code: code.into(), operation: operation.into() }
+        Self::Refused {
+            code: code.into(),
+            operation: operation.into(),
+        }
     }
 }
 
 fn enter<'a, T>(owner: &'a Mutex<T>, operation: &str) -> Result<MutexGuard<'a, T>, LabColorsError> {
-    owner.try_lock().map_err(|error| LabColorsError::new(match error {
-        TryLockError::WouldBlock => "program_attachment_busy",
-        TryLockError::Poisoned(_) => "program_internal_invariant",
-    }, operation))
+    owner.try_lock().map_err(|error| {
+        LabColorsError::new(
+            match error {
+                TryLockError::WouldBlock => "program_attachment_busy",
+                TryLockError::Poisoned(_) => "program_internal_invariant",
+            },
+            operation,
+        )
+    })
 }
 
 fn runtime_error(error: core::ProgramRuntimeErrorV1, operation: &str) -> LabColorsError {
     use core::ProgramRuntimeErrorV1 as E;
-    LabColorsError::new(match error {
-        E::Wire => "program_wire",
-        E::Compile => "program_compile",
-        E::FamilyArtifactsRequired => "program_family_artifacts_required",
-        E::Instantiate => "program_instantiate",
-        E::Update => "program_update",
-        E::ResourceExhausted => "program_resource_exhausted",
-        E::InternalInvariant => "program_internal_invariant",
-        _ => "program_runtime",
-    }, operation)
+    LabColorsError::new(
+        match error {
+            E::Wire => "program_wire",
+            E::Compile => "program_compile",
+            E::FamilyArtifactsRequired => "program_family_artifacts_required",
+            E::Instantiate => "program_instantiate",
+            E::Update => "program_update",
+            E::ResourceExhausted => "program_resource_exhausted",
+            E::InternalInvariant => "program_internal_invariant",
+            _ => "program_runtime",
+        },
+        operation,
+    )
 }
 
 fn attach_error(error: core::ProgramAttachErrorV1, operation: &str) -> LabColorsError {
     use core::ProgramAttachErrorV1 as E;
-    LabColorsError::new(match error {
-        E::Binding => "program_attachment_binding",
-        E::Instantiate => "program_attachment_instantiate",
-        E::SinkAdmission => "program_attachment_sink_admission",
-        E::ResourceExhausted => "program_attachment_resource_exhausted",
-        E::InternalInvariant => "program_attachment_internal_invariant",
-        E::NonTerminalTarget => "program_attachment_non_terminal_target",
-        _ => "program_attachment",
-    }, operation)
+    LabColorsError::new(
+        match error {
+            E::Binding => "program_attachment_binding",
+            E::Instantiate => "program_attachment_instantiate",
+            E::SinkAdmission => "program_attachment_sink_admission",
+            E::ResourceExhausted => "program_attachment_resource_exhausted",
+            E::InternalInvariant => "program_attachment_internal_invariant",
+            E::NonTerminalTarget => "program_attachment_non_terminal_target",
+            _ => "program_attachment",
+        },
+        operation,
+    )
 }
 
 fn update_error(error: core::ProgramAttachmentUpdateErrorV1, operation: &str) -> LabColorsError {
-    use core::{ProgramAttachmentUpdateErrorV1 as E, ProgramPointSinkErrorV1 as S, ProgramPointSinkHostErrorV1 as H};
-    LabColorsError::new(match error {
-        E::Update => "program_attachment_update",
-        E::ResourceExhausted => "program_attachment_resource_exhausted",
-        E::InternalInvariant => "program_attachment_internal_invariant",
-        E::AlreadyDisposed => "program_attachment_already_disposed",
-        E::Sink(S::PatchScopeMismatch) => "program_attachment_patch_scope_mismatch",
-        E::Sink(S::StampMismatch) => "program_attachment_stamp_mismatch",
-        E::Sink(S::RevisionMismatch) => "program_attachment_revision_mismatch",
-        E::Sink(S::AlreadyInstalled) => "program_attachment_already_installed",
-        E::Sink(S::Host(H::Rejected)) => "program_attachment_host_rejected",
-        E::Sink(S::Host(H::Protocol)) => "program_attachment_host_protocol",
-        _ => "program_attachment_update_unknown",
-    }, operation)
+    use core::{
+        ProgramAttachmentUpdateErrorV1 as E, ProgramPointSinkErrorV1 as S,
+        ProgramPointSinkHostErrorV1 as H,
+    };
+    LabColorsError::new(
+        match error {
+            E::Update => "program_attachment_update",
+            E::ResourceExhausted => "program_attachment_resource_exhausted",
+            E::InternalInvariant => "program_attachment_internal_invariant",
+            E::AlreadyDisposed => "program_attachment_already_disposed",
+            E::Sink(S::PatchScopeMismatch) => "program_attachment_patch_scope_mismatch",
+            E::Sink(S::StampMismatch) => "program_attachment_stamp_mismatch",
+            E::Sink(S::RevisionMismatch) => "program_attachment_revision_mismatch",
+            E::Sink(S::AlreadyInstalled) => "program_attachment_already_installed",
+            E::Sink(S::Host(H::Rejected)) => "program_attachment_host_rejected",
+            E::Sink(S::Host(H::Protocol)) => "program_attachment_host_protocol",
+            _ => "program_attachment_update_unknown",
+        },
+        operation,
+    )
 }
 
 fn authority_error(error: core::ProgramMaterializationAuthorityErrorV1) -> LabColorsError {
     use core::ProgramMaterializationAuthorityErrorV1 as E;
-    LabColorsError::new(match error {
-        E::NotReady => "program_materialization_not_ready",
-        E::SourceOrIntermediatePaint => "program_materialization_paint_not_authority",
-        E::StaleRevision => "program_materialization_stale_revision",
-        E::StaleIdentity => "program_materialization_stale_identity",
-        E::StaleSinkStamp => "program_materialization_stale_sink_stamp",
-        E::ForeignBindingEpoch => "program_materialization_foreign_binding_epoch",
-        E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
-        E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
-        E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
-        _ => "program_materialization_authority",
-    }, "materializationAuthority")
+    LabColorsError::new(
+        match error {
+            E::NotReady => "program_materialization_not_ready",
+            E::SourceOrIntermediatePaint => "program_materialization_paint_not_authority",
+            E::StaleRevision => "program_materialization_stale_revision",
+            E::StaleIdentity => "program_materialization_stale_identity",
+            E::StaleSinkStamp => "program_materialization_stale_sink_stamp",
+            E::ForeignBindingEpoch => "program_materialization_foreign_binding_epoch",
+            E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
+            E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
+            E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
+            _ => "program_materialization_authority",
+        },
+        "materializationAuthority",
+    )
 }
 
-fn scenarios(ids: &[u32], surfaces: &[u8], count: u32, operation: &str) -> Result<Vec<core::ProgramScenarioV1>, LabColorsError> {
-    let malformed = || LabColorsError::new(if operation == "attachmentUpdateObserved" { "program_attachment_update" } else { "program_update" }, operation);
-    let exhausted = |_| LabColorsError::new(if operation == "attachmentUpdateObserved" { "program_attachment_resource_exhausted" } else { "program_resource_exhausted" }, operation);
+fn scenarios(
+    ids: &[u32],
+    surfaces: &[u8],
+    count: u32,
+    operation: &str,
+) -> Result<Vec<core::ProgramScenarioV1>, LabColorsError> {
+    let malformed = || {
+        LabColorsError::new(
+            if operation == "attachmentUpdateObserved" {
+                "program_attachment_update"
+            } else {
+                "program_update"
+            },
+            operation,
+        )
+    };
+    let exhausted = |_| {
+        LabColorsError::new(
+            if operation == "attachmentUpdateObserved" {
+                "program_attachment_resource_exhausted"
+            } else {
+                "program_resource_exhausted"
+            },
+            operation,
+        )
+    };
     let row = (count as usize).checked_mul(3).ok_or_else(malformed)?;
     let expected = ids.len().checked_mul(row).ok_or_else(malformed)?;
-    if surfaces.len() != expected { return Err(malformed()); }
+    if surfaces.len() != expected {
+        return Err(malformed());
+    }
     let mut result = Vec::new();
     result.try_reserve_exact(ids.len()).map_err(exhausted)?;
     for (index, id) in ids.iter().copied().enumerate() {
         let mut values = Vec::new();
-        values.try_reserve_exact(count as usize).map_err(exhausted)?;
+        values
+            .try_reserve_exact(count as usize)
+            .map_err(exhausted)?;
         for rgb in surfaces[index * row..(index + 1) * row].chunks_exact(3) {
             values.push(labcolors_core::Srgb8::new([rgb[0], rgb[1], rgb[2]]));
         }
@@ -102,57 +152,104 @@ fn scenarios(ids: &[u32], surfaces: &[u8], count: u32, operation: &str) -> Resul
 }
 
 #[derive(uniffi::Object)]
-pub struct ProgramRuntime { inner: Mutex<core::ProgramSessionV1> }
+pub struct ProgramRuntime {
+    inner: Mutex<core::ProgramSessionV1>,
+}
 
 #[uniffi::export]
-pub fn compile_program_wire(bytes: Vec<u8>, stream_id: u32) -> Result<Arc<ProgramRuntime>, LabColorsError> {
+pub fn compile_program_wire(
+    bytes: Vec<u8>,
+    stream_id: u32,
+) -> Result<Arc<ProgramRuntime>, LabColorsError> {
     let operation = "compileProgramWire";
     let owner = core::compile_program_wire(&bytes).map_err(|e| runtime_error(e, operation))?;
-    let session = owner.instantiate(stream_id).map_err(|e| runtime_error(e, operation))?;
-    Ok(Arc::new(ProgramRuntime { inner: Mutex::new(session) }))
+    let session = owner
+        .instantiate(stream_id)
+        .map_err(|e| runtime_error(e, operation))?;
+    Ok(Arc::new(ProgramRuntime {
+        inner: Mutex::new(session),
+    }))
 }
 
 #[uniffi::export]
 impl ProgramRuntime {
-    pub fn update_observed(&self, revision: u64, scenario_ids: Vec<u32>, surfaces: Vec<u8>, surface_count: u32) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+    pub fn update_observed(
+        &self,
+        revision: u64,
+        scenario_ids: Vec<u32>,
+        surfaces: Vec<u8>,
+        surface_count: u32,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateObserved";
         let mut inner = enter(&self.inner, operation)?;
         let values = scenarios(&scenario_ids, &surfaces, surface_count, operation)?;
-        inner.update_observed(revision, &values)
+        inner
+            .update_observed(revision, &values)
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
     }
 
-    pub fn update_unknown(&self, revision: u64, reason_id: u32) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+    pub fn update_unknown(
+        &self,
+        revision: u64,
+        reason_id: u32,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateUnknown";
-        enter(&self.inner, operation)?.update_unknown(revision, reason_id)
+        enter(&self.inner, operation)?
+            .update_unknown(revision, reason_id)
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
     }
 }
 
 #[derive(uniffi::Object)]
-pub struct ProgramSnapshot { inner: core::ProgramSnapshotV1 }
+pub struct ProgramSnapshot {
+    inner: core::ProgramSnapshotV1,
+}
 
-fn output(snapshot: &core::ProgramSnapshotV1, index: u32) -> Result<core::ProgramPaintOutputV1, LabColorsError> {
-    snapshot.outputs().get(index as usize).copied()
+fn output(
+    snapshot: &core::ProgramSnapshotV1,
+    index: u32,
+) -> Result<core::ProgramPaintOutputV1, LabColorsError> {
+    snapshot
+        .outputs()
+        .get(index as usize)
+        .copied()
         .ok_or_else(|| LabColorsError::new("invalid_output_index", "readProgramOutput"))
 }
 
 #[uniffi::export]
 impl ProgramSnapshot {
-    pub fn state(&self) -> String { self.inner.state().key().into() }
-    pub fn output_count(&self) -> u64 { self.inner.outputs().len() as u64 }
-    pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> { Ok(output(&self.inner, index)?.slot()) }
-    pub fn output_rgb(&self, index: u32) -> Result<Vec<u8>, LabColorsError> { Ok(output(&self.inner, index)?.source().bytes().to_vec()) }
-    pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> { Ok(output(&self.inner, index)?.opacity()) }
+    pub fn state(&self) -> String {
+        self.inner.state().key().into()
+    }
+    pub fn output_count(&self) -> u64 {
+        self.inner.outputs().len() as u64
+    }
+    pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> {
+        Ok(output(&self.inner, index)?.slot())
+    }
+    pub fn output_rgb(&self, index: u32) -> Result<Vec<u8>, LabColorsError> {
+        Ok(output(&self.inner, index)?.source().bytes().to_vec())
+    }
+    pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> {
+        Ok(output(&self.inner, index)?.opacity())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum ProgramPointSinkOperation { SetAll, RevokeAll, ConfirmExact }
+pub enum ProgramPointSinkOperation {
+    SetAll,
+    RevokeAll,
+    ConfirmExact,
+}
 
 #[derive(Debug, Clone, uniffi::Record)]
-pub struct ProgramPointPaint { pub slot: u32, pub source: Vec<u8>, pub opacity: f64 }
+pub struct ProgramPointPaint {
+    pub slot: u32,
+    pub source: Vec<u8>,
+    pub opacity: f64,
+}
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct ProgramPointSinkIntent {
@@ -175,29 +272,43 @@ pub enum ProgramPointSinkCallbackError {
 /// оставляют прежний внешний scope. Callback исполняется на вызывающем потоке.
 #[uniffi::export(callback_interface)]
 pub trait ProgramPointSinkHost: Send + Sync {
-    fn try_install(&self, intent: ProgramPointSinkIntent) -> Result<bool, ProgramPointSinkCallbackError>;
+    fn try_install(
+        &self,
+        intent: ProgramPointSinkIntent,
+    ) -> Result<bool, ProgramPointSinkCallbackError>;
 }
 
-struct NativeHost { callback: Box<dyn ProgramPointSinkHost> }
+struct NativeHost {
+    callback: Box<dyn ProgramPointSinkHost>,
+}
 
 impl core::ProgramPointSinkHostV1 for NativeHost {
-    fn try_install(&mut self, intent: core::ProgramPointSinkIntentV1) -> Result<(), core::ProgramPointSinkHostErrorV1> {
+    fn try_install(
+        &mut self,
+        intent: core::ProgramPointSinkIntentV1,
+    ) -> Result<(), core::ProgramPointSinkHostErrorV1> {
         use core::ProgramPointSinkHostErrorV1 as E;
         let operation = match intent.operation() {
             core::ProgramPointSinkOperationV1::SetAll => ProgramPointSinkOperation::SetAll,
             core::ProgramPointSinkOperationV1::RevokeAll => ProgramPointSinkOperation::RevokeAll,
-            core::ProgramPointSinkOperationV1::ConfirmExact => ProgramPointSinkOperation::ConfirmExact,
+            core::ProgramPointSinkOperationV1::ConfirmExact => {
+                ProgramPointSinkOperation::ConfirmExact
+            }
             _ => return Err(E::Protocol),
         };
         let point = intent.point().map(|point| ProgramPointPaint {
-            slot: point.slot(), source: point.source().bytes().to_vec(), opacity: point.opacity(),
+            slot: point.slot(),
+            source: point.source().bytes().to_vec(),
+            opacity: point.opacity(),
         });
         let projected = ProgramPointSinkIntent {
-            operation, revision: intent.revision(),
+            operation,
+            revision: intent.revision(),
             expected_sequence: intent.expected_stamp().sequence(),
             desired_sequence: intent.desired_stamp().sequence(),
             binding_epoch: intent.expected_stamp().binding_epoch(),
-            sink_output: intent.sink_output(), point,
+            sink_output: intent.sink_output(),
+            point,
         };
         match self.callback.try_install(projected) {
             Ok(true) => Ok(()),
@@ -208,126 +319,276 @@ impl core::ProgramPointSinkHostV1 for NativeHost {
 }
 
 #[derive(uniffi::Object)]
-pub struct ProgramAttachment { inner: Mutex<core::ProgramAttachmentV1<NativeHost>> }
+pub struct ProgramAttachment {
+    inner: Mutex<core::ProgramAttachmentV1<NativeHost>>,
+}
 
 #[uniffi::export]
-pub fn attach_program_wire(bytes: Vec<u8>, stream_id: u32, output_slot: u32, sink_output: u32, presentation_root: u32, occurrence: u32, host: Box<dyn ProgramPointSinkHost>) -> Result<Arc<ProgramAttachment>, LabColorsError> {
+pub fn attach_program_wire(
+    bytes: Vec<u8>,
+    stream_id: u32,
+    output_slot: u32,
+    sink_output: u32,
+    presentation_root: u32,
+    occurrence: u32,
+    host: Box<dyn ProgramPointSinkHost>,
+) -> Result<Arc<ProgramAttachment>, LabColorsError> {
     let operation = "attachProgramWire";
     let owner = core::compile_program_wire(&bytes).map_err(|e| runtime_error(e, operation))?;
-    let inner = owner.attach(stream_id, output_slot, sink_output, presentation_root, occurrence, NativeHost { callback: host })
+    let inner = owner
+        .attach(
+            stream_id,
+            output_slot,
+            sink_output,
+            presentation_root,
+            occurrence,
+            NativeHost { callback: host },
+        )
         .map_err(|e| attach_error(e, operation))?;
-    Ok(Arc::new(ProgramAttachment { inner: Mutex::new(inner) }))
+    Ok(Arc::new(ProgramAttachment {
+        inner: Mutex::new(inner),
+    }))
 }
 
 #[uniffi::export]
 impl ProgramAttachment {
-    pub fn update_observed(&self, revision: u64, scenario_ids: Vec<u32>, surfaces: Vec<u8>, surface_count: u32) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
+    pub fn update_observed(
+        &self,
+        revision: u64,
+        scenario_ids: Vec<u32>,
+        surfaces: Vec<u8>,
+        surface_count: u32,
+    ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateObserved";
         let mut inner = enter(&self.inner, operation)?;
         let values = scenarios(&scenario_ids, &surfaces, surface_count, operation)?;
-        inner.update_observed(revision, &values)
+        inner
+            .update_observed(revision, &values)
             .map(|inner| Arc::new(ProgramAttachedSnapshot { inner }))
             .map_err(|e| update_error(e, operation))
     }
 
-    pub fn update_unknown(&self, revision: u64, reason_id: u32) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
+    pub fn update_unknown(
+        &self,
+        revision: u64,
+        reason_id: u32,
+    ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateUnknown";
-        enter(&self.inner, operation)?.update_unknown(revision, reason_id)
+        enter(&self.inner, operation)?
+            .update_unknown(revision, reason_id)
             .map(|inner| Arc::new(ProgramAttachedSnapshot { inner }))
             .map_err(|e| update_error(e, operation))
     }
 
-    pub fn materialization_authority(&self) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
-        enter(&self.inner, "materializationAuthority")?.current_materialization_authority()
-            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner })).map_err(authority_error)
+    pub fn materialization_authority(
+        &self,
+    ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
+        enter(&self.inner, "materializationAuthority")?
+            .current_materialization_authority()
+            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
+            .map_err(authority_error)
     }
 
-    pub fn materialization_authority_for(&self, revision: u64, content_identity: Vec<u8>, binding_epoch: u64) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
+    pub fn materialization_authority_for(
+        &self,
+        revision: u64,
+        content_identity: Vec<u8>,
+        binding_epoch: u64,
+    ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
         let inner = enter(&self.inner, "materializationAuthority")?;
-        let render = inner.current_render().ok_or_else(|| authority_error(core::ProgramMaterializationAuthorityErrorV1::NotReady))?;
-        let identity: [u8; 32] = content_identity.as_slice().try_into()
-            .map_err(|_| authority_error(core::ProgramMaterializationAuthorityErrorV1::StaleIdentity))?;
-        let expected = render.expectation().with_revision(revision).with_content_identity(identity).with_binding_epoch(binding_epoch);
-        inner.materialization_authority(core::ProgramMaterializationCandidateV1::AttachedCommit, expected)
-            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner })).map_err(authority_error)
+        let render = inner.current_render().ok_or_else(|| {
+            authority_error(core::ProgramMaterializationAuthorityErrorV1::NotReady)
+        })?;
+        let identity: [u8; 32] = content_identity.as_slice().try_into().map_err(|_| {
+            authority_error(core::ProgramMaterializationAuthorityErrorV1::StaleIdentity)
+        })?;
+        let expected = render
+            .expectation()
+            .with_revision(revision)
+            .with_content_identity(identity)
+            .with_binding_epoch(binding_epoch);
+        inner
+            .materialization_authority(
+                core::ProgramMaterializationCandidateV1::AttachedCommit,
+                expected,
+            )
+            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
+            .map_err(authority_error)
     }
 
     /// Освобождение памяти через ARC не отзывает внешний scope. Его владелец
     /// сначала отзывает scope, затем передаёт true; false сохраняет attachment.
     pub fn dispose(&self, confirmed: bool) -> Result<(), LabColorsError> {
         let operation = "attachmentDispose";
-        enter(&self.inner, operation)?.dispose(|| if confirmed { Ok(()) } else { Err(()) })
-            .map_err(|error| LabColorsError::new(match error {
-                core::ProgramDisposeErrorV1::AlreadyDisposed => "program_attachment_already_disposed",
-                core::ProgramDisposeErrorV1::Confirmation(()) => "program_attachment_revoke_unconfirmed",
-                _ => "program_attachment_dispose",
-            }, operation))
+        enter(&self.inner, operation)?
+            .dispose(|| if confirmed { Ok(()) } else { Err(()) })
+            .map_err(|error| {
+                LabColorsError::new(
+                    match error {
+                        core::ProgramDisposeErrorV1::AlreadyDisposed => {
+                            "program_attachment_already_disposed"
+                        }
+                        core::ProgramDisposeErrorV1::Confirmation(()) => {
+                            "program_attachment_revoke_unconfirmed"
+                        }
+                        _ => "program_attachment_dispose",
+                    },
+                    operation,
+                )
+            })
     }
 }
 
 #[derive(uniffi::Object)]
-pub struct ProgramAttachedSnapshot { inner: core::ProgramAttachedSnapshotV1 }
+pub struct ProgramAttachedSnapshot {
+    inner: core::ProgramAttachedSnapshotV1,
+}
 
 #[uniffi::export]
 impl ProgramAttachedSnapshot {
-    pub fn state(&self) -> String { self.inner.snapshot().state().key().into() }
-    pub fn output_count(&self) -> u64 { self.inner.snapshot().outputs().len() as u64 }
-    pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> { Ok(output(self.inner.snapshot(), index)?.slot()) }
-    pub fn output_rgb(&self, index: u32) -> Result<Vec<u8>, LabColorsError> { Ok(output(self.inner.snapshot(), index)?.source().bytes().to_vec()) }
-    pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> { Ok(output(self.inner.snapshot(), index)?.opacity()) }
-    pub fn has_render(&self) -> bool { self.inner.render().is_some() }
-    pub fn render(&self) -> Option<Arc<ProgramAttachedRender>> { self.inner.render().map(|inner| Arc::new(ProgramAttachedRender { inner })) }
+    pub fn state(&self) -> String {
+        self.inner.snapshot().state().key().into()
+    }
+    pub fn output_count(&self) -> u64 {
+        self.inner.snapshot().outputs().len() as u64
+    }
+    pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> {
+        Ok(output(self.inner.snapshot(), index)?.slot())
+    }
+    pub fn output_rgb(&self, index: u32) -> Result<Vec<u8>, LabColorsError> {
+        Ok(output(self.inner.snapshot(), index)?
+            .source()
+            .bytes()
+            .to_vec())
+    }
+    pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> {
+        Ok(output(self.inner.snapshot(), index)?.opacity())
+    }
+    pub fn has_render(&self) -> bool {
+        self.inner.render().is_some()
+    }
+    pub fn render(&self) -> Option<Arc<ProgramAttachedRender>> {
+        self.inner
+            .render()
+            .map(|inner| Arc::new(ProgramAttachedRender { inner }))
+    }
 }
 
-fn physical_identity(value: Option<core::ProgramPhysicalIdentityV1>) -> Result<String, LabColorsError> {
+fn physical_identity(
+    value: Option<core::ProgramPhysicalIdentityV1>,
+) -> Result<String, LabColorsError> {
     match value {
-        Some(core::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => Ok("encoded-srgb8-source-over-v1".into()),
+        Some(core::ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1) => {
+            Ok("encoded-srgb8-source-over-v1".into())
+        }
         None => Ok("unknown".into()),
-        Some(_) => Err(LabColorsError::new("program_physical_identity", "physicalIdentity")),
+        Some(_) => Err(LabColorsError::new(
+            "program_physical_identity",
+            "physicalIdentity",
+        )),
     }
 }
 
 #[derive(uniffi::Object)]
-pub struct ProgramAttachedRender { inner: core::ProgramAttachedRenderV1 }
+pub struct ProgramAttachedRender {
+    inner: core::ProgramAttachedRenderV1,
+}
 
 #[uniffi::export]
 impl ProgramAttachedRender {
-    pub fn output_slot(&self) -> u32 { self.inner.output().slot() }
-    pub fn sink_output(&self) -> u32 { self.inner.sink_output() }
-    pub fn output_rgb(&self) -> Vec<u8> { self.inner.output().source().bytes().to_vec() }
-    pub fn output_opacity(&self) -> f64 { self.inner.output().opacity() }
-    pub fn revision(&self) -> u64 { self.inner.revision() }
-    pub fn sink_sequence(&self) -> u64 { self.inner.sink_stamp().sequence() }
-    pub fn binding_epoch(&self) -> u64 { self.inner.sink_stamp().binding_epoch() }
-    pub fn content_identity(&self) -> Vec<u8> { self.inner.content_identity().to_vec() }
-    pub fn context_identity(&self) -> Vec<u8> { self.inner.context().identity_bytes().to_vec() }
-    pub fn presentation_root(&self) -> u32 { self.inner.presentation_root() }
-    pub fn occurrence(&self) -> u32 { self.inner.occurrence() }
-    pub fn physical_identity(&self) -> Result<String, LabColorsError> { physical_identity(self.inner.physical_identity()) }
-    pub fn terminal_composite_rgb(&self) -> Option<Vec<u8>> { self.inner.terminal_composite().map(|rgb| rgb.bytes().to_vec()) }
+    pub fn output_slot(&self) -> u32 {
+        self.inner.output().slot()
+    }
+    pub fn sink_output(&self) -> u32 {
+        self.inner.sink_output()
+    }
+    pub fn output_rgb(&self) -> Vec<u8> {
+        self.inner.output().source().bytes().to_vec()
+    }
+    pub fn output_opacity(&self) -> f64 {
+        self.inner.output().opacity()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+    pub fn sink_sequence(&self) -> u64 {
+        self.inner.sink_stamp().sequence()
+    }
+    pub fn binding_epoch(&self) -> u64 {
+        self.inner.sink_stamp().binding_epoch()
+    }
+    pub fn content_identity(&self) -> Vec<u8> {
+        self.inner.content_identity().to_vec()
+    }
+    pub fn context_identity(&self) -> Vec<u8> {
+        self.inner.context().identity_bytes().to_vec()
+    }
+    pub fn presentation_root(&self) -> u32 {
+        self.inner.presentation_root()
+    }
+    pub fn occurrence(&self) -> u32 {
+        self.inner.occurrence()
+    }
+    pub fn physical_identity(&self) -> Result<String, LabColorsError> {
+        physical_identity(self.inner.physical_identity())
+    }
+    pub fn terminal_composite_rgb(&self) -> Option<Vec<u8>> {
+        self.inner
+            .terminal_composite()
+            .map(|rgb| rgb.bytes().to_vec())
+    }
 }
 
 #[derive(uniffi::Object)]
-pub struct AttachedMaterializationAuthority { inner: core::AttachedMaterializationAuthorityV1 }
+pub struct AttachedMaterializationAuthority {
+    inner: core::AttachedMaterializationAuthorityV1,
+}
 
 #[uniffi::export]
 impl AttachedMaterializationAuthority {
-    pub fn output_slot(&self) -> u32 { self.inner.output().slot() }
-    pub fn output_rgb(&self) -> Vec<u8> { self.inner.output().source().bytes().to_vec() }
-    pub fn output_opacity(&self) -> f64 { self.inner.output().opacity() }
-    pub fn revision(&self) -> u64 { self.inner.revision() }
-    pub fn sink_sequence(&self) -> u64 { self.inner.sink_stamp().sequence() }
-    pub fn binding_epoch(&self) -> u64 { self.inner.sink_stamp().binding_epoch() }
-    pub fn content_identity(&self) -> Vec<u8> { self.inner.content_identity().to_vec() }
-    pub fn context_identity(&self) -> Vec<u8> { self.inner.context().identity_bytes().to_vec() }
-    pub fn presentation_root(&self) -> u32 { self.inner.presentation_root() }
-    pub fn occurrence(&self) -> u32 { self.inner.occurrence() }
-    pub fn physical_identity(&self) -> Result<String, LabColorsError> { physical_identity(self.inner.physical_identity()) }
+    pub fn output_slot(&self) -> u32 {
+        self.inner.output().slot()
+    }
+    pub fn output_rgb(&self) -> Vec<u8> {
+        self.inner.output().source().bytes().to_vec()
+    }
+    pub fn output_opacity(&self) -> f64 {
+        self.inner.output().opacity()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+    pub fn sink_sequence(&self) -> u64 {
+        self.inner.sink_stamp().sequence()
+    }
+    pub fn binding_epoch(&self) -> u64 {
+        self.inner.sink_stamp().binding_epoch()
+    }
+    pub fn content_identity(&self) -> Vec<u8> {
+        self.inner.content_identity().to_vec()
+    }
+    pub fn context_identity(&self) -> Vec<u8> {
+        self.inner.context().identity_bytes().to_vec()
+    }
+    pub fn presentation_root(&self) -> u32 {
+        self.inner.presentation_root()
+    }
+    pub fn occurrence(&self) -> u32 {
+        self.inner.occurrence()
+    }
+    pub fn physical_identity(&self) -> Result<String, LabColorsError> {
+        physical_identity(self.inner.physical_identity())
+    }
     pub fn renderer_provenance(&self) -> Result<String, LabColorsError> {
         match self.inner.renderer_provenance() {
             core::ProgramRendererProvenanceV1::Unverified => Ok("unverified".into()),
-            _ => Err(LabColorsError::new("program_materialization_authority", "rendererProvenance")),
+            _ => Err(LabColorsError::new(
+                "program_materialization_authority",
+                "rendererProvenance",
+            )),
         }
     }
-    pub fn terminal_composite_rgb(&self) -> Vec<u8> { self.inner.terminal_composite().bytes().to_vec() }
+    pub fn terminal_composite_rgb(&self) -> Vec<u8> {
+        self.inner.terminal_composite().bytes().to_vec()
+    }
 }

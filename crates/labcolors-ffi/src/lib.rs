@@ -1,10 +1,10 @@
 //! Нативные адаптеры общего Rust-ядра через UniFFI.
 //! Program, наблюдения, attachment и численные операции используют одного владельца.
 
-mod program;
 mod metadata;
-pub use program::*;
+mod program;
 pub use metadata::*;
+pub use program::*;
 
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::{

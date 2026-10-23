@@ -1593,8 +1593,9 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "observation storage must use the Core-owned shared allocation policy",
     );
     assert!(
-        OBSERVATION_SOURCE
-            .contains("pub(crate) struct CanonicalObservationSchemaV1(Shared<[SurfaceInputPortId]>);"),
+        OBSERVATION_SOURCE.contains(
+            "pub(crate) struct CanonicalObservationSchemaV1(Shared<[SurfaceInputPortId]>);"
+        ),
         "compiled schema and observations must share one immutable schema allocation",
     );
     // Normalize CRLF→LF so the assertion is platform-independent: include_str!

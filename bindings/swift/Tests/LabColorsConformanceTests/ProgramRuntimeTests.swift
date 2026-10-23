@@ -2,27 +2,27 @@ import Foundation
 import XCTest
 import LabColors
 
-private struct RuntimeStep: Decodable {
+struct RuntimeStep: Decodable {
     let revision: UInt64
     let backgrounds: [[UInt8]]?
     let unknownReason: UInt32?
     let state: String
     let rgb: [UInt8]?
 }
-private struct RuntimeFixture: Decodable {
+struct RuntimeFixture: Decodable {
     let schemaVersion: Int
     let fixed: String
     let adaptive: String
     let encodingOnly: String
     let history: [RuntimeStep]
 }
-private func fixture() throws -> RuntimeFixture {
+func fixture() throws -> RuntimeFixture {
     let url = try XCTUnwrap(Bundle.module.url(forResource: "program-runtime-v1", withExtension: "json", subdirectory: "Fixtures"))
     let result = try JSONDecoder().decode(RuntimeFixture.self, from: Data(contentsOf: url))
     XCTAssertEqual(result.schemaVersion, 1)
     return result
 }
-private func bytes(_ hex: String) throws -> Data {
+func bytes(_ hex: String) throws -> Data {
     let characters = Array(hex.utf8)
     guard characters.count % 2 == 0 else { throw ProgramWireError.invalidDeclaration("odd hex length") }
     return try Data(stride(from: 0, to: characters.count, by: 2).map {
@@ -99,10 +99,15 @@ final class ProgramRuntimeTests: XCTestCase {
         let first = try runtime.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
         XCTAssertEqual(try runtime.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1).state(), "ready")
         XCTAssertThrowsError(try runtime.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)) { assertCode($0, "program_update") }
-        let second = try DispatchQueue.global().sync {
-            try runtime.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
-        }
-        XCTAssertEqual(try second.outputRgb(index: 0), Data([255, 255, 255]))
+        let finished = expectation(description: "native runtime returns from another thread")
+        Thread {
+            defer { finished.fulfill() }
+            do {
+                let second = try runtime.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
+                XCTAssertEqual(try second.outputRgb(index: 0), Data([255, 255, 255]))
+            } catch { XCTFail("thread migration failed: \(error)") }
+        }.start()
+        wait(for: [finished], timeout: 10)
         XCTAssertEqual(try first.outputRgb(index: 0), Data([0, 0, 0]))
         XCTAssertThrowsError(try runtime.updateUnknown(revision: 1, reasonId: 7)) { assertCode($0, "program_update") }
     }
@@ -146,7 +151,9 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertEqual(got.sites.map { $0.siteId }, expected.sites.map { $0.siteId })
         let envelope = try issueSourceCertificateEnvelope()
         let metadata = try decodeCertificateEnvelope(bytes: envelope)
-        XCTAssertEqual(metadata.producerRevision.count, 40)
+        let identityUrl = try XCTUnwrap(Bundle.module.url(forResource: "build-identity", withExtension: "json", subdirectory: "Fixtures"))
+        let identity = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: identityUrl))
+        XCTAssertEqual(metadata.producerRevision, try XCTUnwrap(identity["coreTree"]))
         XCTAssertEqual(metadata.producerContentIdentity.count, 32)
         XCTAssertEqual(metadata.payloadLength, 1)
         XCTAssertEqual(metadata.payloadSha256.count, 32)

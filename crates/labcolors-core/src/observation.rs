@@ -4,10 +4,10 @@
 //! The F2 Session is the sole production owner of the current payload and the
 //! only code allowed to bind an admitted observation to evaluator evidence.
 
+use crate::shared::Shared;
 use core::cmp::Ordering;
 use core::ops::Range;
 use std::num::NonZeroUsize;
-use crate::shared::Shared;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
