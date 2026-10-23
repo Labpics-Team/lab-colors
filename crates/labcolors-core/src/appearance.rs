@@ -570,7 +570,7 @@ impl AppearanceGraphSpec {
                 },
             })
             .collect();
-        let compiled_surfaces = surfaces
+        let compiled_surfaces: Vec<_> = surfaces
             .iter()
             .map(|surface| match *surface {
                 SurfaceSpec::Input { id, port } => CompiledSurfaceSpec::Input { id, port },
@@ -583,7 +583,7 @@ impl AppearanceGraphSpec {
                 }
             })
             .collect();
-        let compiled_occurrences = occurrences
+        let mut compiled_occurrences: Vec<_> = occurrences
             .iter()
             .map(|occurrence| CompiledOccurrenceSpec {
                 id: occurrence.id,
@@ -594,8 +594,19 @@ impl AppearanceGraphSpec {
                 against: surface_index(occurrence.against)
                     .unwrap_or_else(|| unreachable!("surface links were validated")),
                 profile: occurrence.profile,
+                consumed_downstream: false,
             })
             .collect();
+        // Терминальность — свойство неизменяемого графа. Один проход
+        // закрепляет её для всех будущих presentation roots.
+        for index in 0..compiled_occurrences.len() {
+            let against = compiled_occurrences[index].against;
+            if let CompiledSurfaceSpec::FromOccurrence { occurrence, .. } =
+                compiled_surfaces[against]
+            {
+                compiled_occurrences[occurrence].consumed_downstream = true;
+            }
+        }
 
         Ok(CompiledAppearanceGraph {
             instance: Arc::new(()),
@@ -764,6 +775,7 @@ struct CompiledOccurrenceSpec {
     against_id: SurfaceId,
     against: usize,
     profile: CompositionProfileV1,
+    consumed_downstream: bool,
 }
 
 /// Cold-bound canonical Paint position for allocation-free repeated lookup.
@@ -986,6 +998,7 @@ const POINT_OCCURRENCES: [CompiledOccurrenceSpec; 1] = [CompiledOccurrenceSpec {
     against_id: POINT_CONTEXT_SURFACE,
     against: 0,
     profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+    consumed_downstream: false,
 }];
 const POINT_PAINT_TOPO: [usize; 2] = [0, 1];
 const POINT_RENDER_TOPO: [RenderNode; 3] = [
@@ -1999,16 +2012,7 @@ impl CompiledAppearanceGraph {
         let terminal = self
             .bind_occurrence(terminal)
             .ok_or(PointPresentationPathErrorV1::MissingRoot)?;
-        let consumed = self.occurrences.iter().any(|occurrence| {
-            matches!(
-                self.surfaces.get(occurrence.against),
-                Some(CompiledSurfaceSpec::FromOccurrence {
-                    occurrence: source_occurrence,
-                    ..
-                }) if *source_occurrence == terminal.index
-            )
-        });
-        if consumed {
+        if self.occurrences[terminal.index].consumed_downstream {
             return Err(PointPresentationPathErrorV1::RootConsumedDownstream);
         }
         Ok(CompiledPointPresentationRootV1 {
@@ -2032,20 +2036,19 @@ impl CompiledAppearanceGraph {
             .ok_or(PointPresentationPathErrorV1::MissingTarget)?;
         let root_slot = root.terminal;
         let mut reverse = Vec::new();
-        reverse
-            .try_reserve_exact(self.occurrences.len())
-            .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
 
-        // `compile()` отклоняет `RenderCycle` при построении канонической
-        // функциональной топологии. Каждый переход идёт к единственному предку,
-        // поэтому обход завершается не более чем за `occurrences.len()` узлов;
-        // та же граница позволяет безопасно зарезервировать точный объём.
+        // `compile()` отклоняет `RenderCycle`. Каждый переход идёт к одному
+        // предку, поэтому путь конечен. Буфер растёт только вместе с путём:
+        // короткая ветвь не резервирует место для остальных узлов графа.
         let mut current = root_slot.index;
         loop {
             let spec = self
                 .occurrences
                 .get(current)
                 .ok_or(PointPresentationPathErrorV1::InternalInvariant)?;
+            reverse
+                .try_reserve(1)
+                .map_err(|_| PointPresentationPathErrorV1::ResourceExhausted)?;
             reverse.push(CompiledOccurrenceSlotV1 {
                 index: current,
                 id: spec.id,

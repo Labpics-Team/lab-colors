@@ -2134,3 +2134,16 @@ fn invalid_opacity_is_rejected_during_admission_before_any_composition() {
     );
     assert_eq!(crate::composition::source_over_evaluation_count(), 0);
 }
+
+#[test]
+fn an_unconsumed_derived_surface_does_not_remove_terminal_authority() {
+    let graph = point_component(false, false).compile().unwrap();
+    let root = graph
+        .compile_point_presentation_root(FILL_OCCURRENCE)
+        .unwrap();
+    let path = graph
+        .compile_point_presentation_path(FILL_OCCURRENCE, &root)
+        .unwrap();
+    assert_eq!(root.terminal(), FILL_OCCURRENCE);
+    assert_eq!(path.len(), 1);
+}
