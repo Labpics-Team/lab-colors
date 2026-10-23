@@ -948,7 +948,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ba373aa8eefdce2903a1deed2d70822ea699bed8d0864ad0bf319b481ade309c",
+ "record_sha256": "7f1a521adf1ec947de7a7f153a600dc2f39b324f707a8c0c4b81f1d2b9cd69c7",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1005,6 +1005,7 @@
    "appearance_graph_tests::admitted_bindings_and_workspace_are_reused_without_storage_churn: test",
    "appearance_graph_tests::admitted_schema_and_workspace_shape_mismatches_fail_before_composition: test",
    "appearance_graph_tests::admitted_surface_runtime_exposes_only_canonical_bulk_seams: test",
+   "appearance_graph_tests::an_unconsumed_derived_surface_does_not_remove_terminal_authority: test",
    "appearance_graph_tests::arbitrary_nonopaque_input_and_opacity_chain_follow_declared_binary64_order: test",
    "appearance_graph_tests::binding_admission_is_atomic_before_any_occurrence_is_evaluated: test",
    "appearance_graph_tests::canonical_paint_occurrence_surface_chain_evaluates_exactly: test",
@@ -1941,12 +1942,16 @@
    "program_relation_tests::relation_endpoints_and_intrinsic_unary_target_fail_with_typed_errors: test",
    "program_relation_tests::relation_identity_ignores_opaque_names_and_candidate_declaration_order: test",
    "program_relation_tests::visible_relation_checks_every_candidate_in_every_admitted_scenario: test",
+   "program_session::dependency_tests::an_incomplete_dependency_scan_does_not_taint_the_next_cone: test",
+   "program_session::dependency_tests::reused_dependency_cones_match_an_independent_closure: test",
    "program_session::identity::ordering::tests::all_small_multisets_match_the_standard_library: test",
    "program_session::identity::ordering::tests::array_shapes_have_bounded_comparisons_and_no_allocator_events: test",
    "program_session::identity::ordering::tests::comparator_failure_never_drops_or_duplicates_an_element: test",
    "program_session::identity::ordering::tests::projected_keys_keep_owned_records_and_their_complete_payload: test",
+   "program_session::identity::tests::bulk_components_match_sequential_refinement_and_exhaustive_preimages: test",
    "program_session::identity::tests::canonicalizer_matches_an_independent_tiny_isomorphism_oracle: test",
    "program_session::identity::tests::clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit: test",
+   "program_session::identity::tests::component_index_matches_connectivity_after_refinement_and_individualization: test",
    "program_session::identity::tests::component_interchange_checks_direction_role_multiplicity_and_boundary: test",
    "program_session::identity::tests::declared_clean_set_constraint_color_binds_every_release_digest_byte: test",
    "program_session::identity::tests::equitable_components_with_repeated_cells_are_not_interchangeable: test",
@@ -1963,6 +1968,7 @@
    "program_session::identity::tests::modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content: test",
    "program_session::identity::tests::pruning_keeps_exact_bytes_on_every_four_vertex_digraph: test",
    "program_session::identity::tests::repeated_components_are_canonicalized_with_one_leaf: test",
+   "program_session::identity::tests::repeated_components_use_one_bulk_group_instead_of_search_depth: test",
    "program_session::identity::tests::small_role_directed_graph_preimage_is_invariant_for_generated_bijections: test",
    "program_session::program_preflight_reservation_tests::a_warm_coordinate_consumes_but_cannot_realize_an_allocation_failure: test",
    "program_session::program_preflight_reservation_tests::an_empty_coordinate_does_not_consume_a_failure_index: test",
@@ -2237,7 +2243,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1285,
+  "enabled_count": 1291,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
