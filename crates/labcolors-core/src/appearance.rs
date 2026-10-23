@@ -559,9 +559,9 @@ impl AppearanceGraphSpec {
             compiled_paints.push(match *paint {
                 PaintSpec::Input { id, input } => CompiledPaintSpec::Input {
                     id,
-                    input_index: paint_inputs.binary_search(&input).map_err(|_| {
-                        CompileError::MissingPaintInput { paint: id, input }
-                    })?,
+                    input_index: paint_inputs
+                        .binary_search(&input)
+                        .map_err(|_| CompileError::MissingPaintInput { paint: id, input })?,
                 },
                 PaintSpec::Opacity {
                     id,
@@ -771,14 +771,8 @@ impl CompiledPaintSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompiledSurfaceSpec {
-    Input {
-        id: SurfaceId,
-        port_index: usize,
-    },
-    FromOccurrence {
-        id: SurfaceId,
-        occurrence: usize,
-    },
+    Input { id: SurfaceId, port_index: usize },
+    FromOccurrence { id: SurfaceId, occurrence: usize },
 }
 
 impl CompiledSurfaceSpec {

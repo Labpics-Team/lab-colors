@@ -17,8 +17,9 @@ name: Native conformance (Swift) worker
 # Линтеры/аудит/wasm/основной `cargo test --workspace` (включая толерантный
 # раннер-референс пака на Linux) — в ci-worker.yml. Здесь — Swift-слой.
 #
-# Неизменяемый worker: caller (native-conformance.yml) закрепляет этот файл
-# полным commit SHA и не может изменить ни job graph, ни пины. Своих inputs нет.
+# Caller (native-conformance.yml) выбирает worker из своего точного коммита,
+# независимо от checkout. Граф заданий и пины проверяются вместе с исходниками;
+# заранее одобренным этот snapshot не считается. Своих inputs нет.
 
 on:
   workflow_call:

@@ -2298,9 +2298,7 @@ fn compiled_inputs_preserve_sparse_ids_and_chained_physical_values() -> Result<(
             (1, [96, 32, 224], 0.75_f64),
             (300, [240, 16, 80], 0.25_f64),
         ] {
-            let paint = evaluation
-                .paint(PaintId::new(id))
-                .ok_or("missing paint")?;
+            let paint = evaluation.paint(PaintId::new(id)).ok_or("missing paint")?;
             assert_eq!(paint.source().bytes(), rgb);
             assert_eq!(paint.opacity_bits(), alpha.to_bits());
         }
@@ -2438,9 +2436,6 @@ fn workspace_reuse_overwrites_equal_shape_graphs_after_schema_rejection() -> Res
     let recovered = second
         .evaluate_admitted_into(&second_bindings, &mut workspace)
         .map_err(|error| format!("{error:?}"))?;
-    assert_eq!(
-        recovered.surface_rgb(CONTEXT_SURFACE),
-        Some([64, 64, 160])
-    );
+    assert_eq!(recovered.surface_rgb(CONTEXT_SURFACE), Some([64, 64, 160]));
     Ok(())
 }

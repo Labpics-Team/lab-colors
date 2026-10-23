@@ -146,8 +146,8 @@ jobs:
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
               worker: {
-                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@89df71ef1e628d53436eb8c0efbc3418962b444f",
-                sha: "89df71ef1e628d53436eb8c0efbc3418962b444f",
+                path: `Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@${expectedSha}`,
+                sha: expectedSha,
               },
               requiredJobs: [
                 "swift conformance (self-hosted Linux, pinned toolchain)",

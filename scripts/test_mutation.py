@@ -2184,8 +2184,9 @@ class MutationTruthTest(unittest.TestCase):
         )
         self.assertIn("sha: expectedSha,", workflow)
         self.assertIn(
-            'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@89df71ef1e628d53436eb8c0efbc3418962b444f"',
+            'path: `Labpics-Team/lab-colors/.github/workflows/'
+            'native-conformance-worker.yml@${expectedSha}`,\n'
+            '                sha: expectedSha,',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
@@ -2232,11 +2233,10 @@ class MutationTruthTest(unittest.TestCase):
         native = (repo / ".github/workflows/native-conformance.yml").read_text(
             encoding="utf-8"
         )
-        native_calls = re.findall(
-            r"(?m)^    uses: Labpics-Team/lab-colors/\.github/workflows/"
-            r"native-conformance-worker\.yml@([0-9a-f]{40})$", native,
+        native_calls = re.findall(r"(?m)^    uses: (\S+)$", native)
+        self.assertEqual(
+            native_calls, ["./.github/workflows/native-conformance-worker.yml"]
         )
-        self.assertEqual(native_calls, ["89df71ef1e628d53436eb8c0efbc3418962b444f"])
         # Исполняем сам guard; сеть и запись outputs заменены на границе VM.
         harness = r"""
 const assert = require('node:assert/strict');
@@ -2259,7 +2259,9 @@ const mutations = {
   foreignClosure: (runs) => { runs[0].referenced_workflows.push({path: 'foreign/repo/.github/workflows/package-worker.yml@' + sha, sha}); },
   staleCIPath: (runs) => { runs[0].referenced_workflows[0].path = prefix + 'ci-worker.yml@' + 'a'.repeat(40); },
   staleCISha: (runs) => { runs[0].referenced_workflows[0].sha = 'a'.repeat(40); },
-  staleNative: (runs) => { runs[1].referenced_workflows[0].sha = 'a'.repeat(40); },
+  staleNativePath: (runs) => { runs[1].referenced_workflows[0].path = prefix + 'native-conformance-worker.yml@' + 'a'.repeat(40); },
+  staleNativeSha: (runs) => { runs[1].referenced_workflows[0].sha = 'a'.repeat(40); },
+  staleNativeRevision: (runs) => { runs[1].referenced_workflows[0] = {path: prefix + 'native-conformance-worker.yml@' + 'a'.repeat(40), sha: 'a'.repeat(40)}; },
   missingRefs: (runs) => { delete runs[0].referenced_workflows; },
   extraRefs: (runs) => { runs[0].referenced_workflows.push(runs[0].referenced_workflows[0]); },
   foreignPath: (runs) => { runs[0].referenced_workflows[0].path = 'foreign/repo/ci-worker.yml@' + sha; },
@@ -2283,8 +2285,8 @@ const mutations = {
       head_sha: sha, head_branch: 'main', event: 'push',
       status: 'completed', conclusion: 'success', run_attempt: 2,
       referenced_workflows: [{
-        path: prefix + name + '-worker.yml@' + (index ? input.nativeSha : sha),
-        sha: index ? input.nativeSha : sha,
+        path: prefix + name + '-worker.yml@' + sha,
+        sha,
       }],
     }));
     const jobs = names.map((group, index) => group.map(name => ({
@@ -2335,16 +2337,16 @@ const mutations = {
       assert.equal(errors.length, 1, label);
     }
   }
-  console.log('17 receipt scenarios passed');
+  console.log('26 receipt scenarios passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
         result = subprocess.run(
             ["node", "-e", harness],
-            input=json.dumps({"script": script, "nativeSha": native_calls[0]}),
+            input=json.dumps({"script": script}),
             text=True, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("17 receipt scenarios passed", result.stdout)
+        self.assertIn("26 receipt scenarios passed", result.stdout)
 
     def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
         workflow, _ = load_publish_worker()

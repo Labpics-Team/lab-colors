@@ -948,7 +948,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "bf49ae81eafbeae20bab13766a51832a199d710ebd1bc5df7cdb89e892873fcf",
+ "record_sha256": "cc8bde74d1f9bf94c8c085196aed6a0cde928546c0ed0609e9da15a0fb0957f0",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1957,6 +1957,7 @@
    "program_session::identity::tests::component_interchange_checks_direction_role_multiplicity_and_boundary: test",
    "program_session::identity::tests::connected_cycles_keep_unpruned_canonical_bytes: test",
    "program_session::identity::tests::declared_clean_set_constraint_color_binds_every_release_digest_byte: test",
+   "program_session::identity::tests::equal_signature_heapsort_preserves_one_left_rotation: test",
    "program_session::identity::tests::equitable_components_with_repeated_cells_are_not_interchangeable: test",
    "program_session::identity::tests::evaluator_descriptor_and_certificate_metadata_have_one_source_of_truth: test",
    "program_session::identity::tests::every_appearance_context_coordinate_and_frame_release_is_content_bound: test",
@@ -1964,11 +1965,13 @@
    "program_session::identity::tests::exact_automorphism_pruning_prevents_factorial_symmetric_search: test",
    "program_session::identity::tests::exact_preimage_is_invariant_under_opaque_relabelling: test",
    "program_session::identity::tests::exhausted_fault_injection_fuel_never_returns_a_partial_preimage: test",
-   "program_session::identity::tests::explored_orbit_keeps_parent_and_child_stabilizers_separate: test",
-   "program_session::identity::tests::explored_orbit_tracks_new_generators_and_explored_branches: test",
    "program_session::identity::tests::family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt: test",
    "program_session::identity::tests::fixed_color_key_preserves_length_first_order_and_bounds: test",
    "program_session::identity::tests::hostile_graph_preimage_is_invariant_for_generated_bijections: test",
+   "program_session::identity::tests::incremental_refinement_matches_full_refiner_for_all_small_digraphs: test",
+   "program_session::identity::tests::incremental_refinement_preserves_middle_and_tied_largest_children: test",
+   "program_session::identity::tests::incremental_refinement_preserves_typed_simultaneous_splits_and_cycles: test",
+   "program_session::identity::tests::incremental_refinement_skips_unchanged_cells_without_skipping_rounds: test",
    "program_session::identity::tests::joint_selection_vertex_binds_tag_and_exact_release_identity_bytes: test",
    "program_session::identity::tests::modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content: test",
    "program_session::identity::tests::pruning_keeps_exact_bytes_on_every_four_vertex_digraph: test",
@@ -2248,7 +2251,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1296,
+  "enabled_count": 1299,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

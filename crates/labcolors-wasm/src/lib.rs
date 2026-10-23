@@ -132,6 +132,16 @@ export function bindingFailure(kind, reason) {
   return programError(code + ": " + reason, code, operation);
 }
 
+const OutputRgbArray = Uint8Array;
+
+export function copyOutputRgb(red, green, blue) {
+  const bytes = new OutputRgbArray(3);
+  bytes[0] = red;
+  bytes[1] = green;
+  bytes[2] = blue;
+  return bytes;
+}
+
 export function certificateError(code, operation) {
   return programError(
     "Certificate envelope operation failed",
@@ -189,6 +199,9 @@ extern "C" {
 
     #[wasm_bindgen(js_name = bindingFailure)]
     fn binding_failure_error(kind: u32, reason: &str) -> js_sys::Error;
+
+    #[wasm_bindgen(catch, js_name = copyOutputRgb)]
+    fn copy_output_rgb(red: u8, green: u8, blue: u8) -> Result<js_sys::Uint8Array, JsValue>;
 
     #[wasm_bindgen(js_name = certificateError)]
     fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
@@ -545,13 +558,15 @@ impl ProgramSnapshot {
     pub fn output_rgb(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<Box<[u8]>, JsValue> {
+    ) -> Result<js_sys::Uint8Array, JsValue> {
         let index = checked_output_index(index)?;
-        self.inner
+        let output = self
+            .inner
             .outputs()
             .get(index)
-            .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(output_index_error)
+            .ok_or_else(output_index_error)?;
+        let [red, green, blue] = output.source().bytes();
+        copy_output_rgb(red, green, blue)
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1504,7 +1519,7 @@ mod browser_tests {
         assert_eq!(snapshot.output_count(), 1);
         assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
         assert_eq!(
-            snapshot.output_rgb(0.into()).unwrap().as_ref(),
+            snapshot.output_rgb(0.into()).unwrap().to_vec().as_slice(),
             &[20, 20, 20]
         );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
