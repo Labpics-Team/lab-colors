@@ -479,7 +479,7 @@
   "proof/region/v1/tests/test_verification_assembly.py": "4ecc72ae37f3937ef3845267ac1be07e8fabbe5f",
   "proof/region/v1/tests/test_verification_dispatch.py": "9712a5067e7b0ec2c0340a67b636ec5f529369cb",
   "proof/region/v1/tests/test_verification_evidence.py": "c516880845c4c742349beb51e981e6513ad695d9",
-  "proof/region/v1/tests/test_workflow_admission.py": "5c8724df2c7b6a5002609f9eb4f393128dcd52e8",
+  "proof/region/v1/tests/test_workflow_admission.py": "ffdb77c857fd0e99c15db686f7f431362a849626",
   "proof/region/v1/tests/test_workflow_inputs.py": "f708c6ae84fe68f3442b1cd4f51bc8db8533accb",
   "proof/region/v1/verification_assembly.py": "503473f214cf0872476c25631444e8c89b6bf933",
   "scripts/artifact_matrix.py": "997bc09191898947c961b73fb706c9423711843d",
@@ -559,7 +559,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "fbed946ad136d80c14a078d8c8f5e7c03b248cd4f375c12d347afd3280920616",
+ "record_sha256": "fb3459448ba3d98929ede8da58050f1c02f7f9e227d086147995e20663a75957",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
