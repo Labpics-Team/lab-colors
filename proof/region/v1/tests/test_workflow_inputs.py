@@ -189,6 +189,10 @@ class DualProofContainmentContractTests(unittest.TestCase):
         cover_check = self.text.index("refuse an incomplete cover")
         first_build = self.text.index("seal the full-domain dual proof")
         self.assertLess(cover_check, first_build)
+        self.assertIn(
+            "python3 proof/region/v1/tests/dual_proof_gate.py --preflight", self.text
+        )
+
 
 
 class LaneCampaignContractTests(unittest.TestCase):

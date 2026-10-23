@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import test_workflow_inputs as workflow_inputs
 import test_corpus_campaign_guard as corpus_guard
+import test_corpus_assembly as assembly_fixture
+import dual_proof_gate as native_gate
 
 WORKFLOWS = workflow_inputs.WORKFLOWS
 
@@ -113,21 +117,65 @@ class WorkflowAdmissionTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 64, result.stderr)
 
+    def _run_cover_preflight_v1(self, root: Path, job, comparators) -> tuple[int, str]:
+        shell = step_script(
+            "dual-proof.yml",
+            "refuse an incomplete cover before anything expensive is built",
+        )
+        self.assertIn(
+            "python3 proof/region/v1/tests/dual_proof_gate.py --preflight", shell
+        )
+        # Only source-archive admission is replaced by the reduced fixture.
+        # The real CLI, source roster, lane parser and cover law all execute.
+        modules = [
+            SimpleNamespace(full_domain_request_v1=lambda: SimpleNamespace(job=job))
+            for _ in comparators
+        ]
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {native_gate.LANES_ENV_V1: str(root)}),
+            patch.object(native_gate, "_load_lane_module_v1", side_effect=modules),
+            patch.object(native_gate, "_assert_engine_modules_are_unmixed_v1"),
+            patch.object(
+                native_gate.arb_pipeline, "expected_comparator_source_identity_v1",
+                return_value=comparators[0].source_identity,
+            ),
+            patch.object(
+                native_gate.mpfi_receipt, "expected_comparator_source_identity_v1",
+                return_value=comparators[1].source_identity,
+            ),
+            patch.object(native_gate, "_sealed_engine_receipt_v1") as native,
+            redirect_stdout(output), redirect_stderr(output),
+        ):
+            result = native_gate.main(["--preflight"])
+            native.assert_not_called()
+        return result, output.getvalue()
+
     def test_cover_rejects_malformed_manifests_with_usage_status(self) -> None:
-        shell = step_script("dual-proof.yml", "refuse an incomplete cover before anything expensive is built")
-        script = shell.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-        identity = "a" * 64
-        valid = {"comparator_source_identity": identity, "window_start": 0, "window_points": 16777216}
-        for invalid in ("{", "[]", "{}", json.dumps({**valid, "comparator_source_identity": []}), json.dumps({**valid, "window_start": True}), json.dumps({**valid, "window_points": 0}), json.dumps({**valid, "window_points": "16777216"})):
+        job = assembly_fixture._job_with_pregrant(tuple(range(64)), 0)
+        comparators = tuple(
+            assembly_fixture._comparator(kind)
+            for kind in assembly_fixture.protocol.ComparatorKindV1
+        )
+        valid = {
+            "comparator_source_identity": comparators[0].source_identity.hex(),
+            "window_start": 0, "window_points": 64,
+        }
+        invalid_manifests = (
+            "{", "[]", "{}", json.dumps({**valid, "comparator_source_identity": []}),
+            json.dumps({**valid, "window_start": True}),
+            json.dumps({**valid, "window_points": 0}),
+            json.dumps({**valid, "window_points": "64"}),
+        )
+        for invalid in invalid_manifests:
             with self.subTest(value=invalid), tempfile.TemporaryDirectory() as directory:
-                lane = Path(directory) / "lanes-in" / "lane"
-                lane.mkdir(parents=True)
+                root = Path(directory)
+                lane = root / "lane"
+                lane.mkdir()
                 (lane / "lane-manifest.json").write_text(invalid, encoding="ascii")
-                result = subprocess.run(
-                    (sys.executable, "-c", script), cwd=directory, capture_output=True,
-                    env={**os.environ, "PYTHONPATH": str(WORKFLOWS.parents[1] / "proof/region/v1")},
-                )
-                self.assertEqual(result.returncode, 64, result.stderr)
+                status, output = self._run_cover_preflight_v1(root, job, comparators)
+                self.assertEqual(status, 64, output)
+                self.assertIn("lane preflight rejected", output)
 
     def test_download_preserves_valid_run_ids(self) -> None:
         for workflow, name in (
@@ -209,18 +257,20 @@ exit 65
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_cover_accepts_two_complete_engines(self) -> None:
-        shell = step_script("dual-proof.yml", "refuse an incomplete cover before anything expensive is built")
-        script = shell.split("python3 - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        job = assembly_fixture._job_with_pregrant(tuple(range(64)), 0)
+        comparators = tuple(
+            assembly_fixture._comparator(kind)
+            for kind in assembly_fixture.protocol.ComparatorKindV1
+        )
         with tempfile.TemporaryDirectory() as directory:
-            for identity in ("a" * 64, "b" * 64):
-                lane = Path(directory) / "lanes-in" / identity
-                lane.mkdir(parents=True)
-                (lane / "lane-manifest.json").write_text(json.dumps({"comparator_source_identity": identity, "window_start": 0, "window_points": 16777216}), encoding="ascii")
-            result = subprocess.run(
-                (sys.executable, "-c", script), cwd=directory, capture_output=True,
-                env={**os.environ, "PYTHONPATH": str(WORKFLOWS.parents[1] / "proof/region/v1")},
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
+            root = Path(directory)
+            for index, comparator in enumerate(comparators):
+                assembly_fixture._write_lane_dir(
+                    root, str(index), job, comparator, 0, 64, 32
+                )
+            status, output = self._run_cover_preflight_v1(root, job, comparators)
+            self.assertEqual(status, 0, output)
+            self.assertIn("complete, validated lane covers", output)
 
 
 if __name__ == "__main__":

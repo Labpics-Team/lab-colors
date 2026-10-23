@@ -39,7 +39,7 @@
  ],
  "python": [
   {
-   "count": 549,
+   "count": 554,
    "load_errors": [],
    "names": [
     "test_build.ArbBuildIdentityCharacterizationTests.test_arb_runtime_binding_propagates_to_downstream_identities",
@@ -126,6 +126,11 @@
     "test_corpus_assembly.AssemblyCliTests.test_assembly_cli_rejects_a_missing_lanes_root_with_exit_64",
     "test_corpus_assembly.AssemblyCliTests.test_assembly_cli_rejects_partial_cover_with_exit_64",
     "test_corpus_assembly.AssemblyCliTests.test_load_lane_rejects_a_foreign_comparator_binding",
+    "test_corpus_assembly.LanePreflightTests.test_complete_expected_sources_keep_the_real_assembly_path",
+    "test_corpus_assembly.LanePreflightTests.test_native_gate_refuses_before_build_and_passes_the_checked_request",
+    "test_corpus_assembly.LanePreflightTests.test_preflight_refuses_ambiguous_fields_and_foreign_fragment_paths",
+    "test_corpus_assembly.LanePreflightTests.test_preflight_rejects_corruption_in_every_lane_component",
+    "test_corpus_assembly.LanePreflightTests.test_preflight_requires_the_exact_roster_and_complete_nonoverlapping_covers",
     "test_corpus_assembly.WireLoadTests.test_load_lane_admits_the_wire_layout",
     "test_corpus_assembly.WireLoadTests.test_load_lane_rejects_a_foreign_job_identity",
     "test_corpus_assembly.WireLoadTests.test_load_lane_rejects_a_tampered_record_ordinal",
@@ -948,7 +953,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "cc8bde74d1f9bf94c8c085196aed6a0cde928546c0ed0609e9da15a0fb0957f0",
+ "record_sha256": "231a18c66da0f064bc981eb3c554dfe64bdc44a79b888ad748644f99656be22e",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

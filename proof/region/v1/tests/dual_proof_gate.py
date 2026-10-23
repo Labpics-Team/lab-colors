@@ -29,6 +29,7 @@ native integration, dispatched deliberately, never swept up by a quick gate.
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -48,6 +49,7 @@ import dual_proof  # noqa: E402
 import executor  # noqa: E402
 import region_proof_protocol as protocol  # noqa: E402
 import verification_assembly  # noqa: E402
+from arb import pipeline as arb_pipeline
 from arb import receipt as arb_receipt  # noqa: E402
 from mpfi import receipt as mpfi_receipt  # noqa: E402
 from semantic.receipt import SemanticVerificationReceiptV1  # noqa: E402
@@ -119,7 +121,9 @@ def _assert_engine_modules_are_unmixed_v1() -> None:
             raise AssertionError(f"{name} resolved to {resolved}, not {directory}")
 
 
-def _sealed_engine_receipt_v1(module: ModuleType, cgroup_env: str, expected: type):
+def _sealed_engine_receipt_v1(
+    module: ModuleType, request, cgroup_env: str, expected: type
+):
     """Seal one engine's receipt in its own observer subtree.
 
     The process returns to the unconstrained task group first: it may still be
@@ -129,7 +133,7 @@ def _sealed_engine_receipt_v1(module: ModuleType, cgroup_env: str, expected: typ
 
     executor.enter_task_cgroup_v1(Path(os.environ[TASK_CGROUP_ENV_V1]))
     os.environ[EXECUTOR_CGROUP_ENV_V1] = os.environ[cgroup_env]
-    sealed = module.seal_full_domain_receipt_v1()
+    sealed = module.seal_full_domain_receipt_v1(request)
     if type(sealed) is not expected:
         # The seal returns a union: every rejection carries the reason this
         # run failed, and losing it costs another two hours to learn again.
@@ -197,6 +201,28 @@ def _sealed_semantic_receipt_v1(
     return sealed, names
 
 
+def _prepare_native_requests_v1(arb_lane, mpfi_lane):
+    """Все входные байты проверяются до любого нативного эффекта."""
+    arb_request = arb_lane.full_domain_request_v1()
+    mpfi_request = mpfi_lane.full_domain_request_v1()
+    if arb_request.job.identity != mpfi_request.job.identity:
+        raise ValueError("native requests disagree on the proof job")
+    sources = {
+        arb_pipeline.expected_comparator_source_identity_v1(arb_request):
+            protocol.ComparatorKindV1.ARB,
+        mpfi_receipt.expected_comparator_source_identity_v1(mpfi_request):
+            protocol.ComparatorKindV1.MPFI,
+    }
+    if len(sources) != 2:
+        raise ValueError("native requests must have two distinct source closures")
+    result = corpus_assembly.preflight_lanes_v1(
+        Path(os.environ[LANES_ENV_V1]), arb_request.job, sources
+    )
+    if type(result) is not int:
+        raise ValueError(f"lane preflight rejected: {result!r}")
+    return arb_request, mpfi_request
+
+
 class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
     def test_one_process_seals_the_full_domain_dual_proof(self) -> None:
         # Deliberately a failure and never a skip: this module is only ever
@@ -209,12 +235,15 @@ class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
         arb_lane = _load_lane_module_v1("labcolors_arb_full_domain", ARB_LANE_MODULE)
         mpfi_lane = _load_lane_module_v1("labcolors_mpfi_full_domain", MPFI_LANE_MODULE)
         _assert_engine_modules_are_unmixed_v1()
+        arb_request, mpfi_request = _prepare_native_requests_v1(arb_lane, mpfi_lane)
 
         arb = _sealed_engine_receipt_v1(
-            arb_lane, ARB_CGROUP_ENV_V1, arb_receipt.SourceBoundEvaluatorReceiptV1
+            arb_lane, arb_request, ARB_CGROUP_ENV_V1,
+            arb_receipt.SourceBoundEvaluatorReceiptV1
         )
         mpfi = _sealed_engine_receipt_v1(
             mpfi_lane,
+            mpfi_request,
             MPFI_CGROUP_ENV_V1,
             mpfi_receipt.MpfiSourceBoundEvaluatorReceiptV1,
         )
@@ -300,13 +329,28 @@ class NativeFullDomainDualProofIntegrationTests(unittest.TestCase):
         print(f"dual proof sealed identity={sealed.identity.hex()}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run the single dual-proof integration with no room to vanish.
 
     The engine gates pin a discovered inventory against drift; this one has a
     single named test, so the law that matters is only that it ran, was not
     skipped, and passed.
     """
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--preflight", action="store_true")
+    args = parser.parse_args(argv)
+    if args.preflight:
+        try:
+            arb_lane = _load_lane_module_v1("labcolors_arb_full_domain", ARB_LANE_MODULE)
+            mpfi_lane = _load_lane_module_v1("labcolors_mpfi_full_domain", MPFI_LANE_MODULE)
+            _assert_engine_modules_are_unmixed_v1()
+            _prepare_native_requests_v1(arb_lane, mpfi_lane)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            print(f"lane preflight rejected: {error}", file=sys.stderr)
+            return 64
+        print("both expected source closures have complete, validated lane covers")
+        return 0
 
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(
         NativeFullDomainDualProofIntegrationTests
