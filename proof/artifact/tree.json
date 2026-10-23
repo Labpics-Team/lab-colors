@@ -84,8 +84,8 @@
   "crates/labcolors-core/contracts/wcag22-srgb8-v1.json": "7b3932335398bdbc0760136904cb245305749b09",
   "crates/labcolors-core/examples/bg_ladder_anchors.rs": "09395aa2fe53e73eb9972b7a712b1904adcd62d9",
   "crates/labcolors-core/src/alpha.rs": "911460a9fe20bd232d60a528f914f464279bde1d",
-  "crates/labcolors-core/src/appearance.rs": "d1346830a6de7ecafed2169aeb9d37083259b2fd",
-  "crates/labcolors-core/src/appearance_graph_tests.rs": "d1a80f904eb0aa155120a49b2489f8f0aa1eb141",
+  "crates/labcolors-core/src/appearance.rs": "4b4632dca78af949065d2aa73b28e41476fd49d3",
+  "crates/labcolors-core/src/appearance_graph_tests.rs": "930e39ebd5ef7181605bf5da4716e6b9ae75541c",
   "crates/labcolors-core/src/appearance_replay_tests.rs": "3ee7aaee4ec00e1f00ebf3eac5f550e8733aac33",
   "crates/labcolors-core/src/authority.rs": "dec24c739992cd87bc0043ef7517b43b42824649",
   "crates/labcolors-core/src/authority/clean_convention.rs": "7f31f85cadb5b3ef67ae1e847b65712dd4e41b13",
@@ -179,7 +179,7 @@
   "crates/labcolors-core/src/program_category_relation_tests.rs": "358ed125a036ccddcfa08b59726494ea499a390e",
   "crates/labcolors-core/src/program_clean_set_tests.rs": "c8aaf84f04272d7e722951fa9f4d9bfc659b7439",
   "crates/labcolors-core/src/program_family_tests.rs": "45a9069d138e7d27795400c63175b2c0918a48fc",
-  "crates/labcolors-core/src/program_identity.rs": "6a6c499679e25c7195f1484a80e4ef84aa599a4d",
+  "crates/labcolors-core/src/program_identity.rs": "c6b9bc08366205bd4723e3b26dc0ce9120933618",
   "crates/labcolors-core/src/program_identity_tests.rs": "15d2188bf5090460898731aed79f669dd50d3101",
   "crates/labcolors-core/src/program_joint_integration_tests.rs": "b5758a5d18db20f1327b8da8c41dd166d407f612",
   "crates/labcolors-core/src/program_lcs_integration_tests.rs": "f0b887aebd6741192b958aae8bf96f5866ab7780",
@@ -559,7 +559,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "17c2cce8b761741148f63f55023a920656335f0fdcae11d267eeacbae8142823",
+ "record_sha256": "951279b4ab2b2d81e02d73d465a70caabc5aa1e2ebd5550c879f5063a01d9c22",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

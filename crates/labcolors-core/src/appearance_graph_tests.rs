@@ -2150,3 +2150,297 @@ fn an_unconsumed_derived_surface_does_not_remove_terminal_authority() -> Result<
     assert_eq!(path.len(), 1);
     Ok(())
 }
+
+#[test]
+fn compiled_inputs_preserve_sparse_ids_and_chained_physical_values() -> Result<(), String> {
+    for reverse in [false, true] {
+        let mut paint_inputs = vec![
+            PaintInputId::new(31),
+            PaintInputId::new(4093),
+            PaintInputId::new(7),
+        ];
+        let mut surface_inputs = vec![
+            SurfaceInputPortId::new(50),
+            SurfaceInputPortId::new(4001),
+            SurfaceInputPortId::new(9),
+        ];
+        let mut opacity_inputs = vec![
+            OpacityInputId::new(8191),
+            OpacityInputId::new(3),
+            OpacityInputId::new(37),
+        ];
+        let mut paints = vec![
+            PaintSpec::Input {
+                id: PaintId::new(90),
+                input: PaintInputId::new(31),
+            },
+            PaintSpec::Input {
+                id: PaintId::new(12),
+                input: PaintInputId::new(4093),
+            },
+            PaintSpec::Input {
+                id: PaintId::new(700),
+                input: PaintInputId::new(7),
+            },
+            PaintSpec::Opacity {
+                id: PaintId::new(4),
+                source: PaintId::new(90),
+                opacity: OpacityInputId::new(8191),
+            },
+            PaintSpec::Opacity {
+                id: PaintId::new(22),
+                source: PaintId::new(4),
+                opacity: OpacityInputId::new(3),
+            },
+            PaintSpec::Opacity {
+                id: PaintId::new(1),
+                source: PaintId::new(12),
+                opacity: OpacityInputId::new(37),
+            },
+            PaintSpec::Opacity {
+                id: PaintId::new(300),
+                source: PaintId::new(700),
+                opacity: OpacityInputId::new(3),
+            },
+        ];
+        let mut surfaces = vec![
+            SurfaceSpec::Input {
+                id: SurfaceId::new(600),
+                port: SurfaceInputPortId::new(50),
+            },
+            SurfaceSpec::Input {
+                id: SurfaceId::new(5),
+                port: SurfaceInputPortId::new(4001),
+            },
+            SurfaceSpec::Input {
+                id: SurfaceId::new(90),
+                port: SurfaceInputPortId::new(9),
+            },
+            SurfaceSpec::FromOccurrence {
+                id: SurfaceId::new(2),
+                occurrence: OccurrenceId::new(900),
+            },
+        ];
+        let mut occurrences = vec![
+            OccurrenceSpec {
+                id: OccurrenceId::new(900),
+                subject: PaintId::new(22),
+                against: SurfaceId::new(600),
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: OccurrenceId::new(20),
+                subject: PaintId::new(1),
+                against: SurfaceId::new(2),
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: OccurrenceId::new(300),
+                subject: PaintId::new(300),
+                against: SurfaceId::new(5),
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+            OccurrenceSpec {
+                id: OccurrenceId::new(30),
+                subject: PaintId::new(90),
+                against: SurfaceId::new(90),
+                profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+            },
+        ];
+        if reverse {
+            paint_inputs.reverse();
+            surface_inputs.reverse();
+            opacity_inputs.reverse();
+            paints.reverse();
+            surfaces.reverse();
+            occurrences.reverse();
+        }
+        let graph = AppearanceGraphSpec::new(
+            paint_inputs,
+            surface_inputs,
+            opacity_inputs,
+            paints,
+            surfaces,
+            occurrences,
+        )
+        .compile()
+        .map_err(|error| format!("{error:?}"))?;
+        let admitted = graph
+            .admit_bindings(&AppearanceBindings::new(
+                vec![
+                    (PaintInputId::new(4093), opaque([96, 32, 224])),
+                    (PaintInputId::new(7), opaque([240, 16, 80])),
+                    (PaintInputId::new(31), opaque([16, 208, 64])),
+                ],
+                vec![
+                    (SurfaceInputPortId::new(4001), Srgb8::new([100, 180, 36])),
+                    (SurfaceInputPortId::new(9), Srgb8::new([200, 80, 16])),
+                    (SurfaceInputPortId::new(50), Srgb8::new([8, 40, 200])),
+                ],
+                vec![
+                    (OpacityInputId::new(37), 0.75),
+                    (OpacityInputId::new(8191), 0.5),
+                    (OpacityInputId::new(3), 0.25),
+                ],
+            ))
+            .map_err(|error| format!("{error:?}"))?;
+        let mut workspace = graph
+            .new_workspace()
+            .map_err(|error| format!("{error:?}"))?;
+        let evaluation = graph
+            .evaluate_admitted_into(&admitted, &mut workspace)
+            .map_err(|error| format!("{error:?}"))?;
+
+        // Ручные значения различают три входа каждого типа и два шага opacity.
+        // Вторая occurrence использует уже округлённый результат первой.
+        for (id, rgb, alpha) in [
+            (22, [16, 208, 64], 0.125_f64),
+            (1, [96, 32, 224], 0.75_f64),
+            (300, [240, 16, 80], 0.25_f64),
+        ] {
+            let paint = evaluation
+                .paint(PaintId::new(id))
+                .ok_or("missing paint")?;
+            assert_eq!(paint.source().bytes(), rgb);
+            assert_eq!(paint.opacity_bits(), alpha.to_bits());
+        }
+        for (id, rgb, backdrop) in [
+            (900, [9, 61, 183], [8, 40, 200]),
+            (20, [74, 39, 214], [9, 61, 183]),
+            (300, [135, 139, 47], [100, 180, 36]),
+            (30, [16, 208, 64], [200, 80, 16]),
+        ] {
+            let occurrence = evaluation
+                .occurrence(OccurrenceId::new(id))
+                .ok_or("missing occurrence")?;
+            assert_eq!(occurrence.visible(), rgb);
+            assert_eq!(occurrence.backdrop(), backdrop);
+            assert_eq!(occurrence.certificate().replay(), rgb);
+        }
+        assert_eq!(
+            evaluation.surface_rgb(SurfaceId::new(2)),
+            Some([9, 61, 183])
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_reuse_overwrites_equal_shape_graphs_after_schema_rejection() -> Result<(), String> {
+    let first = point_component(false, false)
+        .compile()
+        .map_err(|error| format!("{error:?}"))?;
+    let second = AppearanceGraphSpec::new(
+        vec![OTHER_SOURCE],
+        vec![OTHER_CONTEXT],
+        vec![OTHER_OPACITY],
+        vec![
+            PaintSpec::Input {
+                id: FILL_PAINT,
+                input: OTHER_SOURCE,
+            },
+            PaintSpec::Opacity {
+                id: SOLID_PAINT,
+                source: FILL_PAINT,
+                opacity: OTHER_OPACITY,
+            },
+        ],
+        vec![
+            SurfaceSpec::Input {
+                id: DERIVED_SURFACE,
+                port: OTHER_CONTEXT,
+            },
+            SurfaceSpec::FromOccurrence {
+                id: CONTEXT_SURFACE,
+                occurrence: OTHER_OCCURRENCE,
+            },
+        ],
+        vec![OccurrenceSpec {
+            id: OTHER_OCCURRENCE,
+            subject: SOLID_PAINT,
+            against: DERIVED_SURFACE,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        }],
+    )
+    .compile()
+    .map_err(|error| format!("{error:?}"))?;
+    let first_bindings = first
+        .admit_bindings(&bindings([200, 80, 40], 0.5, [20, 40, 60]))
+        .map_err(|error| format!("{error:?}"))?;
+    let second_bindings = second
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(OTHER_SOURCE, opaque([16, 208, 64]))],
+            vec![(OTHER_CONTEXT, Srgb8::new([80, 16, 192]))],
+            vec![(OTHER_OPACITY, 0.25)],
+        ))
+        .map_err(|error| format!("{error:?}"))?;
+    let mut workspace = first
+        .new_workspace()
+        .map_err(|error| format!("{error:?}"))?;
+    let storage = workspace.storage_signature();
+
+    for (graph, admitted, paint, occurrence, surface, source, alpha, visible) in [
+        (
+            &first,
+            &first_bindings,
+            FILL_PAINT,
+            FILL_OCCURRENCE,
+            DERIVED_SURFACE,
+            [200, 80, 40],
+            0.5_f64,
+            [110, 60, 50],
+        ),
+        (
+            &second,
+            &second_bindings,
+            SOLID_PAINT,
+            OTHER_OCCURRENCE,
+            CONTEXT_SURFACE,
+            [16, 208, 64],
+            0.25_f64,
+            [64, 64, 160],
+        ),
+        (
+            &first,
+            &first_bindings,
+            FILL_PAINT,
+            FILL_OCCURRENCE,
+            DERIVED_SURFACE,
+            [200, 80, 40],
+            0.5_f64,
+            [110, 60, 50],
+        ),
+    ] {
+        let evaluation = graph
+            .evaluate_admitted_into(admitted, &mut workspace)
+            .map_err(|error| format!("{error:?}"))?;
+        let resolved_paint = evaluation.paint(paint).ok_or("missing paint")?;
+        assert_eq!(resolved_paint.id(), paint);
+        assert_eq!(resolved_paint.source().bytes(), source);
+        assert_eq!(resolved_paint.opacity_bits(), alpha.to_bits());
+        let resolved_occurrence = evaluation
+            .occurrence(occurrence)
+            .ok_or("missing occurrence")?;
+        assert_eq!(resolved_occurrence.id(), occurrence);
+        assert_eq!(resolved_occurrence.visible(), visible);
+        assert_eq!(resolved_occurrence.certificate().replay(), visible);
+        assert_eq!(evaluation.surface_rgb(surface), Some(visible));
+        assert_eq!(workspace.storage_signature(), storage);
+    }
+
+    crate::composition::reset_source_over_evaluation_count();
+    assert!(matches!(
+        second.evaluate_admitted_into(&first_bindings, &mut workspace),
+        Err(BindingError::IncompatibleAdmittedBindings)
+    ));
+    assert_eq!(crate::composition::source_over_evaluation_count(), 0);
+    assert_eq!(workspace.storage_signature(), storage);
+    let recovered = second
+        .evaluate_admitted_into(&second_bindings, &mut workspace)
+        .map_err(|error| format!("{error:?}"))?;
+    assert_eq!(
+        recovered.surface_rgb(CONTEXT_SURFACE),
+        Some([64, 64, 160])
+    );
+    Ok(())
+}

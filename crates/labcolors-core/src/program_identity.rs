@@ -1641,6 +1641,9 @@ struct SearchFrameV1 {
     candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
     component_twins: Option<ComponentTwinIndexV1>,
+    explored_orbit: Option<ExploredOrbitV1>,
+    #[cfg(test)]
+    orbit_builds: usize,
     next_candidate: usize,
     leaf_pending: bool,
 }
@@ -1662,6 +1665,9 @@ impl SearchFrameV1 {
             candidates,
             explored_candidates: Vec::new(),
             component_twins,
+            explored_orbit: None,
+            #[cfg(test)]
+            orbit_builds: 0,
             next_candidate: 0,
         })
     }
@@ -1807,24 +1813,64 @@ fn automorphism_preserves_partition(
     Ok(true)
 }
 
-/// Проверяет, лежит ли `candidate` в орбите уже исследованной ветви при
-/// автоморфизмах, стабилизирующих текущее упорядоченное разбиение. Отсечение
-/// точное: отображение сохраняется лишь после совпадения полных сериализаций
-/// листьев, доказывающего автоморфизм графа.
+/// Орбита принадлежит одному неизменяемому разбиению frame. Оба списка,
+/// определяющих её, только дополняются: их длины однозначно задают поколение.
+/// Пустой `seen` означает отсутствие стабилизирующих автоморфизмов.
+struct ExploredOrbitV1 {
+    automorphism_count: usize,
+    explored_count: usize,
+    seen: Vec<bool>,
+}
+
 fn candidate_is_in_explored_orbit(
-    partition: &PartitionV1,
-    explored: &[usize],
+    frame: &mut SearchFrameV1,
     candidate: usize,
     automorphisms: &[Vec<usize>],
 ) -> Result<bool, ProgramCompileError> {
-    if explored.is_empty() || automorphisms.is_empty() {
+    if frame.explored_candidates.is_empty() || automorphisms.is_empty() {
         return Ok(false);
     }
     let vertex_count = automorphisms[0].len();
-    let cell_of = partition_cells(partition, vertex_count)?;
     if candidate >= vertex_count {
         return Err(ProgramCompileError::InternalInvariant);
     }
+    if frame.explored_orbit.as_ref().is_none_or(|orbit| {
+        orbit.automorphism_count != automorphisms.len()
+            || orbit.explored_count != frame.explored_candidates.len()
+    }) {
+        let seen = build_explored_orbit(
+            &frame.partition.0,
+            &frame.explored_candidates,
+            automorphisms,
+        )?;
+        frame.explored_orbit = Some(ExploredOrbitV1 {
+            automorphism_count: automorphisms.len(),
+            explored_count: frame.explored_candidates.len(),
+            seen,
+        });
+        #[cfg(test)]
+        {
+            frame.orbit_builds += 1;
+        }
+    }
+    let orbit = frame
+        .explored_orbit
+        .as_ref()
+        .ok_or(ProgramCompileError::InternalInvariant)?;
+    Ok(!orbit.seen.is_empty() && orbit.seen[candidate])
+}
+
+/// Замыкает исследованные ветви только по автоморфизмам, стабилизирующим
+/// текущее упорядоченное разбиение. Каждое отображение уже подтверждено
+/// совпадением полных сериализаций листьев. Соседние кандидаты используют
+/// одно замыкание, пока поиск не добавил новую ветвь либо автоморфизм.
+fn build_explored_orbit(
+    partition: &PartitionV1,
+    explored: &[usize],
+    automorphisms: &[Vec<usize>],
+) -> Result<Vec<bool>, ProgramCompileError> {
+    let vertex_count = automorphisms[0].len();
+    let cell_of = partition_cells(partition, vertex_count)?;
 
     let mut stabilizers = Vec::new();
     stabilizers
@@ -1836,7 +1882,7 @@ fn candidate_is_in_explored_orbit(
         }
     }
     if stabilizers.is_empty() {
-        return Ok(false);
+        return Ok(Vec::new());
     }
 
     let mut seen = Vec::new();
@@ -1871,7 +1917,7 @@ fn candidate_is_in_explored_orbit(
             }
         }
     }
-    Ok(seen[candidate])
+    Ok(seen)
 }
 
 /// Для каждой вершины хранит клетку, если её компонента после удаления
@@ -2178,8 +2224,7 @@ fn canonical_search_impl(
                     candidate,
                     &mut frame.component_twins,
                 )? || candidate_is_in_explored_orbit(
-                    &frame.partition.0,
-                    &frame.explored_candidates,
+                    frame,
                     candidate,
                     &automorphisms,
                 )? {
@@ -3272,6 +3317,200 @@ mod tests {
             canonical_search_impl(&graph, Some(254)).err(),
             Some(ProgramCompileError::ResourceExhausted),
         );
+        Ok(())
+    }
+
+    fn connected_cycle_graph(
+        count: usize,
+        bidirectional: bool,
+    ) -> Result<CanonicalGraphV1, ProgramCompileError> {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+        for _ in 0..count {
+            graph.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+        }
+        for from in 1..=count {
+            let to = from % count + 1;
+            graph.add_edge(from, to, EdgeRoleV1::TargetSource)?;
+            if bidirectional {
+                graph.add_edge(to, from, EdgeRoleV1::TargetSource)?;
+            }
+        }
+        graph.finish()
+    }
+
+    fn cycle_rotation(count: usize, step: usize) -> Vec<usize> {
+        std::iter::once(0)
+            .chain((0..count).map(|index| (index + step) % count + 1))
+            .collect()
+    }
+
+    fn orbit_union_oracle(
+        partition: &PartitionV1,
+        explored: &[usize],
+        candidate: usize,
+        automorphisms: &[Vec<usize>],
+    ) -> bool {
+        fn root(parents: &[usize], mut vertex: usize) -> usize {
+            while parents[vertex] != vertex {
+                vertex = parents[vertex];
+            }
+            vertex
+        }
+
+        let vertex_count = partition.cells.iter().map(Vec::len).sum::<usize>();
+        let mut parents = (0..vertex_count).collect::<Vec<_>>();
+        let mut has_stabilizer = false;
+        for permutation in automorphisms {
+            if !partition.cells.iter().all(|cell| {
+                cell.iter().all(|&vertex| cell.contains(&permutation[vertex]))
+            }) {
+                continue;
+            }
+            has_stabilizer = true;
+            // Замыкание перестановок совпадает с компонентами их пар v → p(v).
+            // Эталон не использует очередь, cell_of или фильтрацию основного поиска.
+            for (vertex, &image) in permutation.iter().enumerate() {
+                let left = root(&parents, vertex);
+                let right = root(&parents, image);
+                parents[left] = right;
+            }
+        }
+        has_stabilizer
+            && explored
+                .iter()
+                .any(|&vertex| root(&parents, vertex) == root(&parents, candidate))
+    }
+
+    fn check_cached_orbit(
+        frame: &mut SearchFrameV1,
+        automorphisms: &[Vec<usize>],
+    ) -> Result<(), ProgramCompileError> {
+        let vertex_count = frame.partition.0.cells.iter().map(Vec::len).sum::<usize>();
+        for candidate in 0..vertex_count {
+            let expected = orbit_union_oracle(
+                &frame.partition.0,
+                &frame.explored_candidates,
+                candidate,
+                automorphisms,
+            );
+            assert_eq!(
+                candidate_is_in_explored_orbit(frame, candidate, automorphisms)?,
+                expected,
+                "orbit at vertex {candidate}",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn explored_orbit_tracks_new_generators_and_explored_branches()
+    -> Result<(), ProgramCompileError> {
+        let graph = connected_cycle_graph(6, true)?;
+        let mut frame = SearchFrameV1::new(
+            refine_partition(&graph, PartitionV1::initial(&graph)?)?,
+            None,
+        )?;
+        let automorphisms = vec![cycle_rotation(6, 2)];
+        assert!(mapping_preserves_graph(&graph, &graph, &automorphisms[0]));
+        check_cached_orbit(&mut frame, &automorphisms)?;
+        frame.explored_candidates.push(1);
+        check_cached_orbit(&mut frame, &[])?;
+        assert_eq!(frame.orbit_builds, 0);
+        for _ in 0..3 {
+            check_cached_orbit(&mut frame, &automorphisms)?;
+        }
+        assert_eq!(frame.orbit_builds, 1);
+        assert!(!candidate_is_in_explored_orbit(&mut frame, 2, &automorphisms)?);
+        frame.explored_candidates.push(2);
+        check_cached_orbit(&mut frame, &automorphisms)?;
+        assert_eq!(frame.orbit_builds, 2);
+        assert!(candidate_is_in_explored_orbit(&mut frame, 4, &automorphisms)?);
+
+        let mut generator_frame = SearchFrameV1::new(
+            refine_partition(&graph, PartitionV1::initial(&graph)?)?,
+            None,
+        )?;
+        let mut generators = vec![vec![0, 1, 6, 5, 4, 3, 2]];
+        assert!(mapping_preserves_graph(&graph, &graph, &generators[0]));
+        generator_frame.explored_candidates.push(1);
+        check_cached_orbit(&mut generator_frame, &generators)?;
+        assert!(!candidate_is_in_explored_orbit(
+            &mut generator_frame,
+            5,
+            &generators,
+        )?);
+        generators.push(vec![0, 3, 2, 1, 6, 5, 4]);
+        assert!(mapping_preserves_graph(&graph, &graph, &generators[1]));
+        check_cached_orbit(&mut generator_frame, &generators)?;
+        assert_eq!(generator_frame.orbit_builds, 2);
+        // Вершина 5 достижима только композицией двух отражений.
+        assert!(candidate_is_in_explored_orbit(
+            &mut generator_frame,
+            5,
+            &generators,
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn explored_orbit_keeps_parent_and_child_stabilizers_separate()
+    -> Result<(), ProgramCompileError> {
+        let graph = connected_cycle_graph(6, true)?;
+        let mut parent = SearchFrameV1::new(
+            refine_partition(&graph, PartitionV1::initial(&graph)?)?,
+            None,
+        )?;
+        parent.explored_candidates.push(1);
+        let mut automorphisms = vec![cycle_rotation(6, 2)];
+        check_cached_orbit(&mut parent, &automorphisms)?;
+        let cell = parent
+            .branch_cell
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let mut child = SearchFrameV1::new(
+            refine_partition(&graph, individualize(&parent.partition.0, cell, 1)?)?,
+            None,
+        )?;
+        child.explored_candidates.push(2);
+        check_cached_orbit(&mut child, &automorphisms)?;
+        assert!(
+            child
+                .explored_orbit
+                .as_ref()
+                .is_some_and(|orbit| orbit.seen.is_empty())
+        );
+        // Отражение фиксирует индивидуализированную вершину, вращение — нет.
+        automorphisms.push(vec![0, 1, 6, 5, 4, 3, 2]);
+        assert!(mapping_preserves_graph(&graph, &graph, &automorphisms[1]));
+        check_cached_orbit(&mut child, &automorphisms)?;
+        assert!(candidate_is_in_explored_orbit(&mut child, 6, &automorphisms)?);
+        assert!(!candidate_is_in_explored_orbit(&mut child, 4, &automorphisms)?);
+        check_cached_orbit(&mut parent, &automorphisms)?;
+        assert_eq!(child.orbit_builds, 2);
+        assert_eq!(parent.orbit_builds, 2);
+        automorphisms.push(cycle_rotation(6, 1));
+        check_cached_orbit(&mut child, &automorphisms)?;
+        check_cached_orbit(&mut parent, &automorphisms)?;
+        assert_eq!(child.orbit_builds, 3);
+        assert_eq!(parent.orbit_builds, 3);
+        assert!(!candidate_is_in_explored_orbit(&mut child, 4, &automorphisms)?);
+        assert!(candidate_is_in_explored_orbit(&mut parent, 2, &automorphisms)?);
+        Ok(())
+    }
+
+    #[test]
+    fn connected_cycles_keep_unpruned_canonical_bytes() -> Result<(), ProgramCompileError> {
+        for count in 3..=9 {
+            for bidirectional in [false, true] {
+                let graph = connected_cycle_graph(count, bidirectional)?;
+                let (actual, leaves) = canonical_search(&graph)?;
+                assert!(leaves > 1, "connected cycles must exercise exact search");
+                assert_eq!(
+                    actual,
+                    exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?,
+                    "cycle length {count}, bidirectional {bidirectional}",
+                );
+            }
+        }
         Ok(())
     }
 
