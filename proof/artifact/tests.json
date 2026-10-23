@@ -948,7 +948,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "7f1a521adf1ec947de7a7f153a600dc2f39b324f707a8c0c4b81f1d2b9cd69c7",
+ "record_sha256": "cc8bde74d1f9bf94c8c085196aed6a0cde928546c0ed0609e9da15a0fb0957f0",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1015,6 +1015,7 @@
    "appearance_graph_tests::compile_rejects_duplicate_declarations_with_typed_errors: test",
    "appearance_graph_tests::compile_rejects_every_dangling_canonical_edge: test",
    "appearance_graph_tests::compiled_appearance_graph_remains_send_and_sync: test",
+   "appearance_graph_tests::compiled_inputs_preserve_sparse_ids_and_chained_physical_values: test",
    "appearance_graph_tests::compiled_slots_bind_found_ids_and_reject_missing_ids: test",
    "appearance_graph_tests::compiled_slots_have_canonical_ordinals_across_declaration_permutations: test",
    "appearance_graph_tests::complete_typed_id_renaming_does_not_change_physics: test",
@@ -1044,6 +1045,7 @@
    "appearance_graph_tests::signed_zero_opacity_has_one_canonical_state: test",
    "appearance_graph_tests::static_exact_program_is_declarative_topology_plus_typed_constraint: test",
    "appearance_graph_tests::surface_from_reuses_visible_result_without_recompositing: test",
+   "appearance_graph_tests::workspace_reuse_overwrites_equal_shape_graphs_after_schema_rejection: test",
    "appearance_replay_tests::alpha_endpoints_and_a_later_opaque_layer_obey_the_same_domain_law: test",
    "appearance_replay_tests::exact_owned_domain_is_empty_when_downstream_quantization_erases_the_target: test",
    "appearance_replay_tests::exact_owned_domain_is_singleton_only_for_a_final_byte_contribution: test",
@@ -1953,7 +1955,9 @@
    "program_session::identity::tests::clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit: test",
    "program_session::identity::tests::component_index_matches_connectivity_after_refinement_and_individualization: test",
    "program_session::identity::tests::component_interchange_checks_direction_role_multiplicity_and_boundary: test",
+   "program_session::identity::tests::connected_cycles_keep_unpruned_canonical_bytes: test",
    "program_session::identity::tests::declared_clean_set_constraint_color_binds_every_release_digest_byte: test",
+   "program_session::identity::tests::equal_signature_heapsort_preserves_one_left_rotation: test",
    "program_session::identity::tests::equitable_components_with_repeated_cells_are_not_interchangeable: test",
    "program_session::identity::tests::evaluator_descriptor_and_certificate_metadata_have_one_source_of_truth: test",
    "program_session::identity::tests::every_appearance_context_coordinate_and_frame_release_is_content_bound: test",
@@ -1964,6 +1968,10 @@
    "program_session::identity::tests::family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt: test",
    "program_session::identity::tests::fixed_color_key_preserves_length_first_order_and_bounds: test",
    "program_session::identity::tests::hostile_graph_preimage_is_invariant_for_generated_bijections: test",
+   "program_session::identity::tests::incremental_refinement_matches_full_refiner_for_all_small_digraphs: test",
+   "program_session::identity::tests::incremental_refinement_preserves_middle_and_tied_largest_children: test",
+   "program_session::identity::tests::incremental_refinement_preserves_typed_simultaneous_splits_and_cycles: test",
+   "program_session::identity::tests::incremental_refinement_skips_unchanged_cells_without_skipping_rounds: test",
    "program_session::identity::tests::joint_selection_vertex_binds_tag_and_exact_release_identity_bytes: test",
    "program_session::identity::tests::modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content: test",
    "program_session::identity::tests::pruning_keeps_exact_bytes_on_every_four_vertex_digraph: test",
@@ -2243,7 +2251,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1291,
+  "enabled_count": 1299,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

@@ -136,6 +136,76 @@ for (const method of ["outputSlot", "outputRgb", "outputOpacity"]) {
   });
 }
 
+test("outputRgb returns independent bytes after snapshot and runtime release", () => {
+  const runtime = compileProgramWire(wire, 1);
+  let snapshot;
+  let first;
+  let second;
+  try {
+    snapshot = observe(runtime, 1n, 1);
+    first = snapshot.outputRgb(0);
+    second = snapshot.outputRgb(0);
+    assert.ok(first instanceof Uint8Array);
+    assert.ok(second instanceof Uint8Array);
+    assert.equal(first.byteLength, 3);
+    assert.equal(second.byteLength, 3);
+    assert.notStrictEqual(first, second);
+    assert.notStrictEqual(first.buffer, second.buffer);
+    first[0] = 255;
+    assert.deepEqual([...second], [20, 20, 20]);
+    assert.deepEqual([...snapshot.outputRgb(0)], [20, 20, 20]);
+  } finally {
+    try {
+      snapshot?.free();
+    } finally {
+      runtime.free();
+    }
+  }
+  assert.deepEqual([...first], [255, 20, 20]);
+  assert.deepEqual([...second], [20, 20, 20]);
+  second[1] = 0;
+  assert.deepEqual([...first], [255, 20, 20]);
+  assert.deepEqual([...second], [20, 0, 20]);
+});
+
+test("outputRgb does not invoke a replaced typed-array constructor", () => {
+  const runtime = compileProgramWire(wire, 1);
+  const snapshot = observe(runtime, 1n, 1);
+  const NativeUint8Array = Uint8Array;
+  let constructorCalls = 0;
+  let recovered;
+  try {
+    try {
+      globalThis.Uint8Array = new Proxy(NativeUint8Array, {
+        construct() {
+          constructorCalls += 1;
+          throw new Error("caller-controlled constructor must not run");
+        },
+      });
+      const bytes = snapshot.outputRgb(0);
+      assert.ok(bytes instanceof NativeUint8Array);
+      assert.deepEqual([...bytes], [20, 20, 20]);
+      assert.equal(constructorCalls, 0);
+    } finally {
+      globalThis.Uint8Array = NativeUint8Array;
+    }
+    assert.deepEqual(read(snapshot), expected);
+    recovered = observe(runtime, 2n, 1);
+    assert.deepEqual(read(recovered), expected);
+    assert.deepEqual(read(snapshot), expected);
+  } finally {
+    try {
+      recovered?.free();
+    } finally {
+      try {
+        snapshot.free();
+      } finally {
+        runtime.free();
+      }
+    }
+  }
+});
+
 for (const field of ["stream", "observed-revision", "unknown-revision", "surface-count", "reason", "index"]) {
   test(`${field}: admission does not invoke a caller coercion hook`, () => {
     let calls = 0;

@@ -554,10 +554,15 @@ impl AppearanceGraphSpec {
             })
             .collect();
 
-        let compiled_paints = paints
-            .iter()
-            .map(|paint| match *paint {
-                PaintSpec::Input { id, input } => CompiledPaintSpec::Input { id, input },
+        let mut compiled_paints = Vec::with_capacity(paints.len());
+        for paint in &paints {
+            compiled_paints.push(match *paint {
+                PaintSpec::Input { id, input } => CompiledPaintSpec::Input {
+                    id,
+                    input_index: paint_inputs
+                        .binary_search(&input)
+                        .map_err(|_| CompileError::MissingPaintInput { paint: id, input })?,
+                },
                 PaintSpec::Opacity {
                     id,
                     source,
@@ -565,24 +570,41 @@ impl AppearanceGraphSpec {
                 } => CompiledPaintSpec::Opacity {
                     id,
                     source: paint_index(source)
-                        .unwrap_or_else(|| unreachable!("paint links were validated")),
-                    opacity,
+                        .ok_or(CompileError::MissingPaintSource { paint: id, source })?,
+                    opacity_index: opacity_inputs.binary_search(&opacity).map_err(|_| {
+                        CompileError::MissingPaintOpacityInput {
+                            paint: id,
+                            input: opacity,
+                        }
+                    })?,
                 },
-            })
-            .collect();
-        let compiled_surfaces: Vec<_> = surfaces
-            .iter()
-            .map(|surface| match *surface {
-                SurfaceSpec::Input { id, port } => CompiledSurfaceSpec::Input { id, port },
+            });
+        }
+        let mut compiled_surfaces = Vec::with_capacity(surfaces.len());
+        for surface in &surfaces {
+            compiled_surfaces.push(match *surface {
+                SurfaceSpec::Input { id, port } => CompiledSurfaceSpec::Input {
+                    id,
+                    port_index: surface_input_ports.binary_search(&port).map_err(|_| {
+                        CompileError::MissingSurfaceInputPort {
+                            surface: id,
+                            input: port,
+                        }
+                    })?,
+                },
                 SurfaceSpec::FromOccurrence { id, occurrence } => {
                     CompiledSurfaceSpec::FromOccurrence {
                         id,
-                        occurrence: occurrence_index(occurrence)
-                            .unwrap_or_else(|| unreachable!("occurrence links were validated")),
+                        occurrence: occurrence_index(occurrence).ok_or(
+                            CompileError::MissingSurfaceOccurrence {
+                                surface: id,
+                                occurrence,
+                            },
+                        )?,
                     }
                 }
-            })
-            .collect();
+            });
+        }
         let mut compiled_occurrences: Vec<_> = occurrences
             .iter()
             .map(|occurrence| CompiledOccurrenceSpec {
@@ -730,12 +752,12 @@ enum RenderNode {
 enum CompiledPaintSpec {
     Input {
         id: PaintId,
-        input: PaintInputId,
+        input_index: usize,
     },
     Opacity {
         id: PaintId,
         source: usize,
-        opacity: OpacityInputId,
+        opacity_index: usize,
     },
 }
 
@@ -749,14 +771,8 @@ impl CompiledPaintSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CompiledSurfaceSpec {
-    Input {
-        id: SurfaceId,
-        port: SurfaceInputPortId,
-    },
-    FromOccurrence {
-        id: SurfaceId,
-        occurrence: usize,
-    },
+    Input { id: SurfaceId, port_index: usize },
+    FromOccurrence { id: SurfaceId, occurrence: usize },
 }
 
 impl CompiledSurfaceSpec {
@@ -973,18 +989,18 @@ const POINT_OPACITY_INPUTS: [OpacityInputId; 1] = [POINT_OPACITY];
 const POINT_PAINTS: [CompiledPaintSpec; 2] = [
     CompiledPaintSpec::Input {
         id: POINT_SOLID_PAINT,
-        input: POINT_PAINT_INPUT,
+        input_index: 0,
     },
     CompiledPaintSpec::Opacity {
         id: POINT_OPACITY_PAINT,
         source: 0,
-        opacity: POINT_OPACITY,
+        opacity_index: 0,
     },
 ];
 const POINT_SURFACES: [CompiledSurfaceSpec; 2] = [
     CompiledSurfaceSpec::Input {
         id: POINT_CONTEXT_SURFACE,
-        port: POINT_CONTEXT,
+        port_index: 0,
     },
     CompiledSurfaceSpec::FromOccurrence {
         id: POINT_DERIVED_SURFACE,
@@ -1064,16 +1080,16 @@ impl PointOpacityOverSurfaceV1 {
         let mut surfaces = [None; 2];
         let mut occurrences = [None; 1];
         POINT_OPACITY_OVER_SURFACE_V1.execute_into(
-            |id| {
-                debug_assert_eq!(id, POINT_PAINT_INPUT);
+            |input_index| {
+                debug_assert_eq!(input_index, 0);
                 EncodedPointPaintValueV1::opaque(Srgb8::new(source))
             },
-            |id| {
-                debug_assert_eq!(id, POINT_CONTEXT);
+            |port_index| {
+                debug_assert_eq!(port_index, 0);
                 Srgb8::new(backdrop)
             },
-            |id| {
-                debug_assert_eq!(id, POINT_OPACITY);
+            |opacity_index| {
+                debug_assert_eq!(opacity_index, 0);
                 opacity
             },
             &mut paints,
@@ -1691,8 +1707,8 @@ impl AppearanceEvaluation {
 
 /// Reusable scratch для одного compiled physical graph.
 ///
-/// После первого fallible sizing повторные evaluate того же shape только
-/// очищают slots; capacity и backing allocations остаются неизменными.
+/// После первого fallible sizing повторные evaluate того же shape полностью
+/// перезаписывают slots; capacity и backing allocations остаются неизменными.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AppearanceWorkspaceShape {
     paints: usize,
@@ -1733,13 +1749,12 @@ impl AppearanceWorkspace {
         Ok(workspace)
     }
 
-    fn prepare(&mut self, program: CompiledAppearanceProgram<'_>) -> Result<(), BindingError> {
+    fn validate_shape(&self, program: CompiledAppearanceProgram<'_>) -> Result<(), BindingError> {
         if self.shape != AppearanceWorkspaceShape::of(program) {
             return Err(BindingError::IncompatibleWorkspace);
         }
-        self.paints.fill(None);
-        self.surfaces.fill(None);
-        self.occurrences.fill(None);
+        // Оба topo покрывают все узлы. execute_into перезаписывает каждый slot
+        // до его чтения зависимыми узлами и не имеет частичного выхода.
         Ok(())
     }
 
@@ -2243,35 +2258,18 @@ impl<'program> CompiledAppearanceProgram<'program> {
         if !bindings.matches_schema(self.input_schema()) {
             return Err(BindingError::IncompatibleAdmittedBindings);
         }
-        workspace.prepare(self)?;
+        workspace.validate_shape(self)?;
 
         let paint_inputs = &bindings.paint_inputs;
         let surfaces = &bindings.surfaces;
         let opacities = &bindings.opacities;
 
-        let paint_input_value = |id: PaintInputId| -> EncodedPointPaintValueV1 {
-            let index = paint_inputs
-                .binary_search_by_key(&id, |(bound, _)| *bound)
-                .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            paint_inputs[index].1
-        };
-        let surface_value = |id: SurfaceInputPortId| -> Srgb8 {
-            let index = surfaces
-                .binary_search_by_key(&id, |(bound, _)| *bound)
-                .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            surfaces[index].1
-        };
-        let opacity_value = |id: OpacityInputId| -> crate::composition::AdmittedOpacityV1 {
-            let index = opacities
-                .binary_search_by_key(&id, |(bound, _)| *bound)
-                .unwrap_or_else(|_| unreachable!("bindings were matched before evaluation"));
-            opacities[index].1
-        };
-
+        // Компилятор закрепил позиции входов в канонической схеме. Полная
+        // проверка выше не даёт применить эти позиции к чужим bindings.
         self.execute_into(
-            paint_input_value,
-            surface_value,
-            opacity_value,
+            |input_index| paint_inputs[input_index].1,
+            |port_index| surfaces[port_index].1,
+            |opacity_index| opacities[opacity_index].1,
             &mut workspace.paints,
             &mut workspace.surfaces,
             &mut workspace.occurrences,
@@ -2296,9 +2294,9 @@ impl<'program> CompiledAppearanceProgram<'program> {
         resolved_surfaces: &mut [Option<Srgb8>],
         resolved_occurrences: &mut [Option<ResolvedOccurrence>],
     ) where
-        P: Fn(PaintInputId) -> EncodedPointPaintValueV1,
-        S: Fn(SurfaceInputPortId) -> Srgb8,
-        O: Fn(OpacityInputId) -> crate::composition::AdmittedOpacityV1,
+        P: Fn(usize) -> EncodedPointPaintValueV1,
+        S: Fn(usize) -> Srgb8,
+        O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
         debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
@@ -2306,13 +2304,13 @@ impl<'program> CompiledAppearanceProgram<'program> {
 
         for &index in self.paint_topo {
             let paint = match self.paints[index] {
-                CompiledPaintSpec::Input { id, input } => {
-                    EncodedPointPaintV1::from_value(id, paint_input_value(input))
+                CompiledPaintSpec::Input { id, input_index } => {
+                    EncodedPointPaintV1::from_value(id, paint_input_value(input_index))
                 }
                 CompiledPaintSpec::Opacity {
                     id,
                     source,
-                    opacity,
+                    opacity_index,
                 } => {
                     // Валидированный `paint_topo` всегда материализует source
                     // раньше зависимого Opacity-узла.
@@ -2322,7 +2320,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
                         id,
                         EncodedPointPaintValueV1::from_admitted(
                             value.source(),
-                            value.opacity().multiply(opacity_value(opacity)),
+                            value.opacity().multiply(opacity_value(opacity_index)),
                         ),
                     )
                 }
@@ -2334,7 +2332,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
             match *node {
                 RenderNode::Surface(index) => {
                     let value = match self.surfaces[index] {
-                        CompiledSurfaceSpec::Input { port, .. } => surface_value(port),
+                        CompiledSurfaceSpec::Input { port_index, .. } => surface_value(port_index),
                         CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => Srgb8::new(
                             resolved_occurrences[occurrence]
                                 .unwrap_or_else(|| unreachable!())

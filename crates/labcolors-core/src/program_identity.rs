@@ -1486,7 +1486,14 @@ struct RefinementAtomV1 {
 
 struct RefinementRecordV1 {
     vertex: usize,
-    signature: Vec<RefinementAtomV1>,
+    signature: core::ops::Range<usize>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct RefinementTraceV1 {
+    rounds: Vec<Vec<Vec<usize>>>,
+    skipped_cells: usize,
 }
 
 fn partition_cells(
@@ -1517,25 +1524,71 @@ fn partition_cells(
 
 fn refine_partition(
     graph: &CanonicalGraphV1,
-    mut partition: PartitionV1,
+    partition: PartitionV1,
 ) -> Result<EquitablePartitionV1, ProgramCompileError> {
+    refine_partition_impl(
+        graph,
+        partition,
+        #[cfg(test)]
+        None,
+    )
+}
+
+fn refine_partition_impl(
+    graph: &CanonicalGraphV1,
+    mut partition: PartitionV1,
+    #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
+) -> Result<EquitablePartitionV1, ProgramCompileError> {
+    if partition.is_discrete() {
+        return Ok(EquitablePartitionV1(partition));
+    }
+    let mut dirty = Vec::new();
+    dirty
+        .try_reserve_exact(graph.colors.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    dirty.resize(graph.colors.len(), true);
+    let mut next_dirty = Vec::new();
+    next_dirty
+        .try_reserve_exact(graph.colors.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    next_dirty.resize(graph.colors.len(), false);
+    let mut next_cells = Vec::new();
+    // Записи ссылаются на один переиспользуемый буфер атомов. Длины сигнатур
+    // и прежний heapsort остаются точными, включая порядок равных записей.
+    let mut signatures = Vec::new();
+    let mut records = Vec::new();
     loop {
         if partition.is_discrete() {
             return Ok(EquitablePartitionV1(partition));
         }
         let cell_of = partition_cells(&partition, graph.colors.len())?;
-
-        let mut next_cells = Vec::new();
+        // После swap здесь прежний внешний Vec разбиения; его исходная
+        // capacity могла быть меньше числа вершин (после individualize).
         next_cells
             .try_reserve_exact(graph.colors.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        next_dirty.fill(false);
         let previous_count = partition.cells.len();
-        for cell in partition.cells {
+        for mut cell in partition.cells.drain(..) {
             if cell.len() == 1 {
                 next_cells.push(cell);
                 continue;
             }
-            let mut records = Vec::new();
+            if !cell.iter().any(|&vertex| dirty[vertex]) {
+                // Соседи остались в представительных дочерних клетках.
+                // Их ранги меняются строго монотонно, поэтому все сигнатуры
+                // клетки по-прежнему равны. Старый heapsort равных ключей
+                // делает ровно этот сдвиг, в том числе в последнем раунде.
+                cell.rotate_left(1);
+                next_cells.push(cell);
+                #[cfg(test)]
+                if let Some(trace) = trace.as_deref_mut() {
+                    trace.skipped_cells += 1;
+                }
+                continue;
+            }
+            records.clear();
+            signatures.clear();
             records
                 .try_reserve_exact(cell.len())
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
@@ -1544,28 +1597,34 @@ fn refine_partition(
                     .adjacency
                     .get(vertex)
                     .ok_or(ProgramCompileError::InternalInvariant)?;
-                let mut signature = Vec::new();
-                signature
-                    .try_reserve_exact(arcs.len())
+                let start = signatures.len();
+                signatures
+                    .try_reserve(arcs.len())
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 for arc in arcs {
-                    signature.push(RefinementAtomV1 {
+                    signatures.push(RefinementAtomV1 {
                         direction: arc.direction,
                         role: arc.role,
                         neighbour_cell: cell_of[arc.neighbour],
                     });
                 }
-                ordering::sort(&mut signature);
+                let signature = start..signatures.len();
+                ordering::sort(&mut signatures[signature.clone()]);
                 records.push(RefinementRecordV1 { vertex, signature });
             }
             ordering::sort_by(&mut records, |left, right| {
-                left.signature.cmp(&right.signature)
+                signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
             });
 
+            let first_split = next_cells.len();
+            let mut largest_split = first_split;
             let mut start = 0;
             while start < records.len() {
                 let mut end = start + 1;
-                while end < records.len() && records[start].signature == records[end].signature {
+                while end < records.len()
+                    && signatures[records[start].signature.clone()]
+                        == signatures[records[end].signature.clone()]
+                {
                     end += 1;
                 }
                 let mut split = Vec::new();
@@ -1573,16 +1632,39 @@ fn refine_partition(
                     .try_reserve_exact(end - start)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 split.extend(records[start..end].iter().map(|record| record.vertex));
+                if next_cells.len() == first_split || split.len() > next_cells[largest_split].len()
+                {
+                    largest_split = next_cells.len();
+                }
                 next_cells.push(split);
                 start = end;
             }
+            if next_cells.len() - first_split > 1 {
+                // Представитель влияет только на dirty следующего раунда:
+                // порядок дочерних клеток по сигнатуре никогда не меняется.
+                // Для незатронутых вершин old-cell -> rank(largest-child)
+                // строго возрастает. Любой иной сосед делает вершину dirty.
+                for (offset, split) in next_cells[first_split..].iter().enumerate() {
+                    if first_split + offset == largest_split {
+                        continue;
+                    }
+                    for &vertex in split {
+                        for arc in &graph.adjacency[vertex] {
+                            next_dirty[arc.neighbour] = true;
+                        }
+                    }
+                }
+            }
         }
-
-        if next_cells.len() == previous_count {
-            partition.cells = next_cells;
+        #[cfg(test)]
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.rounds.push(next_cells.clone());
+        }
+        core::mem::swap(&mut partition.cells, &mut next_cells);
+        core::mem::swap(&mut dirty, &mut next_dirty);
+        if partition.cells.len() == previous_count {
             return Ok(EquitablePartitionV1(partition));
         }
-        partition.cells = next_cells;
     }
 }
 
@@ -3272,6 +3354,336 @@ mod tests {
             canonical_search_impl(&graph, Some(254)).err(),
             Some(ProgramCompileError::ResourceExhausted),
         );
+        Ok(())
+    }
+
+    fn assert_refinement_matches_full(
+        graph: &CanonicalGraphV1,
+        partition: PartitionV1,
+    ) -> Result<(EquitablePartitionV1, RefinementTraceV1), ProgramCompileError> {
+        let mut expected_rounds = Vec::new();
+        let expected = full_refine_partition_reference(
+            graph,
+            PartitionV1 {
+                cells: partition.cells.clone(),
+            },
+            &mut expected_rounds,
+        )?;
+        let mut trace = RefinementTraceV1::default();
+        let actual = refine_partition_impl(graph, partition, Some(&mut trace))?;
+        assert_eq!(actual.0.cells, expected.0.cells, "ordered final cells");
+        assert_eq!(trace.rounds, expected_rounds, "every synchronous round");
+        Ok((actual, trace))
+    }
+
+    fn check_initial_and_individualized_refinement(
+        graph: &CanonicalGraphV1,
+    ) -> Result<(), ProgramCompileError> {
+        let (partition, _) = assert_refinement_matches_full(graph, PartitionV1::initial(graph)?)?;
+        for (cell_index, cell) in partition.0.cells.iter().enumerate() {
+            if cell.len() < 2 {
+                continue;
+            }
+            for &vertex in cell {
+                assert_refinement_matches_full(
+                    graph,
+                    individualize(&partition.0, cell_index, vertex)?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn equal_signature_heapsort_preserves_one_left_rotation() {
+        for count in 0..=64 {
+            let mut actual = (0..count).collect::<Vec<_>>();
+            let expected = (1..count)
+                .chain((count != 0).then_some(0))
+                .collect::<Vec<_>>();
+            ordering::sort_by(&mut actual, |_, _| core::cmp::Ordering::Equal);
+            assert_eq!(actual, expected, "equal-key cell length {count}");
+        }
+    }
+
+    #[test]
+    fn incremental_refinement_matches_full_refiner_for_all_small_digraphs()
+    -> Result<(), ProgramCompileError> {
+        for mask in 0..=0x0fff {
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            check_initial_and_individualized_refinement(&graph)?;
+            let mut reversed = PartitionV1::initial(&graph)?;
+            for cell in &mut reversed.cells {
+                cell.reverse();
+            }
+            assert_refinement_matches_full(&graph, reversed)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_refinement_skips_unchanged_cells_without_skipping_rounds()
+    -> Result<(), ProgramCompileError> {
+        for reverse_edges in [false, true] {
+            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+            let mut stable = Vec::new();
+            for _ in 0..5 {
+                stable.push(graph.add_member(VertexColorV1::new(20))?);
+            }
+            let mut path = Vec::new();
+            for _ in 0..12 {
+                path.push(graph.add_member(VertexColorV1::new(10))?);
+            }
+            for pair in path.windows(2) {
+                let (from, to) = if reverse_edges {
+                    (pair[1], pair[0])
+                } else {
+                    (pair[0], pair[1])
+                };
+                graph.add_edge(from, to, EdgeRoleV1::TargetSource)?;
+            }
+            let graph = graph.finish()?;
+            let (partition, trace) =
+                assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
+            assert!(trace.rounds.len() >= 4, "path must propagate across rounds");
+            assert!(
+                trace.skipped_cells >= trace.rounds.len() - 1,
+                "stable cell must execute the optimized branch",
+            );
+            let rotations = trace.rounds.len() % stable.len();
+            stable.rotate_left(rotations);
+            assert!(
+                partition.0.cells.contains(&stable),
+                "include the terminal no-split round's equal-key permutation",
+            );
+            check_initial_and_individualized_refinement(&graph)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_refinement_preserves_middle_and_tied_largest_children()
+    -> Result<(), ProgramCompileError> {
+        for (multiplicities, expected_sizes) in [
+            ([0, 1, 1, 1, 1, 2], vec![1, 4, 1]),
+            ([0, 0, 1, 1, 2, 2], vec![2, 2, 2]),
+        ] {
+            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+            let mut sources = Vec::new();
+            for _ in multiplicities {
+                sources.push(graph.add_member(VertexColorV1::new(10))?);
+            }
+            let marker = graph.add_member(VertexColorV1::new(30))?;
+            for (&source, multiplicity) in sources.iter().zip(multiplicities) {
+                for _ in 0..multiplicity {
+                    graph.add_edge(source, marker, EdgeRoleV1::TargetSource)?;
+                }
+            }
+            let graph = graph.finish()?;
+            let (_, trace) = assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
+            let sizes = trace.rounds[0]
+                .iter()
+                .filter(|cell| cell.iter().all(|vertex| sources.contains(vertex)))
+                .map(Vec::len)
+                .collect::<Vec<_>>();
+            assert_eq!(sizes, expected_sizes, "representative must not move groups");
+            check_initial_and_individualized_refinement(&graph)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_refinement_preserves_typed_simultaneous_splits_and_cycles()
+    -> Result<(), ProgramCompileError> {
+        for reverse_edges in [false, true] {
+            let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+            let mut groups = Vec::new();
+            for color in [10, 20, 30, 40, 50] {
+                let mut group = Vec::new();
+                for _ in 0..4 {
+                    group.push(graph.add_member(VertexColorV1::new(color))?);
+                }
+                groups.push(group);
+            }
+            let marker = graph.add_member(VertexColorV1::new(60))?;
+            let multiplicities = [(0, 2), (1, 1), (2, 1), (2, 0)];
+            for (index, (left_count, right_count)) in multiplicities.into_iter().enumerate() {
+                // Group 1 sees splits before and after its iteration position.
+                // Group 4 has only one directed incidence to the splitting group.
+                for (from, to, role) in [
+                    (groups[0][index], groups[1][index], EdgeRoleV1::TargetSource),
+                    (
+                        groups[1][index],
+                        groups[2][index],
+                        EdgeRoleV1::ProgramMember,
+                    ),
+                    (groups[2][index], groups[3][index], EdgeRoleV1::TargetSource),
+                    (groups[2][index], groups[3][index], EdgeRoleV1::TargetSource),
+                    (
+                        groups[4][index],
+                        groups[0][index],
+                        EdgeRoleV1::ProgramMember,
+                    ),
+                ] {
+                    let (from, to) = if reverse_edges {
+                        (to, from)
+                    } else {
+                        (from, to)
+                    };
+                    graph.add_edge(from, to, role)?;
+                }
+                for _ in 0..left_count {
+                    graph.add_edge(groups[0][index], marker, EdgeRoleV1::TargetSource)?;
+                }
+                for _ in 0..right_count {
+                    graph.add_edge(groups[2][index], marker, EdgeRoleV1::ProgramMember)?;
+                }
+                for _ in 0..2 {
+                    graph.add_edge(groups[4][index], groups[4][index], EdgeRoleV1::TargetSource)?;
+                }
+            }
+            let graph = graph.finish()?;
+            let (partition, trace) =
+                assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
+            assert!(trace.rounds[0].iter().any(|cell| {
+                cell.len() == 4 && cell.iter().all(|vertex| groups[1].contains(vertex))
+            }));
+            assert!(partition.0.cells.iter().all(|cell| {
+                cell.len() == 1 || cell.iter().all(|vertex| !groups[1].contains(vertex))
+            }));
+            check_initial_and_individualized_refinement(&graph)?;
+        }
+        for count in 3..=16 {
+            for bidirectional in [false, true] {
+                check_initial_and_individualized_refinement(&connected_cycle_graph(
+                    count,
+                    bidirectional,
+                )?)?;
+            }
+        }
+        for reverse_middle in [false, true] {
+            check_initial_and_individualized_refinement(&interleaved_component_graph(
+                3,
+                [2, 0, 1],
+                reverse_middle,
+            )?)?;
+        }
+        Ok(())
+    }
+
+    // Full-round implementation frozen from 5bf2d944. Only the record type,
+    // function name and round trace differ from that source.
+    struct FullRefinementRecordV1 {
+        vertex: usize,
+        signature: Vec<RefinementAtomV1>,
+    }
+
+    fn full_refine_partition_reference(
+        graph: &CanonicalGraphV1,
+        mut partition: PartitionV1,
+        rounds: &mut Vec<Vec<Vec<usize>>>,
+    ) -> Result<EquitablePartitionV1, ProgramCompileError> {
+        loop {
+            if partition.is_discrete() {
+                return Ok(EquitablePartitionV1(partition));
+            }
+            let cell_of = partition_cells(&partition, graph.colors.len())?;
+
+            let mut next_cells = Vec::new();
+            next_cells
+                .try_reserve_exact(graph.colors.len())
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            let previous_count = partition.cells.len();
+            for cell in partition.cells {
+                if cell.len() == 1 {
+                    next_cells.push(cell);
+                    continue;
+                }
+                let mut records = Vec::new();
+                records
+                    .try_reserve_exact(cell.len())
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                for &vertex in &cell {
+                    let arcs = graph
+                        .adjacency
+                        .get(vertex)
+                        .ok_or(ProgramCompileError::InternalInvariant)?;
+                    let mut signature = Vec::new();
+                    signature
+                        .try_reserve_exact(arcs.len())
+                        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                    for arc in arcs {
+                        signature.push(RefinementAtomV1 {
+                            direction: arc.direction,
+                            role: arc.role,
+                            neighbour_cell: cell_of[arc.neighbour],
+                        });
+                    }
+                    ordering::sort(&mut signature);
+                    records.push(FullRefinementRecordV1 { vertex, signature });
+                }
+                ordering::sort_by(&mut records, |left, right| {
+                    left.signature.cmp(&right.signature)
+                });
+
+                let mut start = 0;
+                while start < records.len() {
+                    let mut end = start + 1;
+                    while end < records.len() && records[start].signature == records[end].signature
+                    {
+                        end += 1;
+                    }
+                    let mut split = Vec::new();
+                    split
+                        .try_reserve_exact(end - start)
+                        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                    split.extend(records[start..end].iter().map(|record| record.vertex));
+                    next_cells.push(split);
+                    start = end;
+                }
+            }
+
+            rounds.push(next_cells.clone());
+            if next_cells.len() == previous_count {
+                partition.cells = next_cells;
+                return Ok(EquitablePartitionV1(partition));
+            }
+            partition.cells = next_cells;
+        }
+    }
+
+    fn connected_cycle_graph(
+        count: usize,
+        bidirectional: bool,
+    ) -> Result<CanonicalGraphV1, ProgramCompileError> {
+        let mut graph = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+        for _ in 0..count {
+            graph.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+        }
+        for from in 1..=count {
+            let to = from % count + 1;
+            graph.add_edge(from, to, EdgeRoleV1::TargetSource)?;
+            if bidirectional {
+                graph.add_edge(to, from, EdgeRoleV1::TargetSource)?;
+            }
+        }
+        graph.finish()
+    }
+
+    #[test]
+    fn connected_cycles_keep_unpruned_canonical_bytes() -> Result<(), ProgramCompileError> {
+        for count in 3..=9 {
+            for bidirectional in [false, true] {
+                let graph = connected_cycle_graph(count, bidirectional)?;
+                let (actual, leaves) = canonical_search(&graph)?;
+                assert!(leaves > 1, "connected cycles must exercise exact search");
+                assert_eq!(
+                    actual,
+                    exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?,
+                    "cycle length {count}, bidirectional {bidirectional}",
+                );
+            }
+        }
         Ok(())
     }
 

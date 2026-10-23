@@ -1,9 +1,9 @@
 name: Native conformance (Swift)
 
-# Тонкий caller: только триггеры, concurrency и права. Job graph, пины и env-пины
-# (Rust 1.96.0, swift-контейнер по digest) закреплены в immutable
-# native-conformance-worker.yml на полном commit SHA — каждый job исполняется на
-# одноразовой эфемерной GitHub-hosted VM без секретов и общего состояния.
+# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
+# из того же коммита, что и caller, независимо от checkout и squash-истории.
+# Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
+# на одноразовых эфемерных GitHub-hosted VM без секретов и общего состояния.
 # Своих inputs у worker нет by design.
 
 on:
@@ -31,4 +31,4 @@ jobs:
     name: Native conformance (Swift)
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@89df71ef1e628d53436eb8c0efbc3418962b444f
+    uses: ./.github/workflows/native-conformance-worker.yml

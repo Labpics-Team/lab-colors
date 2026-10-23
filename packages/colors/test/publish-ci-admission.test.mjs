@@ -44,8 +44,10 @@ function producerNames(files) {
 }
 
 function evidence() {
-  const nativeReferences = [...workflow("native-conformance.yml").matchAll(/^    uses: ([^\s]+)@([0-9a-f]{40})$/gmu)];
-  assert.equal(nativeReferences.length, 1, "native caller must bind one immutable worker");
+  const nativeReferences = [...workflow("native-conformance.yml").matchAll(/^    uses: (\S+)$/gmu)];
+  assert.deepEqual(nativeReferences.map((match) => match[1]),
+    ["./.github/workflows/native-conformance-worker.yml"],
+    "native caller must bind one worker from its own source revision");
   const ciNames = producerNames(["ci-worker.yml", "package-worker.yml"]);
   assert.ok(ciNames.includes("core tests and artifact contracts"), "healthy control lacks the Core aggregate");
   assert.ok(ciNames.includes("test"), "healthy control lacks the full verification aggregate");
@@ -59,7 +61,7 @@ function evidence() {
     path: repository + "/.github/workflows/" + file + "@" + sha, sha,
   })));
   const native = run(202, "native-conformance.yml", [{
-    path: nativeReferences[0][1] + "@" + nativeReferences[0][2], sha: nativeReferences[0][2],
+    path: repository + nativeReferences[0][1].slice(1) + "@" + sha, sha,
   }]);
   const jobs = (id, names) => names.map((name, index) => ({
     id: id * 100 + index, run_id: id, name: "caller / nested caller / " + name,
@@ -148,9 +150,20 @@ test("publication does not fall back to an old successful run after a failed rer
 });
 
 test("publication refuses workflow references from another source revision", async () => {
-  const record = evidence();
-  record.runs["ci.yml"][0].referenced_workflows[1].sha = "0".repeat(40);
-  assertRefused(await admit(record), /escaped the admitted source revision/u);
+  for (const [file, index, reason] of [
+    ["ci.yml", 1, /escaped the admitted source revision/u],
+    ["native-conformance.yml", 0, /primary worker is missing or repeated/u],
+  ]) {
+    for (const coordinate of ["path", "sha", "both"]) {
+      const record = evidence();
+      const reference = record.runs[file][0].referenced_workflows[index];
+      if (coordinate !== "sha") {
+        reference.path = reference.path.replace(/@[0-9a-f]{40}$/u, "@" + "0".repeat(40));
+      }
+      if (coordinate !== "path") reference.sha = "0".repeat(40);
+      assertRefused(await admit(record), reason);
+    }
+  }
 });
 
 test("publication rejects a missing native result after a successful CI run", async () => {
