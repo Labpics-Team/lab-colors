@@ -1640,6 +1640,7 @@ struct SearchFrameV1 {
     branch_cell: Option<usize>,
     candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
+    component_twins: Option<ComponentTwinIndexV1>,
     next_candidate: usize,
     leaf_pending: bool,
 }
@@ -1657,6 +1658,7 @@ impl SearchFrameV1 {
             branch_cell,
             candidates,
             explored_candidates: Vec::new(),
+            component_twins: None,
             next_candidate: 0,
         })
     }
@@ -1869,51 +1871,95 @@ fn candidate_is_in_explored_orbit(
     Ok(seen[candidate])
 }
 
-/// Обходит компоненту после удаления уже различённых вершин. В каждой клетке
-/// должна остаться единственная вершина компоненты: тогда соответствие двух
-/// компонент задаётся самой клеткой без перебора перестановок.
-fn unique_component_by_cell(
-    graph: &CanonicalGraphV1,
-    partition: &PartitionV1,
-    cell_of: &[usize],
-    root: usize,
-    by_cell: &mut [usize],
-    pending: &mut Vec<usize>,
-) -> bool {
-    by_cell.fill(usize::MAX);
-    pending.clear();
-    by_cell[cell_of[root]] = root;
-    pending.push(root);
-    let mut cursor = 0;
-    while cursor < pending.len() {
-        let vertex = pending[cursor];
-        cursor += 1;
-        for arc in &graph.adjacency[vertex] {
-            let cell = cell_of[arc.neighbour];
-            if partition.cells[cell].len() == 1 {
+/// Для каждой вершины хранит клетку, если её компонента после удаления
+/// одноэлементных клеток содержит не более одной вершины каждой клетки.
+/// Индекс принадлежит одному неизменяемому equitable-разбиению search frame.
+struct ComponentTwinIndexV1 {
+    unique_cell_of: Vec<usize>,
+}
+
+impl ComponentTwinIndexV1 {
+    fn new(
+        graph: &CanonicalGraphV1,
+        equitable: &EquitablePartitionV1,
+    ) -> Result<Self, ProgramCompileError> {
+        let partition = &equitable.0;
+        let mut cell_of = partition_cells(partition, graph.colors.len())?;
+        let mut state = Vec::new();
+        state
+            .try_reserve_exact(graph.colors.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        state.resize(graph.colors.len(), 0_u8);
+        let mut seen_cell = Vec::new();
+        seen_cell
+            .try_reserve_exact(partition.cells.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        seen_cell.resize(partition.cells.len(), usize::MAX);
+        let mut pending = Vec::new();
+        pending
+            .try_reserve_exact(graph.colors.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+
+        for root in 0..graph.colors.len() {
+            if state[root] != 0 || partition.cells[cell_of[root]].len() == 1 {
                 continue;
             }
-            match by_cell[cell] {
-                usize::MAX => {
-                    by_cell[cell] = arc.neighbour;
-                    pending.push(arc.neighbour);
+            pending.clear();
+            pending.push(root);
+            state[root] = 1;
+            let mut unique = true;
+            let mut cursor = 0;
+            while cursor < pending.len() {
+                let vertex = pending[cursor];
+                cursor += 1;
+                let cell = cell_of[vertex];
+                if seen_cell[cell] == root {
+                    unique = false;
                 }
-                previous if previous == arc.neighbour => {}
-                _ => return false,
+                seen_cell[cell] = root;
+                for arc in &graph.adjacency[vertex] {
+                    let neighbour = arc.neighbour;
+                    if state[neighbour] == 0 && partition.cells[cell_of[neighbour]].len() != 1 {
+                        state[neighbour] = 1;
+                        pending.push(neighbour);
+                    }
+                }
+            }
+            if unique {
+                for &vertex in &pending {
+                    state[vertex] = 2;
+                }
             }
         }
+        for (cell, state) in cell_of.iter_mut().zip(state) {
+            if state != 2 {
+                *cell = usize::MAX;
+            }
+        }
+        Ok(Self {
+            unique_cell_of: cell_of,
+        })
     }
-    true
+
+    fn interchangeable(&self, explored: &[usize], candidate: usize) -> bool {
+        let cell = self.unique_cell_of[candidate];
+        cell != usize::MAX
+            && explored.iter().any(|&representative| {
+                candidate != representative && self.unique_cell_of[representative] == cell
+            })
+    }
 }
 
 /// В устойчивом разбиении две компоненты с единственной вершиной каждой клетки
 /// совпадают по направлениям, ролям и кратностям рёбер. Соответствие по клеткам
 /// задаёт их точную транспозицию; одноэлементные клетки фиксируют внешнюю границу.
+/// Свойство вычисляется один раз для всего frame, а не заново для каждой ветви.
 fn candidate_is_component_twin(
     graph: &CanonicalGraphV1,
     equitable: &EquitablePartitionV1,
     explored: &[usize],
     candidate: usize,
+    component_twins: &mut Option<ComponentTwinIndexV1>,
 ) -> Result<bool, ProgramCompileError> {
     if explored.is_empty() {
         return Ok(false);
@@ -1925,43 +1971,13 @@ fn candidate_is_component_twin(
     }) {
         return Ok(true);
     }
-    let partition = &equitable.0;
-    let cell_of = partition_cells(partition, graph.colors.len())?;
-    let mut by_cell = Vec::new();
-    by_cell
-        .try_reserve_exact(partition.cells.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    by_cell.resize(partition.cells.len(), usize::MAX);
-    let mut pending = Vec::new();
-    pending
-        .try_reserve_exact(partition.cells.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    if !unique_component_by_cell(
-        graph,
-        partition,
-        &cell_of,
-        candidate,
-        &mut by_cell,
-        &mut pending,
-    ) {
-        return Ok(false);
+    if component_twins.is_none() {
+        *component_twins = Some(ComponentTwinIndexV1::new(graph, equitable)?);
     }
-    for &representative in explored {
-        if candidate != representative
-            && cell_of[candidate] == cell_of[representative]
-            && unique_component_by_cell(
-                graph,
-                partition,
-                &cell_of,
-                representative,
-                &mut by_cell,
-                &mut pending,
-            )
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(component_twins
+        .as_ref()
+        .ok_or(ProgramCompileError::InternalInvariant)?
+        .interchangeable(explored, candidate))
 }
 
 fn canonical_search_impl(
@@ -2031,6 +2047,7 @@ fn canonical_search_impl(
                     &frame.partition,
                     &frame.explored_candidates,
                     candidate,
+                    &mut frame.component_twins,
                 )? || candidate_is_in_explored_orbit(
                     &frame.partition.0,
                     &frame.explored_candidates,
@@ -2876,7 +2893,13 @@ mod tests {
             let graph = graph.finish()?;
             let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
             assert_eq!(
-                candidate_is_component_twin(&graph, &partition, &sources[..1], sources[1])?,
+                candidate_is_component_twin(
+                    &graph,
+                    &partition,
+                    &sources[..1],
+                    sources[1],
+                    &mut None,
+                )?,
                 defect == 0,
                 "changed incidence {defect}",
             );
@@ -2921,14 +2944,81 @@ mod tests {
             &graph,
             &partition,
             &roots[..1],
-            roots[1]
+            roots[1],
+            &mut None,
         )?);
         assert!(!candidate_is_component_twin(
             &graph,
             &partition,
             &roots[1..],
-            roots[0]
+            roots[0],
+            &mut None,
         )?);
+        Ok(())
+    }
+
+    fn component_index_matches_union_oracle(
+        graph: &CanonicalGraphV1,
+        partition: &EquitablePartitionV1,
+    ) -> Result<(), ProgramCompileError> {
+        let cells = partition_cells(&partition.0, graph.colors.len())?;
+        // Независимый oracle объединяет метки концов каждого ребра; обхода
+        // компонент и поколений seen_cell здесь нет.
+        let mut component = (0..graph.colors.len()).collect::<Vec<_>>();
+        for (vertex, arcs) in graph.adjacency.iter().enumerate() {
+            for arc in arcs {
+                if partition.0.cells[cells[vertex]].len() == 1
+                    || partition.0.cells[cells[arc.neighbour]].len() == 1
+                {
+                    continue;
+                }
+                let from = component[vertex];
+                let to = component[arc.neighbour];
+                for label in &mut component {
+                    if *label == from {
+                        *label = to;
+                    }
+                }
+            }
+        }
+        let index = ComponentTwinIndexV1::new(graph, partition)?;
+        for vertex in 0..graph.colors.len() {
+            let unique = partition.0.cells[cells[vertex]].len() != 1
+                && partition.0.cells.iter().all(|cell| {
+                    cell.iter()
+                        .filter(|&&other| component[other] == component[vertex])
+                        .count()
+                        <= 1
+                });
+            assert_eq!(
+                index.unique_cell_of[vertex],
+                if unique { cells[vertex] } else { usize::MAX },
+                "component classification at vertex {vertex}",
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn component_index_matches_connectivity_after_refinement_and_individualization()
+    -> Result<(), ProgramCompileError> {
+        for mask in 0..=0x0fff {
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+            component_index_matches_union_oracle(&graph, &partition)?;
+            if let Some(cell) = partition.0.first_non_singleton() {
+                for &vertex in &partition.0.cells[cell] {
+                    let child =
+                        refine_partition(&graph, individualize(&partition.0, cell, vertex)?)?;
+                    component_index_matches_union_oracle(&graph, &child)?;
+                }
+            }
+        }
+        for count in 1..=5 {
+            let graph = repeated_component_graph(count)?;
+            let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+            component_index_matches_union_oracle(&graph, &partition)?;
+        }
         Ok(())
     }
 

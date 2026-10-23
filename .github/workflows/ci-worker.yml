@@ -1004,5 +1004,8 @@ jobs:
 
   wasm:
     uses: ./.github/workflows/package-worker.yml
+    with:
+      program-benchmark: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'performance') }}
     permissions:
       contents: read
+

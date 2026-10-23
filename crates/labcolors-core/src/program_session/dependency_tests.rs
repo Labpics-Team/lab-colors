@@ -93,13 +93,14 @@ proptest! {
         for update in updates {
             let roots: Vec<_> = update.iter().map(|&root| usize::from(root) % len).collect();
             let expected = closure(&index, &roots);
-            merge_visible_constraint_coverage(
+            let coverage = merge_visible_constraint_coverage(
                 &index,
                 &mut scratch,
                 roots.iter().copied().map(occurrence),
                 &mut constrained,
                 Some(&mut assessed),
-            ).unwrap();
+            );
+            prop_assert!(coverage.is_ok());
             prop_assert_eq!(&scratch.targets, &expected[0]);
             prop_assert_eq!(&scratch.paints, &expected[1]);
             prop_assert_eq!(&scratch.surfaces, &expected[2]);
@@ -115,21 +116,21 @@ proptest! {
 }
 
 #[test]
-fn an_incomplete_dependency_scan_does_not_taint_the_next_cone() {
+fn an_incomplete_dependency_scan_does_not_taint_the_next_cone() -> Result<(), ProgramCompileError> {
     let index = dependencies(&[0, 1, 2, 3, 4, 5]);
     let mut scratch = scratch(6);
-    scratch.scan(&index, [occurrence(5)]).unwrap();
+    scratch.scan(&index, [occurrence(5)])?;
     assert_eq!(
         scratch.scan(&index, [occurrence(2), OccurrenceId::new(u32::MAX)]),
         Err(ProgramCompileError::InternalInvariant),
     );
-    scratch.scan(&index, [occurrence(0)]).unwrap();
+    scratch.scan(&index, [occurrence(0)])?;
     let expected = closure(&index, &[0]);
     assert_eq!(scratch.targets, expected[0]);
     assert_eq!(scratch.paints, expected[1]);
     assert_eq!(scratch.surfaces, expected[2]);
     assert_eq!(scratch.occurrences, expected[3]);
-    scratch.scan(&index, []).unwrap();
+    scratch.scan(&index, [])?;
     assert!(
         scratch
             .targets
@@ -139,4 +140,5 @@ fn an_incomplete_dependency_scan_does_not_taint_the_next_cone() {
             .chain(&scratch.occurrences)
             .all(|&value| !value)
     );
+    Ok(())
 }
