@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +59,23 @@ async function noticeBytes(directory, path) {
   return text;
 }
 
-async function crateNotices(pkg) {
+async function upstreamNotice(pkg, directory, sourceRoot, notices) {
+  const candidates = notices.filter((entry) => entry.repository === pkg.repository && entry.license === pkg.license);
+  if (candidates.length === 0) throw new Error(`Cargo package has no license notices: ${pkg.name}`);
+  // Published crate provenance identifies the source revision. Merely sharing
+  // a project name or SPDX expression does not admit a substituted notice.
+  const provenance = JSON.parse(await noticeBytes(directory, ".cargo_vcs_info.json"));
+  const matches = candidates.filter((entry) => entry.revision === provenance.git?.sha1);
+  if (matches.length !== 1) throw new Error(`upstream license provenance is missing or ambiguous: ${pkg.name}`);
+  const entry = matches[0];
+  const text = await noticeBytes(sourceRoot, entry.path);
+  if (createHash("sha256").update(text, "utf8").digest("hex") !== entry.sha256) {
+    throw new Error(`upstream license digest mismatch: ${pkg.name}`);
+  }
+  return [{ path: `${entry.repository}@${entry.revision}/${entry.upstreamPath}`, text }];
+}
+
+async function crateNotices(pkg, sourceRoot, upstreamNotices) {
   if (typeof pkg.manifest_path !== "string" || !isAbsolute(pkg.manifest_path)) {
     throw new Error(`Cargo manifest path is missing: ${pkg.name}`);
   }
@@ -80,13 +97,21 @@ async function crateNotices(pkg) {
       }
     }
   }
-  if (paths.size === 0) throw new Error(`Cargo package has no license notices: ${pkg.name}`);
+  if (paths.size === 0) return upstreamNotice(pkg, directory, sourceRoot, upstreamNotices);
   return Promise.all([...paths].sort().map(async (path) => ({
     path: path.split(sep).join("/"), text: await noticeBytes(directory, path),
   })));
 }
 
-export async function distributionNotices(metadata, sbom, sourceRoot = REPO_ROOT) {
+export async function distributionNotices(metadata, sbom, sourceRoot = REPO_ROOT, upstreamNotices = []) {
+  if (!Array.isArray(upstreamNotices) || upstreamNotices.some((entry) =>
+    !entry || typeof entry.repository !== "string" || !entry.repository.startsWith("https://") ||
+    !/^[0-9a-f]{40}$/u.test(entry.revision ?? "") || typeof entry.license !== "string" || !entry.license ||
+    !/^[0-9a-f]{64}$/u.test(entry.sha256 ?? "") ||
+    [entry.path, entry.upstreamPath].some((path) => typeof path !== "string" || !path || isAbsolute(path) ||
+      path.split(/[\\/]/u).some((part) => part === ".." || part === ".")))) {
+    throw new Error("invalid upstream license provenance");
+  }
   const inventory = licenseInventory(sbom);
   const byRef = new Map(metadata.packages.map((pkg) => [
     `cargo:${pkg.name}@${pkg.version}#${pkg.source ?? "workspace"}`, pkg,
@@ -122,7 +147,7 @@ export async function distributionNotices(metadata, sbom, sourceRoot = REPO_ROOT
         continue;
       }
     }
-    for (const { path, text } of await crateNotices(pkg)) {
+    for (const { path, text } of await crateNotices(pkg, root, upstreamNotices)) {
       sections.push(`### ${path}\n\n${text.trimEnd()}\n`);
     }
   }

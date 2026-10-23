@@ -103,7 +103,7 @@ jobs:
       - name: install declaration parser and test compiled API verification
         run: |
           npm ci --prefix packages/colors --ignore-scripts
-          node --test scripts/test_swift_surface.mjs
+          node --test scripts/test_swift_surface.mjs scripts/test_distribution_notices.mjs
       - name: assemble the self-contained Swift package
         run: python3 bindings/swift/ci/build-apple.py "$RUNNER_TEMP/swift-distribution"
       - name: exercise the exact archive as an external Apple consumer

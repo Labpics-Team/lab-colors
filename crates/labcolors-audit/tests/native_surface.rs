@@ -20,10 +20,7 @@ fn attribute(attributes: &[Attribute], name: &str) -> bool {
 fn test_only(attributes: &[Attribute]) -> bool {
     attributes.iter().any(|attribute| {
         attribute.path().is_ident("cfg")
-            && quote::quote!(#attribute)
-                .to_string()
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .any(|word| word == "test")
+            && matches!(attribute.parse_args::<syn::Meta>(), Ok(syn::Meta::Path(path)) if path.is_ident("test"))
     })
 }
 
@@ -45,11 +42,15 @@ fn exported_items(items: &[Item], binding: &str, output: &mut Surface) {
         match item {
             Item::Fn(function)
                 if attribute(&function.attrs, binding)
+                    && !test_only(&function.attrs)
                     && matches!(function.vis, Visibility::Public(_)) =>
             {
                 insert(output, "fn", &function.sig);
             }
-            Item::Impl(implementation) if attribute(&implementation.attrs, binding) => {
+            Item::Impl(implementation)
+                if attribute(&implementation.attrs, binding)
+                    && !test_only(&implementation.attrs) =>
+            {
                 let Type::Path(path) = implementation.self_ty.as_ref() else {
                     panic!("exported receiver must have a named type");
                 };
@@ -62,7 +63,8 @@ fn exported_items(items: &[Item], binding: &str, output: &mut Surface) {
                     .to_string();
                 for item in &implementation.items {
                     if let ImplItem::Fn(method) = item {
-                        if matches!(method.vis, Visibility::Public(_)) {
+                        if matches!(method.vis, Visibility::Public(_)) && !test_only(&method.attrs)
+                        {
                             insert(output, &owner, &method.sig);
                         }
                     }
@@ -163,6 +165,8 @@ fn discovery_detects_added_operations_and_ignores_test_helpers() {
         #[wasm_bindgen] pub fn existing(value: u32) {}
         #[wasm_bindgen] impl Runtime { pub fn advance(&self, revision: u64) {} fn private(&self) {} }
         #[cfg(test)] mod tests { #[wasm_bindgen] pub fn fixture() {} }
+        #[cfg(test)] #[wasm_bindgen] pub fn isolated_fixture() {}
+        #[cfg(not(test))] #[wasm_bindgen] pub fn production() {}
     "#).unwrap();
     let mut found = Surface::new();
     exported_items(&source.items, "wasm_bindgen", &mut found);
@@ -170,7 +174,8 @@ fn discovery_detects_added_operations_and_ignores_test_helpers() {
         found,
         Surface::from([
             ("fn::existing".to_string(), 1),
-            ("Runtime::advance".to_string(), 1)
+            ("Runtime::advance".to_string(), 1),
+            ("fn::production".to_string(), 0)
         ])
     );
     let original = found.clone();

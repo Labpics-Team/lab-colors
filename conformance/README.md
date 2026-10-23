@@ -168,10 +168,15 @@ reference runner всего пака в Core на Linux x86_64 и отдельн
 WASM-тесты проверяют публичную JS-границу, но каждый вектор пака через неё не
 проходит, поэтому полная conformance JS API не заявляется.
 `native-conformance.yml` воспроизводит все семейства через сгенерированный
-Swift/UniFFI binding в закреплённом Linux x86_64 container. macOS/arm64 job
-запускается только вручную и не является release gate. `publish.yml` принимает
-тег только после успешных canonical exact-SHA запусков CI и Linux Swift/UniFFI
-gate.
+Swift/UniFFI API у независимого Linux-потребителя и в установленном Apple-пакете
+на macOS и iOS Simulator. Отдельная сборка и линковка для iOS-устройства
+не заменяет запуск на физическом устройстве. `publish.yml` принимает тег
+только после успешных exact-SHA проверок CI и обеих нативных поставок.
+
+[Истории Program](program-runtime-v1.json) проверяют публичный сценарий
+обновления в JS/WASM, Rust FFI и Swift. Они дополняют четыре численных
+семейства, но не заменяют их. Полнота экспортов и фактических символов Swift
+проверяется отдельно от численных результатов.
 
 Workflow-прогон сам по себе не добавляет запись в `runtimeAttestations`;
 capability manifest заявляет только evidence, фактически записанное в его

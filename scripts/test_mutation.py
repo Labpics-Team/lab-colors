@@ -2320,7 +2320,7 @@ const mutations = {
             text=True, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("26 receipt scenarios passed", result.stdout)
+        self.assertIn("29 receipt scenarios passed", result.stdout)
 
     def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
         workflow, _ = load_publish_worker()

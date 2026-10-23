@@ -152,7 +152,7 @@ CONTRACTS.update({
 MUTANTS += (
     ("observation-foreign-backing", "observation.rs", "observation::proofs::equality_requires_the_same_observation_allocation",
      "observation equality must bind stream revision and allocation identity",
-     "            && Rc::ptr_eq(&self.backing, &other.backing)", "            && true"),
+     "            && Shared::ptr_eq(&self.backing, &other.backing)", "            && true"),
     ("ledger-entry-boundary", "certificate.rs", "certificate::proofs::ledger_budget_cannot_overflow_or_exceed_capacity",
      "ledger budget must reject all count size and overflow violations",
      "    if records >= MAX_ADMISSION_ENTRIES_V1 {", "    if records > MAX_ADMISSION_ENTRIES_V1 {"),

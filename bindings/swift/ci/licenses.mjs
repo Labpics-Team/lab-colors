@@ -24,4 +24,7 @@ const components = [...identities].sort().map((id) => {
     licenses: [{ expression: pkg.license }] };
 });
 await writeFile(resolve(output, "dependency-licenses.json"), JSON.stringify(licenseInventory({ components }), null, 2) + "\n");
-await writeFile(resolve(output, "THIRD-PARTY-NOTICES.md"), await distributionNotices(metadata, { components }));
+const upstream = JSON.parse(await readFile(new URL("../../../crates/labcolors-ffi/third-party-notices.json", import.meta.url), "utf8"));
+if (upstream.schemaVersion !== 1 || !Array.isArray(upstream.notices)) throw new Error("unknown upstream notice inventory");
+await writeFile(resolve(output, "THIRD-PARTY-NOTICES.md"),
+  await distributionNotices(metadata, { components }, undefined, upstream.notices));
