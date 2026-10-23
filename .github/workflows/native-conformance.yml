@@ -4,7 +4,7 @@ name: Native conformance (Swift)
 # из того же коммита, что и caller, независимо от checkout и squash-истории.
 # Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
 # на одноразовых эфемерных GitHub-hosted VM без секретов и общего состояния.
-# Своих inputs у worker нет by design.
+# Ручное сравнение authoring не меняет обязательные проверки пакета.
 
 on:
   push:
@@ -12,6 +12,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      authoring_baseline:
+        description: Exact commit for an optional paired Swift authoring benchmark
+        required: false
+        type: string
+        default: ''
 
 # Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
 # run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
@@ -32,3 +38,5 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/native-conformance-worker.yml
+    with:
+      authoring_baseline: ${{ inputs.authoring_baseline || '' }}

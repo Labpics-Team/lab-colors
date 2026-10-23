@@ -55,3 +55,22 @@ test("missing compiler output or discovery roots cannot produce success", () => 
   assert.throws(() => verifySwiftSurface(inventory, declarations, { ...graph(), module: { name: "Other" } }), /compiled LabColors/u);
   assert.throws(() => authoringSurface({}), /roots/u);
 });
+
+
+test("SymbolKit may omit empty parameters, but not an entire signature or required arguments", () => {
+  const valid = graph();
+  const finish = valid.symbols.find((symbol) => symbol.pathComponents.at(-1) === "finish()");
+  delete finish.functionSignature.parameters;
+  assert.equal(verifySwiftSurface(inventory, declarations, valid), 6);
+  delete finish.functionSignature;
+  assert.throws(() => verifySwiftSurface(inventory, declarations, valid), /no signature/u);
+  const malformed = graph();
+  delete malformed.symbols.find((symbol) => symbol.pathComponents[0] === "ProgramRuntime").functionSignature.parameters;
+  assert.throws(() => verifySwiftSurface(inventory, declarations, malformed), /parameter list/u);
+});
+
+test("a static replacement cannot satisfy an instance operation", () => {
+  const compiled = graph();
+  compiled.symbols.find((symbol) => symbol.pathComponents[0] === "ProgramRuntime").kind.identifier = "swift.type.method";
+  assert.throws(() => verifySwiftSurface(inventory, declarations, compiled), /updateObserved/u);
+});

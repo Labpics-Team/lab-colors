@@ -70,4 +70,46 @@ final class ProgramWireBuilderTests: XCTestCase {
         XCTAssertThrowsError(try bounded.surfaceInputPort(4096))
         XCTAssertEqual(try bounded.finish(), full)
     }
+
+    func testLateFailureRollsBackTheWholeEntryWithoutLosingEarlierEntries() throws {
+        let builder = try ProgramWireBuilderV2().source(11, rgb: [20, 20, 20])
+        let before = try builder.finish()
+        XCTAssertThrowsError(try builder.finiteTarget(21, candidates: [
+            ProgramCandidate(id: 1, rgb: [1, 2, 3], opacity: 1),
+            ProgramCandidate(id: 2, rgb: [4, 5, 6], opacity: .nan),
+        ]))
+        let good = ProgramSelectionState(id: 1, choices: [ProgramSelectionChoice(target: 21, candidate: 1)])
+        XCTAssertThrowsError(try builder.selectionRelease(1, rankGroups: [[good], []]))
+        XCTAssertEqual(try builder.finish(), before)
+        try builder.selectionRelease(2, rankGroups: [[good]])
+        let accepted = try builder.finish()
+        XCTAssertThrowsError(try builder.selectionRelease(3, rankGroups: [[good]]))
+        XCTAssertEqual(try builder.finish(), accepted)
+        XCTAssertEqual(before, try ProgramWireBuilderV2().source(11, rgb: [20, 20, 20]).finish())
+    }
+
+    func testGrowthPreservesHeldSnapshotsAndIndependentSectionCounts() throws {
+        let builder = ProgramWireBuilderV1()
+        var held: [(Int, Data)] = []
+        for index in 0..<4096 {
+            if index.isMultiple(of: 257) { held.append((index, try builder.finish())) }
+            try builder.source(UInt32(index), rgb: [1, 2, 3]).output(UInt32(index), paint: UInt32(index))
+        }
+        for (count, bytes) in held {
+            let reference = ProgramWireBuilderV1()
+            for index in 0..<count {
+                try reference.source(UInt32(index), rgb: [1, 2, 3]).output(UInt32(index), paint: UInt32(index))
+            }
+            XCTAssertEqual(bytes, try reference.finish())
+            let encodedLength = bytes.dropFirst(6).prefix(4).enumerated().reduce(UInt32(0)) {
+                $0 | (UInt32($1.element) << (8 * $1.offset))
+            }
+            XCTAssertEqual(Int(encodedLength), bytes.count)
+            XCTAssertEqual(bytes.count, 66 + count * (7 + 8))
+        }
+        let full = try builder.finish()
+        XCTAssertThrowsError(try builder.source(4096, rgb: [1, 2, 3]))
+        XCTAssertEqual(try builder.finish(), full)
+    }
+
 }

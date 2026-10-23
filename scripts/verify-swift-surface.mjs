@@ -38,9 +38,18 @@ function compiledSurface(graph) {
     const path = symbol.pathComponents;
     if (!Array.isArray(path) || path.length === 0) fail("public symbol has no qualified name");
     if (symbol.kind?.identifier === "swift.class") classes.set(symbol.identifier.precise, path.at(-1));
-    if (!["swift.func", "swift.method", "swift.type.method"].includes(symbol.kind?.identifier)) continue;
-    const parameters = symbol.functionSignature?.parameters;
-    if (!Array.isArray(parameters)) fail("compiled operation has no signature: " + path.join("."));
+    if (!["swift.func", "swift.method"].includes(symbol.kind?.identifier)) continue;
+    const signature = symbol.functionSignature;
+    if (!signature || typeof signature !== "object" || Array.isArray(signature)) {
+      fail("compiled operation has no signature: " + path.join("."));
+    }
+    // SymbolKit omits an empty parameter list. Missing non-empty signatures
+    // still fail: the compiler's qualified name must describe the same arity.
+    const parameters = signature.parameters === undefined ? [] : signature.parameters;
+    if (!Array.isArray(parameters) ||
+        (signature.parameters === undefined && !path.at(-1).endsWith("()"))) {
+      fail("compiled operation has an invalid parameter list: " + path.join("."));
+    }
     const owner = path.length === 1 ? "fn" : path.at(-2);
     const method = path.at(-1).split("(", 1)[0];
     const key = owner + "::" + method;
