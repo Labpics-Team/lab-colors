@@ -43,14 +43,8 @@ FULL_DOMAIN_MEMORY_MAX_BYTES_V1 = 4 * 1024 * 1024 * 1024
 EVIDENCE_OUT_ENV_V1 = "LABCOLORS_FULL_DOMAIN_EVIDENCE_OUT"
 
 
-def seal_full_domain_receipt_v1() -> receipt.SourceBoundEvaluatorReceiptV1:
-    """One controller-observed BUILD to RUN over the exact full manifest.
-
-    Extracted so the dual-proof gate mints the same receipt this lane does
-    instead of restating the request: two copies of the build coordinates
-    would drift, and the drift would surface as an unrelated admission
-    failure hours into a native run.
-    """
+def full_domain_request_v1():
+    """Единственный набор исходников и координат для preflight и BUILD."""
 
     source_lock = provenance.arb_source_lock_v1()
     archive_names = (
@@ -72,6 +66,13 @@ def seal_full_domain_receipt_v1() -> receipt.SourceBoundEvaluatorReceiptV1:
             memory_max_bytes=FULL_DOMAIN_MEMORY_MAX_BYTES_V1,
         ),
     )
+    return request
+
+
+def seal_full_domain_receipt_v1(request=None) -> receipt.SourceBoundEvaluatorReceiptV1:
+    """Строит и исполняет ровно запрос, проверенный до запуска движка."""
+    if request is None:
+        request = full_domain_request_v1()
     return receipt.SourceBoundArbControllerV1(
         Path(os.environ["LABCOLORS_ARB_PIPELINE_DOCKER"]),
         Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),

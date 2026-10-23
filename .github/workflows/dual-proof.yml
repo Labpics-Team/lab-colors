@@ -223,53 +223,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Cover arithmetic costs seconds; discovering a missing lane after
-          # both native runs costs the whole job.
           export PYTHONPATH="$GITHUB_WORKSPACE/proof/region/v1"
-          python3 - <<'PY'
-          import json
-          import sys
-          from collections import defaultdict
-          from pathlib import Path
-
-          import region_proof_protocol as protocol
-
-          domain_points = protocol.OUTPUT_CARDINALITY_V1
-          windows = defaultdict(list)
-          for lane in sorted(Path("lanes-in").iterdir()):
-              manifest_path = lane / "lane-manifest.json"
-              if not manifest_path.is_file():
-                  print(f"not a lane directory: {lane}", file=sys.stderr)
-                  raise SystemExit(64)
-              try:
-                  manifest = json.loads(manifest_path.read_text("ascii"))
-                  identity = manifest["comparator_source_identity"]
-                  start, points = manifest["window_start"], manifest["window_points"]
-                  if (type(identity) is not str or len(identity) != 64
-                          or any(char not in "0123456789abcdef" for char in identity)
-                          or type(start) is not int or type(points) is not int
-                          or not 0 <= start < domain_points
-                          or not 0 < points <= domain_points - start):
-                      raise ValueError("invalid lane coordinates")
-              except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
-                  print(f"lane manifest rejected: {lane} ({error})", file=sys.stderr)
-                  raise SystemExit(64) from None
-              windows[identity].append((start, points))
-          if len(windows) != 2:
-              print(f"expected two engines, found {len(windows)}", file=sys.stderr)
-              raise SystemExit(64)
-          for identity, cover in sorted(windows.items()):
-              cursor = 0
-              for start, points in sorted(cover):
-                  if start != cursor:
-                      print(f"{identity[:16]}: gap or overlap at {cursor}", file=sys.stderr)
-                      raise SystemExit(64)
-                  cursor += points
-              if cursor != domain_points:
-                  print(f"{identity[:16]}: cover ends at {cursor}", file=sys.stderr)
-                  raise SystemExit(64)
-              print(f"{identity[:16]}: {len(cover)} lanes cover the exact domain")
-          PY
+          python3 proof/region/v1/tests/dual_proof_gate.py --preflight
 
       - name: delegate one disposable cgroup subtree
         shell: bash

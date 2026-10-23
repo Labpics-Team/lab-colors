@@ -16,11 +16,14 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
 from functools import cache
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 PROOF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROOF))
@@ -28,6 +31,7 @@ sys.path.insert(0, str(PROOF))
 import corpus  # noqa: E402
 import corpus_assembly  # noqa: E402
 import corpus_lane  # noqa: E402
+import dual_proof_gate as native_gate  # noqa: E402
 import region_proof_protocol as protocol  # noqa: E402
 
 FIXTURE_JOB_V1 = PROOF / "fixtures" / "proof-job-v1.bin"
@@ -41,13 +45,13 @@ def _base_job() -> protocol.ProofJobV1:
 
 
 @cache
-def _comparator() -> protocol.ContentResolvedComparatorManifestV2:
+def _comparator(kind=ARB_KIND) -> protocol.ContentResolvedComparatorManifestV2:
     contents = tuple(
         f"corpus-assembly-manifest-{index}".encode("ascii") for index in range(10)
     )
     return protocol.ContentResolvedComparatorManifestV2.admit(
         protocol.ComparatorManifestV2(
-            ARB_KIND,
+            kind,
             *(hashlib.sha256(content).digest() for content in contents),
         ),
         {
@@ -417,6 +421,156 @@ class AssemblyCliTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(status, 64)
+
+
+class LanePreflightTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.job = _job_with_pregrant(tuple(range(64)), 0)
+        self.comparators = tuple(_comparator(kind) for kind in protocol.ComparatorKindV1)
+        self.sources = {
+            comparator.source_identity: comparator.manifest.kind
+            for comparator in self.comparators
+        }
+
+    def _write(self, root: Path) -> list[Path]:
+        return [
+            _write_lane_dir(root, str(index), self.job, comparator, 0, 64, 32)
+            for index, comparator in enumerate(self.comparators)
+        ]
+
+    def _preflight(self, root: Path):
+        return corpus_assembly.preflight_lanes_v1(root, self.job, self.sources)
+
+    def test_complete_expected_sources_keep_the_real_assembly_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lanes = self._write(root)
+            self.assertEqual(self._preflight(root), 2)
+            for path, comparator in zip(lanes, self.comparators, strict=True):
+                lane = corpus_assembly.load_lane_v1(path, self.job, comparator)
+                result = corpus_assembly.assemble_lanes_v1(self.job, comparator, (lane,))
+                self.assertIs(type(result), protocol.DecisionTranscriptV1)
+                self.assertEqual(result.point_count, 64)
+
+    def test_preflight_rejects_corruption_in_every_lane_component(self) -> None:
+        changes = (
+            ("schema", "foreign"),
+            ("counters", None),
+            ("witness_count", False),
+            ("job_identity", "00" * 32),
+            ("domain_identity", "00" * 32),
+            ("policy_identity", "00" * 32),
+            ("comparator_source_identity", "00" * 32),
+            ("window_accounting_digest", "00" * 32),
+            ("records_sha256", "00" * 32),
+            ("record_count", 63),
+        )
+        for field, value in changes:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lane = self._write(root)[0]
+                path = lane / "lane-manifest.json"
+                manifest = json.loads(path.read_text("ascii"))
+                manifest[field] = value
+                path.write_text(json.dumps(manifest), encoding="ascii")
+                self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+        for filename in ("lane-records.bin", "shard-00000.decision.bin", "shard-00000.witness.bin"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lane = self._write(root)[0]
+                path = lane / filename
+                path.write_bytes(path.read_bytes() + b"corruption")
+                self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+
+    def test_preflight_requires_the_exact_roster_and_complete_nonoverlapping_covers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write(root)
+            wrong_sources = dict(self.sources)
+            wrong_sources.pop(self.comparators[0].source_identity)
+            wrong_sources[b"x" * 32] = self.comparators[0].manifest.kind
+            self.assertIs(
+                type(corpus_assembly.preflight_lanes_v1(root, self.job, wrong_sources)),
+                corpus.ShardCorpusRejectedV1,
+            )
+            _write_lane_dir(root, "duplicate", self.job, self.comparators[0], 0, 64, 32)
+            self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_lane_dir(root, "missing-engine", self.job, self.comparators[0], 0, 64, 32)
+            self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, comparator in enumerate(self.comparators):
+                _write_lane_dir(root, str(index), self.job, comparator, 32, 32, 32)
+            self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+
+    def test_preflight_refuses_ambiguous_fields_and_foreign_fragment_paths(self) -> None:
+        for mutation in ("duplicate-field", "foreign-path", "symlink"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lane = self._write(root)[0]
+                path = lane / "lane-manifest.json"
+                if mutation == "duplicate-field":
+                    text = path.read_text("ascii")
+                    path.write_text('{"counters":null,' + text[1:], encoding="ascii")
+                elif mutation == "foreign-path":
+                    manifest = json.loads(path.read_text("ascii"))
+                    manifest["shards"][0]["decision_file"] = "../foreign.bin"
+                    path.write_text(json.dumps(manifest), encoding="ascii")
+                else:
+                    records = lane / "lane-records.bin"
+                    target = root / "foreign.bin"
+                    records.replace(target)
+                    records.symlink_to(target)
+                self.assertIs(type(self._preflight(root)), corpus.ShardCorpusRejectedV1)
+
+    def test_native_gate_refuses_before_build_and_passes_the_checked_request(self) -> None:
+        class NativeReached(Exception):
+            pass
+
+        for corrupted in (True, False):
+            with self.subTest(corrupted=corrupted), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                lane = self._write(root)[0]
+                if corrupted:
+                    path = lane / "lane-manifest.json"
+                    manifest = json.loads(path.read_text("ascii"))
+                    del manifest["counters"]
+                    path.write_text(json.dumps(manifest), encoding="ascii")
+                requests = (SimpleNamespace(job=self.job), SimpleNamespace(job=self.job))
+                modules = [
+                    SimpleNamespace(full_domain_request_v1=lambda request=request: request)
+                    for request in requests
+                ]
+                environment = {name: "present" for name in native_gate.REQUIRED_ENVIRONMENT_V1}
+                environment[native_gate.LANES_ENV_V1] = str(root)
+                with (
+                    mock.patch.dict(os.environ, environment),
+                    mock.patch.object(native_gate, "_load_lane_module_v1", side_effect=modules),
+                    mock.patch.object(native_gate, "_assert_engine_modules_are_unmixed_v1"),
+                    mock.patch.object(
+                        native_gate.arb_pipeline, "expected_comparator_source_identity_v1",
+                        return_value=self.comparators[0].source_identity,
+                    ),
+                    mock.patch.object(
+                        native_gate.mpfi_receipt, "expected_comparator_source_identity_v1",
+                        return_value=self.comparators[1].source_identity,
+                    ),
+                    mock.patch.object(
+                        native_gate, "_sealed_engine_receipt_v1",
+                        side_effect=NativeReached,
+                    ) as native,
+                ):
+                    gate = native_gate.NativeFullDomainDualProofIntegrationTests()
+                    if corrupted:
+                        with self.assertRaisesRegex(ValueError, "preflight rejected"):
+                            gate.test_one_process_seals_the_full_domain_dual_proof()
+                        native.assert_not_called()
+                    else:
+                        with self.assertRaises(NativeReached):
+                            gate.test_one_process_seals_the_full_domain_dual_proof()
+                        self.assertIs(native.call_args.args[1], requests[0])
 
 
 if __name__ == "__main__":
