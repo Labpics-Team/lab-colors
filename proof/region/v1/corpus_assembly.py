@@ -101,19 +101,55 @@ def load_lane_v1(
 ):
     """Admit one lane directory against the job it claims to serve."""
 
-    if type(job) is not protocol.ProofJobV1:
-        return _reject(
-            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
-            "lane admission requires a canonical proof job",
-        )
     if type(comparator) is not protocol.ContentResolvedComparatorManifestV2:
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
             "lane admission requires a canonical comparator manifest",
         )
+    return load_lane_source_v1(
+        directory, job, comparator.manifest.kind, comparator.source_identity
+    )
+
+
+def _unique_manifest_fields_v1(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate lane manifest field")
+        result[key] = value
+    return result
+
+
+def load_lane_source_v1(
+    directory: Path,
+    job: protocol.ProofJobV1,
+    kind: protocol.ComparatorKindV1,
+    source_identity: bytes,
+):
+    """Разбирает lane по ожидаемым исходникам, не создавая native receipt."""
+
+    if type(job) is not protocol.ProofJobV1:
+        return _reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane admission requires a canonical proof job",
+        )
+    if (
+        type(kind) is not protocol.ComparatorKindV1
+        or type(source_identity) is not bytes
+        or len(source_identity) != 32
+    ):
+        return _reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane admission requires canonical source coordinates",
+        )
     manifest_path = directory / "lane-manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text("ascii"))
+        if directory.is_symlink() or manifest_path.is_symlink():
+            raise ValueError("lane input must not be a symlink")
+        manifest = json.loads(
+            manifest_path.read_text("ascii"),
+            object_pairs_hook=_unique_manifest_fields_v1,
+        )
     except (OSError, ValueError):
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
@@ -125,8 +161,11 @@ def load_lane_v1(
             "lane manifest must be a JSON object",
         )
     manifest_counters = manifest.get("counters")
-    if type(manifest_counters) is not list or any(
-        type(value) is not int for value in manifest_counters
+    if (
+        type(manifest_counters) is not list
+        or len(manifest_counters) != 4
+        or any(type(value) is not int for value in manifest_counters)
+        or type(manifest.get("witness_count")) is not int
     ):
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
@@ -140,7 +179,7 @@ def load_lane_v1(
         "job_identity": job.identity,
         "domain_identity": job.domain.identity,
         "policy_identity": job.policy.identity,
-        "comparator_source_identity": comparator.source_identity,
+        "comparator_source_identity": source_identity,
     }
     for key, expected in identities.items():
         value = _parse_hex_identity(manifest.get(key))
@@ -159,6 +198,8 @@ def load_lane_v1(
         or window_start % corpus.CORPUS_SHARD_ALIGNMENT_V1 != 0
         or window_points % corpus.CORPUS_SHARD_ALIGNMENT_V1 != 0
         or window_start + window_points > protocol.OUTPUT_CARDINALITY_V1
+        or type(manifest.get("record_count")) is not int
+        or type(manifest.get("record_bytes")) is not int
         or manifest.get("record_count") != window_points
         or manifest.get("record_bytes") != RECORD_BYTES_V1
     ):
@@ -168,7 +209,13 @@ def load_lane_v1(
         )
 
     try:
-        records = (directory / "lane-records.bin").read_bytes()
+        records_path = directory / "lane-records.bin"
+        if (
+            records_path.is_symlink()
+            or records_path.stat().st_size != RECORD_BYTES_V1 * window_points
+        ):
+            raise OSError("lane record length or origin is invalid")
+        records = records_path.read_bytes()
     except OSError:
         return _reject(
             corpus.ShardCorpusReasonV1.FOREIGN_INPUT, "lane records are missing"
@@ -192,12 +239,12 @@ def load_lane_v1(
             )
 
     window_job = corpus.lane_window_job_v1(
-        job, window_start, window_points, comparator.manifest.kind
+        job, window_start, window_points, kind
     )
     if type(window_job) is not protocol.ProofJobV1:
         return window_job
     window_accounting = semantic_replay.accounting_prefix_v1(
-        comparator.manifest.kind, window_job, comparator.source_identity
+        kind, window_job, source_identity
     )
     window_accounting.update(records)
     if window_accounting.digest().hex() != manifest.get(
@@ -217,14 +264,26 @@ def load_lane_v1(
     counters = [0, 0, 0, 0]
     witness_count = 0
     cursor = window_start
-    for entry in shard_entries:
+    for index, entry in enumerate(shard_entries):
         if type(entry) is not dict:
             return _reject(
                 corpus.ShardCorpusReasonV1.FOREIGN_INPUT, "foreign shard entry"
             )
+        if (
+            entry.get("decision_file") != f"shard-{index:05d}.decision.bin"
+            or entry.get("witness_file") != f"shard-{index:05d}.witness.bin"
+        ):
+            return _reject(
+                corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+                "shard filenames must match their canonical index",
+            )
         try:
-            decision = (directory / entry["decision_file"]).read_bytes()
-            witness = (directory / entry["witness_file"]).read_bytes()
+            decision_path = directory / entry["decision_file"]
+            witness_path = directory / entry["witness_file"]
+            if decision_path.is_symlink() or witness_path.is_symlink():
+                raise OSError("shard fragments must not be symlinks")
+            decision = decision_path.read_bytes()
+            witness = witness_path.read_bytes()
         except (KeyError, OSError, TypeError):
             return _reject(
                 corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
@@ -294,6 +353,117 @@ def load_lane_v1(
         return _reject(corpus.ShardCorpusReasonV1.FOREIGN_INPUT, str(error))
 
 
+def _cover_rejection_v1(job: protocol.ProofJobV1, windows):
+    """Один закон покрытия для раннего разбора и окончательной сборки."""
+
+    if not windows:
+        return _reject(
+            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "no lanes were admitted for the domain",
+        )
+    ranges = iter(job.domain.ranges)
+    current_range = next(ranges, None)
+    if current_range is None:
+        return _reject(
+            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "the job carries an empty domain",
+        )
+    cursor = current_range[0]
+    for start, points in windows:
+        if start != cursor:
+            if start < cursor:
+                return _reject(
+                    corpus.ShardCorpusReasonV1.SHARD_ORDER,
+                    "lanes overlap or arrive out of ordinal order",
+                )
+            return _reject(
+                corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+                "the lane cover has a gap before the next lane",
+            )
+        if current_range is None:
+            return _reject(
+                corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+                "a lane starts beyond the covered domain end",
+            )
+        if start + points > current_range[1]:
+            return _reject(
+                corpus.ShardCorpusReasonV1.SHARD_ORDER,
+                "a lane overruns its domain range",
+            )
+        cursor += points
+        if cursor == current_range[1]:
+            current_range = next(ranges, None)
+            if current_range is not None:
+                cursor = current_range[0]
+    if current_range is not None:
+        return _reject(
+            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
+            "the lane cover stops before the domain end",
+        )
+    return None
+
+
+def preflight_lanes_v1(
+    root: Path,
+    job: protocol.ProofJobV1,
+    sources: dict[bytes, protocol.ComparatorKindV1],
+):
+    """Проверяет все байты до BUILD; возвращает только количество lanes.
+
+    Ожидаемые исходники задаёт будущий native request. По одному lane
+    читается и освобождается за раз: полный куб не удерживается в памяти.
+    """
+    if (
+        type(job) is not protocol.ProofJobV1
+        or type(sources) is not dict
+        or not sources
+        or any(
+            type(source) is not bytes or len(source) != 32
+            or type(kind) is not protocol.ComparatorKindV1
+            for source, kind in sources.items()
+        )
+        or len(set(sources.values())) != len(sources)
+        or not root.is_dir()
+        or root.is_symlink()
+    ):
+        return _reject(
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "preflight requires a canonical job, source roster and directory",
+        )
+    covers = {source: [] for source in sources}
+    for directory in sorted(root.iterdir()):
+        try:
+            if not directory.is_dir() or directory.is_symlink():
+                raise ValueError("each input must be a lane directory")
+            manifest_path = directory / "lane-manifest.json"
+            if manifest_path.is_symlink():
+                raise ValueError("lane manifest must not be a symlink")
+            manifest = json.loads(
+                manifest_path.read_text("ascii"),
+                object_pairs_hook=_unique_manifest_fields_v1,
+            )
+            if type(manifest) is not dict:
+                raise ValueError("lane manifest must be an object")
+            source = _parse_hex_identity(manifest.get("comparator_source_identity"))
+            if source not in sources:
+                raise ValueError("lane belongs to an unexpected source closure")
+        except (OSError, ValueError):
+            return _reject(
+                corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+                f"lane source rejected: {directory.name}",
+            )
+        lane = load_lane_source_v1(directory, job, sources[source], source)
+        if type(lane) is not AdmittedLaneV1:
+            return lane
+        covers[source].append((lane.window_start, lane.window_points))
+        del lane
+    for windows in covers.values():
+        rejected = _cover_rejection_v1(job, sorted(windows))
+        if rejected is not None:
+            return rejected
+    return sum(len(windows) for windows in covers.values())
+
+
 def assemble_lanes_v1(
     job: protocol.ProofJobV1,
     comparator: protocol.ContentResolvedComparatorManifestV2,
@@ -312,61 +482,23 @@ def assemble_lanes_v1(
             "lane assembly requires a canonical comparator manifest",
         )
     lanes = tuple(lanes)
-    if not lanes:
+    if any(type(lane) is not AdmittedLaneV1 for lane in lanes):
         return _reject(
-            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
-            "no lanes were admitted for the domain",
+            corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
+            "lane assembly requires canonical admitted lanes",
         )
-    ranges = iter(job.domain.ranges)
-    current_range = next(ranges, None)
-    if current_range is None:
-        return _reject(
-            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
-            "the job carries an empty domain",
-        )
-    cursor = current_range[0]
+    rejected = _cover_rejection_v1(
+        job, tuple((lane.window_start, lane.window_points) for lane in lanes)
+    )
+    if rejected is not None:
+        return rejected
     shards: list[corpus.ShardArtifactV1] = []
     accounting = semantic_replay.accounting_prefix_v1(
         comparator.manifest.kind, job, comparator.source_identity
     )
     for lane in lanes:
-        if type(lane) is not AdmittedLaneV1:
-            return _reject(
-                corpus.ShardCorpusReasonV1.FOREIGN_INPUT,
-                "lane assembly requires canonical admitted lanes",
-            )
-        if lane.window_start != cursor:
-            if lane.window_start < cursor:
-                return _reject(
-                    corpus.ShardCorpusReasonV1.SHARD_ORDER,
-                    "lanes overlap or arrive out of ordinal order",
-                )
-            return _reject(
-                corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
-                "the lane cover has a gap before the next lane",
-            )
-        if current_range is None:
-            return _reject(
-                corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
-                "a lane starts beyond the covered domain end",
-            )
-        if lane.window_start + lane.window_points > current_range[1]:
-            return _reject(
-                corpus.ShardCorpusReasonV1.SHARD_ORDER,
-                "a lane overruns its domain range",
-            )
         accounting.update(lane.accounting_records)
         shards.extend(lane.shards)
-        cursor += lane.window_points
-        if cursor == current_range[1]:
-            current_range = next(ranges, None)
-            if current_range is not None:
-                cursor = current_range[0]
-    if current_range is not None:
-        return _reject(
-            corpus.ShardCorpusReasonV1.INCOMPLETE_COVER,
-            "the lane cover stops before the domain end",
-        )
     return corpus.assemble_transcript_from_shards_v1(
         job, comparator, shards, accounting.digest()
     )

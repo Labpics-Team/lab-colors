@@ -58,13 +58,8 @@ def _full_domain_binding() -> mpfi_runtime.MpfiRuntimeBindingV1:
     )
 
 
-def seal_full_domain_receipt_v1() -> receipt.MpfiSourceBoundEvaluatorReceiptV1:
-    """One controller-observed MPFI BUILD to RUN over the exact full manifest.
-
-    Extracted for the same reason as the Arb lane: the dual-proof gate mints
-    the receipt through this function instead of restating the request, so
-    the two cannot drift apart.
-    """
+def full_domain_request_v1():
+    """Единственный набор исходников и координат для preflight и BUILD."""
 
     source_lock = provenance.mpfi_source_lock_v1()
     archive_names = (
@@ -92,6 +87,13 @@ def seal_full_domain_receipt_v1() -> receipt.MpfiSourceBoundEvaluatorReceiptV1:
         corpus.full_domain_job_v1(base.job),
         _full_domain_binding(),
     )
+    return request
+
+
+def seal_full_domain_receipt_v1(request=None) -> receipt.MpfiSourceBoundEvaluatorReceiptV1:
+    """Строит и исполняет ровно запрос, проверенный до запуска движка."""
+    if request is None:
+        request = full_domain_request_v1()
     return receipt.MpfiSourceBoundControllerV1(
         Path(os.environ["LABCOLORS_MPFI_DOCKER"]),
         Path(os.environ["LABCOLORS_EXECUTOR_CGROUP_V1"]),
