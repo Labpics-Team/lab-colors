@@ -74,7 +74,7 @@ jobs:
           # rustup-init.sha256 рядом с бинарником на static.rust-lang.org);
           # точный тулчейн независимо fail-closed проверяет run-conformance.sh.
           curl --proto '=https' --tlsv1.2 -fsSL \
-            https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+            https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init \
             -o /tmp/rustup-init
           echo "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  /tmp/rustup-init" \
             | sha256sum -c -
@@ -167,3 +167,4 @@ jobs:
       - name: swift test (conformance pack vs FFI)
         working-directory: bindings/swift
         run: swift test -Xlinker -L"$GITHUB_WORKSPACE/target/debug"
+

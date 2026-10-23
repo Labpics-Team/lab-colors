@@ -4,6 +4,11 @@ name: package worker
 # Только выпуск версии передаёт их отдельному заданию с правом публикации.
 on:
   workflow_call:
+    inputs:
+      program-benchmark:
+        description: Compare the public Program consumer with the exact PR base
+        type: boolean
+        default: false
     outputs:
       node:
         description: Verified packer Node.js version
@@ -130,6 +135,10 @@ jobs:
           test -f "$binaryen/wasm-opt.worker.js"
           echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
       - name: repeat runtime WASM build in one toolchain-pinned CI job
+        env:
+          PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
+          PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # Rust error locations otherwise embed the slot's mutable
         # workspace/CARGO_HOME roots and make identical source hash differently.
         # The second build follows `cargo clean`; equality checks repeatability
@@ -174,6 +183,44 @@ jobs:
             fi
           done
           sha256sum packages/colors/pkg/labcolors_bg.wasm
+          if [[ "$PROGRAM_BENCHMARK" == true ]]; then
+            [[ "$PROGRAM_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$PROGRAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            results="$RUNNER_TEMP/program-performance"
+            baseline="$RUNNER_TEMP/program-baseline-$GITHUB_JOB"
+            candidate="$RUNNER_TEMP/program-candidate-$GITHUB_JOB"
+            mkdir -p "$results" "$candidate"
+            cp -a packages/colors/. "$candidate/"
+            git fetch --no-tags origin "$PROGRAM_BASE_SHA"
+            git worktree add --detach "$baseline" "$PROGRAM_BASE_SHA"
+            (
+              cd "$baseline"
+              export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$baseline=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+              build_runtime
+            )
+            python3 scripts/compare-program-performance.py \
+              --harness packages/colors/bench/program.mjs \
+              --baseline "$baseline/packages/colors" \
+              --candidate "$candidate" \
+              --baseline-revision "$PROGRAM_BASE_SHA" \
+              --candidate-revision "$GITHUB_SHA" \
+              --head-revision "$PROGRAM_HEAD_SHA" \
+              --output "$results"
+          fi
+      - name: retain source-bound point-support evidence
+        if: ${{ always() && inputs.program-benchmark }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/program-performance"
+          python3 scripts/verify_point_support_surplus.py --emit \
+            > "$RUNNER_TEMP/program-performance/point-support-reference-surplus-q55-bps-proof-v1.json"
+      - name: upload Program performance observations
+        if: ${{ always() && inputs.program-benchmark }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: program-performance-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/program-performance
+          if-no-files-found: error
+          retention-days: 7
       - name: enforce measured WASM runtime budget
         # Exact Linux x64 zero-headroom ratchet. gzip remains transport
         # diagnostics only.
@@ -449,3 +496,4 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 1
+

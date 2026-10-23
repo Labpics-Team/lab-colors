@@ -5506,6 +5506,7 @@ enum IndexedPaintDependencyV1 {
 
 #[derive(Debug, Clone, Copy)]
 enum IndexedDependencyNodeV1 {
+    Target(usize),
     Paint(usize),
     Surface(usize),
     Occurrence(usize),
@@ -5666,9 +5667,10 @@ impl ProgramDependencyScratchV1 {
         ProgramConstraintInvocationOf<Evaluation>: Copy,
     {
         let node_count = program
-            .paints
+            .targets
             .len()
-            .checked_add(program.surfaces.len())
+            .checked_add(program.paints.len())
+            .and_then(|count| count.checked_add(program.surfaces.len()))
             .and_then(|count| count.checked_add(program.occurrences.len()))
             .ok_or(ProgramCompileError::ResourceExhausted)?;
         let mut queue = Vec::new();
@@ -5689,11 +5691,19 @@ impl ProgramDependencyScratchV1 {
         index: &IndexedProgramDependenciesV1,
         roots: impl IntoIterator<Item = OccurrenceId>,
     ) -> Result<(), ProgramCompileError> {
-        self.targets.fill(false);
-        self.paints.fill(false);
-        self.surfaces.fill(false);
-        self.occurrences.fill(false);
-        self.queue.clear();
+        // Очередь содержит каждый посещённый узел ровно один раз. Сброс
+        // ограничен прошлым конусом, поэтому независимые ограничения не
+        // оплачивают очистку всего графа перед каждым обходом.
+        for node in self.queue.drain(..) {
+            match node {
+                IndexedDependencyNodeV1::Target(target) => self.targets[target] = false,
+                IndexedDependencyNodeV1::Paint(paint) => self.paints[paint] = false,
+                IndexedDependencyNodeV1::Surface(surface) => self.surfaces[surface] = false,
+                IndexedDependencyNodeV1::Occurrence(occurrence) => {
+                    self.occurrences[occurrence] = false;
+                }
+            }
+        }
         for root in roots {
             let occurrence = index
                 .occurrence(root)
@@ -5709,6 +5719,7 @@ impl ProgramDependencyScratchV1 {
         while let Some(node) = self.queue.get(cursor).copied() {
             cursor += 1;
             match node {
+                IndexedDependencyNodeV1::Target(_) => {}
                 IndexedDependencyNodeV1::Occurrence(occurrence) => {
                     let paint = index.occurrence_paints[occurrence];
                     if !self.paints[paint] {
@@ -5731,7 +5742,12 @@ impl ProgramDependencyScratchV1 {
                     }
                 }
                 IndexedDependencyNodeV1::Paint(paint) => match index.paint_dependencies[paint] {
-                    IndexedPaintDependencyV1::Target(target) => self.targets[target] = true,
+                    IndexedPaintDependencyV1::Target(target) => {
+                        if !self.targets[target] {
+                            self.targets[target] = true;
+                            self.queue.push(IndexedDependencyNodeV1::Target(target));
+                        }
+                    }
                     IndexedPaintDependencyV1::Paint(source) => {
                         if !self.paints[source] {
                             self.paints[source] = true;
@@ -5766,11 +5782,11 @@ where
 {
     // Объекты ограничений здесь уже скомпилированы, поэтому более точная
     // диагностика отсутствующей ссылки ещё может принадлежать только выходу.
-    if program.outputs.iter().any(|output| {
-        !program.paints.iter().any(|paint| match *paint {
-            Paint::Solid { id, .. } | Paint::Opacity { id, .. } => id == output.paint,
-        })
-    }) {
+    if program
+        .outputs
+        .iter()
+        .any(|output| index.paint(output.paint).is_none())
+    {
         return Ok(());
     }
 
@@ -5922,15 +5938,22 @@ fn merge_visible_constraint_coverage(
     if scratch.targets.len() != constrained_targets.len() {
         return Err(ProgramCompileError::InternalInvariant);
     }
-    for (destination, reached) in constrained_targets.iter_mut().zip(&scratch.targets) {
-        *destination |= *reached;
+    if assessed_paints
+        .as_ref()
+        .is_some_and(|paints| scratch.paints.len() != paints.len())
+    {
+        return Err(ProgramCompileError::InternalInvariant);
     }
-    if let Some(assessed_paints) = assessed_paints {
-        if scratch.paints.len() != assessed_paints.len() {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
-        for (destination, reached) in assessed_paints.iter_mut().zip(&scratch.paints) {
-            *destination |= *reached;
+    let mut assessed_paints = assessed_paints;
+    for node in &scratch.queue {
+        match *node {
+            IndexedDependencyNodeV1::Target(target) => constrained_targets[target] = true,
+            IndexedDependencyNodeV1::Paint(paint) => {
+                if let Some(paints) = assessed_paints.as_deref_mut() {
+                    paints[paint] = true;
+                }
+            }
+            IndexedDependencyNodeV1::Surface(_) | IndexedDependencyNodeV1::Occurrence(_) => {}
         }
     }
     Ok(())
@@ -6429,16 +6452,17 @@ where
                     )?);
                 }
                 dependency_scratch.scan(dependency_index, [reference_id])?;
-                if let Some(target) =
-                    program
-                        .targets
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, target)| {
-                            (dependency_scratch.targets[index]
-                                && matches!(target.intent, TargetIntentV1::Finite(_)))
-                            .then_some(target.id)
-                        })
+                if let Some(target) = dependency_scratch
+                    .queue
+                    .iter()
+                    .filter_map(|node| match *node {
+                        IndexedDependencyNodeV1::Target(index) => {
+                            let target = &program.targets[index];
+                            matches!(target.intent, TargetIntentV1::Finite(_)).then_some(target.id)
+                        }
+                        _ => None,
+                    })
+                    .min()
                 {
                     return Err(
                         ProgramCompileError::SolverDependentVisibleRelationReference {
@@ -6985,3 +7009,6 @@ fn map_binding_compile_error(error: BindingError) -> ProgramCompileError {
         _ => ProgramCompileError::InternalInvariant,
     }
 }
+
+#[cfg(test)]
+mod dependency_tests;
