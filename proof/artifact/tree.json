@@ -14,7 +14,7 @@
   ".github/workflows/mutation.yml": "806281a660b679568eda408403a2cb5c3d2695a3",
   ".github/workflows/native-conformance-worker.yml": "abe934bc3efe10f96df468779b1c624f738bbf9a",
   ".github/workflows/native-conformance.yml": "ae61bb9dbc49bd51b3ad3e2e5c27bdca2b759b6e",
-  ".github/workflows/package-worker.yml": "c5e26911ab7e2c1180a7e1cb787eb539f219ab60",
+  ".github/workflows/package-worker.yml": "260fe530d6086cc496decf9ef5ee646fb152c08a",
   ".github/workflows/publish-worker.yml": "622477b53b0dde99718533a0bd0a44a9306a696d",
   ".github/workflows/publish.yml": "d38836005638a20ff0c09314240e51ee05c9d1d1",
   ".github/workflows/verification-lanes.yml": "ae83870463f8ef5bc4e351e71a710c991cb2563b",
@@ -492,7 +492,7 @@
   "scripts/ci/formal_outputs.py": "1f02a58cef575fa9788b79871449cf43f3cdc739",
   "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
   "scripts/ci_workflow_binding.py": "f6c232851ba2f9ce02039a7fc4e475275df82745",
-  "scripts/compare-program-performance.py": "acc6cc63bdacf831bafadbf443595e373911d7f1",
+  "scripts/compare-program-performance.py": "b98368a7d549db6acf4b5f87b47677e1038c9520",
   "scripts/distribution-licenses.mjs": "460174e7e5b433ca74d711b9bd35be0e54164cfe",
   "scripts/evaluate-distribution.mjs": "bb0804cd15f21c774e625e05f00c688b06f09ed5",
   "scripts/evaluation_cli_gate.py": "cfa472f90acbc8e7ba1f09f222641d4fc6b83c2b",
@@ -559,7 +559,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "f25b72a1dad1f30e14f31f6be7954ba0ce5675b429f5ab331a8f718980c298b9",
+ "record_sha256": "17c2cce8b761741148f63f55023a920656335f0fdcae11d267eeacbae8142823",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

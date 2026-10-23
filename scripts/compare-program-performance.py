@@ -21,6 +21,8 @@ parser.add_argument("--head-revision", required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--timeout", type=int, default=180)
 parser.add_argument("--budget", type=int, default=900)
+parser.add_argument("--profile", action="store_true",
+                    help="retain separate CPU profiles after the latency comparison")
 args = parser.parse_args()
 if args.timeout <= 0 or args.budget <= 0:
     parser.error("timeout and budget must be positive seconds")
@@ -138,3 +140,81 @@ print(json.dumps(summary, indent=2), flush=True)
 # Non-timeout consumer failures invalidate the comparison.
 if any(record["status"] not in ("completed", "timeout", "budget-exhausted") for record in observations):
     raise SystemExit("consumer failure: inspect retained observations")
+
+if args.profile:
+    # Instrumented processes never enter observations or the latency summary.
+    # Cap diagnostics at one ordinary process budget, shared equally by six runs.
+    profile_cases = [(pattern, nodes, label)
+                     for pattern, nodes in (("repeated", 1024), ("distinct", 1024), ("ring", 256))
+                     for label in roots]
+    profile_budget = min(args.timeout, args.budget)
+    profile_timeout = profile_budget / len(profile_cases)
+    profile_root = (args.output / "profiles").resolve()
+    profile_root.mkdir(parents=True, exist_ok=True)
+    profiles = {
+        "includedInLatencySummary": False,
+        "samplingIntervalUs": 1000,
+        "budgetSeconds": profile_budget,
+        "processTimeoutSeconds": profile_timeout,
+        "harnessSha256": metadata["harnessSha256"],
+        "observations": [],
+    }
+    profile_deadline = time.monotonic() + profile_budget
+    for pattern, nodes, label in profile_cases:
+        profile_path = profile_root / f"{pattern}-{nodes}-{label}.cpuprofile"
+        profile_path.unlink(missing_ok=True)
+        record = {
+            "variant": label, "pattern": pattern, "nodes": nodes,
+            "sourceRevision": args.baseline_revision if label == "baseline" else args.candidate_revision,
+            "wasmSha256": metadata["wasmSha256"][label],
+            "profileFile": profile_path.name,
+        }
+        command = ["node", "--cpu-prof", f"--cpu-prof-dir={profile_root}",
+                   f"--cpu-prof-name={profile_path.name}", "--cpu-prof-interval=1000",
+                   str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+        started = time.monotonic()
+        remaining = profile_deadline - started
+        if remaining <= 0:
+            record["status"] = "budget-exhausted"
+        else:
+            try:
+                process = subprocess.run(command, capture_output=True, text=True,
+                                         timeout=min(profile_timeout, remaining), check=False)
+                record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
+                record["status"] = "failed"
+                if process.returncode == 0:
+                    try:
+                        measurement = json.loads(process.stdout)
+                        samples = [measurement["cold"], *measurement["samplesAfterWarmup"]]
+                        checksums = sorted({sample["checksum"] for sample in samples})
+                        reference = next(row[label] for row in summary
+                                         if row["pattern"] == pattern and row["nodes"] == nodes)
+                        if (measurement["wasmSha256"] != record["wasmSha256"]
+                                or measurement["pattern"] != pattern or measurement["nodes"] != nodes
+                                or measurement["samples"] != 3 or len(samples) != 4
+                                or len(checksums) != 1
+                                or ("checksums" in reference and checksums != reference["checksums"])):
+                            raise ValueError("profiled consumer differs from the measured workload")
+                        profile = json.loads(profile_path.read_text())
+                        if not isinstance(profile.get("nodes"), list) or not profile["nodes"]:
+                            raise ValueError("CPU profile contains no call tree")
+                        record.update(status="completed", checksums=checksums)
+                    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                        record.update(status="invalid-output", error=str(error))
+            except subprocess.TimeoutExpired as error:
+                def decoded(value):
+                    return value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
+                record.update(status="timeout", stdout=decoded(error.stdout), stderr=decoded(error.stderr))
+        record["elapsedSeconds"] = time.monotonic() - started
+        if profile_path.is_file():
+            profile_bytes = profile_path.read_bytes()
+            record.update(profileBytes=len(profile_bytes),
+                          profileSha256=hashlib.sha256(profile_bytes).hexdigest())
+        profiles["observations"].append(record)
+        (profile_root / "index.json").write_text(json.dumps(profiles, indent=2) + "\n")
+        print(json.dumps({"cpuProfile": {key: record[key] for key in
+                                         ("variant", "pattern", "nodes", "status", "elapsedSeconds")}}),
+              flush=True)
+    if any(record["status"] not in ("completed", "timeout", "budget-exhausted")
+           for record in profiles["observations"]):
+        raise SystemExit("profiled consumer failure: inspect retained diagnostics")
