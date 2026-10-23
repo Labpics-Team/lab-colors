@@ -19,8 +19,8 @@ parser.add_argument("--baseline-revision", required=True)
 parser.add_argument("--candidate-revision", required=True)
 parser.add_argument("--head-revision", required=True)
 parser.add_argument("--output", type=Path, required=True)
-parser.add_argument("--timeout", type=int, default=45)
-parser.add_argument("--budget", type=int, default=480)
+parser.add_argument("--timeout", type=int, default=180)
+parser.add_argument("--budget", type=int, default=900)
 args = parser.parse_args()
 if args.timeout <= 0 or args.budget <= 0:
     parser.error("timeout and budget must be positive seconds")
@@ -67,9 +67,13 @@ metadata = {
 }
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
 observations = []
+scenarios = {
+    nodes: ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ())
+    for nodes in (8, 64, 256, 1024, 4096)
+}
 deadline = time.monotonic() + args.budget
-for nodes in (8, 64, 256, 1024, 4096):
-    for pattern in ("repeated", "distinct", "shared", "grouped"):
+for nodes, patterns in scenarios.items():
+    for pattern in patterns:
         for round_index in range(2):
             order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
             for label in order:
@@ -105,8 +109,8 @@ for nodes in (8, 64, 256, 1024, 4096):
                       flush=True)
 
 summary = []
-for nodes in (8, 64, 256, 1024, 4096):
-    for pattern in ("repeated", "distinct", "shared", "grouped"):
+for nodes, patterns in scenarios.items():
+    for pattern in patterns:
         row = {"pattern": pattern, "nodes": nodes}
         matching = [r for r in observations if r["pattern"] == pattern and r["nodes"] == nodes]
         for label in roots:
@@ -134,4 +138,3 @@ print(json.dumps(summary, indent=2), flush=True)
 # Non-timeout consumer failures invalidate the comparison.
 if any(record["status"] not in ("completed", "timeout", "budget-exhausted") for record in observations):
     raise SystemExit("consumer failure: inspect retained observations")
-

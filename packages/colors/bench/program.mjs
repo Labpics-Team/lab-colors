@@ -9,8 +9,9 @@ const packageRoot = resolve(process.argv[2] ?? dirname(fileURLToPath(new URL("..
 const pattern = process.argv[3] ?? "repeated";
 const nodes = Number(process.argv[4] ?? 8);
 const samples = Number(process.argv[5] ?? 7);
-assert.ok(["repeated", "distinct", "shared", "grouped"].includes(pattern), "pattern: repeated | distinct | shared | grouped");
+assert.ok(["repeated", "distinct", "shared", "grouped", "ring"].includes(pattern), "pattern: repeated | distinct | shared | grouped | ring");
 assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..4096");
+assert.ok(pattern !== "ring" || (nodes >= 3 && nodes <= 2048), "ring nodes: 3..2048 (two hard constraints per node)");
 assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
 const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v1.js")));
@@ -21,7 +22,7 @@ const initializationMs = performance.now() - started;
 const producer = api.decodeCertificateEnvelope(api.issueSourceCertificateEnvelope()).producerRevision;
 
 function color(index) {
-  if (pattern === "repeated" || pattern === "shared") return [20, 20, 20];
+  if (pattern === "repeated" || pattern === "shared" || pattern === "ring") return [20, 20, 20];
   if (pattern === "grouped") return [20 + index % 4, 20, 20];
   return [index % 128, Math.floor(index / 128) % 128, 20];
 }
@@ -36,6 +37,13 @@ for (let index = 0; index < nodes; index += 1) {
     .presentationRoot(id, id).presentationTarget(id, id)
     .wcag22VisibleUnary(true, id, id, abi.WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1)
     .output(id, id);
+}
+if (pattern === "ring") {
+  // Equal colours keep the same output oracle. Directed relations connect all
+  // target branches, so the residual component repeats each partition cell.
+  for (let id = 1; id <= nodes; id += 1) {
+    builder.exactIntrinsicRelationHard(nodes + id, id, [id % nodes + 1]);
+  }
 }
 const wire = builder.finish();
 const results = [];

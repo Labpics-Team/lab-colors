@@ -2185,7 +2185,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("sha: expectedSha,", workflow)
         self.assertIn(
             'path: "Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@1beda3770a990bb62d1b97e0188b1f2620e16c07"',
+            'native-conformance-worker.yml@89df71ef1e628d53436eb8c0efbc3418962b444f"',
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
@@ -2236,7 +2236,7 @@ class MutationTruthTest(unittest.TestCase):
             r"(?m)^    uses: Labpics-Team/lab-colors/\.github/workflows/"
             r"native-conformance-worker\.yml@([0-9a-f]{40})$", native,
         )
-        self.assertEqual(native_calls, ["1beda3770a990bb62d1b97e0188b1f2620e16c07"])
+        self.assertEqual(native_calls, ["89df71ef1e628d53436eb8c0efbc3418962b444f"])
         # Исполняем сам guard; сеть и запись outputs заменены на границе VM.
         harness = r"""
 const assert = require('node:assert/strict');
