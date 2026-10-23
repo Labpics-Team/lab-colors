@@ -7,7 +7,7 @@
 use core::cmp::Ordering;
 use core::ops::Range;
 use std::num::NonZeroUsize;
-use std::rc::Rc;
+use crate::shared::Shared;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
@@ -219,7 +219,7 @@ impl ObservedScenarioSet {
 /// admitted observation backing created for it.
 #[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(Clone))]
-pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);
+pub(crate) struct CanonicalObservationSchemaV1(Shared<[SurfaceInputPortId]>);
 
 impl CanonicalObservationSchemaV1 {
     pub(crate) fn as_slice(&self) -> &[SurfaceInputPortId] {
@@ -227,14 +227,14 @@ impl CanonicalObservationSchemaV1 {
     }
 
     fn shares_backing_with(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        Shared::ptr_eq(&self.0, &other.0)
     }
 
     /// Admission is the sole production boundary allowed to share the compiled
     /// schema handle: the immutable observation backing must prove the exact
     /// schema against which it was admitted.
     fn share_for_observation(&self) -> Self {
-        Self(Rc::clone(&self.0))
+        Self(Shared::clone(&self.0))
     }
 
     #[cfg(test)]
@@ -244,7 +244,7 @@ impl CanonicalObservationSchemaV1 {
 
     #[cfg(test)]
     pub(crate) fn strong_count_for_test(&self) -> usize {
-        Rc::strong_count(&self.0)
+        Shared::strong_count(&self.0)
     }
 }
 
@@ -272,7 +272,7 @@ mod arena {
         CanonicalObservationSchemaV1, OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationArenaSlotV1,
         ObservationError, ObservedScenarioSet,
     };
-    use std::rc::Rc;
+    use crate::shared::Shared;
 
     /// Приватные поля делают construction backing недоступным даже через alias;
     /// родительский admission получает только готовый pool-owned handle.
@@ -299,19 +299,19 @@ mod arena {
 
     /// Три постоянных backing allocation во владении одной Session.
     ///
-    /// Pool хранит ровно один `Rc` каждого свободного слота. Raw-head и evidence
+    /// Pool хранит ровно один `Shared` каждого свободного слота. Raw-head и evidence
     /// клонируют только этот control block, поэтому уникальность без аллокации
     /// доказывает, что освобождённый слот можно перезаписать.
     #[derive(Debug)]
     pub(crate) struct ObservationArenaPoolV1 {
-        slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
+        slots: [Shared<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
     }
 
     impl ObservationArenaPoolV1 {
         pub(crate) fn new(schema: &CanonicalObservationSchemaV1) -> Self {
             Self {
                 slots: ObservationArenaSlotV1::ALL.map(|arena_slot| {
-                    Rc::new(ObservationBackingV1 {
+                    Shared::new(ObservationBackingV1 {
                         arena_slot,
                         schema: schema.share_for_observation(),
                         set: ObservedScenarioSet::empty(),
@@ -323,13 +323,13 @@ mod arena {
         pub(super) fn materialize_into(
             &mut self,
             materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
-        ) -> Result<Rc<ObservationBackingV1>, ObservationError> {
+        ) -> Result<Shared<ObservationBackingV1>, ObservationError> {
             for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
-                let Some(backing) = Rc::get_mut(&mut self.slots[slot_index]) else {
+                let Some(backing) = Shared::get_mut(&mut self.slots[slot_index]) else {
                     continue;
                 };
                 materialize(&mut backing.set)?;
-                return Ok(Rc::clone(&self.slots[slot_index]));
+                return Ok(Shared::clone(&self.slots[slot_index]));
             }
             Err(ObservationError::InternalInvariant)
         }
@@ -354,7 +354,7 @@ use arena::ObservationBackingV1;
 pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
     revision: Revision,
-    backing: Rc<ObservationBackingV1>,
+    backing: Shared<ObservationBackingV1>,
 }
 
 impl RevisionBoundObservationV1 {
@@ -417,7 +417,7 @@ impl RevisionBoundObservationV1 {
     pub(crate) fn is_same_binding_as(&self, other: &Self) -> bool {
         self.stream == other.stream
             && self.revision == other.revision
-            && Rc::ptr_eq(&self.backing, &other.backing)
+            && Shared::ptr_eq(&self.backing, &other.backing)
     }
 
     fn has_canonical_input(
@@ -446,7 +446,7 @@ impl RevisionBoundObservationV1 {
 
     #[cfg(test)]
     pub(crate) fn backing_ptr_for_test(&self) -> *const () {
-        Rc::as_ptr(&self.backing).cast()
+        Shared::as_ptr(&self.backing).cast()
     }
 
     #[cfg(test)]
@@ -632,7 +632,7 @@ pub(crate) enum PreparedObservationUpdateV1<'owner, Owner> {
 /// Canonicalize and validate a compiled surface-input schema.
 ///
 /// Sorting and duplicate detection reuse the supplied `Vec`. Converting its
-/// storage into the immutable `Rc`-backed schema can still allocate through the
+/// storage into the immutable `Shared`-backed schema can still allocate through the
 /// global allocator; this function does not claim allocator-wide recoverable
 /// OOM semantics.
 pub(crate) fn canonicalize_observation_schema(
@@ -647,7 +647,7 @@ pub(crate) fn canonicalize_observation_schema(
             input: duplicate[0],
         });
     }
-    Ok(CanonicalObservationSchemaV1(Rc::from(
+    Ok(CanonicalObservationSchemaV1(Shared::from(
         ports.into_boxed_slice(),
     )))
 }
