@@ -953,7 +953,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "231a18c66da0f064bc981eb3c554dfe64bdc44a79b888ad748644f99656be22e",
+ "record_sha256": "470d98c148c21a8b93ab249ead05c4ff59834542b6e580b4dd61bbaeaf87077f",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1292,6 +1292,7 @@
    "deterministic_corpus_matches_python_hashlib: test",
    "digest_is_exactly_typed_and_hex_is_canonical: test",
    "direct_core_oracle: test",
+   "discovery_detects_added_operations_and_ignores_test_helpers: test",
    "dispose::tests::decision_site_not_in_v2_is_orphaned: test",
    "dispose::tests::decision_site_registered_in_v2_is_covered: test",
    "dispose::tests::non_decision_site_is_not_assessed: test",
@@ -1457,6 +1458,7 @@
    "hash::tests::empty_is_offset_basis: test",
    "hash::tests::published_reference_vectors: test",
    "healthy_sources_remain_available_to_every_reader: test",
+   "host_rejection_reentry_authority_and_dispose_preserve_one_committed_head: test",
    "invalid_rust_cannot_disappear_from_any_rust_reader: test",
    "invalid_utf8_cannot_disappear_from_any_rust_reader: test",
    "jnd_band_resolves_within_budget_with_tolerant_acceptance: test",
@@ -1523,11 +1525,14 @@
    "lpc::tests::soft_clamp_inv_matches_reference_bisection: test",
    "lpc::tests::y_hk_analytic_endpoints_and_saturation: test",
    "lpc::tests::y_hk_analytic_matches_bisection_on_grid: test",
+   "malformed_conflicting_and_old_observations_do_not_consume_a_revision: test",
    "manifest_digest_matches_raw_committed_bytes: test",
    "manifest_metadata_matches_core: test",
+   "metadata_is_projected_from_core_and_untrusted_envelopes_remain_untrusted: test",
    "missing_source_root_is_an_input_failure: test",
    "missing_workflows_do_not_produce_a_partial_audit: test",
    "moderate_positive_target_on_white_is_never_out_of_range_at_any_hue: test",
+   "native_surface_covers_every_exported_wasm_operation: test",
    "neutral::exposure_locks::achromatic_threshold_sits_in_empty_noise_to_chroma_gap: test",
    "neutral::exposure_locks::exposure_achromatic_mp_threshold: test",
    "neutral::exposure_locks::exposure_hue_purity_curve: test",
@@ -1666,6 +1671,7 @@
    "point_support_tests::multi_paint_declared_order_and_direct_provenance_are_preserved: test",
    "point_support_tests::point_support_observation_arenas_share_the_canonical_schema_for_the_session_lifetime: test",
    "point_support_tests::wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed: test",
+   "portable_history_and_owned_snapshots_survive_thread_migration: test",
    "production_evaluator_replays_every_oracle_scenario: test",
    "production_replay_is_bound_to_the_exact_independent_oracle_fixture: test",
    "production_src_carries_no_client_anchor_hex: test",
@@ -2256,7 +2262,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1299,
+  "enabled_count": 1305,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

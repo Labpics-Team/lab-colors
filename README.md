@@ -41,6 +41,7 @@ JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в па�
 
 [JavaScript и WASM](packages/colors/README.md) ·
 [Ядро на Rust](crates/labcolors-core/README.md) ·
+[Swift для macOS и iOS](bindings/swift/DISTRIBUTION.md) ·
 [Оценка через CLI](crates/labcolors-evaluate-cli/README.md) ·
 [Все руководства](docs/README.md).
 

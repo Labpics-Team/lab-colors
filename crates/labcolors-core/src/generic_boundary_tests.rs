@@ -1544,16 +1544,16 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     );
     assert_eq!(
         observation_pool
-            .matches("slots: [Rc<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],",)
+            .matches("slots: [Shared<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],",)
             .count(),
         1,
         "one Session-owned pool must retain every reusable observation backing",
     );
     for required in [
         "pub(crate)constOBSERVATION_ARENA_SLOT_COUNT_V1:usize=3;",
-        "Rc::new(ObservationBackingV1{",
-        "Rc::get_mut(&mutself.slots[slot_index])",
-        "Ok(Rc::clone(&self.slots[slot_index]))",
+        "Shared::new(ObservationBackingV1{",
+        "Shared::get_mut(&mutself.slots[slot_index])",
+        "Ok(Shared::clone(&self.slots[slot_index]))",
     ] {
         assert!(
             observation_syntax.contains(required),
@@ -1576,7 +1576,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "pub(crate) struct RevisionBoundObservationV1 { ",
             "stream: ObservationStreamId, ",
             "revision: Revision, ",
-            "backing: Rc<ObservationBackingV1>, ",
+            "backing: Shared<ObservationBackingV1>, ",
             "}",
         ),
         "revision identity must wrap exactly one shared immutable backing",
@@ -1589,13 +1589,14 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "production must define exactly one revision-bound observation value",
     );
     assert!(
-        OBSERVATION_SOURCE.contains("use std::rc::Rc;"),
-        "single-threaded Core observations must use Rc",
+        OBSERVATION_SOURCE.contains("use crate::shared::Shared;"),
+        "observation storage must use the Core-owned shared allocation policy",
     );
     assert!(
-        OBSERVATION_SOURCE
-            .contains("pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);"),
-        "compiled schema and observations must share the same Rc-backed schema",
+        OBSERVATION_SOURCE.contains(
+            "pub(crate) struct CanonicalObservationSchemaV1(Shared<[SurfaceInputPortId]>);"
+        ),
+        "compiled schema and observations must share one immutable schema allocation",
     );
     // Normalize CRLF→LF so the assertion is platform-independent: include_str!
     // captures raw file bytes (CRLF on Windows), but concat! produces LF only.
@@ -1604,7 +1605,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         observation_lf.contains(concat!(
             "#[derive(Debug, PartialEq, Eq)]\n",
             "#[cfg_attr(test, derive(Clone))]\n",
-            "pub(crate) struct CanonicalObservationSchemaV1(Rc<[SurfaceInputPortId]>);",
+            "pub(crate) struct CanonicalObservationSchemaV1(Shared<[SurfaceInputPortId]>);",
         )),
         "production schema ownership must not expose a general Clone capability",
     );
@@ -1622,7 +1623,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     for forbidden in ["std::sync::Arc", "Arc<", "RefCell<", "Mutex<", "RwLock<"] {
         assert!(
             !OBSERVATION_SOURCE.contains(forbidden),
-            "immutable single-threaded observation backing must not acquire `{forbidden}`",
+            "immutable observation backing must not acquire local ownership policies or interior mutation `{forbidden}`",
         );
     }
 
@@ -2083,7 +2084,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "a Program Session must hold exactly one weak compiled-generation binding",
     );
     assert!(
-        !plan.contains("epoch: Rc<ProgramEpochV1<Evaluation>>,"),
+        !plan.contains("epoch: Shared<ProgramEpochV1<Evaluation>>,"),
         "a Program Session must not prolong its CompiledProgram owner",
     );
     assert!(
@@ -2106,7 +2107,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
     );
     assert_eq!(
         compiled
-            .matches("owner_generation: Rc<ProgramEpochV1<Evaluation>>,")
+            .matches("owner_generation: Shared<ProgramEpochV1<Evaluation>>,")
             .count(),
         1,
         "CompiledProgram must be the one strong owner of its generation",

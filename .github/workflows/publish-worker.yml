@@ -150,7 +150,8 @@ jobs:
                 sha: expectedSha,
               },
               requiredJobs: [
-                "swift conformance (self-hosted Linux, pinned toolchain)",
+                "swift package (Linux)",
+                "swift package (macOS and iOS)",
               ],
             },
           ];

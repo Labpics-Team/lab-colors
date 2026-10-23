@@ -472,3 +472,13 @@ pub struct NoPrematureFamilyArtifactApi;
 ///
 #[cfg(doctest)]
 pub struct NoRawFloatSrgbSerializer;
+
+// Неизменяемые поколения и observation-lease можно переносить между нативными
+// потоками. Единственный writer по-прежнему требует &mut Session; блокировки
+// внешнего API принадлежат адаптеру, а не математическому ядру.
+mod shared {
+    #[cfg(target_family = "wasm")]
+    pub(crate) use std::rc::{Rc as Shared, Weak};
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) use std::sync::{Arc as Shared, Weak};
+}

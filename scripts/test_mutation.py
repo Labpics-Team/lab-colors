@@ -1965,20 +1965,11 @@ class MutationTruthTest(unittest.TestCase):
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
         )
-        # Linux-конформанс мигрирован на self-hosted; инвариант теста —
-        # cancel-stale-PRs, не тип раннера.
-        linux_runner = next(
-            line.strip()
-            for line in native_blocks["swift-conformance-linux"].splitlines()
-            if line.strip().startswith("runs-on:")
-        )
-        self.assertIn(
-            linux_runner,
-            {"runs-on: ubuntu-latest", "runs-on: self-hosted"},
-        )
-        self.assertIn(
-            "runs-on: macos-15", native_blocks["swift-conformance-macos-reference"]
-        )
+        # Оба потребителя обязательны на обычном PR. Ручной Apple-прогон
+        # не заменяет проверку поставляемого пакета.
+        for name in ("swift-conformance-linux", "apple-package"):
+            self.assertIn(name, native_blocks)
+            self.assertNotRegex(native_blocks[name], r"(?m)^    if:")
         for worker_name, source in (
             ("ci-worker.yml", ci_worker),
             ("native-conformance-worker.yml", native_worker),
@@ -2112,18 +2103,8 @@ class MutationTruthTest(unittest.TestCase):
             r"(?m)^\s+SWIFT_IMAGE_V1: swift@sha256:"
             r"fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec$",
         )
-        self.assertIn('mkdir -p "$RUNNER_TEMP/tmp-$job"', swift_job)
-        # В pinned swift-образе нет cc/gcc (только clang 17), поэтому
-        # линкер cargo пробрасывается явно — иначе rustc падает
-        # `linker `cc` not found` (доказано live-прогоном Stage A).
-        self.assertIn(
-            '--env "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=clang"',
-            swift_job,
-        )
-        # rustup ставится workflow'ом НАПРЯМУЮ в изолированные homes job'а
-        # (dtolnay/rust-toolchain ставит в дефолтный HOME раннера, который
-        # контейнер не видит); бинарник закреплён sha256 официального
-        # дистрибутива, установка без модификации PATH раннера.
+        # Производитель проверяет Rust отдельно; потребитель получает только
+        # скомпилированную библиотеку и публичный Swift-контракт.
         self.assertIn("name: install rustup into the isolated homes", swift_job)
         self.assertIn(
             "rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
@@ -2139,26 +2120,16 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("name: verify the pinned toolchain is live", swift_job)
         self.assertNotIn("dtolnay/rust-toolchain", swift_job)
         self.assertNotIn("sh.rustup.rs", swift_job)
-        self.assertIn(
-            '--mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly"',
-            swift_job,
-        )
-        self.assertIn(
-            "bash bindings/swift/ci/run-conformance.sh",
-            swift_job,
-        )
-
-        swift_runner = (
-            repo / "bindings" / "swift" / "ci" / "run-conformance.sh"
-        ).read_text(encoding="utf-8-sig")
-        self.assertIn('expected_swift="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
-        self.assertIn('readonly source_root="${GITHUB_WORKSPACE:-/src}"', swift_runner)
-        self.assertIn('readonly temp_root="${RUNNER_TEMP:-/work}"', swift_runner)
+        self.assertIn("run: bash bindings/swift/ci/run-conformance.sh", swift_job)
+        swift_runner = (repo / "bindings/swift/ci/run-conformance.sh").read_text(encoding="utf-8")
+        self.assertIn('expected="Swift version ${SWIFT_TOOLCHAIN} ', swift_runner)
+        self.assertIn('[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]', swift_runner)
+        self.assertIn('--mount "type=bind,src=$consumer,dst=/consumer"', swift_runner)
+        self.assertNotIn('src=$source', swift_runner)
+        self.assertNotIn('src=$GITHUB_WORKSPACE', swift_runner)
+        self.assertIn('git --no-lazy-fetch --version', swift_runner)
+        self.assertLess(swift_runner.index('cargo +"$RUST_TOOLCHAIN" build'), swift_runner.index('"$docker" run'))
         self.assertNotIn('install -d -m 0700 "$temp_root"', swift_runner)
-        self.assertIn(
-            '[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]',
-            swift_runner,
-        )
         self.assertNotIn("apt-get", swift_runner)
         self.assertNotIn("https://sh.rustup.rs", swift_runner)
 
@@ -2248,7 +2219,7 @@ const names = [
   ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
-  ['swift conformance (self-hosted Linux, pinned toolchain)'],
+  ['swift package (Linux)', 'swift package (macOS and iOS)'],
 ];
 const mutations = {
   valid: () => {},
@@ -2277,6 +2248,9 @@ const mutations = {
   duplicateJob: (_runs, jobs) => { jobs[0].push(jobs[0][0]); },
   missingFormal: (_runs, jobs) => { jobs[0] = jobs[0].filter((job) => !job.name.endsWith('formal core (Kani)')); },
   skippedFormal: (_runs, jobs) => { jobs[0].find((job) => job.name.endsWith('formal core (Kani)')).conclusion = 'skipped'; },
+  missingApple: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('swift package (macOS and iOS)')); },
+  skippedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'skipped'; },
+  failedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'failure'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {
@@ -2337,7 +2311,7 @@ const mutations = {
       assert.equal(errors.length, 1, label);
     }
   }
-  console.log('26 receipt scenarios passed');
+  console.log(Object.keys(mutations).length + ' receipt scenarios passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
         result = subprocess.run(
@@ -2346,7 +2320,7 @@ const mutations = {
             text=True, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("26 receipt scenarios passed", result.stdout)
+        self.assertIn("29 receipt scenarios passed", result.stdout)
 
     def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
         workflow, _ = load_publish_worker()
@@ -2811,6 +2785,8 @@ jobs:
                 "PATH": f"{stub_bin}:{os.environ['PATH']}",
                 "RUST_TOOLCHAIN": "1.96.0",
                 "SWIFT_TOOLCHAIN": "6.1.3",
+                "SWIFT_IMAGE_V1": "swift@sha256:" + "a" * 64,
+                "LABCOLORS_SWIFT_DOCKER": "/fixture/not-invoked-docker",
                 "GITHUB_WORKSPACE": str(repo),
                 "RUNNER_TEMP": str(temp_root),
             }

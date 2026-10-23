@@ -169,7 +169,7 @@ test("publication refuses workflow references from another source revision", asy
 test("publication rejects a missing native result after a successful CI run", async () => {
   const record = evidence();
   record.jobs[202] = [];
-  assertRefused(await admit(record), /swift conformance/u);
+  assertRefused(await admit(record), /swift package/u);
 });
 
 test("publication inventory and exports match the source package contract", () => {

@@ -23,9 +23,9 @@
 //! separate typed capability; neither claim is renderer observation or
 //! human-subject evidence.
 
+use crate::shared::{Shared, Weak};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::rc::{Rc, Weak};
 
 use crate::Srgb8;
 use crate::appearance::{
@@ -1181,7 +1181,7 @@ where
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
         prepare_program(self).map(|epoch| CompiledProgram {
-            owner_generation: Rc::new(epoch),
+            owner_generation: Shared::new(epoch),
         })
     }
 }
@@ -2170,7 +2170,7 @@ where
 /// его через upgrade слабой связи Session plan; enclosing cold owner также
 /// может клонировать его прямо из [`CompiledProgram`]. Вложенная эпоха никогда
 /// не становится независимо распространяемым API.
-pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Rc<ProgramEpochV1<Evaluation>>)
+pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Shared<ProgramEpochV1<Evaluation>>)
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy;
@@ -2181,7 +2181,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    owner_generation: Rc<ProgramEpochV1<Evaluation>>,
+    owner_generation: Shared<ProgramEpochV1<Evaluation>>,
 }
 
 pub(crate) type CompiledCoreProgramV1 = CompiledProgram<CoreProgramEvaluatorsV1>;
@@ -2316,7 +2316,7 @@ where
 
     /// Удерживает точную owner generation независимо от `CompiledProgram`.
     pub(crate) fn pin_owner(&self) -> ProgramOwnerLeaseV1<Evaluation> {
-        ProgramOwnerLeaseV1(Rc::clone(&self.owner_generation))
+        ProgramOwnerLeaseV1(Shared::clone(&self.owner_generation))
     }
 
     pub(crate) fn point_presentation_count(&self) -> usize {
@@ -2376,7 +2376,7 @@ where
     pub(crate) fn owns_session(&self, session: &Session<ProgramSessionPlan<Evaluation>>) -> bool {
         core::ptr::eq(
             session.plan().owner_generation.as_ptr(),
-            Rc::as_ptr(&self.owner_generation),
+            Shared::as_ptr(&self.owner_generation),
         )
     }
 
@@ -2470,7 +2470,7 @@ where
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
-                owner_generation: Rc::downgrade(&self.owner_generation),
+                owner_generation: Shared::downgrade(&self.owner_generation),
                 bindings,
                 workspace,
                 presentation_cache,
@@ -3551,7 +3551,7 @@ std::thread_local! {
 
 #[cfg(test)]
 pub(crate) struct ProgramPreflightFailureGuardV1 {
-    _not_send: PhantomData<Rc<()>>,
+    _not_send: PhantomData<std::rc::Rc<()>>,
 }
 
 #[cfg(test)]

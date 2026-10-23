@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Native UniFFI boundary over labcolors-core with a generated Swift surface and explicit-profile Glow point decisions."
+description = "Native Program runtime, attachment and numerical bindings over labcolors-core."
 
 [lib]
 # Имя lib-артефакта (без префикса пакета): даёт `liblabcolors.{a,dylib}` и
@@ -41,3 +41,6 @@ thiserror = "2"
 # собирают bin как заглушку и НЕ тянут clap. Генерация биндингов включает её:
 # `cargo run -p labcolors-ffi --features cli --bin uniffi-bindgen -- generate …`.
 cli = ["uniffi/cli"]
+
+[dev-dependencies]
+serde_json = "1"
