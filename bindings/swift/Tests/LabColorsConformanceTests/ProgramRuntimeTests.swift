@@ -34,6 +34,22 @@ private func assertCode(_ error: Error, _ expected: String, file: StaticString =
     XCTAssertEqual(code, expected, file: file, line: line)
 }
 
+// Поля сгенерированных value-records сравниваются целиком: новый metadata-field
+// нельзя забыть в Swift-проекции, сохранив только правильный checksum Core.
+private func reflectedJSON(_ value: Any) throws -> Any {
+    let mirror = Mirror(reflecting: value)
+    switch mirror.displayStyle {
+    case .collection:
+        return try mirror.children.map { try reflectedJSON($0.value) }
+    case .struct:
+        return try Dictionary(uniqueKeysWithValues: mirror.children.map {
+            (try XCTUnwrap($0.label), try reflectedJSON($0.value))
+        })
+    default:
+        return value
+    }
+}
+
 // Изменяемое состояние тестового host защищено lock; callback не держит его при повторном входе.
 private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private let lock = NSLock()
@@ -146,6 +162,10 @@ final class ProgramRuntimeTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "manifest", withExtension: "json", subdirectory: "Fixtures"))
         let expected = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url)).numericalCapabilities
         let got = numericalCapabilityManifest()
+        let fullPack = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let fullExpected = try XCTUnwrap(fullPack["numericalCapabilities"] as? NSDictionary)
+        let fullActual = try XCTUnwrap(reflectedJSON(got) as? NSDictionary)
+        XCTAssertEqual(fullActual, fullExpected)
         XCTAssertEqual(got.schemaVersion, expected.schemaVersion)
         XCTAssertEqual(got.checksum, expected.checksum)
         XCTAssertEqual(got.sites.map { $0.siteId }, expected.sites.map { $0.siteId })

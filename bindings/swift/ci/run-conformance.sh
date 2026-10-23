@@ -11,6 +11,7 @@ set -euo pipefail
 [[ "$SWIFT_IMAGE_V1" =~ @sha256:[0-9a-f]{64}$ ]]
 readonly source_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
 readonly temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+[[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]
 readonly docker="${LABCOLORS_SWIFT_DOCKER:-$(command -v docker)}"
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 

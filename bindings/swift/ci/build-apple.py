@@ -47,9 +47,20 @@ def main(output: Path) -> None:
         raise ValueError("SDK source must be a clean Git revision")
     triples = [triple for values in SLICES.values() for triple in values]
     run("rustup", "target", "add", "--toolchain", toolchain, *triples)
+    os.environ["LABCOLORS_NATIVE_SURFACE_OUTPUT"] = str(output / "native-surface.json")
+    run("cargo", f"+{toolchain}", "test", "--locked", "-p", "labcolors-audit", "--test", "native_surface")
+    del os.environ["LABCOLORS_NATIVE_SURFACE_OUTPUT"]
+    build_packages: set[str] = set()
     for triple in triples:
-        run("cargo", f"+{toolchain}", "build", "--release", "--lib", "--locked",
-            "-p", "labcolors-ffi", "--target", triple)
+        messages = run("cargo", f"+{toolchain}", "build", "--release", "--lib", "--locked",
+                       "-p", "labcolors-ffi", "--target", triple,
+                       "--message-format=json-render-diagnostics", capture=True)
+        for line in messages.splitlines():
+            message = json.loads(line)
+            if message.get("reason") == "compiler-artifact":
+                build_packages.add(message["package_id"])
+    package_inventory = output / "build-packages.json"
+    package_inventory.write_text(json.dumps(sorted(build_packages)) + "\n")
     host = next(line[6:] for line in run("rustc", f"+{toolchain}", "-vV", capture=True).splitlines()
                 if line.startswith("host: "))
     generated = output / "generated"
@@ -94,7 +105,7 @@ let package = Package(
 ''')
     shutil.copy2(ROOT / "LICENSE", sdk)
     shutil.copy2(ROOT / "bindings/swift/DISTRIBUTION.md", sdk / "README.md")
-    run("node", "bindings/swift/ci/licenses.mjs", str(sdk))
+    run("node", "bindings/swift/ci/licenses.mjs", str(sdk), str(package_inventory))
     metadata = {"schemaVersion": 1, "sourceCommit": revision, "coreTree": core_tree,
                 "rustToolchain": toolchain, "xcode": run("xcodebuild", "-version", capture=True),
                 "swift": run("swift", "--version", capture=True), "minimumPlatforms": MINIMUM,

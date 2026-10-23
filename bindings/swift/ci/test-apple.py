@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,6 +18,29 @@ def run(*args: str, cwd: Path, capture: bool = False) -> str:
     result = subprocess.run(args, cwd=cwd, check=True, text=True,
                             stdout=subprocess.PIPE if capture else None)
     return result.stdout.strip() if capture else ""
+
+
+
+def extract_surface(consumer: Path, modules: Path, platform: str, variant: str | None, target: str) -> Path:
+    framework = consumer / "Dependencies/LabColors/labcolorsFFI.xcframework"
+    with (framework / "Info.plist").open("rb") as stream:
+        slices = plistlib.load(stream)["AvailableLibraries"]
+    matches = [item for item in slices if item["SupportedPlatform"] == platform
+               and item.get("SupportedPlatformVariant") == variant]
+    if len(matches) != 1 or not (modules / "LabColors.swiftmodule").exists():
+        raise ValueError("compiled SDK module or matching ABI slice is missing")
+    entry = matches[0]
+    headers = framework / entry["LibraryIdentifier"] / entry["HeadersPath"]
+    sdk = "macosx" if platform == "macos" else "iphonesimulator" if variant == "simulator" else "iphoneos"
+    output = consumer / "Symbols" / sdk
+    output.mkdir(parents=True)
+    run("xcrun", "swift-symbolgraph-extract", "-module-name", "LabColors", "-minimum-access-level", "public",
+        "-target", target, "-sdk", run("xcrun", "--sdk", sdk, "--show-sdk-path", cwd=consumer, capture=True),
+        "-I", str(modules), "-I", str(headers), "-output-dir", str(output), cwd=consumer)
+    graph = output / "LabColors.symbols.json"
+    if not graph.is_file():
+        raise ValueError("Swift did not produce a public symbol graph")
+    return graph
 
 
 def main(distribution: Path, consumer: Path) -> None:
@@ -87,10 +111,16 @@ public func makeRuntime(_ bytes: Data) throws -> ProgramRuntime {
     # Сборка потребителя не видит Cargo/Rust и ничего не загружает из исходного repo.
     previous_path = os.environ["PATH"]
     os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+    graphs = []
+    derived = consumer / "DerivedData"
     try:
         run("xcrun", "swift", "test", cwd=consumer)
+        binary_root = Path(run("xcrun", "swift", "build", "--show-bin-path", cwd=consumer, capture=True))
+        target = json.loads(run("xcrun", "swiftc", "-print-target-info", cwd=consumer, capture=True))["target"]["triple"]
+        graphs.append(extract_surface(consumer, binary_root / "Modules", "macos", None, target))
         run("xcodebuild", "-scheme", "Consumer", "-destination", "generic/platform=iOS",
-            "CODE_SIGNING_ALLOWED=NO", "build-for-testing", cwd=consumer)
+            "-derivedDataPath", str(derived), "CODE_SIGNING_ALLOWED=NO", "build-for-testing", cwd=consumer)
+        graphs.append(extract_surface(consumer, derived / "Build/Products/Debug-iphoneos", "ios", None, "arm64-apple-ios15.0"))
         runtimes = json.loads(run("xcrun", "simctl", "list", "runtimes", "--json", cwd=consumer, capture=True))["runtimes"]
         sdk_version = run("xcrun", "--sdk", "iphonesimulator", "--show-sdk-version", cwd=consumer, capture=True)
         supported = [runtime for runtime in runtimes if runtime.get("isAvailable")
@@ -103,12 +133,15 @@ public func makeRuntime(_ bytes: Data) throws -> ProgramRuntime {
                          runtime["identifier"], cwd=consumer, capture=True)
         try:
             run("xcodebuild", "-scheme", "Consumer", "-destination", "id=" + identifier,
-                "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test", cwd=consumer)
+                "-derivedDataPath", str(derived), "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test", cwd=consumer)
+            graphs.append(extract_surface(consumer, derived / "Build/Products/Debug-iphonesimulator", "ios", "simulator", target.split("-", 1)[0] + "-apple-ios15.0-simulator"))
         finally:
             subprocess.run(("xcrun", "simctl", "shutdown", identifier), cwd=consumer, check=False)
             run("xcrun", "simctl", "delete", identifier, cwd=consumer)
     finally:
         os.environ["PATH"] = previous_path
+    run("node", "scripts/verify-swift-surface.mjs", str(distribution / "native-surface.json"),
+        *(str(graph) for graph in graphs), cwd=ROOT)
     print("Verified installed SDK on macOS and iOS Simulator; iOS device ABI built and linked.")
 
 

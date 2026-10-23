@@ -6,7 +6,7 @@ use super::*;
 #[kani::proof]
 #[kani::unwind(5)]
 fn equality_requires_the_same_observation_allocation() {
-    let schema = CanonicalObservationSchemaV1(Rc::from([SurfaceInputPortId::new(1)]));
+    let schema = CanonicalObservationSchemaV1(Shared::from([SurfaceInputPortId::new(1)]));
     let mut pool = ObservationArenaPoolV1::new(&schema);
     let first_backing = pool.materialize_into(|_| Ok(())).unwrap();
     let other_backing = pool.materialize_into(|_| Ok(())).unwrap();

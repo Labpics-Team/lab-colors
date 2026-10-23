@@ -40,7 +40,7 @@ test("native authoring fixtures match both real Web builders byte for byte", () 
   assert.deepEqual(graph(adaptive).finish(), bytes("adaptive"));
   const all = new ProgramWireBuilderV1().source(11, [1, 2, 3]).fixedTarget(21, 11)
     .finiteTarget(22, [{ id: 201, rgb: [0, 0, 0], opacity: .5 }, { id: 202, rgb: [255, 255, 255], opacity: 1 }])
-    .family(90, new Uint8Array(32)).surfaceInputPort(31).opacityInput(32, .5)
+    .family(90, Array(32).fill(0)).surfaceInputPort(31).opacityInput(32, .5)
     .solidPaint(41, 21).opacityPaint(42, 41, 32).inputSurface(51, 31).occurrenceSurface(52, 61)
     .sourceOverOccurrence(61, 42, 51, 64, .2, 2).presentationRoot(71, 61).presentationTarget(71, 61)
     .exactVisibleUnary(true, 81, 61, [1, 2, 3]).wcag22VisibleUnary(false, 82, 61, 3)

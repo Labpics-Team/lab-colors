@@ -20,32 +20,16 @@ env:
   SWIFT_IMAGE_V1: swift@sha256:fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec
 
 jobs:
-  # АКТИВНЫЙ ГЕЙТ: Swift-conformance на эфемерной GitHub-hosted VM.
-  # Зеркало проверенного локального прогона (bindings/swift/ci/run-conformance.sh).
-  #
-  # ИМЯ JOB'А НЕ МЕНЯТЬ: publish-worker.yml принимает ровно это имя либо
-  # reusable-суффикс «<caller> / <это имя>» внутри canonical run. Строка
-  # «self-hosted Linux» — контракт с publish-гейтом, а не описание раннера.
   swift-conformance-linux:
-    name: swift conformance (self-hosted Linux, pinned toolchain)
+    name: swift package (Linux)
     runs-on: ubuntu-24.04
-    # 120 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
-    # 65-минутный конверт удвоен: history-replay на новом железе ещё невозможен);
-    # перекалибровать по фактическим main-прогонам.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Rust остаётся workflow-owned версией; mutable каталоги живут только под
-      # runner.temp конкретной job. Swift приходит из закреплённого OCI-образа.
-      #
-      # rustup ставится НАПРЯМУЮ в изолированные RUSTUP_HOME/CARGO_HOME этой
-      # job: стандартный rust-toolchain action ставит в дефолтный HOME раннера,
-      # который контейнер не видит — там мультиколл-прокси не находили тулчейн.
-      # Версия rustup закреплена хешем скрипта, точный тулчейн fail-closed
-      # доказывает run-conformance.sh.
+      # Производитель владеет своим Rust toolchain; Swift входит только в consumer image.
       - name: prepare isolated Rust toolchain
         run: |
           {
@@ -116,6 +100,10 @@ jobs:
           expected="$(printf 'Xcode %s\nBuild version %s' "$XCODE_VERSION" "$XCODE_BUILD")"
           test "$(xcodebuild -version)" = "$expected"
           swift --version
+      - name: install declaration parser and test compiled API verification
+        run: |
+          npm ci --prefix packages/colors --ignore-scripts
+          node --test scripts/test_swift_surface.mjs
       - name: assemble the self-contained Swift package
         run: python3 bindings/swift/ci/build-apple.py "$RUNNER_TEMP/swift-distribution"
       - name: exercise the exact archive as an external Apple consumer
