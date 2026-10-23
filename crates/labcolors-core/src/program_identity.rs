@@ -1632,8 +1632,7 @@ fn refine_partition_impl(
                     .try_reserve_exact(end - start)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 split.extend(records[start..end].iter().map(|record| record.vertex));
-                if next_cells.len() == first_split
-                    || split.len() > next_cells[largest_split].len()
+                if next_cells.len() == first_split || split.len() > next_cells[largest_split].len()
                 {
                     largest_split = next_cells.len();
                 }
@@ -3380,8 +3379,7 @@ mod tests {
     fn check_initial_and_individualized_refinement(
         graph: &CanonicalGraphV1,
     ) -> Result<(), ProgramCompileError> {
-        let (partition, _) =
-            assert_refinement_matches_full(graph, PartitionV1::initial(graph)?)?;
+        let (partition, _) = assert_refinement_matches_full(graph, PartitionV1::initial(graph)?)?;
         for (cell_index, cell) in partition.0.cells.iter().enumerate() {
             if cell.len() < 2 {
                 continue;
@@ -3482,8 +3480,7 @@ mod tests {
                 }
             }
             let graph = graph.finish()?;
-            let (_, trace) =
-                assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
+            let (_, trace) = assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
             let sizes = trace.rounds[0]
                 .iter()
                 .filter(|cell| cell.iter().all(|vertex| sources.contains(vertex)))
@@ -3515,12 +3512,24 @@ mod tests {
                 // Group 4 has only one directed incidence to the splitting group.
                 for (from, to, role) in [
                     (groups[0][index], groups[1][index], EdgeRoleV1::TargetSource),
-                    (groups[1][index], groups[2][index], EdgeRoleV1::ProgramMember),
+                    (
+                        groups[1][index],
+                        groups[2][index],
+                        EdgeRoleV1::ProgramMember,
+                    ),
                     (groups[2][index], groups[3][index], EdgeRoleV1::TargetSource),
                     (groups[2][index], groups[3][index], EdgeRoleV1::TargetSource),
-                    (groups[4][index], groups[0][index], EdgeRoleV1::ProgramMember),
+                    (
+                        groups[4][index],
+                        groups[0][index],
+                        EdgeRoleV1::ProgramMember,
+                    ),
                 ] {
-                    let (from, to) = if reverse_edges { (to, from) } else { (from, to) };
+                    let (from, to) = if reverse_edges {
+                        (to, from)
+                    } else {
+                        (from, to)
+                    };
                     graph.add_edge(from, to, role)?;
                 }
                 for _ in 0..left_count {
@@ -3530,11 +3539,7 @@ mod tests {
                     graph.add_edge(groups[2][index], marker, EdgeRoleV1::ProgramMember)?;
                 }
                 for _ in 0..2 {
-                    graph.add_edge(
-                        groups[4][index],
-                        groups[4][index],
-                        EdgeRoleV1::TargetSource,
-                    )?;
+                    graph.add_edge(groups[4][index], groups[4][index], EdgeRoleV1::TargetSource)?;
                 }
             }
             let graph = graph.finish()?;
@@ -3624,8 +3629,7 @@ mod tests {
                 let mut start = 0;
                 while start < records.len() {
                     let mut end = start + 1;
-                    while end < records.len()
-                        && records[start].signature == records[end].signature
+                    while end < records.len() && records[start].signature == records[end].signature
                     {
                         end += 1;
                     }
