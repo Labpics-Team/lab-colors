@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import LabColors
+import LabColors
 
 /// Conformance-прогон нативного (Swift/UniFFI) биндинга против закоммиченного
 /// пака `conformance/vectors/*.json`. Доказывает: рантайм-ядро Rust, вызванное
@@ -16,13 +16,10 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - Локация закоммиченных векторов (относительно этого файла)
 
-    static var vectorsDir: URL = {
-        // <repo>/bindings/swift/Tests/LabColorsConformanceTests/ConformanceTests.swift
-        // → снять имя файла и 4 каталога до корня репозитория.
-        var dir = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 { dir = dir.deletingLastPathComponent() }
-        return dir.appendingPathComponent("conformance").appendingPathComponent("vectors")
-    }()
+    static var vectorsDir: URL {
+        // Ресурсы копируются из канонического conformance-пака при сборке.
+        Bundle.module.resourceURL!.appendingPathComponent("Fixtures")
+    }
 
     func load<T: Decodable>(_ file: String, as type: T.Type) throws -> T {
         let url = Self.vectorsDir.appendingPathComponent(file)

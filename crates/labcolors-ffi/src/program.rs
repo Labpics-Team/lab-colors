@@ -167,8 +167,8 @@ pub struct ProgramPointSinkIntent {
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum ProgramPointSinkCallbackError {
-    #[error("host protocol failed")]
-    Protocol,
+    #[error("host callback failed")]
+    InvocationFailed,
 }
 
 /// Возвращает true только после атомарной установки всей команды. false и ошибка

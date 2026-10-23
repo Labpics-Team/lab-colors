@@ -1,6 +1,6 @@
 # Сгенерированные UniFFI-биндинги — производный артефакт, генерируется в CI
 # (uniffi-bindgen) ПЕРЕД `swift test`.
-Sources/LabColors/*.swift
+Sources/LabColors/labcolors.swift
 Sources/labcolorsFFI/*.h
 Sources/labcolorsFFI/module.modulemap
 Sources/labcolorsFFI/*.modulemap
@@ -12,3 +12,6 @@ generated/
 .build/
 *.xcodeproj
 Package.resolved
+
+# Копия канонических векторов для тестов внешнего потребителя.
+Tests/LabColorsConformanceTests/Fixtures/

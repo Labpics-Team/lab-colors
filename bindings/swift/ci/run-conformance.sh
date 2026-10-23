@@ -49,11 +49,11 @@ actual_cargo="$(cargo +"$RUST_TOOLCHAIN" --version)"
 printf '%s\n%s\n%s\n' "$actual_swift" "$actual_rust" "$actual_cargo"
 
 echo "==================== EPHEMERAL SOURCE COPY ===================="
-tar -C "$source_root" \
-  --exclude=target --exclude=.git --exclude=node_modules \
-  --exclude='mutants.out' --exclude='mutants.out.old' \
-  --exclude='bindings/swift/.build' --exclude='bindings/swift/generated' \
-  -cf - . | tar -C "$work_root" -xf -
+# Изолированная копия точного Git-снимка сохраняет source identity Core.
+# Неподтверждённые локальные файлы не становятся входом выпуска.
+source_sha="$(git -C "$source_root" rev-parse HEAD)"
+git clone --shared --no-checkout "$source_root" "$work_root"
+git -C "$work_root" checkout --detach "$source_sha"
 cd "$work_root"
 
 echo "==================== BUILD FFI AND BINDGEN ===================="
@@ -75,9 +75,15 @@ install -m 0644 "$generated/labcolors.swift" bindings/swift/Sources/LabColors/la
 install -m 0644 "$generated/labcolorsFFI.h" bindings/swift/Sources/labcolorsFFI/labcolorsFFI.h
 install -m 0644 "$generated/labcolorsFFI.modulemap" bindings/swift/Sources/labcolorsFFI/module.modulemap
 
+echo "==================== CONSUMER FIXTURES ===================="
+fixtures=bindings/swift/Tests/LabColorsConformanceTests/Fixtures
+install -d "$fixtures"
+cp conformance/vectors/*.json "$fixtures/"
+cp conformance/program-runtime-v1.json "$fixtures/"
+
 echo "==================== SWIFT CONFORMANCE ===================="
 cd bindings/swift
 export LD_LIBRARY_PATH="$work_root/target/debug:${LD_LIBRARY_PATH:-}"
-swift test -Xlinker -L"$work_root/target/debug"
+swift test -Xlinker -L"$work_root/target/debug" -Xlinker -llabcolors
 
 echo "==================== SWIFT CONFORMANCE: OK ===================="
