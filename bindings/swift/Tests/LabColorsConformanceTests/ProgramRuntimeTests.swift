@@ -58,6 +58,7 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private var reentrant = false
     private var point: Data?
     private var sequence: UInt64 = 0
+    private var epoch: UInt64?
     private weak var owner: ProgramAttachment?
     func configure(owner: ProgramAttachment, reentrant: Bool) { lock.lock(); defer { lock.unlock() }; self.owner = owner; self.reentrant = reentrant }
     func reject(_ value: Bool) { lock.lock(); defer { lock.unlock() }; rejected = value }
@@ -73,9 +74,22 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
         }
         lock.lock(); defer { lock.unlock() }
         XCTAssertEqual(intent.expectedSequence, sequence)
+        XCTAssertEqual(intent.sinkOutput, 501)
+        XCTAssertNotEqual(intent.bindingEpoch, 0)
+        if let epoch { XCTAssertEqual(intent.bindingEpoch, epoch) }
+        switch intent.operation {
+        case .setAll, .confirmExact:
+            let paint = try XCTUnwrap(intent.point)
+            XCTAssertEqual(paint.slot, 91)
+            XCTAssertEqual(paint.source.count, 3)
+            XCTAssertEqual(paint.opacity, 1)
+        case .revokeAll:
+            XCTAssertNil(intent.point)
+        }
         if callbackFailure { throw ProgramPointSinkCallbackError.InvocationFailed }
         if rejected { return false }
         if intent.operation != .confirmExact { XCTAssertEqual(intent.desiredSequence, sequence + 1) }
+        epoch = intent.bindingEpoch
         sequence = intent.desiredSequence; point = intent.point?.source
         return true
     }
@@ -161,8 +175,30 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertEqual(authority.terminalCompositeRgb(), Data([0, 0, 0]))
         XCTAssertThrowsError(try attachment.dispose(confirmed: false)) { assertCode($0, "program_attachment_revoke_unconfirmed") }
         XCTAssertEqual(try attachment.materializationAuthority().revision(), 2)
+        let current = try attachment.materializationAuthority()
+        XCTAssertEqual(try attachment.materializationAuthorityFor(revision: current.revision(),
+            contentIdentity: current.contentIdentity(), bindingEpoch: current.bindingEpoch()).terminalCompositeRgb(), Data([255, 255, 255]))
+        var foreign = current.contentIdentity(); foreign[0] ^= 1
+        XCTAssertThrowsError(try attachment.materializationAuthorityFor(revision: 2,
+            contentIdentity: foreign, bindingEpoch: current.bindingEpoch())) { assertCode($0, "program_materialization_stale_identity") }
+        XCTAssertThrowsError(try attachment.materializationAuthorityFor(revision: 2,
+            contentIdentity: current.contentIdentity(), bindingEpoch: current.bindingEpoch() ^ 1)) { assertCode($0, "program_materialization_foreign_binding_epoch") }
+        let unknown = try attachment.updateUnknown(revision: 3, reasonId: 7)
+        XCTAssertEqual(unknown.state(), "stale")
+        XCTAssertFalse(unknown.hasRender())
+        XCTAssertNil(host.installed())
+        XCTAssertThrowsError(try attachment.materializationAuthority()) { assertCode($0, "program_materialization_not_ready") }
+        XCTAssertEqual(try attachment.updateObserved(revision: 4, scenarioIds: [1],
+            surfaces: Data([255, 255, 255]), surfaceCount: 1).state(), "ready")
+        let conflict = try attachment.updateObserved(revision: 5, scenarioIds: [1, 2],
+            surfaces: Data([255, 255, 255, 0, 0, 0]), surfaceCount: 1)
+        XCTAssertEqual(conflict.state(), "failed")
+        XCTAssertFalse(conflict.hasRender())
+        XCTAssertNil(host.installed())
+        XCTAssertEqual(try attachment.updateObserved(revision: 6, scenarioIds: [1],
+            surfaces: Data([0, 0, 0]), surfaceCount: 1).state(), "ready")
         host.revoke(); try attachment.dispose(confirmed: true)
-        XCTAssertThrowsError(try attachment.updateUnknown(revision: 3, reasonId: 7)) { assertCode($0, "program_attachment_already_disposed") }
+        XCTAssertThrowsError(try attachment.updateUnknown(revision: 7, reasonId: 7)) { assertCode($0, "program_attachment_already_disposed") }
         XCTAssertThrowsError(try attachment.dispose(confirmed: true)) { assertCode($0, "program_attachment_already_disposed") }
     }
 

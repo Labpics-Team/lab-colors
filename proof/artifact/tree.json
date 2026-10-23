@@ -27,7 +27,7 @@
     "bindings/swift/Sources/LabColors/ProgramWireBuilder.swift": "08e9384788bbe8ae30e701440325cddc7dc707fb",
     "bindings/swift/Sources/labcolorsFFI/.gitkeep": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "bindings/swift/Tests/LabColorsConformanceTests/ConformanceTests.swift": "6e5498019891b494c6827ab48ba8fd4e0e1d38e4",
-    "bindings/swift/Tests/LabColorsConformanceTests/ProgramRuntimeTests.swift": "e28675aeed9737d1a485a44c6d49ad4120c2ba22",
+    "bindings/swift/Tests/LabColorsConformanceTests/ProgramRuntimeTests.swift": "ab0d1aaa5d1949960fca17233f0192c5b7abf349",
     "bindings/swift/Tests/LabColorsConformanceTests/ProgramWireBuilderTests.swift": "bf0b780ccad53e5651f81f2f8d60a60870953900",
     "bindings/swift/ci/benchmark-authoring.py": "be2668073c427f9a0323aca55d1977567e5c2904",
     "bindings/swift/ci/build-apple.py": "b4d51d8b5edfe9c5474f8d54b0260cb5777fa501",
@@ -578,7 +578,7 @@
     "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
     "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
   },
-  "record_sha256": "4fad34e3254a8cea2f30bdfe503128bc124912d508b8a4cd67d78f31bc4c48d9",
+  "record_sha256": "0fe5dedbff0f4bbf5ec42748bca929314e661eab0ed8ec89c2560f274b0613f4",
   "roots": [
     ".github/workflows",
     "Cargo.toml",
