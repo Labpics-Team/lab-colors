@@ -1005,6 +1005,9 @@ jobs:
   wasm:
     uses: ./.github/workflows/package-worker.yml
     with:
+      # Метка выбирает измерение при следующем обычном запуске CI для PR.
+      # Отдельное событие labeled требует согласования с жизненным циклом
+      # обязательного ci-gate: прежний зелёный запуск на том же SHA недостаточен.
       program-benchmark: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'performance') }}
     permissions:
       contents: read
