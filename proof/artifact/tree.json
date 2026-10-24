@@ -28,7 +28,7 @@
   "bindings/kotlin/ci/test-consumer.py": "a1cda6be91c280a090a47571a2c91979d3072b71",
   "bindings/kotlin/ci/test_artifact.py": "3b85366e7093dce3b204bd3bef9572647eec4ba1",
   "bindings/kotlin/consumer-rules.pro": "45e3848a99fd914d1b1ca4540915131bcc772e2b",
-  "bindings/kotlin/consumer/build.gradle.kts": "dc94df44fd3670b25f38d6320dcad1a87b7aec77",
+  "bindings/kotlin/consumer/build.gradle.kts": "cc370a7a06b38d11e4ea7d98de838de032e3de88",
   "bindings/kotlin/consumer/gradle.properties": "45b05d65e8012d83d4f8cd05602b97747c44aebc",
   "bindings/kotlin/consumer/settings.gradle.kts": "1a1951daea829aaf87e739ef9f3f8b3906d0da40",
   "bindings/kotlin/consumer/src/androidTest/kotlin/pics/lab/colors/consumer/PageSizeTest.kt": "d51ca1af3f628173bbbe316711dfc85c0c8c300c",
@@ -602,7 +602,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "4889a7212936966fa340f07f3a3b846df4e82b5e923a97f29b07c7b0186e13b7",
+ "record_sha256": "c489bf01d1e2d724acfa0691b8f8f1bee884e9a6ea4c1aaae7752f2c2ab25ac4",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
