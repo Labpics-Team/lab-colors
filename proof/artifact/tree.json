@@ -12,7 +12,7 @@
   ".github/workflows/full-domain-run.yml": "84b0957c9ff5eb89e48cc4007b67ea6c73f30d5a",
   ".github/workflows/mutation-worker.yml": "bbfc3f576e2d1b14586b2d9d1d6da39142a4da1b",
   ".github/workflows/mutation.yml": "806281a660b679568eda408403a2cb5c3d2695a3",
-  ".github/workflows/native-conformance-worker.yml": "bb371c28682e1948f36c1183073ab59eb59a7f93",
+  ".github/workflows/native-conformance-worker.yml": "12e6cea0415391e7c483a38917d54d153591388a",
   ".github/workflows/native-conformance.yml": "348b6d7dafc5fcec41607a459592879c04870c1e",
   ".github/workflows/package-worker.yml": "260fe530d6086cc496decf9ef5ee646fb152c08a",
   ".github/workflows/publish-worker.yml": "0b400da2b6b08dc0f3e7e7fe36e3182593ac2075",
@@ -601,7 +601,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "4965a414eda6b6da3246ab766ea3f5e51c3dcdf284b8151b85d7495dec0bba45",
+ "record_sha256": "9478f5a1f68d5ebd3ef55a115593f0a935cebb143e5bfd1f94224ec2748d7534",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
