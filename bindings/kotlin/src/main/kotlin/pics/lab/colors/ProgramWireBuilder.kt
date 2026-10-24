@@ -135,7 +135,8 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
     }
     fun output(slot: UInt, paint: UInt) = entry(13) { it.u32(slot); it.u32(paint) }
 
-    protected fun selection(revision: ULong, rankGroups: List<List<ProgramSelectionState>>) {
+    internal fun selection(revision: ULong, rankGroups: List<List<ProgramSelectionState>>) {
+        if (wireVersion != 2) throw ProgramWireException.InvalidDeclaration("selection release requires wire version 2")
         if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("selection release already exists")
         entry(3) { out ->
             val groupCount = count(rankGroups.size).toInt()

@@ -87,6 +87,23 @@ class ArtifactTests(unittest.TestCase):
                 struct.pack_into("<Q" if word == 2 else "<I", data, 112 if word == 2 else 92, 2048)
                 with self.assertRaisesRegex(ValueError, "page size"):
                     elf.check_elf(data, abi)
+                struct.pack_into("<Q" if word == 2 else "<I", data, 112 if word == 2 else 92, 4096)
+                if word == 2:
+                    with self.assertRaisesRegex(ValueError, "page size"):
+                        elf.check_elf(data, abi)
+                else:
+                    elf.check_elf(data, abi)
+                if word == 2:
+                    # LOAD remains valid while a separate RELRO end changes.
+                    struct.pack_into("<Q", data, 112, 16384)
+                    struct.pack_into("<H", data, 56, 2)
+                    struct.pack_into("<I", data, 120, 0x6474E552)
+                    struct.pack_into("<Q", data, 136, 0x3F00)
+                    struct.pack_into("<Q", data, 160, 0x100)
+                    elf.check_elf(data, abi)
+                    struct.pack_into("<Q", data, 160, 0x1100)
+                    with self.assertRaisesRegex(ValueError, "RELRO"):
+                        elf.check_elf(data, abi)
 
 
 if __name__ == "__main__":

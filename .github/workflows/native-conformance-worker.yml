@@ -212,6 +212,8 @@ jobs:
           path: ${{ runner.temp }}/android-artifact
       - name: install the archive into an independent Android project
         run: python3 bindings/kotlin/ci/prepare-consumer.py "$RUNNER_TEMP/android-artifact" "$RUNNER_TEMP/android-consumer"
+      - name: compile the independent application and tests before starting an emulator
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble
       - name: allow this ephemeral runner to use hardware virtualization
         run: sudo setfacl -m "u:$(id -un):rw" /dev/kvm
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d

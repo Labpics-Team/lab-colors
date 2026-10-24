@@ -152,6 +152,18 @@ class ContractTest {
         try { v2.selectionRelease(2uL, listOf(listOf(state))); fail("duplicate release accepted") }
         catch (_: ProgramWireException.InvalidDeclaration) { }
         assertArrayEquals(accepted, v2.finish())
+        // Даже обход Kotlin internal через JVM-reflection не может испортить v1.
+        val v1 = ProgramWireBuilderV1()
+        val v1Before = v1.finish()
+        val selection = ProgramWireBuilderV1::class.java.declaredMethods.single {
+            it.name.substringBefore('-').substringBefore('$') == "selection"
+        }
+        selection.isAccessible = true
+        try { selection.invoke(v1, 1L, listOf(listOf(state))); fail("v1 selection was encoded") }
+        catch (failure: java.lang.reflect.InvocationTargetException) {
+            assertTrue(failure.cause is ProgramWireException.InvalidDeclaration)
+        }
+        assertArrayEquals(v1Before, v1.finish())
         val reentrant = object : AbstractList<ProgramCandidate>() {
             override val size: Int get() = 1
             override fun get(index: Int): ProgramCandidate {
