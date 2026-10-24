@@ -105,7 +105,7 @@ let package = Package(
 ''')
     shutil.copy2(ROOT / "LICENSE", sdk)
     shutil.copy2(ROOT / "bindings/swift/DISTRIBUTION.md", sdk / "README.md")
-    run("node", "bindings/swift/ci/licenses.mjs", str(sdk), str(package_inventory))
+    run("node", "scripts/native-distribution-licenses.mjs", str(sdk), str(package_inventory))
     metadata = {"schemaVersion": 1, "sourceCommit": revision, "coreTree": core_tree,
                 "rustToolchain": toolchain, "xcode": run("xcodebuild", "-version", capture=True),
                 "swift": run("swift", "--version", capture=True), "minimumPlatforms": MINIMUM,

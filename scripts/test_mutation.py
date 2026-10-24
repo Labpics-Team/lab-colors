@@ -2219,7 +2219,7 @@ const names = [
   ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
-  ['swift package (Linux)', 'swift package (macOS and iOS)'],
+  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package'],
 ];
 const mutations = {
   valid: () => {},
@@ -2251,6 +2251,9 @@ const mutations = {
   missingApple: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('swift package (macOS and iOS)')); },
   skippedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'skipped'; },
   failedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'failure'; },
+  missingAndroid: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('android package')); },
+  skippedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'skipped'; },
+  failedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'failure'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {
@@ -2320,7 +2323,7 @@ const mutations = {
             text=True, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("29 receipt scenarios passed", result.stdout)
+        self.assertIn("32 receipt scenarios passed", result.stdout)
 
     def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
         workflow, _ = load_publish_worker()

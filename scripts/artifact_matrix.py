@@ -51,7 +51,7 @@ TREE_ROOTS: tuple[str, ...] = (
     "Cargo.lock",
     "crates",
     "conformance",
-    "bindings/swift",
+    "bindings",
     "packages/colors",
     "proof",
     "scripts",

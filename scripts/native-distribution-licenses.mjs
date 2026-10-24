@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { distributionNotices, licenseInventory } from "../../../scripts/distribution-licenses.mjs";
+import { distributionNotices, licenseInventory } from "./distribution-licenses.mjs";
 
 const [output, artifactInventory] = process.argv.slice(2), toolchain = process.env.RUST_TOOLCHAIN;
 if (!output || !artifactInventory || !toolchain) throw new Error("usage: RUST_TOOLCHAIN=... licenses.mjs SDK_DIRECTORY BUILD_PACKAGES_JSON");
@@ -24,7 +24,7 @@ const components = [...identities].sort().map((id) => {
     licenses: [{ expression: pkg.license }] };
 });
 await writeFile(resolve(output, "dependency-licenses.json"), JSON.stringify(licenseInventory({ components }), null, 2) + "\n");
-const upstream = JSON.parse(await readFile(new URL("../../../crates/labcolors-ffi/third-party-notices.json", import.meta.url), "utf8"));
+const upstream = JSON.parse(await readFile(new URL("../crates/labcolors-ffi/third-party-notices.json", import.meta.url), "utf8"));
 if (upstream.schemaVersion !== 1 || !Array.isArray(upstream.notices)) throw new Error("unknown upstream notice inventory");
 await writeFile(resolve(output, "THIRD-PARTY-NOTICES.md"),
   await distributionNotices(metadata, { components }, undefined, upstream.notices));
