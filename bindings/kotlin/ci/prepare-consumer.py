@@ -51,6 +51,7 @@ def main(distribution: Path, consumer: Path) -> None:
     (assets / "build-metadata.json").write_text(json.dumps(manifest) + "\n")
     with (consumer / "gradle.properties").open("a") as out:
         out.write("publicationVersion=" + manifest["version"] + "\n")
+        out.write("supportedAbis=" + ",".join(manifest["abis"]) + "\n")
     sdkmanager = Path(os.environ["ANDROID_HOME"]) / "cmdline-tools/latest/bin/sdkmanager"
     run(str(sdkmanager), "--install", "platforms;android-36", "build-tools;36.0.0")
     executable = gradle(consumer / "tools")

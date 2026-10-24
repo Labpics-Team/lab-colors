@@ -71,6 +71,14 @@ def main(consumer: Path, expected_page: int) -> None:
         "release": {"optimizedApplicationExecutesTheInstalledNativePackage"},
     }
     for variant, tests in expected_tests.items():
+        # Application.onCreate должен выполнить этот APK, а не оставить успех
+        # от предыдущей debug/release установки в SharedPreferences.
+        package = "pics.lab.colors.consumer"
+        installed = subprocess.check_output([str(adb), "shell", "pm", "list", "packages", package], text=True).splitlines()
+        if "package:" + package in installed:
+            cleared = subprocess.check_output([str(adb), "shell", "pm", "clear", package], text=True).strip()
+            if cleared != "Success":
+                raise ValueError("cannot clear previous consumer application state")
         subprocess.run([executable, "--no-daemon", "--max-workers=2", "-PconsumerBuildType=" + variant,
                         "connected" + variant.title() + "AndroidTest"], cwd=consumer, env=environment, check=True)
         passed = set()

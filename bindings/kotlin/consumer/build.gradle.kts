@@ -8,6 +8,7 @@ android {
     defaultConfig {
         applicationId = "pics.lab.colors.consumer"
         minSdk = 23
+        ndk { abiFilters.addAll(providers.gradleProperty("supportedAbis").get().split(",")) }
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

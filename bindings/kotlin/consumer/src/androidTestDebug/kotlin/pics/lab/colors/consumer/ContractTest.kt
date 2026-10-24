@@ -46,7 +46,7 @@ private class Host : ProgramPointSinkHost {
             }
             ProgramPointSinkOperation.REVOKE_ALL -> assertNull(intent.point)
         }
-        if (fail) throw ProgramPointSinkCallbackException.InvocationFailed("declined before effect")
+        if (fail) throw ProgramPointSinkCallbackException.InvocationFailed()
         if (reject) return false
         if (intent.operation != ProgramPointSinkOperation.CONFIRM_EXACT) assertEquals(sequence + 1uL, intent.desiredSequence)
         point = intent.point?.source?.copyOf()
