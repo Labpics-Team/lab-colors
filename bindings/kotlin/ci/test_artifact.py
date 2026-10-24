@@ -1,0 +1,71 @@
+"""Контрольные примеры для установки архива и проверки Android ELF."""
+import hashlib
+import importlib.util
+from pathlib import Path
+import struct
+import tempfile
+import unittest
+import zipfile
+
+ROOT = Path(__file__).resolve().parent
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+consumer = load("prepare-consumer")
+elf = load("test-consumer")
+
+
+class ArtifactTests(unittest.TestCase):
+    def test_archive_checks_bytes_inventory_and_path_before_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, permitted in [("repository/a.aar", True), ("../escape", False), ("repository/./a", False), ("/absolute", False)]:
+                with self.subTest(name=name):
+                    archive = root / "sdk.zip"
+                    with zipfile.ZipFile(archive, "w") as bundle:
+                        bundle.writestr(name, b"verified bytes")
+                    manifest = {"archiveSha256": consumer.digest(archive),
+                                "files": {name: hashlib.sha256(b"verified bytes").hexdigest()}}
+                    target = root / "consumer"
+                    if permitted:
+                        consumer.extract(archive, manifest, target)
+                        self.assertEqual((target / name).read_bytes(), b"verified bytes")
+                        manifest["files"][name] = "0" * 64
+                        with self.assertRaisesRegex(ValueError, "checksum"):
+                            consumer.extract(archive, manifest, root / "changed")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "path"):
+                            consumer.extract(archive, manifest, target)
+
+    def test_elf_admits_aligned_native_slices_and_rejects_wrong_abi_or_alignment(self):
+        for abi, (word, machine) in elf.MACHINES.items():
+            with self.subTest(abi=abi):
+                data = bytearray(256)
+                data[:6] = b"\x7fELF" + bytes((word, 1))
+                struct.pack_into("<H", data, 18, machine)
+                struct.pack_into("<Q" if word == 2 else "<I", data, 32 if word == 2 else 28, 64)
+                struct.pack_into("<HH", data, 54 if word == 2 else 42, 56 if word == 2 else 32, 1)
+                struct.pack_into("<I", data, 64, 1)
+                if word == 2:
+                    struct.pack_into("<QQQ", data, 96, 128, 128, 16384)
+                else:
+                    struct.pack_into("<II", data, 80, 128, 128)
+                    struct.pack_into("<I", data, 92, 16384)
+                elf.check_elf(data, abi)
+                malformed = data.copy()
+                struct.pack_into("<H", malformed, 18, 0)
+                with self.assertRaisesRegex(ValueError, "ABI"):
+                    elf.check_elf(malformed, abi)
+                struct.pack_into("<Q" if word == 2 else "<I", data, 112 if word == 2 else 92, 2048)
+                with self.assertRaisesRegex(ValueError, "page size"):
+                    elf.check_elf(data, abi)
+
+
+if __name__ == "__main__":
+    unittest.main()
