@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { posix, resolve } from "node:path";
 import ts from "../packages/colors/node_modules/typescript/lib/typescript.js";
 const fail = (message) => { throw new Error(message); };
 
@@ -23,3 +25,27 @@ export function authoringSurface(documents) {
   return result;
 }
 
+
+export function authoringExportPaths(pkg) {
+  if (!pkg?.exports || typeof pkg.exports !== "object" || Array.isArray(pkg.exports)) {
+    fail("public package exports are missing");
+  }
+  const paths = new Set();
+  for (const [name, entry] of Object.entries(pkg.exports)) {
+    if (!name.startsWith("./program-wire/")) continue;
+    const path = entry?.types;
+    if (typeof path !== "string" || !path.startsWith("./program-wire/") || !path.endsWith(".d.ts") ||
+        path.includes("\\") || path.includes("\0") || posix.normalize(path) !== path.slice(2)) {
+      fail("public authoring export has no local canonical type declaration: " + name);
+    }
+    paths.add(path);
+  }
+  if (paths.size === 0) fail("public authoring exports are missing");
+  return [...paths].sort();
+}
+
+export async function loadAuthoringDocuments(packageRoot) {
+  const pkg = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8"));
+  return Object.fromEntries(await Promise.all(authoringExportPaths(pkg).map(async path =>
+    [path, await readFile(resolve(packageRoot, path), "utf8")])));
+}

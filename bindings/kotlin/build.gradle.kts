@@ -17,10 +17,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+    // Производитель уже удалил отладочные символы и проверяет точные байты.
+    packaging { jniLibs.keepDebugSymbols.add("**/liblabcolors.so") }
     publishing { singleVariant("release") { withSourcesJar() } }
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8 } }
-dependencies { api("net.java.dev.jna:jna:5.18.1@aar") }
+dependencies {
+    api("net.java.dev.jna:jna:5.18.1@aar")
+    compileOnly("androidx.annotation:annotation:1.9.1")
+}
 afterEvaluate {
     publishing {
         publications {

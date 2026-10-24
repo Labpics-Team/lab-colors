@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { authoringSurface } from "./authoring-surface.mjs";
+import { authoringSurface, loadAuthoringDocuments } from "./authoring-surface.mjs";
 export { authoringSurface } from "./authoring-surface.mjs";
 
 const camel = (name) => name.replace(/_([a-z0-9])/gu, (_, letter) => letter.toUpperCase());
@@ -82,8 +82,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const [inventoryPath, ...graphs] = process.argv.slice(2);
   if (!inventoryPath || graphs.length === 0) fail("usage: verify-swift-surface.mjs INVENTORY SYMBOL_GRAPH...");
   const root = fileURLToPath(new URL("..", import.meta.url));
-  const documents = Object.fromEntries(await Promise.all(["abi-v1.d.ts", "abi-v2.d.ts"].map(async (name) =>
-    [name, await readFile(resolve(root, "packages/colors/program-wire", name), "utf8")])));
+  const documents = await loadAuthoringDocuments(resolve(root, "packages/colors"));
   const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
   for (const path of graphs) {
     const count = verifySwiftSurface(inventory, documents, JSON.parse(await readFile(path, "utf8")));

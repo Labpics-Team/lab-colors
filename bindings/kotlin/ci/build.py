@@ -52,11 +52,11 @@ def gradle(directory: Path) -> Path:
 
 
 def main(output: Path) -> None:
-    if sys.platform != "linux" or output.exists():
-        raise ValueError("Android producer needs Linux and a new output directory")
+    if sys.platform != "linux" or (output.exists() and any(path.name != "target" for path in output.iterdir())):
+        raise ValueError("Android producer needs Linux; output may contain only the restored Cargo cache")
     if run("git", "status", "--porcelain", "--untracked-files=no", capture=True):
         raise ValueError("source revision must be clean")
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=True)
     toolchain = os.environ["RUST_TOOLCHAIN"]
     sdk = Path(os.environ["ANDROID_HOME"])
     sdkmanager = sdk / "cmdline-tools/latest/bin/sdkmanager"

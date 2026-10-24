@@ -95,6 +95,11 @@ class ContractTest {
                 first.outputRgb(0u)[0] = 123
                 assertArrayEquals(rgb(0, 0, 0), first.outputRgb(0u))
                 expectCode("invalid_output_index") { first.outputRgb(1u) }
+                runtime.updateObserved(ULong.MAX_VALUE, listOf(1u), rgb(255, 255, 255), 1u).use {
+                    assertEquals("ready", it.state())
+                    assertArrayEquals(rgb(0, 0, 0), it.outputRgb(0u))
+                }
+                runtime.updateObserved(ULong.MAX_VALUE, listOf(1u), rgb(255, 255, 255), 1u).close()
                 expectCode("program_update") { runtime.updateUnknown(1uL, 7u).close() }
             } finally { held.forEach { it.close() }; worker.shutdownNow() }
         }
