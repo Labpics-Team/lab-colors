@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import struct
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -63,6 +64,21 @@ def check_apk(path: Path, sdk: Path) -> None:
     subprocess.run([str(sdk / "build-tools/36.0.0/zipalign"), "-c", "-P", "16", "4", str(path)], check=True)
 
 
+def verify_reports(directory: Path, required: set[str]) -> None:
+    passed = set()
+    for report in directory.rglob("TEST-*.xml"):
+        tree = ET.parse(report)
+        for suite in tree.iter("testsuite"):
+            if any(int(suite.get(key, "0")) != 0 for key in ("failures", "errors", "skipped")):
+                raise ValueError("external consumer test suite failed or was skipped")
+        for case in tree.iter("testcase"):
+            if any(child.tag in ("failure", "error", "skipped") for child in case):
+                raise ValueError("external consumer test failed or was skipped")
+            passed.add(case.attrib["name"])
+    if not required.issubset(passed):
+        raise ValueError("consumer did not execute its required tests: " + str(required - passed))
+
+
 def main(consumer: Path, expected_page: int) -> None:
     sdk = Path(os.environ["ANDROID_HOME"])
     adb = sdk / "platform-tools/adb"
@@ -85,20 +101,18 @@ def main(consumer: Path, expected_page: int) -> None:
             cleared = subprocess.check_output([str(adb), "shell", "pm", "clear", package], text=True).strip()
             if cleared != "Success":
                 raise ValueError("cannot clear previous consumer application state")
+        reports = consumer / "build/outputs/androidTest-results"
+        # Результат debug не может подтвердить пропущенный тест release.
+        if reports.exists():
+            shutil.rmtree(reports)
         subprocess.run([executable, "--no-daemon", "--max-workers=2", "-PconsumerBuildType=" + variant,
                         "-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=" + str(expected_page),
                         "connected" + variant.title() + "AndroidTest"], cwd=consumer, env=environment, check=True)
-        passed = set()
-        reports = list((consumer / "build/outputs/androidTest-results").rglob("TEST-*.xml"))
-        for report in reports:
-            tree = ET.parse(report)
-            for case in tree.iter("testcase"):
-                if list(case):
-                    if any(child.tag in ("failure", "error", "skipped") for child in case):
-                        raise ValueError("external consumer test failed or was skipped")
-                passed.add(case.attrib["name"])
-        if not tests.issubset(passed):
-            raise ValueError("consumer did not execute its required tests: " + str(tests - passed))
+        verify_reports(reports, tests)
+        evidence = consumer / "build/outputs/verified-android-tests" / variant
+        if evidence.exists():
+            shutil.rmtree(evidence)
+        shutil.copytree(reports, evidence)
         apks = list((consumer / "build/outputs/apk" / variant).glob("*.apk"))
         if len(apks) != 1:
             raise ValueError("expected one installed application APK")

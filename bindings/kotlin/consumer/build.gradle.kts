@@ -30,6 +30,7 @@ dependencies {
     implementation("pics.lab:colors-android:" + providers.gradleProperty("publicationVersion").get())
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    // AndroidX Test references these annotations; R8 also checks the test APK.
-    androidTestImplementation("com.google.errorprone:error_prone_annotations:2.41.0")
+    // AndroidX Test references these annotations. 2.46 removes the desktop
+    // javax.lang.model reference that earlier releases exposed to Android R8.
+    androidTestImplementation("com.google.errorprone:error_prone_annotations:2.46.0")
 }

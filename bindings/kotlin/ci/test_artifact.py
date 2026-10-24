@@ -5,6 +5,7 @@ import subprocess
 import importlib.util
 from pathlib import Path
 import struct
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -44,6 +45,27 @@ class ArtifactTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(ValueError, "path"):
                             consumer.extract(archive, manifest, target)
+
+    def test_consumer_reports_require_current_tests_and_reject_partial_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reports = Path(directory) / "reports"
+            reports.mkdir()
+            report = reports / "TEST-consumer.xml"
+            report.write_text('<testsuite tests="2" failures="0"><testcase name="app"/><testcase name="page"/></testsuite>')
+            elf.verify_reports(reports, {"app", "page"})
+            # Same reset used between variants: no prior debug result remains.
+            shutil.rmtree(reports)
+            with self.assertRaisesRegex(ValueError, "required tests"):
+                elf.verify_reports(reports, {"app", "page"})
+            reports.mkdir()
+            for body in [
+                '<testsuite><testcase name="app"/></testsuite>',
+                '<testsuite failures="1"><testcase name="app"/><testcase name="page"/></testsuite>',
+                '<testsuite><testcase name="app"/><testcase name="page"><skipped/></testcase></testsuite>',
+            ]:
+                report.write_text(body)
+                with self.assertRaises(ValueError):
+                    elf.verify_reports(reports, {"app", "page"})
 
     def test_android_aggregate_requires_all_finished_consumers(self):
         workflow = (ROOT.parents[2] / ".github/workflows/native-conformance-worker.yml").read_text()
