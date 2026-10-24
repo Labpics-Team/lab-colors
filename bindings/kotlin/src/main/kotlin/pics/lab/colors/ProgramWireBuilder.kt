@@ -83,8 +83,10 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
     fun source(id: UInt, rgb: ByteArray) = entry(0) { it.u32(id); it.rgb(rgb) }
     fun fixedTarget(id: UInt, source: UInt) = entry(1) { it.u32(id); it.u8(1); it.u32(source) }
     fun finiteTarget(id: UInt, candidates: List<ProgramCandidate>) = entry(1) { out ->
-        out.u32(id); out.u8(2); out.u32(count(candidates.size))
-        for (candidate in candidates) {
+        val size = count(candidates.size).toInt()
+        out.u32(id); out.u8(2); out.u32(size.toUInt())
+        for (index in 0 until size) {
+            val candidate = candidates[index]
             out.u32(candidate.id); out.rgb(candidate.rgb); out.f64(opacity(candidate.opacity))
         }
     }
@@ -127,24 +129,33 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         it.u32(id); it.u8(10); it.u32(root); it.u32(occurrence)
     }
     fun exactIntrinsicRelationHard(id: UInt, reference: UInt, candidates: List<UInt>) = entry(11) {
-        it.u32(id); it.u8(4); it.u32(reference); it.u32(count(candidates.size))
-        for (candidate in candidates) it.u32(candidate)
+        val size = count(candidates.size).toInt()
+        it.u32(id); it.u8(4); it.u32(reference); it.u32(size.toUInt())
+        for (index in 0 until size) it.u32(candidates[index])
     }
     fun output(slot: UInt, paint: UInt) = entry(13) { it.u32(slot); it.u32(paint) }
 
     protected fun selection(revision: ULong, rankGroups: List<List<ProgramSelectionState>>) {
         if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("selection release already exists")
         entry(3) { out ->
-            out.u64(revision); out.u32(count(rankGroups.size))
+            val groupCount = count(rankGroups.size).toInt()
+            out.u64(revision); out.u32(groupCount.toUInt())
             var states = 0
             var choices = 0
-            for (group in rankGroups) {
-                out.u32(count(group.size)); states += group.size
+            for (groupIndex in 0 until groupCount) {
+                val group = rankGroups[groupIndex]
+                val stateCount = count(group.size).toInt()
+                out.u32(stateCount.toUInt()); states += stateCount
                 if (states > 4096) throw ProgramWireException.TooManyEntries()
-                for (state in group) {
-                    out.u32(state.id); out.u32(count(state.choices.size)); choices += state.choices.size
+                for (stateIndex in 0 until stateCount) {
+                    val state = group[stateIndex]
+                    val choiceCount = count(state.choices.size).toInt()
+                    out.u32(state.id); out.u32(choiceCount.toUInt()); choices += choiceCount
                     if (choices > 4096) throw ProgramWireException.TooManyEntries()
-                    for (choice in state.choices) { out.u32(choice.target); out.u32(choice.candidate) }
+                    for (choiceIndex in 0 until choiceCount) {
+                        val choice = state.choices[choiceIndex]
+                        out.u32(choice.target); out.u32(choice.candidate)
+                    }
                 }
             }
         }

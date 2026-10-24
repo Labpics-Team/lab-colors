@@ -1,4 +1,4 @@
-name: Native conformance (Swift) worker
+name: Native conformance worker
 
 # Потребители проверяют ту же исходную ревизию через сгенерированный UniFFI.
 # Linux получает готовую библиотеку в закреплённом Swift-контейнере.
@@ -130,8 +130,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  android-package:
-    name: android package
+  android-build:
+    name: build Android SDK
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -177,7 +177,7 @@ jobs:
 
   android-consumer:
     name: android consumer (${{ matrix.name }})
-    needs: android-package
+    needs: android-build
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -223,3 +223,19 @@ jobs:
           name: android-consumer-api-${{ matrix.api }}-${{ github.sha }}
           path: ${{ runner.temp }}/android-consumer/build/outputs/androidTest-results
           retention-days: 7
+
+  android-package:
+    name: android package
+    needs: [android-build, android-consumer]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: require the artifact and every Android consumer
+        env:
+          BUILD_RESULT: ${{ needs.android-build.result }}
+          CONSUMER_RESULT: ${{ needs.android-consumer.result }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_RESULT" = success
+          test "$CONSUMER_RESULT" = success

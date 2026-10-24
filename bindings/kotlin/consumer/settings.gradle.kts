@@ -3,7 +3,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         exclusiveContent {
-            forRepository { maven { url = uri("repository") } }
+            forRepository { maven { url = uri("installed/repository") } }
             filter { includeGroup("pics.lab") }
         }
         google(); mavenCentral()

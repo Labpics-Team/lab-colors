@@ -136,6 +136,34 @@ class ContractTest {
         try { all.finiteTarget(99u, listOf(ProgramCandidate(1u, rgb(1, 2, 3), 1.0), ProgramCandidate(2u, rgb(1, 2, 3), Double.NaN))); fail("invalid entry accepted") }
         catch (_: ProgramWireException.InvalidDeclaration) { }
         assertArrayEquals(before, all.finish())
+        val v2 = ProgramWireBuilderV2()
+        val state = ProgramSelectionState(1u, listOf(ProgramSelectionChoice(21u, 201u)))
+        val empty = v2.finish()
+        try { v2.selectionRelease(1uL, listOf(listOf(state), emptyList())); fail("empty late group accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        assertArrayEquals(empty, v2.finish())
+        v2.selectionRelease(ULong.MAX_VALUE, listOf(listOf(state)))
+        val accepted = v2.finish()
+        try { v2.selectionRelease(2uL, listOf(listOf(state))); fail("duplicate release accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        assertArrayEquals(accepted, v2.finish())
+        val reentrant = object : AbstractList<ProgramCandidate>() {
+            override val size: Int get() = 1
+            override fun get(index: Int): ProgramCandidate {
+                all.source(999u, rgb(1, 2, 3))
+                return ProgramCandidate(1u, rgb(1, 2, 3), 1.0)
+            }
+        }
+        try { all.finiteTarget(99u, reentrant); fail("reentrant write accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        assertArrayEquals(before, all.finish())
+        val lawful = object : AbstractList<UInt>() {
+            override val size: Int get() = 1
+            override fun get(index: Int) = 11u
+            override fun iterator(): Iterator<UInt> = error("caller iterator must not control bounded encoding")
+        }
+        assertArrayEquals(ProgramWireBuilderV1().exactIntrinsicRelationHard(1u, 11u, listOf(11u)).finish(),
+            ProgramWireBuilderV1().exactIntrinsicRelationHard(1u, 11u, lawful).finish())
         val bounded = ProgramWireBuilderV1()
         repeat(4096) { bounded.surfaceInputPort(it.toUInt()) }
         val full = bounded.finish()

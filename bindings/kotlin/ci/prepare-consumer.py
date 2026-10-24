@@ -40,7 +40,7 @@ def main(distribution: Path, consumer: Path) -> None:
     if manifest["coreTree"] != run("git", "rev-parse", "HEAD:crates/labcolors-core", capture=True):
         raise ValueError("SDK has a different Core identity")
     shutil.copytree(ROOT / "bindings/kotlin/consumer", consumer)
-    extract(distribution / manifest["archive"], manifest, consumer)
+    extract(distribution / manifest["archive"], manifest, consumer / "installed")
     assets = consumer / "src/androidTest/assets"
     assets.mkdir(parents=True)
     for path in (ROOT / "conformance/vectors").glob("*.json"):

@@ -1,4 +1,4 @@
-[bindings.kotlin]
+[defaults.bindings.kotlin]
 package_name = "pics.lab.colors"
 android = true
 generate_immutable_records = true

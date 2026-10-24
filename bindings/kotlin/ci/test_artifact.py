@@ -1,5 +1,7 @@
 """Контрольные примеры для установки архива и проверки Android ELF."""
 import hashlib
+import os
+import subprocess
 import importlib.util
 from pathlib import Path
 import struct
@@ -42,6 +44,26 @@ class ArtifactTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(ValueError, "path"):
                             consumer.extract(archive, manifest, target)
+
+    def test_android_aggregate_requires_all_finished_consumers(self):
+        workflow = (ROOT.parents[2] / ".github/workflows/native-conformance-worker.yml").read_text()
+        aggregate = workflow.split("  android-package:\n", 1)[1]
+        self.assertIn("needs: [android-build, android-consumer]", aggregate)
+        self.assertIn("if: always()", aggregate)
+        self.assertIn("BUILD_RESULT: ${{ needs.android-build.result }}", aggregate)
+        self.assertIn("CONSUMER_RESULT: ${{ needs.android-consumer.result }}", aggregate)
+        script = "\n".join(line[10:] for line in aggregate.split("        run: |\n", 1)[1].splitlines())
+        good = {"BUILD_RESULT": "success", "CONSUMER_RESULT": "success"}
+        environment = {key: value for key, value in os.environ.items() if key not in (*good, "BASH_ENV", "ENV")}
+        def execute(values):
+            return subprocess.run(["bash", "--noprofile", "--norc", "-c", script],
+                                  env=environment | values, capture_output=True, check=False, timeout=5)
+        self.assertEqual(execute(good).returncode, 0)
+        for key in good:
+            for result in ["failure", "cancelled", "skipped", "neutral", "in_progress", ""]:
+                with self.subTest(key=key, result=result):
+                    self.assertNotEqual(execute(good | {key: result}).returncode, 0)
+            self.assertNotEqual(execute({name: value for name, value in good.items() if name != key}).returncode, 0)
 
     def test_elf_admits_aligned_native_slices_and_rejects_wrong_abi_or_alignment(self):
         for abi, (word, machine) in elf.MACHINES.items():

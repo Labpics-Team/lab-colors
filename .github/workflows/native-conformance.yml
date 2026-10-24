@@ -1,4 +1,4 @@
-name: Native conformance (Swift)
+name: Native conformance
 
 # Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
 # из того же коммита, что и caller, независимо от checkout и squash-истории.
@@ -34,7 +34,7 @@ jobs:
   # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
   # эти имена буквально.
   worker:
-    name: Native conformance (Swift)
+    name: Native conformance
     permissions:
       contents: read
     uses: ./.github/workflows/native-conformance-worker.yml

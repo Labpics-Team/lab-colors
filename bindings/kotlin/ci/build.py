@@ -64,12 +64,14 @@ def main(output: Path) -> None:
     compiler = sdk / "ndk" / NDK / "toolchains/llvm/prebuilt/linux-x86_64/bin"
     environment = dict(os.environ, CARGO_TARGET_DIR=str(output / "target"))
     run("rustup", "target", "add", "--toolchain", toolchain, *(row[0] for row in ABIS.values()))
-    run("cargo", "+" + toolchain, "build", "--locked", "--release", "--lib", "-p", "labcolors-ffi", env=environment)
+    # ELF release stripping removes bindgen metadata, so generation uses an
+    # unstripped host build; published Android libraries remain release builds.
+    run("cargo", "+" + toolchain, "build", "--locked", "-p", "labcolors-ffi", "--features", "cli", env=environment)
     project = output / "producer"
     shutil.copytree(ROOT / "bindings/kotlin", project,
                     ignore=shutil.ignore_patterns("ci", "consumer", "README.md", ".gradle", "build"))
     run("cargo", "+" + toolchain, "run", "--locked", "-p", "labcolors-ffi", "--features", "cli",
-        "--bin", "uniffi-bindgen", "--", "generate", "--library", str(output / "target/release/liblabcolors.so"),
+        "--bin", "uniffi-bindgen", "--", "generate", "--library", str(output / "target/debug/liblabcolors.so"),
         "--language", "kotlin", "--config", str(project / "uniffi.toml"), "--out-dir", str(project / "generated"), env=environment)
     packages: set[str] = set()
     for abi, (target, clang_target) in ABIS.items():
@@ -92,9 +94,12 @@ def main(output: Path) -> None:
     notices = project / "src/main/assets/labcolors"
     notices.mkdir(parents=True)
     run("node", "scripts/native-distribution-licenses.mjs", str(notices), str(package_inventory), env=environment)
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    core_version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    source_commit = run("git", "rev-parse", "HEAD", capture=True)
+    # CI-архивы разных ревизий не разделяют изменяемую Maven-координату.
+    version = core_version + "-" + source_commit
     metadata = {"schemaVersion": 1, "version": version,
-                "sourceCommit": run("git", "rev-parse", "HEAD", capture=True),
+                "sourceCommit": source_commit, "coreVersion": core_version,
                 "coreTree": run("git", "rev-parse", "HEAD:crates/labcolors-core", capture=True),
                 "minimumApi": 23, "abis": sorted(ABIS), "ndk": NDK,
                 "rustToolchain": toolchain, "gradle": GRADLE_VERSION}

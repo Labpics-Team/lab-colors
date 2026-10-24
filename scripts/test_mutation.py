@@ -2219,7 +2219,7 @@ const names = [
   ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
-  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package', 'android consumer (minimum API)', 'android consumer (16 KB)'],
+  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package'],
 ];
 const mutations = {
   valid: () => {},
@@ -2252,8 +2252,8 @@ const mutations = {
   skippedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'skipped'; },
   failedApple: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('swift package (macOS and iOS)')).conclusion = 'failure'; },
   missingAndroid: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('android package')); },
-  skippedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android consumer (minimum API)')).conclusion = 'skipped'; },
-  failedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android consumer (16 KB)')).conclusion = 'failure'; },
+  skippedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'skipped'; },
+  failedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'failure'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {

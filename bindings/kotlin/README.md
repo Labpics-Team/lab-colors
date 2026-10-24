@@ -7,9 +7,11 @@ Kotlin вызывает общий Rust Core через сгенерирован
 ## Подключение
 
 Распакуйте `LabColors.android.zip` проверенной ревизии. Добавьте вложенный
-`repository` как Maven-репозиторий и зависимость `pics.lab:colors-android:0.3.0`.
+`repository` как Maven-репозиторий и зависимость `pics.lab:colors-android:<version>`.
 Версия и точный Git commit находятся в `build-metadata.json`; архив и каждый
-файл привязаны SHA-256 в `android-release-manifest.json`. Артефакт из PR требует
+файл привязаны SHA-256 в `android-release-manifest.json`. Замените `<version>`
+значением `version` из этого манифеста: разные исходные ревизии не используют
+одну Maven-координату. Артефакт из PR требует
 успешных Android consumer jobs этой же ревизии и сам по себе не является релизом.
 Публикация в Maven Central не выполняется автоматически.
 
@@ -21,7 +23,7 @@ repositories {
     mavenCentral()
 }
 // build.gradle.kts приложения
-dependencies { implementation("pics.lab:colors-android:0.3.0") }
+dependencies { implementation("pics.lab:colors-android:<version>") }
 ```
 
 POM и Gradle metadata передают Kotlin и JNA зависимости. Подключение отдельного

@@ -153,8 +153,6 @@ jobs:
                 "swift package (Linux)",
                 "swift package (macOS and iOS)",
                 "android package",
-                "android consumer (minimum API)",
-                "android consumer (16 KB)",
               ],
             },
           ];
