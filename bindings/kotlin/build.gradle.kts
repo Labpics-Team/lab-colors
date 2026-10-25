@@ -23,7 +23,7 @@ android {
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8 } }
 dependencies {
-    api("net.java.dev.jna:jna:5.18.1@aar")
+    api("net.java.dev.jna:jna:5.14.0@aar")
     compileOnly("androidx.annotation:annotation:1.9.1")
 }
 afterEvaluate {

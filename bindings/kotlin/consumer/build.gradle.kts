@@ -16,7 +16,7 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             signingConfig = signingConfigs.getByName("debug")
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "instrumentation-rules.pro")
         }
     }
     testBuildType = providers.gradleProperty("consumerBuildType").getOrElse("debug")
