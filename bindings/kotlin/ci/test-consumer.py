@@ -361,6 +361,15 @@ def assemble(consumer: Path) -> None:
                            cwd=consumer, env=environment, check=True)
             stages[variant][category] = "assembled"
             inventory(consumer, stages)
+        if variant == "release":
+            app_apks = list((consumer / "build/outputs/apk/release").glob("*.apk"))
+            test_apks = list((consumer / "build/outputs/apk/androidTest/release").glob("*.apk"))
+            if len(app_apks) != 1 or len(test_apks) != 1:
+                raise ValueError("expected one release app/test APK pair")
+            with (evidence / "desugar-linkage.txt").open("w") as output:
+                subprocess.run([sys.executable, str(Path(__file__).with_name("desugar-linkage.py")),
+                                str(app_apks[0]), str(test_apks[0])], check=True,
+                               stdout=output, stderr=subprocess.STDOUT)
 
 
 if __name__ == "__main__":

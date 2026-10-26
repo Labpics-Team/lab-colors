@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import importlib.util
 from pathlib import Path
 import struct
@@ -220,7 +221,12 @@ class ArtifactTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
             with patch.dict(os.environ, {"JAVA_HOME": directory}), patch.object(elf.subprocess, "run", side_effect=execute):
                 elf.assemble(root)
-            self.assertEqual(len(calls), 8)
+            self.assertEqual(len(calls), 9)
+            linkage = calls[-1]
+            self.assertEqual(linkage[:2], [sys.executable, str(ROOT / "desugar-linkage.py")])
+            self.assertEqual(linkage[2:], [str(root / "build/outputs/apk/release/app.apk"),
+                                           str(root / "build/outputs/apk/androidTest/release/test.apk")])
+            self.assertTrue((root / "build/outputs/consumer-diagnostics/release/desugar-linkage.txt").is_file())
             for variant in ("debug", "release"):
                 for configuration in (variant + "RuntimeClasspath", variant + "AndroidTestRuntimeClasspath"):
                     self.assertTrue((root / "build/outputs/consumer-diagnostics" / variant / (configuration + ".txt")).is_file())
