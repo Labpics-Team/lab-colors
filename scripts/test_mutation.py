@@ -1792,7 +1792,7 @@ class MutationTruthTest(unittest.TestCase):
             self.assertIn(anchor, jobs[owner])
 
         self.assertIn(
-            'run: python3 scripts/authority_mutation_gate.py --scope "${{ matrix.scope }}"',
+            'run: python3 scripts/check_authority_mutations.py --scope "${{ matrix.scope }}"',
             jobs["authority-mutation-worker"],
         )
         self.assertIn("case \"$REGION_MODE\" in", jobs["region-proof-worker"])
@@ -2946,7 +2946,7 @@ jobs:
 
 class AuthorityMutationShardContractTest(unittest.TestCase):
     def test_required_scopes_partition_every_semantic_mutant_once(self):
-        import authority_mutation_gate as gate
+        import check_authority_mutations as gate
         gate.validate_scope_partition()
         self.assertEqual(
             gate.REQUIRED_SCOPES,
@@ -2970,9 +2970,9 @@ class AuthorityMutationShardContractTest(unittest.TestCase):
 
     def test_external_scopes_do_not_execute_core_mutants(self):
         from unittest.mock import patch
-        import authority_mutation_gate as gate
-        for scope, script in (("science", "science_certificate_gate.py"),
-                              ("cli", "evaluation_cli_gate.py")):
+        import check_authority_mutations as gate
+        for scope, script in (("science", "check_science_mutations.py"),
+                              ("cli", "check_evaluation_mutations.py")):
             with self.subTest(scope=scope), \
                  patch.object(gate, "run_mutant") as mutants, \
                  patch.object(gate, "verify_evaluation_borrows") as borrows, \
@@ -2990,15 +2990,15 @@ class CliGateWiringTest(unittest.TestCase):
         from contextlib import redirect_stdout
         import io
         from unittest.mock import patch
-        import authority_mutation_gate as gate
+        import check_authority_mutations as gate
         # Предметная проверка исполняется отдельно; здесь проверяется реальный
         # маршрут main с подменёнными дорогими эффектами, не текстовый маркер.
         with patch.object(gate, "run_mutant"), patch.object(gate, "verify_evaluation_borrows"), \
              patch.object(gate.subprocess, "run") as calls, redirect_stdout(io.StringIO()):
             gate.main()
         scripts = [call.args[0][1] for call in calls.call_args_list]
-        self.assertEqual(scripts, [str(gate.ROOT / "scripts/science_certificate_gate.py"),
-                                   str(gate.ROOT / "scripts/evaluation_cli_gate.py")])
+        self.assertEqual(scripts, [str(gate.ROOT / "scripts/check_science_mutations.py"),
+                                   str(gate.ROOT / "scripts/check_evaluation_mutations.py")])
         for call in calls.call_args_list:
             self.assertIs(call.kwargs["check"], True)
             self.assertEqual(call.kwargs["cwd"], gate.ROOT)

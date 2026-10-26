@@ -206,7 +206,7 @@ class SourceBuildTests(unittest.TestCase):
         # не научную оценку. Его зависимость идёт только от SCI к кодеку: пустой
         # модуль подтверждает, что кодек не требует EVAL. Все три RUNTIME_SOURCES
         # копируются побайтно без удаления строк или изменения условий сборки.
-        # Реальный SCI целиком проверяется workspace и science_certificate_gate.
+        # Реальный SCI целиком проверяется workspace и check_science_mutations.
         (core / "src/certificate/science.rs").write_text(
             "// SCI не входит в предмет std-only проверки LCEN/source.\n"
         )
