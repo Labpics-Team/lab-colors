@@ -591,7 +591,7 @@
   "scripts/test_mutation.py": "e7939d330b94aaa065d656a724f6166cf4e314e4",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
-  "scripts/test_strict_secret_scan.py": "9fa6b96895228037b4a91ca662fb40f115b516bf",
+  "scripts/test_strict_secret_scan.py": "5696e7fcd544b0627ae8f730ce2b2ad3271dd582",
   "scripts/test_swift_surface.mjs": "ef6d52ecf9e74bec8dab126b2192405604c7dcca",
   "scripts/test_transport_distribution.mjs": "483eff5cdcdedd9507ef7ed6d1444e8ee6ffb2f1",
   "scripts/test_verify_clean_set_receipt.py": "93f965fcef796a951ee5f4643cb174889f0853f3",
@@ -609,7 +609,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "6ba9eca7279f3800c196059b6e446e064c03e2928ebbf1d85cbf280f4e8aaf3d",
+ "record_sha256": "85a95cdb06e154b66fee925a8e72053c8ff22f26bca1f178ae1c435a189ea677",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
