@@ -14,6 +14,7 @@ android {
         jniLibs.srcDir("jniLibs")
     }
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
@@ -23,7 +24,8 @@ android {
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8 } }
 dependencies {
-    api("net.java.dev.jna:jna:5.14.0@aar")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    api("net.java.dev.jna:jna:5.19.1@aar")
     compileOnly("androidx.annotation:annotation:1.9.1")
 }
 afterEvaluate {
