@@ -549,8 +549,8 @@ def run_mutation_scope(scope: str) -> None:
     print(f"mutation shard {scope}: caught {len(authority_names) + len(bounded_names)} semantic mutants")
 
 
-def run_external_gate(script: str, label: str) -> None:
-    """Execute one existing standalone semantic gate as its own CI shard."""
+def run_external_mutations(script: str, label: str) -> None:
+    """Execute one standalone mutation suite as its own CI shard."""
     subprocess.run([sys.executable, str(ROOT / "scripts" / script)], cwd=ROOT, check=True)
     print(f"mutation shard {label}: passed")
 
@@ -560,9 +560,9 @@ def run_scope(scope: str) -> None:
     if scope in MUTATION_SCOPES:
         run_mutation_scope(scope)
     elif scope == "science":
-        run_external_gate("science_certificate_gate.py", scope)
+        run_external_mutations("check_science_mutations.py", scope)
     elif scope == "cli":
-        run_external_gate("evaluation_cli_gate.py", scope)
+        run_external_mutations("check_evaluation_mutations.py", scope)
     else:
         raise SystemExit(f"unknown mutation scope: {scope}")
 

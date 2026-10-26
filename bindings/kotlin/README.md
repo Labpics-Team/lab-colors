@@ -22,14 +22,27 @@ repositories {
     google()
     mavenCentral()
 }
-// build.gradle.kts приложения
-dependencies { implementation("pics.lab:colors-android:<version>") }
+// build.gradle.kts приложения, Android Gradle Plugin 8.0 или новее
+android {
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+}
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    implementation("pics.lab:colors-android:<version>")
+}
 ```
 
 POM и Gradle metadata передают Kotlin и JNA зависимости. Подключение отдельного
 AAR через `files(...)` теряет эти метаданные и не является поддерживаемым
 маршрутом. Rust, Cargo, NDK и внутренние пути Lab Colors приложению не нужны.
-Consumer-правила R8 входят в AAR.
+Consumer-правила R8 входят в AAR. Для API 23 приложению нужен показанный выше
+core-library desugaring: JNA использует Java API, добавленные в Android API 24.
+Этот флаг приложения не передаётся через POM; одной установки Java 8
+source/target недостаточно. Desugaring совместим с R8.
 
 Поставка содержит arm64-v8a, armeabi-v7a, x86 и x86_64; минимальный Android API 23.
 CI исполняет внешний debug-потребитель и приложение после R8 на x86_64
