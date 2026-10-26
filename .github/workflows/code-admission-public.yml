@@ -46,6 +46,30 @@ jobs:
           repo: .code-subject.public01
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           candidate: ${{ github.sha }}
+      # Исторический carrier использует встроенные Trivy-исключения для test/example/md.
+      # Дополнительный проход ужесточает только секреты того же кандидата и не меняет carrier.
+      - name: Scan secrets omitted by Trivy defaults
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d "$RUNNER_TEMP/strict-secret.XXXXXXXX")"
+          trap 'rm -rf -- "$work"' EXIT
+          version=0.74.0
+          sum=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+          curl -fsSL --retry 3 --retry-all-errors -o "$work/trivy.tgz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v$version/trivy_${version}_Linux-64bit.tar.gz"
+          echo "$sum  $work/trivy.tgz" | sha256sum -c -
+          tar -xzf "$work/trivy.tgz" -C "$work" trivy
+          # Digest закрепляет helper относительно workflow; исполняется только копия.
+          helper="$work/strict_secret_scan.py"
+          install -m 0600 scripts/ci/strict_secret_scan.py "$helper"
+          helper_sha256=338f0aff0694d14458c3e030ffe8d296ce17c9eeae235b6a1802028d187a1746
+          printf "%s  %s\n" "$helper_sha256" "$helper" | sha256sum -c -
+          python3 -I "$helper" \
+            "$work/trivy" "$GITHUB_WORKSPACE/.code-subject.public01" "$CANDIDATE_SHA" "$work" \
+            "$GITHUB_WORKSPACE/.github/actions/labpics-code-admission/plans/tools/code-admission/snapshot.mjs"
       - name: Remove candidate checkout
         if: ${{ always() }}
         shell: bash
