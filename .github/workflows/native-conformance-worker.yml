@@ -157,7 +157,7 @@ jobs:
       - name: install canonical declaration parser
         run: npm ci --prefix packages/colors --ignore-scripts
       - name: verify archive admission and native layout controls
-        run: python3 bindings/kotlin/ci/test_artifact.py
+        run: python3 -m unittest discover -s bindings/kotlin/ci -p 'test_*.py'
       - name: build the complete Android AAR and Maven distribution
         run: python3 bindings/kotlin/ci/build.py "$RUNNER_TEMP/android-distribution"
       - name: pass the exact SDK bytes to external consumers

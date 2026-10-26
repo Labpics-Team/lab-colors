@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 import json
 import subprocess
-from science_certificate_gate import git, run
+from check_science_mutations import git, run
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = "crates/labcolors-core/src/point_evaluation.rs"
