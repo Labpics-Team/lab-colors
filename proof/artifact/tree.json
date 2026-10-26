@@ -34,12 +34,12 @@
   "bindings/kotlin/consumer-rules.pro": "a5d12593942576d3019806a048c5b97fbc7a0c6f",
   "bindings/kotlin/consumer/build.gradle.kts": "9e2f715af44fb1085a96a9b7c2bd5d642bd5697d",
   "bindings/kotlin/consumer/gradle.properties": "45b05d65e8012d83d4f8cd05602b97747c44aebc",
-  "bindings/kotlin/consumer/instrumentation-rules.pro": "d74b08c5b86575954fc60e234addba33ca9965eb",
+  "bindings/kotlin/consumer/instrumentation-rules.pro": "1ab94c0c4f60b98c1d5e9c6e23623aea0239b0db",
   "bindings/kotlin/consumer/settings.gradle.kts": "1a1951daea829aaf87e739ef9f3f8b3906d0da40",
   "bindings/kotlin/consumer/src/androidTest/kotlin/pics/lab/colors/consumer/PageSizeTest.kt": "d51ca1af3f628173bbbe316711dfc85c0c8c300c",
   "bindings/kotlin/consumer/src/androidTestDebug/kotlin/pics/lab/colors/consumer/ContractTest.kt": "05eaea1d2113e043d8ded78f4bdf082eeaa5361a",
   "bindings/kotlin/consumer/src/androidTestDebug/kotlin/pics/lab/colors/consumer/SurfaceTest.kt": "053ba2725e5aaa6b72f2e5ccd84e460d5dbe7153",
-  "bindings/kotlin/consumer/src/androidTestRelease/kotlin/pics/lab/colors/consumer/ReleaseTest.kt": "3e30d6d79c6c8366b16533b9a3d5cc453083417c",
+  "bindings/kotlin/consumer/src/androidTestRelease/kotlin/pics/lab/colors/consumer/ReleaseTest.kt": "7778bbdb85cb74d6186b0991e83fd553503654da",
   "bindings/kotlin/consumer/src/main/AndroidManifest.xml": "2f0325b7be8f567a31ba43bd32f992e851b58682",
   "bindings/kotlin/consumer/src/main/kotlin/pics/lab/colors/consumer/ProbeApplication.kt": "f41707307210f103a587abc4c5100ce9151f2133",
   "bindings/kotlin/gradle.properties": "b9b9970199307505b1d31ab6d91cbf6a3f88dd49",
@@ -607,7 +607,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "eb0519e6df3de248c8733d70ee22b51690f82534017fb0a6614ee8d68057688e",
+ "record_sha256": "6273943165f865a2a4666ce8e8d06d535b17da87178b8216f1cae1b47b388fa0",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

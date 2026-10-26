@@ -97,6 +97,7 @@
 -keep class kotlin.jvm.internal.Ref$BooleanRef { *; }
 -keep class kotlin.jvm.internal.Ref$IntRef { *; }
 -keep class kotlin.jvm.internal.Ref$LongRef { *; }
+-keep class kotlin.jvm.internal.Ref$ObjectRef { *; }
 -keep class kotlin.jvm.internal.StringCompanionObject { *; }
 -keep class kotlin.jvm.internal.TypeIntrinsics { *; }
 -keep interface kotlin.jvm.internal.markers.KMappedMarker { *; }
