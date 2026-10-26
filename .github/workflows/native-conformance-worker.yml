@@ -224,15 +224,25 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
-      - name: retain external consumer test reports
-        if: always()
+      - name: verify staged failure artifact inventory
+        if: failure()
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory
+      - name: retain external consumer failure diagnostics
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-consumer-api-${{ matrix.api }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/android-consumer/build/outputs/verified-android-tests
             ${{ runner.temp }}/android-consumer/build/outputs/androidTest-results
-          retention-days: 7
+            ${{ runner.temp }}/android-consumer/build/outputs/apk/**/*.apk
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/mapping.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/configuration.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/usage.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/seeds.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/consumer-diagnostics
+          if-no-files-found: error
+          retention-days: 1
 
   android-package:
     name: android package
