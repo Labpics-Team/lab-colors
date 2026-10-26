@@ -26,10 +26,6 @@ PROBE_PATHS = frozenset(
     {"README.md", "tests/secret.txt", "examples/secret.txt", "package-lock.json", "tokens.json"}
 )
 MAX_REPORT_BYTES = 64 * 1024 * 1024
-CARRIER_SNAPSHOT = (
-    Path(__file__).resolve().parents[2]
-    / ".github/actions/labpics-code-admission/plans/tools/code-admission/snapshot.mjs"
-)
 MATERIALIZE = (
     "import { pathToFileURL } from 'node:url';\n"
     "const [module, repository, ref, destination] = process.argv.slice(1);\n"
@@ -171,7 +167,9 @@ def _verify_candidate(subject: Path, sha: str) -> str:
     return tree.stdout.strip()
 
 
-def _materialize_candidate(subject: Path, sha: str, tree: str, work: Path) -> Path:
+def _materialize_candidate(
+    subject: Path, sha: str, tree: str, work: Path, carrier_snapshot: Path
+) -> Path:
     snapshot = work / "candidate"
     environment = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
@@ -183,7 +181,7 @@ def _materialize_candidate(subject: Path, sha: str, tree: str, work: Path) -> Pa
     try:
         result = subprocess.run(
             ["node", "--input-type=module", "--eval", MATERIALIZE,
-             str(CARRIER_SNAPSHOT), str(subject), sha, str(snapshot)],
+             str(carrier_snapshot), str(subject), sha, str(snapshot)],
             cwd=work, env=environment, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=360, check=False,
         )
@@ -210,10 +208,11 @@ def _materialize_candidate(subject: Path, sha: str, tree: str, work: Path) -> Pa
     return snapshot
 
 
-def run(binary: Path, subject: Path, sha: str, scratch: Path) -> int:
+def run(binary: Path, subject: Path, sha: str, scratch: Path, carrier_snapshot: Path) -> int:
     subject = subject.resolve(strict=True)
     binary = binary.resolve(strict=True)
     scratch = scratch.resolve(strict=True)
+    carrier_snapshot = carrier_snapshot.resolve(strict=True)
     tree = _verify_candidate(subject, sha)
     with tempfile.TemporaryDirectory(prefix="strict-secret-", dir=scratch) as temporary:
         work = Path(temporary)
@@ -222,7 +221,7 @@ def run(binary: Path, subject: Path, sha: str, scratch: Path) -> int:
         probe = _prepare_probe(work)
         if _run_scan(binary, probe, config, work, "probe") != PROBE_PATHS:
             raise IncompleteScan("Trivy не обнаружил все контрольные секреты")
-        snapshot = _materialize_candidate(subject, sha, tree, work)
+        snapshot = _materialize_candidate(subject, sha, tree, work, carrier_snapshot)
         findings = _run_scan(binary, snapshot, config, work, "candidate")
         if findings:
             print(f"Проверка секретов отклонена: {len(findings)} файлов; совпадения скрыты", file=sys.stderr)
@@ -233,9 +232,11 @@ def run(binary: Path, subject: Path, sha: str, scratch: Path) -> int:
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 5:
-            raise IncompleteScan("usage: strict_secret_scan.py TRIVY SUBJECT SHA SCRATCH")
-        raise SystemExit(run(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])))
+        if len(sys.argv) != 6:
+            raise IncompleteScan("usage: strict_secret_scan.py TRIVY SUBJECT SHA SCRATCH CARRIER_SNAPSHOT")
+        raise SystemExit(run(
+            Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]), Path(sys.argv[5])
+        ))
     except (IncompleteScan, OSError) as error:
         print(f"Проверка секретов не завершена: {error}", file=sys.stderr)
         raise SystemExit(2) from error

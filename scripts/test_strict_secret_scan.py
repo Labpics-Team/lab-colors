@@ -5,11 +5,14 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +22,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci" / "strict_secret_scan.py"
+CARRIER_SNAPSHOT = (
+    ROOT / ".github/actions/labpics-code-admission/plans/tools/code-admission/snapshot.mjs"
+)
 SPEC = importlib.util.spec_from_file_location("strict_secret_scan", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 scanner = importlib.util.module_from_spec(SPEC)
@@ -44,7 +50,7 @@ class StrictSecretScanTest(unittest.TestCase):
     def test_scan_uses_raw_git_blob_when_checkout_transcodes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
-            subject = work / "subject"
+            subject = work / ".code-subject.public01"
             subject.mkdir()
             environment = os.environ | {
                 "GIT_CONFIG_NOSYSTEM": "1",
@@ -96,9 +102,18 @@ class StrictSecretScanTest(unittest.TestCase):
             binary.chmod(0o700)
             errors = io.StringIO()
             with redirect_stderr(errors):
-                self.assertEqual(scanner.run(binary, subject, sha, work), 1)
+                self.assertEqual(scanner.run(binary, subject, sha, work, CARRIER_SNAPSHOT), 1)
             self.assertIn("1 файлов", errors.getvalue())
             self.assertNotIn(marker, errors.getvalue())
+            installed = work / "strict_secret_scan.py"
+            shutil.copyfile(SCRIPT, installed)
+            cli = subprocess.run(
+                [sys.executable, "-I", str(installed), str(binary), str(subject), sha,
+                 str(work), str(CARRIER_SNAPSHOT)],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertEqual(cli.returncode, 1)
+            self.assertNotIn(marker, cli.stderr)
 
             target.write_bytes("safe content\n".encode("utf-16le"))
             git("add", "tests/secret.txt")
@@ -107,7 +122,13 @@ class StrictSecretScanTest(unittest.TestCase):
             clean_sha = git("rev-parse", "HEAD").decode().strip()
             self.assertNotEqual(clean_sha, sha)
             self.assertFalse(git("status", "--porcelain", "--untracked-files=all"))
-            self.assertEqual(scanner.run(binary, subject, clean_sha, work), 0)
+            self.assertEqual(scanner.run(binary, subject, clean_sha, work, CARRIER_SNAPSHOT), 0)
+            clean_cli = subprocess.run(
+                [sys.executable, "-I", str(installed), str(binary), str(subject), clean_sha,
+                 str(work), str(CARRIER_SNAPSHOT)],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            self.assertEqual(clean_cli.returncode, 0, clean_cli.stderr)
 
     def test_run_rejects_incomplete_probe_and_bad_sha(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -120,7 +141,7 @@ class StrictSecretScanTest(unittest.TestCase):
                   mock.patch.object(scanner, "_run_scan", return_value={"README.md"}),
                   mock.patch.object(scanner, "_materialize_candidate") as materialize):
                 with self.assertRaisesRegex(scanner.IncompleteScan, "контрольные секреты"):
-                    scanner.run(Path(sys.executable), subject, "0" * 40, work)
+                    scanner.run(Path(sys.executable), subject, "0" * 40, work, CARRIER_SNAPSHOT)
                 materialize.assert_not_called()
 
     def test_report_requires_consistent_exit_and_exact_subject(self) -> None:
@@ -196,7 +217,30 @@ class StrictSecretScanTest(unittest.TestCase):
         self.assertEqual(source.count("- name: Scan secrets omitted by Trivy defaults"), 1)
         self.assertIn("candidate: ${{ github.sha }}", source)
         self.assertIn('"$GITHUB_WORKSPACE/.code-subject.public01" "$CANDIDATE_SHA"', source)
-        self.assertIn("python3 scripts/ci/strict_secret_scan.py", source)
+        self.assertIn('install -m 0600 scripts/ci/strict_secret_scan.py "$helper"', source)
+        self.assertIn('printf "%s  %s\\n" "$helper_sha256" "$helper" | sha256sum -c -', source)
+        self.assertIn('python3 -I "$helper"', source)
+        self.assertLess(
+            source.index('printf "%s  %s\\n" "$helper_sha256" "$helper" | sha256sum -c -'),
+            source.index('python3 -I "$helper"'),
+        )
+        self.assertIn(
+            '"$GITHUB_WORKSPACE/.github/actions/labpics-code-admission/'
+            'plans/tools/code-admission/snapshot.mjs"', source,
+        )
+        pinned = re.search(r"(?m)^          helper_sha256=([0-9a-f]{64})$", source)
+        self.assertIsNotNone(pinned)
+        assert pinned is not None
+        self.assertEqual(pinned.group(1), hashlib.sha256(SCRIPT.read_bytes()).hexdigest())
+        sabotage = SCRIPT.read_bytes().replace(
+            b"    tree = _verify_candidate(subject, sha)\n",
+            b'    if subject.name == ".code-subject.public01":\n'
+            b"        return 0\n"
+            b"    tree = _verify_candidate(subject, sha)\n",
+            1,
+        )
+        self.assertNotEqual(sabotage, SCRIPT.read_bytes())
+        self.assertNotEqual(hashlib.sha256(sabotage).hexdigest(), pinned.group(1))
         self.assertIn("2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a", source)
         self.assertIn("- name: Remove candidate checkout\n        if: ${{ always() }}", source)
 
