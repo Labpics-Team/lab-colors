@@ -486,6 +486,9 @@ jobs:
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
+      - name: strict secret scan contract tests
+        if: ${{ matrix.lane == 'default' }}
+        run: python3 scripts/test_strict_secret_scan.py
       - name: mutation evidence verifier hostile tests
         if: ${{ matrix.lane == 'default' }}
         env:
