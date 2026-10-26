@@ -135,8 +135,10 @@ class StrictSecretScanTest(unittest.TestCase):
             work = Path(directory)
             subject = work / "subject"
             subject.mkdir()
-            with self.assertRaises(scanner.IncompleteScan):
-                scanner._verify_candidate(subject, "not-a-commit")
+            with mock.patch.object(scanner.subprocess, "run") as git:
+                with self.assertRaises(scanner.IncompleteScan):
+                    scanner._verify_candidate(subject, "not-a-commit")
+                git.assert_not_called()
             with (mock.patch.object(scanner, "_verify_candidate", return_value="0" * 40),
                   mock.patch.object(scanner, "_run_scan", return_value={"README.md"}),
                   mock.patch.object(scanner, "_materialize_candidate") as materialize):
