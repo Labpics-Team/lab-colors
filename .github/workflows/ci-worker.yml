@@ -486,6 +486,10 @@ jobs:
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: ${{ matrix.lane == 'default' }}
+        with:
+          node-version: '22'
       - name: strict secret scan contract tests
         if: ${{ matrix.lane == 'default' }}
         run: python3 scripts/test_strict_secret_scan.py

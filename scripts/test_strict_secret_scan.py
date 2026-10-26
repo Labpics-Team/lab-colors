@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from datetime import datetime, timezone
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -38,6 +41,65 @@ def report(subject: Path, paths: tuple[str, ...] = ()) -> dict:
 
 
 class StrictSecretScanTest(unittest.TestCase):
+    def test_scan_uses_raw_git_blob_when_checkout_transcodes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            subject = work / "subject"
+            subject.mkdir()
+            environment = os.environ | {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_NO_REPLACE_OBJECTS": "1",
+            }
+
+            def git(*args: str) -> bytes:
+                return subprocess.run(
+                    ["git", "-C", str(subject), *args],
+                    env=environment, capture_output=True, check=True,
+                ).stdout
+
+            git("init", "-q")
+            (subject / ".gitattributes").write_text(
+                "tests/secret.txt text working-tree-encoding=UTF-16LE\n", encoding="utf-8"
+            )
+            target = subject / "tests" / "secret.txt"
+            target.parent.mkdir()
+            marker = "AKIA" + "ABCDEFGHIJKLMNOP"
+            content = f"access_key_id = {marker}\n"
+            target.write_bytes(content.encode("utf-16le"))
+            git("add", ".gitattributes", "tests/secret.txt")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-qm", "fixture")
+            sha = git("rev-parse", "HEAD").decode().strip()
+            blob = git("show", f"{sha}:tests/secret.txt")
+            self.assertEqual(blob, content.encode("utf-8"))
+            self.assertNotEqual(target.read_bytes(), blob)
+            self.assertFalse(git("status", "--porcelain", "--untracked-files=all"))
+
+            binary = work / "fixture-trivy"
+            binary.write_text(
+                f"#!{sys.executable}\n"
+                "from datetime import datetime, timezone\n"
+                "import json, pathlib, sys\n"
+                "root = pathlib.Path(sys.argv[-1])\n"
+                "marker = b'AKIA' + b'ABCDEFGHIJKLMNOP'\n"
+                "paths = sorted(p.relative_to(root).as_posix() for p in root.rglob('*') "
+                "if p.is_file() and marker in p.read_bytes())\n"
+                "print(json.dumps({'SchemaVersion': 2, 'ArtifactType': 'filesystem', "
+                "'ArtifactName': str(root), 'CreatedAt': datetime.now(timezone.utc).isoformat(), "
+                "'Trivy': {'Version': '0.74.0'}, 'Results': "
+                "[{'Class': 'secret', 'Target': p, 'Secrets': [{'RuleID': 'fixture'}]} "
+                "for p in paths]}))\n"
+                "raise SystemExit(bool(paths))\n",
+                encoding="utf-8",
+            )
+            binary.chmod(0o700)
+            errors = io.StringIO()
+            with redirect_stderr(errors):
+                self.assertEqual(scanner.run(binary, subject, sha, work), 1)
+            self.assertIn("1 файлов", errors.getvalue())
+            self.assertNotIn(marker, errors.getvalue())
+
     def test_report_requires_consistent_exit_and_exact_subject(self) -> None:
         subject = Path("/tmp/subject")
         started = datetime.now(timezone.utc)

@@ -4,7 +4,7 @@
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
-  ".github/workflows/ci-worker.yml": "a9da862bf80148e44741526628e2982b8924db4b",
+  ".github/workflows/ci-worker.yml": "128010c80066b92b200f6272b3ddb9b355dfe067",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/code-admission-public.yml": "28ae873d731bf506c9c4849ec85906998a62a0dd",
   ".github/workflows/dual-proof.yml": "17a7d914737a29420be3e39342ad8a47e7eb57d9",
@@ -509,7 +509,7 @@
   "scripts/ci/distribution_outputs.mjs": "21e7b6e2412686d3727b136dd6aba8f1879f1d4b",
   "scripts/ci/formal_outputs.py": "1f02a58cef575fa9788b79871449cf43f3cdc739",
   "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
-  "scripts/ci/strict_secret_scan.py": "7c1ac4cdcc89072b815e975b30bcfa08ca771b03",
+  "scripts/ci/strict_secret_scan.py": "0ccaa8c2ce7444cc0327b129fde93967ed8c2cbc",
   "scripts/ci_workflow_binding.py": "f6c232851ba2f9ce02039a7fc4e475275df82745",
   "scripts/compare-program-performance.py": "b98368a7d549db6acf4b5f87b47677e1038c9520",
   "scripts/distribution-licenses.mjs": "5457eb692803abb672778875f2e8728137e10f85",
@@ -562,7 +562,7 @@
   "scripts/test_mutation.py": "cdb771b5a556810d37ad4faf40d5f1d86f630711",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
-  "scripts/test_strict_secret_scan.py": "22589c3413d7adb2aea606d308fe1d8f4af32613",
+  "scripts/test_strict_secret_scan.py": "d858ffac79ed91dc5ee8dd168392e17d44f19b51",
   "scripts/test_swift_surface.mjs": "f49356237f3fb5f34d42adc5d0b78755a3daa185",
   "scripts/test_transport_distribution.mjs": "483eff5cdcdedd9507ef7ed6d1444e8ee6ffb2f1",
   "scripts/test_verify_clean_set_receipt.py": "93f965fcef796a951ee5f4643cb174889f0853f3",
@@ -580,7 +580,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "9fd2ae43c1852b51735bc1dca0e134dc230e185d52463641ec601f0e89f49422",
+ "record_sha256": "7f22b9dd6d42a93e8690bc5514781e6c33e3b38528031c876718cc8cf1d30893",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

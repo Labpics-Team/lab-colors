@@ -26,6 +26,16 @@ PROBE_PATHS = frozenset(
     {"README.md", "tests/secret.txt", "examples/secret.txt", "package-lock.json", "tokens.json"}
 )
 MAX_REPORT_BYTES = 64 * 1024 * 1024
+CARRIER_SNAPSHOT = (
+    Path(__file__).resolve().parents[2]
+    / ".github/actions/labpics-code-admission/plans/tools/code-admission/snapshot.mjs"
+)
+MATERIALIZE = (
+    "import { pathToFileURL } from 'node:url';\n"
+    "const [module, repository, ref, destination] = process.argv.slice(1);\n"
+    "const { materializeSnapshot } = await import(pathToFileURL(module).href);\n"
+    "process.stdout.write(JSON.stringify(materializeSnapshot(repository, ref, destination)));\n"
+)
 
 
 class IncompleteScan(Exception):
@@ -135,7 +145,7 @@ def _prepare_probe(work: Path) -> Path:
     return probe
 
 
-def _verify_candidate(subject: Path, sha: str) -> None:
+def _verify_candidate(subject: Path, sha: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise IncompleteScan("Не задан точный SHA кандидата")
     try:
@@ -147,17 +157,64 @@ def _verify_candidate(subject: Path, sha: str) -> None:
             ["git", "-C", str(subject), "status", "--porcelain", "--untracked-files=all"],
             capture_output=True, text=True, timeout=10, check=False,
         )
+        tree = subprocess.run(
+            ["git", "-C", str(subject), "rev-parse", "--verify", "--end-of-options",
+             f"{sha}^{{tree}}"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise IncompleteScan("Идентичность checkout кандидата недоступна") from error
-    if head.returncode or head.stdout.strip() != sha or status.returncode or status.stdout.strip():
+    if (head.returncode or head.stdout.strip() != sha or status.returncode
+            or status.stdout.strip() or tree.returncode
+            or not re.fullmatch(r"[0-9a-f]{40}", tree.stdout.strip())):
         raise IncompleteScan("Checkout кандидата не совпадает с SHA или изменён")
+    return tree.stdout.strip()
+
+
+def _materialize_candidate(subject: Path, sha: str, tree: str, work: Path) -> Path:
+    snapshot = work / "candidate"
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": str(work),
+        "TMPDIR": str(work),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    try:
+        result = subprocess.run(
+            ["node", "--input-type=module", "--eval", MATERIALIZE,
+             str(CARRIER_SNAPSHOT), str(subject), sha, str(snapshot)],
+            cwd=work, env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=360, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise IncompleteScan("Git snapshot кандидата не материализован") from error
+    if result.returncode or len(result.stdout) > 4096:
+        digest = hashlib.sha256(result.stderr).hexdigest()
+        raise IncompleteScan(
+            f"Git snapshot кандидата не материализован; status={result.returncode}; "
+            f"diagnosticDigest={digest}"
+        )
+    try:
+        receipt = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IncompleteScan("Git snapshot не вернул receipt") from error
+    if (not isinstance(receipt, dict) or receipt.get("commit") != sha
+            or receipt.get("tree") != tree
+            or not isinstance(receipt.get("inventoryDigest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", receipt["inventoryDigest"])
+            or type(receipt.get("files")) is not int or receipt["files"] < 1
+            or type(receipt.get("bytes")) is not int or receipt["bytes"] < 1
+            or not snapshot.is_dir() or snapshot.is_symlink()):
+        raise IncompleteScan("Git snapshot не связан с SHA и деревом кандидата")
+    return snapshot
 
 
 def run(binary: Path, subject: Path, sha: str, scratch: Path) -> int:
     subject = subject.resolve(strict=True)
     binary = binary.resolve(strict=True)
     scratch = scratch.resolve(strict=True)
-    _verify_candidate(subject, sha)
+    tree = _verify_candidate(subject, sha)
     with tempfile.TemporaryDirectory(prefix="strict-secret-", dir=scratch) as temporary:
         work = Path(temporary)
         config = work / "secret.yaml"
@@ -165,7 +222,8 @@ def run(binary: Path, subject: Path, sha: str, scratch: Path) -> int:
         probe = _prepare_probe(work)
         if _run_scan(binary, probe, config, work, "probe") != PROBE_PATHS:
             raise IncompleteScan("Trivy не обнаружил все контрольные секреты")
-        findings = _run_scan(binary, subject, config, work, "candidate")
+        snapshot = _materialize_candidate(subject, sha, tree, work)
+        findings = _run_scan(binary, snapshot, config, work, "candidate")
         if findings:
             print(f"Проверка секретов отклонена: {len(findings)} файлов; совпадения скрыты", file=sys.stderr)
             return 1
