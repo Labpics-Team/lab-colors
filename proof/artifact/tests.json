@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 342,
+   "count": 343,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -876,6 +876,7 @@
     "test_strict_secret_scan.StrictSecretScanTest.test_native_invocation_keeps_policy_and_raw_matches_private",
     "test_strict_secret_scan.StrictSecretScanTest.test_report_requires_consistent_exit_and_exact_subject",
     "test_strict_secret_scan.StrictSecretScanTest.test_required_workflow_runs_probe_and_candidate_in_same_policy",
+    "test_strict_secret_scan.StrictSecretScanTest.test_run_rejects_incomplete_probe_and_bad_sha",
     "test_strict_secret_scan.StrictSecretScanTest.test_scan_uses_raw_git_blob_when_checkout_transcodes",
     "test_verify_clean_set_receipt.CapsuleReplayTests.test_full_replay_is_offline_and_does_not_need_the_research_repository",
     "test_verify_clean_set_receipt.CapsuleReplayTests.test_identity_mode_never_claims_or_executes_mathematical_replay",
@@ -957,7 +958,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ac82e42dc8eccb3f7774cc2f88885902a3f46b215f9c42c678ebeb670fcb8ff3",
+ "record_sha256": "b2f21153bbc297eb99f6230e7d199f530c4095e5cd270912640c864ce92b4127",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

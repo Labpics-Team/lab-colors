@@ -100,6 +100,29 @@ class StrictSecretScanTest(unittest.TestCase):
             self.assertIn("1 файлов", errors.getvalue())
             self.assertNotIn(marker, errors.getvalue())
 
+            target.write_bytes("safe content\n".encode("utf-16le"))
+            git("add", "tests/secret.txt")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-qm", "clean fixture")
+            clean_sha = git("rev-parse", "HEAD").decode().strip()
+            self.assertNotEqual(clean_sha, sha)
+            self.assertFalse(git("status", "--porcelain", "--untracked-files=all"))
+            self.assertEqual(scanner.run(binary, subject, clean_sha, work), 0)
+
+    def test_run_rejects_incomplete_probe_and_bad_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            subject = work / "subject"
+            subject.mkdir()
+            with self.assertRaises(scanner.IncompleteScan):
+                scanner._verify_candidate(subject, "not-a-commit")
+            with (mock.patch.object(scanner, "_verify_candidate", return_value="0" * 40),
+                  mock.patch.object(scanner, "_run_scan", return_value={"README.md"}),
+                  mock.patch.object(scanner, "_materialize_candidate") as materialize):
+                with self.assertRaisesRegex(scanner.IncompleteScan, "контрольные секреты"):
+                    scanner.run(Path(sys.executable), subject, "0" * 40, work)
+                materialize.assert_not_called()
+
     def test_report_requires_consistent_exit_and_exact_subject(self) -> None:
         subject = Path("/tmp/subject")
         started = datetime.now(timezone.utc)
