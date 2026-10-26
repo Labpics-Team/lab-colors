@@ -31,6 +31,7 @@
   создание программы и чтение результатов.
 
 - [Swift](contracts/swift-binding.md): Program, отображение и жизненный цикл.
+- [Kotlin для Android](../bindings/kotlin/README.md): установка AAR, Program и ресурсы.
 - [Платформенные адаптеры](contracts/native-adapters.md): границы и условия поддержки.
 
 ## Устройство
