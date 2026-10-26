@@ -152,6 +152,7 @@ jobs:
               requiredJobs: [
                 "swift package (Linux)",
                 "swift package (macOS and iOS)",
+                "android package",
               ],
             },
           ];

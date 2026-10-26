@@ -74,3 +74,23 @@ test("a static replacement cannot satisfy an instance operation", () => {
   compiled.symbols.find((symbol) => symbol.pathComponents[0] === "ProgramRuntime").kind.identifier = "swift.type.method";
   assert.throws(() => verifySwiftSurface(inventory, declarations, compiled), /updateObserved/u);
 });
+
+
+test("new publicly exported authoring versions join native coverage without a second version list", async () => {
+  const { authoringExportPaths } = await import("./authoring-surface.mjs");
+  const pkg = { exports: {
+    "./program-wire/abi-v1.js": { types: "./program-wire/abi-v1.d.ts" },
+    "./program-wire/abi-v2.js": { types: "./program-wire/abi-v2.d.ts" },
+    "./program-wire/abi-v3.js": { types: "./program-wire/abi-v3.d.ts" },
+    ".": { types: "./index.d.ts" },
+  } };
+  assert.deepEqual(authoringExportPaths(pkg), ["./program-wire/abi-v1.d.ts", "./program-wire/abi-v2.d.ts", "./program-wire/abi-v3.d.ts"]);
+  const documents = { ...declarations, "v3.d.ts": "export class ProgramWireBuilderV3 { futureVersion(value: number): this; }" };
+  assert.throws(() => verifySwiftSurface(inventory, documents, graph()), /futureVersion/u);
+  for (const path of ["../foreign.d.ts", "./program-wire/../foreign.d.ts", "./program-wire/code.js", null]) {
+    const malformed = structuredClone(pkg);
+    malformed.exports["./program-wire/abi-v3.js"].types = path;
+    assert.throws(() => authoringExportPaths(malformed), /canonical type/u);
+  }
+  assert.throws(() => authoringExportPaths({ exports: {} }), /exports are missing/u);
+});

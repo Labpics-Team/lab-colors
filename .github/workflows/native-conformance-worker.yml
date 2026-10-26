@@ -1,4 +1,4 @@
-name: Native conformance (Swift) worker
+name: Native conformance worker
 
 # Потребители проверяют ту же исходную ревизию через сгенерированный UniFFI.
 # Linux получает готовую библиотеку в закреплённом Swift-контейнере.
@@ -129,3 +129,133 @@ jobs:
             ${{ runner.temp }}/swift-distribution/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+
+  android-build:
+    name: build Android SDK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: '. -> ${{ runner.temp }}/android-distribution/target'
+          cache-on-failure: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.14.0'
+          package-manager-cache: false
+      - name: install canonical declaration parser
+        run: npm ci --prefix packages/colors --ignore-scripts
+      - name: verify archive admission and native layout controls
+        run: python3 -m unittest discover -s bindings/kotlin/ci -p 'test_*.py'
+      - name: build the complete Android AAR and Maven distribution
+        run: python3 bindings/kotlin/ci/build.py "$RUNNER_TEMP/android-distribution"
+      - name: pass the exact SDK bytes to external consumers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-sdk-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/android-distribution/LabColors.android.zip
+            ${{ runner.temp }}/android-distribution/android-release-manifest.json
+            ${{ runner.temp }}/android-distribution/SHA256SUMS
+            ${{ runner.temp }}/android-distribution/native-surface.json
+            ${{ runner.temp }}/android-distribution/authoring-surface.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: preserve generation diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-generation-${{ github.sha }}
+          path: ${{ runner.temp }}/android-distribution/producer/generated
+          retention-days: 1
+
+  android-consumer:
+    name: android consumer (${{ matrix.name }})
+    needs: android-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum API
+            api: 23
+            target: default
+            page: 4096
+          - name: 16 KB
+            api: 35
+            target: google_apis_ps16k
+            page: 16384
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: android-sdk-${{ github.sha }}
+          path: ${{ runner.temp }}/android-artifact
+      - name: install the archive into an independent Android project
+        run: python3 bindings/kotlin/ci/prepare-consumer.py "$RUNNER_TEMP/android-artifact" "$RUNNER_TEMP/android-consumer"
+      - name: compile the independent application and tests before starting an emulator
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble
+      - name: allow this ephemeral runner to use hardware virtualization
+        run: sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
+      - name: verify staged failure artifact inventory
+        if: failure()
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory
+      - name: retain external consumer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-consumer-api-${{ matrix.api }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/android-consumer/build/outputs/verified-android-tests
+            ${{ runner.temp }}/android-consumer/build/outputs/androidTest-results
+            ${{ runner.temp }}/android-consumer/build/outputs/apk/**/*.apk
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/mapping.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/configuration.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/usage.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/seeds.txt
+            ${{ runner.temp }}/android-consumer/build/outputs/consumer-diagnostics
+          if-no-files-found: error
+          retention-days: 1
+
+  android-package:
+    name: android package
+    needs: [android-build, android-consumer]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: require the artifact and every Android consumer
+        env:
+          BUILD_RESULT: ${{ needs.android-build.result }}
+          CONSUMER_RESULT: ${{ needs.android-consumer.result }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_RESULT" = success
+          test "$CONSUMER_RESULT" = success
