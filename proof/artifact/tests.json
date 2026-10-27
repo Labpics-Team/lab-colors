@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 344,
+   "count": 345,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -807,6 +807,7 @@
     "test_mutation.MutationTruthTest.test_exit_priority_is_exhaustive_and_rejects_unbound_process_codes",
     "test_mutation.MutationTruthTest.test_expensive_proofs_have_independent_required_jobs",
     "test_mutation.MutationTruthTest.test_external_command_timeout_is_a_typed_contract_failure",
+    "test_mutation.MutationTruthTest.test_fixture_bootstrap_ignores_inherited_git_locations",
     "test_mutation.MutationTruthTest.test_fixture_copy_owns_worktree_and_git_metadata",
     "test_mutation.MutationTruthTest.test_git_authority_environment_drops_host_overrides",
     "test_mutation.MutationTruthTest.test_git_fixture_ignores_hostile_global_configuration",
@@ -959,7 +960,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "0caa8aa18915a3e3add022296a9bb61cd5517f5ef5fc95aca7a41c0c32e1a82d",
+ "record_sha256": "1bac9f86ec8e94acdd16f32ad97fcca0403fa52657489efe730d5948adfb03c0",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

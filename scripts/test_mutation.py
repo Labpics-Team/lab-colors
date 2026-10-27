@@ -180,7 +180,12 @@ class MutationTruthTest(unittest.TestCase):
         if cls._fixture_git_binary is None:
             raise RuntimeError("git is required for mutation source tests")
         cls._fixture_git_env = {
-            **os.environ,
+            # cwd не отменяет унаследованные Git-пути и конфигурацию.
+            **{
+                name: value
+                for name, value in os.environ.items()
+                if not name.startswith("GIT_")
+            },
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -251,6 +256,56 @@ class MutationTruthTest(unittest.TestCase):
         self.source = self.root / "crates" / "core" / "src" / "lib.rs"
         self.revision = self._fixture_revision
         self.git("update-index", "--refresh")
+
+    def test_fixture_bootstrap_ignores_inherited_git_locations(self) -> None:
+        class IsolatedSeed(MutationTruthTest):
+            pass
+
+        def contents(root: Path) -> dict[Path, bytes]:
+            return {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+        original = contents(self.root)
+        git_dir = self.root / ".git"
+        hostile = {
+            "GIT_DIR": str(git_dir),
+            "GIT_WORK_TREE": str(self.root),
+            "GIT_COMMON_DIR": str(git_dir),
+            "GIT_INDEX_FILE": str(git_dir / "index"),
+            "GIT_OBJECT_DIRECTORY": str(git_dir / "objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_dir / "objects"),
+            "LAB_COLORS_FIXTURE_PARENT_MARKER": "retained",
+        }
+        try:
+            with mock.patch.dict(os.environ, hostile):
+                IsolatedSeed.setUpClass()
+
+            environment = IsolatedSeed._fixture_git_env
+            for name in hostile:
+                if name.startswith("GIT_"):
+                    self.assertNotIn(name, environment)
+            self.assertEqual(
+                environment["LAB_COLORS_FIXTURE_PARENT_MARKER"],
+                "retained",
+            )
+            self.assertTrue((IsolatedSeed._fixture_root / ".git").is_dir())
+            actual_root = subprocess.check_output(
+                [self.git_binary, "rev-parse", "--show-toplevel"],
+                cwd=IsolatedSeed._fixture_root,
+                env=environment,
+                text=True,
+            ).strip()
+            self.assertEqual(
+                Path(actual_root).resolve(),
+                IsolatedSeed._fixture_root.resolve(),
+            )
+            self.assertEqual(contents(self.root), original)
+        finally:
+            IsolatedSeed.doClassCleanups()
+        self.assertEqual(IsolatedSeed.tearDown_exceptions, [])
 
     def test_fixture_copy_owns_worktree_and_git_metadata(self) -> None:
         original = (self._fixture_root / "crates/core/src/lib.rs").read_bytes()

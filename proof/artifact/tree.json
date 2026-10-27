@@ -588,7 +588,7 @@
   "scripts/test_extract_resources.py": "86e2d25c6ff5ee4c53f26d486087decf92519f4e",
   "scripts/test_extract_source_files.py": "6163f40461bf7e0b0e17d3ddf322b965c0aca633",
   "scripts/test_formal_outputs.py": "4da9c69f940462e6482c80490feb16da9fa09516",
-  "scripts/test_mutation.py": "9f97f4884d6dbb491c785aa760d87ecfd38bcc93",
+  "scripts/test_mutation.py": "5b6efddbe72730fc5a6b522e8016741ef1dab257",
   "scripts/test_point_support_surplus_source_binding.py": "1a1c13625cd6b0169a7b897dd98b5b56965cab22",
   "scripts/test_program_public_surface.py": "cd04ede56d9d500850250577bcae9e992701185c",
   "scripts/test_strict_secret_scan.py": "5696e7fcd544b0627ae8f730ce2b2ad3271dd582",
@@ -609,7 +609,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "280ed87db6792df1c16725fa183a23acc5e70b8edf7e1c1321eecdb41cf5584a",
+ "record_sha256": "c7990c92441c4903bc41aa3476928bb09b09544e47fedc5914d910bdf3989396",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
