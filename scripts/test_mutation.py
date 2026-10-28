@@ -169,15 +169,23 @@ CANONICAL_PUBLISH_SCRIPT = (
 
 
 class MutationTruthTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.external_temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.external = Path(self.external_temp.name)
-        self.git_binary = shutil.which("git")
-        self.assertIsNotNone(self.git_binary)
-        self.git_env = {
-            **os.environ,
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        fixture = tempfile.TemporaryDirectory(prefix="mutation-source-fixture-")
+        cls.addClassCleanup(fixture.cleanup)
+        cls._fixture_root = Path(fixture.name)
+        root = cls._fixture_root
+        cls._fixture_git_binary = shutil.which("git")
+        if cls._fixture_git_binary is None:
+            raise RuntimeError("git is required for mutation source tests")
+        cls._fixture_git_env = {
+            # cwd не отменяет унаследованные Git-пути и конфигурацию.
+            **{
+                name: value
+                for name, value in os.environ.items()
+                if not name.startswith("GIT_")
+            },
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -196,31 +204,131 @@ class MutationTruthTest(unittest.TestCase):
             "GIT_CONFIG_VALUE_5": "main",
             "GIT_TERMINAL_PROMPT": "0",
         }
-        self.config = self.root / ".cargo" / "mutants.toml"
-        self.config.parent.mkdir(parents=True)
-        self.config.write_text(
+        config = root / ".cargo" / "mutants.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
             'examine_globs = ["crates/core/src/lib.rs"]\n',
             encoding="utf-8",
         )
-        self.source = self.root / "crates" / "core" / "src" / "lib.rs"
-        self.source.parent.mkdir(parents=True)
-        self.source.write_text("pub fn value() -> bool { true }\n", encoding="utf-8")
-        (self.root / "Cargo.toml").write_text(
+        source = root / "crates" / "core" / "src" / "lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text("pub fn value() -> bool { true }\n", encoding="utf-8")
+        (root / "Cargo.toml").write_text(
             '[workspace]\nmembers = ["crates/core"]\nresolver = "2"\n',
             encoding="utf-8",
         )
-        (self.source.parents[1] / "Cargo.toml").write_text(
+        (source.parents[1] / "Cargo.toml").write_text(
             '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2021"\n',
             encoding="utf-8",
         )
-        self.git("init", "--quiet")
-        self.git("add", ".")
-        self.git("commit", "--quiet", "-m", "fixture")
-        self.revision = self.git_output("rev-parse", "HEAD")
+        # Один неизменяемый seed; каждый тест получает собственные index,
+        # refs, objects и working tree без hardlinks или Git alternates.
+        for arguments in (
+            ("init", "--quiet"),
+            ("add", "."),
+            ("commit", "--quiet", "-m", "fixture"),
+        ):
+            subprocess.run(
+                [cls._fixture_git_binary, *arguments],
+                cwd=root,
+                env=cls._fixture_git_env,
+                check=True,
+                capture_output=True,
+            )
+        cls._fixture_revision = subprocess.check_output(
+            [cls._fixture_git_binary, "rev-parse", "HEAD"],
+            cwd=root,
+            env=cls._fixture_git_env,
+            text=True,
+        ).strip()
 
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-        self.external_temp.cleanup()
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.external_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.external_temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.external = Path(self.external_temp.name)
+        self.git_binary = self._fixture_git_binary
+        self.git_env = dict(self._fixture_git_env)
+        shutil.copytree(self._fixture_root, self.root, dirs_exist_ok=True)
+        self.config = self.root / ".cargo" / "mutants.toml"
+        self.source = self.root / "crates" / "core" / "src" / "lib.rs"
+        self.revision = self._fixture_revision
+        self.git("update-index", "--refresh")
+
+    def test_fixture_bootstrap_ignores_inherited_git_locations(self) -> None:
+        class IsolatedSeed(MutationTruthTest):
+            pass
+
+        def contents(root: Path) -> dict[Path, bytes]:
+            return {
+                path.relative_to(root): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+        original = contents(self.root)
+        git_dir = self.root / ".git"
+        hostile = {
+            "GIT_DIR": str(git_dir),
+            "GIT_WORK_TREE": str(self.root),
+            "GIT_COMMON_DIR": str(git_dir),
+            "GIT_INDEX_FILE": str(git_dir / "index"),
+            "GIT_OBJECT_DIRECTORY": str(git_dir / "objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_dir / "objects"),
+            "LAB_COLORS_FIXTURE_PARENT_MARKER": "retained",
+        }
+        try:
+            with mock.patch.dict(os.environ, hostile):
+                IsolatedSeed.setUpClass()
+
+            environment = IsolatedSeed._fixture_git_env
+            for name in hostile:
+                if name.startswith("GIT_"):
+                    self.assertNotIn(name, environment)
+            self.assertEqual(
+                environment["LAB_COLORS_FIXTURE_PARENT_MARKER"],
+                "retained",
+            )
+            self.assertTrue((IsolatedSeed._fixture_root / ".git").is_dir())
+            actual_root = subprocess.check_output(
+                [self.git_binary, "rev-parse", "--show-toplevel"],
+                cwd=IsolatedSeed._fixture_root,
+                env=environment,
+                text=True,
+            ).strip()
+            self.assertEqual(
+                Path(actual_root).resolve(),
+                IsolatedSeed._fixture_root.resolve(),
+            )
+            self.assertEqual(contents(self.root), original)
+        finally:
+            IsolatedSeed.doClassCleanups()
+        self.assertEqual(IsolatedSeed.tearDown_exceptions, [])
+
+    def test_fixture_copy_owns_worktree_and_git_metadata(self) -> None:
+        original = (self._fixture_root / "crates/core/src/lib.rs").read_bytes()
+        self.source.write_text("changed fixture\n", encoding="utf-8")
+        self.assertEqual(
+            (self._fixture_root / "crates/core/src/lib.rs").read_bytes(),
+            original,
+        )
+        for seed in self._fixture_root.rglob("*"):
+            if seed.is_file():
+                copied = self.root / seed.relative_to(self._fixture_root)
+                self.assertFalse(seed.samefile(copied), str(seed))
+        self.assertFalse((self.root / ".git/objects/info/alternates").exists())
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "isolated change")
+        self.assertNotEqual(self.git_output("rev-parse", "HEAD"), self._fixture_revision)
+        seed_head = subprocess.check_output(
+            [self.git_binary, "rev-parse", "HEAD"],
+            cwd=self._fixture_root,
+            env=self.git_env,
+            text=True,
+        ).strip()
+        self.assertEqual(seed_head, self._fixture_revision)
 
     def git(
         self,
