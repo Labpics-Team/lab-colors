@@ -139,12 +139,34 @@ def validate_native_storage(source):
             raise AssertionError("external Apple verification became optional: " + required)
 
 
+def validate_mutation_storage(source):
+    # Shards and their manifest cross job boundaries; the aggregate report
+    # already appears in job logs and must never consume artifact quota.
+    if source.count("uses: actions/upload-artifact@") != 2:
+        raise AssertionError("mutation CI may only transfer its manifest and shards")
+    manifest = job(source, "manifest")
+    shard = job(source, "shard")
+    aggregate = job(source, "aggregate")
+    if ("uses: actions/upload-artifact@" not in manifest
+            or "name: mutation-manifest" not in manifest):
+        raise AssertionError("mutation manifest handoff missing")
+    if ("uses: actions/upload-artifact@" not in shard
+            or "name: mutation-shard-" not in shard):
+        raise AssertionError("mutation shard handoff missing")
+    if "uses: actions/upload-artifact@" in aggregate or "name: mutation-report" in aggregate:
+        raise AssertionError("aggregate diagnostic upload returned")
+    if "scripts/mutation.py aggregate" not in aggregate:
+        raise AssertionError("mutation aggregation cannot be skipped")
+
+
 class NativeStorageTests(unittest.TestCase):
     def setUp(self):
         self.source = (ROOT / ".github/workflows/native-conformance-worker.yml").read_text()
+        self.mutation_source = (ROOT / ".github/workflows/mutation-worker.yml").read_text()
 
     def test_only_sdk_transfer_survives(self):
         validate_native_storage(self.source)
+        validate_mutation_storage(self.mutation_source)
 
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
@@ -193,6 +215,19 @@ class NativeStorageTests(unittest.TestCase):
                     validate_native_storage(changed)
         with self.assertRaises(AssertionError):
             validate_native_storage(self.source + "\n      - uses: actions/upload-artifact@v4\n")
+        with self.assertRaises(AssertionError):
+            validate_mutation_storage(self.mutation_source.replace(
+                "      - name: verify exact non-overlapping aggregate",
+                "      - uses: actions/upload-artifact@v4\n"
+                "      - name: verify exact non-overlapping aggregate", 1))
+        for before, after in (
+            ("name: mutation-manifest", "name: dropped-manifest"),
+            ("name: mutation-shard-", "name: dropped-shard-"),
+        ):
+            with self.subTest(before=before):
+                self.assertIn(before, self.mutation_source)
+                with self.assertRaises(AssertionError):
+                    validate_mutation_storage(self.mutation_source.replace(before, after, 1))
 
 
 if __name__=="__main__":
