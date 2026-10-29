@@ -214,14 +214,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/program-performance"
           python3 scripts/verify_point_support_surplus.py --emit \
             > "$RUNNER_TEMP/program-performance/point-support-reference-surplus-q55-bps-proof-v1.json"
-      - name: upload Program performance observations
-        if: ${{ always() && inputs.program-benchmark }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: program-performance-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/program-performance
-          if-no-files-found: error
-          retention-days: 7
       - name: enforce measured WASM runtime budget
         # Exact Linux x64 zero-headroom ratchet. gzip remains transport
         # diagnostics only.

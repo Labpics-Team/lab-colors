@@ -39,6 +39,8 @@ def validate(ci, package, release):
     for guard in ["github.event_name == 'push'", "github.ref_type == 'tag'", "startsWith(github.ref_name, 'colors-v')"]:
         if guard not in uploads[0]:
             raise AssertionError("ordinary CI can retain the package")
+    if owner.count("uses: actions/upload-artifact@") != 1:
+        raise AssertionError("package diagnostics must not use remote artifact storage")
     publisher=job(release,"publish")
     if "    needs: prepare\n" not in publisher or "    environment: npm-publish\n" not in publisher:
         raise AssertionError("publish bypasses isolated verification")
@@ -76,6 +78,51 @@ class CiStorageTests(unittest.TestCase):
         values[1]+='\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000\n'
         with self.assertRaises(AssertionError):
             validate(*values)
+
+
+def validate_native_storage(source):
+    if source.count("uses: actions/upload-artifact@") != 1:
+        raise AssertionError("native CI may only transfer the Android SDK")
+    build = job(source, "android-build")
+    blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", build)
+    upload = [block for block in blocks if "uses: actions/upload-artifact@" in block]
+    if len(upload) != 1:
+        raise AssertionError("Android SDK transfer missing")
+    for required in ("name: android-sdk-", "retention-days: 1", "if-no-files-found: error"):
+        if required not in upload[0]:
+            raise AssertionError("Android SDK transfer changed: " + required)
+    if "continue-on-error:" in upload[0] or "\n        if:" in upload[0]:
+        raise AssertionError("Android SDK transfer became optional")
+    consumer = job(source, "android-consumer")
+    for required in ("needs: android-build", "uses: actions/download-artifact@",
+                     "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
+        if required not in consumer:
+            raise AssertionError("external Android consumer missing: " + required)
+    for required in ("build-apple.py", "test-apple.py"):
+        if required not in job(source, "apple-package"):
+            raise AssertionError("external Apple verification missing: " + required)
+
+
+class NativeStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.source = (ROOT / ".github/workflows/native-conformance-worker.yml").read_text()
+
+    def test_only_sdk_transfer_survives(self):
+        validate_native_storage(self.source)
+
+    def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
+        for before, after in [
+            ("retention-days: 1", "retention-days: 7"),
+            ("if-no-files-found: error", "if-no-files-found: ignore"),
+            ("needs: android-build", "needs: other"),
+            ("test-apple.py", "skip-apple.py"),
+        ]:
+            with self.subTest(before=before):
+                self.assertIn(before, self.source)
+                with self.assertRaises(AssertionError):
+                    validate_native_storage(self.source.replace(before, after))
+        with self.assertRaises(AssertionError):
+            validate_native_storage(self.source + "\n      - uses: actions/upload-artifact@v4\n")
 
 
 if __name__=="__main__":
