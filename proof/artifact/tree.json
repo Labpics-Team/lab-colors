@@ -572,7 +572,7 @@
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "4b10feb589a615166048cb7513a03a7a36d0e32e",
   "scripts/test_ci_peer_gate.py": "a30f1b4957d4a5ede7b2ee24d40e62e4de23da1a",
-  "scripts/test_ci_storage.py": "8808b695b7f368b3a08d00baf04c39228c4a0b02",
+  "scripts/test_ci_storage.py": "02daf10c50729eb4d7e5c6f74a9539c81c556bb6",
   "scripts/test_distribution_notices.mjs": "64412401e7b5817cad9ac370f4da3fe269e76076",
   "scripts/test_distribution_outputs.mjs": "bb2fd1aac381a8a37fcd656c2d183f690b9c3686",
   "scripts/test_document_bytes.py": "a2ff5044168320288c48f2cd1af0176a746499d2",
@@ -609,7 +609,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "48a6d4ac3447bfe8d9186c28b1d49711f8612f74c268bcf3f2dfe743b56f1b10",
+ "record_sha256": "e88466106d99348ecf3fa292ccb0b8bae4b0c8df8c298e3c0ea8eb80f30ca6dd",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

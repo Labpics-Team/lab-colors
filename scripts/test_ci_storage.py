@@ -36,9 +36,10 @@ def validate(ci, package, release):
     uploads=re.findall(r"(?ms)^      - name: upload verified npm tarball and manifest\n(.*?)(?=^      - name:|\Z)",owner)
     if len(uploads)!=1 or "retention-days: 1\n" not in uploads[0]:
         raise AssertionError("release handoff has no bounded lifetime")
-    for guard in ["github.event_name == 'push'", "github.ref_type == 'tag'", "startsWith(github.ref_name, 'colors-v')"]:
-        if guard not in uploads[0]:
-            raise AssertionError("ordinary CI can retain the package")
+    expected_guard = "github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')"
+    upload_conditions = re.findall(r"(?m)^        if: ([^\r\n]+)$", uploads[0])
+    if upload_conditions != [expected_guard] or re.search(r"(?m)^        continue-on-error:", uploads[0]):
+        raise AssertionError("release handoff became optional or lost its exact release guard")
     if owner.count("uses: actions/upload-artifact@") != 1:
         raise AssertionError("package diagnostics must not use remote artifact storage")
     publisher=job(release,"publish")
@@ -64,6 +65,8 @@ class CiStorageTests(unittest.TestCase):
             (1,'node scripts/test-program-runtime-browser.mjs','echo browser'),
             (1,'--package-smoke "$VERIFIED_TARBALL"','--help'),
             (1,"github.ref_type == 'tag'","true"),
+            (1,"if: github.event_name == 'push'", "if: false && github.event_name == 'push'"),
+            (1,"retention-days: 1", "retention-days: 1\n        continue-on-error: true"),
             (1,'retention-days: 1','retention-days: 90'),
             (2,'    needs: prepare','    needs: ignored'),
             (2,'    environment: npm-publish','    environment: other'),
@@ -80,10 +83,16 @@ class CiStorageTests(unittest.TestCase):
             validate(*values)
 
 
+def job_level_optional(source, name):
+    return re.search(r"(?m)^    (?:if|continue-on-error):", job(source, name)) is not None
+
+
 def validate_native_storage(source):
     if source.count("uses: actions/upload-artifact@") != 1:
         raise AssertionError("native CI may only transfer the Android SDK")
     build = job(source, "android-build")
+    if job_level_optional(source, "android-build"):
+        raise AssertionError("Android SDK build job became optional")
     blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", build)
     upload = [block for block in blocks if "uses: actions/upload-artifact@" in block]
     if len(upload) != 1:
@@ -96,10 +105,23 @@ def validate_native_storage(source):
     if "continue-on-error:" in upload[0] or "\n        if:" in upload[0]:
         raise AssertionError("Android SDK transfer became optional")
     consumer = job(source, "android-consumer")
+    if job_level_optional(source, "android-consumer"):
+        raise AssertionError("external Android consumer job became optional")
+    consumer_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", consumer)
+    for required_step in (
+        "uses: actions/download-artifact@", "run: python3 bindings/kotlin/ci/prepare-consumer.py",
+        "run: python3 bindings/kotlin/ci/test-consumer.py",
+        "uses: reactivecircus/android-emulator-runner@",
+    ):
+        matching = [block for block in consumer_steps if required_step in block]
+        if len(matching) != 1 or re.search(r"(?m)^        (?:if|continue-on-error):", matching[0]):
+            raise AssertionError("external Android consumer step missing or optional: " + required_step)
     for required in ("needs: android-build", "uses: actions/download-artifact@",
                      "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
         if required not in consumer:
             raise AssertionError("external Android consumer missing: " + required)
+    if job_level_optional(source, "apple-package"):
+        raise AssertionError("external Apple verification job became optional")
     apple_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "apple-package"))
     for required in ("build-apple.py", "test-apple.py"):
         matching = [block for block in apple_steps if "run: python3 bindings/swift/ci/" + required in block]
@@ -136,6 +158,28 @@ class NativeStorageTests(unittest.TestCase):
                     self.assertIn(original, self.source)
                     with self.assertRaises(AssertionError):
                         validate_native_storage(self.source.replace(original, changed))
+        for name in ("android-build", "android-consumer", "apple-package"):
+            for setting in ("if: false", "continue-on-error: true"):
+                with self.subTest(job=name, setting=setting):
+                    original = "  " + name + ":\n"
+                    self.assertIn(original, self.source)
+                    changed = self.source.replace(original, original + "    " + setting + "\n", 1)
+                    with self.assertRaises(AssertionError):
+                        validate_native_storage(changed)
+        for step in (
+            "      - uses: actions/download-artifact@",
+            "        run: python3 bindings/kotlin/ci/prepare-consumer.py",
+            "        run: python3 bindings/kotlin/ci/test-consumer.py",
+            "      - uses: reactivecircus/android-emulator-runner@",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(step, self.source)
+                if step.startswith("      -"):
+                    changed = self.source.replace(step, "      - if: false\n        " + step.strip().removeprefix("- "), 1)
+                else:
+                    changed = self.source.replace(step, "        if: false\n" + step, 1)
+                with self.assertRaises(AssertionError):
+                    validate_native_storage(changed)
         with self.assertRaises(AssertionError):
             validate_native_storage(self.source + "\n      - uses: actions/upload-artifact@v4\n")
 
