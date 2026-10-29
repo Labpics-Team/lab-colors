@@ -572,7 +572,7 @@
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "4b10feb589a615166048cb7513a03a7a36d0e32e",
   "scripts/test_ci_peer_gate.py": "a30f1b4957d4a5ede7b2ee24d40e62e4de23da1a",
-  "scripts/test_ci_storage.py": "4a7824977fc750ec619ee458e9a50b6558b4ff53",
+  "scripts/test_ci_storage.py": "c25a362e36e49e18d44dcafe06bea12710d9970a",
   "scripts/test_distribution_notices.mjs": "64412401e7b5817cad9ac370f4da3fe269e76076",
   "scripts/test_distribution_outputs.mjs": "bb2fd1aac381a8a37fcd656c2d183f690b9c3686",
   "scripts/test_document_bytes.py": "a2ff5044168320288c48f2cd1af0176a746499d2",
