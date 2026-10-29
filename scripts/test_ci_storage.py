@@ -153,6 +153,14 @@ def validate_mutation_storage(source):
     if ("uses: actions/upload-artifact@" not in shard
             or "name: mutation-shard-" not in shard):
         raise AssertionError("mutation shard handoff missing")
+    # Shards are only a live workflow handoff. They must not retain 32
+    # archives for a month after aggregation finishes.
+    for owner, transfer in ((manifest, "mutation-manifest"), (shard, "mutation-shard-")):
+        blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", owner)
+        uploads = [block for block in blocks if "uses: actions/upload-artifact@" in block]
+        if (len(uploads) != 1 or "name: " + transfer not in uploads[0]
+                or not re.search(r"(?m)^          retention-days: 2[ \t]*$", uploads[0])):
+            raise AssertionError("mutation transfer must expire after two days: " + transfer)
     if "uses: actions/upload-artifact@" in aggregate or "name: mutation-report" in aggregate:
         raise AssertionError("aggregate diagnostic upload returned")
     # The aggregator executes the script from the materialized source tree.
@@ -230,6 +238,12 @@ class NativeStorageTests(unittest.TestCase):
             validate_mutation_storage(self.mutation_source.replace(
                 'python3 "$source_root/scripts/mutation.py" aggregate',
                 'echo skipped-aggregate', 1))
+        for retention in ("retention-days: 30", "retention-days: 7", "retention-days: 1"):
+            with self.subTest(mutation_retention=retention):
+                changed = self.mutation_source.replace("retention-days: 2", retention, 1)
+                self.assertNotEqual(changed, self.mutation_source)
+                with self.assertRaises(AssertionError):
+                    validate_mutation_storage(changed)
         for before, after in (
             ("name: mutation-manifest", "name: dropped-manifest"),
             ("name: mutation-shard-", "name: dropped-shard-"),

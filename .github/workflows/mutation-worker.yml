@@ -91,7 +91,7 @@ jobs:
           name: mutation-manifest
           path: ${{ runner.temp }}/mutation-manifest/mutation-manifest.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 2
 
   shard:
     name: mutation shard ${{ matrix.shard }}/32
@@ -213,7 +213,7 @@ jobs:
           name: mutation-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/mutation-shard-${{ matrix.shard }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 2
 
   aggregate:
     name: prove complete mutation population
