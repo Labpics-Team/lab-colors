@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 345,
+   "count": 347,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -680,6 +680,8 @@
     "test_ci_peer_gate.PeerGateTest.test_wrong_head_and_wrong_event_do_not_satisfy_admission",
     "test_ci_storage.CiStorageTests.test_current_package_graph_retains_only_the_release_handoff",
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
+    "test_ci_storage.NativeStorageTests.test_only_sdk_transfer_survives",
+    "test_ci_storage.NativeStorageTests.test_reintroduced_diagnostics_and_weakened_transfer_are_rejected",
     "test_document_bytes.DocumentBytesTests.test_c1_controls_are_rejected_through_the_document_check",
     "test_document_bytes.DocumentBytesTests.test_control_bytes_refuse_without_rejecting_normal_whitespace",
     "test_document_bytes.DocumentBytesTests.test_documented_domain_separator_matches_protocol_source",
@@ -960,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "1bac9f86ec8e94acdd16f32ad97fcca0403fa52657489efe730d5948adfb03c0",
+ "record_sha256": "bc0b4fd6deb4c55919b0c24b920a198864e8b3f37fd31448bc3445642a528a57",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
