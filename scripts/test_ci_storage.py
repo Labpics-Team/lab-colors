@@ -110,12 +110,20 @@ def validate_native_storage(source):
     consumer_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", consumer)
     for required_step in (
         "uses: actions/download-artifact@", "run: python3 bindings/kotlin/ci/prepare-consumer.py",
-        "run: python3 bindings/kotlin/ci/test-consumer.py",
+        'run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble',
         "uses: reactivecircus/android-emulator-runner@",
     ):
         matching = [block for block in consumer_steps if required_step in block]
         if len(matching) != 1 or re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", matching[0]):
             raise AssertionError("external Android consumer step missing or optional: " + required_step)
+    # The separate inventory command is deliberately conditional on failure; it
+    # must not be mistaken for the mandatory external compile step above.
+    emulator = next(block for block in consumer_steps
+                    if "uses: reactivecircus/android-emulator-runner@" in block)
+    expected_runtime = ('script: python3 bindings/kotlin/ci/test-consumer.py '
+                        '"$RUNNER_TEMP/android-consumer" ' + '$' + '{{ matrix.page }}')
+    if expected_runtime not in emulator:
+        raise AssertionError("external Android runtime consumer is not executed in the emulator")
     for required in ("needs: android-build", "uses: actions/download-artifact@",
                      "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
         if required not in consumer:
@@ -145,6 +153,9 @@ class NativeStorageTests(unittest.TestCase):
             ("if-no-files-found: error", "if-no-files-found: ignore"),
             ("needs: android-build", "needs: other"),
             ("test-apple.py", "skip-apple.py"),
+            ("script: python3 bindings/kotlin/ci/test-consumer.py", "script: echo skip-runtime"),
+            ('run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble',
+             'run: echo skip-external-assembly'),
         ]:
             with self.subTest(before=before):
                 self.assertIn(before, self.source)
