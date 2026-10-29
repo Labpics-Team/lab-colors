@@ -88,9 +88,11 @@ def validate_native_storage(source):
     upload = [block for block in blocks if "uses: actions/upload-artifact@" in block]
     if len(upload) != 1:
         raise AssertionError("Android SDK transfer missing")
-    for required in ("name: android-sdk-", "retention-days: 1", "if-no-files-found: error"):
+    for required in ("name: android-sdk-", "if-no-files-found: error"):
         if required not in upload[0]:
             raise AssertionError("Android SDK transfer changed: " + required)
+    if not re.search(r"(?m)^[ \t]*retention-days:[ \t]*1[ \t]*$", upload[0]):
+        raise AssertionError("Android SDK transfer must expire after one day")
     if "continue-on-error:" in upload[0] or "\n        if:" in upload[0]:
         raise AssertionError("Android SDK transfer became optional")
     consumer = job(source, "android-consumer")
@@ -98,9 +100,13 @@ def validate_native_storage(source):
                      "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
         if required not in consumer:
             raise AssertionError("external Android consumer missing: " + required)
+    apple_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "apple-package"))
     for required in ("build-apple.py", "test-apple.py"):
-        if required not in job(source, "apple-package"):
+        matching = [block for block in apple_steps if "run: python3 bindings/swift/ci/" + required in block]
+        if len(matching) != 1:
             raise AssertionError("external Apple verification missing: " + required)
+        if re.search(r"(?m)^        (?:if|continue-on-error):", matching[0]):
+            raise AssertionError("external Apple verification became optional: " + required)
 
 
 class NativeStorageTests(unittest.TestCase):
@@ -113,6 +119,7 @@ class NativeStorageTests(unittest.TestCase):
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
             ("retention-days: 1", "retention-days: 7"),
+            ("retention-days: 1", "retention-days: 14"),
             ("if-no-files-found: error", "if-no-files-found: ignore"),
             ("needs: android-build", "needs: other"),
             ("test-apple.py", "skip-apple.py"),
@@ -121,6 +128,14 @@ class NativeStorageTests(unittest.TestCase):
                 self.assertIn(before, self.source)
                 with self.assertRaises(AssertionError):
                     validate_native_storage(self.source.replace(before, after))
+        for command in ("build-apple.py", "test-apple.py"):
+            for setting in ("if: false", "continue-on-error: true"):
+                with self.subTest(command=command, setting=setting):
+                    original = "        run: python3 bindings/swift/ci/" + command
+                    changed = "        " + setting + "\n" + original
+                    self.assertIn(original, self.source)
+                    with self.assertRaises(AssertionError):
+                        validate_native_storage(self.source.replace(original, changed))
         with self.assertRaises(AssertionError):
             validate_native_storage(self.source + "\n      - uses: actions/upload-artifact@v4\n")
 
