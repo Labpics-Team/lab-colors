@@ -155,7 +155,13 @@ def validate_mutation_storage(source):
         raise AssertionError("mutation shard handoff missing")
     if "uses: actions/upload-artifact@" in aggregate or "name: mutation-report" in aggregate:
         raise AssertionError("aggregate diagnostic upload returned")
-    if "scripts/mutation.py aggregate" not in aggregate:
+    # The aggregator executes the script from the materialized source tree.
+    # Match the actual shell command, not a filename fragment that never
+    # appears when the path is prefixed by "$source_root".
+    if not re.search(
+        r'(?m)^[ \t]+python3 "\$source_root/scripts/mutation\.py" aggregate[ \t]*\\[ \t]*$',
+        aggregate,
+    ):
         raise AssertionError("mutation aggregation cannot be skipped")
 
 
@@ -220,6 +226,10 @@ class NativeStorageTests(unittest.TestCase):
                 "      - name: verify exact non-overlapping aggregate",
                 "      - uses: actions/upload-artifact@v4\n"
                 "      - name: verify exact non-overlapping aggregate", 1))
+        with self.assertRaises(AssertionError):
+            validate_mutation_storage(self.mutation_source.replace(
+                'python3 "$source_root/scripts/mutation.py" aggregate',
+                'echo skipped-aggregate', 1))
         for before, after in (
             ("name: mutation-manifest", "name: dropped-manifest"),
             ("name: mutation-shard-", "name: dropped-shard-"),
