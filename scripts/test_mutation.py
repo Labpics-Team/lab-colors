@@ -2928,7 +2928,7 @@ jobs:
         caller = (repo / ".github" / "workflows" / "mutation.yml").read_text(encoding="utf-8-sig")
         self.assertEqual(caller.count("uses: ./.github/workflows/mutation-worker.yml"), 1)
         self.assertNotIn("Labpics-Team/lab-colors/.github/workflows/mutation-worker.yml@", caller)
-        self.assertEqual(workflow.count("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"), 3)
+        self.assertEqual(workflow.count("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2"), 2)
         self.assertEqual(workflow.count("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1"), 3)
         self.assertNotIn("upload-artifact@ea165f8", workflow)
         config = (repo / ".cargo" / "mutants.toml").read_text(encoding="utf-8-sig")
@@ -2965,12 +2965,13 @@ jobs:
             "      - name:",
             "manifest discovery step",
         )
-        aggregate_step = between(
-            workflow,
-            "      - name: verify exact non-overlapping aggregate\n",
-            "      - name:",
-            "aggregate verification step",
-        )
+        aggregate_anchor = "      - name: verify exact non-overlapping aggregate\n"
+        self.assertEqual(workflow.count(aggregate_anchor), 1)
+        aggregate_step = workflow.split(aggregate_anchor, 1)[1]
+        # It must remain the final step: publishing a diagnostic report is not
+        # part of mutation verification or an inter-job handoff.
+        self.assertNotIn("\n      - name:", aggregate_step)
+        self.assertNotIn("actions/upload-artifact@", aggregate_step)
 
         self.assertIn("set -euo pipefail", aggregate_step)
         self.assertIn('diagnostic="$report_root/aggregate.log"', aggregate_step)

@@ -118,18 +118,6 @@ jobs:
         env:
           BASELINE_COMMIT: ${{ inputs.authoring_baseline }}
         run: python3 bindings/swift/ci/benchmark-authoring.py "$RUNNER_TEMP/swift-consumer" "$BASELINE_COMMIT"
-      - name: retain the verified main distribution
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: swift-package-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/swift-distribution/LabColors.swiftpm.zip
-            ${{ runner.temp }}/swift-distribution/swift-release-manifest.json
-            ${{ runner.temp }}/swift-distribution/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
-
   android-build:
     name: build Android SDK
     runs-on: ubuntu-24.04
@@ -170,15 +158,7 @@ jobs:
             ${{ runner.temp }}/android-distribution/native-surface.json
             ${{ runner.temp }}/android-distribution/authoring-surface.json
           if-no-files-found: error
-          retention-days: 7
-      - name: preserve generation diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: android-generation-${{ github.sha }}
-          path: ${{ runner.temp }}/android-distribution/producer/generated
           retention-days: 1
-
   android-consumer:
     name: android consumer (${{ matrix.name }})
     needs: android-build
@@ -226,23 +206,6 @@ jobs:
       - name: verify staged failure artifact inventory
         if: failure()
         run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory
-      - name: retain external consumer failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: android-consumer-api-${{ matrix.api }}-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/android-consumer/build/outputs/verified-android-tests
-            ${{ runner.temp }}/android-consumer/build/outputs/androidTest-results
-            ${{ runner.temp }}/android-consumer/build/outputs/apk/**/*.apk
-            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/mapping.txt
-            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/configuration.txt
-            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/usage.txt
-            ${{ runner.temp }}/android-consumer/build/outputs/mapping/**/seeds.txt
-            ${{ runner.temp }}/android-consumer/build/outputs/consumer-diagnostics
-          if-no-files-found: error
-          retention-days: 1
-
   android-package:
     name: android package
     needs: [android-build, android-consumer]
