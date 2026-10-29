@@ -122,7 +122,9 @@ def validate_native_storage(source):
                     if "uses: reactivecircus/android-emulator-runner@" in block)
     expected_runtime = ('script: python3 bindings/kotlin/ci/test-consumer.py '
                         '"$RUNNER_TEMP/android-consumer" ' + '$' + '{{ matrix.page }}')
-    if expected_runtime not in emulator:
+    runtime_commands = [line.strip() for line in emulator.splitlines()
+                        if line.lstrip().startswith("script:")]
+    if runtime_commands != [expected_runtime]:
         raise AssertionError("external Android runtime consumer is not executed in the emulator")
     for required in ("needs: android-build", "uses: actions/download-artifact@",
                      "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
@@ -163,12 +165,18 @@ def validate_mutation_storage(source):
             raise AssertionError("mutation transfer must expire after two days: " + transfer)
     if "uses: actions/upload-artifact@" in aggregate or "name: mutation-report" in aggregate:
         raise AssertionError("aggregate diagnostic upload returned")
+    steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", aggregate)
+    aggregation_steps = [step for step in steps
+                         if step.startswith("      - name: verify exact non-overlapping aggregate\n")]
+    if len(aggregation_steps) != 1 or re.search(
+            r"(?m)^        (?:if|continue-on-error):", aggregation_steps[0]):
+        raise AssertionError("mutation aggregation step is missing or optional")
     # The aggregator executes the script from the materialized source tree.
     # Match the actual shell command, not a filename fragment that never
     # appears when the path is prefixed by "$source_root".
     if not re.search(
         r'(?m)^[ \t]+python3 "\$source_root/scripts/mutation\.py" aggregate[ \t]*\\[ \t]*$',
-        aggregate,
+        aggregation_steps[0],
     ):
         raise AssertionError("mutation aggregation cannot be skipped")
 
@@ -197,6 +205,11 @@ class NativeStorageTests(unittest.TestCase):
                 self.assertIn(before, self.source)
                 with self.assertRaises(AssertionError):
                     validate_native_storage(self.source.replace(before, after))
+        runtime = ('script: python3 bindings/kotlin/ci/test-consumer.py '
+                   '"$RUNNER_TEMP/android-consumer" ' + '$' + '{{ matrix.page }}')
+        self.assertIn(runtime, self.source)
+        with self.assertRaises(AssertionError):
+            validate_native_storage(self.source.replace(runtime, runtime + " || true", 1))
         for command in ("build-apple.py", "test-apple.py"):
             for setting in ("if: false", "continue-on-error: true"):
                 with self.subTest(command=command, setting=setting):
@@ -238,6 +251,14 @@ class NativeStorageTests(unittest.TestCase):
             validate_mutation_storage(self.mutation_source.replace(
                 'python3 "$source_root/scripts/mutation.py" aggregate',
                 'echo skipped-aggregate', 1))
+        aggregation = "      - name: verify exact non-overlapping aggregate\n"
+        self.assertIn(aggregation, self.mutation_source)
+        for setting in ("if: false", "continue-on-error: true"):
+            with self.subTest(aggregate_setting=setting):
+                changed = self.mutation_source.replace(aggregation,
+                    aggregation + "        " + setting + "\n", 1)
+                with self.assertRaises(AssertionError):
+                    validate_mutation_storage(changed)
         for retention in ("retention-days: 30", "retention-days: 7", "retention-days: 1"):
             with self.subTest(mutation_retention=retention):
                 changed = self.mutation_source.replace("retention-days: 2", retention, 1)
