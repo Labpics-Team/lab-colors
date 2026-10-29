@@ -114,7 +114,7 @@ def validate_native_storage(source):
         "uses: reactivecircus/android-emulator-runner@",
     ):
         matching = [block for block in consumer_steps if required_step in block]
-        if len(matching) != 1 or re.search(r"(?m)^        (?:if|continue-on-error):", matching[0]):
+        if len(matching) != 1 or re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", matching[0]):
             raise AssertionError("external Android consumer step missing or optional: " + required_step)
     for required in ("needs: android-build", "uses: actions/download-artifact@",
                      "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
@@ -127,7 +127,7 @@ def validate_native_storage(source):
         matching = [block for block in apple_steps if "run: python3 bindings/swift/ci/" + required in block]
         if len(matching) != 1:
             raise AssertionError("external Apple verification missing: " + required)
-        if re.search(r"(?m)^        (?:if|continue-on-error):", matching[0]):
+        if re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", matching[0]):
             raise AssertionError("external Apple verification became optional: " + required)
 
 
