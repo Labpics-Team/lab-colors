@@ -45,9 +45,12 @@ function run(mutation) {
       assert.equal(source.split(mutation.before).length, 2, "mutation must have exactly one owned site");
       writeFileSync(path, source.replace(mutation.before, mutation.after));
     }
+    // Новый CLI runner не наследует внутренний протокол родительского node:test.
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath, [
       "--test", "--test-reporter=tap", "--test-name-pattern=^" + witness + "$", contract,
-    ], { cwd: consumer, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 });
+    ], { cwd: consumer, env, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024 });
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
     return result;

@@ -38,11 +38,15 @@ function admissible(fixture, backgrounds, order = fixture.order) {
   return order.filter(([a, b]) => backgrounds.every((backdrop) => {
     const lower = over(fixture.lower[a], backdrop);
     const terminal = over(fixture.upper[b], lower);
-    return sameRgb(lower, fixture.expectedLower) && sameRgb(terminal, fixture.expectedFinal);
+    return (fixture.expectedLower === null || sameRgb(lower, fixture.expectedLower)) &&
+      sameRgb(terminal, fixture.expectedFinal);
   }));
 }
 
-function graph(fixture, { id = identity, reverse = false, order = fixture.order, report = true } = {}) {
+function graph(fixture, {
+  id = identity, reverse = false, order = fixture.order, report = true,
+  outputBindings = [[91, 41], [92, 42]],
+} = {}) {
   const b = new ProgramWireBuilderV2();
   const declarations = [
     [21, fixture.lower], [22, fixture.upper],
@@ -68,13 +72,14 @@ function graph(fixture, { id = identity, reverse = false, order = fixture.order,
       viewing.adaptingLuminance, viewing.backgroundRatio, viewing.surround);
   }
   b.presentationRoot(id(71), id(62)).presentationTarget(id(71), id(62));
-  const constraints = [[81, 61, fixture.expectedLower], [82, 62, fixture.expectedFinal]];
+  const constraints = [[82, 62, fixture.expectedFinal]];
+  if (fixture.expectedLower !== null) constraints.unshift([81, 61, fixture.expectedLower]);
   if (reverse) constraints.reverse();
   for (const [constraint, occurrence, expected] of constraints) {
     b.exactVisibleUnary(true, id(constraint), id(occurrence), expected);
   }
   if (report) b.exactVisibleUnary(false, id(83), id(62), differentRgb(fixture.expectedFinal));
-  const outputs = [[91, 41], [92, 42]];
+  const outputs = outputBindings.map((binding) => [...binding]);
   if (reverse) outputs.reverse();
   for (const [slot, paint] of outputs) b.output(id(slot), id(paint));
   return b.finish();
@@ -192,6 +197,32 @@ test("client preference preserves atomic opacity and report-only constraints", (
   assert.notDeepEqual(results[0], results[2], "changing the declared policy must remain effective");
 });
 
+test("joint feasibility cannot be reconstructed from per-target choices", () => {
+  const backgrounds = [[0, 1, 255], [255, 254, 0]];
+  for (const center of [[64, 96, 160], [160, 96, 64]]) {
+    const delta = [3, 5, 7];
+    const below = center.map((channel, i) => channel - delta[i]);
+    const above = center.map((channel, i) => channel + delta[i]);
+    const declaration = {
+      lower: [value(below, 4), value(above, 4)],
+      upper: [value(above, 2), value(below, 2)],
+      expectedLower: null, expectedFinal: center,
+      order: [[0, 1], [1, 0], [1, 1], [0, 0]],
+    };
+    // Обе проекции содержат 0 и 1, но их декартово произведение неверно:
+    // только диагональные пары дают center после композиции.
+    assert.deepEqual(admissible(declaration, backgrounds), [[1, 1], [0, 0]]);
+    for (const order of [declaration.order, [...declaration.order].reverse()]) {
+      const runtime = compileProgramWire(graph(declaration, { order }), 1);
+      let snapshot;
+      try {
+        snapshot = observe(runtime, 1n, backgrounds);
+        assertChoice(snapshot, declaration, admissible(declaration, backgrounds, order)[0]);
+      } finally { snapshot?.free(); runtime.free(); }
+    }
+  }
+});
+
 test("a finite attachment revokes an impossible context and recovers without rewriting intent", () => {
   const backdrop = [0, 0, 0], other = [255, 255, 255];
   const lower = [value([3, 5, 7], 2), value([7, 11, 15], 1)];
@@ -202,7 +233,7 @@ test("a finite attachment revokes an impossible context and recovers without rew
   assert.equal(admissible(declaration, [backdrop]).length, lower.length);
   assert.deepEqual(admissible(declaration, [backdrop, other]), []);
   const host = { point: null, operations: [] };
-  const attachment = attachProgramWire(graph(declaration), 1, 92, 501, 71, 62, (intent) => {
+  const attachment = attachProgramWire(graph(declaration, { outputBindings: [[92, 42]] }), 1, 92, 501, 71, 62, (intent) => {
     host.operations.push(intent.operation);
     host.point = intent.point;
     return true;
@@ -210,7 +241,12 @@ test("a finite attachment revokes an impossible context and recovers without rew
   const held = [];
   try {
     const initial = observe(attachment, 1n, [backdrop]); held.push(initial);
-    assertChoice(initial, declaration, declaration.order[0]);
+    const expectedOutput = new Map([[92, { rgb: upper[0].rgb, opacity: upper[0].quarters / 4 }]]);
+    const expectedPoint = { slot: 92, source: new Uint8Array(upper[0].rgb), opacity: upper[0].quarters / 4 };
+    assert.equal(initial.state, "ready");
+    assert.deepEqual(outputs(initial), expectedOutput);
+    assert.equal(host.operations.at(-1), "setAll");
+    assert.deepEqual(host.point, expectedPoint);
     const authority = attachment.materializationAuthority(); held.push(authority);
     assert.deepEqual([...authority.terminalCompositeRgb()], expectedFinal);
     const before = outputs(initial);
@@ -223,7 +259,10 @@ test("a finite attachment revokes an impossible context and recovers without rew
     const unknown = attachment.updateUnknown(3n, 1); held.push(unknown);
     assert.equal(unknown.state, "stale");
     const recovered = observe(attachment, 4n, [backdrop]); held.push(recovered);
-    assertChoice(recovered, declaration, declaration.order[0]);
+    assert.equal(recovered.state, "ready");
+    assert.deepEqual(outputs(recovered), expectedOutput);
+    assert.equal(host.operations.at(-1), "setAll");
+    assert.deepEqual(host.point, expectedPoint);
     const current = attachment.materializationAuthority(); held.push(current);
     assert.equal(current.revision(), 4n);
     assert.deepEqual([...current.terminalCompositeRgb()], expectedFinal);

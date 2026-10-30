@@ -334,8 +334,8 @@
   "packages/colors/test/helpers/certificate-wire-reference.mjs": "48987da33073dc2cce780dce0dc2ce07a446b3cb",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/native-program-contract.test.mjs": "7bdaf8d970c907375551876165f1868720a23b2f",
-  "packages/colors/test/program-adaptive-contract.test.mjs": "75eebd8c0a899920efaf6b1c6e0886b3eff27570",
-  "packages/colors/test/program-adaptive-mutations.test.mjs": "2a449ca66502bce99fdca8ad954ce29058e40ba6",
+  "packages/colors/test/program-adaptive-contract.test.mjs": "525e5c56b1bb76a42d3d15d8663a7b2c0c2bbb6c",
+  "packages/colors/test/program-adaptive-mutations.test.mjs": "c144b274f0c846336fa5067e29da3281de77366a",
   "packages/colors/test/program-array-ingress.test.mjs": "dd359be39bb9b52e636c83773a8829f98af4b59d",
   "packages/colors/test/program-attachment-lifecycle.test.mjs": "e66995534a53c85e2971aa46773cf114ddecfb1d",
   "packages/colors/test/program-clean-set-wire.test.mjs": "126508762d0f5409e517e23f96fc6ba774576acd",
@@ -611,7 +611,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "2143e7bdc2fe55c5318c68ef3420ed70c850cd716ef168e6de2e05e15afcde31",
+ "record_sha256": "150b8791bdd810c47a0c9e8187a37bfcb86a643115d515d45ce641a655ab85ce",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
