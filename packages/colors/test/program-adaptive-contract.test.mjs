@@ -282,11 +282,13 @@ test("finite selection requires the whole declared product, not merely the right
   const incomplete = declaration.order.map((choice) => [...choice]);
   incomplete[incomplete.length - 1] = [...incomplete[0]];
   assert.equal(incomplete.length, declaration.order.length);
-  let accidental;
-  try {
-    assert.throws(() => { accidental = compileProgramWire(graph(declaration, { order: incomplete }), 1); },
-      (error) => isProgramError(error) && ["program_compile", "program_wire"].includes(error.code));
-  } finally { accidental?.free(); }
+  for (const order of [incomplete, declaration.order.slice(0, -1)]) {
+    let accidental;
+    try {
+      assert.throws(() => { accidental = compileProgramWire(graph(declaration, { order }), 1); },
+        (error) => isProgramError(error) && ["program_compile", "program_wire"].includes(error.code));
+    } finally { accidental?.free(); }
+  }
   const runtime = compileProgramWire(graph(declaration), 1);
   let healthy;
   try {
