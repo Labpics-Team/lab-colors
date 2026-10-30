@@ -1447,6 +1447,14 @@ void (null as unknown as RoleRecipe);
 `;
 }
 
+async function verifyAdaptiveContract(consumer) {
+  const filename = "program-adaptive-contract.test.mjs";
+  const path = resolve(consumer, filename);
+  // Тот же контракт исполняется вне checkout против установленного tarball.
+  await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
+  process.stdout.write(command(process.execPath, ["--test", path], consumer));
+}
+
 async function verifyCleanConsumer(
   tarballBytes,
   packageJson,
@@ -1534,6 +1542,7 @@ async function verifyCleanConsumer(
     await writeFile(typesPath, typeSmokeSource());
 
     command(process.execPath, [runtimePath], consumer);
+    await verifyAdaptiveContract(consumer);
     for (const compiler of typescriptCompilers) {
       command(
         process.execPath,
@@ -1605,6 +1614,7 @@ export async function smokePackedPackage(tarballPath) {
     const runtimePath = resolve(consumer, "smoke.mjs");
     await writeFile(runtimePath, runtimeSmokeSource());
     command(process.execPath, [runtimePath], consumer);
+    await verifyAdaptiveContract(consumer);
     const tutorial = await readFile(resolve(REPO_ROOT, "docs/how-to/adapt-contrast.md"), "utf8");
     const examples = [...tutorial.matchAll(/^```js\r?\n([\s\S]*?)^```$/gmu)];
     if (examples.length !== 1) fail("adaptive contrast tutorial must contain one runnable JavaScript example");

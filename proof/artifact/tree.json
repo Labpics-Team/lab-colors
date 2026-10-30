@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 606,
+ "file_count": 608,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -334,6 +334,8 @@
   "packages/colors/test/helpers/certificate-wire-reference.mjs": "48987da33073dc2cce780dce0dc2ce07a446b3cb",
   "packages/colors/test/init-lifecycle.test.mjs": "77d2e7ffb767b735e3e7a556aaf238ddada6ed9c",
   "packages/colors/test/native-program-contract.test.mjs": "7bdaf8d970c907375551876165f1868720a23b2f",
+  "packages/colors/test/program-adaptive-contract.test.mjs": "75eebd8c0a899920efaf6b1c6e0886b3eff27570",
+  "packages/colors/test/program-adaptive-mutations.test.mjs": "2a449ca66502bce99fdca8ad954ce29058e40ba6",
   "packages/colors/test/program-array-ingress.test.mjs": "dd359be39bb9b52e636c83773a8829f98af4b59d",
   "packages/colors/test/program-attachment-lifecycle.test.mjs": "e66995534a53c85e2971aa46773cf114ddecfb1d",
   "packages/colors/test/program-clean-set-wire.test.mjs": "126508762d0f5409e517e23f96fc6ba774576acd",
@@ -598,7 +600,7 @@
   "scripts/test_verify_core_formal.py": "85372064d897d0bb7048b8aa7436817eb6a74e67",
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
   "scripts/transport-distribution.mjs": "0ffdd393185b048db61bc56bfe1ae64c2408ee0d",
-  "scripts/verify-package-release.mjs": "b54b9d1620e19d70dd830d0762777cb3497b8f85",
+  "scripts/verify-package-release.mjs": "7544b5b46a52dfce8200a367807a5a0616714766",
   "scripts/verify-publication.mjs": "f8bfeae013cf412a4e7095b59b9e036e19935b0b",
   "scripts/verify-published-package.mjs": "59f6f1d4999170ca23c87385fafc7ca833a4837b",
   "scripts/verify-swift-surface.mjs": "5218e5478fe3920c635239cbacdf4c4ce65f4a61",
@@ -609,7 +611,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "451fa022762c50f51422f32ab7f3c74ecb0cf058c579f9a994d8d88e47da6c98",
+ "record_sha256": "2143e7bdc2fe55c5318c68ef3420ed70c850cd716ef168e6de2e05e15afcde31",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
