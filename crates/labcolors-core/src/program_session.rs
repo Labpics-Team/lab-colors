@@ -1083,8 +1083,6 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
-    // Допуск закрытого поиска отсутствует в обычном пути компиляции Program.
-    #[cfg(test)]
     computed_budget: Option<u64>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
@@ -1123,7 +1121,6 @@ where
             targets,
             families: Vec::new(),
             joint_selection: None,
-            #[cfg(test)]
             computed_budget: None,
             observation_group,
             opacities,
@@ -1196,7 +1193,6 @@ where
     }
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        #[cfg(test)]
         if self.computed_budget.is_some()
             || self
                 .targets
@@ -5323,7 +5319,6 @@ where
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
-        #[cfg(test)]
         program.computed_budget,
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
@@ -5361,7 +5356,14 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_owner_identity(&program)?;
+    let content_identity = match program.computed_budget {
+        Some(budget) => {
+            ProgramOwnerIdentityV1::Computed(identity::compile_computed_identity(&program, budget)?)
+        }
+        None => {
+            ProgramOwnerIdentityV1::Legacy(identity::compile_program_content_identity_v9(&program)?)
+        }
+    };
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -6021,9 +6023,8 @@ fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
     authored_selection: Option<&MaterialisedSelectionV1>,
-    #[cfg(test)] computed_budget: Option<u64>,
+    computed_budget: Option<u64>,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
-    #[cfg(test)]
     if let Some(budget) = computed_budget {
         return computed_assignment::compile_selection(
             graph,
