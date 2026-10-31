@@ -8,6 +8,14 @@ struct RuntimeStep: Decodable {
     let unknownReason: UInt32?
     let state: String
     let rgb: [UInt8]?
+    let reason: String?
+}
+struct ComputedFixture: Decodable {
+    let gray: String
+    let box: String
+    let encodingOnly: String
+    let grayHistory: [RuntimeStep]
+    let boxHistory: [RuntimeStep]
 }
 struct RuntimeFixture: Decodable {
     let schemaVersion: Int
@@ -15,6 +23,7 @@ struct RuntimeFixture: Decodable {
     let adaptive: String
     let encodingOnly: String
     let history: [RuntimeStep]
+    let computed: ComputedFixture
 }
 func fixture() throws -> RuntimeFixture {
     let url = try XCTUnwrap(Bundle.module.url(forResource: "program-runtime-v1", withExtension: "json", subdirectory: "Fixtures"))
@@ -53,6 +62,7 @@ private func reflectedJSON(_ value: Any) throws -> Any {
 // Изменяемое состояние тестового host защищено lock; callback не держит его при повторном входе.
 private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private let lock = NSLock()
+    private let expectedOpacity: Double
     private var rejected = false
     private var callbackFailure = false
     private var reentrant = false
@@ -60,6 +70,7 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private var sequence: UInt64 = 0
     private var epoch: UInt64?
     private weak var owner: ProgramAttachment?
+    init(opacity: Double = 1) { expectedOpacity = opacity }
     func configure(owner: ProgramAttachment, reentrant: Bool) { lock.lock(); defer { lock.unlock() }; self.owner = owner; self.reentrant = reentrant }
     func reject(_ value: Bool) { lock.lock(); defer { lock.unlock() }; rejected = value }
     func fail(_ value: Bool) { lock.lock(); defer { lock.unlock() }; callbackFailure = value }
@@ -82,7 +93,7 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
             let paint = try XCTUnwrap(intent.point)
             XCTAssertEqual(paint.slot, 91)
             XCTAssertEqual(paint.source.count, 3)
-            XCTAssertEqual(paint.opacity, 1)
+            XCTAssertEqual(paint.opacity, expectedOpacity)
         case .revokeAll:
             XCTAssertNil(intent.point)
         }
@@ -111,6 +122,9 @@ final class ProgramRuntimeTests: XCTestCase {
             }
             held.append(snapshot)
             XCTAssertEqual(snapshot.state(), step.state)
+            XCTAssertEqual(snapshot.snapshotVersion(), 1)
+            XCTAssertEqual(snapshot.revision(), step.revision)
+            XCTAssertNil(snapshot.reason())
             if let rgb = step.rgb {
                 XCTAssertEqual(snapshot.outputCount(), 1)
                 XCTAssertEqual(try snapshot.outputSlot(index: 0), 91)
@@ -124,6 +138,110 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try held[0].outputRgb(index: 1)) { assertCode($0, "invalid_output_index") }
         let fixed = try compileProgramWire(bytes: bytes(vectors.fixed), streamId: 2)
         XCTAssertEqual(try fixed.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1).outputRgb(index: 0), Data([20, 20, 20]))
+    }
+
+    func testComputedSnapshotsContainOnlyTheCurrentRevision() throws {
+        let vectors = try fixture().computed
+        let unsupported = try ProgramWireBuilderV3().computedTarget(21, domain: .gray(lower: 0, upper: 255), anchor: [0, 0, 0], maxDelta: 1)
+            .finiteTarget(22, candidates: [ProgramCandidate(id: 1, rgb: [0, 0, 0], opacity: 1)]).assignment([21]).finish()
+        XCTAssertThrowsError(try compileProgramWire(bytes: unsupported, streamId: 1)) { assertCode($0, "program_unsupported") }
+        XCTAssertThrowsError(try attachProgramWire(bytes: unsupported, streamId: 1, outputSlot: 91,
+            sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: RuntimeHost())) { assertCode($0, "program_unsupported") }
+        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory)] {
+            let runtime = try compileProgramWire(bytes: bytes(wire), streamId: .max)
+            let waiting = try runtime.updateUnknown(revision: 0, reasonId: .max)
+            XCTAssertEqual(waiting.snapshotVersion(), 2)
+            XCTAssertEqual(waiting.state(), "waiting")
+            XCTAssertEqual(waiting.revision(), 0)
+            XCTAssertNil(waiting.reason())
+            XCTAssertEqual(waiting.outputCount(), 0)
+            var held: [ProgramSnapshot] = []
+            for step in history {
+                let snapshot: ProgramSnapshot
+                if let reason = step.unknownReason {
+                    snapshot = try runtime.updateUnknown(revision: step.revision, reasonId: reason)
+                } else {
+                    let backgrounds = try XCTUnwrap(step.backgrounds)
+                    let surfaces = Data(backgrounds.flatMap { $0 })
+                    snapshot = try runtime.updateObserved(revision: step.revision, scenarioIds: [1], surfaces: surfaces, surfaceCount: 1)
+                    let replay = try runtime.updateObserved(revision: step.revision, scenarioIds: [1], surfaces: surfaces, surfaceCount: 1)
+                    XCTAssertEqual(replay.state(), snapshot.state())
+                    XCTAssertEqual(replay.reason(), snapshot.reason())
+                    XCTAssertEqual(replay.outputCount(), snapshot.outputCount())
+                }
+                held.append(snapshot)
+                XCTAssertEqual(snapshot.snapshotVersion(), 2)
+                XCTAssertEqual(snapshot.revision(), step.revision)
+                XCTAssertEqual(snapshot.state(), step.state)
+                XCTAssertEqual(snapshot.reason(), step.reason)
+                if let rgb = step.rgb {
+                    XCTAssertEqual(snapshot.outputCount(), 1)
+                    XCTAssertEqual(try snapshot.outputSlot(index: 0), 91)
+                    XCTAssertEqual(try snapshot.outputRgb(index: 0), Data(rgb))
+                    XCTAssertEqual(try snapshot.outputOpacity(index: 0), 0.5)
+                } else {
+                    XCTAssertEqual(snapshot.outputCount(), 0)
+                    XCTAssertThrowsError(try snapshot.outputRgb(index: 0)) { assertCode($0, "invalid_output_index") }
+                }
+            }
+            XCTAssertEqual(try held[0].outputRgb(index: 0), Data([64, 64, 64]))
+            XCTAssertEqual(held[0].revision(), 1)
+            XCTAssertThrowsError(try runtime.updateUnknown(revision: 1, reasonId: 7)) { assertCode($0, "program_update") }
+            XCTAssertThrowsError(try runtime.updateObserved(revision: 5, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)) { assertCode($0, "program_update") }
+            let high = try runtime.updateObserved(revision: .max, scenarioIds: [1], surfaces: Data([128, 128, 128]), surfaceCount: 1)
+            XCTAssertEqual(high.revision(), .max)
+            XCTAssertEqual(high.state(), "ready")
+        }
+    }
+
+    func testComputedAttachmentRevokesBeforePublishingIncompleteOrUnsatisfied() throws {
+        let vectors = try fixture().computed
+        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory)] {
+            let host = RuntimeHost(opacity: 0.5)
+            let attachment = try attachProgramWire(bytes: bytes(wire), streamId: 1, outputSlot: 91,
+                sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: host)
+            host.configure(owner: attachment, reentrant: true)
+            let first = try attachment.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([128, 128, 128]), surfaceCount: 1)
+            XCTAssertEqual(first.snapshotVersion(), 2)
+            XCTAssertEqual(first.revision(), 1)
+            XCTAssertNil(first.reason())
+            XCTAssertEqual(try attachment.materializationAuthority().terminalCompositeRgb(), Data([96, 96, 96]))
+            host.reject(true)
+            XCTAssertThrowsError(try attachment.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)) { assertCode($0, "program_attachment_host_rejected") }
+            XCTAssertEqual(try attachment.materializationAuthority().revision(), 1)
+            XCTAssertEqual(host.installed(), Data([64, 64, 64]))
+            host.reject(false)
+            for step in history.dropFirst() {
+                let snapshot: ProgramAttachedSnapshot
+                if let reason = step.unknownReason {
+                    snapshot = try attachment.updateUnknown(revision: step.revision, reasonId: reason)
+                } else {
+                    let surfaces = Data(try XCTUnwrap(step.backgrounds).flatMap { $0 })
+                    snapshot = try attachment.updateObserved(revision: step.revision, scenarioIds: [1], surfaces: surfaces, surfaceCount: 1)
+                    let replay = try attachment.updateObserved(revision: step.revision, scenarioIds: [1], surfaces: surfaces, surfaceCount: 1)
+                    XCTAssertEqual(replay.state(), snapshot.state())
+                }
+                XCTAssertEqual(snapshot.snapshotVersion(), 2)
+                XCTAssertEqual(snapshot.revision(), step.revision)
+                XCTAssertEqual(snapshot.state(), step.state)
+                XCTAssertEqual(snapshot.reason(), step.reason)
+                XCTAssertEqual(snapshot.hasRender(), step.rgb != nil)
+                if let rgb = step.rgb {
+                    XCTAssertEqual(snapshot.outputCount(), 1)
+                    XCTAssertEqual(try snapshot.outputRgb(index: 0), Data(rgb))
+                    XCTAssertEqual(host.installed(), Data(rgb))
+                } else {
+                    XCTAssertEqual(snapshot.outputCount(), 0)
+                    XCTAssertThrowsError(try snapshot.outputRgb(index: 0)) { assertCode($0, "invalid_output_index") }
+                    XCTAssertNil(host.installed())
+                    XCTAssertThrowsError(try attachment.materializationAuthority()) { assertCode($0, "program_materialization_not_ready") }
+                }
+            }
+            XCTAssertEqual(try first.outputRgb(index: 0), Data([64, 64, 64]))
+            XCTAssertThrowsError(try attachment.dispose(confirmed: false)) { assertCode($0, "program_attachment_revoke_unconfirmed") }
+            host.revoke(); try attachment.dispose(confirmed: true)
+            XCTAssertThrowsError(try attachment.updateUnknown(revision: 6, reasonId: 7)) { assertCode($0, "program_attachment_already_disposed") }
+        }
     }
 
     func testRejectedInputsAndThreadMigration() throws {
