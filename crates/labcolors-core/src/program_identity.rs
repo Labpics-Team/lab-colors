@@ -119,7 +119,8 @@ mod refinement {
             }
             // Keep only buffers whose retained capacity cannot follow a large
             // parent into a tiny descendant. Refinement never merges singletons.
-            self.recycled_singletons.retain(|vertices| vertices.len() == 1);
+            self.recycled_singletons
+                .retain(|vertices| vertices.len() == 1);
             // Dirty vertices and the clean representative are distinct members
             // of one descendant of an initial cell.
             self.signatures
@@ -374,11 +375,20 @@ mod refinement {
                         &mut trace,
                     )?;
                 }
+                // Equal signatures cannot split the cell. This includes every
+                // clean member through its representative, so no ordering or
+                // staged membership is needed for this cell.
+                if records.windows(2).all(|pair| {
+                    signatures[pair[0].signature.clone()]
+                        == signatures[pair[1].signature.clone()]
+                }) {
+                    dirty_begin = dirty_end;
+                    continue;
+                }
                 ordering::sort_by(records, |left, right| {
                     signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
                 });
                 let group_begin = groups.len();
-                let member_begin = members.len();
                 let mut retained = None;
                 let mut largest = group_begin;
                 let mut logical_start = cell.logical_start;
@@ -415,18 +425,13 @@ mod refinement {
                     logical_start += len;
                     record_begin = record_end;
                 }
-                if groups.len() - group_begin > 1 {
-                    splits.push(Split {
-                        cell: cell_id,
-                        group_begin,
-                        group_end: groups.len(),
-                        retained: retained.unwrap_or(largest),
-                        largest,
-                    });
-                } else {
-                    groups.truncate(group_begin);
-                    members.truncate(member_begin);
-                }
+                splits.push(Split {
+                    cell: cell_id,
+                    group_begin,
+                    group_end: groups.len(),
+                    retained: retained.unwrap_or(largest),
+                    largest,
+                });
                 dirty_begin = dirty_end;
             }
             #[cfg(test)]
@@ -519,9 +524,7 @@ mod refinement {
             if !changed || non_singletons == 0 || dirty.is_empty() {
                 break;
             }
-            ordering::sort_by(dirty, |left, right| {
-                cell_of[*left].cmp(&cell_of[*right])
-            });
+            ordering::sort_by(dirty, |left, right| cell_of[*left].cmp(&cell_of[*right]));
         }
         // cell_of is no longer needed as a vertex map. Reuse its V slots as
         // logical-start -> cell ID, avoiding a final allocation or global sort.
@@ -670,6 +673,8 @@ impl VertexColorV1 {
         self.push_bytes(&[value])
     }
 
+    // Share the checked writer across every typed color payload.
+    #[inline(never)]
     fn push_bytes(&mut self, values: &[u8]) -> Result<(), ProgramCompileError> {
         let start = usize::from(self.len()) + 1;
         let end = start
@@ -826,6 +831,7 @@ impl GraphBuilderV1 {
         })
     }
 
+    #[inline(never)]
     fn add_member(&mut self, color: VertexColorV1) -> Result<usize, ProgramCompileError> {
         self.colors
             .try_reserve(1)
@@ -836,6 +842,7 @@ impl GraphBuilderV1 {
         Ok(index)
     }
 
+    #[inline(never)]
     fn add_edge(
         &mut self,
         from: usize,
@@ -1970,9 +1977,16 @@ impl PartitionV1 {
                 .then_with(|| left.cmp(right))
         });
 
+        // The outer allocation follows the actual color cells. Refinement
+        // can retain this buffer even when a large cell stays equitable.
+        let cell_count = usize::from(!order.is_empty())
+            + order
+                .windows(2)
+                .filter(|pair| graph.colors[pair[0]] != graph.colors[pair[1]])
+                .count();
         let mut cells = Vec::new();
         cells
-            .try_reserve_exact(graph.colors.len())
+            .try_reserve_exact(cell_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         let mut start = 0;
         while start < order.len() {
@@ -2104,12 +2118,7 @@ fn individualize(
             cells.push(copy_vertices(cell)?);
             continue;
         }
-        let mut singleton = Vec::new();
-        singleton
-            .try_reserve_exact(1)
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        singleton.push(vertex);
-        cells.push(singleton);
+        cells.push(copy_vertices(&[vertex])?);
 
         let mut remainder = Vec::new();
         remainder
@@ -2628,8 +2637,10 @@ fn canonical_search_impl(
         &mut bulk_groups,
     )?;
     let mut stack = Vec::new();
+    // Only the root is known here. Each child reserves fallibly before push,
+    // so retained frame storage follows reached depth instead of graph size.
     stack
-        .try_reserve_exact(graph.colors.len())
+        .try_reserve_exact(1)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     stack.push(SearchFrameV1::new(initial, component_twins)?);
     let mut best: Option<SerializedLeafV1> = None;
@@ -4346,8 +4357,9 @@ mod tests {
                 },
                 &mut Vec::new(),
             )?;
-            let (actual, events) =
-                crate::test_support::measured_allocator_events(|| refine_partition(&graph, initial));
+            let (actual, events) = crate::test_support::measured_allocator_events(|| {
+                refine_partition(&graph, initial)
+            });
             let actual = actual?;
             assert!(actual.0.is_discrete(), "the remaining pair must split");
             assert_eq!(actual.0.cells, expected.0.cells, "complete ordered result");
@@ -4356,6 +4368,34 @@ mod tests {
         assert!(
             allocation_counts[1] <= allocation_counts[0],
             "more retained singletons must not require more allocations: {allocation_counts:?}",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refinement_retains_capacity_by_cell_count() -> Result<(), ProgramCompileError> {
+        let mut capacities = Vec::new();
+        for count in [32_usize, 128] {
+            // One root cell and one equitable cycle cell at both sizes.
+            let graph = connected_cycle_graph(count, false)?;
+            let initial = PartitionV1::initial(&graph)?;
+            let initial_capacity = initial.cells.capacity();
+            let expected = full_refine_partition_reference(
+                &graph,
+                PartitionV1 {
+                    cells: initial.cells.clone(),
+                },
+                &mut Vec::new(),
+            )?;
+            let actual = refine_partition(&graph, initial)?;
+            assert!(!actual.0.is_discrete(), "the cycle must stay equitable");
+            assert_eq!(actual.0.cells.len(), 2, "root and cycle cells");
+            assert_eq!(actual.0.cells, expected.0.cells, "complete ordered result");
+            capacities.push((initial_capacity, actual.0.cells.capacity()));
+        }
+        assert!(
+            capacities[1].0 <= capacities[0].0 && capacities[1].1 <= capacities[0].1,
+            "more vertices in the same cells must not grow outer storage: {capacities:?}",
         );
         Ok(())
     }
