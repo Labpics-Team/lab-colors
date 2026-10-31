@@ -1752,6 +1752,17 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    // Drop the declaration's ID indexes before reserving the CSR arc storage.
+    bind_graph(program)?.finish()
+}
+
+fn bind_graph<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<GraphBuilderV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
     let mut graph = GraphBuilderV1::new(program_root_color()?)?;
     let mut sources = IdIndexV1::new();
     let mut targets = IdIndexV1::new();
@@ -2078,7 +2089,7 @@ where
         }
     }
 
-    graph.finish()
+    Ok(graph)
 }
 
 #[cfg(test)]
@@ -2353,32 +2364,20 @@ fn individualize(
 struct SearchFrameV1 {
     partition: EquitablePartitionV1,
     branch_cell: Option<usize>,
-    candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
     component_twins: Option<ComponentTwinIndexV1>,
     next_candidate: usize,
-    leaf_pending: bool,
 }
 
 impl SearchFrameV1 {
-    fn new(
-        partition: EquitablePartitionV1,
-        component_twins: Option<ComponentTwinIndexV1>,
-    ) -> Result<Self, ProgramCompileError> {
-        let branch_cell = partition.0.first_non_singleton();
-        let candidates = match branch_cell {
-            Some(index) => copy_vertices(&partition.0.cells[index])?,
-            None => Vec::new(),
-        };
-        Ok(Self {
-            leaf_pending: branch_cell.is_none(),
+    fn new(partition: EquitablePartitionV1, component_twins: Option<ComponentTwinIndexV1>) -> Self {
+        Self {
+            branch_cell: partition.0.first_non_singleton(),
             partition,
-            branch_cell,
-            candidates,
             explored_candidates: Vec::new(),
             component_twins,
             next_candidate: 0,
-        })
+        }
     }
 }
 
@@ -2397,26 +2396,30 @@ struct SerializedLeafV1 {
 
 fn serialize_leaf(
     graph: &CanonicalGraphV1,
-    partition: &PartitionV1,
+    partition: PartitionV1,
 ) -> Result<SerializedLeafV1, ProgramCompileError> {
-    if !partition.is_discrete() || partition.cells.len() != graph.colors.len() {
+    let vertices = graph.colors.len();
+    if partition.cells.len() != vertices {
         return Err(ProgramCompileError::InternalInvariant);
     }
     let mut order = Vec::new();
     order
-        .try_reserve_exact(graph.colors.len())
+        .try_reserve_exact(vertices)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    let mut label_of = Vec::new();
-    label_of
-        .try_reserve_exact(graph.colors.len())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    label_of.resize(graph.colors.len(), usize::MAX);
-    for (label, cell) in partition.cells.iter().enumerate() {
+    for cell in partition.cells {
         let [vertex] = cell.as_slice() else {
             return Err(ProgramCompileError::InternalInvariant);
         };
-        label_of[*vertex] = label;
         order.push(*vertex);
+    }
+    // From here the compact order is the only remaining owner of the leaf.
+    let mut label_of = Vec::new();
+    label_of
+        .try_reserve_exact(vertices)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    label_of.resize(vertices, usize::MAX);
+    for (label, &vertex) in order.iter().enumerate() {
+        label_of[vertex] = label;
     }
 
     let edge_bytes = graph
@@ -2444,8 +2447,7 @@ fn serialize_leaf(
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
     let mut outgoing = Vec::new();
-    for cell in &partition.cells {
-        let vertex = cell[0];
+    for &vertex in &order {
         let color = graph.colors[vertex];
         push_u64_bytes(&mut output, u64::from(color.len()));
         output.extend_from_slice(color.as_slice());
@@ -2855,25 +2857,19 @@ fn canonical_search_impl(
     stack
         .try_reserve_exact(1)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    stack.push(SearchFrameV1::new(initial, component_twins)?);
+    stack.push(SearchFrameV1::new(initial, component_twins));
     let mut best: Option<SerializedLeafV1> = None;
     let mut automorphisms: Vec<Vec<usize>> = Vec::new();
     let mut leaf_count = 0_usize;
 
-    while !stack.is_empty() {
-        let leaf = stack
-            .last()
-            .map(|frame| frame.leaf_pending)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
-        if leaf {
-            let candidate = {
-                let frame = stack
-                    .last_mut()
-                    .ok_or(ProgramCompileError::InternalInvariant)?;
-                frame.leaf_pending = false;
-                serialize_leaf(graph, &frame.partition.0)?
-            };
-            stack.pop();
+    while let Some(frame) = stack.last_mut() {
+        let Some(cell) = frame.branch_cell else {
+            let leaf = stack
+                .pop()
+                .ok_or(ProgramCompileError::InternalInvariant)?
+                .partition
+                .0;
+            let candidate = serialize_leaf(graph, leaf)?;
             // Диагностический счётчик не участвует в admission: насыщение не
             // влияет на выбранный прообраз даже у недостижимо большого дерева.
             leaf_count = leaf_count.saturating_add(1);
@@ -2898,18 +2894,17 @@ fn canonical_search_impl(
                 Some(_) => {}
             }
             continue;
-        }
+        };
 
         let child = {
-            let frame = stack
-                .last_mut()
-                .ok_or(ProgramCompileError::InternalInvariant)?;
+            // Child refinement owns its partition; the parent's candidates never change.
+            let candidates = &frame.partition.0.cells[cell];
             let mut selected = None;
             // Разбиение, представители и автоморфизмы неизменны до выхода
             // из этого прохода. После дочерней ветви орбита строится заново.
             let mut explored_orbit = None;
-            while frame.next_candidate < frame.candidates.len() {
-                let candidate = frame.candidates[frame.next_candidate];
+            while frame.next_candidate < candidates.len() {
+                let candidate = candidates[frame.next_candidate];
                 frame.next_candidate += 1;
                 if candidate_is_component_twin(
                     graph,
@@ -2942,9 +2937,6 @@ fn canonical_search_impl(
                             .checked_sub(1)
                             .ok_or(ProgramCompileError::ResourceExhausted)?;
                     }
-                    let cell = frame
-                        .branch_cell
-                        .ok_or(ProgramCompileError::InternalInvariant)?;
                     let partition = refine_partition(
                         graph,
                         individualize(&frame.partition.0, cell, candidate)?,
@@ -2964,7 +2956,7 @@ fn canonical_search_impl(
                 stack
                     .try_reserve(1)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                stack.push(SearchFrameV1::new(partition, component_twins)?);
+                stack.push(SearchFrameV1::new(partition, component_twins));
             }
             None => {
                 stack.pop();
@@ -4859,6 +4851,25 @@ mod tests {
     }
 
     #[test]
+    fn search_frame_borrows_the_partition_branch_without_another_allocation()
+    -> Result<(), ProgramCompileError> {
+        let graph = connected_cycle_graph(17, false)?;
+        let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+        let branch = partition
+            .0
+            .first_non_singleton()
+            .expect("cycle must branch");
+        let members = partition.0.cells[branch].as_ptr();
+        let (frame, events) =
+            crate::test_support::measured_allocator_events(|| SearchFrameV1::new(partition, None));
+        assert_eq!(frame.branch_cell, Some(branch));
+        assert_eq!(frame.partition.0.cells[branch].as_ptr(), members);
+        assert_eq!(frame.partition.0.cells[branch].len(), 17);
+        assert_eq!(events.alloc + events.realloc, 0);
+        Ok(())
+    }
+
+    #[test]
     fn connected_cycles_build_one_orbit_per_unchanged_search_pass()
     -> Result<(), ProgramCompileError> {
         // Любой ненулевой сдвиг цикла простой длины порождает всю орбиту.
@@ -4901,7 +4912,7 @@ mod tests {
     ) -> Result<Vec<u8>, ProgramCompileError> {
         let partition = full_refine_partition_reference(graph, partition, &mut Vec::new())?.0;
         match partition.first_non_singleton() {
-            None => Ok(serialize_leaf(graph, &partition)?.preimage),
+            None => Ok(serialize_leaf(graph, partition)?.preimage),
             Some(cell) => {
                 let mut best: Option<Vec<u8>> = None;
                 for &vertex in partition.cells[cell].iter() {

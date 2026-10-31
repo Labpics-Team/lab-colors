@@ -965,7 +965,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "178fab10de543980a4d4e38da325ae5898f88a6cf7157da17344ad3b03ced4b2",
+ "record_sha256": "d27dad410d9c360c1f9c53ed607234a7efec330c5e8a25b8e2103e077fd42dad",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -2018,6 +2018,7 @@
    "program_session::identity::tests::refinement_reuses_initial_singletons_without_per_vertex_allocations: test",
    "program_session::identity::tests::repeated_components_are_canonicalized_with_one_leaf: test",
    "program_session::identity::tests::repeated_components_use_one_bulk_group_instead_of_search_depth: test",
+   "program_session::identity::tests::search_frame_borrows_the_partition_branch_without_another_allocation: test",
    "program_session::identity::tests::small_role_directed_graph_preimage_is_invariant_for_generated_bijections: test",
    "program_session::identity::tests::sparse_refinement_preserves_clean_middle_and_largest_dirty_children: test",
    "program_session::identity::tests::sparse_refinement_visits_only_changed_signatures: test",
@@ -2295,7 +2296,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1326,
+  "enabled_count": 1327,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",
