@@ -264,7 +264,7 @@
   "crates/labcolors-core/src/wcag22_tests.rs": "35644c8e8b66f560364690f924627c1839eefb04",
   "crates/labcolors-core/tests/agnostic_production_surface.rs": "e77c38113418dee27ba8bfa638a37a4de069ce65",
   "crates/labcolors-core/tests/assignment/README.md": "b0ce23137c7197209b901eec38048711f5d7e308",
-  "crates/labcolors-core/tests/assignment/experiment.rs": "fe1aec40aad3ce35449c2d1b0b18843499eb5153",
+  "crates/labcolors-core/tests/assignment/experiment.rs": "ca410f2b594444e2c0122aa7b70e8c459d4a255d",
   "crates/labcolors-core/tests/assignment/oracle.rs": "6de8d1bfb979585f54eb13bce62541c648485344",
   "crates/labcolors-core/tests/assignment_probe.rs": "8cb21a85a8f7179e4280b242c6dc0f53b7ea9ddc",
   "crates/labcolors-core/tests/c4_absence_law.rs": "0e7a0bd4a90dc45b5ea652c219e9fbbfdc0f9285",
@@ -615,7 +615,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "7504308e879029f648b10d96eb1e6dbd16cd3caeefdfe76df0fece6c2b9650d4",
+ "record_sha256": "a7f3109864a867042607334d29d9413a7ef2f954448c7caef7f648fc8803c208",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
