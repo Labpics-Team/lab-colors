@@ -81,7 +81,7 @@ extern "C" {
     pub type JsWcag22AssessmentV1;
 }
 // Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
-#[wasm_bindgen(inline_js = r#"
+#[wasm_bindgen(inline_js = r##"
 export function programError(message, code, operation) {
   try {
     const error = new Error(message);
@@ -288,7 +288,7 @@ export function wcag22Projection(
     },
   };
 }
-"#)]
+"##)]
 extern "C" {
     #[wasm_bindgen(catch, js_name = capabilityManifestProjection)]
     fn capability_manifest_projection(
