@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "bc0b4fd6deb4c55919b0c24b920a198864e8b3f37fd31448bc3445642a528a57",
+ "record_sha256": "b1d5e2da4ebae2236975234e7ae295ad3292083044f81c028cc99bad29b1889a",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1068,6 +1068,7 @@
    "appearance_replay_tests::replay_matches_an_independent_encoded_srgb8_oracle: test",
    "appearance_replay_tests::replay_preflights_capacity_and_returns_only_its_appended_range: test",
    "appearance_replay_tests::replay_rejects_foreign_evaluation_before_touching_the_replay_buffer: test",
+   "assignable_primary_anchor_survives_secondary_repair: test",
    "authority::clean_convention::tests::accepted_source_does_not_admit_rejected_terminal_composite: test",
    "authority::clean_convention::tests::admission_is_allocation_free_and_does_not_change_the_attachment: test",
    "authority::clean_convention::tests::current_revision_exact_cas_and_independent_authority_lanes_are_preserved: test",
@@ -1149,6 +1150,7 @@
    "certificate::tests::single_writer_model_has_one_accept_and_duplicate_replays: test",
    "certificate::tests::specialized_key_clone_preserves_every_selector_and_identity: test",
    "cfg_test_module_exclusion_covers_the_relocated_oracles: test",
+   "changed_observed_source_requires_a_new_valid_assignment: test",
    "characterization_counters_are_non_vacuous: test",
    "check_returns_32_byte_identity_for_valid_bytes: test",
    "clean_set_tests::closed_interval_endpoints_are_rejected: test",
@@ -1307,6 +1309,7 @@
    "dispose::tests::non_decision_site_is_not_assessed: test",
    "dropped_item_detected: test",
    "dropped_operation_detected: test",
+   "empty_feasible_set_is_proved_without_relaxing_any_constraint: test",
    "empty_input_is_rejected_as_wire_error: test",
    "evaluator_registry::metadata::tests::applicability_undeclared_has_expected_defaults: test",
    "evaluator_registry::metadata::tests::confidence_interval_accepts_finite_positive: test",
@@ -1314,6 +1317,7 @@
    "evaluator_registry::metadata::tests::confidence_interval_rejects_nan: test",
    "evaluator_registry::metadata::tests::confidence_interval_rejects_negative_infinity: test",
    "evaluator_registry::metadata::tests::confidence_interval_rejects_positive_infinity: test",
+   "exhausted_budget_reports_incompleteness_even_with_a_feasible_incumbent: test",
    "ext07_native_boundary_floor: test",
    "ext07_native_boundary_no_phantom: test",
    "ext07_wasm_boundary_floor: test",
@@ -1386,6 +1390,7 @@
    "family_definition_binding_tests::every_byte_of_the_definition_address_is_compared: test",
    "family_definition_binding_tests::the_artifact_of_the_asked_region_is_admitted: test",
    "family_definition_binding_tests::the_asked_definition_does_not_weaken_the_transport_contract: test",
+   "feasible_anchor_stays_exact_instead_of_maximizing_contrast: test",
    "field_effect::source_over_quotient_tests::every_byte_product_matches_legacy_integer_division: test",
    "field_effect_tests::binomial_profile_rejects_symmetric_normalized_non_binomial_weights: test",
    "field_effect_tests::carrier_presence_contribution_and_variation_fail_closed: test",
@@ -1412,7 +1417,9 @@
    "field_effect_tests::unsupported_numeric_profiles_are_rejected_before_evaluation: test",
    "field_effect_tests::weak_evidence_classes_never_upgrade_to_whole_field_proof: test",
    "field_effect_tests::whole_field_evidence_kind_must_match_renderer_authority: test",
+   "final_encoded_color_is_rechecked_at_the_quantization_boundary: test",
    "fips_and_nist_known_answer_vectors: test",
+   "fixed_strong_source_is_not_replaced_when_another_target_is_repaired: test",
    "fixture_replays_bit_for_bit: test",
    "fuzz_500_vectors_match_frozen_characterization: test",
    "gate1_every_policy_const_is_marked: test",
@@ -1474,6 +1481,7 @@
    "join_key_pairs_are_unique_and_resolve: test",
    "joint::tests::all_two_by_two_sequences_preserve_complete_authored_policy: test",
    "joint::tests::every_small_shape_failure_is_typed_before_runtime: test",
+   "joint_assignment_repairs_a_pair_that_independent_repairs_break: test",
    "lcs::tests::dim_jp_differs_from_srgb: test",
    "lcs::tests::from_hex_rejects_short_string: test",
    "lcs::tests::h_cam_stored_in_degrees: test",
@@ -1623,9 +1631,11 @@
    "oklab_white_is_l1_c0: test",
    "oklch_core_vectors_fixture_is_fresh: test",
    "oklch_primary_hues: test",
+   "opaque_id_renaming_cannot_change_a_unique_preferred_assignment: test",
    "operations_deterministic_order: test",
    "operations_excludes_test_modules: test",
    "operations_includes_known_functions: test",
+   "opposite_polarity_consumer_preserves_bright_primary_and_repairs_weaker_secondary: test",
    "output_projection::hdr_tests::encode_channel_to_pq_boundary_values: test",
    "output_projection::hdr_tests::encode_out_of_range_luminance_returns_error: test",
    "output_projection::hdr_tests::encode_xyz_d65_white_produces_valid_pq: test",
@@ -2271,9 +2281,10 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1305,
+  "enabled_count": 1315,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
+   "exhaustive_full_srgb_assignment_experiment: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
    "neutral::whittle_crispening_metric::whittle_raw_report: test",
    "program::wire::tests::_emit_reference_wire_hex: test",
@@ -2281,7 +2292,7 @@
    "scale::tests::diff_b_find_optimal_hue_matches_frozen_reference_full: test",
    "spaces::srgb::tests::_emit_gamma_data: test"
   ],
-  "ignored_count": 7
+  "ignored_count": 8
  },
  "schema_version": 1
 }
