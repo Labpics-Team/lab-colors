@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "bfa30b5b7d84c296eb55919dd0a3fcb93d2f78ef0ff985c5c062356917f4350e",
+ "record_sha256": "529c1bb4b2e7999bdfb9e46b084251cc1013e47eaa53c62ee2597f71c85be65b",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1999,6 +1999,8 @@
    "program_session::identity::tests::repeated_components_are_canonicalized_with_one_leaf: test",
    "program_session::identity::tests::repeated_components_use_one_bulk_group_instead_of_search_depth: test",
    "program_session::identity::tests::small_role_directed_graph_preimage_is_invariant_for_generated_bijections: test",
+   "program_session::identity::tests::sparse_refinement_preserves_clean_middle_and_largest_dirty_children: test",
+   "program_session::identity::tests::sparse_refinement_visits_only_changed_signatures: test",
    "program_session::program_preflight_reservation_tests::a_warm_coordinate_consumes_but_cannot_realize_an_allocation_failure: test",
    "program_session::program_preflight_reservation_tests::an_empty_coordinate_does_not_consume_a_failure_index: test",
    "program_session::program_preflight_reservation_tests::mixed_warm_and_cold_coordinates_keep_stable_failure_indices: test",
@@ -2272,7 +2274,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1306,
+  "enabled_count": 1308,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

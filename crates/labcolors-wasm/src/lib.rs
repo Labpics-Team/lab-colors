@@ -618,14 +618,16 @@ impl ProgramRuntime {
         let surface_count = checked_u32(surface_count)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
             as usize;
-        let scenarios = decode_observed_scenarios(scenario_ids, surfaces, surface_count)
-            .map_err(|error| match error {
-                ObservedScenarioDecodeError::InvalidShape => {
-                    to_program_js_error(E::Update, ProgramOperation::UpdateObserved)
-                }
-                ObservedScenarioDecodeError::ScenarioAllocation(error)
-                | ObservedScenarioDecodeError::SurfaceAllocation(error) => {
-                    program_observation_reservation_error(error)
+        let scenarios =
+            decode_observed_scenarios(scenario_ids, surfaces, surface_count).map_err(|error| {
+                match error {
+                    ObservedScenarioDecodeError::InvalidShape => {
+                        to_program_js_error(E::Update, ProgramOperation::UpdateObserved)
+                    }
+                    ObservedScenarioDecodeError::ScenarioAllocation(error)
+                    | ObservedScenarioDecodeError::SurfaceAllocation(error) => {
+                        program_observation_reservation_error(error)
+                    }
                 }
             })?;
         self.inner
