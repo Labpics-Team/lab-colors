@@ -44,11 +44,11 @@ class ProbeApplication : Application() {
         check(evaluateWcag22("#000000", "#FFFFFF", Wcag22Criterion.SC143_TEXT_DEFAULT).decision == Wcag22Decision.PASS)
         check(numericalCapabilityManifest().sites.isNotEmpty())
         check(decodeCertificateEnvelope(issueSourceCertificateEnvelope()).producerContentIdentity.size == 32)
-        exerciseAssignment(ProgramWireDomainV3.Gray(0u, 255u), "unsatisfied", null)
-        exerciseAssignment(ProgramWireDomainV3.Box(byteArrayOf(0, 0, 0), byteArrayOf(-1, -1, -1)), "incomplete", "limit")
+        exerciseAssignment(ProgramWireDomainV3.Gray(0u, 255u))
+        exerciseAssignment(ProgramWireDomainV3.Box(byteArrayOf(0, 0, 0), byteArrayOf(-1, -1, -1)))
     }
 
-    private fun exerciseAssignment(domain: ProgramWireDomainV3, emptyState: String, reason: String?) {
+    private fun exerciseAssignment(domain: ProgramWireDomainV3) {
         val wire = ProgramWireBuilderV3().computedTarget(21u, domain, byteArrayOf(64, 64, 64), 1.0).assignment(listOf(21u)).apply {
             surfaceInputPort(31u); opacityInput(32u, 0.5); solidPaint(41u, 21u); opacityPaint(42u, 41u, 32u)
             inputSurface(51u, 31u); sourceOverOccurrence(61u, 42u, 51u, 64.0, 0.2, ProgramSurround.DIM)
@@ -70,18 +70,13 @@ class ProbeApplication : Application() {
                 check(first.state() == "ready" && first.outputRgb(0u).contentEquals(byteArrayOf(64, 64, 64)))
                 check(installed?.contentEquals(byteArrayOf(64, 64, 64)) == true)
                 attachment.updateObserved(2uL, listOf(1u), byteArrayOf(-1, -1, -1), 1u).use {
-                    check(it.snapshotVersion() == 2u && it.revision() == 2uL && it.reason() == reason)
-                    check(it.state() == emptyState && it.outputCount() == 0uL && !it.hasRender())
+                    check(it.snapshotVersion() == 2u && it.revision() == 2uL && it.reason() == null)
+                    check(it.state() == "unsatisfied" && it.outputCount() == 0uL && !it.hasRender())
                 }
                 check(installed == null)
                 attachment.updateObserved(3uL, listOf(1u), byteArrayOf(0, 0, 0), 1u).use {
-                    if (domain is ProgramWireDomainV3.Gray) {
-                        check(it.state() == "ready" && it.reason() == null)
-                        check(it.outputRgb(0u).contentEquals(byteArrayOf(-65, -65, -65)))
-                    } else {
-                        check(it.state() == "incomplete" && it.reason() == "limit")
-                        check(it.outputCount() == 0uL && !it.hasRender() && installed == null)
-                    }
+                    check(it.state() == "ready" && it.reason() == null)
+                    check(it.outputRgb(0u).contentEquals(byteArrayOf(-65, -65, -65)))
                 }
                 attachment.updateObserved(ULong.MAX_VALUE, listOf(1u), byteArrayOf(-128, -128, -128), 1u).use {
                     check(it.revision() == ULong.MAX_VALUE && it.state() == "ready" && it.reason() == null)

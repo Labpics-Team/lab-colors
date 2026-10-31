@@ -41,7 +41,7 @@
   "bindings/kotlin/consumer/src/androidTestDebug/kotlin/pics/lab/colors/consumer/SurfaceTest.kt": "053ba2725e5aaa6b72f2e5ccd84e460d5dbe7153",
   "bindings/kotlin/consumer/src/androidTestRelease/kotlin/pics/lab/colors/consumer/ReleaseTest.kt": "7778bbdb85cb74d6186b0991e83fd553503654da",
   "bindings/kotlin/consumer/src/main/AndroidManifest.xml": "2f0325b7be8f567a31ba43bd32f992e851b58682",
-  "bindings/kotlin/consumer/src/main/kotlin/pics/lab/colors/consumer/ProbeApplication.kt": "9a86a48088bdf5b39f360f4e18d7457359f53b2c",
+  "bindings/kotlin/consumer/src/main/kotlin/pics/lab/colors/consumer/ProbeApplication.kt": "dd20bf2c33a5d2f05374d61ee6492cb3ab229c33",
   "bindings/kotlin/gradle.properties": "b9b9970199307505b1d31ab6d91cbf6a3f88dd49",
   "bindings/kotlin/settings.gradle.kts": "aa781e81c5b112eedf5e7b35252211b3b4c512be",
   "bindings/kotlin/src/main/AndroidManifest.xml": "cc947c56799598205b8fb518f3ba95843c1bab71",
@@ -623,7 +623,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "4548ab83a880035844ec79bfc030e08c97a6f871"
  },
- "record_sha256": "fa88dc2366d5f0906e3d21201cfc5af554d8f5bb250ce29d0f54637e17057f5d",
+ "record_sha256": "50640f8617f384e4adf88a30193701d93aeb43a11326c357fa4a67f8fc481a0a",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
