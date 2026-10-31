@@ -16,17 +16,27 @@ pub(super) struct ComputedIdentityV1(pub(super) [u8; 32]);
 pub(super) enum CandidateOriginV1 {
     Fixed,
     DeclaredFinite(usize),
+    #[cfg(test)]
     Computed {
         identity: ComputedIdentityV1,
         values: Box<[Srgb8]>,
     },
 }
 
+// Закрытая проба не добавляет payload и Drop обычному evidence Program.
+#[cfg(not(test))]
+const _: () = {
+    assert!(std::mem::size_of::<CandidateOriginV1>() <= std::mem::size_of::<Option<usize>>());
+    assert!(!std::mem::needs_drop::<CandidateOriginV1>());
+};
+
 impl CandidateOriginV1 {
     pub(super) const fn declared_state_index(&self) -> Option<usize> {
         match self {
             Self::DeclaredFinite(index) => Some(*index),
-            Self::Fixed | Self::Computed { .. } => None,
+            Self::Fixed => None,
+            #[cfg(test)]
+            Self::Computed { .. } => None,
         }
     }
 }
@@ -454,13 +464,16 @@ impl<Evaluation: ProgramConstraintEvaluatorSetV1> SessionEvidenceV1
     }
 }
 
+#[cfg(test)]
 struct ComputedSessionPlanV1<Evaluation: ProgramConstraintEvaluatorSetV1>(
     ProgramSessionPlan<Evaluation>,
 );
+#[cfg(test)]
 impl<Evaluation: ProgramConstraintEvaluatorSetV1> session_private::PlanSealed
     for ComputedSessionPlanV1<Evaluation>
 {
 }
+#[cfg(test)]
 impl<Evaluation: ProgramConstraintEvaluatorSetV1> SessionPlanV1
     for ComputedSessionPlanV1<Evaluation>
 {

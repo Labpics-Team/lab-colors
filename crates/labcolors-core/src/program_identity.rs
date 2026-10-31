@@ -2350,6 +2350,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    #[cfg(test)]
     if program.computed_budget.is_some()
         || program
             .targets
@@ -2364,7 +2365,22 @@ where
     Ok(ProgramContentIdentityV9(*digest.as_bytes()))
 }
 
-pub(super) fn compile_computed_identity<Evaluation>(
+pub(super) fn compile_owner_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<ProgramOwnerIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    #[cfg(test)]
+    if let Some(budget) = program.computed_budget {
+        return compile_computed_identity(program, budget).map(ProgramOwnerIdentityV1::Computed);
+    }
+    compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
+}
+
+#[cfg(test)]
+fn compile_computed_identity<Evaluation>(
     program: &Program<Evaluation>,
     budget: u64,
 ) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>
