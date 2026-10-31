@@ -333,6 +333,66 @@ fn opaque_id_renaming_cannot_change_a_unique_preferred_assignment() {
     );
 }
 
+#[test]
+fn prefix_scores_survive_changed_prefixes_and_pruned_branches() {
+    for (primary, secondary, fixed, primary_is_lighter) in [
+        (gray_target("a", 20, 16, 18), [170; 3], [255; 3], false),
+        (gray_target("a", 230, 232, 234), [80; 3], [16; 3], true),
+    ] {
+        let (lower, upper) = if primary_is_lighter {
+            (123, 126)
+        } else {
+            (116, 119)
+        };
+        let (lighter, darker) = if primary_is_lighter {
+            (Source::Target(1), Source::Fixed(fixed))
+        } else {
+            (Source::Fixed(fixed), Source::Target(1))
+        };
+        let (gap_lighter, gap_darker) = if primary_is_lighter {
+            (Source::Target(0), Source::Target(1))
+        } else {
+            (Source::Target(1), Source::Target(0))
+        };
+        let problem = Problem {
+            targets: vec![
+                primary,
+                Target {
+                    id: "b",
+                    anchor: secondary,
+                    domain: Domain::Gray { lower, upper },
+                    max_delta: 0.3,
+                },
+            ],
+            constraints: vec![
+                contrast(lighter, darker, Floor::FourAndHalf),
+                Constraint::Gap {
+                    lighter: gap_lighter,
+                    darker: gap_darker,
+                    minimum_q55: 1 << 50,
+                },
+            ],
+        };
+        let values = complete_matches_oracle(&problem);
+        assert_ne!(values[0], problem.targets[0].anchor);
+        assert_ne!(values[1], problem.targets[1].anchor);
+    }
+}
+
+#[test]
+fn changing_assignment_invalidates_gap_luminance_bounds() {
+    let problem = Problem {
+        targets: vec![gray_target("a", 88, 80, 84), gray_target("b", 80, 80, 85)],
+        constraints: vec![Constraint::Gap {
+            lighter: Source::Target(1),
+            darker: Source::Target(0),
+            minimum_q55: 1,
+        }],
+    };
+    let values = complete_matches_oracle(&problem);
+    assert_eq!(values, vec![[84; 3], [85; 3]]);
+}
+
 fn full_color_problem(
     id: &'static str,
     anchor: Rgb,
