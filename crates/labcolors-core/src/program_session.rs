@@ -2512,18 +2512,22 @@ where
         stream: ObservationStreamId,
         family_artifacts: FamilyArtifactBundleV2,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateFailureV2> {
-        prepare_session_plan(&self.owner_generation, family_artifacts)
-            .map(|plan| Session::new(stream, plan))
+        instantiate_program_session(&self.owner_generation, stream, family_artifacts, |plan| {
+            plan
+        })
     }
 }
 
-fn prepare_session_plan<Evaluation>(
+fn instantiate_program_session<Evaluation, Plan>(
     owner: &Shared<ProgramEpochV1<Evaluation>>,
+    stream: ObservationStreamId,
     family_artifacts: FamilyArtifactBundleV2,
-) -> Result<ProgramSessionPlan<Evaluation>, ProgramSessionInstantiateFailureV2>
+    wrap_plan: impl FnOnce(ProgramSessionPlan<Evaluation>) -> Plan,
+) -> Result<Session<Plan>, ProgramSessionInstantiateFailureV2>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
+    Plan: SessionPlanV1,
 {
     let family_artifacts = match family_artifacts.bind(&owner.families) {
         Ok(bound) => bound,
@@ -2579,14 +2583,17 @@ where
             });
         }
     };
-    Ok(ProgramSessionPlan {
-        owner_generation: Shared::downgrade(owner),
-        bindings,
-        workspace,
-        presentation_cache,
-        evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
-        family_artifacts,
-    })
+    Ok(Session::new(
+        stream,
+        wrap_plan(ProgramSessionPlan {
+            owner_generation: Shared::downgrade(owner),
+            bindings,
+            workspace,
+            presentation_cache,
+            evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+            family_artifacts,
+        }),
+    ))
 }
 
 /// Failure while preparing mutable storage for one independent Session.

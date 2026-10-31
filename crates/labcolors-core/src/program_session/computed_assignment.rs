@@ -587,9 +587,13 @@ impl<Evaluation: ProgramConstraintEvaluatorSetV1> ComputedProgramV1<Evaluation> 
         &self,
         stream: ObservationStreamId,
     ) -> Result<Session<ComputedSessionPlanV1<Evaluation>>, ProgramSessionInstantiateError> {
-        let plan = prepare_session_plan(&self.owner, FamilyArtifactBundleV2::empty())
-            .map_err(|failure| failure.cause)?;
-        Ok(Session::new(stream, ComputedSessionPlanV1(plan)))
+        instantiate_program_session(
+            &self.owner,
+            stream,
+            FamilyArtifactBundleV2::empty(),
+            ComputedSessionPlanV1,
+        )
+        .map_err(|failure| failure.cause)
     }
 }
 
