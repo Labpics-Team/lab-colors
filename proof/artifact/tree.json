@@ -1,6 +1,6 @@
 {
  "class": "tree",
- "file_count": 612,
+ "file_count": 613,
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
@@ -14,7 +14,7 @@
   ".github/workflows/mutation.yml": "806281a660b679568eda408403a2cb5c3d2695a3",
   ".github/workflows/native-conformance-worker.yml": "fda14193eb5607631eb935ede4d3c42feb7b8ac6",
   ".github/workflows/native-conformance.yml": "348b6d7dafc5fcec41607a459592879c04870c1e",
-  ".github/workflows/package-worker.yml": "6f677d34092d3ec94f75953f89079b5f9b67058c",
+  ".github/workflows/package-worker.yml": "447468304be767f2838be7c8ed533c3a34f9b981",
   ".github/workflows/publish-worker.yml": "0b400da2b6b08dc0f3e7e7fe36e3182593ac2075",
   ".github/workflows/publish.yml": "d38836005638a20ff0c09314240e51ee05c9d1d1",
   ".github/workflows/verification-lanes.yml": "ae83870463f8ef5bc4e351e71a710c991cb2563b",
@@ -314,6 +314,7 @@
   "packages/colors/README.md": "aee12c0353af285bb098720db8714efa15881588",
   "packages/colors/bench/program.mjs": "f3936e97fcb436f62dd86161ebeed75766146ff6",
   "packages/colors/bench/wasm.json": "43138288aaf28fe3daa90fce0d8b93075b39e355",
+  "packages/colors/bench/wire-construction.mjs": "0963f0940799dc7ea319d7f17f5e234e02c4ee90",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
   "packages/colors/package-lock.json": "9afce10f6147f8adcc5000ff978211d5ec10fe36",
@@ -615,7 +616,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "a48e5947a507983b870ce6319129d9439d4671be5eb24e2dfbda8034d3c9960a",
+ "record_sha256": "c7c63568e1a2d7a15e2f85d961a733dc35aacb41b0fac5c1cfa80161762eff4d",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
