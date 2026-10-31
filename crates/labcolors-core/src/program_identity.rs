@@ -204,7 +204,6 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
-    #[cfg(test)]
     pub(super) const TARGET_COMPUTED: u8 = 30;
 }
 
@@ -1081,7 +1080,6 @@ where
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
-            #[cfg(test)]
             TargetIntentV1::Computed(target) => {
                 let mut color = VertexColorV1::new(vertex_tag::TARGET_COMPUTED);
                 color.push_bytes(&target.identity_bytes())?;
@@ -2352,8 +2350,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    #[cfg(test)]
-    if program.computed_budget.is_some()
+    if program.assignment.is_some()
         || program
             .targets
             .iter()
@@ -2374,17 +2371,14 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    #[cfg(test)]
-    if let Some(budget) = program.computed_budget {
-        return compile_computed_identity(program, budget).map(ProgramOwnerIdentityV1::Computed);
+    if program.assignment.is_some() {
+        return compile_computed_identity(program).map(ProgramOwnerIdentityV1::Computed);
     }
     compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
 }
 
-#[cfg(test)]
 fn compile_computed_identity<Evaluation>(
     program: &Program<Evaluation>,
-    budget: u64,
 ) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -2392,16 +2386,14 @@ where
 {
     let graph = build_graph(program)?;
     let canonical = canonical_preimage(&graph)?;
-    // Новый semantic domain связывает graph, полный ΔEOK/байтовый порядок,
-    // final recheck и синхронный лимит узлов. Старый V9 preimage не изменён.
-    let domain =
-        b"labcolors.private-computed-program.v1.hex-oklch-lab.lex-rgb.full-recheck.node-budget\0";
+    // Semantic identity связывает объявленную политику и граф. Предел работы
+    // принадлежит отдельному execution profile; старый V9 preimage не изменён.
+    let domain = b"labcolors.computed-program.v1.hex-oklch-lab.lex-rgb.full-recheck\0";
     let mut bytes = Vec::new();
     bytes
-        .try_reserve_exact(domain.len() + 8 + canonical.len())
+        .try_reserve_exact(domain.len() + canonical.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     bytes.extend_from_slice(domain);
-    bytes.extend_from_slice(&budget.to_le_bytes());
     bytes.extend_from_slice(&canonical);
     Ok(computed_assignment::ComputedIdentityV1(
         *crate::sha256::digest(&bytes).as_bytes(),

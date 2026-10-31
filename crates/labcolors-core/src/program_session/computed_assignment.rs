@@ -5,10 +5,10 @@ use super::*;
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ComputedIdentityV1(pub(super) [u8; 32]);
+pub(crate) struct ComputedIdentityV1(pub(super) [u8; 32]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssignmentDomainV1 {
+pub(crate) enum AssignmentDomainV1 {
     Cube { lower: [u8; 3], upper: [u8; 3] },
     Gray { lower: u8, upper: u8 },
 }
@@ -61,7 +61,7 @@ impl AssignmentDomainV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComputedTargetV1 {
+pub(crate) struct ComputedTargetV1 {
     domain: AssignmentDomainV1,
     anchor: Srgb8,
     max_delta_bits: u64,
@@ -69,7 +69,7 @@ pub struct ComputedTargetV1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ComputedAdmissionErrorV1 {
+pub(crate) enum ComputedAdmissionErrorV1 {
     InvalidDomain,
     InvalidTolerance,
     MixedSelection,
@@ -78,7 +78,32 @@ pub enum ComputedAdmissionErrorV1 {
     CardinalityOverflow,
 }
 
+// Предел экспериментального синхронного профиля; не клиентская политика.
+pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
+
+pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
+    const DOMAIN: &[u8] =
+        b"labcolors.assignment-execution.v1.hex-oklch-sincos-f64.lex-rgb.exact-dfs.full-recheck\0";
+    let mut bytes = [0; DOMAIN.len() + 8];
+    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
+    *crate::sha256::digest(&bytes).as_bytes()
+}
+
 impl ComputedTargetV1 {
+    pub(crate) fn declared(domain: AssignmentDomainV1, anchor: Srgb8, max_delta: f64) -> Self {
+        Self {
+            domain,
+            anchor,
+            max_delta_bits: if max_delta == 0.0 {
+                0
+            } else {
+                max_delta.to_bits()
+            },
+            preference: u64::MAX,
+        }
+    }
+
     // Фабрика недоступна старым wire/SDK и private-fixture ABI.
     #[cfg(test)]
     fn new(
@@ -130,7 +155,52 @@ struct CompiledComputedTargetV1 {
 pub(super) struct ComputedSelectionV1 {
     targets: Box<[CompiledComputedTargetV1]>,
     budget: u64,
+    execution_profile: [u8; 32],
     tuple_count: u64,
+}
+
+pub(super) fn assign_preference(
+    targets: &mut [Target],
+    order: Option<&[TargetId]>,
+) -> Result<(), ProgramCompileError> {
+    let invalid = |error| ProgramCompileError::InvalidComputedAssignment(error);
+    let computed = targets
+        .iter()
+        .filter(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
+        .count();
+    let Some(order) = order else {
+        return if computed == 0 {
+            Ok(())
+        } else {
+            Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder))
+        };
+    };
+    if computed == 0 {
+        return Err(invalid(ComputedAdmissionErrorV1::EmptySelection));
+    }
+    if targets
+        .iter()
+        .any(|target| matches!(target.intent, TargetIntentV1::Finite(_)))
+    {
+        return Err(invalid(ComputedAdmissionErrorV1::MixedSelection));
+    }
+    if order.len() != computed {
+        return Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder));
+    }
+    for (ordinal, id) in order.iter().enumerate() {
+        if order[..ordinal].contains(id) {
+            return Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder));
+        }
+        let Some(Target {
+            intent: TargetIntentV1::Computed(value),
+            ..
+        }) = targets.iter_mut().find(|target| target.id == *id)
+        else {
+            return Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder));
+        };
+        value.preference = ordinal as u64;
+    }
+    Ok(())
 }
 
 pub(super) fn compile_selection(
@@ -195,6 +265,7 @@ pub(super) fn compile_selection(
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
         budget,
+        execution_profile: execution_profile_identity(budget),
         tuple_count,
     })
 }
@@ -398,10 +469,11 @@ where
     Ok(())
 }
 
-struct ComputedStoppedV1 {
-    identity: ComputedIdentityV1,
-    observation: RevisionBoundObservationV1,
+pub(crate) struct ComputedStoppedV1 {
+    pub(super) identity: ComputedIdentityV1,
+    pub(super) observation: RevisionBoundObservationV1,
     search: SearchEvidenceV1,
+    execution_profile: [u8; 32],
 }
 
 impl session_private::EvidenceSealed for ComputedStoppedV1 {}
@@ -411,11 +483,13 @@ impl SessionEvidenceV1 for ComputedStoppedV1 {
     }
 }
 
-struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1> {
-    observation: RevisionBoundObservationV1,
-    origin: CandidateOriginV1,
+pub(crate) struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1> {
+    pub(super) identity: ComputedIdentityV1,
+    pub(super) observation: RevisionBoundObservationV1,
+    values: Box<[Srgb8]>,
     search: SearchEvidenceV1,
-    arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
+    execution_profile: [u8; 32],
+    pub(super) arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
 
 impl<Evaluation: ProgramConstraintEvaluatorSetV1> session_private::EvidenceSealed
@@ -430,166 +504,113 @@ impl<Evaluation: ProgramConstraintEvaluatorSetV1> SessionEvidenceV1
     }
 }
 
-struct ComputedSessionPlanV1<Evaluation: ProgramConstraintEvaluatorSetV1>(
-    ProgramSessionPlan<Evaluation>,
-);
-impl<Evaluation: ProgramConstraintEvaluatorSetV1> session_private::PlanSealed
-    for ComputedSessionPlanV1<Evaluation>
+pub(super) fn evaluate<Evaluation>(
+    plan: &mut ProgramSessionPlan<Evaluation>,
+    epoch: &ProgramEpochV1<Evaluation>,
+    observation: RevisionBoundObservationV1,
+) -> ProgramSessionEvaluationResult<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-}
-impl<Evaluation: ProgramConstraintEvaluatorSetV1> SessionPlanV1
-    for ComputedSessionPlanV1<Evaluation>
-{
-    type OwnerLease = ProgramOwnerLeaseV1<Evaluation>;
-    type Verified = ComputedVerifiedV1<Evaluation>;
-    type Violation = ComputedStoppedV1;
-    type Incomplete = ComputedStoppedV1;
-    type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
-    fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
-        self.0.try_acquire_owner()
-    }
-    fn observation_schema<'a>(
-        &'a self,
-        owner: &'a Self::OwnerLease,
-    ) -> &'a CanonicalObservationSchemaV1 {
-        self.0.observation_schema(owner)
-    }
-    fn retire_verified(&mut self, evidence: Self::Verified) {
-        let slot = evidence.observation.arena_slot();
-        self.0
-            .evaluation_arenas
-            .restore(ProgramEvaluationArenaReturnV1 {
-                slot,
-                storage: evidence.arena.storage,
-            });
-    }
-    fn evaluate(
-        &mut self,
-        owner: &Self::OwnerLease,
-        observation: RevisionBoundObservationV1,
-        _: Option<&Self::Verified>,
-        _: SessionObservationBindingPermitV1,
-    ) -> Result<SessionDecision<Self::Verified, Self::Violation, Self::Incomplete>, Self::Error>
-    {
-        let epoch = &owner.0;
-        let (
-            ProgramOwnerIdentityV1::Computed(identity),
-            CompiledTargetSelectionV1::Computed(selection),
-        ) = (epoch.content_identity, &epoch.target_selection)
-        else {
-            return Err(ProgramSessionEvaluationError::InternalInvariant);
-        };
-        let plan = &mut self.0;
-        let mut arena = plan
-            .evaluation_arenas
-            .guard(observation.arena_slot())
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        let mut runtime = ProgramEvaluationRuntimeV1 {
-            bindings: &mut plan.bindings,
-            workspace: &mut plan.workspace,
-            presentation_cache: &mut plan.presentation_cache,
-            family_artifacts: &plan.family_artifacts,
-        };
-        let scenarios = NonEmptyScenarioSetV1::from_admitted(&observation)
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        let counts = prepare_program_evaluation_arena(epoch, scenarios, arena.storage_mut())?;
-        let selected = select(selection, &mut runtime, epoch, scenarios)?;
-        match selected.values {
-            Some(values) => {
-                apply::<Evaluation>(selection, &mut runtime, &values)?;
-                #[cfg(test)]
-                if let Some(corrupted) = CORRUPT_FINAL_SOURCE.with(|value| value.take()) {
-                    runtime
-                        .bindings
-                        .overwrite_paint_input_at(
-                            selection.targets[0].binding,
-                            EncodedPointPaintValueV1::opaque(corrupted),
-                        )
-                        .map_err(map_program_execution_binding_error)?;
-                }
-                let origin = CandidateOriginV1::Computed {
+    let (
+        ProgramOwnerIdentityV1::Computed(identity),
+        CompiledTargetSelectionV1::Computed(selection),
+    ) = (epoch.content_identity, &epoch.target_selection)
+    else {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    };
+    let mut arena = plan
+        .evaluation_arenas
+        .guard(observation.arena_slot())
+        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+    let mut runtime = ProgramEvaluationRuntimeV1 {
+        bindings: &mut plan.bindings,
+        workspace: &mut plan.workspace,
+        presentation_cache: &mut plan.presentation_cache,
+        family_artifacts: &plan.family_artifacts,
+    };
+    let scenarios = NonEmptyScenarioSetV1::from_admitted(&observation)
+        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+    let counts = prepare_program_evaluation_arena(epoch, scenarios, arena.storage_mut())?;
+    let selected = select(selection, &mut runtime, epoch, scenarios)?;
+    match selected.values {
+        Some(values) => {
+            apply::<Evaluation>(selection, &mut runtime, &values)?;
+            #[cfg(test)]
+            if let Some(corrupted) = CORRUPT_FINAL_SOURCE.with(|value| value.take()) {
+                runtime
+                    .bindings
+                    .overwrite_paint_input_at(
+                        selection.targets[0].binding,
+                        EncodedPointPaintValueV1::opaque(corrupted),
+                    )
+                    .map_err(map_program_execution_binding_error)?;
+            }
+            let origin = CandidateOriginV1::Computed {
+                identity,
+                values: values.into_boxed_slice(),
+            };
+            let result = collect_program_candidate_into(
+                &mut runtime,
+                epoch,
+                scenarios,
+                origin,
+                0,
+                arena.storage_mut(),
+                counts,
+                None,
+            )?;
+            let ProgramEvaluationOutcomeV1::Verified { origin } = result else {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            };
+            let CandidateOriginV1::Computed {
+                identity: selected_identity,
+                values,
+            } = origin
+            else {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            };
+            // Допустимость другого RGB не доказывает обещанное preference.
+            // После полного physical recheck проверяем тот же tuple в тех
+            // же compiled slots, которые потребляла реальная композиция.
+            if selected_identity != identity
+                || selection
+                    .targets
+                    .iter()
+                    .zip(values.iter())
+                    .any(|(target, &value)| {
+                        runtime.bindings.paint_input_at(target.binding)
+                            != Some(EncodedPointPaintValueV1::opaque(value))
+                    })
+            {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            Ok(SessionDecision::Verified(
+                ProgramVerifiedOutcomeV1::Computed(ComputedVerifiedV1 {
                     identity,
-                    values: values.into_boxed_slice(),
-                };
-                let result = collect_program_candidate_into(
-                    &mut runtime,
-                    epoch,
-                    scenarios,
-                    origin,
-                    0,
-                    arena.storage_mut(),
-                    counts,
-                    None,
-                )?;
-                let ProgramEvaluationOutcomeV1::Verified { origin } = result else {
-                    return Err(ProgramSessionEvaluationError::InternalInvariant);
-                };
-                let CandidateOriginV1::Computed {
-                    identity: selected_identity,
-                    values,
-                } = &origin
-                else {
-                    return Err(ProgramSessionEvaluationError::InternalInvariant);
-                };
-                // Допустимость другого RGB не доказывает обещанное preference.
-                // После полного physical recheck проверяем тот же tuple в тех
-                // же compiled slots, которые потребляла реальная композиция.
-                if *selected_identity != identity
-                    || selection
-                        .targets
-                        .iter()
-                        .zip(values.iter())
-                        .any(|(target, &value)| {
-                            runtime.bindings.paint_input_at(target.binding)
-                                != Some(EncodedPointPaintValueV1::opaque(value))
-                        })
-                {
-                    return Err(ProgramSessionEvaluationError::InternalInvariant);
-                }
-                Ok(SessionDecision::Verified(ComputedVerifiedV1 {
+                    execution_profile: selection.execution_profile,
                     observation,
-                    origin,
+                    values,
                     search: selected.evidence,
                     arena: arena.into_lease(),
-                }))
-            }
-            None => {
-                let evidence = ComputedStoppedV1 {
-                    identity,
-                    observation,
-                    search: selected.evidence,
-                };
-                if selected.evidence.completion == CompletionV1::Complete {
-                    Ok(SessionDecision::Violation(evidence))
-                } else {
-                    Ok(SessionDecision::Incomplete(evidence))
-                }
+                }),
+            ))
+        }
+        None => {
+            let evidence = ComputedStoppedV1 {
+                identity,
+                execution_profile: selection.execution_profile,
+                observation,
+                search: selected.evidence,
+            };
+            if selected.evidence.completion == CompletionV1::Complete {
+                Ok(SessionDecision::Violation(
+                    ProgramViolationOutcomeV1::Computed(evidence),
+                ))
+            } else {
+                Ok(SessionDecision::Incomplete(evidence))
             }
         }
-    }
-}
-
-#[cfg(test)]
-struct ComputedProgramV1<Evaluation: ProgramConstraintEvaluatorSetV1> {
-    owner: Shared<ProgramEpochV1<Evaluation>>,
-}
-
-#[cfg(test)]
-impl<Evaluation: ProgramConstraintEvaluatorSetV1> ComputedProgramV1<Evaluation> {
-    fn compile(mut program: Program<Evaluation>, budget: u64) -> Result<Self, ProgramCompileError> {
-        program.computed_budget = Some(budget);
-        prepare_program(program).map(|epoch| Self {
-            owner: Shared::new(epoch),
-        })
-    }
-
-    fn instantiate(
-        &self,
-        stream: ObservationStreamId,
-    ) -> Result<Session<ComputedSessionPlanV1<Evaluation>>, ProgramSessionInstantiateError> {
-        let plan = prepare_session_plan(&self.owner, FamilyArtifactBundleV2::empty())
-            .map_err(|failure| failure.cause)?;
-        Ok(Session::new(stream, ComputedSessionPlanV1(plan)))
     }
 }
 

@@ -14,12 +14,12 @@ use crate::program_session::{
     CompiledPointOutputPresentationV1, CoreProgramEvaluatorsV1, PointOutputPresentationBindErrorV1,
     ProgramOwnerLeaseV1, ProgramPaintOutputV1,
 };
-use crate::session::PreparedSessionDispositionV1;
+use crate::session::{PreparedSessionDispositionV1, SessionEvidenceV1};
 
 use super::{
     CorePreparedSessionTransitionV1, EvidenceViewV1, InstantiateErrorV1, OccurrenceIdV1,
     OutputSlotIdV1, OwnerV1, PresentationRootIdV1, SessionV1, UpdateErrorV1, UpdateV1,
-    VerifiedCertificateV1,
+    VerifiedOutputV1,
 };
 
 /// Sealing оставляет реализации физического writer внутри пакета.
@@ -661,7 +661,9 @@ fn prepared_disposition<'prepared>(
     transition: &'prepared CorePreparedSessionTransitionV1<'_>,
 ) -> Result<PreparedDispositionV1<'prepared>, AttachmentInvariantV1> {
     match transition.disposition() {
-        PreparedSessionDispositionV1::Incomplete(cause) => match *cause {},
+        PreparedSessionDispositionV1::Incomplete(cause) => Ok(PreparedDispositionV1::RevokeAll {
+            revision: cause.observation().revision().value(),
+        }),
         PreparedSessionDispositionV1::Idempotent { raw_head, .. } => raw_head
             .revision()
             .map(|revision| PreparedDispositionV1::ConfirmExact {
@@ -672,12 +674,12 @@ fn prepared_disposition<'prepared>(
             revision: unknown.revision().value(),
         }),
         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
-            revision: verified.report().observation().revision().value(),
+            revision: verified.observation().revision().value(),
             outputs: verified.outputs(),
         }),
         PreparedSessionDispositionV1::Violation(violation) => {
             Ok(PreparedDispositionV1::RevokeAll {
-                revision: violation.report().observation().revision().value(),
+                revision: violation.observation().revision().value(),
             })
         }
     }
@@ -719,7 +721,7 @@ impl AttachedPublishedStampV1<'_> {
 
 /// Один элемент final render-authority после commit sink и Session.
 pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId> {
-    certificate: VerifiedCertificateV1<'a>,
+    evidence: VerifiedOutputV1<'a>,
     patch: AttachedRenderPatchEntryV1<SinkOutputId>,
     published_stamp: AttachedPublishedStampV1<'a>,
 }
@@ -733,8 +735,8 @@ impl<SinkOutputId: Copy> Clone for AttachedRenderOutputV1<'_, SinkOutputId> {
 }
 
 impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
-    pub(crate) const fn certificate(self) -> VerifiedCertificateV1<'a> {
-        self.certificate
+    pub(crate) const fn evidence(self) -> VerifiedOutputV1<'a> {
+        self.evidence
     }
 
     pub(crate) const fn output(self) -> OutputSlotIdV1 {
@@ -768,6 +770,7 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
 
 /// Точный post-commit view; historical evidence и render authority не смешаны.
 pub(crate) struct AttachmentCommitV1<'a, SinkOutputId> {
+    owner: &'a ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
     evidence: EvidenceViewV1<'a>,
     session: &'a SessionV1,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
@@ -784,6 +787,9 @@ impl<SinkOutputId> Clone for AttachmentCommitV1<'_, SinkOutputId> {
 }
 
 impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
+    pub(crate) fn snapshot_version(self) -> u32 {
+        self.owner.snapshot_version()
+    }
     pub(crate) const fn evidence(self) -> EvidenceViewV1<'a> {
         self.evidence
     }
@@ -795,13 +801,9 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
     }
 
     pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId> {
-        let certificate = self
-            .evidence
-            .state()
-            .current_verified()
-            .map(|current| VerifiedCertificateV1 { inner: current });
+        let evidence = self.evidence.current_verified();
         AttachedRenderOutputsV1 {
-            certificate,
+            evidence,
             committed_render_patch: self.committed_render_patch,
             published_stamp: AttachedPublishedStampV1 {
                 revision: self.committed_revision,
@@ -813,7 +815,7 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
 }
 
 pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId> {
-    certificate: Option<VerifiedCertificateV1<'a>>,
+    evidence: Option<VerifiedOutputV1<'a>>,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
     published_stamp: AttachedPublishedStampV1<'a>,
     index: usize,
@@ -823,18 +825,18 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
     type Item = AttachedRenderOutputV1<'a, SinkOutputId>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let certificate = self.certificate?;
+        let evidence = self.evidence?;
         let patch = *self.committed_render_patch.get(self.index)?;
         self.index += 1;
         Some(AttachedRenderOutputV1 {
-            certificate,
+            evidence,
             patch,
             published_stamp: self.published_stamp,
         })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = if self.certificate.is_some() {
+        let remaining = if self.evidence.is_some() {
             self.committed_render_patch.len().saturating_sub(self.index)
         } else {
             0
@@ -1433,6 +1435,7 @@ where
         installed_sink.finish_after_session();
 
         Ok(AttachmentCommitV1 {
+            owner: &self._owner_pin,
             evidence: self.session.evidence(),
             session: &self.session,
             committed_render_patch: &self.committed_render_patch,

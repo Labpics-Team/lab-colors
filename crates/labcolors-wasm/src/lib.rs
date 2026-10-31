@@ -80,7 +80,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22AssessmentV1;
 }
-// Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
+// Приватные индексы JS: runtime — 0..7 и 15, attachment — 8..14.
+// Сопоставления, таблица, граница message и browser-тест меняются вместе.
 #[wasm_bindgen(inline_js = r#"
 export function programError(message, code, operation) {
   try {
@@ -109,11 +110,12 @@ const programFailureCodes = [
   "program_attachment_internal_invariant",
   "program_attachment_non_terminal_target",
   "program_attachment",
+  "program_unsupported",
 ];
 
 export function programFailure(kind, operation) {
   return programError(
-    kind < 8 ? "Program runtime operation failed" : "Program attachment admission failed",
+    kind < 8 || kind === 15 ? "Program runtime operation failed" : "Program attachment admission failed",
     programFailureCodes[kind],
     operation,
   );
@@ -311,6 +313,7 @@ fn to_program_js_error(
         E::Update => 4,
         E::ResourceExhausted => 5,
         E::InternalInvariant => 6,
+        E::Unsupported => 15,
         _ => 7,
     };
     program_failure_error(kind, operation.key()).into()
@@ -530,6 +533,21 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
+
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
@@ -1062,6 +1080,21 @@ pub struct ProgramAttachedSnapshot {
 
 #[wasm_bindgen]
 impl ProgramAttachedSnapshot {
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot().snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.snapshot().revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.snapshot().reason().map(str::to_owned)
+    }
+
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().to_string()
@@ -1401,6 +1434,16 @@ mod browser_tests {
                 "program_compile",
             ),
             (
+                E::Unsupported,
+                ProgramOperation::CompileProgramWire,
+                "program_unsupported",
+            ),
+            (
+                E::Unsupported,
+                ProgramOperation::AttachProgramWire,
+                "program_unsupported",
+            ),
+            (
                 E::FamilyArtifactsRequired,
                 ProgramOperation::CompileProgramWire,
                 "program_family_artifacts_required",
@@ -1516,6 +1559,9 @@ mod browser_tests {
             .expect("observed update");
 
         assert_eq!(snapshot.state(), "ready");
+        assert_eq!(snapshot.snapshot_version(), 1);
+        assert_eq!(snapshot.revision(), 1);
+        assert_eq!(snapshot.reason(), None);
         assert_eq!(snapshot.output_count(), 1);
         assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
         assert_eq!(
@@ -1523,6 +1569,14 @@ mod browser_tests {
             &[20, 20, 20]
         );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
+
+        let stale = runtime.update_unknown(2_u64.into(), 41.into()).unwrap();
+        assert_eq!(stale.state(), "stale");
+        assert_eq!(stale.snapshot_version(), 1);
+        assert_eq!(stale.revision(), 2);
+        assert_eq!(stale.reason(), None);
+        assert_eq!(stale.output_count(), 1);
+        assert_eq!(snapshot.revision(), 1);
     }
 
     #[wasm_bindgen_test]

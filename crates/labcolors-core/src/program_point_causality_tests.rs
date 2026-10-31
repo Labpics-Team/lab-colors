@@ -490,7 +490,7 @@ fn fixed_fanout_retains_empty_and_singleton_as_distinct_modeled_roots() {
     for (index, certificate) in certificates.iter().enumerate() {
         assert_eq!(
             certificate.content_identity(),
-            expected_identity,
+            expected_identity.legacy().unwrap(),
             "certificate {index} must retain the compiled Program identity"
         );
         assert_eq!(

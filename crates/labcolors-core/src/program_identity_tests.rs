@@ -589,7 +589,7 @@ fn canonical_v9_digest_is_cross_platform_golden() {
     .compile()
     .unwrap();
 
-    let identity: ProgramContentIdentityV9 = compiled.content_identity();
+    let identity: ProgramContentIdentityV9 = compiled.content_identity().legacy().unwrap();
     assert_eq!(
         identity.as_bytes(),
         &[

@@ -9,6 +9,25 @@ use crate::observation::{
 };
 use crate::session::{SessionState, SessionUpdateError};
 
+// Только сборка декларации; исполнение принадлежит обычному Program/Session.
+fn compile_assignment<E: ProgramConstraintEvaluatorSetV1>(
+    mut program: Program<E>,
+    budget: u64,
+) -> Result<CompiledProgram<E>, ProgramCompileError> {
+    let mut order: Vec<_> = program
+        .targets
+        .iter()
+        .filter_map(|target| match &target.intent {
+            TargetIntentV1::Computed(value) => Some((value.preference, target.id)),
+            _ => None,
+        })
+        .collect();
+    order.sort_unstable_by_key(|entry| entry.0);
+    program.assignment = Some(order.into_iter().map(|entry| entry.1).collect());
+    program.computed_budget = Some(budget);
+    program.compile()
+}
+
 fn context() -> AppearanceContextId {
     AppearanceContextId::from_inputs(
         AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
@@ -90,12 +109,13 @@ fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
 }
 
 fn rgb<Evaluation: ProgramConstraintEvaluatorSetV1>(
-    session: &Session<ComputedSessionPlanV1<Evaluation>>,
+    session: &Session<ProgramSessionPlan<Evaluation>>,
 ) -> Srgb8 {
     session
         .state()
         .current_verified()
         .expect("ожидается current output")
+        .computed_for_test()
         .arena
         .storage
         .outputs[0]
@@ -105,7 +125,7 @@ fn rgb<Evaluation: ProgramConstraintEvaluatorSetV1>(
 
 #[test]
 fn computed_new_rgb_and_valid_anchor_use_real_program() {
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 150, 0, 255, 0),
             Wcag22CriterionV1::Sc143TextDefault,
@@ -117,21 +137,19 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
     let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
     session.prepare_update(update(1, 255)).unwrap().commit();
     assert_eq!(rgb(&session), Srgb8::new([118; 3]));
-    assert!(matches!(
-        session.state().current_verified().unwrap().origin,
-        CandidateOriginV1::Computed { .. }
-    ));
-    let current = session.state().current_verified().unwrap();
-    let CandidateOriginV1::Computed { identity, values } = &current.origin else {
-        panic!()
-    };
+    let current = session
+        .state()
+        .current_verified()
+        .unwrap()
+        .computed_for_test();
     assert_eq!(
-        owner.owner.content_identity,
-        ProgramOwnerIdentityV1::Computed(*identity)
+        owner.owner_generation.content_identity,
+        ProgramOwnerIdentityV1::Computed(current.identity)
     );
-    assert_eq!(&**values, &[Srgb8::new([118; 3])]);
+    assert_eq!(&*current.values, &[Srgb8::new([118; 3])]);
     assert_eq!(current.search.completion, CompletionV1::Complete);
     assert_eq!(current.search.covered, 256);
+    assert_eq!(current.execution_profile, execution_profile_identity(300));
     assert_eq!(current.arena.storage.cells.len(), 1);
     session.prepare_update(update(2, 0)).unwrap().commit();
     assert_eq!(rgb(&session), Srgb8::new([150; 3]));
@@ -140,6 +158,7 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
             .state()
             .current_verified()
             .unwrap()
+            .computed_for_test()
             .search
             .completion,
         CompletionV1::AuthoredExact
@@ -148,7 +167,7 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
 
 #[test]
 fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 150, 0, 255, 0),
             Wcag22CriterionV1::Sc143TextDefault,
@@ -169,12 +188,18 @@ fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
     };
     assert_eq!(cause.observation.revision(), Revision::new(2));
     assert_eq!(cause.search.completion, CompletionV1::BudgetExhausted);
+    assert_eq!(cause.execution_profile, execution_profile_identity(1));
     assert_eq!(
-        owner.owner.content_identity,
+        owner.owner_generation.content_identity,
         ProgramOwnerIdentityV1::Computed(cause.identity)
     );
     assert_eq!(
-        previous.as_ref().unwrap().observation.revision(),
+        previous
+            .as_ref()
+            .unwrap()
+            .computed_for_test()
+            .observation
+            .revision(),
         Revision::new(1)
     );
     let observation = cause.observation.clone();
@@ -198,7 +223,7 @@ fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
 #[test]
 fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
     let make = |id, budget| {
-        ComputedProgramV1::compile(
+        compile_assignment(
             program(
                 target(id, 100, 100, 255, 0),
                 Wcag22CriterionV1::Sc143TextDefault,
@@ -210,10 +235,17 @@ fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
     };
     let owner = make(10, 300);
     let renamed = make(91, 300);
-    assert_eq!(owner.owner.content_identity, renamed.owner.content_identity);
+    assert_eq!(
+        owner.owner_generation.content_identity,
+        renamed.owner_generation.content_identity
+    );
+    assert_eq!(
+        owner.owner_generation.content_identity,
+        make(10, 301).owner_generation.content_identity
+    );
     assert_ne!(
-        owner.owner.content_identity,
-        make(10, 301).owner.content_identity
+        execution_profile_identity(300),
+        execution_profile_identity(301)
     );
     for owner in [&owner, &renamed] {
         let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
@@ -225,18 +257,21 @@ fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
         panic!()
     };
     declaration.max_delta_bits = 0.25_f64.to_bits();
-    let altered = ComputedProgramV1::compile(
+    let altered = compile_assignment(
         program(altered, Wcag22CriterionV1::Sc143TextDefault, Wcag22Srgb8V1),
         300,
     )
     .unwrap();
-    assert_ne!(owner.owner.content_identity, altered.owner.content_identity);
+    assert_ne!(
+        owner.owner_generation.content_identity,
+        altered.owner_generation.content_identity
+    );
 }
 
 #[test]
 fn empty_domain_proof_and_unfinished_search_are_distinct() {
     for budget in [0, 1, 300] {
-        let owner = ComputedProgramV1::compile(
+        let owner = compile_assignment(
             program(
                 target(10, 150, 130, 180, 0),
                 Wcag22CriterionV1::Sc143TextDefault,
@@ -255,7 +290,10 @@ fn empty_domain_proof_and_unfinished_search_are_distinct() {
                 assert_eq!(cause.search.completion, CompletionV1::BudgetExhausted);
                 assert_eq!(cause.search.visited, budget);
             }
-            SessionState::Failed { cause, .. } => {
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(cause),
+                ..
+            } => {
                 assert_eq!(budget, 300);
                 assert_eq!(cause.search.completion, CompletionV1::Complete);
                 assert_eq!(cause.search.covered, 51);
@@ -267,7 +305,7 @@ fn empty_domain_proof_and_unfinished_search_are_distinct() {
 
 #[test]
 fn corrupted_final_encoded_source_never_gets_output() {
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 150, 0, 255, 0),
             Wcag22CriterionV1::Sc143TextDefault,
@@ -290,6 +328,7 @@ fn corrupted_final_encoded_source_never_gets_output() {
             .state()
             .current_verified()
             .unwrap()
+            .computed_for_test()
             .observation
             .revision(),
         Revision::new(1)
@@ -300,7 +339,7 @@ fn corrupted_final_encoded_source_never_gets_output() {
 
 #[test]
 fn admissible_but_unselected_final_source_cannot_claim_preference() {
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 150, 0, 255, 0),
             Wcag22CriterionV1::Sc143TextDefault,
@@ -328,7 +367,7 @@ fn admissible_but_unselected_final_source_cannot_claim_preference() {
 #[test]
 fn computed_physical_recheck_owns_verdict_after_search_pass() {
     let evaluator = crate::constraints::FinalRecheckMutantProgramEvaluatorV1::default();
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 118, 118, 118, 0),
             Srgb8::new([118; 3]),
@@ -360,7 +399,7 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         0,
     )
     .unwrap();
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             Target::new(
                 TargetId::new(10),
@@ -377,7 +416,7 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
     assert_eq!(rgb(&session), Srgb8::new([63, 82, 91]));
     let mut strict = declaration;
     strict.max_delta_bits = 0;
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             Target::new(TargetId::new(10), TargetIntentV1::Computed(strict)),
             Srgb8::new([63, 82, 91]),
@@ -517,13 +556,20 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
         150,
         Wcag22CriterionV1::Sc143TextLargeScale
     ));
-    let first = ComputedProgramV1::compile(nested(false), 20_000).unwrap();
-    let second = ComputedProgramV1::compile(nested(true), 20_000).unwrap();
-    assert_eq!(first.owner.content_identity, second.owner.content_identity);
+    let first = compile_assignment(nested(false), 20_000).unwrap();
+    let second = compile_assignment(nested(true), 20_000).unwrap();
+    assert_eq!(
+        first.owner_generation.content_identity,
+        second.owner_generation.content_identity
+    );
     for owner in [&first, &second] {
         let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
         session.prepare_update(update(1, 255)).unwrap().commit();
-        let current = session.state().current_verified().unwrap();
+        let current = session
+            .state()
+            .current_verified()
+            .unwrap()
+            .computed_for_test();
         let outputs: Vec<_> = current
             .arena
             .storage
@@ -538,7 +584,7 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
 }
 
 #[test]
-fn old_constructor_and_old_identity_reject_computed_capability() {
+fn missing_assignment_order_and_legacy_identity_reject_computed_capability() {
     let make = || {
         program(
             target(10, 150, 0, 255, 0),
@@ -548,7 +594,9 @@ fn old_constructor_and_old_identity_reject_computed_capability() {
     };
     assert!(matches!(
         make().compile(),
-        Err(ProgramCompileError::InternalInvariant)
+        Err(ProgramCompileError::InvalidComputedAssignment(
+            ComputedAdmissionErrorV1::InvalidPreferenceOrder
+        ))
     ));
     assert!(matches!(
         identity::compile_program_content_identity_v9(&make()),
@@ -583,7 +631,7 @@ fn old_constructor_and_old_identity_reject_computed_capability() {
 #[test]
 fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
     let evaluator = crate::constraints::CountingProgramWcag22Srgb8V1::default();
-    let owner = ComputedProgramV1::compile(
+    let owner = compile_assignment(
         program(
             target(10, 118, 0, 255, 0),
             Wcag22CriterionV1::Sc143TextDefault,
@@ -618,6 +666,7 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
             .state()
             .current_verified()
             .unwrap()
+            .computed_for_test()
             .arena
             .storage
             .cells
@@ -648,6 +697,7 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
             .state()
             .current_verified()
             .unwrap()
+            .computed_for_test()
             .observation
             .revision(),
         Revision::new(2)
@@ -671,13 +721,14 @@ fn fixed_sources_are_not_part_of_computed_freedom() {
         panic!()
     };
     upper.preference = 0;
-    let owner = ComputedProgramV1::compile(declaration, 300).unwrap();
+    let owner = compile_assignment(declaration, 300).unwrap();
     let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
     session.prepare_update(update(1, 255)).unwrap().commit();
     let outputs = &session
         .state()
         .current_verified()
         .unwrap()
+        .computed_for_test()
         .arena
         .storage
         .outputs;

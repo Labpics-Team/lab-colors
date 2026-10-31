@@ -36,6 +36,7 @@ fn runtime_error(error: core::ProgramRuntimeErrorV1, operation: &str) -> LabColo
         match error {
             E::Wire => "program_wire",
             E::Compile => "program_compile",
+            E::Unsupported => "program_unsupported",
             E::FamilyArtifactsRequired => "program_family_artifacts_required",
             E::Instantiate => "program_instantiate",
             E::Update => "program_update",
@@ -220,6 +221,15 @@ fn output(
 
 #[uniffi::export]
 impl ProgramSnapshot {
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
     pub fn state(&self) -> String {
         self.inner.state().key().into()
     }
@@ -446,6 +456,15 @@ pub struct ProgramAttachedSnapshot {
 
 #[uniffi::export]
 impl ProgramAttachedSnapshot {
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot().snapshot_version()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.snapshot().revision()
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.inner.snapshot().reason().map(str::to_owned)
+    }
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().into()
     }
@@ -590,5 +609,159 @@ impl AttachedMaterializationAuthority {
     }
     pub fn terminal_composite_rgb(&self) -> Vec<u8> {
         self.inner.terminal_composite().bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Байты получены публичным ProgramWireBuilderV3: target 2, alpha 0.5,
+    // exact visible [96; 3], anchor [64; 3]. Здесь нет отдельного encoder.
+    const GRAY_WIRE: &str = concat!(
+        "4c4350570300cf000000000000000100000002000000030200ff404040000000000000f03f",
+        "00000000010000000100010000000200000001000000060000000100000005000000000000000000e03f",
+        "020000000300000001020000000400000002030000000500000001000000070000000106000000",
+        "0100000008000000040000000700000000000000000050409a9999999999c93f02",
+        "010000000900000008000000010000000900000008000000010000000a0000000108000000606060",
+        "00000000010000001100000004000000",
+    );
+    const BOX_WIRE: &str = concat!(
+        "4c4350570300d30000000000000001000000020000000301000000ffffff404040000000000000f03f",
+        "00000000010000000100010000000200000001000000060000000100000005000000000000000000e03f",
+        "020000000300000001020000000400000002030000000500000001000000070000000106000000",
+        "0100000008000000040000000700000000000000000050409a9999999999c93f02",
+        "010000000900000008000000010000000900000008000000010000000a0000000108000000606060",
+        "00000000010000001100000004000000",
+    );
+
+    fn bytes(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0);
+        (0..hex.len())
+            .step_by(2)
+            .map(|offset| {
+                u8::from_str_radix(&hex[offset..offset + 2], 16)
+                    .expect("fixture содержит hex-байты")
+            })
+            .collect()
+    }
+
+    struct AcceptHost;
+
+    impl ProgramPointSinkHost for AcceptHost {
+        fn try_install(
+            &self,
+            _intent: ProgramPointSinkIntent,
+        ) -> Result<bool, ProgramPointSinkCallbackError> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn unsupported_assignment_preserves_its_error_class() {
+        for expected_operation in ["compileProgramWire", "attachProgramWire"] {
+            let LabColorsError::Refused { code, operation } =
+                runtime_error(core::ProgramRuntimeErrorV1::Unsupported, expected_operation);
+            assert_eq!(code, "program_unsupported");
+            assert_eq!(operation, expected_operation);
+        }
+    }
+
+    #[test]
+    fn computed_snapshot_metadata_is_shared_by_standalone_and_attached_ffi() {
+        for (wire, state, reason) in [
+            (GRAY_WIRE, "unsatisfied", None),
+            (BOX_WIRE, "incomplete", Some("limit")),
+        ] {
+            let runtime = compile_program_wire(bytes(wire), 100).unwrap();
+            let ready = runtime
+                .update_observed(1, vec![7], vec![128; 3], 1)
+                .unwrap();
+            assert_eq!(ready.snapshot_version(), 2);
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(ready.reason(), None);
+            assert_eq!(ready.output_rgb(0).unwrap(), [64; 3]);
+            let stopped = runtime
+                .update_observed(2, vec![7], vec![255; 3], 1)
+                .unwrap();
+            assert_eq!(stopped.snapshot_version(), 2);
+            assert_eq!(stopped.revision(), 2);
+            assert_eq!(stopped.reason().as_deref(), reason);
+            assert_eq!(stopped.state(), state);
+            assert_eq!(stopped.output_count(), 0);
+            assert!(stopped.output_rgb(0).is_err());
+            let stale = runtime.update_unknown(3, 41).unwrap();
+            assert_eq!(stale.state(), "stale");
+            assert_eq!(stale.reason(), None);
+            assert_eq!(stale.output_count(), 0);
+            drop(runtime);
+            let held = std::thread::spawn(move || {
+                (
+                    ready.snapshot_version(),
+                    ready.revision(),
+                    ready.reason(),
+                    ready.output_rgb(0).unwrap(),
+                )
+            })
+            .join()
+            .unwrap();
+            assert_eq!(held, (2, 1, None, vec![64; 3]));
+
+            let attached =
+                attach_program_wire(bytes(wire), 100, 17, 91, 9, 8, Box::new(AcceptHost)).unwrap();
+            let ready = attached
+                .update_observed(1, vec![7], vec![128; 3], 1)
+                .unwrap();
+            assert_eq!(ready.snapshot_version(), 2);
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(ready.reason(), None);
+            assert!(ready.has_render());
+            let stopped = attached
+                .update_observed(2, vec![7], vec![255; 3], 1)
+                .unwrap();
+            assert_eq!(stopped.snapshot_version(), 2);
+            assert_eq!(stopped.revision(), 2);
+            assert_eq!(stopped.reason().as_deref(), reason);
+            assert_eq!(stopped.state(), state);
+            assert_eq!(stopped.output_count(), 0);
+            assert!(!stopped.has_render());
+            assert!(attached.materialization_authority().is_err());
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(ready.output_rgb(0).unwrap(), [64; 3]);
+        }
+    }
+
+    #[test]
+    fn legacy_ffi_metadata_preserves_historical_outputs() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
+                .unwrap();
+        let wire = bytes(fixtures["adaptive"].as_str().unwrap());
+        let runtime = compile_program_wire(wire.clone(), 1).unwrap();
+        let first = runtime
+            .update_observed(1, vec![1], vec![255; 3], 1)
+            .unwrap();
+        let historical = runtime.update_unknown(2, 41).unwrap();
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(
+            historical.output_rgb(0).unwrap(),
+            first.output_rgb(0).unwrap()
+        );
+
+        let attached = attach_program_wire(wire, 1, 91, 501, 71, 61, Box::new(AcceptHost)).unwrap();
+        let first = attached
+            .update_observed(1, vec![1], vec![255; 3], 1)
+            .unwrap();
+        let historical = attached.update_unknown(2, 41).unwrap();
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(
+            historical.output_rgb(0).unwrap(),
+            first.output_rgb(0).unwrap()
+        );
+        assert!(!historical.has_render());
     }
 }
