@@ -4326,8 +4326,9 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         }
         ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
-        ProgramCompileError::InternalInvariant
-        | ProgramCompileError::InvalidComputedAssignment(_) => CompileErrorV1::InternalInvariant,
+        ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
+        #[cfg(test)]
+        ProgramCompileError::InvalidComputedAssignment(_) => CompileErrorV1::InternalInvariant,
     }
 }
 
