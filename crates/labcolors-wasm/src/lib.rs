@@ -189,8 +189,144 @@ export function certificateProjection(
     bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
+
+const ProjectionString = String;
+const defineProjectionProperty = Object.defineProperty;
+
+function appendProjectionValue(array, value) {
+  defineProjectionProperty(array, array.length, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+export function capabilityManifestProjection(schemaVersion, coverage, checksum) {
+  return { schemaVersion, coverage, sites: [], checksum };
+}
+
+export function capabilitySiteProjection(manifest, siteId) {
+  const site = {
+    siteId,
+    stableOutcomes: [],
+    compatibilityReleases: [],
+    evidenceClasses: [],
+    artifactIds: [],
+    boundIds: [],
+    proofIds: [],
+    runtimeAttestations: [],
+  };
+  appendProjectionValue(manifest.sites, site);
+  return site;
+}
+
+export function capabilityKeyProjection(site, field, key) {
+  appendProjectionValue(site[field], key);
+}
+
+function projectionRgbHex(rgb) {
+  // The packed RGB24 value has six hexadecimal digits of four bits each.
+  const digits = "0123456789ABCDEF";
+  let result = "#";
+  for (let shift = 20; shift >= 0; shift -= 4) {
+    result += digits[(rgb >>> shift) & 15];
+  }
+  return result;
+}
+
+export function wcag22Projection(
+  profileId,
+  criterion,
+  foreground,
+  background,
+  foregroundLower,
+  foregroundUpper,
+  backgroundLower,
+  backgroundUpper,
+  q55Scale,
+  decision,
+  artifactId,
+  artifactSha256,
+  boundId,
+  proofId,
+  proofSha256,
+  proofPayloadSha256,
+  generatorSha256,
+  verifierSha256,
+  profileChecksum,
+  profileSha256,
+) {
+  return {
+    kind: "evaluated",
+    profileId,
+    criterion,
+    foreground: projectionRgbHex(foreground),
+    background: projectionRgbHex(background),
+    foregroundLuminanceQ55: {
+      lower: ProjectionString(foregroundLower),
+      upper: ProjectionString(foregroundUpper),
+    },
+    backgroundLuminanceQ55: {
+      lower: ProjectionString(backgroundLower),
+      upper: ProjectionString(backgroundUpper),
+    },
+    q55Scale: ProjectionString(q55Scale),
+    decision,
+    evidence: {
+      kind: "canonical-finite-bounded",
+      artifactId,
+      artifactSha256,
+      boundId,
+      proofId,
+      proofSha256,
+      proofPayloadSha256,
+      generatorSha256,
+      verifierSha256,
+      profileChecksum,
+      profileSha256,
+    },
+  };
+}
 "#)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = capabilityManifestProjection)]
+    fn capability_manifest_projection(
+        schema_version: u32,
+        coverage: &str,
+        checksum: &str,
+    ) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = capabilitySiteProjection)]
+    fn capability_site_projection(manifest: &JsValue, site_id: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = capabilityKeyProjection)]
+    fn capability_key_projection(site: &JsValue, field: &str, key: &str) -> Result<(), JsValue>;
+
+    #[wasm_bindgen(catch, js_name = wcag22Projection)]
+    fn wcag22_projection(
+        profile_id: &str,
+        criterion: &str,
+        foreground: u32,
+        background: u32,
+        foreground_lower: u64,
+        foreground_upper: u64,
+        background_lower: u64,
+        background_upper: u64,
+        q55_scale: u64,
+        decision: &str,
+        artifact_id: &str,
+        artifact_sha256: &str,
+        bound_id: &str,
+        proof_id: &str,
+        proof_sha256: &str,
+        proof_payload_sha256: &str,
+        generator_sha256: &str,
+        verifier_sha256: &str,
+        profile_checksum: &str,
+        profile_sha256: &str,
+    ) -> Result<JsValue, JsValue>;
+
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
@@ -431,8 +567,7 @@ fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsValue> {
-    let json = terminal_projection::capability_manifest_json();
-    js_sys::JSON::parse(&json)
+    terminal_projection::capability_manifest()
         .map(JsValue::unchecked_into)
         .map_err(|_| {
             binding_failure_error(
@@ -470,14 +605,9 @@ pub fn evaluate_wcag22(
                     },
                 })
             })?;
-    let json = terminal_projection::wcag22_json(&assessment).map_err(project)?;
-    js_sys::JSON::parse(&json)
+    terminal_projection::wcag22(&assessment)
         .map(JsValue::unchecked_into)
-        .map_err(|_| {
-            project(BindingError::Internal {
-                reason: "WCAG22 projection не распарсился как JSON".to_string(),
-            })
-        })
+        .map_err(project)
 }
 
 /// Выдаёт собственную копию байтов сертификата встроенного дескриптора исходников Core.

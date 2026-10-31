@@ -15,24 +15,16 @@ mod refinement {
         physical_begin: usize,
         len: usize,
         logical_start: usize,
+        signature_start: usize,
         dirty_cursor: usize,
     }
 
     #[derive(Clone, Copy)]
     struct Group {
-        member_begin: usize,
-        member_end: usize,
+        record_begin: usize,
+        record_end: usize,
         len: usize,
         logical_start: usize,
-    }
-
-    #[derive(Clone, Copy)]
-    struct Split {
-        cell: usize,
-        group_begin: usize,
-        group_end: usize,
-        retained: usize,
-        largest: usize,
     }
 
     #[derive(Default)]
@@ -42,12 +34,13 @@ mod refinement {
         vertex_pos: Vec<usize>,
         cells: Vec<Cell>,
         marked: Vec<bool>,
+        next_marked: Vec<bool>,
         dirty: Vec<usize>,
+        next_dirty: Vec<usize>,
         signatures: Vec<RefinementAtomV1>,
         records: Vec<RefinementRecordV1>,
-        members: Vec<usize>,
         groups: Vec<Group>,
-        splits: Vec<Split>,
+        split_parents: Vec<usize>,
         recycled_singletons: Vec<Vec<usize>>,
         #[cfg(test)]
         trace_starts: Vec<usize>,
@@ -78,6 +71,10 @@ mod refinement {
                 .try_reserve_exact(vertex_count)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
             self.marked.resize(vertex_count, false);
+            self.next_marked
+                .try_reserve_exact(vertex_count)
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            self.next_marked.resize(vertex_count, false);
             self.dirty
                 .try_reserve_exact(vertex_count)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
@@ -116,6 +113,7 @@ mod refinement {
                     physical_begin,
                     len,
                     logical_start: physical_begin,
+                    signature_start: physical_begin,
                     dirty_cursor: 0,
                 });
             }
@@ -131,14 +129,15 @@ mod refinement {
             self.records
                 .try_reserve_exact(maximum_records)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            // Staged parents are disjoint; an actual split needs size >= 2.
-            self.members
+            // A round deduplicates its next worklist. Only one cell's groups
+            // are live; disjoint splitting parents each contain at least two vertices.
+            self.next_dirty
                 .try_reserve_exact(vertex_count)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
             self.groups
-                .try_reserve_exact(vertex_count)
+                .try_reserve_exact(maximum_records)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            self.splits
+            self.split_parents
                 .try_reserve_exact(vertex_count / 2)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
             #[cfg(test)]
@@ -181,7 +180,7 @@ mod refinement {
             signatures.push(RefinementAtomV1 {
                 direction: arc.direction,
                 role: arc.role,
-                neighbour_cell: neighbour_cell.logical_start,
+                neighbour_cell: neighbour_cell.signature_start,
             });
         }
         let signature = start..signatures.len();
@@ -221,7 +220,7 @@ mod refinement {
         dirty: &mut Vec<usize>,
         members: &mut Vec<usize>,
     ) {
-        // All staged splits have committed. Both vectors retain V reserved
+        // All splits have committed. Both vectors retain V reserved
         // slots, and every cell cursor is zero outside this function.
         members.clear();
         let mut retained = 0;
@@ -368,25 +367,29 @@ mod refinement {
             vertex_pos,
             cells,
             marked,
+            next_marked,
             dirty,
+            next_dirty,
             signatures,
             records,
-            members,
             groups,
-            splits,
+            split_parents,
             recycled_singletons,
             #[cfg(test)]
             trace_starts,
         } = workspace;
 
         loop {
-            members.clear();
-            groups.clear();
-            splits.clear();
+            next_dirty.clear();
+            split_parents.clear();
+            let first_new_cell = cells.len();
+            #[cfg(test)]
+            let round_non_singletons = non_singletons;
             #[cfg(test)]
             let mut touched_cells = 0_usize;
-            // Initially dirty is already grouped by the initial cell IDs.
-            // Subsequent rounds group only their explicit dirty worklist.
+
+            // Dirty blocks contain disjoint old cells. Committing one block
+            // cannot change membership or physical order in a later block.
             let mut dirty_begin = 0;
             while dirty_begin < dirty.len() {
                 let cell_id = cell_of[dirty[dirty_begin]];
@@ -403,6 +406,7 @@ mod refinement {
                 {
                     touched_cells += 1;
                 }
+
                 records.clear();
                 signatures.clear();
                 let clean_count = cell
@@ -412,7 +416,6 @@ mod refinement {
                 let clean_vertex = if clean_count == 0 {
                     None
                 } else {
-                    // At most the dirty members precede the first clean member.
                     let representative = order[cell.physical_begin..cell.physical_begin + cell.len]
                         .iter()
                         .copied()
@@ -420,6 +423,7 @@ mod refinement {
                         .ok_or(ProgramCompileError::InternalInvariant)?;
                     Some(representative)
                 };
+
                 for &vertex in &dirty[dirty_begin..dirty_end] {
                     append_signature(
                         graph,
@@ -444,9 +448,7 @@ mod refinement {
                         &mut trace,
                     )?;
                 }
-                // Equal signatures cannot split the cell. This includes every
-                // clean member through its representative, so no ordering or
-                // staged membership is needed for this cell.
+
                 if records.windows(2).all(|pair| {
                     signatures[pair[0].signature.clone()] == signatures[pair[1].signature.clone()]
                 }) {
@@ -456,9 +458,10 @@ mod refinement {
                 ordering::sort_by(records, |left, right| {
                     signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
                 });
-                let group_begin = groups.len();
+
+                groups.clear();
                 let mut retained = None;
-                let mut largest = group_begin;
+                let mut largest = 0;
                 let mut logical_start = cell.logical_start;
                 let mut record_begin = 0;
                 while record_begin < records.len() {
@@ -469,21 +472,20 @@ mod refinement {
                     {
                         record_end += 1;
                     }
+
                     let group_index = groups.len();
-                    let group_member_begin = members.len();
                     let mut len = 0;
                     for record in &records[record_begin..record_end] {
                         if Some(record.vertex) == clean_vertex {
                             len += clean_count;
                             retained = Some(group_index);
                         } else {
-                            members.push(record.vertex);
                             len += 1;
                         }
                     }
                     groups.push(Group {
-                        member_begin: group_member_begin,
-                        member_end: members.len(),
+                        record_begin,
+                        record_end,
                         len,
                         logical_start,
                     });
@@ -493,95 +495,97 @@ mod refinement {
                     logical_start += len;
                     record_begin = record_end;
                 }
-                splits.push(Split {
-                    cell: cell_id,
-                    group_begin,
-                    group_end: groups.len(),
-                    retained: retained.unwrap_or(largest),
-                    largest,
-                });
+
+                let retained_index = retained.unwrap_or(largest);
+                let retained = groups[retained_index];
+                let mut tail = cell.physical_begin + retained.len;
+
+                // Physical membership may change now, but all children still
+                // expose the parent's old label to subsequent signatures.
+                cells[cell_id] = Cell {
+                    physical_begin: cell.physical_begin,
+                    len: retained.len,
+                    logical_start: retained.logical_start,
+                    signature_start: cell.signature_start,
+                    dirty_cursor: 0,
+                };
+                split_parents.push(cell_id);
+                non_singletons -= 1;
+
+                for (group_index, &group) in groups.iter().enumerate() {
+                    if group.len > 1 {
+                        non_singletons += 1;
+                    }
+                    if group_index == retained_index {
+                        continue;
+                    }
+
+                    // The retained group owns every implicit clean member.
+                    // Every other group consists entirely of explicit records.
+                    if group.record_end - group.record_begin != group.len {
+                        return Err(ProgramCompileError::InternalInvariant);
+                    }
+                    let new_cell = cells.len();
+                    let end = tail + group.len;
+                    for (record, destination) in records[group.record_begin..group.record_end]
+                        .iter()
+                        .zip(tail..end)
+                    {
+                        let vertex = record.vertex;
+                        let source = vertex_pos[vertex];
+                        let displaced = order[destination];
+                        order.swap(source, destination);
+                        vertex_pos[vertex] = destination;
+                        vertex_pos[displaced] = source;
+                        cell_of[vertex] = new_cell;
+                    }
+                    cells.push(Cell {
+                        physical_begin: tail,
+                        len: group.len,
+                        logical_start: group.logical_start,
+                        signature_start: cell.signature_start,
+                        dirty_cursor: 0,
+                    });
+
+                    if group_index != largest {
+                        mark_neighbours(graph, &order[tail..end], next_marked, next_dirty)?;
+                    }
+                    tail = end;
+                }
+
+                if tail != cell.physical_begin + cell.len {
+                    return Err(ProgramCompileError::InternalInvariant);
+                }
+                if retained_index != largest {
+                    mark_neighbours(
+                        graph,
+                        &order[cell.physical_begin..cell.physical_begin + retained.len],
+                        next_marked,
+                        next_dirty,
+                    )?;
+                }
+
                 dirty_begin = dirty_end;
             }
+
             #[cfg(test)]
             if let Some(trace) = trace.as_deref_mut() {
                 trace.skipped_cells = trace
                     .skipped_cells
-                    .saturating_add(non_singletons - touched_cells);
+                    .saturating_add(round_non_singletons - touched_cells);
             }
-            let changed = !splits.is_empty();
-            if changed {
-                // Every signature above used the same old labels. No old labels
-                // are read after this point, so all physical commits are safe.
-                for &vertex in dirty.iter() {
-                    marked[vertex] = false;
-                }
-                dirty.clear();
-                for split in splits.iter() {
-                    let parent = cells[split.cell];
-                    let retained = groups[split.retained];
-                    let mut tail = parent.physical_begin + retained.len;
-                    cells[split.cell] = Cell {
-                        physical_begin: parent.physical_begin,
-                        len: retained.len,
-                        logical_start: retained.logical_start,
-                        dirty_cursor: 0,
-                    };
-                    non_singletons -= 1;
-                    let children = &groups[split.group_begin..split.group_end];
-                    for (offset, &group) in children.iter().enumerate() {
-                        let group_index = split.group_begin + offset;
-                        if group.len > 1 {
-                            non_singletons += 1;
-                        }
-                        if group_index == split.retained {
-                            continue;
-                        }
-                        // The retained group owns every implicit clean member.
-                        // Every other group's membership is fully explicit.
-                        if group.member_end - group.member_begin != group.len {
-                            return Err(ProgramCompileError::InternalInvariant);
-                        }
-                        let new_cell = cells.len();
-                        let end = tail + group.len;
-                        for (&vertex, destination) in members[group.member_begin..group.member_end]
-                            .iter()
-                            .zip(tail..end)
-                        {
-                            let source = vertex_pos[vertex];
-                            let displaced = order[destination];
-                            order.swap(source, destination);
-                            vertex_pos[vertex] = destination;
-                            vertex_pos[displaced] = source;
-                            cell_of[vertex] = new_cell;
-                        }
-                        cells.push(Cell {
-                            physical_begin: tail,
-                            len: group.len,
-                            logical_start: group.logical_start,
-                            dirty_cursor: 0,
-                        });
-                        // Finalized tail ranges cannot be disturbed by later
-                        // groups: their members are disjoint and positions exact.
-                        if group_index != split.largest {
-                            mark_neighbours(graph, &order[tail..end], marked, dirty)?;
-                        }
-                        tail = end;
-                    }
-                    // After every other group moves to its tail interval, the
-                    // prefix contains exactly the retained group, without a scan.
-                    if tail != parent.physical_begin + parent.len {
-                        return Err(ProgramCompileError::InternalInvariant);
-                    }
-                    if split.retained != split.largest {
-                        mark_neighbours(
-                            graph,
-                            &order[parent.physical_begin..parent.physical_begin + retained.len],
-                            marked,
-                            dirty,
-                        )?;
-                    }
-                }
+
+            let changed = !split_parents.is_empty();
+
+            // Only split parents and appended children changed their labels.
+            // No signatures remain to be computed from the old snapshot.
+            for &cell_id in split_parents.iter() {
+                cells[cell_id].signature_start = cells[cell_id].logical_start;
             }
+            for cell in &mut cells[first_new_cell..] {
+                cell.signature_start = cell.logical_start;
+            }
+
             #[cfg(test)]
             if let Some(trace) = trace.as_deref_mut() {
                 let snapshot = materialize(order, cells, trace_starts, &mut Vec::new())?;
@@ -591,13 +595,20 @@ mod refinement {
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 trace.rounds.push(snapshot.cells);
             }
-            if !changed || non_singletons == 0 || dirty.is_empty() {
+
+            if !changed || non_singletons == 0 || next_dirty.is_empty() {
                 break;
             }
-            group_dirty_by_cell(cell_of, cells, marked, dirty, members);
+
+            for &vertex in dirty.iter() {
+                marked[vertex] = false;
+            }
+            dirty.clear();
+            core::mem::swap(dirty, next_dirty);
+            core::mem::swap(marked, next_marked);
+            group_dirty_by_cell(cell_of, cells, marked, dirty, next_dirty);
         }
-        // cell_of is no longer needed as a vertex map. Reuse its V slots as
-        // logical-start -> cell ID, avoiding a final allocation or global sort.
+
         Ok(EquitablePartitionV1(materialize(
             order,
             cells,
