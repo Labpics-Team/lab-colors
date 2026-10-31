@@ -277,3 +277,42 @@ if args.profile:
               flush=True)
     if any(record["status"] != "completed" for record in profiles["observations"]):
         raise SystemExit("incomplete consumer profile: inspect retained diagnostics")
+
+    # Cross producer and consumer on the reproducible RSS discrepancy. One JS
+    # builder and one runtime are loaded in each fresh, non-profiled process.
+    # Rotate a balanced sequence so every combination occupies every position.
+    combinations = [(builder, runtime) for builder in roots for runtime in roots]
+    order = (0, 1, 3, 2)
+    reference = next(row for row in summary if (row["pattern"], row["nodes"]) == ("ring", 1024))
+    wire_digests = set()
+    for block in range(len(combinations)):
+        for position in order:
+            builder, runtime = combinations[(position + block) % len(combinations)]
+            command = ["node", str(args.harness), str(roots[runtime]), reference["pattern"],
+                       str(reference["nodes"]), str(metadata["samplesAfterWarmup"]), str(roots[builder])]
+            record = {"builder": builder, "runtime": runtime, "block": block,
+                      "pattern": reference["pattern"], "nodes": reference["nodes"]}
+            remaining = min(args.timeout, deadline - time.monotonic())
+            try:
+                if remaining <= 0:
+                    raise ValueError("ordinary comparison budget exhausted before component controls")
+                result = subprocess.run(command, capture_output=True, text=True, timeout=remaining, check=True)
+                m = read_measurement(result.stdout, runtime, reference["pattern"], reference["nodes"])
+                if [m["cold"]["checksum"]] != reference[runtime]["checksums"]:
+                    raise ValueError("output changed across producer/runtime combinations")
+                if re.fullmatch(r"[0-9a-f]{64}", m["wireSha256"]) is None:
+                    raise ValueError("missing declaration digest")
+                if type(m["maxRssKiB"]) is not int or m["maxRssKiB"] <= 0:
+                    raise ValueError("invalid process peak")
+                wire_digests.add(m["wireSha256"])
+                if len(wire_digests) != 1:
+                    raise ValueError("builders emitted different declarations")
+                record.update(status="completed", wireSha256=m["wireSha256"], wasmSha256=m["wasmSha256"],
+                              checksum=m["cold"]["checksum"], maxRssKiB=m["maxRssKiB"],
+                              coldCycleMs=m["cold"]["cycleMs"],
+                              warmCycleMs=[x["cycleMs"] for x in m["samplesAfterWarmup"]])
+            except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+                record.update(status="failed", error=str(error), stderr=str(getattr(error, "stderr", "") or ""))
+                print(json.dumps({"componentControl": record}), flush=True)
+                raise SystemExit("incomplete crossed component control") from error
+            print(json.dumps({"componentControl": record}), flush=True)

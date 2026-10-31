@@ -313,7 +313,7 @@
   "crates/labcolors-wasm/webdriver.json": "ac44eca82ed3a41d8af8de3e3b6af3a9aad6f6c0",
   "packages/colors/.gitignore": "6e3d5af2132762f2d3441c15ba5ee7b8451d3bd4",
   "packages/colors/README.md": "aee12c0353af285bb098720db8714efa15881588",
-  "packages/colors/bench/program.mjs": "a97669a8d668ad70fdbbd5688a62f5c202ccd3de",
+  "packages/colors/bench/program.mjs": "70eaba022fd4a8cb06a594792ef120c0e6b29fc3",
   "packages/colors/bench/wasm.json": "d25d8b4efb181e667241e4c86adc1633813b881f",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
@@ -545,7 +545,7 @@
   "scripts/ci/peer_gate.py": "f4f6ca58a9cfd3332bbf59a56e794df7b3a179ac",
   "scripts/ci/strict_secret_scan.py": "1030d9e279547934c292dfcf6bb777bf8244abb6",
   "scripts/ci_workflow_binding.py": "f6c232851ba2f9ce02039a7fc4e475275df82745",
-  "scripts/compare-program-performance.py": "906d5d567d07588613f6519fab0832c09bbd4df7",
+  "scripts/compare-program-performance.py": "881f7bc2a98b7f7a2d77f8319cfcb1a8c7df750b",
   "scripts/distribution-licenses.mjs": "5457eb692803abb672778875f2e8728137e10f85",
   "scripts/emit-authoring-surface.mjs": "af7b6bdc8c2b1a08c0a4ebb597e2503134bad9a5",
   "scripts/evaluate-distribution.mjs": "bb0804cd15f21c774e625e05f00c688b06f09ed5",
@@ -619,7 +619,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "c57c3ec50c7ef0bbbf3ff7814bd07a3a5b3e5de474fd13cae9edb14471310a7a",
+ "record_sha256": "6181317765a81b82c4abb1c173884f25b121eb6f222a3510ee1d1e01a799eb18",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

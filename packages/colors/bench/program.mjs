@@ -14,7 +14,8 @@ assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..409
 assert.ok(pattern !== "ring" || (nodes >= 3 && nodes <= 2048), "ring nodes: 3..2048 (two hard constraints per node)");
 assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
-const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v1.js")));
+const builderRoot = process.argv[6] === undefined ? packageRoot : resolve(process.argv[6]);
+const abi = await import(pathToFileURL(resolve(builderRoot, "program-wire/abi-v1.js")));
 const started = performance.now();
 const wasm = await readFile(resolve(packageRoot, "pkg/labcolors_bg.wasm"));
 await api.default({ module_or_path: wasm });
@@ -90,8 +91,11 @@ for (let sample = 0; sample <= samples; sample += 1) {
 }
 assert.ok(results.every((result) => result.checksum === results[0].checksum));
 const cold = results.shift();
+const maxRssKiB = process.resourceUsage().maxRSS;
+// Hash the authored bytes only for the crossed diagnostic, after measuring RSS.
+const wireSha256 = process.argv[6] === undefined ? undefined : createHash("sha256").update(wire).digest("hex");
 console.log(JSON.stringify({
   node: process.version, v8: process.versions.v8, producer, pattern, nodes, samples,
   wasmBytes: wasm.length, wasmSha256: createHash("sha256").update(wasm).digest("hex"),
-  initializationMs, cold, samplesAfterWarmup: results, maxRssKiB: process.resourceUsage().maxRSS,
+  initializationMs, cold, samplesAfterWarmup: results, maxRssKiB, wireSha256,
 }));
