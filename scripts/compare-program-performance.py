@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -68,6 +69,7 @@ metadata = {
     "rounds": 2,
 }
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
+print(json.dumps({"environment": metadata}), flush=True)
 observations = []
 scenarios = {
     nodes: ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ())
@@ -106,8 +108,8 @@ for nodes, patterns in scenarios.items():
                 observations.append(record)
                 name = f"{pattern}-{nodes}-{round_index}-{label}.json"
                 (args.output / name).write_text(json.dumps(record, indent=2) + "\n")
-                print(json.dumps({key: record[key] for key in
-                                  ("variant", "pattern", "nodes", "round", "status", "elapsedSeconds")}),
+                print(json.dumps({key: value for key, value in record.items()
+                                  if key != "stdout" or "measurement" not in record}),
                       flush=True)
 
 summary = []
@@ -124,6 +126,7 @@ for nodes, patterns in scenarios.items():
                 row[label].update(
                     compileMedianMs=statistics.median(s["compileMs"] for s in samples),
                     cycleMedianMs=statistics.median(s["cycleMs"] for s in samples),
+                    updatesMedianMs=statistics.median(sum(s["updatesMs"]) for s in samples),
                     maxRssKiB=max(m["maxRssKiB"] for m in measurements),
                     wasmSha256=sorted({m["wasmSha256"] for m in measurements}),
                     checksums=sorted({s["checksum"] for s in samples}),
@@ -133,6 +136,7 @@ for nodes, patterns in scenarios.items():
                 raise SystemExit(f"output checksum changed: {pattern}/{nodes}")
             row["compileSpeedup"] = row["baseline"]["compileMedianMs"] / row["candidate"]["compileMedianMs"]
             row["cycleSpeedup"] = row["baseline"]["cycleMedianMs"] / row["candidate"]["cycleMedianMs"]
+            row["updatesSpeedup"] = row["baseline"]["updatesMedianMs"] / row["candidate"]["updatesMedianMs"]
         summary.append(row)
 (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 print(json.dumps(summary, indent=2), flush=True)
@@ -140,6 +144,59 @@ print(json.dumps(summary, indent=2), flush=True)
 # Non-timeout consumer failures invalidate the comparison.
 if any(record["status"] not in ("completed", "timeout", "budget-exhausted") for record in observations):
     raise SystemExit("consumer failure: inspect retained observations")
+
+
+def summarize_profile(profile):
+    """Суммирует интервалы CDP samples/timeDeltas; hitCount не задаёт время."""
+    nodes = {node["id"]: node for node in profile["nodes"]}
+    if not nodes or len(nodes) != len(profile["nodes"]):
+        raise ValueError("CPU profile node IDs are empty or duplicated")
+    root = profile["nodes"][0]["id"]
+    parents, order = {}, []
+    pending = [(root, None)]
+    while pending:
+        node_id, parent = pending.pop()
+        if node_id not in nodes or node_id in parents:
+            raise ValueError("CPU profile is not a rooted call tree")
+        parents[node_id] = parent
+        order.append(node_id)
+        pending.extend((child, node_id) for child in nodes[node_id].get("children", []))
+    if len(order) != len(nodes):
+        raise ValueError("CPU profile contains unreachable nodes")
+
+    samples, deltas = profile["samples"], profile["timeDeltas"]
+    if not samples or len(samples) != len(deltas):
+        raise ValueError("CPU profile sample intervals are missing or incomplete")
+    self_us = dict.fromkeys(nodes, 0)
+    for node_id, delta in zip(samples, deltas):
+        if (type(node_id) is not int or node_id not in nodes
+                or type(delta) is not int or delta < 0):
+            raise ValueError("CPU profile sample interval is invalid")
+        self_us[node_id] += delta
+
+    sampled_us = sum(deltas)
+    duration_us = profile["endTime"] - profile["startTime"]
+    if not math.isfinite(duration_us) or sampled_us <= 0 or duration_us < sampled_us:
+        raise ValueError("CPU profile sample intervals exceed its duration")
+
+    inclusive_us = self_us.copy()
+    for node_id in reversed(order):
+        parent = parents[node_id]
+        if parent is not None:
+            inclusive_us[parent] += inclusive_us[node_id]
+
+    def top(weights):
+        # Это предел объёма лога; totals охватывают все узлы и отсчёты.
+        ids = sorted((node_id for node_id in nodes if weights[node_id]),
+                     key=lambda node_id: (-weights[node_id], node_id))[:20]
+        return [{"id": node_id, "frame": nodes[node_id]["callFrame"],
+                 "selfUs": self_us[node_id], "inclusiveUs": inclusive_us[node_id]}
+                for node_id in ids]
+
+    return {"nodeCount": len(nodes), "sampleCount": len(samples),
+            "profileDurationUs": duration_us, "sampledTimeUs": sampled_us,
+            "unattributedTailUs": duration_us - sampled_us,
+            "topBySelf": top(self_us), "topByInclusive": top(inclusive_us)}
 
 if args.profile:
     # Instrumented processes never enter observations or the latency summary.
@@ -198,7 +255,8 @@ if args.profile:
                         profile = json.loads(profile_path.read_text())
                         if not isinstance(profile.get("nodes"), list) or not profile["nodes"]:
                             raise ValueError("CPU profile contains no call tree")
-                        record.update(status="completed", checksums=checksums)
+                        record.update(status="completed", checksums=checksums,
+                                      cpuSummary=summarize_profile(profile))
                     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                         record.update(status="invalid-output", error=str(error))
             except subprocess.TimeoutExpired as error:
@@ -212,8 +270,8 @@ if args.profile:
                           profileSha256=hashlib.sha256(profile_bytes).hexdigest())
         profiles["observations"].append(record)
         (profile_root / "index.json").write_text(json.dumps(profiles, indent=2) + "\n")
-        print(json.dumps({"cpuProfile": {key: record[key] for key in
-                                         ("variant", "pattern", "nodes", "status", "elapsedSeconds")}}),
+        print(json.dumps({"cpuProfile": {key: value for key, value in record.items()
+                                         if key != "stdout" or record["status"] != "completed"}}),
               flush=True)
     if any(record["status"] not in ("completed", "timeout", "budget-exhausted")
            for record in profiles["observations"]):
