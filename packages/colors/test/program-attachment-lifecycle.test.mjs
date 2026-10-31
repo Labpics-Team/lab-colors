@@ -157,3 +157,34 @@ for (const [name, makeConfirmation] of [
     assert.equal(host.point, null);
   });
 }
+
+
+test("attached RGB values belong to the reader after all handles are released", () => {
+  const attachment = attachProgramWire(wire, 1, 91, 501, 71, 61, () => true);
+  let snapshot, render, authority;
+  const copies = [];
+  try {
+    snapshot = observe(attachment, 1n);
+    render = snapshot.render();
+    authority = attachment.materializationAuthority();
+    for (const read of [
+      () => snapshot.outputRgb(-0), () => render.outputRgb(), () => render.terminalCompositeRgb(),
+      () => authority.outputRgb(), () => authority.terminalCompositeRgb(),
+    ]) {
+      const bytes = read();
+      assert.ok(bytes instanceof Uint8Array);
+      assert.deepEqual([...bytes], [20, 20, 20]);
+      bytes[0] = copies.length;
+      assert.deepEqual([...read()], [20, 20, 20]);
+      copies.push(bytes);
+    }
+  } finally {
+    authority?.free();
+    render?.free();
+    snapshot?.free();
+    attachment.dispose(true);
+    attachment.free();
+  }
+  assert.equal(new Set(copies.map(bytes => bytes.buffer)).size, copies.length);
+  copies.forEach((bytes, index) => assert.deepEqual([...bytes], [index, 20, 20]));
+});

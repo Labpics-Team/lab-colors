@@ -508,18 +508,24 @@ fn to_authority_error(
 // а u64::try_from дополнительно проверяет, что bigint не потерял старшие биты.
 fn checked_u32(value: JsValue) -> Option<u32> {
     let number = value.as_f64()?;
-    if number.is_finite() && number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number)
-    {
-        Some(number as u32)
-    } else {
-        None
-    }
+    let integer = number as u32;
+    // Every u32 is exactly representable in f64. Fractions, out-of-range
+    // values, infinities and NaN cannot survive this round trip unchanged.
+    (f64::from(integer) == number).then_some(integer)
 }
 
-fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
-    checked_u32(value)
-        .map(|index| index as usize)
+fn snapshot_output(
+    snapshot: &labcolors_core::program_wire::ProgramSnapshotV1,
+    index: JsValue,
+) -> Result<&labcolors_core::program_wire::ProgramPaintOutputV1, JsValue> {
+    checked_u32(index)
+        .and_then(|i| snapshot.outputs().get(i as usize))
         .ok_or_else(output_index_error)
+}
+
+fn owned_rgb(color: labcolors_core::Srgb8) -> Result<js_sys::Uint8Array, JsValue> {
+    let [red, green, blue] = color.bytes();
+    copy_output_rgb(red, green, blue)
 }
 
 /// Единственный публичный манифест численных возможностей.
@@ -638,12 +644,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<u32, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .outputs()
-            .get(index)
-            .map(|output| output.slot())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(&self.inner, index)?.slot())
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -651,14 +652,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<js_sys::Uint8Array, JsValue> {
-        let index = checked_output_index(index)?;
-        let output = self
-            .inner
-            .outputs()
-            .get(index)
-            .ok_or_else(output_index_error)?;
-        let [red, green, blue] = output.source().bytes();
-        copy_output_rgb(red, green, blue)
+        owned_rgb(snapshot_output(&self.inner, index)?.source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -666,12 +660,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<f64, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .outputs()
-            .get(index)
-            .map(|output| output.opacity())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(&self.inner, index)?.opacity())
     }
 }
 
@@ -1164,27 +1153,15 @@ impl ProgramAttachedSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<u32, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.slot())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(self.inner.snapshot(), index)?.slot())
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
     pub fn output_rgb(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<Box<[u8]>, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(output_index_error)
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(snapshot_output(self.inner.snapshot(), index)?.source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1192,13 +1169,7 @@ impl ProgramAttachedSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<f64, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.opacity())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(self.inner.snapshot(), index)?.opacity())
     }
 
     #[wasm_bindgen(js_name = hasRender)]
@@ -1232,13 +1203,8 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
-    pub fn output_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .output()
-            .source()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn output_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.output().source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1291,10 +1257,8 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
-    pub fn terminal_composite_rgb(&self) -> Option<Box<[u8]>> {
-        self.inner
-            .terminal_composite()
-            .map(|value| value.bytes().to_vec().into_boxed_slice())
+    pub fn terminal_composite_rgb(&self) -> Result<Option<js_sys::Uint8Array>, JsValue> {
+        self.inner.terminal_composite().map(owned_rgb).transpose()
     }
 }
 
@@ -1311,13 +1275,8 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
-    pub fn output_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .output()
-            .source()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn output_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.output().source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1379,12 +1338,8 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
-    pub fn terminal_composite_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .terminal_composite()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn terminal_composite_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.terminal_composite())
     }
 }
 

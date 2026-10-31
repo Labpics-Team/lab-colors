@@ -39,6 +39,8 @@ function rejects(invoke, error) {
 }
 
 const invalidNumbers = [
+  ["below-zero-ulp", -Number.MIN_VALUE], ["above-zero-ulp", Number.MIN_VALUE],
+  ["above-one-ulp", 1 + Number.EPSILON], ["near-max-fraction", 0xffff_ffff - 0.5],
   ["negative", -1], ["fraction", 0.5], ["fraction-truncates-to-one", 1.5],
   ["overflow", 2 ** 32], ["overflow-wraps-to-one", 2 ** 32 + 1],
   ["negative-wraps-to-one", 1 - 2 ** 32], ["NaN", Number.NaN],
@@ -236,7 +238,7 @@ for (const field of ["stream", "observed-revision", "unknown-revision", "surface
 }
 
 test("exact u32 stream and u64 revision endpoints remain usable", () => {
-  for (const stream of [0, 0xffff_ffff]) {
+  for (const stream of [-0, 0, 0x8000_0000, 0xffff_ffff]) {
     const runtime = compileProgramWire(wire, stream);
     const held = [];
     try {

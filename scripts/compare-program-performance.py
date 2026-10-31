@@ -83,6 +83,26 @@ metadata = {
     "samplesAfterWarmup": 3,
     "rounds": 2,
 }
+
+
+def read_measurement(output, label, pattern, nodes):
+    measurement = json.loads(output)
+    expected = metadata["samplesAfterWarmup"]
+    if (measurement["wasmSha256"] != metadata["wasmSha256"][label]
+            or measurement["pattern"] != pattern or measurement["nodes"] != nodes
+            or measurement["samples"] != expected or len(measurement["samplesAfterWarmup"]) != expected):
+        raise ValueError("consumer output does not match the requested artifact and workload")
+    cycles = [measurement["cold"], *measurement["samplesAfterWarmup"]]
+    if len({cycle["checksum"] for cycle in cycles}) != 1:
+        raise ValueError("consumer output differs between cold and warmed cycles")
+    for cycle in cycles:
+        if not cycle["updatesMs"] or not all(
+                type(value) in (int, float) and math.isfinite(value) and value >= 0
+                for value in (cycle["compileMs"], cycle["cycleMs"], *cycle["updatesMs"])):
+            raise ValueError("consumer cycle has no updates or invalid timings")
+    return measurement
+
+
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
 print(json.dumps({"environment": metadata}), flush=True)
 observations = []
@@ -95,11 +115,12 @@ scenarios.extend([(1024, ("ring",)), (2048, ("ring",))])
 deadline = time.monotonic() + args.budget
 for nodes, patterns in scenarios:
     for pattern in patterns:
-        for round_index in range(2):
+        for round_index in range(metadata["rounds"]):
             order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
             for label in order:
                 started = time.monotonic()
-                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes),
+                           str(metadata["samplesAfterWarmup"])]
                 record = {"variant": label, "pattern": pattern, "nodes": nodes, "round": round_index}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -111,10 +132,10 @@ for nodes, patterns in scenarios:
                         record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
                         if process.returncode == 0:
                             try:
-                                record["measurement"] = json.loads(process.stdout)
+                                record["measurement"] = read_measurement(process.stdout, label, pattern, nodes)
                                 record["status"] = "completed"
-                            except ValueError:
-                                record["status"] = "invalid-output"
+                            except (ValueError, TypeError, KeyError, OverflowError) as error:
+                                record.update(status="invalid-output", error=str(error))
                         else:
                             record["status"] = "failed"
                     except subprocess.TimeoutExpired as error:
@@ -137,10 +158,11 @@ for nodes, patterns in scenarios:
         for label in roots:
             records = [r for r in matching if r["variant"] == label]
             row[label] = {"statuses": [r["status"] for r in records]}
-            if len(records) == 2 and all(r["status"] == "completed" for r in records):
+            if len(records) == metadata["rounds"] and all(r["status"] == "completed" for r in records):
                 measurements = [r["measurement"] for r in records]
                 samples = [s for m in measurements for s in m["samplesAfterWarmup"]]
                 row[label].update(
+                    coldCycleMedianMs=statistics.median(m["cold"]["cycleMs"] for m in measurements),
                     compileMedianMs=statistics.median(s["compileMs"] for s in samples),
                     cycleMedianMs=statistics.median(s["cycleMs"] for s in samples),
                     updatesMedianMs=statistics.median(sum(s["updatesMs"]) for s in samples),
@@ -149,18 +171,19 @@ for nodes, patterns in scenarios:
                     checksums=sorted({s["checksum"] for s in samples}),
                 )
         if all("compileMedianMs" in row[label] for label in roots):
-            if row["baseline"]["checksums"] != row["candidate"]["checksums"]:
+            if (len(row["baseline"]["checksums"]) != 1
+                    or row["baseline"]["checksums"] != row["candidate"]["checksums"]):
                 raise SystemExit(f"output checksum changed: {pattern}/{nodes}")
+            row["coldCycleSpeedup"] = row["baseline"]["coldCycleMedianMs"] / row["candidate"]["coldCycleMedianMs"]
             row["compileSpeedup"] = row["baseline"]["compileMedianMs"] / row["candidate"]["compileMedianMs"]
             row["cycleSpeedup"] = row["baseline"]["cycleMedianMs"] / row["candidate"]["cycleMedianMs"]
             row["updatesSpeedup"] = row["baseline"]["updatesMedianMs"] / row["candidate"]["updatesMedianMs"]
         summary.append(row)
 (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 print(json.dumps(summary, indent=2), flush=True)
-# A timeout remains an incomplete observation, never a successful latency sample.
-# Non-timeout consumer failures invalidate the comparison.
-if any(record["status"] not in ("completed", "timeout", "budget-exhausted") for record in observations):
-    raise SystemExit("consumer failure: inspect retained observations")
+# Keep partial diagnostics without reporting a successful comparison.
+if any(record["status"] != "completed" for record in observations):
+    raise SystemExit("incomplete consumer comparison: inspect retained observations")
 
 
 def summarize_profile(profile):
@@ -255,7 +278,8 @@ if args.profile:
         }
         command = ["node", "--cpu-prof", f"--cpu-prof-dir={profile_root}",
                    f"--cpu-prof-name={profile_path.name}", "--cpu-prof-interval=1000",
-                   str(memory_observer), str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                   str(memory_observer), str(args.harness), str(roots[label]), pattern, str(nodes),
+                   str(metadata["samplesAfterWarmup"])]
         started = time.monotonic()
         remaining = profile_deadline - started
         if remaining <= 0:
@@ -271,16 +295,11 @@ if args.profile:
                 record["status"] = "failed"
                 if process.returncode == 0:
                     try:
-                        measurement = json.loads(process.stdout)
-                        samples = [measurement["cold"], *measurement["samplesAfterWarmup"]]
-                        checksums = sorted({sample["checksum"] for sample in samples})
+                        measurement = read_measurement(process.stdout, label, pattern, nodes)
+                        checksums = [measurement["cold"]["checksum"]]
                         reference = next(row[label] for row in summary
                                          if row["pattern"] == pattern and row["nodes"] == nodes)
-                        if (measurement["wasmSha256"] != record["wasmSha256"]
-                                or measurement["pattern"] != pattern or measurement["nodes"] != nodes
-                                or measurement["samples"] != 3 or len(samples) != 4
-                                or len(checksums) != 1
-                                or ("checksums" in reference and checksums != reference["checksums"])):
+                        if checksums != reference["checksums"]:
                             raise ValueError("profiled consumer differs from the measured workload")
                         memory = json.loads(memory_path.read_text())
                         if (memory["phase"] != "after-consumer"
@@ -311,6 +330,5 @@ if args.profile:
         print(json.dumps({"cpuProfile": {key: value for key, value in record.items()
                                          if key != "stdout" or record["status"] != "completed"}}),
               flush=True)
-    if any(record["status"] not in ("completed", "timeout", "budget-exhausted")
-           for record in profiles["observations"]):
-        raise SystemExit("profiled consumer failure: inspect retained diagnostics")
+    if any(record["status"] != "completed" for record in profiles["observations"]):
+        raise SystemExit("incomplete consumer profile: inspect retained diagnostics")
