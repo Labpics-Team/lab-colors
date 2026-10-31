@@ -71,12 +71,14 @@ metadata = {
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
 print(json.dumps({"environment": metadata}), flush=True)
 observations = []
-scenarios = {
-    nodes: ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ())
+scenarios = [
+    (nodes, ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ()))
     for nodes in (8, 64, 256, 1024, 4096)
-}
+]
+# Keep all original observations ahead of the connected scaling cases.
+scenarios.extend([(1024, ("ring",)), (2048, ("ring",))])
 deadline = time.monotonic() + args.budget
-for nodes, patterns in scenarios.items():
+for nodes, patterns in scenarios:
     for pattern in patterns:
         for round_index in range(2):
             order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
@@ -113,7 +115,7 @@ for nodes, patterns in scenarios.items():
                       flush=True)
 
 summary = []
-for nodes, patterns in scenarios.items():
+for nodes, patterns in scenarios:
     for pattern in patterns:
         row = {"pattern": pattern, "nodes": nodes}
         matching = [r for r in observations if r["pattern"] == pattern and r["nodes"] == nodes]

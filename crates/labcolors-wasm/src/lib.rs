@@ -618,42 +618,16 @@ impl ProgramRuntime {
         let surface_count = checked_u32(surface_count)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
             as usize;
-        let row_bytes = surface_count
-            .checked_mul(3)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        let expected = scenario_ids
-            .len()
-            .checked_mul(row_bytes)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        if expected != surfaces.len() {
-            return Err(to_program_js_error(
-                E::Update,
-                ProgramOperation::UpdateObserved,
-            ));
-        }
-        let mut scenarios = Vec::new();
-        scenarios
-            .try_reserve_exact(scenario_ids.len())
-            .map_err(program_observation_reservation_error)?;
-        for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-            let start = row * row_bytes;
-            let mut values = Vec::new();
-            values
-                .try_reserve_exact(surface_count)
-                .map_err(program_observation_reservation_error)?;
-            for offset in 0..surface_count {
-                let byte = start + offset * 3;
-                values.push(labcolors_core::Srgb8::new([
-                    surfaces[byte],
-                    surfaces[byte + 1],
-                    surfaces[byte + 2],
-                ]));
-            }
-            scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
-                scenario_id,
-                values,
-            ));
-        }
+        let scenarios = decode_observed_scenarios(scenario_ids, surfaces, surface_count)
+            .map_err(|error| match error {
+                ObservedScenarioDecodeError::InvalidShape => {
+                    to_program_js_error(E::Update, ProgramOperation::UpdateObserved)
+                }
+                ObservedScenarioDecodeError::ScenarioAllocation(error)
+                | ObservedScenarioDecodeError::SurfaceAllocation(error) => {
+                    program_observation_reservation_error(error)
+                }
+            })?;
         self.inner
             .update_observed(revision, &scenarios)
             .map(|inner| ProgramSnapshot { inner })
@@ -779,44 +753,40 @@ fn attachment_snapshot_error(operation: ProgramOperation) -> JsValue {
     )
 }
 
-fn decode_attachment_scenarios(
+enum ObservedScenarioDecodeError {
+    InvalidShape,
+    ScenarioAllocation(std::collections::TryReserveError),
+    SurfaceAllocation(std::collections::TryReserveError),
+}
+
+// Один owned decoder обслуживает обе runtime-обёртки. Проекция ошибок
+// остаётся снаружи, поэтому код копирования не специализируется по операции.
+#[inline(never)]
+fn decode_observed_scenarios(
     scenario_ids: &[u32],
     surfaces: &[u8],
-    surface_count: JsValue,
-    operation: ProgramOperation,
-) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, JsValue> {
-    let surface_count =
-        checked_u32(surface_count).ok_or_else(|| attachment_snapshot_error(operation))? as usize;
+    surface_count: usize,
+) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, ObservedScenarioDecodeError> {
     let row_bytes = surface_count
         .checked_mul(3)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
+        .ok_or(ObservedScenarioDecodeError::InvalidShape)?;
     let expected = scenario_ids
         .len()
         .checked_mul(row_bytes)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
+        .ok_or(ObservedScenarioDecodeError::InvalidShape)?;
     if expected != surfaces.len() {
-        return Err(attachment_snapshot_error(operation));
+        return Err(ObservedScenarioDecodeError::InvalidShape);
     }
     let mut scenarios = Vec::new();
     scenarios
         .try_reserve_exact(scenario_ids.len())
-        .map_err(|_| {
-            attachment_js_error(
-                "Program attachment scenario allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
+        .map_err(ObservedScenarioDecodeError::ScenarioAllocation)?;
     for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
         let start = row * row_bytes;
         let mut values = Vec::new();
-        values.try_reserve_exact(surface_count).map_err(|_| {
-            attachment_js_error(
-                "Program attachment surface allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
+        values
+            .try_reserve_exact(surface_count)
+            .map_err(ObservedScenarioDecodeError::SurfaceAllocation)?;
         for offset in 0..surface_count {
             let byte = start + offset * 3;
             values.push(labcolors_core::Srgb8::new([
@@ -831,6 +801,29 @@ fn decode_attachment_scenarios(
         ));
     }
     Ok(scenarios)
+}
+
+fn decode_attachment_scenarios(
+    scenario_ids: &[u32],
+    surfaces: &[u8],
+    surface_count: JsValue,
+    operation: ProgramOperation,
+) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, JsValue> {
+    let surface_count =
+        checked_u32(surface_count).ok_or_else(|| attachment_snapshot_error(operation))? as usize;
+    decode_observed_scenarios(scenario_ids, surfaces, surface_count).map_err(|error| match error {
+        ObservedScenarioDecodeError::InvalidShape => attachment_snapshot_error(operation),
+        ObservedScenarioDecodeError::ScenarioAllocation(_) => attachment_js_error(
+            "Program attachment scenario allocation failed",
+            "program_attachment_resource_exhausted",
+            operation,
+        ),
+        ObservedScenarioDecodeError::SurfaceAllocation(_) => attachment_js_error(
+            "Program attachment surface allocation failed",
+            "program_attachment_resource_exhausted",
+            operation,
+        ),
+    })
 }
 
 /// Создаёт один публичный attachment и передаёт все внешние эффекты в `host`.
