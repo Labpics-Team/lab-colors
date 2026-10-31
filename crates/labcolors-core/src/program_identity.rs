@@ -56,7 +56,10 @@ mod refinement {
             #[cfg(test)] with_trace: bool,
         ) -> Result<usize, ProgramCompileError> {
             let vertex_count = graph.colors.len();
-            self.cell_of = partition_cells(&partition, vertex_count)?;
+            self.cell_of
+                .try_reserve_exact(vertex_count)
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            self.cell_of.resize(vertex_count, usize::MAX);
             self.order
                 .try_reserve_exact(vertex_count)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
@@ -82,7 +85,7 @@ mod refinement {
             let mut maximum_records = 0_usize;
             let mut maximum_atoms = 0_usize;
             self.recycled_singletons = partition.cells;
-            for vertices in &self.recycled_singletons {
+            for (cell_id, vertices) in self.recycled_singletons.iter().enumerate() {
                 if vertices.is_empty() {
                     return Err(ProgramCompileError::InternalInvariant);
                 }
@@ -94,6 +97,14 @@ mod refinement {
                     maximum_records = maximum_records.max(len);
                 }
                 for &vertex in vertices {
+                    let slot = self
+                        .cell_of
+                        .get_mut(vertex)
+                        .ok_or(ProgramCompileError::InternalInvariant)?;
+                    if *slot != usize::MAX {
+                        return Err(ProgramCompileError::InternalInvariant);
+                    }
+                    *slot = cell_id;
                     self.vertex_pos[vertex] = self.order.len();
                     self.order.push(vertex);
                     if len > 1 {
@@ -116,6 +127,10 @@ mod refinement {
                     signature_start: physical_begin,
                     dirty_cursor: 0,
                 });
+            }
+            // Each indexed member was in range and distinct: length now proves coverage.
+            if self.order.len() != vertex_count {
+                return Err(ProgramCompileError::InternalInvariant);
             }
             // Keep only buffers whose retained capacity cannot follow a large
             // parent into a tiny descendant. Refinement never merges singletons.
@@ -337,20 +352,36 @@ mod refinement {
         if partition.is_discrete() {
             return Ok(EquitablePartitionV1(partition));
         }
-        let mut workspace = Workspace::default();
-        let non_singletons = workspace.prepare(
-            graph,
-            partition,
-            #[cfg(test)]
-            trace.is_some(),
-        )?;
-        run(
-            &mut workspace,
-            graph,
-            non_singletons,
-            #[cfg(test)]
-            trace,
-        )
+        // Only the final partition survives the refinement phase. Its output
+        // allocations can reuse memory occupied by the worklists and signatures.
+        let (order, cells, mut by_start, mut singletons) = {
+            let mut workspace = Workspace::default();
+            let non_singletons = workspace.prepare(
+                graph,
+                partition,
+                #[cfg(test)]
+                trace.is_some(),
+            )?;
+            run(
+                &mut workspace,
+                graph,
+                non_singletons,
+                #[cfg(test)]
+                trace,
+            )?;
+            (
+                workspace.order,
+                workspace.cells,
+                workspace.cell_of,
+                workspace.recycled_singletons,
+            )
+        };
+        Ok(EquitablePartitionV1(materialize(
+            &order,
+            &cells,
+            &mut by_start,
+            &mut singletons,
+        )?))
     }
 
     // Scratch ownership stays in the caller; every round only borrows it.
@@ -360,7 +391,7 @@ mod refinement {
         graph: &CanonicalGraphV1,
         mut non_singletons: usize,
         #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
-    ) -> Result<EquitablePartitionV1, ProgramCompileError> {
+    ) -> Result<(), ProgramCompileError> {
         let Workspace {
             cell_of,
             order,
@@ -374,9 +405,9 @@ mod refinement {
             records,
             groups,
             split_parents,
-            recycled_singletons,
             #[cfg(test)]
             trace_starts,
+            ..
         } = workspace;
 
         loop {
@@ -609,12 +640,7 @@ mod refinement {
             group_dirty_by_cell(cell_of, cells, marked, dirty, next_dirty);
         }
 
-        Ok(EquitablePartitionV1(materialize(
-            order,
-            cells,
-            cell_of,
-            recycled_singletons,
-        )?))
+        Ok(())
     }
 }
 
@@ -2999,6 +3025,11 @@ mod ordering {
                 root = child;
             }
         }
+        // Strict order has a unique result. Equal keys retain the original
+        // heap permutation, including the vertices compared by signature.
+        if (1..n).all(|i| operation(i - 1, i, false)) {
+            return;
+        }
         for root in (0..n / 2).rev() {
             sift(root, n, operation);
         }
@@ -3058,6 +3089,9 @@ mod ordering {
                 });
                 assert_eq!(values, expected);
                 assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
+                if shape == 0 {
+                    assert_eq!(comparisons, values.len() - 1);
+                }
                 assert!(
                     comparisons <= 4 * values.len() * 12,
                     "comparison bound {comparisons}"
