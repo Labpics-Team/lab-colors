@@ -64,16 +64,20 @@ export function invalid(message) {
 }
 
 // Диагностика не преобразует отклонённое значение и не вызывает его hooks.
-export function u32Value(value, what) {
+function indexedPath(what, index) {
+  return index === undefined ? what : what + "[" + index + "]";
+}
+
+export function u32Value(value, what, index) {
   if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
-    invalid(`${what} must be a u32 (received type ${typeof value})`);
+    invalid(indexedPath(what, index) + " must be a u32 (received type " + typeof value + ")");
   }
   return value >>> 0;
 }
 
-export function byteValue(value, what) {
+export function byteValue(value, what, index) {
   if (!Number.isInteger(value) || value < 0 || value > 0xff) {
-    invalid(`${what} must be a byte (received type ${typeof value})`);
+    invalid(indexedPath(what, index) + " must be a byte (received type " + typeof value + ")");
   }
   return value;
 }
@@ -167,11 +171,14 @@ export function candidateList(candidates, what) {
   return indexedValues(candidates, length, what);
 }
 
-export function rgbBytes(rgb, what) {
-  if (inputArrayLength(rgb, what) !== 3) {
-    invalid(`${what} must be an [r, g, b] triple`);
-  }
-  return indexedValues(rgb, 3, what).map((channel, index) => byteValue(channel, `${what}[${index}]`));
+// Keep the three caller-owned reads ordered and complete before validation.
+// The packed number is internal; the wire still carries R, G, B in that order.
+export function rgb24(rgb, what) {
+  if (inputArrayLength(rgb, what) !== 3) invalid(what + " must be an [r, g, b] triple");
+  const r = inputProperty(rgb, 0, what);
+  const g = inputProperty(rgb, 1, what);
+  const b = inputProperty(rgb, 2, what);
+  return byteValue(r, what, 0) | (byteValue(g, what, 1) << 8) | (byteValue(b, what, 2) << 16);
 }
 
 /** Little-endian section payload. Only initialized bytes reach the wire. */
@@ -202,5 +209,10 @@ export class ByteSink {
   u32(value) { const at = this.#reserve(4); this.#view.setUint32(at, value, true); }
   u64(value) { const at = this.#reserve(8); this.#view.setBigUint64(at, value, true); }
   f64Bits(value) { const at = this.#reserve(8); this.#view.setFloat64(at, value, true); }
-  rgb(value) { const at = this.#reserve(3); this.#data.set(value, at); }
+  rgb24(value) {
+    const at = this.#reserve(3);
+    this.#data[at] = value;
+    this.#data[at + 1] = value >>> 8;
+    this.#data[at + 2] = value >>> 16;
+  }
 }

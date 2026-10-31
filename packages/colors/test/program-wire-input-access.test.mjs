@@ -51,3 +51,19 @@ for (const property of ["id", "rgb", "opacity"]) {
     assert.deepEqual(builder.finish(), before);
   });
 }
+
+
+test("source RGB stores asymmetric unsigned channel bytes and snapshots each index once", () => {
+  const reads = [];
+  const rgb = new Proxy([0x80, 0x01, 0xff], {
+    get(target, key) {
+      reads.push(key);
+      return Reflect.get(target, key);
+    },
+  });
+  const wire = new ProgramWireBuilderV1().source(17, rgb).finish();
+  assert.deepEqual(reads, ["length", "0", "1", "2"]);
+  // Header, source count and ID precede the first source's three wire bytes.
+  const offset = 4 + 2 + 4 + 4 + 4;
+  assert.deepEqual([...wire.subarray(offset, offset + 3)], [0x80, 0x01, 0xff]);
+});

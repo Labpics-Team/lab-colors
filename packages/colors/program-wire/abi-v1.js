@@ -22,7 +22,7 @@ import {
   inputArrayLength,
   indexedValues,
   candidateList,
-  rgbBytes,
+  rgb24,
   ByteSink
 } from "./encoding.js";
 export {
@@ -65,10 +65,10 @@ export class ProgramWireBuilderV1 {
 
   source(id, rgb) {
     const checkedId = u32Value(id, "source id");
-    const checkedRgb = rgbBytes(rgb, "source rgb");
+    const checkedRgb = rgb24(rgb, "source rgb");
     const sink = this.entry("sources");
     sink.u32(checkedId);
-    sink.rgb(checkedRgb);
+    sink.rgb24(checkedRgb);
     return this;
   }
 
@@ -91,7 +91,7 @@ export class ProgramWireBuilderV1 {
         }
         return {
           id: u32Value(inputProperty(candidate, "id", "candidate id"), "candidate[" + index + "] id"),
-          rgb: rgbBytes(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
+          rgb: rgb24(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
           opacity: opacityValue(inputProperty(candidate, "opacity", "candidate opacity"), "candidate[" + index + "] opacity"),
         };
       },
@@ -102,7 +102,7 @@ export class ProgramWireBuilderV1 {
     sink.u32(checked.length);
     for (const candidate of checked) {
       sink.u32(candidate.id);
-      sink.rgb(candidate.rgb);
+      sink.rgb24(candidate.rgb);
       sink.f64Bits(candidate.opacity);
     }
     return this;
@@ -220,12 +220,12 @@ export class ProgramWireBuilderV1 {
   exactVisibleUnary(hard, id, occurrence, expectedRgb) {
     const checkedId = u32Value(id, "constraint id");
     const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
-    const checkedRgb = rgbBytes(expectedRgb, "expected rgb");
+    const checkedRgb = rgb24(expectedRgb, "expected rgb");
     const sink = this.constraintEntry(hard);
     sink.u32(checkedId);
     sink.u8(KIND_EXACT_VISIBLE_UNARY);
     sink.u32(checkedOccurrence);
-    sink.rgb(checkedRgb);
+    sink.rgb24(checkedRgb);
     return this;
   }
 
@@ -256,9 +256,10 @@ export class ProgramWireBuilderV1 {
   exactIntrinsicRelationHard(id, reference, candidates) {
     const checkedId = u32Value(id, "constraint id");
     const checkedReference = u32Value(reference, "relation reference");
-    const checked = candidateList(candidates, "relation candidates").map(
-      (candidate, index) => u32Value(candidate, "relation candidate[" + index + "]"),
-    );
+    const checked = candidateList(candidates, "relation candidates");
+    for (let i = 0; i < checked.length; i++) {
+      checked[i] = u32Value(checked[i], "relation candidate", i);
+    }
     const sink = this.constraintEntry(true);
     sink.u32(checkedId);
     sink.u8(KIND_EXACT_INTRINSIC_RELATION);
