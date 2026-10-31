@@ -314,7 +314,7 @@
   "packages/colors/README.md": "aee12c0353af285bb098720db8714efa15881588",
   "packages/colors/bench/program.mjs": "f3936e97fcb436f62dd86161ebeed75766146ff6",
   "packages/colors/bench/wasm.json": "43138288aaf28fe3daa90fce0d8b93075b39e355",
-  "packages/colors/bench/wire-construction.mjs": "0963f0940799dc7ea319d7f17f5e234e02c4ee90",
+  "packages/colors/bench/wire-construction.mjs": "5c068378e75b615eb8cdc26bf2539deb8d2a551a",
   "packages/colors/index.d.ts": "363864b1285e61bdfdd2f4da396137084a85c444",
   "packages/colors/index.js": "739a60f51b324c5a39b32c1bb5ca81af487b683f",
   "packages/colors/package-lock.json": "9afce10f6147f8adcc5000ff978211d5ec10fe36",
@@ -616,7 +616,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "c7c63568e1a2d7a15e2f85d961a733dc35aacb41b0fac5c1cfa80161762eff4d",
+ "record_sha256": "6f587bfd01c2200e2ec6725e892b9f62d19f977b55f5fbae60489b223064e7af",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

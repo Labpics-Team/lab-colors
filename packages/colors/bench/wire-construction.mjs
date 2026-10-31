@@ -10,8 +10,8 @@ const sizes = [1, 128, 4096];
 async function measure(root) {
   const results = [];
   for (const version of [1, 2]) {
-    const abi = await import(pathToFileURL(resolve(root, `program-wire/abi-v.js`)));
-    const Builder = abi[`ProgramWireBuilderV`];
+    const abi = await import(pathToFileURL(resolve(root, "program-wire/abi-v" + version + ".js")));
+    const Builder = abi["ProgramWireBuilderV" + version];
     for (const count of sizes) {
       const samples = [];
       for (let sample = -3; sample < 7; sample++) {
