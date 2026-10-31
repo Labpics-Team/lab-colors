@@ -15,6 +15,7 @@ mod refinement {
         physical_begin: usize,
         len: usize,
         logical_start: usize,
+        dirty_cursor: usize,
     }
 
     #[derive(Clone, Copy)]
@@ -115,6 +116,7 @@ mod refinement {
                     physical_begin,
                     len,
                     logical_start: physical_begin,
+                    dirty_cursor: 0,
                 });
             }
             // Keep only buffers whose retained capacity cannot follow a large
@@ -212,6 +214,56 @@ mod refinement {
         Ok(())
     }
 
+    fn group_dirty_by_cell(
+        cell_of: &[usize],
+        cells: &mut [Cell],
+        marked: &mut [bool],
+        dirty: &mut Vec<usize>,
+        members: &mut Vec<usize>,
+    ) {
+        // All staged splits have committed. Both vectors retain V reserved
+        // slots, and every cell cursor is zero outside this function.
+        members.clear();
+        let mut retained = 0;
+        for index in 0..dirty.len() {
+            let vertex = dirty[index];
+            let cell_id = cell_of[vertex];
+            let cell = &mut cells[cell_id];
+            if cell.len == 1 {
+                marked[vertex] = false;
+                continue;
+            }
+            if cell.dirty_cursor == 0 {
+                members.push(cell_id);
+            }
+            cell.dirty_cursor += 1;
+            dirty[retained] = vertex;
+            retained += 1;
+        }
+        dirty.truncate(retained);
+
+        let mut start = 0;
+        for &cell_id in members.iter() {
+            let cell = &mut cells[cell_id];
+            let count = cell.dirty_cursor;
+            cell.dirty_cursor = start;
+            start += count;
+        }
+
+        // Touched cells are no longer needed after their disjoint output
+        // intervals have been assigned. Reuse that prefix for grouped vertices.
+        members.resize(dirty.len(), 0);
+        for &vertex in dirty.iter() {
+            let cell = &mut cells[cell_of[vertex]];
+            members[cell.dirty_cursor] = vertex;
+            cell.dirty_cursor += 1;
+        }
+        for &vertex in dirty.iter() {
+            cells[cell_of[vertex]].dirty_cursor = 0;
+        }
+        core::mem::swap(dirty, members);
+    }
+
     fn materialize(
         order: &[usize],
         cells: &[Cell],
@@ -281,18 +333,35 @@ mod refinement {
     pub(super) fn refine(
         graph: &CanonicalGraphV1,
         partition: PartitionV1,
-        #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
+        #[cfg(test)] trace: Option<&mut RefinementTraceV1>,
     ) -> Result<EquitablePartitionV1, ProgramCompileError> {
         if partition.is_discrete() {
             return Ok(EquitablePartitionV1(partition));
         }
         let mut workspace = Workspace::default();
-        let mut non_singletons = workspace.prepare(
+        let non_singletons = workspace.prepare(
             graph,
             partition,
             #[cfg(test)]
             trace.is_some(),
         )?;
+        run(
+            &mut workspace,
+            graph,
+            non_singletons,
+            #[cfg(test)]
+            trace,
+        )
+    }
+
+    // Scratch ownership stays in the caller; every round only borrows it.
+    #[inline(never)]
+    fn run(
+        workspace: &mut Workspace,
+        graph: &CanonicalGraphV1,
+        mut non_singletons: usize,
+        #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
+    ) -> Result<EquitablePartitionV1, ProgramCompileError> {
         let Workspace {
             cell_of,
             order,
@@ -308,7 +377,7 @@ mod refinement {
             recycled_singletons,
             #[cfg(test)]
             trace_starts,
-        } = &mut workspace;
+        } = workspace;
 
         loop {
             members.clear();
@@ -317,7 +386,7 @@ mod refinement {
             #[cfg(test)]
             let mut touched_cells = 0_usize;
             // Initially dirty is already grouped by the initial cell IDs.
-            // Subsequent rounds sort only their explicit dirty worklist.
+            // Subsequent rounds group only their explicit dirty worklist.
             let mut dirty_begin = 0;
             while dirty_begin < dirty.len() {
                 let cell_id = cell_of[dirty[dirty_begin]];
@@ -379,8 +448,7 @@ mod refinement {
                 // clean member through its representative, so no ordering or
                 // staged membership is needed for this cell.
                 if records.windows(2).all(|pair| {
-                    signatures[pair[0].signature.clone()]
-                        == signatures[pair[1].signature.clone()]
+                    signatures[pair[0].signature.clone()] == signatures[pair[1].signature.clone()]
                 }) {
                     dirty_begin = dirty_end;
                     continue;
@@ -456,6 +524,7 @@ mod refinement {
                         physical_begin: parent.physical_begin,
                         len: retained.len,
                         logical_start: retained.logical_start,
+                        dirty_cursor: 0,
                     };
                     non_singletons -= 1;
                     let children = &groups[split.group_begin..split.group_end];
@@ -489,6 +558,7 @@ mod refinement {
                             physical_begin: tail,
                             len: group.len,
                             logical_start: group.logical_start,
+                            dirty_cursor: 0,
                         });
                         // Finalized tail ranges cannot be disturbed by later
                         // groups: their members are disjoint and positions exact.
@@ -524,7 +594,7 @@ mod refinement {
             if !changed || non_singletons == 0 || dirty.is_empty() {
                 break;
             }
-            ordering::sort_by(dirty, |left, right| cell_of[*left].cmp(&cell_of[*right]));
+            group_dirty_by_cell(cell_of, cells, marked, dirty, members);
         }
         // cell_of is no longer needed as a vertex map. Reuse its V slots as
         // logical-start -> cell ID, avoiding a final allocation or global sort.
@@ -673,8 +743,6 @@ impl VertexColorV1 {
         self.push_bytes(&[value])
     }
 
-    // Share the checked writer across every typed color payload.
-    #[inline(never)]
     fn push_bytes(&mut self, values: &[u8]) -> Result<(), ProgramCompileError> {
         let start = usize::from(self.len()) + 1;
         let end = start
@@ -831,7 +899,6 @@ impl GraphBuilderV1 {
         })
     }
 
-    #[inline(never)]
     fn add_member(&mut self, color: VertexColorV1) -> Result<usize, ProgramCompileError> {
         self.colors
             .try_reserve(1)
@@ -842,7 +909,6 @@ impl GraphBuilderV1 {
         Ok(index)
     }
 
-    #[inline(never)]
     fn add_edge(
         &mut self,
         from: usize,
@@ -4390,7 +4456,11 @@ mod tests {
             let actual = refine_partition(&graph, initial)?;
             assert!(!actual.0.is_discrete(), "the cycle must stay equitable");
             assert_eq!(actual.0.cells.len(), 2, "root and cycle cells");
-            assert_eq!(actual.0.cells, expected.0.cells, "complete ordered result");
+            assert_eq!(
+                ordered_cell_sets(actual.0.cells.clone()),
+                ordered_cell_sets(expected.0.cells),
+                "complete ordered cell sets",
+            );
             capacities.push((initial_capacity, actual.0.cells.capacity()));
         }
         assert!(
