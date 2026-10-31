@@ -1,4 +1,4 @@
-// Shared canonical scalar encoding for the two supported Program envelopes.
+// Общие канонические скаляры поддерживаемых версий Program wire.
 // Каноническая wire-грамматика авторского Draft-графа Program (v1) — JS-зеркало
 // Rust-модуля crates/labcolors-core/src/program/wire.rs. Одни байты — одна
 // декларация: заголовок LCPW + u16 version + u32 total_len, секции строго в

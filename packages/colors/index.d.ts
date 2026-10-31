@@ -34,6 +34,7 @@ export type ProgramCompileErrorCode =
   | ProgramInfrastructureErrorCode
   | "program_wire"
   | "program_compile"
+  | "program_unsupported"
   | "program_family_artifacts_required"
   | "program_instantiate";
 export type ProgramUpdateErrorCode = "program_update" | ProgramInfrastructureErrorCode;
