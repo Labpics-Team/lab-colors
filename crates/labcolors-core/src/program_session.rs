@@ -2512,12 +2512,78 @@ where
         stream: ObservationStreamId,
         family_artifacts: FamilyArtifactBundleV2,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateFailureV2> {
-        instantiate_program_session(&self.owner_generation, stream, family_artifacts, |plan| {
-            plan
-        })
+        let family_artifacts = match family_artifacts.bind(&self.owner_generation.families) {
+            Ok(bound) => bound,
+            Err(failure) => {
+                let (cause, family_artifacts) = failure.into_parts();
+                let cause = match cause {
+                    FamilyArtifactBindErrorV2::Contract(cause) => {
+                        ProgramSessionInstantiateError::FamilyArtifacts(cause)
+                    }
+                    FamilyArtifactBindErrorV2::ResourceExhausted => {
+                        ProgramSessionInstantiateError::ResourceExhausted
+                    }
+                };
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts,
+                });
+            }
+        };
+        let bindings = self
+            .owner_generation
+            .binding_template
+            .try_clone_v1()
+            .map_err(map_session_instantiate_error);
+        let bindings = match bindings {
+            Ok(bindings) => bindings,
+            Err(cause) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
+        let workspace = self
+            .owner_generation
+            .graph
+            .new_workspace()
+            .map_err(map_session_instantiate_error);
+        let workspace = match workspace {
+            Ok(workspace) => workspace,
+            Err(cause) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
+        let presentation_cache =
+            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations);
+        let presentation_cache = match presentation_cache {
+            Ok(cache) => cache,
+            Err(()) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause: ProgramSessionInstantiateError::ResourceExhausted,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
+        Ok(Session::new(
+            stream,
+            ProgramSessionPlan {
+                owner_generation: Shared::downgrade(&self.owner_generation),
+                bindings,
+                workspace,
+                presentation_cache,
+                evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                family_artifacts,
+            },
+        ))
     }
 }
 
+#[cfg(test)]
 fn instantiate_program_session<Evaluation, Plan>(
     owner: &Shared<ProgramEpochV1<Evaluation>>,
     stream: ObservationStreamId,
