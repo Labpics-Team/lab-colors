@@ -47,9 +47,10 @@ export class ProgramWireBuilderV2 extends ProgramWireBuilderV1 {
     }
     // Callers may execute getters while the declaration is copied. Commit only
     // after all nested values have passed admission, without replacing a release.
-    if (this.section("jointSelection").count !== 0) invalid("selection release is already declared");
-    const output = this.entry("jointSelection");
-    output.append(sink.bytes);
+    const section = this.section("jointSelection");
+    if (section.count !== 0) invalid("selection release is already declared");
+    section.sink = sink;
+    section.count = 1;
     return this;
   }
 

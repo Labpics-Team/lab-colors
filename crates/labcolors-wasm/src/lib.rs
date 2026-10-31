@@ -530,14 +530,14 @@ pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2
         env!("OUT_DIR"),
         "/numerical-capabilities.json"
     )))
-        .map(JsValue::unchecked_into)
-        .map_err(|_| {
-            binding_failure_error(
-                BindingFailure::ManifestInternal as u32,
-                "capability manifest не распарсился как JSON",
-            )
-            .into()
-        })
+    .map(JsValue::unchecked_into)
+    .map_err(|_| {
+        binding_failure_error(
+            BindingFailure::ManifestInternal as u32,
+            "capability manifest не распарсился как JSON",
+        )
+        .into()
+    })
 }
 
 /// Точная оценка WCAG 2.2 одной финальной пары sRGB8.

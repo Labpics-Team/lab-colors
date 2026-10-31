@@ -199,10 +199,8 @@ export class ByteSink {
   }
 
   u8(value) { const at = this.#reserve(1); this.#view.setUint8(at, value); }
-  u16(value) { const at = this.#reserve(2); this.#view.setUint16(at, value, true); }
   u32(value) { const at = this.#reserve(4); this.#view.setUint32(at, value, true); }
   u64(value) { const at = this.#reserve(8); this.#view.setBigUint64(at, value, true); }
   f64Bits(value) { const at = this.#reserve(8); this.#view.setFloat64(at, value, true); }
-  rgb(value) { this.append(value); }
-  append(bytes) { const at = this.#reserve(bytes.length); this.#data.set(bytes, at); }
+  rgb(value) { const at = this.#reserve(3); this.#data.set(value, at); }
 }
