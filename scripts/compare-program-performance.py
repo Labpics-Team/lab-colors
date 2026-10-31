@@ -12,6 +12,8 @@ import statistics
 import subprocess
 import time
 
+from program_cpu_profile import summarize_profile
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--harness", type=Path, required=True)
 parser.add_argument("--baseline", type=Path, required=True)
@@ -185,62 +187,6 @@ print(json.dumps(summary, indent=2), flush=True)
 if any(record["status"] != "completed" for record in observations):
     raise SystemExit("incomplete consumer comparison: inspect retained observations")
 
-
-def summarize_profile(profile):
-    """Суммирует интервалы CDP samples/timeDeltas; hitCount не задаёт время."""
-    nodes = {node["id"]: node for node in profile["nodes"]}
-    if not nodes or len(nodes) != len(profile["nodes"]):
-        raise ValueError("CPU profile node IDs are empty or duplicated")
-    root = profile["nodes"][0]["id"]
-    parents, order = {}, []
-    pending = [(root, None)]
-    while pending:
-        node_id, parent = pending.pop()
-        if node_id not in nodes or node_id in parents:
-            raise ValueError("CPU profile is not a rooted call tree")
-        parents[node_id] = parent
-        order.append(node_id)
-        pending.extend((child, node_id) for child in nodes[node_id].get("children", []))
-    if len(order) != len(nodes):
-        raise ValueError("CPU profile contains unreachable nodes")
-
-    samples, deltas = profile["samples"], profile["timeDeltas"]
-    if not samples or len(samples) != len(deltas):
-        raise ValueError("CPU profile sample intervals are missing or incomplete")
-    self_us = dict.fromkeys(nodes, 0)
-    for sample_index, (node_id, delta) in enumerate(zip(samples, deltas)):
-        node_present = type(node_id) is int and node_id in nodes
-        if (not node_present or type(delta) is not int or delta < 0):
-            raise ValueError(
-                "CPU profile sample interval is invalid: "
-                f"index={sample_index}, node_id={node_id!r}, delta={delta!r}, "
-                f"node_present={node_present}"
-            )
-        self_us[node_id] += delta
-
-    sampled_us = sum(deltas)
-    duration_us = profile["endTime"] - profile["startTime"]
-    if not math.isfinite(duration_us) or sampled_us <= 0 or duration_us < sampled_us:
-        raise ValueError("CPU profile sample intervals exceed its duration")
-
-    inclusive_us = self_us.copy()
-    for node_id in reversed(order):
-        parent = parents[node_id]
-        if parent is not None:
-            inclusive_us[parent] += inclusive_us[node_id]
-
-    def top(weights):
-        # Это предел объёма лога; totals охватывают все узлы и отсчёты.
-        ids = sorted((node_id for node_id in nodes if weights[node_id]),
-                     key=lambda node_id: (-weights[node_id], node_id))[:20]
-        return [{"id": node_id, "frame": nodes[node_id]["callFrame"],
-                 "selfUs": self_us[node_id], "inclusiveUs": inclusive_us[node_id]}
-                for node_id in ids]
-
-    return {"nodeCount": len(nodes), "sampleCount": len(samples),
-            "profileDurationUs": duration_us, "sampledTimeUs": sampled_us,
-            "unattributedTailUs": duration_us - sampled_us,
-            "topBySelf": top(self_us), "topByInclusive": top(inclusive_us)}
 
 if args.profile:
     # Instrumented processes never enter observations or the latency summary.

@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 347,
+   "count": 350,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -864,6 +864,9 @@
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_complete_files_fail_closed_on_addition_removal_and_unknown_override",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_complete_production_dependency_cone_is_bound",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_universal_certificate_separates_scales_and_rejects_symbolic_mutants",
+    "test_program_cpu_profile.CpuTimelineTests.test_equal_timestamps_keep_capture_order_without_inventing_time",
+    "test_program_cpu_profile.CpuTimelineTests.test_invalid_intermediate_timestamp_or_identity_is_not_repaired",
+    "test_program_cpu_profile.CpuTimelineTests.test_out_of_order_events_preserve_weights_and_unattributed_tail",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_observation_alias_is_rejected_by_origin",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_program_session_alias_is_rejected_by_origin",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_root_reexport_alias_is_rejected_by_origin",
@@ -962,7 +965,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "253b94f544753bfb1e68b463ea872abfc59593d375d283ff0fc58f8a9b19ac4e",
+ "record_sha256": "4fb093c7ae6f67375f8a90c54d408a696662d625adfcbbc2dd247c37bee4aebc",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
