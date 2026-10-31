@@ -1242,31 +1242,25 @@ where
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
         #[cfg(test)]
+        if self.computed_budget.is_some()
+            || self
+                .targets
+                .iter()
+                .any(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
         {
-            if self.computed_budget.is_some()
-                || self
-                    .targets
-                    .iter()
-                    .any(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
-            {
-                return Err(ProgramCompileError::InternalInvariant);
-            }
-            let epoch = prepare_program(self)?;
-            let content_identity = epoch
-                .content_identity
-                .legacy()
-                .ok_or(ProgramCompileError::InternalInvariant)?;
-            Ok(CompiledProgram {
-                owner_generation: Shared::new(epoch),
-                content_identity,
-            })
+            return Err(ProgramCompileError::InternalInvariant);
         }
-        #[cfg(not(test))]
-        {
-            prepare_program(self).map(|epoch| CompiledProgram {
-                owner_generation: Shared::new(epoch),
-            })
-        }
+        let epoch = prepare_program(self)?;
+        #[cfg(test)]
+        let content_identity = epoch
+            .content_identity
+            .legacy()
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        Ok(CompiledProgram {
+            owner_generation: Shared::new(epoch),
+            #[cfg(test)]
+            content_identity,
+        })
     }
 }
 
