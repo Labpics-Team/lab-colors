@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "529c1bb4b2e7999bdfb9e46b084251cc1013e47eaa53c62ee2597f71c85be65b",
+ "record_sha256": "df8446bb6f073b5920fd0bd6aa7139b64ddd12d895bad69f78cb346c893b136f",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1996,6 +1996,7 @@
    "program_session::identity::tests::joint_selection_vertex_binds_tag_and_exact_release_identity_bytes: test",
    "program_session::identity::tests::modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content: test",
    "program_session::identity::tests::pruning_keeps_exact_bytes_on_every_four_vertex_digraph: test",
+   "program_session::identity::tests::refinement_reuses_initial_singletons_without_per_vertex_allocations: test",
    "program_session::identity::tests::repeated_components_are_canonicalized_with_one_leaf: test",
    "program_session::identity::tests::repeated_components_use_one_bulk_group_instead_of_search_depth: test",
    "program_session::identity::tests::small_role_directed_graph_preimage_is_invariant_for_generated_bijections: test",
@@ -2274,7 +2275,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1308,
+  "enabled_count": 1309,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
