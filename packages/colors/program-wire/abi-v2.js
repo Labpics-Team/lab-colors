@@ -49,7 +49,7 @@ export class ProgramWireBuilderV2 extends ProgramWireBuilderV1 {
     // after all nested values have passed admission, without replacing a release.
     if (this.section("jointSelection").count !== 0) invalid("selection release is already declared");
     const output = this.entry("jointSelection");
-    for (const byte of sink.bytes) output.u8(byte);
+    output.append(sink.bytes);
     return this;
   }
 

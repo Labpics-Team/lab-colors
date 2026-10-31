@@ -1,67 +1,8 @@
-//! Проекция постоянных возможностей в собственные JavaScript-данные.
+//! Проекция результата WCAG в собственные JavaScript-данные.
 
 use wasm_bindgen::JsValue;
 
 use crate::error::BindingError;
-
-fn push_keys<'a>(
-    site: &JsValue,
-    field: &str,
-    keys: impl Iterator<Item = &'a str>,
-) -> Result<(), JsValue> {
-    for key in keys {
-        crate::capability_key_projection(site, field, key)?;
-    }
-    Ok(())
-}
-
-pub(crate) fn capability_manifest() -> Result<JsValue, JsValue> {
-    let manifest = labcolors_core::numerical_capability_manifest_v2();
-    let projected = crate::capability_manifest_projection(
-        manifest.schema_version,
-        manifest.coverage.key(),
-        &manifest.checksum.hex(),
-    )?;
-    for site in manifest.sites.iter() {
-        let projected_site = crate::capability_site_projection(&projected, site.site_id.key())?;
-        push_keys(
-            &projected_site,
-            "stableOutcomes",
-            site.stable_outcomes.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "compatibilityReleases",
-            site.compatibility_releases.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "evidenceClasses",
-            site.evidence_classes.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "artifactIds",
-            site.artifact_ids.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "boundIds",
-            site.bound_ids.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "proofIds",
-            site.proof_ids.iter().map(|value| value.key()),
-        )?;
-        push_keys(
-            &projected_site,
-            "runtimeAttestations",
-            site.runtime_attestations.iter().map(|value| value.key()),
-        )?;
-    }
-    Ok(projected)
-}
 
 fn packed_rgb(bytes: [u8; 3]) -> u32 {
     u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]])

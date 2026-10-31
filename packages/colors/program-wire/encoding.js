@@ -174,45 +174,35 @@ export function rgbBytes(rgb, what) {
   return indexedValues(rgb, 3, what).map((channel, index) => byteValue(channel, `${what}[${index}]`));
 }
 
-/** Растущий LE-байтовый буфер: те же представления, что у Rust-стороны. */
+/** Little-endian section payload. Only initialized bytes reach the wire. */
 export class ByteSink {
-  constructor() {
-    /** @type {number[]} */
-    this.bytes = [];
-  }
+  #data = new Uint8Array(0);
+  #view = new DataView(this.#data.buffer);
+  #length = 0;
 
-  u8(value) {
-    this.bytes.push(value & 0xff);
-  }
+  get bytes() { return this.#data.subarray(0, this.#length); }
 
-  u16(value) {
-    this.bytes.push(value & 0xff, (value >>> 8) & 0xff);
-  }
-
-  u32(value) {
-    this.bytes.push(
-      value & 0xff,
-      (value >>> 8) & 0xff,
-      (value >>> 16) & 0xff,
-      (value >>> 24) & 0xff,
-    );
-  }
-
-  u64(value) {
-    this.u32(Number(value & 0xffff_ffffn));
-    this.u32(Number(value >> 32n));
-  }
-
-  f64Bits(value) {
-    const view = new DataView(new ArrayBuffer(8));
-    view.setFloat64(0, value, true);
-    for (let index = 0; index < 8; index += 1) {
-      this.bytes.push(view.getUint8(index));
+  #reserve(width) {
+    const at = this.#length;
+    const end = at + width;
+    if (end > 0xffff_ffff) {
+      throw new ProgramWireError(PROGRAM_WIRE_TOO_MANY_ENTRIES, "section exceeds the u32 wire length");
     }
+    if (end > this.#data.length) {
+      const data = new Uint8Array(Math.max(end, Math.min(this.#data.length * 2, 0xffff_ffff)));
+      data.set(this.#data);
+      this.#data = data;
+      this.#view = new DataView(data.buffer);
+    }
+    this.#length = end;
+    return at;
   }
 
-  rgb(rgb) {
-    this.bytes.push(rgb[0], rgb[1], rgb[2]);
-  }
+  u8(value) { const at = this.#reserve(1); this.#view.setUint8(at, value); }
+  u16(value) { const at = this.#reserve(2); this.#view.setUint16(at, value, true); }
+  u32(value) { const at = this.#reserve(4); this.#view.setUint32(at, value, true); }
+  u64(value) { const at = this.#reserve(8); this.#view.setBigUint64(at, value, true); }
+  f64Bits(value) { const at = this.#reserve(8); this.#view.setFloat64(at, value, true); }
+  rgb(value) { this.append(value); }
+  append(bytes) { const at = this.#reserve(bytes.length); this.#data.set(bytes, at); }
 }
-

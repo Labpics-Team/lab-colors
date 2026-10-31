@@ -191,40 +191,7 @@ export function certificateProjection(
 }
 
 const ProjectionString = String;
-const defineProjectionProperty = Object.defineProperty;
-
-function appendProjectionValue(array, value) {
-  defineProjectionProperty(array, array.length, {
-    __proto__: null,
-    value,
-    writable: true,
-    enumerable: true,
-    configurable: true,
-  });
-}
-
-export function capabilityManifestProjection(schemaVersion, coverage, checksum) {
-  return { schemaVersion, coverage, sites: [], checksum };
-}
-
-export function capabilitySiteProjection(manifest, siteId) {
-  const site = {
-    siteId,
-    stableOutcomes: [],
-    compatibilityReleases: [],
-    evidenceClasses: [],
-    artifactIds: [],
-    boundIds: [],
-    proofIds: [],
-    runtimeAttestations: [],
-  };
-  appendProjectionValue(manifest.sites, site);
-  return site;
-}
-
-export function capabilityKeyProjection(site, field, key) {
-  appendProjectionValue(site[field], key);
-}
+export const parseCapabilityManifest = JSON.parse;
 
 function projectionRgbHex(rgb) {
   // The packed RGB24 value has six hexadecimal digits of four bits each.
@@ -291,18 +258,8 @@ export function wcag22Projection(
 }
 "##)]
 extern "C" {
-    #[wasm_bindgen(catch, js_name = capabilityManifestProjection)]
-    fn capability_manifest_projection(
-        schema_version: u32,
-        coverage: &str,
-        checksum: &str,
-    ) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(catch, js_name = capabilitySiteProjection)]
-    fn capability_site_projection(manifest: &JsValue, site_id: &str) -> Result<JsValue, JsValue>;
-
-    #[wasm_bindgen(catch, js_name = capabilityKeyProjection)]
-    fn capability_key_projection(site: &JsValue, field: &str, key: &str) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = parseCapabilityManifest)]
+    fn parse_capability_manifest(json: &str) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(catch, js_name = wcag22Projection)]
     fn wcag22_projection(
@@ -568,7 +525,11 @@ fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsValue> {
-    terminal_projection::capability_manifest()
+    // A fresh ordinary JS object per call, without rebuilding and hashing the registry.
+    parse_capability_manifest(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/numerical-capabilities.json"
+    )))
         .map(JsValue::unchecked_into)
         .map_err(|_| {
             binding_failure_error(

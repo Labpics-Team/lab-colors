@@ -45,7 +45,8 @@ def tool_version(*command):
 def runtime_payload(root):
     # Count generated consumer code together, so moving a projection between
     # WASM and JavaScript cannot appear to reduce its delivered byte cost.
-    paths = [root / "pkg/labcolors_bg.wasm", root / "pkg/labcolors.js"]
+    paths = [root / "pkg/labcolors_bg.wasm", root / "pkg/labcolors.js", root / "index.js"]
+    paths.extend(sorted((root / "program-wire").glob("*.js")))
     paths.extend(sorted((root / "pkg/snippets").rglob("*.js")))
     files = []
     for path in paths:

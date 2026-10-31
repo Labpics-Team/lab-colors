@@ -594,6 +594,7 @@ dependencies = [
  "js-sys",
  "labcolors-conformance",
  "labcolors-core",
+ "serde_json",
  "thiserror",
  "wasm-bindgen",
  "wasm-bindgen-test",
