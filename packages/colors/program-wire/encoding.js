@@ -174,39 +174,37 @@ export function rgb24(rgb, what) {
   return byteValue(r, what, 0) | (byteValue(g, what, 1) << 8) | (byteValue(b, what, 2) << 16);
 }
 
-/** Little-endian section payload. Only initialized bytes reach the wire. */
+/** Stage admitted bytes; only finish() materializes the contiguous wire. */
 export class ByteSink {
-  #data;
-  #view;
-  #length = 0;
+  bytes = [];
+  #float;
 
-  get bytes() { return this.#data ? this.#data.subarray(0, this.#length) : new Uint8Array(); }
-
-  #reserve(width) {
-    const at = this.#length;
-    const end = at + width;
-    if (end > 0xffff_ffff) {
+  #room(width) {
+    if (this.bytes.length > 0xffff_ffff - width) {
       throw new ProgramWireError(PROGRAM_WIRE_TOO_MANY_ENTRIES, "section exceeds the u32 wire length");
     }
-    const capacity = this.#data?.length ?? 0;
-    if (end > capacity) {
-      const data = new Uint8Array(Math.max(end, Math.min(capacity * 2, 0xffff_ffff)));
-      if (capacity) data.set(this.#data);
-      this.#data = data;
-      this.#view = new DataView(data.buffer);
-    }
-    this.#length = end;
-    return at;
   }
 
-  u8(value) { const at = this.#reserve(1); this.#view.setUint8(at, value); }
-  u32(value) { const at = this.#reserve(4); this.#view.setUint32(at, value, true); }
-  u64(value) { const at = this.#reserve(8); this.#view.setBigUint64(at, value, true); }
-  f64Bits(value) { const at = this.#reserve(8); this.#view.setFloat64(at, value, true); }
+  u8(value) { this.#room(1); this.bytes.push(value & 255); }
+  u32(value) {
+    this.#room(4);
+    this.bytes.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, value >>> 24);
+  }
+  u64(value) {
+    this.#room(8);
+    this.u32(Number(value & 0xffff_ffffn));
+    this.u32(Number(value >> 32n));
+  }
+  f64Bits(value) {
+    this.#room(8);
+    // Only sections that actually encode floating-point values need a view.
+    const view = this.#float ??= new DataView(new ArrayBuffer(Float64Array.BYTES_PER_ELEMENT));
+    view.setFloat64(0, value, true);
+    this.u32(view.getUint32(0, true));
+    this.u32(view.getUint32(4, true));
+  }
   rgb24(value) {
-    const at = this.#reserve(3);
-    this.#data[at] = value;
-    this.#data[at + 1] = value >>> 8;
-    this.#data[at + 2] = value >>> 16;
+    this.#room(3);
+    this.bytes.push(value & 255, (value >>> 8) & 255, value >>> 16);
   }
 }
