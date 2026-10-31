@@ -2388,7 +2388,7 @@ where
     let canonical = canonical_preimage(&graph)?;
     // Semantic identity связывает объявленную политику и граф. Предел работы
     // принадлежит отдельному execution profile; старый V9 preimage не изменён.
-    let domain = b"labcolors.computed-program.v1.hex-oklch-lab.lex-rgb.full-recheck\0";
+    let domain = b"labcolors.computed-program.v2.direct-oklab-f64.lex-rgb.full-recheck\0";
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(domain.len() + canonical.len())

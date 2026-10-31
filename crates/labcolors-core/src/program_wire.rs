@@ -1946,6 +1946,70 @@ mod runtime_tests {
             .expect("wire декларации кодируется")
     }
 
+    fn computed_incomplete_runtime_wire() -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(11, Srgb8::new([96; 3]))
+            .fixed_target(12, 11)
+            .computed_box_target(2, [0; 3], [255; 3], Srgb8::new([64; 3]), 1.0)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .solid_paint(13, 12)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .source_over_occurrence(18, 13, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_relation_hard(10, 18, &[8])
+            .output(17, 4);
+        builder
+            .finish_assignment(&[2])
+            .expect("валидная relation-декларация кодируется")
+    }
+
+    #[test]
+    fn direct_assignment_policy_rejects_previous_experimental_tag() {
+        let mut bytes = computed_runtime_wire();
+        // header10 + sources4 + target-count4 + gray-target19 + families4
+        // + assignment-count4: поле policy находится на offset45.
+        assert_eq!(&bytes[45..47], &[2, 0]);
+        bytes[45] = 1;
+        assert_eq!(
+            compile_program_wire(&bytes).err(),
+            Some(ProgramRuntimeErrorV1::Wire)
+        );
+    }
+
+    #[test]
+    fn computed_full_rgb_domain_finishes_through_public_runtime() {
+        let mut session = compile_program_wire(&computed_runtime_wire_for_domain(true))
+            .expect("полный RGB domain допускается")
+            .instantiate(100)
+            .expect("stream допускается");
+        for (revision, backdrop, expected) in [
+            (1, 128, Some([64; 3])),
+            (2, 255, None),
+            (3, 0, Some([191; 3])),
+        ] {
+            let snapshot = session
+                .update_observed(
+                    revision,
+                    &[ProgramScenarioV1::new(7, vec![Srgb8::new([backdrop; 3])])],
+                )
+                .expect("наблюдение вычисляется");
+            if let Some(rgb) = expected {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+                assert_eq!(snapshot.outputs()[0].source(), Srgb8::new(rgb));
+            } else {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Unsatisfied);
+                assert!(snapshot.outputs().is_empty());
+            }
+            assert_eq!(snapshot.reason(), None);
+        }
+    }
+
     #[test]
     fn computed_snapshot_keeps_current_output_separate_from_legacy_history() {
         let mut session = compile_program_wire(&computed_runtime_wire())
@@ -2084,8 +2148,12 @@ mod runtime_tests {
         ] {
             let installed = Rc::new(RefCell::new(Vec::new()));
             let reject = Rc::new(Cell::new(false));
-            let compiled = compile_program_wire(&computed_runtime_wire_for_domain(full_cube))
-                .expect("допустимый Program компилируется");
+            let wire = if full_cube {
+                computed_incomplete_runtime_wire()
+            } else {
+                computed_runtime_wire()
+            };
+            let compiled = compile_program_wire(&wire).expect("допустимый Program компилируется");
             let identity = compiled.content_identity();
             let mut attachment = compiled
                 .attach(

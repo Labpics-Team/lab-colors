@@ -128,7 +128,7 @@ class ContractTest {
             .assignment(listOf(21u)).apply { finiteTarget(22u, listOf(ProgramCandidate(1u, rgb(0, 0, 0), 1.0))) }.finish()
         expectCode("program_unsupported") { compileProgramWire(unsupported, 1u).close() }
         expectCode("program_unsupported") { attachProgramWire(unsupported, 1u, 91u, 501u, 71u, 61u, Host()).close() }
-        for (domain in listOf("gray", "box")) {
+        for (domain in listOf("gray", "box", "relation")) {
             compileProgramWire(hex(vectors.getString(domain)), UInt.MAX_VALUE).use { runtime ->
                 runtime.updateUnknown(0uL, UInt.MAX_VALUE).use {
                     assertEquals(2u, it.snapshotVersion()); assertEquals(0uL, it.revision())
@@ -366,7 +366,7 @@ class ContractTest {
 
     private fun computedAttachmentHistory() {
         val vectors = fixture().getJSONObject("computed")
-        for (domain in listOf("gray", "box")) {
+        for (domain in listOf("gray", "box", "relation")) {
             val host = Host(0.5)
             attachProgramWire(hex(vectors.getString(domain)), 1u, 91u, 501u, 71u, 61u, host).use { attachment ->
                 host.owner = WeakReference(attachment); host.reenter = true

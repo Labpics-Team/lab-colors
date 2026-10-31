@@ -365,7 +365,7 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
     match (version, selection_count) {
         (PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2, 0) => {}
         (PROGRAM_WIRE_VERSION_V3, 1) => {
-            if reader.read_u16()? != 1 {
+            if reader.read_u16()? != 2 {
                 return Err(reader.declaration_error(joint_offset));
             }
             let count = reader.read_count()?;
@@ -1192,7 +1192,7 @@ impl ProgramWireBuilderV1 {
         let offset = 10 + 12 + self.sources.len() + self.targets.len() + self.families.len();
         let mut bytes = self.finish()?;
         let mut selection = Vec::new();
-        selection.extend_from_slice(&1_u16.to_le_bytes());
+        selection.extend_from_slice(&2_u16.to_le_bytes());
         push_u32(
             &mut selection,
             u32::try_from(targets.len()).map_err(|_| ProgramWireEncodeErrorV1::TooManyEntries)?,
@@ -1363,6 +1363,24 @@ impl ProgramWireBuilderV1 {
         section.push(KIND_EXACT_INTRINSIC_RELATION);
         push_u32(section, reference);
         push_u32(section, u32::try_from(candidates.len()).unwrap_or(u32::MAX));
+        for candidate in candidates {
+            push_u32(section, *candidate);
+        }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exact_visible_relation_hard(
+        &mut self,
+        id: u32,
+        reference: u32,
+        candidates: &[u32],
+    ) -> &mut Self {
+        let section = self.constraint_section(true);
+        push_u32(section, id);
+        section.push(KIND_EXACT_VISIBLE_RELATION);
+        push_u32(section, reference);
+        push_u32(section, candidates.len() as u32);
         for candidate in candidates {
             push_u32(section, *candidate);
         }

@@ -13,9 +13,11 @@ struct RuntimeStep: Decodable {
 struct ComputedFixture: Decodable {
     let gray: String
     let box: String
+    let relation: String
     let encodingOnly: String
     let grayHistory: [RuntimeStep]
     let boxHistory: [RuntimeStep]
+    let relationHistory: [RuntimeStep]
 }
 struct RuntimeFixture: Decodable {
     let schemaVersion: Int
@@ -155,7 +157,7 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try compileProgramWire(bytes: unsupported, streamId: 1)) { assertCode($0, "program_unsupported") }
         XCTAssertThrowsError(try attachProgramWire(bytes: unsupported, streamId: 1, outputSlot: 91,
             sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: RuntimeHost())) { assertCode($0, "program_unsupported") }
-        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory)] {
+        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory), (vectors.relation, vectors.relationHistory)] {
             let runtime = try compileProgramWire(bytes: bytes(wire), streamId: .max)
             let waiting = try runtime.updateUnknown(revision: 0, reasonId: .max)
             XCTAssertEqual(waiting.snapshotVersion(), 2)
@@ -204,7 +206,7 @@ final class ProgramRuntimeTests: XCTestCase {
 
     func testComputedAttachmentRevokesBeforePublishingIncompleteOrUnsatisfied() throws {
         let vectors = try fixture().computed
-        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory)] {
+        for (wire, history) in [(vectors.gray, vectors.grayHistory), (vectors.box, vectors.boxHistory), (vectors.relation, vectors.relationHistory)] {
             let host = RuntimeHost(opacity: 0.5)
             let attachment = try attachProgramWire(bytes: bytes(wire), streamId: 1, outputSlot: 91,
                 sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: host)

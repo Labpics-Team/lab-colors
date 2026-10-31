@@ -188,7 +188,11 @@ test("V1/V2 сохраняют прежние historical outputs при отка
 
 test("V3 incomplete отзывает текущий point, replay сохраняет исход, новая revision восстанавливает ready", () => {
   const host = { point: null, reject: false, operations: [] };
-  const attachment = attachProgramWire(graph({ domain: fullRgb }).finish(), 1, 91, 501, 71, 61, (intent) => {
+  // Relation пока не даёт region-отсечения: на чёрном фоне она несовместима
+  // с WCAG, но исчерпание общего поиска не выдаётся как доказательство пустоты.
+  const wire = graph({ domain: fullRgb }).source(11, [24, 24, 24]).fixedTarget(22, 11)
+    .exactIntrinsicRelationHard(82, 22, [21]).finish();
+  const attachment = attachProgramWire(wire, 1, 91, 501, 71, 61, (intent) => {
     host.operations.push(intent.operation);
     if (host.reject) return false;
     host.point = intent.point; return true;
@@ -225,9 +229,14 @@ test("V3 known unsupported и malformed wire различаются на обо�
   const valid = graph().finish();
   const unsupported = graph().finiteTarget(22, [{ id: 201, rgb: [0, 0, 0], opacity: 1 }]).finish();
   const malformed = valid.slice(); malformed[4] = 255;
+  // У этой декларации: header10 + sources4 + target-count4 + gray-target19
+  // + families4 + assignment-count4 = 45. Прежний tag не меняет смысл молча.
+  const previousPolicy = valid.slice();
+  assert.equal(new DataView(previousPolicy.buffer).getUint16(45, true), 2);
+  new DataView(previousPolicy.buffer).setUint16(45, 1, true);
   for (const [operation, create] of [["compileProgramWire", (wire) => compileProgramWire(wire, 1)],
     ["attachProgramWire", (wire) => attachProgramWire(wire, 1, 91, 501, 71, 61, () => true)]]) {
-    for (const [wire, code] of [[unsupported, "program_unsupported"], [malformed, "program_wire"],
+    for (const [wire, code] of [[unsupported, "program_unsupported"], [malformed, "program_wire"], [previousPolicy, "program_wire"],
       [graph({ assignment: [99] }).finish(), "program_compile"]]) {
       assert.throws(() => create(wire), errorIs(operation, code));
     }

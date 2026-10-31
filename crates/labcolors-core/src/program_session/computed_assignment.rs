@@ -1,5 +1,5 @@
-//! Частный вычисляемый selection существующего Program. Политика не знает ID.
-//! Полный обход ограничен числом посещённых узлов; физика остаётся у Program.
+//! Вычисляемый selection существующего Program. Политика не знает смысл ID.
+//! Области сокращаются до полного выбора; физика остаётся у Program.
 
 use super::*;
 use std::cmp::Ordering;
@@ -14,6 +14,69 @@ pub(crate) enum AssignmentDomainV1 {
 }
 
 impl AssignmentDomainV1 {
+    fn bounds(self) -> ([u8; 3], [u8; 3]) {
+        match self {
+            Self::Cube { lower, upper } => (lower, upper),
+            Self::Gray { lower, upper } => ([lower; 3], [upper; 3]),
+        }
+    }
+
+    fn lower_score(self, anchor: [f64; 3]) -> f64 {
+        let (lower, upper) = self.bounds();
+        let (lower, upper) = crate::spaces::oklab::srgb8_box_oklab_bounds(lower, upper);
+        let nearest = std::array::from_fn(|i| {
+            if anchor[i] < lower[i] {
+                lower[i]
+            } else if anchor[i] > upper[i] {
+                upper[i]
+            } else {
+                anchor[i]
+            }
+        });
+        squared_distance(nearest, anchor)
+    }
+
+    fn split(self) -> (Self, Self) {
+        match self {
+            Self::Gray { lower, upper } => {
+                let middle = lower + (upper - lower) / 2;
+                (
+                    Self::Gray {
+                        lower,
+                        upper: middle,
+                    },
+                    Self::Gray {
+                        lower: middle + 1,
+                        upper,
+                    },
+                )
+            }
+            Self::Cube { lower, upper } => {
+                let mut axis = 0;
+                for i in 1..3 {
+                    if upper[i] - lower[i] > upper[axis] - lower[axis] {
+                        axis = i;
+                    }
+                }
+                let middle = lower[axis] + (upper[axis] - lower[axis]) / 2;
+                let mut left_upper = upper;
+                let mut right_lower = lower;
+                left_upper[axis] = middle;
+                right_lower[axis] = middle + 1;
+                (
+                    Self::Cube {
+                        lower,
+                        upper: left_upper,
+                    },
+                    Self::Cube {
+                        lower: right_lower,
+                        upper,
+                    },
+                )
+            }
+        }
+    }
+
     fn cardinality(self) -> Option<u64> {
         match self {
             Self::Cube { lower, upper } => (0..3).try_fold(1_u64, |count, i| {
@@ -83,7 +146,7 @@ pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] =
-        b"labcolors.assignment-execution.v1.hex-oklch-sincos-f64.lex-rgb.exact-dfs.full-recheck\0";
+        b"labcolors.assignment-execution.v2.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -238,8 +301,7 @@ pub(super) fn compile_selection(
                 .bind_paint_input(target_paint_input_id(target.id))
                 .ok_or(ProgramCompileError::InternalInvariant)?,
             declaration: declaration.clone(),
-            anchor_lab: lab(declaration.anchor)
-                .map_err(|_| ProgramCompileError::InternalInvariant)?,
+            anchor_lab: lab(declaration.anchor),
             count,
             suffix_count: 1,
         });
@@ -270,16 +332,13 @@ pub(super) fn compile_selection(
     })
 }
 
-fn lab(rgb: Srgb8) -> Result<[f64; 3], ()> {
-    // Сохраняет порядок операций независимой исследовательской пробы: hex →
-    // OKLCH → Lab. Здесь не заявляется универсальная вещественная минимальность.
-    let [l, c, h] = crate::oklch_from_hex(&rgb.to_hex()).map_err(|_| ())?;
-    let (sin, cos) = h.to_radians().sin_cos();
-    Ok([l, c * cos, c * sin])
+fn lab(rgb: Srgb8) -> [f64; 3] {
+    crate::spaces::oklab::srgb_linear_to_oklab(crate::spaces::srgb::srgb_linear_from_srgb8(rgb))
 }
 
 fn squared_distance(a: [f64; 3], b: [f64; 3]) -> f64 {
-    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum()
+    let [l, a, b] = std::array::from_fn::<_, 3, _>(|i| a[i] - b[i]);
+    (l * l + a * a) + b * b
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +352,9 @@ enum CompletionV1 {
 struct SearchEvidenceV1 {
     completion: CompletionV1,
     visited: u64,
+    regions: u64,
+    points: u64,
+    endpoint_evaluations: u64,
     examined: u64,
     covered: u64,
     tuple_count: u64,
@@ -301,6 +363,177 @@ struct SearchEvidenceV1 {
 struct SearchResultV1 {
     evidence: SearchEvidenceV1,
     values: Option<Vec<Srgb8>>,
+}
+
+#[derive(Clone, Copy)]
+struct RegionNodeV1 {
+    depth: usize,
+    domain: AssignmentDomainV1,
+    lower_score: f64,
+    ordinal: Option<u64>,
+}
+
+fn region_node(
+    depth: usize,
+    domain: AssignmentDomainV1,
+    selection: &ComputedSelectionV1,
+    evidence: &mut SearchEvidenceV1,
+) -> Option<RegionNodeV1> {
+    if evidence.visited == selection.budget {
+        return None;
+    }
+    evidence.visited += 1;
+    evidence.regions += 1;
+    Some(RegionNodeV1 {
+        depth,
+        domain,
+        lower_score: domain.lower_score(selection.targets[depth].anchor_lab),
+        ordinal: None,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum RegionConstraintV1 {
+    Wcag {
+        slot: CompiledOccurrenceSlotV1,
+        criterion: Wcag22CriterionV1,
+    },
+    Exact {
+        slot: CompiledOccurrenceSlotV1,
+        expected: Srgb8,
+    },
+}
+
+impl RegionConstraintV1 {
+    fn slot(self) -> CompiledOccurrenceSlotV1 {
+        match self {
+            Self::Wcag { slot, .. } | Self::Exact { slot, .. } => slot,
+        }
+    }
+}
+
+fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
+    epoch: &ProgramEpochV1<Evaluation>,
+) -> Result<Vec<RegionConstraintV1>, ()> {
+    let mut result = Vec::new();
+    if !epoch.graph.supports_rgb_box_endpoints() {
+        return Ok(result);
+    }
+    result
+        .try_reserve_exact(epoch.constraints.len())
+        .map_err(|_| ())?;
+    for constraint in &epoch.constraints {
+        if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
+            continue;
+        }
+        let CompiledProgramConstraintBodyV1::VisibleUnary {
+            slot, invocation, ..
+        } = constraint.body
+        else {
+            continue;
+        };
+        match epoch.evaluator.constraint_content(invocation) {
+            ProgramConstraintContentV1::Wcag22Srgb8 { criterion, .. } => {
+                result.push(RegionConstraintV1::Wcag { slot, criterion })
+            }
+            ProgramConstraintContentV1::ExactSrgb8 { expected, .. } => {
+                result.push(RegionConstraintV1::Exact { slot, expected })
+            }
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+struct RegionPruningV1 {
+    constraints: Vec<RegionConstraintV1>,
+    lower: Vec<([u8; 3], [u8; 3])>,
+    endpoint_evaluations: u64,
+}
+
+impl RegionPruningV1 {
+    fn may_pass<Evaluation: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        selection: &ComputedSelectionV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<Evaluation>,
+        scenario_set: NonEmptyScenarioSetV1<'_>,
+        node: RegionNodeV1,
+        values: &[Srgb8],
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>> {
+        if self.constraints.is_empty() {
+            return Ok(true);
+        }
+        let schema = epoch.observation_group.schema.as_slice();
+        for case_index in 0..scenario_set.len().get() {
+            let observed = scenario_set
+                .physical_values(case_index)
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            if observed.len() != schema.len() {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            runtime
+                .bindings
+                .overwrite_surface_inputs_canonical(schema.iter().copied(), |i| observed[i].srgb8())
+                .map_err(map_program_execution_binding_error)?;
+            for high in [false, true] {
+                for (i, target) in selection.targets.iter().enumerate() {
+                    let value = if i < node.depth {
+                        values[i]
+                    } else {
+                        let (lo, hi) = if i == node.depth {
+                            node.domain
+                        } else {
+                            target.declaration.domain
+                        }
+                        .bounds();
+                        Srgb8::new(if high { hi } else { lo })
+                    };
+                    runtime
+                        .bindings
+                        .overwrite_paint_input_at(
+                            target.binding,
+                            EncodedPointPaintValueV1::opaque(value),
+                        )
+                        .map_err(map_program_execution_binding_error)?;
+                }
+                let evaluation = epoch
+                    .graph
+                    .evaluate_admitted_into(runtime.bindings, runtime.workspace)
+                    .map_err(map_program_execution_binding_error)?;
+                self.endpoint_evaluations += 1;
+                for (index, constraint) in self.constraints.iter().enumerate() {
+                    let point = evaluation
+                        .occurrence_at(constraint.slot())
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if !high {
+                        self.lower[index] = (point.visible(), point.certificate().backdrop_rgb());
+                        continue;
+                    }
+                    let (visible, backdrop) = self.lower[index];
+                    let possible = match constraint {
+                        RegionConstraintV1::Wcag { criterion, .. } => {
+                            crate::wcag22::rgb_boxes_may_pass(
+                                (visible, point.visible()),
+                                (backdrop, point.certificate().backdrop_rgb()),
+                                *criterion,
+                            )
+                            .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
+                        }
+                        RegionConstraintV1::Exact { expected, .. } => {
+                            expected.bytes().iter().enumerate().all(|(i, value)| {
+                                visible[i] <= *value && *value <= point.visible()[i]
+                            })
+                        }
+                    };
+                    if !possible {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -331,10 +564,29 @@ where
     let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
     let mut scores = buffer(count, 0.0).map_err(allocate)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
-    let mut next = buffer(count, 0_u64).map_err(allocate)?;
+    let constraints = region_constraints(epoch).map_err(allocate)?;
+    let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
+    let mut pruning = RegionPruningV1 {
+        constraints,
+        lower,
+        endpoint_evaluations: 0,
+    };
+    let mut stack = Vec::new();
+    // log2 tuple cardinality <=64. Округление глубины трёх RGB-осей добавляет
+    // менее трёх шагов на target; ещё один нужен для continuation leaf.
+    let stack_limit = count
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(65))
+        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    stack
+        .try_reserve_exact(stack_limit)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::BudgetExhausted,
         visited: 0,
+        regions: 0,
+        points: 0,
+        endpoint_evaluations: 0,
         examined: 0,
         covered: 0,
         tuple_count: selection.tuple_count,
@@ -350,6 +602,7 @@ where
         .zip(selection.targets.iter())
         .for_each(|(value, target)| *value = target.declaration.anchor);
     evidence.visited += 1;
+    evidence.points += 1;
     if selection
         .targets
         .iter()
@@ -375,14 +628,64 @@ where
         }
     }
     let mut has_best = false;
-    let mut depth = 0;
-    loop {
-        if next[depth] == selection.targets[depth].count {
-            next[depth] = 0;
-            if depth == 0 {
-                break;
+    let Some(root) = region_node(
+        0,
+        selection.targets[0].declaration.domain,
+        selection,
+        &mut evidence,
+    ) else {
+        return Ok(SearchResultV1 {
+            evidence,
+            values: None,
+        });
+    };
+    stack.push(root);
+    while let Some(mut node) = stack.pop() {
+        let depth = node.depth;
+        let target = &selection.targets[depth];
+        let volume = node
+            .domain
+            .cardinality()
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        if node.ordinal.is_none() {
+            scores[depth] = node.lower_score;
+            let delta = f64::from_bits(target.declaration.max_delta_bits);
+            let worse = node.lower_score > delta * delta
+                || has_best
+                    && compare_scores(&scores[..=depth], &best_scores[..=depth])
+                        == Ordering::Greater;
+            let possible = !worse
+                && pruning.may_pass(selection, runtime, epoch, scenario_set, node, &values)?;
+            evidence.endpoint_evaluations = pruning.endpoint_evaluations;
+            if !possible {
+                evidence.covered += volume * target.suffix_count;
+                continue;
             }
-            depth -= 1;
+            if volume > 64 {
+                let (left, right) = node.domain.split();
+                let Some(left) = region_node(depth, left, selection, &mut evidence) else {
+                    return Ok(SearchResultV1 {
+                        evidence,
+                        values: None,
+                    });
+                };
+                let Some(right) = region_node(depth, right, selection, &mut evidence) else {
+                    return Ok(SearchResultV1 {
+                        evidence,
+                        values: None,
+                    });
+                };
+                let (first, second) = if left.lower_score <= right.lower_score {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                stack.push(second);
+                stack.push(first);
+                continue;
+            }
+            node.ordinal = Some(0);
+            stack.push(node);
             continue;
         }
         if evidence.visited == selection.budget {
@@ -392,14 +695,19 @@ where
             });
         }
         evidence.visited += 1;
-        let target = &selection.targets[depth];
-        let value = target.declaration.domain.value(next[depth]);
-        next[depth] += 1;
+        evidence.points += 1;
+        let ordinal = node
+            .ordinal
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        let value = node.domain.value(ordinal);
+        if ordinal + 1 < volume {
+            stack.push(RegionNodeV1 {
+                ordinal: Some(ordinal + 1),
+                ..node
+            });
+        }
         values[depth] = value;
-        scores[depth] = squared_distance(
-            lab(value).map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?,
-            target.anchor_lab,
-        );
+        scores[depth] = squared_distance(lab(value), target.anchor_lab);
         let delta = f64::from_bits(target.declaration.max_delta_bits);
         let worse_prefix = has_best
             && compare_scores(&scores[..=depth], &best_scores[..=depth]) == Ordering::Greater;
@@ -408,7 +716,18 @@ where
             continue;
         }
         if depth + 1 < count {
-            depth += 1;
+            let Some(next) = region_node(
+                depth + 1,
+                selection.targets[depth + 1].declaration.domain,
+                selection,
+                &mut evidence,
+            ) else {
+                return Ok(SearchResultV1 {
+                    evidence,
+                    values: None,
+                });
+            };
+            stack.push(next);
             continue;
         }
         evidence.covered += 1;
@@ -616,3 +935,6 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod qualification_tests;

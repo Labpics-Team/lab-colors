@@ -2119,6 +2119,11 @@ impl CompiledAppearanceGraph {
     }
 
     /// Allocation-free steady-state execution over already admitted bindings.
+    ///
+    /// При неизменных opacities покомпонентный порядок RGB-входов сохраняется:
+    /// Input копирует значение; Opacity меняет только alpha; FromOccurrence
+    /// копирует результат; exact source-over с alpha в [0,1] и округление
+    /// монотонны по обоим цветам. Поэтому два endpoint-вызова охватывают box.
     pub(crate) fn evaluate_admitted_into<'workspace>(
         &self,
         bindings: &AdmittedAppearanceBindings,
@@ -2126,6 +2131,20 @@ impl CompiledAppearanceGraph {
     ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
         self.program()
             .evaluate_admitted_into(&self.instance, bindings, workspace)
+    }
+
+    pub(crate) fn supports_rgb_box_endpoints(&self) -> bool {
+        let program = self.program();
+        program.paints.iter().all(|paint| match paint {
+            CompiledPaintSpec::Input { .. } | CompiledPaintSpec::Opacity { .. } => true,
+        }) && program.surfaces.iter().all(|surface| match surface {
+            CompiledSurfaceSpec::Input { .. } | CompiledSurfaceSpec::FromOccurrence { .. } => true,
+        }) && program
+            .occurrences
+            .iter()
+            .all(|occurrence| match occurrence.profile {
+                CompositionProfileV1::EncodedSrgb8SourceOverV1 => true,
+            })
     }
 
     /// Cold convenience внутри Core для callers, которым нужен owned result.

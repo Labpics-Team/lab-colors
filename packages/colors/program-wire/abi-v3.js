@@ -52,7 +52,7 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     const targets = candidateList(targetsInPreferenceOrder, "assignment targets")
       .map((target) => u32Value(target, "assignment target"));
     const payload = new ByteSink();
-    payload.u16(1);
+    payload.u16(2);
     payload.u32(targets.length);
     for (const target of targets) payload.u32(target);
     // Getter мог принять вложенное assignment; внешнее не заменяет его.

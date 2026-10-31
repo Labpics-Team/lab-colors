@@ -10,7 +10,7 @@ use crate::observation::{
 use crate::session::{SessionState, SessionUpdateError};
 
 // Только сборка декларации; исполнение принадлежит обычному Program/Session.
-fn compile_assignment<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn compile_assignment<E: ProgramConstraintEvaluatorSetV1>(
     mut program: Program<E>,
     budget: u64,
 ) -> Result<CompiledProgram<E>, ProgramCompileError> {
@@ -40,7 +40,7 @@ fn context() -> AppearanceContextId {
     )
 }
 
-fn target(id: u32, anchor: u8, lower: u8, upper: u8, preference: u64) -> Target {
+pub(super) fn target(id: u32, anchor: u8, lower: u8, upper: u8, preference: u64) -> Target {
     Target::new(
         TargetId::new(id),
         TargetIntentV1::Computed(
@@ -55,7 +55,7 @@ fn target(id: u32, anchor: u8, lower: u8, upper: u8, preference: u64) -> Target 
     )
 }
 
-fn program<Evaluation: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn program<Evaluation: ProgramConstraintEvaluatorSetV1>(
     target: Target,
     invocation: Evaluation::Invocation,
     evaluator: Evaluation,
@@ -94,7 +94,7 @@ fn program<Evaluation: ProgramConstraintEvaluatorSetV1>(
     )
 }
 
-fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
+pub(super) fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
     ObservationUpdateInput {
         stream: ObservationStreamId::new(8),
         revision: Revision::new(revision),
@@ -110,7 +110,7 @@ fn update(revision: u64, backdrop: u8) -> ObservationUpdateInput {
     }
 }
 
-fn rgb<Evaluation: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn rgb<Evaluation: ProgramConstraintEvaluatorSetV1>(
     session: &Session<ProgramSessionPlan<Evaluation>>,
 ) -> Srgb8 {
     session
@@ -490,7 +490,7 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
     assert!(matches!(session.state(), SessionState::Failed { .. }));
 }
 
-fn nested(reverse: bool) -> Program<Wcag22Srgb8V1> {
+pub(super) fn nested(reverse: bool) -> Program<Wcag22Srgb8V1> {
     let mut targets = vec![target(10, 150, 120, 180, 0), target(20, 160, 0, 255, 1)];
     if reverse {
         targets.reverse();

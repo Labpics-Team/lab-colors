@@ -63,7 +63,7 @@ test("native authoring fixtures match both real Web builders byte for byte", () 
 });
 
 test("native and Web V3 snapshots distinguish current outputs from retained history", () => {
-  for (const domain of ["gray", "box"]) {
+  for (const domain of ["gray", "box", "relation"]) {
     const runtime = compileProgramWire(new Uint8Array(Buffer.from(fixture.computed[domain], "hex")), 0xffff_ffff), held = [];
     try {
       const waiting = runtime.updateUnknown(0n, 0xffff_ffff);

@@ -292,7 +292,7 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
 
     @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32]) throws -> Self {
         try selection { b in
-            b.u16(1); b.u32(try boundedCount(targetsInPreferenceOrder.count))
+            b.u16(2); b.u32(try boundedCount(targetsInPreferenceOrder.count))
             for target in targetsInPreferenceOrder { b.u32(target) }
         }
         return self

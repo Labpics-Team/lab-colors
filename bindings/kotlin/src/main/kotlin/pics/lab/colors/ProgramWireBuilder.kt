@@ -196,7 +196,7 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("assignment already exists")
         entry(3) { out ->
             val size = count(targetsInPreferenceOrder.size).toInt()
-            out.u16(1); out.u32(size.toUInt())
+            out.u16(2); out.u32(size.toUInt())
             for (index in 0 until size) out.u32(targetsInPreferenceOrder[index])
         }
     }
