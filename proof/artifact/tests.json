@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "b1d5e2da4ebae2236975234e7ae295ad3292083044f81c028cc99bad29b1889a",
+ "record_sha256": "54b64a1935be824f0dce015b3341a989bd42fe50972f1de67bdad516000d4494",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1422,6 +1422,7 @@
    "fixed_strong_source_is_not_replaced_when_another_target_is_repaired: test",
    "fixture_replays_bit_for_bit: test",
    "fuzz_500_vectors_match_frozen_characterization: test",
+   "gap_constraint_rejects_an_otherwise_acceptable_anchor: test",
    "gate1_every_policy_const_is_marked: test",
    "gate2_inventory_and_markers_are_in_sync: test",
    "gate3_needs_science_contract_holds_both_ways: test",
@@ -2279,9 +2280,10 @@
    "wcag22_tests::same_pair_may_fail_text_and_pass_a_3_to_1_criterion: test",
    "wcag_luminance_coefficients_isolated: test",
    "wcag_published_ratios_via_public_api: test",
-   "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
+   "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
+   "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1315,
+  "enabled_count": 1317,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",
