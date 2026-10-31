@@ -74,9 +74,18 @@ class ProbeApplication : Application() {
                     check(it.state() == emptyState && it.outputCount() == 0uL && !it.hasRender())
                 }
                 check(installed == null)
-                attachment.updateObserved(ULong.MAX_VALUE, listOf(1u), byteArrayOf(0, 0, 0), 1u).use {
-                    check(it.revision() == ULong.MAX_VALUE && it.state() == "ready")
-                    check(it.outputRgb(0u).contentEquals(byteArrayOf(-65, -65, -65)))
+                attachment.updateObserved(3uL, listOf(1u), byteArrayOf(0, 0, 0), 1u).use {
+                    if (domain is ProgramWireDomainV3.Gray) {
+                        check(it.state() == "ready" && it.reason() == null)
+                        check(it.outputRgb(0u).contentEquals(byteArrayOf(-65, -65, -65)))
+                    } else {
+                        check(it.state() == "incomplete" && it.reason() == "limit")
+                        check(it.outputCount() == 0uL && !it.hasRender() && installed == null)
+                    }
+                }
+                attachment.updateObserved(ULong.MAX_VALUE, listOf(1u), byteArrayOf(-128, -128, -128), 1u).use {
+                    check(it.revision() == ULong.MAX_VALUE && it.state() == "ready" && it.reason() == null)
+                    check(it.outputRgb(0u).contentEquals(byteArrayOf(64, 64, 64)))
                 }
                 attachment.materializationAuthority().use { check(it.terminalCompositeRgb().contentEquals(byteArrayOf(96, 96, 96))) }
                 check(first.outputRgb(0u).contentEquals(byteArrayOf(64, 64, 64)))

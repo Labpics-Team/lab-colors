@@ -210,12 +210,8 @@
             0
           ]
         ],
-        "state": "ready",
-        "rgb": [
-          191,
-          191,
-          191
-        ]
+        "state": "incomplete",
+        "reason": "limit"
       },
       {
         "revision": 5,
