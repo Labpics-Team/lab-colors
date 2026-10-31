@@ -64,9 +64,9 @@
   "conformance/program-runtime-v1.json": "297002a482f29b17bcb4afeb4f94a2727ac85a58",
   "conformance/vectors/alpha.json": "c9b6008f4db1f7bb1f6e516312da766c6cf5f2d2",
   "conformance/vectors/contrasts.json": "3be094681d3ca20fe8fd5ba324eb25287303f13d",
-  "conformance/vectors/manifest.json": "e849bcb1a3a74fe84c4dc48b74785941aaea848e",
+  "conformance/vectors/manifest.json": "53d26d855664342238a6bd43b968f4c35e6dbeff",
   "conformance/vectors/solve.json": "59564fd99935fcfc61fc2a5454c5b825cb68151c",
-  "conformance/vectors/wcag22.json": "aa2734be208f87afd3884d72fff0552908f6b280",
+  "conformance/vectors/wcag22.json": "a4414722d4facd79eb823143eab43f9e477d6fb8",
   "crates/labcolors-audit/Cargo.toml": "eff190c39ae3ea3b6ee7b76492ec394b367259a8",
   "crates/labcolors-audit/src/bin/scanner.rs": "61a6751474a7146beb2ee7f9fb7acccd62be2777",
   "crates/labcolors-audit/src/dispose.rs": "daa9cd31635e3685d14330c068f9a040639f5850",
@@ -622,7 +622,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "4548ab83a880035844ec79bfc030e08c97a6f871"
  },
- "record_sha256": "8f7a44f16d1823d7a3e4fe57400a3f199e71cbc54956219f462bd0f236bd82f4",
+ "record_sha256": "dd57e1d72a092d69087ed4f437394610b1fac4d31fa3a2be8fd413ed971d4a58",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
