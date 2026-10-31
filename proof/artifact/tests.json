@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "bdc027e96bddb1eb55e9b3abe357e9a2a6810491e26da4b5de15c3c004d39c9f",
+ "record_sha256": "db54e5448d1404731ab90fff58ae0cbb7637c2adc11aa7ec8256de804a8fb448",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1200,6 +1200,7 @@
    "compiled_program_instantiates_and_updates: test",
    "composition::tests::admitted_opacity_multiplication_is_closed_at_boundaries_and_underflow: test",
    "composition::tests::admitted_opacity_predecessor_is_exact_and_stays_inside_the_domain: test",
+   "composition::tests::final_bytes_preserve_rgb_order_at_monotonicity_proof_cuts: test",
    "composition::tests::opacity_domain_canonicalises_zero_and_represents_fixed_without_a_second_type: test",
    "composition::tests::opacity_domain_rejects_invalid_or_reversed_boundaries_before_execution: test",
    "constraint_tests::bound_report_release_matches_assessment_and_registry: test",
@@ -1292,7 +1293,7 @@
    "crates/labcolors-core/src/solve.rs - solve::Gamut (line 96): test",
    "crates/labcolors-core/src/spaces/vc.rs - spaces::vc::ViewingConditions (line 96): test",
    "crates/labcolors-core/src/spaces/vc.rs - spaces::vc::ViewingConditions::dim_surround (line 261): test",
-   "crates/labcolors-core/src/wcag22.rs - wcag22::Wcag22AssessmentV1 (line 263): test",
+   "crates/labcolors-core/src/wcag22.rs - wcag22::Wcag22AssessmentV1 (line 285): test",
    "crates/labcolors-core/src/wcag22_evidence.rs - wcag22_evidence::CanonicalFiniteBoundedEvidenceV1 (line 17): test",
    "curve::tests::curve_position_rejects_nonfinite_and_out_of_domain_values: test",
    "curve::tests::dyn_curve_renders_through_own_vc: test",
@@ -1983,6 +1984,14 @@
    "program_relation_tests::relation_endpoints_and_intrinsic_unary_target_fail_with_typed_errors: test",
    "program_relation_tests::relation_identity_ignores_opaque_names_and_candidate_declaration_order: test",
    "program_relation_tests::visible_relation_checks_every_candidate_in_every_admitted_scenario: test",
+   "program_session::computed_assignment::qualification_tests::actual_roots_are_finite_and_monotone_on_small_edges: test",
+   "program_session::computed_assignment::qualification_tests::joint_assignment_matches_independent_tuple_oracle_and_preference_order: test",
+   "program_session::computed_assignment::qualification_tests::nested_alpha_region_search_matches_fixed_program_exhaustion: test",
+   "program_session::computed_assignment::qualification_tests::product_bounds_enclose_exhaustive_small_boxes_and_machine_scores: test",
+   "program_session::computed_assignment::qualification_tests::program_assignment_matches_full_cartesian_oracle_at_tolerance_boundaries: test",
+   "program_session::computed_assignment::qualification_tests::report_only_and_unbounded_predicates_are_not_region_vetoes: test",
+   "program_session::computed_assignment::qualification_tests::signed_bounds_zero_and_gray_have_discriminating_cases: test",
+   "program_session::computed_assignment::qualification_tests::unrelated_declarations_preserve_authored_dark_and_fixed_light_intents: test",
    "program_session::computed_assignment::tests::admissible_but_unselected_final_source_cannot_claim_preference: test",
    "program_session::computed_assignment::tests::computed_new_rgb_and_valid_anchor_use_real_program: test",
    "program_session::computed_assignment::tests::computed_physical_recheck_owns_verdict_after_search_pass: test",
@@ -2061,9 +2070,11 @@
    "program_wire::fv01_red_tests::public_attachment_resource_failure_keeps_head_and_allows_same_revision_retry: test",
    "program_wire::fv01_red_tests::ready_attachment_is_the_only_materialization_authority_source: test",
    "program_wire::runtime_tests::computed_attachment_revokes_stopped_outputs_and_preserves_rejected_head: test",
+   "program_wire::runtime_tests::computed_full_rgb_domain_finishes_through_public_runtime: test",
    "program_wire::runtime_tests::computed_snapshot_keeps_current_output_separate_from_legacy_history: test",
    "program_wire::runtime_tests::computed_snapshot_unknown_reason_is_not_search_limit: test",
    "program_wire::runtime_tests::detached_snapshots_remain_readable_after_later_reuse_and_session_drop: test",
+   "program_wire::runtime_tests::direct_assignment_policy_rejects_previous_experimental_tag: test",
    "program_wire::runtime_tests::family_graphs_fail_closed_until_a_public_trust_parameter_exists: test",
    "program_wire::runtime_tests::public_session_preserves_resource_failure_and_retries_same_revision: test",
    "program_wire::runtime_tests::update_failure_preserves_previous_ready_snapshot: test",
@@ -2311,7 +2322,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1345,
+  "enabled_count": 1356,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",
