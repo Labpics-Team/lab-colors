@@ -119,6 +119,9 @@ outputs доступны только в `ready`; `unsatisfied`, `incomplete`, `
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
 внешними потребителями; подтверждение рендера не выводится из расчёта цвета.
+`CONFIRM_EXACT` подтверждает прежнее состояние и stamp без повторной установки.
+После отзыва `point == null` допустим, только если у host также нет paint и
+совпадают sequence/binding epoch.
 
 Attached snapshot предоставляет те же `snapshotVersion`, `revision` и `reason`.
 Новая принятая ревизия с `incomplete` или `unsatisfied` сначала отзывает прежний

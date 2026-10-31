@@ -89,11 +89,19 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
         XCTAssertNotEqual(intent.bindingEpoch, 0)
         if let epoch { XCTAssertEqual(intent.bindingEpoch, epoch) }
         switch intent.operation {
-        case .setAll, .confirmExact:
+        case .setAll:
             let paint = try XCTUnwrap(intent.point)
             XCTAssertEqual(paint.slot, 91)
             XCTAssertEqual(paint.source.count, 3)
             XCTAssertEqual(paint.opacity, expectedOpacity)
+        case .confirmExact:
+            XCTAssertEqual(intent.desiredSequence, sequence)
+            XCTAssertEqual(intent.point?.source, point)
+            if let paint = intent.point {
+                XCTAssertEqual(paint.slot, 91)
+                XCTAssertEqual(paint.source.count, 3)
+                XCTAssertEqual(paint.opacity, expectedOpacity)
+            }
         case .revokeAll:
             XCTAssertNil(intent.point)
         }

@@ -40,9 +40,16 @@ private class Host(private val expectedOpacity: Double = 1.0) : ProgramPointSink
         assertNotEquals(0uL, intent.bindingEpoch)
         epoch?.let { assertEquals(it, intent.bindingEpoch) }
         when (intent.operation) {
-            ProgramPointSinkOperation.SET_ALL, ProgramPointSinkOperation.CONFIRM_EXACT -> {
+            ProgramPointSinkOperation.SET_ALL -> {
                 val paint = requireNotNull(intent.point)
                 assertEquals(91u, paint.slot); assertEquals(3, paint.source.size); assertEquals(expectedOpacity, paint.opacity, 0.0)
+            }
+            ProgramPointSinkOperation.CONFIRM_EXACT -> {
+                assertEquals(sequence, intent.desiredSequence)
+                assertArrayEquals(point, intent.point?.source)
+                intent.point?.let {
+                    assertEquals(91u, it.slot); assertEquals(3, it.source.size); assertEquals(expectedOpacity, it.opacity, 0.0)
+                }
             }
             ProgramPointSinkOperation.REVOKE_ALL -> assertNull(intent.point)
         }
