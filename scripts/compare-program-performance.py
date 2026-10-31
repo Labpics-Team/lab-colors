@@ -83,7 +83,7 @@ metadata = {
     "runtimePayload": {label: runtime_payload(root) for label, root in roots.items()},
     "harnessSha256": hashlib.sha256(args.harness.read_bytes()).hexdigest(),
     "samplesAfterWarmup": 3,
-    "rounds": 2,
+    "rounds": 4,
 }
 
 
@@ -98,7 +98,7 @@ def read_measurement(output, label, pattern, nodes):
     if len({cycle["checksum"] for cycle in cycles}) != 1:
         raise ValueError("consumer output differs between cold and warmed cycles")
     for cycle in cycles:
-        if not cycle["updatesMs"] or not all(
+        if len(cycle["updatesMs"]) != 64 or not all(
                 type(value) in (int, float) and math.isfinite(value) and value >= 0
                 for value in (cycle["compileMs"], cycle["cycleMs"], *cycle["updatesMs"])):
             raise ValueError("consumer cycle has no updates or invalid timings")
@@ -118,7 +118,7 @@ deadline = time.monotonic() + args.budget
 for nodes, patterns in scenarios:
     for pattern in patterns:
         for round_index in range(metadata["rounds"]):
-            order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
+            order = ("baseline", "candidate") if round_index % 2 == 0 else ("candidate", "baseline")
             for label in order:
                 started = time.monotonic()
                 command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes),
@@ -190,21 +190,20 @@ if any(record["status"] != "completed" for record in observations):
 
 if args.profile:
     # Instrumented processes never enter observations or the latency summary.
-    # Cap diagnostics at one ordinary process budget, shared equally by all runs.
+    # Cap diagnostics at one ordinary process budget, shared by all runs; short cases leave time for larger controls.
     memory_observer = Path(__file__).with_name("observe-program-memory.mjs").resolve(strict=True)
     profile_cases = [(pattern, nodes, label)
-                     for pattern, nodes in (("repeated", 1024), ("distinct", 1024),
-                                            ("ring", 256), ("ring", 2048))
+                     for pattern, nodes in (("repeated", 256), ("repeated", 1024), ("distinct", 1024),
+                                            ("ring", 256), ("ring", 1024), ("ring", 2048))
                      for label in roots]
     profile_budget = min(args.timeout, args.budget)
-    profile_timeout = profile_budget / len(profile_cases)
     profile_root = (args.output / "profiles").resolve()
     profile_root.mkdir(parents=True, exist_ok=True)
     profiles = {
         "includedInLatencySummary": False,
         "samplingIntervalUs": 1000,
         "budgetSeconds": profile_budget,
-        "processTimeoutSeconds": profile_timeout,
+        "processTimeoutSeconds": args.timeout,
         "harnessSha256": metadata["harnessSha256"],
         "memoryObserverSha256": hashlib.sha256(memory_observer.read_bytes()).hexdigest(),
         "observations": [],
@@ -234,7 +233,7 @@ if args.profile:
             try:
                 process = subprocess.run(
                     command, capture_output=True, text=True,
-                    timeout=min(profile_timeout, remaining), check=False,
+                    timeout=min(args.timeout, remaining), check=False,
                     env={**os.environ, "LABCOLORS_MEMORY_REPORT": str(memory_path)},
                 )
                 record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
