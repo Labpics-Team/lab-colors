@@ -278,8 +278,7 @@ mod refinement {
                     None
                 } else {
                     // At most the dirty members precede the first clean member.
-                    let representative = order
-                        [cell.physical_begin..cell.physical_begin + cell.len]
+                    let representative = order[cell.physical_begin..cell.physical_begin + cell.len]
                         .iter()
                         .copied()
                         .find(|&vertex| !marked[vertex])
@@ -405,8 +404,7 @@ mod refinement {
                         }
                         let new_cell = cells.len();
                         let end = tail + group.len;
-                        for (&vertex, destination) in members
-                            [group.member_begin..group.member_end]
+                        for (&vertex, destination) in members[group.member_begin..group.member_end]
                             .iter()
                             .zip(tail..end)
                         {
@@ -425,12 +423,7 @@ mod refinement {
                         // Finalized tail ranges cannot be disturbed by later
                         // groups: their members are disjoint and positions exact.
                         if group_index != split.largest {
-                            mark_neighbours(
-                                graph,
-                                &order[tail..end],
-                                &mut marked,
-                                &mut dirty,
-                            )?;
+                            mark_neighbours(graph, &order[tail..end], &mut marked, &mut dirty)?;
                         }
                         tail = end;
                     }
@@ -3671,9 +3664,8 @@ mod tests {
             };
             rank[*vertex] = index;
         }
-        let mut partition = full_refine_partition_reference(
-            graph, PartitionV1::initial(graph)?, &mut Vec::new(),
-        )?;
+        let mut partition =
+            full_refine_partition_reference(graph, PartitionV1::initial(graph)?, &mut Vec::new())?;
         while let Some(cell) = partition.0.first_non_singleton() {
             // Выбор вершины допустим в исходном полном поиске; все последующие
             // split и их порядок вычисляет прежний refine без пакетной ветви.
@@ -3683,7 +3675,9 @@ mod tests {
                 .min_by_key(|&vertex| rank[vertex])
                 .ok_or(ProgramCompileError::InternalInvariant)?;
             partition = full_refine_partition_reference(
-                graph, individualize(&partition.0, cell, vertex)?, &mut Vec::new(),
+                graph,
+                individualize(&partition.0, cell, vertex)?,
+                &mut Vec::new(),
             )?;
         }
         Ok(partition)
@@ -3746,7 +3740,10 @@ mod tests {
     }
 
     fn split_rounds(rounds: Vec<Vec<Vec<usize>>>) -> Vec<Vec<Vec<usize>>> {
-        let mut rounds = rounds.into_iter().map(ordered_cell_sets).collect::<Vec<_>>();
+        let mut rounds = rounds
+            .into_iter()
+            .map(ordered_cell_sets)
+            .collect::<Vec<_>>();
         rounds.dedup();
         rounds
     }
@@ -4042,11 +4039,7 @@ mod tests {
                 // Marker multiplicities order the source children as [1,4,1].
                 // Their matching receiver children inherit that same order.
                 for (index, multiplicity) in [0, 1, 1, 1, 1, 2].into_iter().enumerate() {
-                    builder.add_edge(
-                        sources[index],
-                        receivers[index],
-                        EdgeRoleV1::TargetSource,
-                    )?;
+                    builder.add_edge(sources[index], receivers[index], EdgeRoleV1::TargetSource)?;
                     for _ in 0..multiplicity {
                         builder.add_edge(sources[index], marker, EdgeRoleV1::TargetSource)?;
                     }
@@ -4107,7 +4100,10 @@ mod tests {
                     "source split must propagate: dirty={largest_is_dirty}, permutation={permutation}",
                 );
                 let first_sources = ordered_members(&trace.rounds[0], &sources);
-                assert_eq!(first_sources, expected_source_children, "first source split");
+                assert_eq!(
+                    first_sources, expected_source_children,
+                    "first source split"
+                );
                 assert_eq!(
                     ordered_members(&trace.rounds[0], &receivers),
                     vec![receivers.clone()],
@@ -4139,8 +4135,14 @@ mod tests {
                     .copied()
                     .filter(|receiver| !dirty_receivers.contains(receiver))
                     .collect::<Vec<_>>();
-                assert_eq!(dirty_receivers, expected_dirty_receivers, "actual dirty set");
-                assert_eq!(clean_receivers, expected_clean_receivers, "actual clean set");
+                assert_eq!(
+                    dirty_receivers, expected_dirty_receivers,
+                    "actual dirty set"
+                );
+                assert_eq!(
+                    clean_receivers, expected_clean_receivers,
+                    "actual clean set"
+                );
                 assert_eq!(
                     ordered_members(&trace.rounds[1], &sources),
                     expected_source_children,
@@ -4170,11 +4172,16 @@ mod tests {
                     .enumerate()
                     .max_by_key(|(_, cell)| cell.len())
                     .expect("the receiver cell has children");
-                assert_eq!(largest_child, 1, "the unique largest child is in the middle");
+                assert_eq!(
+                    largest_child, 1,
+                    "the unique largest child is in the middle"
+                );
 
                 if largest_is_dirty {
                     assert!(
-                        largest_receivers.iter().all(|vertex| dirty_receivers.contains(vertex)),
+                        largest_receivers
+                            .iter()
+                            .all(|vertex| dirty_receivers.contains(vertex)),
                         "the largest child must consist entirely of dirty vertices",
                     );
                     assert!(
@@ -4203,10 +4210,9 @@ mod tests {
 
     #[test]
     fn sparse_refinement_visits_only_changed_signatures() -> Result<(), ProgramCompileError> {
-        for count in [32, 128] {
+        for count in [32_usize, 128] {
             for reverse_edges in [false, true] {
-                let mut builder =
-                    GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+                let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
                 let vertices = (0..count)
                     .map(|_| builder.add_member(VertexColorV1::new(vertex_tag::SOURCE)))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -4221,17 +4227,26 @@ mod tests {
                 let graph = builder.finish()?;
                 let (partition, trace) =
                     assert_refinement_matches_full(&graph, PartitionV1::initial(&graph)?)?;
-                assert!(partition.0.is_discrete(), "the path must reach its complete refinement");
+                assert!(
+                    partition.0.is_discrete(),
+                    "the path must reach its complete refinement"
+                );
                 // После первого прохода следующий split затрагивает два конца
                 // остатка пути и одного представителя неизменившихся вершин.
                 let work_bound = count + 3 * count.div_ceil(2);
-                assert!(trace.signature_vertices >= count, "the first round must execute");
+                assert!(
+                    trace.signature_vertices >= count,
+                    "the first round must execute"
+                );
                 assert!(
                     trace.signature_vertices <= work_bound,
                     "{} signatures for a path of {count} vertices; bound {work_bound}",
                     trace.signature_vertices,
                 );
-                assert!(trace.signature_arcs >= 2 * count, "the signatures must inspect edges");
+                assert!(
+                    trace.signature_arcs >= 2 * count,
+                    "the signatures must inspect edges"
+                );
                 assert!(
                     trace.signature_arcs <= 3 * trace.signature_vertices,
                     "a path member has at most three incident typed arcs",
