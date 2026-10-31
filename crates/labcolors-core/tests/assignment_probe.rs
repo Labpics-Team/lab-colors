@@ -69,6 +69,62 @@ fn feasible_anchor_stays_exact_instead_of_maximizing_contrast() {
 }
 
 #[test]
+fn zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement() {
+    // 119 не проходит контраст с белым при 4,5:1; 118 проходит, но
+    // не совпадает с авторской опорой. Ноль запрещает даже такую замену.
+    let mut exact = against_light(119, 118, 118, 255);
+    exact.targets[0].max_delta = 0.0;
+    let mut relaxed = exact.clone();
+    relaxed.targets[0].max_delta = 0.3;
+
+    assert!(!experiment::admissible(&exact, &[[118; 3]]));
+    assert!(experiment::admissible(&relaxed, &[[118; 3]]));
+    for pruning in [false, true] {
+        assert_eq!(
+            experiment::solve(&exact, pruning, u64::MAX).outcome,
+            Outcome::Unsatisfied
+        );
+        assert_eq!(
+            experiment::solve(&relaxed, pruning, u64::MAX).outcome,
+            Outcome::Assigned(vec![[118; 3]])
+        );
+    }
+    assert_eq!(oracle::solve(&exact).best, None);
+    assert_eq!(oracle::solve(&relaxed).best, Some(vec![[118; 3]]));
+}
+
+#[test]
+fn gap_constraint_rejects_an_otherwise_acceptable_anchor() {
+    // Изолируем Gap: нулевое расстояние между равными цветами меньше
+    // положительного требования. Без Gap та же опора допустима.
+    let accepted = Problem {
+        targets: vec![gray_target("gap-fixture", 90, 90, 90)],
+        constraints: vec![],
+    };
+    let mut rejected = accepted.clone();
+    rejected.constraints.push(Constraint::Gap {
+        lighter: Source::Target(0),
+        darker: Source::Fixed([90; 3]),
+        minimum_q55: 1 << 50,
+    });
+
+    assert!(experiment::admissible(&accepted, &[[90; 3]]));
+    assert!(!experiment::admissible(&rejected, &[[90; 3]]));
+    for pruning in [false, true] {
+        assert_eq!(
+            experiment::solve(&accepted, pruning, u64::MAX).outcome,
+            Outcome::Assigned(vec![[90; 3]])
+        );
+        assert_eq!(
+            experiment::solve(&rejected, pruning, u64::MAX).outcome,
+            Outcome::Unsatisfied
+        );
+    }
+    assert_eq!(oracle::solve(&accepted).best, Some(vec![[90; 3]]));
+    assert_eq!(oracle::solve(&rejected).best, None);
+}
+
+#[test]
 fn fixed_strong_source_is_not_replaced_when_another_target_is_repaired() {
     let mut problem = against_light(180, 90, 180, 255);
     problem.constraints.push(Constraint::Gap {
