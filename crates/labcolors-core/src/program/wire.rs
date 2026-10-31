@@ -1,4 +1,4 @@
-//! Каноническая wire-грамматика авторского Draft-графа Program (v1).
+//! Каноническая wire-грамматика авторского Draft-графа Program (V1–V3).
 //!
 //! Слой 1 двухслойного публичного контракта: байты -> декларации. Семантику
 //! графа проверяет слой 2 — атомарный [`super::DraftV1::compile`]; декодер
@@ -25,11 +25,11 @@ use crate::wcag22::Wcag22CriterionV1;
 
 /// Magic-префикс формата: Lab Colors Program Wire.
 pub(crate) const PROGRAM_WIRE_MAGIC_V1: [u8; 4] = *b"LCPW";
-/// Единственная версия, которую понимает этот декодер. Field-секции (C7e
-/// stage 2) войдут НОВОЙ версией, а не форком формата.
+/// Исходный envelope без авторской записи joint selection.
 pub(crate) const PROGRAM_WIRE_VERSION_V1: u16 = 1;
 /// Explicit authored SelectionRelease envelope; V1 remains unchanged.
 pub(crate) const PROGRAM_WIRE_VERSION_V2: u16 = 2;
+pub(crate) const PROGRAM_WIRE_VERSION_V3: u16 = 3;
 /// Верхняя граница записей одной секции: fail-closed budget pin по образцу
 /// evidence-bounds. Значение намеренно щедрое для авторских графов и
 /// намеренно фатальное для hostile length-полей.
@@ -68,7 +68,9 @@ pub(crate) enum ProgramWireErrorV1 {
     /// Первые четыре байта не `LCPW`.
     InvalidMagic,
     /// Версию формата этот декодер не понимает.
-    UnsupportedVersion { declared: u16 },
+    UnsupportedVersion {
+        declared: u16,
+    },
     /// Буфер короче заявленной длины, длина не совпадает с фактической или
     /// после последней секции остался непустой хвост.
     InvalidLength,
@@ -79,7 +81,12 @@ pub(crate) enum ProgramWireErrorV1 {
         offset: usize,
     },
     /// Длина секции превышает объявленный wire-limit.
-    ResourceExhausted { section: WireSectionV1 },
+    ResourceExhausted {
+        section: WireSectionV1,
+    },
+    AssignmentResourceExhausted {
+        section: WireSectionV1,
+    },
 }
 
 /// Позиционный reader: та же fail-closed дисциплина, что у private fixture
@@ -161,7 +168,7 @@ impl<'a> WireReader<'a> {
         Ok(count)
     }
 
-    fn finish(self) -> Result<(), ProgramWireErrorV1> {
+    fn finish(&self) -> Result<(), ProgramWireErrorV1> {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {
@@ -252,8 +259,10 @@ fn decode_program_wire_version(
         return Err(ProgramWireErrorV1::InvalidMagic);
     }
     let version = reader.read_u16()?;
-    if !matches!(version, PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2)
-        || required.is_some_and(|expected| version != expected)
+    if !matches!(
+        version,
+        PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2 | PROGRAM_WIRE_VERSION_V3
+    ) || required.is_some_and(|expected| version != expected)
     {
         return Err(ProgramWireErrorV1::UnsupportedVersion { declared: version });
     }
@@ -263,6 +272,16 @@ fn decode_program_wire_version(
         return Err(ProgramWireErrorV1::InvalidLength);
     }
 
+    let decoded = decode_body(&mut reader, version);
+    decoded.map_err(|error| match error {
+        ProgramWireErrorV1::ResourceExhausted { section } if version == PROGRAM_WIRE_VERSION_V3 => {
+            ProgramWireErrorV1::AssignmentResourceExhausted { section }
+        }
+        other => other,
+    })
+}
+
+fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, ProgramWireErrorV1> {
     let mut draft = DraftV1::new();
 
     // Sources: id u32 + rgb.
@@ -306,6 +325,23 @@ fn decode_program_wire_version(
                 })?;
                 draft.push_finite_target(TargetIdV1::new(id), domain);
             }
+            3 if version == PROGRAM_WIRE_VERSION_V3 => {
+                use crate::program_session::computed_assignment::AssignmentDomainV1;
+                let domain = match reader.read_u8()? {
+                    1 => AssignmentDomainV1::Cube {
+                        lower: reader.read_bytes::<3>()?,
+                        upper: reader.read_bytes::<3>()?,
+                    },
+                    2 => AssignmentDomainV1::Gray {
+                        lower: reader.read_u8()?,
+                        upper: reader.read_u8()?,
+                    },
+                    _ => return Err(reader.declaration_error(entry_offset)),
+                };
+                let anchor = reader.read_rgb()?;
+                let tolerance = reader.read_f64_bits()?;
+                draft.push_computed_target(TargetIdV1::new(id), domain, anchor, tolerance);
+            }
             _ => return Err(reader.declaration_error(entry_offset)),
         }
     }
@@ -327,9 +363,25 @@ fn decode_program_wire_version(
     let joint_offset = reader.offset;
     let selection_count = reader.read_count()?;
     match (version, selection_count) {
-        (_, 0) => {}
+        (PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2, 0) => {}
+        (PROGRAM_WIRE_VERSION_V3, 1) => {
+            if reader.read_u16()? != 2 {
+                return Err(reader.declaration_error(joint_offset));
+            }
+            let count = reader.read_count()?;
+            let mut order = Vec::new();
+            order.try_reserve_exact(count as usize).map_err(|_| {
+                ProgramWireErrorV1::ResourceExhausted {
+                    section: WireSectionV1::JointSelection,
+                }
+            })?;
+            for _ in 0..count {
+                order.push(crate::program_session::TargetId::new(reader.read_u32()?));
+            }
+            draft.set_assignment(order);
+        }
         (PROGRAM_WIRE_VERSION_V2, 1) => {
-            let selection = read_selection_release(&mut reader)?;
+            let selection = read_selection_release(reader)?;
             draft
                 .set_materialised_joint_selection(selection)
                 .map_err(|_| reader.declaration_error(joint_offset))?;
@@ -451,11 +503,11 @@ fn decode_program_wire_version(
     // разный режим. Report-грамматика допускает только report-able виды.
     reader.enter(WireSectionV1::HardConstraints);
     for _ in 0..reader.read_count()? {
-        decode_constraint(&mut reader, &mut draft, ConstraintModeV1::Hard)?;
+        decode_constraint(reader, &mut draft, ConstraintModeV1::Hard)?;
     }
     reader.enter(WireSectionV1::ReportConstraints);
     for _ in 0..reader.read_count()? {
-        decode_constraint(&mut reader, &mut draft, ConstraintModeV1::ReportOnly)?;
+        decode_constraint(reader, &mut draft, ConstraintModeV1::ReportOnly)?;
     }
 
     // Outputs: slot + paint.
@@ -1096,6 +1148,67 @@ impl ProgramWireBuilderV1 {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn computed_box_target(
+        &mut self,
+        id: u32,
+        lower: [u8; 3],
+        upper: [u8; 3],
+        anchor: Srgb8,
+        max_delta: f64,
+    ) -> &mut Self {
+        push_u32(&mut self.targets, id);
+        self.targets.extend_from_slice(&[3, 1]);
+        self.targets.extend_from_slice(&lower);
+        self.targets.extend_from_slice(&upper);
+        self.targets.extend_from_slice(&anchor.bytes());
+        push_f64_bits(&mut self.targets, max_delta);
+        self.targets_count += 1;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn computed_gray_target(
+        &mut self,
+        id: u32,
+        lower: u8,
+        upper: u8,
+        anchor: Srgb8,
+        max_delta: f64,
+    ) -> &mut Self {
+        push_u32(&mut self.targets, id);
+        self.targets.extend_from_slice(&[3, 2, lower, upper]);
+        self.targets.extend_from_slice(&anchor.bytes());
+        push_f64_bits(&mut self.targets, max_delta);
+        self.targets_count += 1;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_assignment(
+        self,
+        targets: &[u32],
+    ) -> Result<Vec<u8>, ProgramWireEncodeErrorV1> {
+        let offset = 10 + 12 + self.sources.len() + self.targets.len() + self.families.len();
+        let mut bytes = self.finish()?;
+        let mut selection = Vec::new();
+        selection.extend_from_slice(&2_u16.to_le_bytes());
+        push_u32(
+            &mut selection,
+            u32::try_from(targets.len()).map_err(|_| ProgramWireEncodeErrorV1::TooManyEntries)?,
+        );
+        for &target in targets {
+            push_u32(&mut selection, target);
+        }
+        bytes[4..6].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[offset..offset + 4].copy_from_slice(&1_u32.to_le_bytes());
+        bytes.splice(offset + 4..offset + 4, selection);
+        let len =
+            u32::try_from(bytes.len()).map_err(|_| ProgramWireEncodeErrorV1::TooManyEntries)?;
+        bytes[6..10].copy_from_slice(&len.to_le_bytes());
+        Ok(bytes)
+    }
+
     /// Кандидаты — пары (id, rgb, opacity-bits) в authored-порядке.
     pub(crate) fn finite_target(&mut self, id: u32, candidates: &[(u32, Srgb8, f64)]) -> &mut Self {
         push_u32(&mut self.targets, id);
@@ -1256,6 +1369,24 @@ impl ProgramWireBuilderV1 {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn exact_visible_relation_hard(
+        &mut self,
+        id: u32,
+        reference: u32,
+        candidates: &[u32],
+    ) -> &mut Self {
+        let section = self.constraint_section(true);
+        push_u32(section, id);
+        section.push(KIND_EXACT_VISIBLE_RELATION);
+        push_u32(section, reference);
+        push_u32(section, candidates.len() as u32);
+        for candidate in candidates {
+            push_u32(section, *candidate);
+        }
+        self
+    }
+
     pub(crate) fn output(&mut self, slot: u32, paint: u32) -> &mut Self {
         push_u32(&mut self.outputs, slot);
         push_u32(&mut self.outputs, paint);
@@ -1304,6 +1435,150 @@ impl ProgramWireBuilderV1 {
 
 #[cfg(kani)]
 mod proofs;
+
+#[cfg(test)]
+mod assignment_v3_tests {
+    use super::*;
+    use crate::program_wire::{ProgramRuntimeErrorV1, ProgramScenarioV1, compile_program_wire};
+
+    fn declaration(lower: u8, upper: u8, tolerance: f64) -> ProgramWireBuilderV1 {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .computed_gray_target(2, lower, upper, Srgb8::new([150; 3]), tolerance)
+            .surface_input_port(6)
+            .solid_paint(3, 2)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 3, 7, 64.0, 0.2, 1)
+            .wcag22_visible_unary(true, 10, 8, 3)
+            .output(17, 3);
+        builder
+    }
+
+    #[test]
+    fn v3_admission_owns_domains_tolerance_and_complete_preference_order() {
+        for tolerance in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+            let bytes = declaration(0, 255, tolerance)
+                .finish_assignment(&[2])
+                .expect("wire декларации кодируется");
+            assert!(matches!(
+                compile_program_wire(&bytes),
+                Err(ProgramRuntimeErrorV1::Compile)
+            ));
+        }
+        for order in [vec![], vec![77], vec![2, 2]] {
+            let bytes = declaration(0, 255, 1.0)
+                .finish_assignment(&order)
+                .expect("wire декларации кодируется");
+            assert!(matches!(
+                compile_program_wire(&bytes),
+                Err(ProgramRuntimeErrorV1::Compile)
+            ));
+        }
+        let invalid_domain = declaration(200, 100, 1.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        assert!(matches!(
+            compile_program_wire(&invalid_domain),
+            Err(ProgramRuntimeErrorV1::Compile)
+        ));
+        let positive = declaration(0, 255, 0.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        let negative = declaration(0, 255, -0.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        assert_eq!(
+            compile_program_wire(&positive)
+                .expect("допустимый Program компилируется")
+                .content_identity(),
+            compile_program_wire(&negative)
+                .expect("допустимый Program компилируется")
+                .content_identity()
+        );
+
+        let mut mixed = declaration(0, 255, 1.0);
+        mixed.finite_target(20, &[(21, Srgb8::new([50; 3]), 1.0)]);
+        let bytes = mixed
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        assert!(matches!(
+            compile_program_wire(&bytes),
+            Err(ProgramRuntimeErrorV1::Unsupported)
+        ));
+        assert!(
+            compile_program_wire(
+                &declaration(0, 255, 1.0)
+                    .finish_assignment(&[2])
+                    .expect("wire декларации кодируется")
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn v3_joint_assignment_uses_the_authored_preference_list() {
+        let declaration = |order: &[u32]| {
+            let mut builder = ProgramWireBuilderV1::new();
+            builder
+                .computed_gray_target(21, 0, 4, Srgb8::new([0; 3]), 1.0)
+                .computed_gray_target(22, 0, 4, Srgb8::new([0; 3]), 1.0)
+                .surface_input_port(31)
+                .opacity_input(32, 0.5)
+                .solid_paint(41, 21)
+                .solid_paint(42, 22)
+                .opacity_paint(43, 42, 32)
+                .input_surface(51, 31)
+                .source_over_occurrence(61, 41, 51, 64.0, 0.2, 1)
+                .occurrence_surface(52, 61)
+                .source_over_occurrence(62, 43, 52, 64.0, 0.2, 1)
+                .exact_visible_unary(true, 81, 62, Srgb8::new([2; 3]))
+                .output(91, 41)
+                .output(92, 43);
+            builder
+                .finish_assignment(order)
+                .expect("wire декларации кодируется")
+        };
+        let mut identities = Vec::new();
+        for (order, expected) in [([21, 22], [0, 3]), ([22, 21], [3, 0])] {
+            let compiled = compile_program_wire(&declaration(&order))
+                .expect("допустимый Program компилируется");
+            identities.push(compiled.content_identity());
+            let mut session = compiled
+                .instantiate(1)
+                .expect("Session создаётся с допустимым stream");
+            let snapshot = session
+                .update_observed(1, &[ProgramScenarioV1::new(1, vec![Srgb8::new([0; 3])])])
+                .expect("наблюдение принимается");
+            for (slot, gray) in [(91, expected[0]), (92, expected[1])] {
+                let output = snapshot
+                    .outputs()
+                    .iter()
+                    .find(|output| output.slot() == slot)
+                    .expect("объявленный output присутствует");
+                assert_eq!(output.source(), Srgb8::new([gray; 3]));
+            }
+        }
+        assert_ne!(identities[0], identities[1]);
+    }
+
+    #[test]
+    fn v3_computed_declaration_reaches_the_existing_program_owner() {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .computed_gray_target(2, 0, 255, Srgb8::new([150; 3]), 1.0)
+            .surface_input_port(6)
+            .solid_paint(3, 2)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 3, 7, 64.0, 0.2, 1)
+            .wcag22_visible_unary(true, 10, 8, 3)
+            .output(17, 3);
+        let bytes = builder
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        assert!(decode_program_wire_v1(&bytes).is_err());
+        assert!(crate::program_wire::compile_program_wire(&bytes).is_ok());
+    }
+}
 
 #[cfg(test)]
 mod selection_v2_tests {

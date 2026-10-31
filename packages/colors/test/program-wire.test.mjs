@@ -122,6 +122,10 @@ test("packed ProgramWire subpath resolves with runtime and declarations", () => 
       'import { ProgramWireBuilderV2 } from "@labpics/colors/program-wire/abi-v2.js"; const bytes = new ProgramWireBuilderV2().selectionRelease(1n, [[{ id: 1, choices: [{ target: 21, candidate: 201 }] }]]).finish(); console.log(new DataView(bytes.buffer).getUint16(4,true));'],
       { cwd: fixture, encoding: "utf8" }).trim();
     assert.equal(v2, "2");
+    const v3 = execFileSync(process.execPath, ["--input-type=module", "--eval",
+      'import { ProgramWireBuilderV3 } from "@labpics/colors/program-wire/abi-v3.js"; const bytes = new ProgramWireBuilderV3().computedTarget(21, { kind: "gray", lower: 0, upper: 255 }, [100, 100, 100], 1).assignment([21]).finish(); console.log(new DataView(bytes.buffer).getUint16(4,true));'],
+      { cwd: fixture, encoding: "utf8" }).trim();
+    assert.equal(v3, "3");
     execFileSync(process.execPath, ["--input-type=module", "--eval",
       'await import("@labpics/colors/program-wire/encoding.js").then(() => { throw new Error("internal encoder leaked"); }, e => { if (e.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw e; });'],
       { cwd: fixture, stdio: ["ignore", "pipe", "pipe"] });
@@ -133,12 +137,39 @@ test("packed ProgramWire subpath resolves with runtime and declarations", () => 
       'new ProgramWireBuilderV1().source(1, [0, 0, 0]).finish();\n' +
       'const state: ProgramSelectionStateV2 = { id: 1, choices: [{ target: 21, candidate: 201 }] };\n' +
       'new ProgramWireBuilderV2().finiteTarget(21, [{ id: 201, rgb: [0,0,0], opacity: 1 }]).selectionRelease(1n, [[state]]).finish();\n' +
-      '// @ts-expect-error exact u64 revision uses bigint\nnew ProgramWireBuilderV2().selectionRelease(1, [[state]]);\n',
+      '// @ts-expect-error exact u64 revision uses bigint\nnew ProgramWireBuilderV2().selectionRelease(1, [[state]]);\n' +
+      `import { ProgramWireBuilderV3, type ProgramWireDomainV3 } from "@labpics/colors/program-wire/abi-v3.js";
+const gray: ProgramWireDomainV3 = { kind: "gray", lower: 0, upper: 255 };
+const box: ProgramWireDomainV3 = { kind: "box", lower: [0, 0, 0], upper: [255, 255, 255] };
+const v3 = new ProgramWireBuilderV3().source(11, [255, 255, 255]).fixedTarget(22, 11)
+  .computedTarget(21, gray, [100, 100, 100], 1);
+const chained: ProgramWireBuilderV3 = v3.computedTarget(23, box, [0, 0, 0], 0).assignment([21, 23] as const);
+const bytes: Uint8Array = chained.finish();
+// @ts-expect-error gray содержит скалярные границы.
+v3.computedTarget(21, { kind: "gray", lower: [0, 0, 0], upper: 255 }, [0, 0, 0], 1);
+// @ts-expect-error box содержит RGB8 triples.
+v3.computedTarget(21, { kind: "box", lower: 0, upper: 255 }, [0, 0, 0], 1);
+// @ts-expect-error неизвестный domain не входит в текущий договор.
+v3.computedTarget(21, { kind: "sphere", lower: 0, upper: 255 }, [0, 0, 0], 1);
+// @ts-expect-error опора — RGB triple.
+v3.computedTarget(21, gray, [0, 0], 1);
+// @ts-expect-error допуск обязателен.
+v3.computedTarget(21, gray, [0, 0, 0]);
+// @ts-expect-error ID — number без coercion.
+v3.computedTarget(21n, gray, [0, 0, 0], 1);
+// @ts-expect-error порядок задаётся number IDs.
+v3.assignment([21n]);
+// @ts-expect-error V3 не предоставляет V2 selection release.
+v3.selectionRelease(1n, [[state]]);
+// @ts-expect-error опубликованный domain неизменяем.
+gray.lower = 1;
+void bytes;
+`,
     );
-    execFileSync(
+    for (const compiler of ["typescript", "typescript-floor"]) execFileSync(
       process.execPath,
       [
-        join(PACKAGE_ROOT, "node_modules", "typescript", "lib", "tsc.js"),
+        join(PACKAGE_ROOT, "node_modules", compiler, "lib", "tsc.js"),
         "--noEmit",
         "--strict",
         "--module",

@@ -820,7 +820,8 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         "handoff_point_sink(",
         ".update(updatev1::observed",
         ".render_outputs()",
-        ".certificate()",
+        ".certificates()",
+        ".evidence()",
         ".content_identity()",
         "run_request_v1(",
         "update_request_v2(",
@@ -1009,9 +1010,9 @@ fn finite_target_intent_has_no_dead_source_axis() {
         normalized_source_scope(
             PROGRAM_SESSION_SOURCE,
             "pub enum TargetIntentV1 {",
-            "/// A Paint-addressable target",
+            "impl TargetIntentV1 {",
         ),
-        "pub enum TargetIntentV1 { FixedSource(SourceId), Finite(FinitePaintDomainV1), }",
+        "pub enum TargetIntentV1 { FixedSource(SourceId), Finite(FinitePaintDomainV1), Computed(ComputedTargetV1), }",
         "Target intent must remain a closed sum instead of a source × domain product",
     );
     assert_eq!(
@@ -1302,7 +1303,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     );
     for required in [
         "raw_head: &'session mut SessionObservationHeadV1,",
-        "state: &'session mut SessionState<Plan::Verified, Plan::Violation>,",
+        "state: &'session mut SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
         "deferred_retirement: &'session mut Option<DeferredSessionRetirement<Plan>>,",
         "guard: PendingSessionTransitionGuard<'session, Plan>,",
     ] {
@@ -1324,7 +1325,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     );
     for required in [
         "plan: &'session mut Plan,",
-        "pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,",
+        "pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>>,",
         "owner: Option<Plan::OwnerLease>,",
     ] {
         assert_eq!(
@@ -1335,7 +1336,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     }
     assert!(
         abort_guard
-            .find("pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,")
+            .find("pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>>,")
             .expect("abort guard must own pending evidence")
             < abort_guard
                 .find("owner: Option<Plan::OwnerLease>,")
@@ -1415,7 +1416,8 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         "retired_raw_head: Option<SessionObservationHeadV1>,",
         "retired_verified: Option<Plan::Verified>,",
         "retired_violation: Option<Plan::Violation>,",
-        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,",
+        "retired_incomplete: Option<Plan::Incomplete>,",
+        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
     ] {
         assert!(
             deferred_retirement
@@ -1433,6 +1435,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     for required in [
         "plan.retire_verified(verified);",
         "plan.retire_violation(violation);",
+        "plan.retire_incomplete(incomplete);",
         "drop(self.retired_raw_head.take());",
     ] {
         assert!(
@@ -1630,15 +1633,16 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     assert_eq!(
         normalized_source_scope(
             SESSION_SOURCE,
-            "pub(crate) enum SessionState<Verified, Violation> {",
-            "impl<Verified, Violation> SessionState<Verified, Violation>",
+            "pub(crate) enum SessionState<Verified, Violation, Incomplete = Infallible> {",
+            "impl<Verified, Violation, Incomplete> SessionState<Verified, Violation, Incomplete>",
         ),
         concat!(
-            "pub(crate) enum SessionState<Verified, Violation> { ",
+            "pub(crate) enum SessionState<Verified, Violation, Incomplete = Infallible> { ",
             "Waiting, ",
             "Ready { current: Verified, }, ",
             "Stale { previous: Verified, }, ",
             "Failed { cause: Violation, previous: Option<Verified>, }, ",
+            "Incomplete { cause: Incomplete, previous: Option<Verified>, }, ",
             "}",
         ),
         "lifecycle state must not duplicate the current raw observation",
@@ -1666,7 +1670,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     for required in [
         "observation_arenas: ObservationArenaPoolV1,",
         "raw_head: SessionObservationHeadV1,",
-        "state: SessionState<Plan::Verified, Plan::Violation>,",
+        "state: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
         "deferred_retirement: Option<DeferredSessionRetirement<Plan>>,",
     ] {
         assert_eq!(
@@ -1716,6 +1720,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "type OwnerLease;",
         "type Verified: SessionEvidenceV1;",
         "type Violation: SessionEvidenceV1;",
+        "type Incomplete: SessionEvidenceV1;",
         "fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;",
         "owner: &'a Self::OwnerLease,",
         "SessionUpdateError::OwnerExpired",

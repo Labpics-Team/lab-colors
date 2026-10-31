@@ -1,6 +1,6 @@
 //! Детерминированные истории настоящего Session/observation lifecycle.
 //! Единственный подменяемый доменный вход — результат чистого evaluator-а:
-//! Verified, Violation или ошибка. Цветовая математика здесь не утверждается.
+//! Verified, Violation, Incomplete или ошибка. Цветовая математика здесь не утверждается.
 
 use super::*;
 use crate::Srgb8;
@@ -26,12 +26,14 @@ struct Plan {
     outcome: u8,
     evaluations: u8,
     substitute: Option<Evidence>,
+    retired: [u32; 3],
 }
 impl private::PlanSealed for Plan {}
 impl SessionPlanV1 for Plan {
     type OwnerLease = ();
     type Verified = Evidence;
     type Violation = Evidence;
+    type Incomplete = Evidence;
     type Error = ();
     fn try_acquire_owner(&self) -> Option<()> {
         self.alive.then_some(())
@@ -45,7 +47,7 @@ impl SessionPlanV1 for Plan {
         observation: RevisionBoundObservationV1,
         _: Option<&Evidence>,
         permit: SessionObservationBindingPermitV1,
-    ) -> Result<SessionDecision<Evidence, Evidence>, ()> {
+    ) -> Result<SessionDecision<Evidence, Evidence, Evidence>, ()> {
         self.evaluations += 1;
         assert!(permit.stream() == observation.stream());
         assert!(permit.revision() == observation.revision());
@@ -53,11 +55,23 @@ impl SessionPlanV1 for Plan {
             return Err(());
         }
         let evidence = self.substitute.clone().unwrap_or(Evidence(observation));
-        if self.outcome == 0 {
-            Ok(SessionDecision::Verified(evidence))
-        } else {
-            Ok(SessionDecision::Violation(evidence))
+        match self.outcome {
+            0 => Ok(SessionDecision::Verified(evidence)),
+            3 => Ok(SessionDecision::Incomplete(evidence)),
+            _ => Ok(SessionDecision::Violation(evidence)),
         }
+    }
+
+    fn retire_verified(&mut self, _: Evidence) {
+        self.retired[0] += 1;
+    }
+
+    fn retire_violation(&mut self, _: Evidence) {
+        self.retired[1] += 1;
+    }
+
+    fn retire_incomplete(&mut self, _: Evidence) {
+        self.retired[2] += 1;
     }
 }
 
@@ -88,6 +102,7 @@ fn new_session(stream: u32) -> Session<Plan> {
         outcome: 0,
         evaluations: 0,
         substitute: None,
+        retired: [0; 3],
     };
     Session::new(ObservationStreamId::new(stream), plan)
 }
@@ -219,7 +234,7 @@ fn lifecycle_observed_order_cancel_and_failure_matrix() {
                     ..ORIGINAL
                 },
             ] {
-                for outcome in 0..3 {
+                for outcome in 0..4 {
                     for alive in [false, true] {
                         for mode in 0..3 {
                             for keyed in [false, true] {
@@ -280,7 +295,16 @@ fn lifecycle_observed_order_cancel_and_failure_matrix() {
                                             assert_eq!(*retained, Some(previous));
                                             assert!(session.state.current_verified().is_none());
                                         }
-                                        _ => panic!("new observed result must be Ready or Failed"),
+                                        SessionState::Incomplete {
+                                            cause,
+                                            previous: retained,
+                                        } => {
+                                            assert_eq!(outcome, 3);
+                                            assert!(cause.observation().is_same_binding_as(raw));
+                                            assert_eq!(*retained, Some(previous));
+                                            assert!(session.state.current_verified().is_none());
+                                        }
+                                        _ => panic!("наблюдение должно иметь собственный исход"),
                                     }
                                 }
                                 assert_eq!(
@@ -298,7 +322,7 @@ fn lifecycle_observed_order_cancel_and_failure_matrix() {
 
 #[test]
 fn lifecycle_rejects_saved_evidence_for_a_new_revision() {
-    for outcome in 0..2 {
+    for outcome in [0, 1, 3] {
         for keyed in [false, true] {
             let mut session = new_session(1);
             let mut scratch = Vec::new();
@@ -404,5 +428,180 @@ fn lifecycle_unknown_and_violation_never_reactivate_last_good() {
                 .revision(),
             Revision::new(3)
         );
+    }
+}
+
+#[test]
+fn lifecycle_incomplete_accepts_new_revision_without_current_output() {
+    for keyed in [false, true] {
+        let mut session = new_session(1);
+        let mut scratch = Vec::new();
+        prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
+        session.plan.outcome = 3;
+        let prepared = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода");
+        assert!(matches!(
+            prepared.disposition(),
+            PreparedSessionDispositionV1::Incomplete(_)
+        ));
+        let committed = prepared.commit();
+        let ObservationHeadViewV1::Observed(raw) = committed.raw_head() else {
+            panic!("незавершённый поиск принимает само наблюдение")
+        };
+        let SessionState::Incomplete { cause, previous } = committed.state() else {
+            panic!("исчерпание не является ошибкой или доказанной пустотой")
+        };
+        assert_eq!(raw.revision(), Revision::new(1));
+        assert!(cause.observation().is_same_binding_as(raw));
+        assert_eq!(
+            previous
+                .as_ref()
+                .expect("предыдущее verified-состояние сохранено")
+                .observation()
+                .revision(),
+            Revision::new(0)
+        );
+        assert!(committed.state().current_verified().is_none());
+        assert_eq!(committed.state().last_verified(), previous.as_ref());
+    }
+}
+
+#[test]
+fn lifecycle_first_incomplete_replays_without_work_and_rejects_old_or_changed_input() {
+    for keyed in [false, true] {
+        let mut session = new_session(1);
+        let mut scratch = Vec::new();
+        session.plan.outcome = 3;
+        prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
+        assert!(matches!(
+            session.state(),
+            SessionState::Incomplete { previous: None, .. }
+        ));
+        let old_head = session.raw_head.clone();
+        let old_state = session.state.clone();
+        // Любое повторное вычисление стало бы ошибкой: replay обязан вернуть
+        // уже принятое решение, а не начать поиск с заново выданным бюджетом.
+        session.plan.outcome = 2;
+        let replay = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода");
+        assert!(matches!(
+            replay.disposition(),
+            PreparedSessionDispositionV1::Idempotent { .. }
+        ));
+        replay.commit();
+        assert_eq!(session.plan.evaluations, 1);
+        assert_eq!(session.plan.retired, [0; 3]);
+        let changed = Input {
+            rgb: [0; 3],
+            ..ORIGINAL
+        };
+        assert!(matches!(
+            prepare(&mut session, 1, changed, &mut scratch, keyed),
+            Err(SessionUpdateError::Observation(
+                ObservationError::RevisionConflict { .. }
+            ))
+        ));
+        assert!(matches!(
+            prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed),
+            Err(SessionUpdateError::Observation(
+                ObservationError::RevisionOutOfOrder { .. }
+            ))
+        ));
+        assert_eq!(session.raw_head, old_head);
+        assert_eq!(session.state, old_state);
+        assert_eq!(session.plan.evaluations, 1);
+    }
+}
+
+#[test]
+fn lifecycle_incomplete_retirement_is_symmetric_across_abort_commit_and_deferred_commit() {
+    for keyed in [false, true] {
+        for history in [false, true] {
+            for next_outcome in [0, 1, 3, 4] {
+                for mode in 0..3 {
+                    let mut session = new_session(1);
+                    let mut scratch = Vec::new();
+                    if history {
+                        prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
+                            .expect("наблюдение допускает подготовку перехода")
+                            .commit();
+                    }
+                    session.plan.outcome = 3;
+                    prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+                        .expect("наблюдение допускает подготовку перехода")
+                        .commit();
+                    let old_head = session.raw_head.clone();
+                    let old_state = session.state.clone();
+                    session.plan.outcome = next_outcome;
+                    let prepared = if next_outcome == 4 {
+                        session.prepare_unknown(Revision::new(2), UnknownReasonId::new(1))
+                    } else {
+                        prepare(&mut session, 2, ORIGINAL, &mut scratch, keyed)
+                    }
+                    .expect("наблюдение допускает подготовку перехода");
+                    finish(prepared, mode);
+                    if mode == 0 {
+                        assert_eq!(session.raw_head, old_head);
+                        assert_eq!(session.state, old_state);
+                        let mut expected = [0; 3];
+                        if next_outcome != 4 {
+                            expected[match next_outcome {
+                                0 => 0,
+                                1 => 1,
+                                _ => 2,
+                            }] = 1;
+                        }
+                        assert_eq!(session.plan.retired, expected);
+                    } else {
+                        let expected = [u32::from(history && next_outcome == 0), 0, 1];
+                        if mode == 2 {
+                            assert_eq!(session.plan.retired, [0; 3]);
+                            // Drain предшествует даже owner rejection следующей попытки.
+                            session.plan.alive = false;
+                            assert!(matches!(
+                                session.prepare_unknown(Revision::new(3), UnknownReasonId::new(1)),
+                                Err(SessionUpdateError::OwnerExpired)
+                            ));
+                        }
+                        assert_eq!(session.plan.retired, expected);
+                        assert_eq!(session.raw_head().revision(), Some(Revision::new(2)));
+                        assert_eq!(
+                            session.state().current_verified().is_some(),
+                            next_outcome == 0
+                        );
+                        assert_eq!(
+                            session.state().last_verified().is_some(),
+                            history || next_outcome == 0
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn lifecycle_wrong_binding_incomplete_is_retired_without_replacing_committed_pair() {
+    for keyed in [false, true] {
+        let mut session = new_session(1);
+        let mut scratch = Vec::new();
+        prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
+        let old_head = session.raw_head.clone();
+        let old_state = session.state.clone();
+        session.plan.substitute = session.state.last_verified().cloned();
+        session.plan.outcome = 3;
+        assert!(matches!(
+            prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed),
+            Err(SessionUpdateError::EvidenceBindingInvariant)
+        ));
+        assert_eq!(session.plan.retired, [0, 0, 1]);
+        assert_eq!(session.raw_head, old_head);
+        assert_eq!(session.state, old_state);
     }
 }

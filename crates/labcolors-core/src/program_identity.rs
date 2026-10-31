@@ -204,6 +204,7 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
+    pub(super) const TARGET_COMPUTED: u8 = 30;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -1079,6 +1080,11 @@ where
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
+            TargetIntentV1::Computed(target) => {
+                let mut color = VertexColorV1::new(vertex_tag::TARGET_COMPUTED);
+                color.push_bytes(&target.identity_bytes())?;
+                color
+            }
         };
         let target_vertex = graph.add_member(target_color)?;
         targets.insert(target.id(), target_vertex)?;
@@ -2344,10 +2350,54 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    if program.assignment.is_some()
+        || program
+            .targets
+            .iter()
+            .any(|target| matches!(target.intent(), TargetIntentV1::Computed(_)))
+    {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
     Ok(ProgramContentIdentityV9(*digest.as_bytes()))
+}
+
+pub(super) fn compile_owner_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<ProgramOwnerIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    if program.assignment.is_some() {
+        return compile_computed_identity(program).map(ProgramOwnerIdentityV1::Computed);
+    }
+    compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
+}
+
+fn compile_computed_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let graph = build_graph(program)?;
+    let canonical = canonical_preimage(&graph)?;
+    // Semantic identity связывает объявленную политику и граф. Предел работы
+    // принадлежит отдельному execution profile; старый V9 preimage не изменён.
+    let domain = b"labcolors.computed-program.v2.direct-oklab-f64.lex-rgb.full-recheck\0";
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(domain.len() + canonical.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    bytes.extend_from_slice(domain);
+    bytes.extend_from_slice(&canonical);
+    Ok(computed_assignment::ComputedIdentityV1(
+        *crate::sha256::digest(&bytes).as_bytes(),
+    ))
 }
 
 mod ordering {

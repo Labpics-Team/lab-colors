@@ -20,7 +20,7 @@ private fun expectCode(code: String, block: () -> Unit) {
     catch (error: LabColorsException.Refused) { assertEquals(code, error.code) }
 }
 
-private class Host : ProgramPointSinkHost {
+private class Host(private val expectedOpacity: Double = 1.0) : ProgramPointSinkHost {
     var owner = WeakReference<ProgramAttachment>(null)
     var reject = false
     var fail = false
@@ -40,9 +40,16 @@ private class Host : ProgramPointSinkHost {
         assertNotEquals(0uL, intent.bindingEpoch)
         epoch?.let { assertEquals(it, intent.bindingEpoch) }
         when (intent.operation) {
-            ProgramPointSinkOperation.SET_ALL, ProgramPointSinkOperation.CONFIRM_EXACT -> {
+            ProgramPointSinkOperation.SET_ALL -> {
                 val paint = requireNotNull(intent.point)
-                assertEquals(91u, paint.slot); assertEquals(3, paint.source.size); assertEquals(1.0, paint.opacity, 0.0)
+                assertEquals(91u, paint.slot); assertEquals(3, paint.source.size); assertEquals(expectedOpacity, paint.opacity, 0.0)
+            }
+            ProgramPointSinkOperation.CONFIRM_EXACT -> {
+                assertEquals(sequence, intent.desiredSequence)
+                assertArrayEquals(point, intent.point?.source)
+                intent.point?.let {
+                    assertEquals(91u, it.slot); assertEquals(3, it.source.size); assertEquals(expectedOpacity, it.opacity, 0.0)
+                }
             }
             ProgramPointSinkOperation.REVOKE_ALL -> assertNull(intent.point)
         }
@@ -85,6 +92,7 @@ class ContractTest {
                     }.get(10, TimeUnit.SECONDS)
                     held.add(snapshot)
                     assertEquals(row.getString("state"), snapshot.state())
+                    assertEquals(1u, snapshot.snapshotVersion()); assertEquals(revision, snapshot.revision()); assertNull(snapshot.reason())
                     if (row.has("rgb")) {
                         assertEquals(1uL, snapshot.outputCount())
                         assertEquals(91u, snapshot.outputSlot(0u))
@@ -111,6 +119,66 @@ class ContractTest {
         runtime.close(); runtime.close()
         try { runtime.updateUnknown(2uL, 7u); fail("closed native handle was usable") }
         catch (_: IllegalStateException) { }
+        computedRuntimeHistory()
+    }
+
+    private fun computedRuntimeHistory() {
+        val vectors = fixture().getJSONObject("computed")
+        val unsupported = ProgramWireBuilderV3().computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), rgb(0, 0, 0), 1.0)
+            .assignment(listOf(21u)).apply { finiteTarget(22u, listOf(ProgramCandidate(1u, rgb(0, 0, 0), 1.0))) }.finish()
+        expectCode("program_unsupported") { compileProgramWire(unsupported, 1u).close() }
+        expectCode("program_unsupported") { attachProgramWire(unsupported, 1u, 91u, 501u, 71u, 61u, Host()).close() }
+        for (domain in listOf("gray", "box", "relation")) {
+            compileProgramWire(hex(vectors.getString(domain)), UInt.MAX_VALUE).use { runtime ->
+                runtime.updateUnknown(0uL, UInt.MAX_VALUE).use {
+                    assertEquals(2u, it.snapshotVersion()); assertEquals(0uL, it.revision())
+                    assertEquals("waiting", it.state()); assertNull(it.reason()); assertEquals(0uL, it.outputCount())
+                }
+                val held = mutableListOf<ProgramSnapshot>()
+                try {
+                    val history = vectors.getJSONArray(domain + "History")
+                    for (index in 0 until history.length()) {
+                        val row = history.getJSONObject(index)
+                        val revision = row.getLong("revision").toULong()
+                        val snapshot = if (row.has("unknownReason")) runtime.updateUnknown(revision, row.getInt("unknownReason").toUInt())
+                        else {
+                            val surfaces = row.getJSONArray("backgrounds").getJSONArray(0).rgb()
+                            runtime.updateObserved(revision, listOf(1u), surfaces, 1u).also { current ->
+                                runtime.updateObserved(revision, listOf(1u), surfaces, 1u).use {
+                                    assertEquals(current.state(), it.state()); assertEquals(current.reason(), it.reason())
+                                    assertEquals(current.outputCount(), it.outputCount())
+                                }
+                            }
+                        }
+                        held.add(snapshot)
+                        assertEquals(2u, snapshot.snapshotVersion()); assertEquals(revision, snapshot.revision())
+                        assertEquals(row.getString("state"), snapshot.state())
+                        assertEquals(if (row.has("reason")) row.getString("reason") else null, snapshot.reason())
+                        if (row.has("rgb")) {
+                            assertEquals(1uL, snapshot.outputCount()); assertEquals(91u, snapshot.outputSlot(0u))
+                            assertArrayEquals(row.getJSONArray("rgb").rgb(), snapshot.outputRgb(0u))
+                            assertEquals(0.5, snapshot.outputOpacity(0u), 0.0)
+                        } else {
+                            assertEquals(0uL, snapshot.outputCount())
+                            expectCode("invalid_output_index") { snapshot.outputRgb(0u) }
+                        }
+                    }
+                    assertArrayEquals(rgb(64, 64, 64), held.first().outputRgb(0u)); assertEquals(1uL, held.first().revision())
+                    expectCode("program_update") { runtime.updateUnknown(1uL, 7u).close() }
+                    val current = held.last()
+                    val surfaces = history.getJSONObject(history.length() - 1).getJSONArray("backgrounds").getJSONArray(0).rgb()
+                    val conflicting = surfaces.copyOf().apply { this[0] = (this[0].toInt() xor 1).toByte() }
+                    expectCode("program_update") { runtime.updateObserved(current.revision(), listOf(1u), conflicting, 1u).close() }
+                    runtime.updateObserved(current.revision(), listOf(1u), surfaces, 1u).use {
+                        assertEquals(current.revision(), it.revision()); assertEquals(current.state(), it.state())
+                        assertArrayEquals(current.outputRgb(0u), it.outputRgb(0u))
+                    }
+                    runtime.updateObserved(ULong.MAX_VALUE, listOf(1u), rgb(128, 128, 128), 1u).use {
+                        assertEquals(ULong.MAX_VALUE, it.revision()); assertEquals("ready", it.state())
+                    }
+                } finally { held.forEach { it.close() } }
+            }
+        }
     }
 
     @Test fun authoringIsCanonicalAndTransactional() {
@@ -192,6 +260,80 @@ class ContractTest {
         val owner = ProgramWireBuilderV1().source(UInt.MAX_VALUE, mutable)
         val saved = owner.finish(); mutable[0] = 99; owner.source(1u, rgb(0, 0, 0))
         assertArrayEquals(ProgramWireBuilderV1().source(UInt.MAX_VALUE, rgb(1, 2, 3)).finish(), saved)
+        computedAuthoring(vectors.getJSONObject("computed"))
+    }
+
+    private fun computedAuthoring(vectors: JSONObject) {
+        val encoded = ProgramWireBuilderV3()
+            .computedTarget(0x10203040u, ProgramWireDomainV3.Box(rgb(1, 2, 3), rgb(4, 5, 6)), rgb(250, 0, 7), 0.25)
+            .computedTarget(19u, ProgramWireDomainV3.Gray(10u, 12u), rgb(9, 8, 7), 8.0)
+            .assignment(listOf(0x10203040u, 19u)).finish()
+        assertArrayEquals(hex(vectors.getString("encodingOnly")), encoded)
+        for ((domain, name) in listOf(ProgramWireDomainV3.Gray(0u, 255u) to "gray",
+                ProgramWireDomainV3.Box(rgb(0, 0, 0), rgb(255, 255, 255)) to "box")) {
+            val wire = ProgramWireBuilderV3().computedTarget(21u, domain, rgb(64, 64, 64), 1.0).assignment(listOf(21u)).apply {
+                surfaceInputPort(31u); opacityInput(32u, 0.5); solidPaint(41u, 21u); opacityPaint(42u, 41u, 32u)
+                inputSurface(51u, 31u); sourceOverOccurrence(61u, 42u, 51u, 64.0, 0.2, ProgramSurround.DIM)
+                presentationRoot(71u, 61u); presentationTarget(71u, 61u)
+                exactVisibleUnary(true, 81u, 61u, rgb(96, 96, 96)); output(91u, 42u)
+            }.finish()
+            assertArrayEquals(hex(vectors.getString(name)), wire)
+        }
+        val builder = ProgramWireBuilderV3().apply { source(11u, rgb(20, 20, 20)) }
+        val before = builder.finish()
+        val invalid = listOf(ProgramWireDomainV3.Gray(2u, 1u),
+            ProgramWireDomainV3.Box(rgb(1, 2), rgb(3, 4, 5)), ProgramWireDomainV3.Box(rgb(1, 2, 3), rgb(3, 4)),
+            ProgramWireDomainV3.Box(rgb(2, 0, 0), rgb(1, 1, 1)), ProgramWireDomainV3.Box(rgb(0, 2, 0), rgb(1, 1, 1)),
+            ProgramWireDomainV3.Box(rgb(0, 0, 2), rgb(1, 1, 1)))
+        for (domain in invalid) {
+            try { builder.computedTarget(21u, domain, rgb(0, 0, 0), 1.0); fail("invalid domain accepted") }
+            catch (_: ProgramWireException.InvalidDeclaration) { }
+            assertArrayEquals(before, builder.finish())
+        }
+        for (delta in listOf(-1.0, -Double.MIN_VALUE, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.MAX_VALUE, 1e155)) {
+            try { builder.computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), rgb(0, 0, 0), delta); fail("invalid delta accepted") }
+            catch (_: ProgramWireException.InvalidDeclaration) { }
+            assertArrayEquals(before, builder.finish())
+        }
+        try { builder.computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), rgb(0, 0), 1.0); fail("invalid anchor accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        try { builder.assignment(emptyList()); fail("empty order accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        val oversized = object : AbstractList<UInt>() { override val size = 4097; override fun get(index: Int): UInt = error("limit before reads") }
+        try { builder.assignment(oversized); fail("oversized order accepted") }
+        catch (_: ProgramWireException.TooManyEntries) { }
+        val reentrant = object : AbstractList<UInt>() {
+            override val size = 1
+            override fun get(index: Int): UInt { builder.assignment(listOf(29u)); return 21u }
+        }
+        try { builder.assignment(reentrant); fail("reentrant order accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        assertArrayEquals(before, builder.finish())
+        val lawful = object : AbstractList<UInt>() {
+            override val size = 1; override fun get(index: Int) = 21u
+            override fun iterator(): Iterator<UInt> = error("iterator must not control encoding")
+        }
+        builder.assignment(lawful)
+        val accepted = builder.finish()
+        try { builder.assignment(listOf(21u)); fail("duplicate assignment accepted") }
+        catch (_: ProgramWireException.InvalidDeclaration) { }
+        assertArrayEquals(accepted, builder.finish())
+        for (domain in listOf(ProgramWireDomainV3.Gray(0u, 255u), ProgramWireDomainV3.Gray(19u, 19u),
+                ProgramWireDomainV3.Box(rgb(0, 0, 0), rgb(255, 255, 255)), ProgramWireDomainV3.Box(rgb(1, 2, 3), rgb(1, 2, 3)))) {
+            assertArrayEquals(ProgramWireBuilderV3().computedTarget(UInt.MAX_VALUE, domain, rgb(0, 0, 0), 0.0).finish(),
+                ProgramWireBuilderV3().computedTarget(UInt.MAX_VALUE, domain, rgb(0, 0, 0), -0.0).finish())
+        }
+        val lower = rgb(1, 2, 3); val anchor = rgb(4, 5, 6); val order = mutableListOf(29u, 21u)
+        val owner = ProgramWireBuilderV3().computedTarget(21u, ProgramWireDomainV3.Box(lower, rgb(7, 8, 9)), anchor, 1.0).assignment(order)
+        val saved = owner.finish(); lower[0] = -1; anchor[0] = -1; order.reverse()
+        assertArrayEquals(saved, owner.finish())
+        val bounded = ProgramWireBuilderV3()
+        repeat(4096) { bounded.computedTarget(it.toUInt(), ProgramWireDomainV3.Gray(0u, 0u), rgb(0, 0, 0), 0.0) }
+        bounded.assignment((4095 downTo 0).map { it.toUInt() })
+        val full = bounded.finish()
+        try { bounded.computedTarget(4096u, ProgramWireDomainV3.Gray(0u, 0u), rgb(0, 0, 0), 0.0); fail("over-limit target accepted") }
+        catch (_: ProgramWireException.TooManyEntries) { }
+        assertArrayEquals(full, bounded.finish())
     }
 
     @Test fun hostFailureReentryRevocationAndRecovery() {
@@ -225,6 +367,54 @@ class ContractTest {
             expectCode("program_attachment_revoke_unconfirmed") { attachment.dispose(false) }
             host.point = null; attachment.dispose(true)
             expectCode("program_attachment_already_disposed") { attachment.updateUnknown(6uL, 7u).close() }
+        }
+        computedAttachmentHistory()
+    }
+
+    private fun computedAttachmentHistory() {
+        val vectors = fixture().getJSONObject("computed")
+        for (domain in listOf("gray", "box", "relation")) {
+            val host = Host(0.5)
+            attachProgramWire(hex(vectors.getString(domain)), 1u, 91u, 501u, 71u, 61u, host).use { attachment ->
+                host.owner = WeakReference(attachment); host.reenter = true
+                attachment.updateObserved(1uL, listOf(1u), rgb(128, 128, 128), 1u).use { first ->
+                    assertEquals(2u, first.snapshotVersion()); assertEquals(1uL, first.revision()); assertNull(first.reason())
+                    attachment.materializationAuthority().use { assertArrayEquals(rgb(96, 96, 96), it.terminalCompositeRgb()) }
+                    host.reject = true
+                    expectCode("program_attachment_host_rejected") { attachment.updateObserved(2uL, listOf(1u), rgb(255, 255, 255), 1u).close() }
+                    attachment.materializationAuthority().use { assertEquals(1uL, it.revision()) }
+                    assertArrayEquals(rgb(64, 64, 64), host.point); host.reject = false
+                    val history = vectors.getJSONArray(domain + "History")
+                    for (index in 1 until history.length()) {
+                        val row = history.getJSONObject(index); val revision = row.getLong("revision").toULong()
+                        val snapshot = if (row.has("unknownReason")) attachment.updateUnknown(revision, row.getInt("unknownReason").toUInt())
+                        else {
+                            val surfaces = row.getJSONArray("backgrounds").getJSONArray(0).rgb()
+                            attachment.updateObserved(revision, listOf(1u), surfaces, 1u).also { current ->
+                                attachment.updateObserved(revision, listOf(1u), surfaces, 1u).use { assertEquals(current.state(), it.state()) }
+                            }
+                        }
+                        snapshot.use {
+                            assertEquals(2u, it.snapshotVersion()); assertEquals(revision, it.revision())
+                            assertEquals(row.getString("state"), it.state())
+                            assertEquals(if (row.has("reason")) row.getString("reason") else null, it.reason())
+                            assertEquals(row.has("rgb"), it.hasRender())
+                            if (row.has("rgb")) {
+                                assertEquals(1uL, it.outputCount()); assertArrayEquals(row.getJSONArray("rgb").rgb(), it.outputRgb(0u))
+                                assertArrayEquals(row.getJSONArray("rgb").rgb(), host.point)
+                            } else {
+                                assertEquals(0uL, it.outputCount()); assertNull(host.point)
+                                expectCode("invalid_output_index") { it.outputRgb(0u) }
+                                expectCode("program_materialization_not_ready") { attachment.materializationAuthority().close() }
+                            }
+                        }
+                    }
+                    assertArrayEquals(rgb(64, 64, 64), first.outputRgb(0u))
+                }
+                expectCode("program_attachment_revoke_unconfirmed") { attachment.dispose(false) }
+                host.point = null; attachment.dispose(true)
+                expectCode("program_attachment_already_disposed") { attachment.updateUnknown(6uL, 7u).close() }
+            }
         }
     }
 

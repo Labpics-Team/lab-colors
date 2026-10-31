@@ -187,6 +187,7 @@ impl SessionPlanV1 for SceneBindingPlan {
     type OwnerLease = ();
     type Verified = SceneBindingEvidence;
     type Violation = SceneBindingEvidence;
+    type Incomplete = std::convert::Infallible;
     type Error = FieldEvaluationErrorV1;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {

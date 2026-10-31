@@ -78,16 +78,17 @@ use crate::program_session::{
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
     FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
     JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    PointOutputPresentationBindErrorV1, PointPresentationRootV1, PointPresentationTargetV1,
-    PresentationRootId, ProgramCompileError, ProgramConflictV1, ProgramConstraintCellV1,
-    ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
-    ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1,
-    ProgramIntrinsicUnaryPassEvidenceV1, ProgramIntrinsicUnaryViolationEvidenceV1,
-    ProgramPaintOutputV1, ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1,
-    ProgramReportV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
-    ProgramSessionPlan, ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
-    TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
+    PointOutputPresentationBindErrorV1, PointPhysicalEvidenceV1, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
+    ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
+    ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9,
+    ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramIntrinsicUnaryViolationEvidenceV1, ProgramOwnerIdentityV1, ProgramPaintOutputV1,
+    ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
+    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
+    ProgramVerifiedOutcomeV1, ProgramVerifiedV1, ProgramViolationOutcomeV1,
+    ProgramVisibleRelationBindingV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
+    TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 #[cfg(test)]
 pub(crate) use crate::relation::DirectedRelationErrorV1;
@@ -105,7 +106,13 @@ type CoreVerifiedV1 = ProgramVerifiedV1<CoreProgramEvaluatorsV1>;
 type CoreConflictV1 = ProgramConflictV1<CoreProgramEvaluatorsV1>;
 type CoreProgramPlanV1 = ProgramSessionPlan<CoreProgramEvaluatorsV1>;
 type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
-type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
+type CoreVerifiedOutcomeV1 = ProgramVerifiedOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreViolationOutcomeV1 = ProgramViolationOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreProgramStateV1 = SessionState<
+    CoreVerifiedOutcomeV1,
+    CoreViolationOutcomeV1,
+    crate::program_session::computed_assignment::ComputedStoppedV1,
+>;
 type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
@@ -541,6 +548,8 @@ impl AppearanceContextV1 {
 /// Закрытая классификация ошибки компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKindV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource,
     /// Повторно объявлена цель.
@@ -800,6 +809,8 @@ pub(crate) enum JointOrderErrorV1 {
 /// [`Self::related_handle`] — только удобные проекции полного payload.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CompileErrorV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource {
         /// Повторный ID.
@@ -1200,6 +1211,8 @@ impl CompileErrorV1 {
             Self::UnconstrainedFiniteTarget { .. } => Kind::UnconstrainedFiniteTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
+            Self::Unsupported => Kind::Unsupported,
+            Self::InvalidAssignment => Kind::InvalidAssignment,
             Self::MissingJointSelection => Kind::MissingJointSelection,
             Self::JointSelectionWithoutTargets => Kind::JointSelectionWithoutTargets,
             Self::JointStateDuplicateTarget { .. } => Kind::JointStateDuplicateTarget,
@@ -1316,6 +1329,8 @@ impl CompileErrorV1 {
             | Self::EmptyOutputSet
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1409,6 +1424,8 @@ impl CompileErrorV1 {
             | Self::DuplicateOutputSlot { .. }
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1844,6 +1861,26 @@ impl DraftV1 {
         self
     }
 
+    pub(crate) fn push_computed_target(
+        &mut self,
+        id: TargetIdV1,
+        domain: crate::program_session::computed_assignment::AssignmentDomainV1,
+        anchor: Srgb8,
+        max_delta: f64,
+    ) {
+        self.inner.push_target(Target::new(
+            id.into_core(),
+            crate::program_session::TargetIntentV1::Computed(
+                crate::program_session::computed_assignment::ComputedTargetV1::declared(
+                    domain, anchor, max_delta,
+                ),
+            ),
+        ));
+    }
+    pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
+        self.inner.set_assignment(order);
+    }
+
     /// Связывает клиентский output slot с выбранным encoded Paint.
     pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner
@@ -1915,8 +1952,12 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV9 {
-        ContentIdentityV9::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ProgramOwnerIdentityV1 {
+        self.compiled.content_identity()
+    }
+
+    pub(crate) fn snapshot_version(&self) -> u32 {
+        self.content_identity().snapshot_version()
     }
 
     /// Точный авторский `SelectionRelease` конечного Program; у fixed-only
@@ -2250,6 +2291,8 @@ pub(crate) enum StateKindV1 {
     Stale,
     /// Текущая ревизия имеет исчерпывающий конфликт.
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Текущая сырая голова наблюдений независимо от evaluator lifecycle.
@@ -2284,6 +2327,11 @@ pub(crate) struct EvidenceViewV1<'a> {
 }
 
 impl<'a> EvidenceViewV1<'a> {
+    pub(crate) fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
+        self.state()
+            .current_verified()
+            .map(|inner| VerifiedOutputV1 { inner })
+    }
     const fn state(self) -> &'a CoreProgramStateV1 {
         self.session.state()
     }
@@ -2294,7 +2342,15 @@ impl<'a> EvidenceViewV1<'a> {
             SessionState::Waiting => StateKindV1::Waiting,
             SessionState::Ready { .. } => StateKindV1::Ready,
             SessionState::Stale { .. } => StateKindV1::Stale,
-            SessionState::Failed { .. } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => StateKindV1::Unsatisfied,
+            SessionState::Incomplete { .. } => StateKindV1::Incomplete,
         }
     }
 
@@ -2317,7 +2373,15 @@ impl<'a> EvidenceViewV1<'a> {
     /// Индекс cause-сертификата в [`Self::certificates`] для `Failed`.
     pub(crate) const fn cause_certificate_index(self) -> Option<usize> {
         match self.state() {
-            SessionState::Failed { .. } => Some(0),
+            SessionState::Incomplete { .. }
+            | SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => None,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
         }
     }
@@ -2326,15 +2390,25 @@ impl<'a> EvidenceViewV1<'a> {
     pub(crate) fn certificates(
         self,
     ) -> impl ExactSizeIterator<Item = CertificateV1<'a>> + FusedIterator + 'a {
+        let legacy =
+            |current: &'a CoreVerifiedOutcomeV1| current.legacy().map(CertificateV1::verified);
         let (first, second) = match self.state() {
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
-                (Some(CertificateV1::verified(current)), None)
+                (legacy(current), None)
             }
-            SessionState::Failed { cause, previous } => (
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(cause),
+                previous,
+            } => (
                 Some(CertificateV1::conflict(cause)),
-                previous.as_ref().map(CertificateV1::verified),
+                previous.as_ref().and_then(legacy),
             ),
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            }
+            | SessionState::Incomplete { .. } => (None, None),
         };
         CertificatesV1::new(first, second)
     }
@@ -2376,6 +2450,36 @@ impl ContentIdentityV9 {
     /// Возвращает 256-битное каноническое представление identity.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct VerifiedOutputV1<'a> {
+    inner: &'a CoreVerifiedOutcomeV1,
+}
+impl<'a> VerifiedOutputV1<'a> {
+    #[cfg(test)]
+    pub(crate) fn observation(self) -> ObservationV1<'a> {
+        use crate::session::SessionEvidenceV1;
+        ObservationV1 {
+            inner: self.inner.observation(),
+        }
+    }
+    pub(crate) fn content_identity(self) -> ProgramOwnerIdentityV1 {
+        self.inner.content_identity()
+    }
+    pub(crate) fn outputs(
+        self,
+    ) -> impl ExactSizeIterator<Item = CertifiedPaintOutputV1<'a>> + FusedIterator + 'a {
+        self.inner
+            .outputs()
+            .iter()
+            .map(CertifiedPaintOutputV1::from_core)
+    }
+    pub(crate) fn point_domains(
+        self,
+    ) -> impl ExactSizeIterator<Item = PointPhysicalEvidenceV1> + 'a {
+        self.inner.point_domains()
     }
 }
 
@@ -4324,6 +4428,11 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
+        ProgramCompileError::InvalidComputedAssignment(error) => match error {
+            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::MixedSelection => CompileErrorV1::Unsupported,
+            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::CardinalityOverflow => CompileErrorV1::ResourceExhausted,
+            _ => CompileErrorV1::InvalidAssignment,
+        },
     }
 }
 

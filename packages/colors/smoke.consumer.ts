@@ -2,6 +2,7 @@ import init, {
   MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachedSnapshot,
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
@@ -14,6 +15,9 @@ import type {
   CertificateErrorCode,
   BindingError,
   ProgramErrorCode,
+  ProgramCompileErrorCode,
+  ProgramAttachmentErrorCode,
+  ProgramUpdateErrorCode,
   ProgramOperation,
   UntrustedCertificateEnvelopeV1,
 } from "@labpics/colors";
@@ -154,3 +158,32 @@ void declaredCleanSetInputTypes;
 const readBindingFailure = (error: unknown): BindingError["code"] | undefined =>
   isBindingError(error) ? error.code : undefined;
 void readBindingFailure;
+
+function versionedSnapshotTypes(snapshot: ProgramSnapshot | ProgramAttachedSnapshot): void {
+  const version: number = snapshot.snapshotVersion;
+  const revision: bigint = snapshot.revision;
+  const reason: string | undefined = snapshot.reason;
+  // @ts-expect-error причина отсутствует вне incomplete.
+  const requiredReason: string = snapshot.reason;
+  // @ts-expect-error getter версии доступен только для чтения.
+  snapshot.snapshotVersion = 2;
+  // @ts-expect-error getter revision доступен только для чтения.
+  snapshot.revision = 1n;
+  // @ts-expect-error getter reason доступен только для чтения.
+  snapshot.reason = "limit";
+  void [version, revision, reason, requiredReason];
+}
+void versionedSnapshotTypes;
+
+function unsupportedErrorTypes(error: unknown): void {
+  const compile: ProgramCompileErrorCode = "program_unsupported";
+  const attach: ProgramAttachmentErrorCode = "program_unsupported";
+  // @ts-expect-error неподдержанное сочетание отклоняется при компиляции, не update.
+  const update: ProgramUpdateErrorCode = "program_unsupported";
+  if (isProgramError(error) && error.code === "program_unsupported") {
+    const operation: "compileProgramWire" | "attachProgramWire" = error.operation;
+    void operation;
+  }
+  void [compile, attach, update];
+}
+void unsupportedErrorTypes;

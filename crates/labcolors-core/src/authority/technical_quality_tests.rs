@@ -51,6 +51,7 @@ impl SessionPlanV1 for FieldSessionPlan {
     type OwnerLease = ();
     type Verified = FieldSessionEvidence;
     type Violation = FieldSessionEvidence;
+    type Incomplete = std::convert::Infallible;
     type Error = ();
 
     /// Выдаёт локальное владение тестовой сценой без внешнего планировщика.

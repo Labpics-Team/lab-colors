@@ -768,6 +768,9 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
         StateKindV1::Ready => 2,
         StateKindV1::Failed => 3,
         StateKindV1::Stale => 4,
+        StateKindV1::Unsatisfied | StateKindV1::Incomplete => {
+            panic!("legacy graph cannot produce assignment outcomes")
+        }
     });
     match view.observation_head() {
         ObservationHeadV1::Empty => probe.mix(0),
@@ -2508,6 +2511,9 @@ fn retired_production_slots_retain_high_water_capacity_without_reallocation() {
                 .commit(update)
                 .expect("the second N+1 pass must reuse retained capacity");
             match state {
+                SessionState::Incomplete { .. } => {
+                    panic!("legacy graph cannot exhaust assignment search")
+                }
                 SessionState::Ready { current } => {
                     current.report().observation().arena_slot().index()
                 }

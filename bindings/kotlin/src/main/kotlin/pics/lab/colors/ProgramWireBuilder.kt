@@ -11,6 +11,12 @@ data class ProgramSelectionChoice(val target: UInt, val candidate: UInt)
 data class ProgramSelectionState(val id: UInt, val choices: List<ProgramSelectionChoice>)
 enum class ProgramSurround(internal val tag: Int) { AVERAGE(1), DIM(2), DARK(3) }
 
+/** Включённые границы encoded sRGB8, без смысла клиентских ролей. */
+sealed interface ProgramWireDomainV3 {
+    data class Box(val lower: ByteArray, val upper: ByteArray) : ProgramWireDomainV3
+    data class Gray(val lower: UByte, val upper: UByte) : ProgramWireDomainV3
+}
+
 private class WireBytes {
     private var bytes = ByteArray(32)
     var size = 0
@@ -161,6 +167,39 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
             }
         }
     }
+
+    internal fun computed(id: UInt, domain: ProgramWireDomainV3, anchor: ByteArray, maxDelta: Double) {
+        if (wireVersion != 3) throw ProgramWireException.InvalidDeclaration("computed target requires wire version 3")
+        if (!maxDelta.isFinite() || maxDelta < 0 || !(maxDelta * maxDelta).isFinite()) {
+            throw ProgramWireException.InvalidDeclaration("maxDelta and its square must be finite and nonnegative")
+        }
+        entry(1) { out ->
+            out.u32(id); out.u8(3)
+            when (domain) {
+                is ProgramWireDomainV3.Box -> {
+                    if (domain.lower.size != 3 || domain.upper.size != 3 || (0..2).any {
+                            (domain.lower[it].toInt() and 255) > (domain.upper[it].toInt() and 255)
+                        }) throw ProgramWireException.InvalidDeclaration("invalid box bounds")
+                    out.u8(1); out.rgb(domain.lower); out.rgb(domain.upper)
+                }
+                is ProgramWireDomainV3.Gray -> {
+                    if (domain.lower > domain.upper) throw ProgramWireException.InvalidDeclaration("invalid gray bounds")
+                    out.u8(2); out.u8(domain.lower.toInt()); out.u8(domain.upper.toInt())
+                }
+            }
+            out.rgb(anchor); out.f64(if (maxDelta == 0.0) 0.0 else maxDelta)
+        }
+    }
+
+    internal fun assign(targetsInPreferenceOrder: List<UInt>) {
+        if (wireVersion != 3) throw ProgramWireException.InvalidDeclaration("assignment requires wire version 3")
+        if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("assignment already exists")
+        entry(3) { out ->
+            val size = count(targetsInPreferenceOrder.size).toInt()
+            out.u16(2); out.u32(size.toUInt())
+            for (index in 0 until size) out.u32(targetsInPreferenceOrder[index])
+        }
+    }
     fun finish(): ByteArray {
         if (writing) throw ProgramWireException.InvalidDeclaration("reentrant authoring")
         val out = ByteArray(length)
@@ -180,6 +219,18 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
 class ProgramWireBuilderV2 : ProgramWireBuilderV1(2) {
     fun selectionRelease(revision: ULong, rankGroups: List<List<ProgramSelectionState>>): ProgramWireBuilderV2 {
         selection(revision, rankGroups)
+        return this
+    }
+}
+
+/** LCPW v3 объявляет области и предпочтения; конкретные цвета назначает Core. */
+class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
+    fun computedTarget(id: UInt, domain: ProgramWireDomainV3, anchor: ByteArray, maxDelta: Double): ProgramWireBuilderV3 {
+        computed(id, domain, anchor, maxDelta)
+        return this
+    }
+    fun assignment(targetsInPreferenceOrder: List<UInt>): ProgramWireBuilderV3 {
+        assign(targetsInPreferenceOrder)
         return this
     }
 }

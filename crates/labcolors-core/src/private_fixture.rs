@@ -624,6 +624,9 @@ fn project_attachment_commit_v2(
         StateKindV1::Ready => PrivateFixtureStateV2::Ready,
         StateKindV1::Stale => PrivateFixtureStateV2::Stale,
         StateKindV1::Failed => PrivateFixtureStateV2::Failed,
+        StateKindV1::Unsatisfied | StateKindV1::Incomplete => {
+            return Err(PrivateFixtureErrorV1::InternalInvariant);
+        }
     };
     let mut renders = commit.render_outputs();
     let Some(render) = renders.next() else {
@@ -644,18 +647,24 @@ fn project_attachment_commit_v2(
     if renders.next().is_some() {
         return Err(PrivateFixtureErrorV1::MultipleCertifiedOutputs);
     }
-    project_certified_render_v1(render, state, stream, revision)
+    let Some(crate::program::CertificateV1::Verified(certificate)) = evidence.certificates().next()
+    else {
+        return Err(PrivateFixtureErrorV1::MissingCertifiedOutput);
+    };
+    project_certified_render_v1(render, certificate, state, stream, revision)
 }
 
 fn project_certified_render_v1(
     render: crate::program::attachment::AttachedRenderOutputV1<'_, HandoffPointSinkOutputIdV1>,
+    certificate: crate::program::VerifiedCertificateV1<'_>,
     state: PrivateFixtureStateV2,
     stream: u32,
     revision: u64,
 ) -> Result<CertifiedPrivateFixtureResultV1, PrivateFixtureErrorV1> {
-    let certificate = render.certificate();
     if certificate.selection_release_identity().is_some()
         || certificate.selected_state_index().is_some()
+        || certificate.content_identity().as_bytes()
+            != render.evidence().content_identity().as_bytes()
     {
         return Err(PrivateFixtureErrorV1::InternalInvariant);
     }

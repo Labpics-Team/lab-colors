@@ -33,6 +33,12 @@ public struct ProgramSelectionState {
 
 public enum ProgramSurround: UInt8 { case average = 1, dim = 2, dark = 3 }
 
+/// Включённые границы encoded sRGB8. Область не определяет смысл цели.
+public enum ProgramWireDomainV3 {
+    case box(lower: [UInt8], upper: [UInt8])
+    case gray(lower: UInt8, upper: UInt8)
+}
+
 fileprivate struct WireBytes {
     var bytes: [UInt8] = []
     mutating func u8(_ value: UInt8) { bytes.append(value) }
@@ -62,7 +68,7 @@ public class ProgramWireBuilderV1 {
 
     // Секция владеет единственным растущим буфером. Неудачное объявление
     // откатывает только собственный хвост; прежние снимки остаются независимыми.
-    private func append(_ index: Int, _ encode: (inout WireBytes) throws -> Void) throws {
+    fileprivate func append(_ index: Int, _ encode: (inout WireBytes) throws -> Void) throws {
         guard sections[index].count < UInt32(maximumEntries) else { throw ProgramWireError.tooManyEntries }
         let previous = sections[index].payload.bytes.count
         do {
@@ -253,6 +259,41 @@ public final class ProgramWireBuilderV2: ProgramWireBuilderV1 {
                     for choice in state.choices { b.u32(choice.target); b.u32(choice.candidate) }
                 }
             }
+        }
+        return self
+    }
+}
+
+/// LCPW v3 объявляет области и предпочтения; конкретные цвета назначает Core.
+public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
+    fileprivate override var wireVersion: UInt16 { 3 }
+
+    @discardableResult public func computedTarget(_ id: UInt32, domain: ProgramWireDomainV3, anchor: [UInt8], maxDelta: Double) throws -> Self {
+        guard maxDelta.isFinite, maxDelta >= 0, (maxDelta * maxDelta).isFinite else {
+            throw ProgramWireError.invalidDeclaration("maxDelta and its square must be finite and nonnegative")
+        }
+        try append(1) { b in
+            b.u32(id); b.u8(3)
+            switch domain {
+            case let .box(lower, upper):
+                guard lower.count == 3, upper.count == 3,
+                      zip(lower, upper).allSatisfy({ $0 <= $1 }) else {
+                    throw ProgramWireError.invalidDeclaration("invalid box bounds")
+                }
+                b.u8(1); try b.rgb(lower); try b.rgb(upper)
+            case let .gray(lower, upper):
+                guard lower <= upper else { throw ProgramWireError.invalidDeclaration("invalid gray bounds") }
+                b.u8(2); b.u8(lower); b.u8(upper)
+            }
+            try b.rgb(anchor); b.f64(maxDelta == 0 ? 0 : maxDelta)
+        }
+        return self
+    }
+
+    @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32]) throws -> Self {
+        try selection { b in
+            b.u16(2); b.u32(try boundedCount(targetsInPreferenceOrder.count))
+            for target in targetsInPreferenceOrder { b.u32(target) }
         }
         return self
     }

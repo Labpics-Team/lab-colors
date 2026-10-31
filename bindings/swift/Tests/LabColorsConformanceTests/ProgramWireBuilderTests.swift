@@ -112,4 +112,67 @@ final class ProgramWireBuilderTests: XCTestCase {
         XCTAssertEqual(try builder.finish(), full)
     }
 
+    func testComputedDomainsAndPreferenceOrderUseIndependentWireBytes() throws {
+        let expected = try fixture().computed
+        let all = try ProgramWireBuilderV3()
+            .computedTarget(0x10203040, domain: .box(lower: [1, 2, 3], upper: [4, 5, 6]), anchor: [250, 0, 7], maxDelta: 0.25)
+            .computedTarget(19, domain: .gray(lower: 10, upper: 12), anchor: [9, 8, 7], maxDelta: 8)
+            .assignment([0x10203040, 19])
+        XCTAssertEqual(try all.finish(), try bytes(expected.encodingOnly))
+        for (domain, vector) in [(ProgramWireDomainV3.gray(lower: 0, upper: 255), expected.gray),
+                                 (.box(lower: [0, 0, 0], upper: [255, 255, 255]), expected.box)] {
+            let builder = try ProgramWireBuilderV3().computedTarget(21, domain: domain, anchor: [64, 64, 64], maxDelta: 1).assignment([21])
+            try builder.surfaceInputPort(31).opacityInput(32, value: 0.5)
+                .solidPaint(41, target: 21).opacityPaint(42, source: 41, opacity: 32).inputSurface(51, input: 31)
+                .sourceOverOccurrence(61, subject: 42, against: 51, adaptingLuminance: 64, backgroundRatio: 0.2, surround: .dim)
+                .presentationRoot(71, terminal: 61).presentationTarget(71, occurrence: 61)
+                .exactVisibleUnary(true, id: 81, occurrence: 61, expectedRgb: [96, 96, 96]).output(91, paint: 42)
+            XCTAssertEqual(try builder.finish(), try bytes(vector))
+        }
+    }
+
+    func testComputedRejectedInputsPreserveBytesAndLegalContinuation() throws {
+        let builder = try ProgramWireBuilderV3().source(11, rgb: [20, 20, 20])
+        let before = try builder.finish()
+        let invalid: [ProgramWireDomainV3] = [
+            .gray(lower: 2, upper: 1), .box(lower: [1, 2], upper: [3, 4, 5]),
+            .box(lower: [1, 2, 3], upper: [3, 4]),
+            .box(lower: [2, 0, 0], upper: [1, 1, 1]),
+            .box(lower: [0, 2, 0], upper: [1, 1, 1]),
+            .box(lower: [0, 0, 2], upper: [1, 1, 1]),
+        ]
+        for domain in invalid { XCTAssertThrowsError(try builder.computedTarget(21, domain: domain, anchor: [0, 0, 0], maxDelta: 1)) }
+        for delta in [-1, -Double.leastNonzeroMagnitude, .nan, .infinity, -.infinity, .greatestFiniteMagnitude, 1e155] {
+            XCTAssertThrowsError(try builder.computedTarget(21, domain: .gray(lower: 0, upper: 255), anchor: [0, 0, 0], maxDelta: delta))
+        }
+        XCTAssertThrowsError(try builder.computedTarget(21, domain: .gray(lower: 0, upper: 255), anchor: [0, 0], maxDelta: 1))
+        XCTAssertThrowsError(try builder.assignment([]))
+        XCTAssertThrowsError(try builder.assignment(Array(repeating: 21, count: 4097)))
+        XCTAssertEqual(try builder.finish(), before)
+        try builder.computedTarget(21, domain: .gray(lower: 255, upper: 255), anchor: [0, 0, 0], maxDelta: 1).assignment([21])
+        let accepted = try builder.finish()
+        XCTAssertThrowsError(try builder.assignment([21]))
+        XCTAssertEqual(try builder.finish(), accepted)
+    }
+
+    func testComputedBoundsCanonicalZeroAndOwnedSnapshots() throws {
+        for domain in [ProgramWireDomainV3.gray(lower: 0, upper: 255), .gray(lower: 19, upper: 19),
+                       .box(lower: [0, 0, 0], upper: [255, 255, 255]), .box(lower: [1, 2, 3], upper: [1, 2, 3])] {
+            XCTAssertEqual(try ProgramWireBuilderV3().computedTarget(.max, domain: domain, anchor: [0, 0, 0], maxDelta: -0.0).finish(),
+                           try ProgramWireBuilderV3().computedTarget(.max, domain: domain, anchor: [0, 0, 0], maxDelta: 0.0).finish())
+        }
+        var lower: [UInt8] = [1, 2, 3], anchor: [UInt8] = [4, 5, 6]
+        var order: [UInt32] = [29, 21]
+        let builder = try ProgramWireBuilderV3().computedTarget(21, domain: .box(lower: lower, upper: [7, 8, 9]), anchor: anchor, maxDelta: 1).assignment(order)
+        let accepted = try builder.finish()
+        lower[0] = 255; anchor[0] = 255; order.reverse()
+        XCTAssertEqual(try builder.finish(), accepted)
+        let full = ProgramWireBuilderV3()
+        for id in 0..<4096 { try full.computedTarget(UInt32(id), domain: .gray(lower: 0, upper: 0), anchor: [0, 0, 0], maxDelta: 0) }
+        try full.assignment((0..<4096).reversed().map(UInt32.init))
+        let snapshot = try full.finish()
+        XCTAssertThrowsError(try full.computedTarget(4096, domain: .gray(lower: 0, upper: 0), anchor: [0, 0, 0], maxDelta: 0))
+        XCTAssertEqual(try full.finish(), snapshot)
+    }
+
 }

@@ -58,10 +58,10 @@ SITE_ID = "point-support-retained-reference-surplus-v1"
 SOURCE_BINDING_LAW = "point-support-rust-whole-file-semantic-cone-v2"
 SOURCE_BINDING_DOMAIN = b"labcolors.point-support.rust-whole-file-semantic-cone.v2"
 EXPECTED_Q55_PROOF_SHA256 = (
-    "2b2170e20bd24c059a0bbaf8d92603470ec941402f3a08185f54a5e1e41c69ca"
+    "e366bdbe4b49e5d5ccad6ea40789e5e1f15a68509a8be790cf169a55e032757e"
 )
 EXPECTED_Q55_PAYLOAD_SHA256 = (
-    "a4e02b4dce47c58310fb3ea9e34af1538ae5813b31b15ddee71a9a1be7bb76f8"
+    "ffa2710fae34eb1d2eb67f1932a51a1bd7d8da1f273a393fc4c619476b770b77"
 )
 
 DROP_SCALE = 10_000
@@ -202,11 +202,11 @@ def verify_source_binding() -> tuple[str, int]:
         (LCS_OCCURRENCE_SOURCE, b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }", b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }"),
         (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
         (SESSION_SOURCE, b"            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n", b"            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n"),
-        (SESSION_SOURCE, b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Observed(raw_observation),\n                );\n", b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Empty,\n                );\n"),
+        (SESSION_SOURCE, b"            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Observed(raw_observation),\n            );\n", b"            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Empty,\n            );\n"),
         (SESSION_SOURCE, b"                Some(previous) => SessionState::Stale { previous },", b"                Some(_) => SessionState::Waiting,"),
         (SESSION_SOURCE, b"            let permit = SessionObservationBindingPermitV1::mint(&observation);", b"            let permit = SessionObservationBindingPermitV1::for_test();"),
-        (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Ready { current }, last_verified)\n                    }\n", b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Stale { previous: current }, last_verified)\n                    }\n"),
-        (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => (\n                        SessionState::Failed {\n                            cause,\n                            previous: last_verified,\n                        },\n                        None,\n                    ),\n", b"                    SessionDecision::Violation(_) => (\n                        SessionState::Waiting,\n                        last_verified,\n                    ),\n"),
+        (SESSION_SOURCE, b"                SessionDecision::Verified(current) => {\n                    (SessionState::Ready { current }, last_verified)\n                }\n", b"                SessionDecision::Verified(current) => {\n                    (SessionState::Stale { previous: current }, last_verified)\n                }\n"),
+        (SESSION_SOURCE, b"                SessionDecision::Violation(cause) => (\n                    SessionState::Failed {\n                        cause,\n                        previous: last_verified,\n                    },\n                    None,\n                ),\n", b"                SessionDecision::Violation(_) => (\n                    SessionState::Waiting,\n                    last_verified,\n                ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
@@ -222,7 +222,7 @@ def verify_source_binding() -> tuple[str, int]:
         (HASH_SOURCE, b"const FNV1A_32_PRIME: u32 = 16777619;", b"const FNV1A_32_PRIME: u32 = 16777621;"),
         (LIB_SOURCE, b"pub(crate) mod point_support;", b"#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;"),
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
-        (Q55_PROOF, b'"proof_payload_sha256":"a4e02b4dce47c58310fb3ea9e34af1538ae5813b31b15ddee71a9a1be7bb76f8"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
+        (Q55_PROOF, b'"proof_payload_sha256":"ffa2710fae34eb1d2eb67f1932a51a1bd7d8da1f273a393fc4c619476b770b77"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)

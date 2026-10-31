@@ -89,7 +89,7 @@ EXPECTED_PARSER_SHA256 = (
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
-    "c2f252829577f1a5455b91afdccc1669ff0c964e10d8935db9e79b0c8ce251d6"
+    "dd537f633ab46105d0bcd09b64e54619b0345ebe1da2419178889b81f922be75"
 )
 DECLARED_OPERATION_LAW = (
     "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"

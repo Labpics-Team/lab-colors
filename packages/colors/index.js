@@ -335,6 +335,7 @@ const COMPILE_PROGRAM_ERROR_CODES = new Set([
   ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
   "program_wire",
   "program_compile",
+  "program_unsupported",
   "program_family_artifacts_required",
   "program_instantiate",
 ]);
