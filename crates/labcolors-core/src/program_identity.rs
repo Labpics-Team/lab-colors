@@ -783,6 +783,10 @@ impl VertexColorV1 {
     fn as_slice(&self) -> &[u8] {
         &self.bytes[1..=usize::from(self.len())]
     }
+
+    const fn tag(&self) -> u8 {
+        self.bytes[1]
+    }
 }
 
 mod vertex_tag {
@@ -913,69 +917,25 @@ impl core::ops::Index<usize> for AdjacencyV1 {
     }
 }
 
-// The bounded key writer is transient. A graph retains only the initialized,
-// length-prefixed keys, in vertex order, without allocating once per vertex.
-#[derive(Default)]
-struct VertexColorsV1 {
-    starts: Vec<usize>,
-    bytes: Vec<u8>,
-}
-
-impl VertexColorsV1 {
-    fn len(&self) -> usize {
-        self.starts.len()
-    }
-
-    fn append(&mut self, color: VertexColorV1) -> Result<usize, ProgramCompileError> {
-        let payload = color.as_slice();
-        self.starts
-            .try_reserve(1)
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        self.bytes
-            .try_reserve(1 + payload.len())
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        let vertex = self.len();
-        self.starts.push(self.bytes.len());
-        self.bytes.push(color.len());
-        self.bytes.extend_from_slice(payload);
-        Ok(vertex)
-    }
-
-    fn payload_len(&self) -> usize {
-        self.bytes.len() - self.starts.len()
-    }
-
-    #[cfg(test)]
-    fn tag(&self, vertex: usize) -> u8 {
-        self[vertex][1]
-    }
-}
-
-impl core::ops::Index<usize> for VertexColorsV1 {
-    type Output = [u8];
-
-    fn index(&self, vertex: usize) -> &Self::Output {
-        let row = &self.bytes[self.starts[vertex]..];
-        &row[..=usize::from(row[0])]
-    }
-}
-
 struct CanonicalGraphV1 {
-    colors: VertexColorsV1,
+    colors: Vec<VertexColorV1>,
     adjacency: AdjacencyV1,
     edge_count: usize,
 }
 
 struct GraphBuilderV1 {
-    colors: VertexColorsV1,
+    colors: Vec<VertexColorV1>,
     edges: Vec<EdgeV1>,
     root: usize,
 }
 
 impl GraphBuilderV1 {
     fn new(root: VertexColorV1) -> Result<Self, ProgramCompileError> {
-        let mut colors = VertexColorsV1::default();
-        colors.append(root)?;
+        let mut colors = Vec::new();
+        colors
+            .try_reserve_exact(1)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        colors.push(root);
         Ok(Self {
             colors,
             edges: Vec::new(),
@@ -984,7 +944,11 @@ impl GraphBuilderV1 {
     }
 
     fn add_member(&mut self, color: VertexColorV1) -> Result<usize, ProgramCompileError> {
-        let index = self.colors.append(color)?;
+        self.colors
+            .try_reserve(1)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        let index = self.colors.len();
+        self.colors.push(color);
         self.add_edge(self.root, index, EdgeRoleV1::ProgramMember)?;
         Ok(index)
     }
@@ -2141,7 +2105,7 @@ where
     vertex_tags
         .try_reserve_exact(graph.colors.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    vertex_tags.extend((0..graph.colors.len()).map(|vertex| graph.colors.tag(vertex)));
+    vertex_tags.extend(graph.colors.iter().map(VertexColorV1::tag));
     ordering::sort(&mut vertex_tags);
     vertex_tags.dedup();
 
@@ -2462,11 +2426,12 @@ fn serialize_leaf(
         .edge_count
         .checked_mul(9)
         .ok_or(ProgramCompileError::ResourceExhausted)?;
-    // Each vertex adds two wire u64 fields and its unpadded payload.
-    let color_bytes = vertices
-        .checked_mul(16)
-        .and_then(|fields| fields.checked_add(graph.colors.payload_len()))
-        .ok_or(ProgramCompileError::ResourceExhausted)?;
+    let color_bytes = graph.colors.iter().try_fold(0_usize, |total, color| {
+        total
+            .checked_add(16)
+            .and_then(|value| value.checked_add(color.as_slice().len()))
+            .ok_or(ProgramCompileError::ResourceExhausted)
+    })?;
     let capacity = DOMAIN_V9
         .len()
         .checked_add(16)
@@ -2483,9 +2448,9 @@ fn serialize_leaf(
 
     let mut outgoing = Vec::new();
     for &vertex in &order {
-        let key = &graph.colors[vertex];
-        push_u64_bytes(&mut output, u64::from(key[0]));
-        output.extend_from_slice(&key[1..]);
+        let color = graph.colors[vertex];
+        push_u64_bytes(&mut output, u64::from(color.len()));
+        output.extend_from_slice(color.as_slice());
 
         let arcs = &graph.adjacency[vertex];
         let outgoing_count = arcs.iter().filter(|arc| arc.direction == 0).count();
@@ -3731,22 +3696,10 @@ mod tests {
                 colors.push(color);
             }
         }
-        let mut packed = VertexColorsV1::default();
-        for (vertex, color) in colors.iter().enumerate() {
-            assert_eq!(packed.append(*color)?, vertex);
-        }
-        let mut bytes = 0;
-        for (vertex, color) in colors.iter().enumerate() {
-            assert_eq!(packed.starts[vertex], bytes);
-            assert_eq!(packed[vertex][0], color.len());
-            assert_eq!(&packed[vertex][1..], color.as_slice());
-            bytes += 1 + color.as_slice().len();
-        }
-        assert_eq!(packed.bytes.len(), bytes);
-        for (i, left) in colors.iter().enumerate() {
-            for (j, right) in colors.iter().enumerate() {
+        for left in &colors {
+            for right in &colors {
                 assert_eq!(
-                    packed[i].cmp(&packed[j]),
+                    left.cmp(right),
                     (left.len(), left.as_slice()).cmp(&(right.len(), right.as_slice()))
                 );
             }
@@ -4618,9 +4571,9 @@ mod tests {
         let graph = builder.finish()?;
         assert_eq!(graph.edge_count, 8);
         assert_eq!(graph.colors.len(), 3);
-        assert_eq!(graph.colors.tag(0), vertex_tag::PROGRAM);
-        assert_eq!(graph.colors.tag(1), vertex_tag::SOURCE);
-        assert_eq!(graph.colors.tag(2), vertex_tag::TARGET_FIXED);
+        assert_eq!(graph.colors[0].tag(), vertex_tag::PROGRAM);
+        assert_eq!(graph.colors[1].tag(), vertex_tag::SOURCE);
+        assert_eq!(graph.colors[2].tag(), vertex_tag::TARGET_FIXED);
         let expected: &[&[(u8, EdgeRoleV1, usize)]] = &[
             &[(0, ProgramMember, 1), (0, ProgramMember, 2)],
             &[
