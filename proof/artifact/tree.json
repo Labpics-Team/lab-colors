@@ -319,10 +319,10 @@
   "packages/colors/package-lock.json": "9afce10f6147f8adcc5000ff978211d5ec10fe36",
   "packages/colors/package.json": "809a948416cffbaff376fa7ceaa9d9f0fd54df3d",
   "packages/colors/program-wire/abi-v1.d.ts": "58579f110625794ebf563958ed7c1bb5d206d14d",
-  "packages/colors/program-wire/abi-v1.js": "d84a6287bc3ccca3a407ebaceee85b5e6fcd8672",
+  "packages/colors/program-wire/abi-v1.js": "05f0b38f3e259d90dd9f483eefa5608ac862421f",
   "packages/colors/program-wire/abi-v2.d.ts": "1c29db7a70437ec49fb7fd257587aab4d45911dc",
-  "packages/colors/program-wire/abi-v2.js": "50bf6e5abc9adb06732682aad2bc10b154984609",
-  "packages/colors/program-wire/encoding.js": "70399759c45a9f9db423d16bef3b99820373ef01",
+  "packages/colors/program-wire/abi-v2.js": "b4fdda6c96e51dbd5e797a8898b798e2ed54e6b2",
+  "packages/colors/program-wire/encoding.js": "ae0e5cb7b58e92e74db4c21ecb093536ffa91b62",
   "packages/colors/sink.js": "a157333b905db95214f8912a58a6a5492190c344",
   "packages/colors/smoke.consumer.ts": "aa8e47246ddd4ef85b8a52675fa68dfa25948e73",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
@@ -615,7 +615,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "6ea734acc728f0001d618a7960015c48b5d93746927631137e0d9a695e525d8c",
+ "record_sha256": "394229c8843a91cc1b9b883862386f23127dfca1fd3cbbc9f7fef538a6449aae",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
