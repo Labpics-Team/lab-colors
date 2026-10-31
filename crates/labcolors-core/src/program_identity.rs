@@ -884,9 +884,36 @@ struct ArcV1 {
     neighbour: usize,
 }
 
+struct AdjacencyV1 {
+    offsets: Vec<usize>,
+    arcs: Vec<ArcV1>,
+}
+
+impl AdjacencyV1 {
+    fn get(&self, vertex: usize) -> Option<&[ArcV1]> {
+        let bounds = self.offsets.get(vertex..)?.get(..2)?;
+        self.arcs.get(bounds[0]..bounds[1])
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = &[ArcV1]> {
+        self.offsets
+            .windows(2)
+            .map(move |bounds| &self.arcs[bounds[0]..bounds[1]])
+    }
+}
+
+impl core::ops::Index<usize> for AdjacencyV1 {
+    type Output = [ArcV1];
+
+    fn index(&self, vertex: usize) -> &Self::Output {
+        &self.arcs[self.offsets[vertex]..self.offsets[vertex + 1]]
+    }
+}
+
 struct CanonicalGraphV1 {
     colors: Vec<VertexColorV1>,
-    adjacency: Vec<Vec<ArcV1>>,
+    adjacency: AdjacencyV1,
     edge_count: usize,
 }
 
@@ -937,48 +964,92 @@ impl GraphBuilderV1 {
     }
 
     fn finish(self) -> Result<CanonicalGraphV1, ProgramCompileError> {
-        let mut degrees = Vec::new();
-        degrees
-            .try_reserve_exact(self.colors.len())
+        let vertex_count = self.colors.len();
+        let offset_count = vertex_count
+            .checked_add(1)
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
+        let mut offsets = Vec::new();
+        offsets
+            .try_reserve_exact(offset_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        degrees.resize(self.colors.len(), 0_usize);
+        offsets.resize(offset_count, 0_usize);
         for edge in &self.edges {
-            degrees[edge.from] = degrees[edge.from]
-                .checked_add(1)
-                .ok_or(ProgramCompileError::ResourceExhausted)?;
-            degrees[edge.to] = degrees[edge.to]
-                .checked_add(1)
-                .ok_or(ProgramCompileError::ResourceExhausted)?;
+            for vertex in [edge.from, edge.to] {
+                let degree = offsets[..vertex_count]
+                    .get_mut(vertex)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                *degree = degree
+                    .checked_add(1)
+                    .ok_or(ProgramCompileError::ResourceExhausted)?;
+            }
         }
 
-        let mut adjacency = Vec::new();
-        adjacency
-            .try_reserve_exact(self.colors.len())
+        let mut arc_count = 0_usize;
+        for offset in &mut offsets[..vertex_count] {
+            let degree = *offset;
+            *offset = arc_count;
+            arc_count = arc_count
+                .checked_add(degree)
+                .ok_or(ProgramCompileError::ResourceExhausted)?;
+        }
+        offsets[vertex_count] = arc_count;
+        let mut arcs = Vec::new();
+        arcs.try_reserve_exact(arc_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for degree in degrees {
-            let mut arcs = Vec::new();
-            arcs.try_reserve_exact(degree)
-                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            adjacency.push(arcs);
-        }
-        for edge in &self.edges {
-            adjacency[edge.from].push(ArcV1 {
+        // Initialization stays private: the counted edges overwrite every
+        // slot before the adjacency can be returned.
+        arcs.resize(
+            arc_count,
+            ArcV1 {
                 direction: 0,
-                role: edge.role,
-                neighbour: edge.to,
-            });
-            adjacency[edge.to].push(ArcV1 {
-                direction: 1,
-                role: edge.role,
-                neighbour: edge.from,
-            });
+                role: EdgeRoleV1::ProgramMember,
+                neighbour: 0,
+            },
+        );
+        for edge in &self.edges {
+            for (vertex, arc) in [
+                (
+                    edge.from,
+                    ArcV1 {
+                        direction: 0,
+                        role: edge.role,
+                        neighbour: edge.to,
+                    },
+                ),
+                (
+                    edge.to,
+                    ArcV1 {
+                        direction: 1,
+                        role: edge.role,
+                        neighbour: edge.from,
+                    },
+                ),
+            ] {
+                let cursor = offsets
+                    .get_mut(vertex)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let slot = arcs
+                    .get_mut(*cursor)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                *slot = arc;
+                *cursor += 1;
+            }
         }
-        for arcs in &mut adjacency {
-            ordering::sort(arcs);
+        // Each cursor now equals its row end. Shift those ends to restore
+        // the starts without a second per-vertex allocation.
+        offsets.copy_within(..vertex_count, 1);
+        offsets[0] = 0;
+        for bounds in offsets.windows(2) {
+            let row = arcs
+                .get_mut(bounds[0]..bounds[1])
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if !row.windows(2).all(|pair| pair[0] <= pair[1]) {
+                ordering::sort(row);
+            }
         }
         Ok(CanonicalGraphV1 {
             colors: self.colors,
-            adjacency,
+            adjacency: AdjacencyV1 { offsets, arcs },
             edge_count: self.edges.len(),
         })
     }
@@ -2015,7 +2086,7 @@ where
     edge_roles
         .try_reserve_exact(graph.edge_count)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for adjacency in &graph.adjacency {
+    for adjacency in graph.adjacency.iter() {
         edge_roles.extend(
             adjacency
                 .iter()
@@ -4407,6 +4478,132 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn graph_adjacency_preserves_typed_multiedges_and_self_loops()
+    -> Result<(), ProgramCompileError> {
+        use EdgeRoleV1::{ProgramMember, SolidTarget, TargetCandidate, TargetSource};
+        let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+        let a = builder.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+        let b = builder.add_member(VertexColorV1::new(vertex_tag::TARGET_FIXED))?;
+        assert_eq!((a, b), (1, 2));
+        assert_eq!(
+            builder.add_edge(usize::MAX, a, TargetSource),
+            Err(ProgramCompileError::InternalInvariant),
+        );
+        assert_eq!(
+            builder.add_edge(a, usize::MAX, TargetSource),
+            Err(ProgramCompileError::InternalInvariant),
+        );
+        builder.add_edge(a, b, SolidTarget)?;
+        builder.add_edge(b, a, TargetSource)?;
+        builder.add_edge(a, a, TargetCandidate)?;
+        builder.add_edge(a, b, SolidTarget)?;
+        builder.add_edge(b, a, SolidTarget)?;
+        builder.add_edge(a, b, TargetSource)?;
+        let graph = builder.finish()?;
+        assert_eq!(graph.edge_count, 8);
+        assert_eq!(graph.colors.len(), 3);
+        assert_eq!(graph.colors[0].tag(), vertex_tag::PROGRAM);
+        assert_eq!(graph.colors[1].tag(), vertex_tag::SOURCE);
+        assert_eq!(graph.colors[2].tag(), vertex_tag::TARGET_FIXED);
+        let expected: &[&[(u8, EdgeRoleV1, usize)]] = &[
+            &[(0, ProgramMember, 1), (0, ProgramMember, 2)],
+            &[
+                (0, TargetSource, 2),
+                (0, TargetCandidate, 1),
+                (0, SolidTarget, 2),
+                (0, SolidTarget, 2),
+                (1, ProgramMember, 0),
+                (1, TargetSource, 2),
+                (1, TargetCandidate, 1),
+                (1, SolidTarget, 2),
+            ],
+            &[
+                (0, TargetSource, 1),
+                (0, SolidTarget, 1),
+                (1, ProgramMember, 0),
+                (1, TargetSource, 1),
+                (1, SolidTarget, 1),
+                (1, SolidTarget, 1),
+            ],
+        ];
+        assert_eq!(graph.adjacency.iter().count(), expected.len());
+        for (vertex, expected_row) in expected.iter().enumerate() {
+            let row: &[ArcV1] = graph
+                .adjacency
+                .get(vertex)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            let indexed: &[ArcV1] = &graph.adjacency[vertex];
+            assert_eq!(indexed, row, "indexed and checked access at {vertex}");
+            let actual = row
+                .iter()
+                .map(|arc| (arc.direction, arc.role, arc.neighbour))
+                .collect::<Vec<_>>();
+            assert_eq!(actual.as_slice(), *expected_row, "vertex {vertex}");
+        }
+        assert!(graph.adjacency.get(expected.len()).is_none());
+        assert!(graph.adjacency.get(usize::MAX).is_none());
+        assert_eq!(graph.adjacency.iter().map(|row| row.len()).sum::<usize>(), 16);
+
+        let empty = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?.finish()?;
+        assert_eq!(empty.edge_count, 0);
+        assert_eq!(empty.colors.len(), 1);
+        assert_eq!(empty.adjacency.iter().count(), 1);
+        assert!(empty.adjacency[0].is_empty());
+        assert!(
+            empty
+                .adjacency
+                .get(0)
+                .ok_or(ProgramCompileError::InternalInvariant)?
+                .is_empty(),
+        );
+        assert!(empty.adjacency.get(1).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn graph_finish_allocations_do_not_grow_per_vertex() -> Result<(), ProgramCompileError> {
+        let mut allocation_counts = [0_usize; 2];
+        for (sample, count) in [32_usize, 128].into_iter().enumerate() {
+            let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+            for _ in 0..count {
+                builder.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
+            }
+            let (result, events) =
+                crate::test_support::measured_allocator_events(|| builder.finish());
+            let graph = result?;
+            assert_eq!(graph.colors.len(), count + 1);
+            assert_eq!(graph.edge_count, count);
+            assert_eq!(graph.adjacency.iter().count(), count + 1);
+            assert_eq!(graph.adjacency[0].len(), count);
+            assert_eq!(
+                graph.adjacency.iter().map(|row| row.len()).sum::<usize>(),
+                2 * count,
+            );
+            for vertex in 1..=count {
+                let row: &[ArcV1] = &graph.adjacency[vertex];
+                assert_eq!(
+                    row,
+                    &[ArcV1 {
+                        direction: 1,
+                        role: EdgeRoleV1::ProgramMember,
+                        neighbour: 0,
+                    }],
+                );
+            }
+            allocation_counts[sample] = events.alloc + events.realloc;
+            assert!(
+                allocation_counts[sample] > 0,
+                "finish must execute observed allocation work",
+            );
+        }
+        assert!(
+            allocation_counts[1] <= allocation_counts[0],
+            "more vertices must not add adjacency allocations: {allocation_counts:?}",
+        );
         Ok(())
     }
 

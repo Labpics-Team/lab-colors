@@ -108,13 +108,18 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
       [Object.prototype, "siteId"],
       [Object.prototype, "kind"],
       [Object.prototype, "lower"],
+      [Object.prototype, "get"],
+      [Object.prototype, "set"],
       [Array.prototype, "0"],
     ];
-    const previous = poisoned.map(([object, key]) =>
-      Object.getOwnPropertyDescriptor(object, key)
-    );
+    const previous = poisoned.map(([object, key]) => {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (descriptor !== undefined) Object.setPrototypeOf(descriptor, null);
+      return descriptor;
+    });
     let setterCalls = 0;
     const poison = {
+      __proto__: null,
       configurable: true,
       set() {
         setterCalls += 1;

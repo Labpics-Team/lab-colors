@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "4f43cc6b379af274df029f71e6517b314addf47e08e55021cbabc342a58b0cbf",
+ "record_sha256": "8aff5c9bfae6e6d887823a62c229495b3da149ae2152ca0925141576a5064e8b",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1988,6 +1988,8 @@
    "program_session::identity::tests::exhausted_fault_injection_fuel_never_returns_a_partial_preimage: test",
    "program_session::identity::tests::family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt: test",
    "program_session::identity::tests::fixed_color_key_preserves_length_first_order_and_bounds: test",
+   "program_session::identity::tests::graph_adjacency_preserves_typed_multiedges_and_self_loops: test",
+   "program_session::identity::tests::graph_finish_allocations_do_not_grow_per_vertex: test",
    "program_session::identity::tests::hostile_graph_preimage_is_invariant_for_generated_bijections: test",
    "program_session::identity::tests::incremental_refinement_matches_full_refiner_for_all_small_digraphs: test",
    "program_session::identity::tests::incremental_refinement_preserves_middle_and_tied_largest_children: test",
@@ -2276,7 +2278,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1310,
+  "enabled_count": 1312,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",

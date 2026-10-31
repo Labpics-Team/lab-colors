@@ -195,6 +195,7 @@ const defineProjectionProperty = Object.defineProperty;
 
 function appendProjectionValue(array, value) {
   defineProjectionProperty(array, array.length, {
+    __proto__: null,
     value,
     writable: true,
     enumerable: true,

@@ -42,6 +42,19 @@ roots = {"baseline": args.baseline, "candidate": args.candidate}
 def tool_version(*command):
     return subprocess.check_output(command, text=True, timeout=15).strip()
 
+def runtime_payload(root):
+    # Count generated consumer code together, so moving a projection between
+    # WASM and JavaScript cannot appear to reduce its delivered byte cost.
+    paths = [root / "pkg/labcolors_bg.wasm", root / "pkg/labcolors.js"]
+    paths.extend(sorted((root / "pkg/snippets").rglob("*.js")))
+    files = []
+    for path in paths:
+        content = path.read_bytes()
+        files.append({"path": path.relative_to(root).as_posix(), "bytes": len(content),
+                      "sha256": hashlib.sha256(content).hexdigest()})
+    return {"files": files, "totalBytes": sum(item["bytes"] for item in files)}
+
+
 checkout_revision = tool_version("git", "rev-parse", "HEAD")
 if checkout_revision != args.candidate_revision:
     raise SystemExit("candidate revision does not match the checked out source")
@@ -64,6 +77,7 @@ metadata = {
     "npm": tool_version("npm", "--version"),
     "wasmSha256": {label: hashlib.sha256((root / "pkg/labcolors_bg.wasm").read_bytes()).hexdigest()
                    for label, root in roots.items()},
+    "runtimePayload": {label: runtime_payload(root) for label, root in roots.items()},
     "harnessSha256": hashlib.sha256(args.harness.read_bytes()).hexdigest(),
     "samplesAfterWarmup": 3,
     "rounds": 2,
