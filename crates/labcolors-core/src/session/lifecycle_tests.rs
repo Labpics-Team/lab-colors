@@ -437,10 +437,11 @@ fn lifecycle_incomplete_accepts_new_revision_without_current_output() {
         let mut session = new_session(1);
         let mut scratch = Vec::new();
         prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
-            .unwrap()
+            .expect("наблюдение допускает подготовку перехода")
             .commit();
         session.plan.outcome = 3;
-        let prepared = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed).unwrap();
+        let prepared = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода");
         assert!(matches!(
             prepared.disposition(),
             PreparedSessionDispositionV1::Incomplete(_)
@@ -455,7 +456,11 @@ fn lifecycle_incomplete_accepts_new_revision_without_current_output() {
         assert_eq!(raw.revision(), Revision::new(1));
         assert!(cause.observation().is_same_binding_as(raw));
         assert_eq!(
-            previous.as_ref().unwrap().observation().revision(),
+            previous
+                .as_ref()
+                .expect("предыдущее verified-состояние сохранено")
+                .observation()
+                .revision(),
             Revision::new(0)
         );
         assert!(committed.state().current_verified().is_none());
@@ -470,7 +475,7 @@ fn lifecycle_first_incomplete_replays_without_work_and_rejects_old_or_changed_in
         let mut scratch = Vec::new();
         session.plan.outcome = 3;
         prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
-            .unwrap()
+            .expect("наблюдение допускает подготовку перехода")
             .commit();
         assert!(matches!(
             session.state(),
@@ -481,7 +486,8 @@ fn lifecycle_first_incomplete_replays_without_work_and_rejects_old_or_changed_in
         // Любое повторное вычисление стало бы ошибкой: replay обязан вернуть
         // уже принятое решение, а не начать поиск с заново выданным бюджетом.
         session.plan.outcome = 2;
-        let replay = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed).unwrap();
+        let replay = prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
+            .expect("наблюдение допускает подготовку перехода");
         assert!(matches!(
             replay.disposition(),
             PreparedSessionDispositionV1::Idempotent { .. }
@@ -521,12 +527,12 @@ fn lifecycle_incomplete_retirement_is_symmetric_across_abort_commit_and_deferred
                     let mut scratch = Vec::new();
                     if history {
                         prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
-                            .unwrap()
+                            .expect("наблюдение допускает подготовку перехода")
                             .commit();
                     }
                     session.plan.outcome = 3;
                     prepare(&mut session, 1, ORIGINAL, &mut scratch, keyed)
-                        .unwrap()
+                        .expect("наблюдение допускает подготовку перехода")
                         .commit();
                     let old_head = session.raw_head.clone();
                     let old_state = session.state.clone();
@@ -536,7 +542,7 @@ fn lifecycle_incomplete_retirement_is_symmetric_across_abort_commit_and_deferred
                     } else {
                         prepare(&mut session, 2, ORIGINAL, &mut scratch, keyed)
                     }
-                    .unwrap();
+                    .expect("наблюдение допускает подготовку перехода");
                     finish(prepared, mode);
                     if mode == 0 {
                         assert_eq!(session.raw_head, old_head);
@@ -584,7 +590,7 @@ fn lifecycle_wrong_binding_incomplete_is_retired_without_replacing_committed_pai
         let mut session = new_session(1);
         let mut scratch = Vec::new();
         prepare(&mut session, 0, ORIGINAL, &mut scratch, keyed)
-            .unwrap()
+            .expect("наблюдение допускает подготовку перехода")
             .commit();
         let old_head = session.raw_head.clone();
         let old_state = session.state.clone();

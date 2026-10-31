@@ -1570,7 +1570,9 @@ mod browser_tests {
         );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
 
-        let stale = runtime.update_unknown(2_u64.into(), 41.into()).unwrap();
+        let stale = runtime
+            .update_unknown(2_u64.into(), 41.into())
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(stale.state(), "stale");
         assert_eq!(stale.snapshot_version(), 1);
         assert_eq!(stale.revision(), 2);

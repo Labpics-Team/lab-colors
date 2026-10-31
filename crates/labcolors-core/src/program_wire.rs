@@ -1941,7 +1941,9 @@ mod runtime_tests {
             .presentation_target(9, 8)
             .exact_visible_unary(true, 10, 8, Srgb8::new([96; 3]))
             .output(17, 4);
-        builder.finish_assignment(&[2]).unwrap()
+        builder
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется")
     }
 
     #[test]
@@ -1949,37 +1951,49 @@ mod runtime_tests {
         let mut session = compile_program_wire(&computed_runtime_wire())
             .expect("V3 проходит обычный публичный вход")
             .instantiate(100)
-            .unwrap();
+            .expect("Session создаётся с допустимым stream");
         let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
-        let ready = session.update_observed(1, &scenarios(128)).unwrap();
+        let ready = session
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
         assert_eq!(ready.snapshot_version(), 2);
         assert_eq!(ready.revision(), 1);
         assert_eq!(ready.reason(), None);
         assert_eq!(ready.state().key(), "ready");
         assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
 
-        let stale = session.update_unknown(2, 41).unwrap();
+        let stale = session
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(stale.state().key(), "stale");
         assert_eq!(stale.snapshot_version(), 2);
         assert_eq!(stale.revision(), 2);
         assert_eq!(stale.reason(), None);
         assert!(stale.outputs().is_empty());
-        let unsatisfied = session.update_observed(3, &scenarios(255)).unwrap();
+        let unsatisfied = session
+            .update_observed(3, &scenarios(255))
+            .expect("наблюдение принимается");
         assert_eq!(unsatisfied.state().key(), "unsatisfied");
         assert_eq!(unsatisfied.revision(), 3);
         assert_eq!(unsatisfied.reason(), None);
         assert!(unsatisfied.outputs().is_empty());
-        let recovered = session.update_observed(4, &scenarios(0)).unwrap();
+        let recovered = session
+            .update_observed(4, &scenarios(0))
+            .expect("наблюдение принимается");
         assert_eq!(recovered.state().key(), "ready");
         assert_eq!(recovered.outputs()[0].source(), Srgb8::new([191; 3]));
         assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
 
         let mut legacy = compile_program_wire_v1(&runtime_wire(Srgb8::new([96; 3])))
-            .unwrap()
+            .expect("V1 Program компилируется")
             .instantiate(101)
-            .unwrap();
-        let _ = legacy.update_observed(1, &scenarios(128)).unwrap();
-        let historical = legacy.update_unknown(2, 41).unwrap();
+            .expect("Session создаётся с допустимым stream");
+        let _ = legacy
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
+        let historical = legacy
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(historical.state().key(), "stale");
         assert_eq!(historical.snapshot_version(), 1);
         assert_eq!(historical.revision(), 2);
@@ -1990,10 +2004,12 @@ mod runtime_tests {
     #[test]
     fn computed_snapshot_unknown_reason_is_not_search_limit() {
         let mut session = compile_program_wire(&computed_runtime_wire())
-            .unwrap()
+            .expect("допустимый Program компилируется")
             .instantiate(100)
-            .unwrap();
-        let waiting = session.update_unknown(1, u32::MAX).unwrap();
+            .expect("Session создаётся с допустимым stream");
+        let waiting = session
+            .update_unknown(1, u32::MAX)
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(waiting.snapshot_version(), 2);
         assert_eq!(waiting.revision(), 1);
         assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
@@ -2068,8 +2084,8 @@ mod runtime_tests {
         ] {
             let installed = Rc::new(RefCell::new(Vec::new()));
             let reject = Rc::new(Cell::new(false));
-            let compiled =
-                compile_program_wire(&computed_runtime_wire_for_domain(full_cube)).unwrap();
+            let compiled = compile_program_wire(&computed_runtime_wire_for_domain(full_cube))
+                .expect("допустимый Program компилируется");
             let identity = compiled.content_identity();
             let mut attachment = compiled
                 .attach(
@@ -2083,17 +2099,25 @@ mod runtime_tests {
                         installed: Rc::clone(&installed),
                     },
                 )
-                .unwrap();
+                .expect("подготовка тестового сценария успешна");
             let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
-            let first = attachment.update_observed(1, &scenarios(128)).unwrap();
+            let first = attachment
+                .update_observed(1, &scenarios(128))
+                .expect("наблюдение принимается");
             assert_eq!(first.snapshot().snapshot_version(), 2);
             assert_eq!(first.snapshot().revision(), 1);
             assert_eq!(first.snapshot().reason(), None);
-            assert_eq!(first.render().unwrap().content_identity(), identity);
+            assert_eq!(
+                first
+                    .render()
+                    .expect("готовый результат содержит render")
+                    .content_identity(),
+                identity
+            );
             assert_eq!(
                 attachment
                     .current_materialization_authority()
-                    .unwrap()
+                    .expect("готовый результат имеет authority")
                     .revision(),
                 1
             );
@@ -2109,13 +2133,15 @@ mod runtime_tests {
             assert_eq!(
                 attachment
                     .current_materialization_authority()
-                    .unwrap()
+                    .expect("готовый результат имеет authority")
                     .revision(),
                 1
             );
             reject.set(false);
 
-            let stopped = attachment.update_observed(2, &scenarios(255)).unwrap();
+            let stopped = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
             assert_eq!(stopped.snapshot().snapshot_version(), 2);
             assert_eq!(stopped.snapshot().revision(), 2);
             assert_eq!(stopped.snapshot().state(), stopped_state);
@@ -2133,7 +2159,9 @@ mod runtime_tests {
             );
             assert!(installed.borrow()[1].point().is_none());
 
-            let replay = attachment.update_observed(2, &scenarios(255)).unwrap();
+            let replay = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
             assert_eq!(replay, stopped);
             assert_eq!(
                 installed.borrow()[2].operation(),
@@ -2144,7 +2172,9 @@ mod runtime_tests {
             assert!(attachment.update_observed(2, &scenarios(0)).is_err());
             assert_eq!(installed.borrow().len(), 3);
 
-            let recovered = attachment.update_observed(3, &scenarios(128)).unwrap();
+            let recovered = attachment
+                .update_observed(3, &scenarios(128))
+                .expect("наблюдение принимается");
             assert_eq!(recovered.snapshot().state(), ProgramSnapshotStateV1::Ready);
             assert_eq!(recovered.snapshot().revision(), 3);
             assert_eq!(recovered.snapshot().reason(), None);

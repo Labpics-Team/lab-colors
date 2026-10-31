@@ -673,24 +673,32 @@ mod tests {
             (GRAY_WIRE, "unsatisfied", None),
             (BOX_WIRE, "incomplete", Some("limit")),
         ] {
-            let runtime = compile_program_wire(bytes(wire), 100).unwrap();
+            let runtime =
+                compile_program_wire(bytes(wire), 100).expect("допустимый Program компилируется");
             let ready = runtime
                 .update_observed(1, vec![7], vec![128; 3], 1)
-                .unwrap();
+                .expect("наблюдение принимается");
             assert_eq!(ready.snapshot_version(), 2);
             assert_eq!(ready.revision(), 1);
             assert_eq!(ready.reason(), None);
-            assert_eq!(ready.output_rgb(0).unwrap(), [64; 3]);
+            assert_eq!(
+                ready
+                    .output_rgb(0)
+                    .expect("существующий output содержит RGB"),
+                [64; 3]
+            );
             let stopped = runtime
                 .update_observed(2, vec![7], vec![255; 3], 1)
-                .unwrap();
+                .expect("наблюдение принимается");
             assert_eq!(stopped.snapshot_version(), 2);
             assert_eq!(stopped.revision(), 2);
             assert_eq!(stopped.reason().as_deref(), reason);
             assert_eq!(stopped.state(), state);
             assert_eq!(stopped.output_count(), 0);
             assert!(stopped.output_rgb(0).is_err());
-            let stale = runtime.update_unknown(3, 41).unwrap();
+            let stale = runtime
+                .update_unknown(3, 41)
+                .expect("неизвестное наблюдение принимается");
             assert_eq!(stale.state(), "stale");
             assert_eq!(stale.reason(), None);
             assert_eq!(stale.output_count(), 0);
@@ -700,25 +708,28 @@ mod tests {
                     ready.snapshot_version(),
                     ready.revision(),
                     ready.reason(),
-                    ready.output_rgb(0).unwrap(),
+                    ready
+                        .output_rgb(0)
+                        .expect("существующий output содержит RGB"),
                 )
             })
             .join()
-            .unwrap();
+            .expect("потребитель снимка завершается без panic");
             assert_eq!(held, (2, 1, None, vec![64; 3]));
 
             let attached =
-                attach_program_wire(bytes(wire), 100, 17, 91, 9, 8, Box::new(AcceptHost)).unwrap();
+                attach_program_wire(bytes(wire), 100, 17, 91, 9, 8, Box::new(AcceptHost))
+                    .expect("Program присоединяется к тестовому host");
             let ready = attached
                 .update_observed(1, vec![7], vec![128; 3], 1)
-                .unwrap();
+                .expect("наблюдение принимается");
             assert_eq!(ready.snapshot_version(), 2);
             assert_eq!(ready.revision(), 1);
             assert_eq!(ready.reason(), None);
             assert!(ready.has_render());
             let stopped = attached
                 .update_observed(2, vec![7], vec![255; 3], 1)
-                .unwrap();
+                .expect("наблюдение принимается");
             assert_eq!(stopped.snapshot_version(), 2);
             assert_eq!(stopped.revision(), 2);
             assert_eq!(stopped.reason().as_deref(), reason);
@@ -727,7 +738,12 @@ mod tests {
             assert!(!stopped.has_render());
             assert!(attached.materialization_authority().is_err());
             assert_eq!(ready.revision(), 1);
-            assert_eq!(ready.output_rgb(0).unwrap(), [64; 3]);
+            assert_eq!(
+                ready
+                    .output_rgb(0)
+                    .expect("существующий output содержит RGB"),
+                [64; 3]
+            );
         }
     }
 
@@ -735,32 +751,50 @@ mod tests {
     fn legacy_ffi_metadata_preserves_historical_outputs() {
         let fixtures: serde_json::Value =
             serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
-                .unwrap();
-        let wire = bytes(fixtures["adaptive"].as_str().unwrap());
-        let runtime = compile_program_wire(wire.clone(), 1).unwrap();
+                .expect("встроенный fixture содержит корректный JSON");
+        let wire = bytes(
+            fixtures["adaptive"]
+                .as_str()
+                .expect("wire fixture представлен строкой"),
+        );
+        let runtime =
+            compile_program_wire(wire.clone(), 1).expect("допустимый Program компилируется");
         let first = runtime
             .update_observed(1, vec![1], vec![255; 3], 1)
-            .unwrap();
-        let historical = runtime.update_unknown(2, 41).unwrap();
+            .expect("наблюдение принимается");
+        let historical = runtime
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(historical.snapshot_version(), 1);
         assert_eq!(historical.revision(), 2);
         assert_eq!(historical.reason(), None);
         assert_eq!(
-            historical.output_rgb(0).unwrap(),
-            first.output_rgb(0).unwrap()
+            historical
+                .output_rgb(0)
+                .expect("существующий output содержит RGB"),
+            first
+                .output_rgb(0)
+                .expect("существующий output содержит RGB")
         );
 
-        let attached = attach_program_wire(wire, 1, 91, 501, 71, 61, Box::new(AcceptHost)).unwrap();
+        let attached = attach_program_wire(wire, 1, 91, 501, 71, 61, Box::new(AcceptHost))
+            .expect("Program присоединяется к тестовому host");
         let first = attached
             .update_observed(1, vec![1], vec![255; 3], 1)
-            .unwrap();
-        let historical = attached.update_unknown(2, 41).unwrap();
+            .expect("наблюдение принимается");
+        let historical = attached
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
         assert_eq!(historical.snapshot_version(), 1);
         assert_eq!(historical.revision(), 2);
         assert_eq!(historical.reason(), None);
         assert_eq!(
-            historical.output_rgb(0).unwrap(),
-            first.output_rgb(0).unwrap()
+            historical
+                .output_rgb(0)
+                .expect("существующий output содержит RGB"),
+            first
+                .output_rgb(0)
+                .expect("существующий output содержит RGB")
         );
         assert!(!historical.has_render());
     }

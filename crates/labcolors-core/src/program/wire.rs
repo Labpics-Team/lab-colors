@@ -1441,41 +1441,59 @@ mod assignment_v3_tests {
         for tolerance in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
             let bytes = declaration(0, 255, tolerance)
                 .finish_assignment(&[2])
-                .unwrap();
+                .expect("wire декларации кодируется");
             assert!(matches!(
                 compile_program_wire(&bytes),
                 Err(ProgramRuntimeErrorV1::Compile)
             ));
         }
         for order in [vec![], vec![77], vec![2, 2]] {
-            let bytes = declaration(0, 255, 1.0).finish_assignment(&order).unwrap();
+            let bytes = declaration(0, 255, 1.0)
+                .finish_assignment(&order)
+                .expect("wire декларации кодируется");
             assert!(matches!(
                 compile_program_wire(&bytes),
                 Err(ProgramRuntimeErrorV1::Compile)
             ));
         }
-        let invalid_domain = declaration(200, 100, 1.0).finish_assignment(&[2]).unwrap();
+        let invalid_domain = declaration(200, 100, 1.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
         assert!(matches!(
             compile_program_wire(&invalid_domain),
             Err(ProgramRuntimeErrorV1::Compile)
         ));
-        let positive = declaration(0, 255, 0.0).finish_assignment(&[2]).unwrap();
-        let negative = declaration(0, 255, -0.0).finish_assignment(&[2]).unwrap();
+        let positive = declaration(0, 255, 0.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
+        let negative = declaration(0, 255, -0.0)
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
         assert_eq!(
-            compile_program_wire(&positive).unwrap().content_identity(),
-            compile_program_wire(&negative).unwrap().content_identity()
+            compile_program_wire(&positive)
+                .expect("допустимый Program компилируется")
+                .content_identity(),
+            compile_program_wire(&negative)
+                .expect("допустимый Program компилируется")
+                .content_identity()
         );
 
         let mut mixed = declaration(0, 255, 1.0);
         mixed.finite_target(20, &[(21, Srgb8::new([50; 3]), 1.0)]);
-        let bytes = mixed.finish_assignment(&[2]).unwrap();
+        let bytes = mixed
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
         assert!(matches!(
             compile_program_wire(&bytes),
             Err(ProgramRuntimeErrorV1::Unsupported)
         ));
         assert!(
-            compile_program_wire(&declaration(0, 255, 1.0).finish_assignment(&[2]).unwrap())
-                .is_ok()
+            compile_program_wire(
+                &declaration(0, 255, 1.0)
+                    .finish_assignment(&[2])
+                    .expect("wire декларации кодируется")
+            )
+            .is_ok()
         );
     }
 
@@ -1498,22 +1516,27 @@ mod assignment_v3_tests {
                 .exact_visible_unary(true, 81, 62, Srgb8::new([2; 3]))
                 .output(91, 41)
                 .output(92, 43);
-            builder.finish_assignment(order).unwrap()
+            builder
+                .finish_assignment(order)
+                .expect("wire декларации кодируется")
         };
         let mut identities = Vec::new();
         for (order, expected) in [([21, 22], [0, 3]), ([22, 21], [3, 0])] {
-            let compiled = compile_program_wire(&declaration(&order)).unwrap();
+            let compiled = compile_program_wire(&declaration(&order))
+                .expect("допустимый Program компилируется");
             identities.push(compiled.content_identity());
-            let mut session = compiled.instantiate(1).unwrap();
+            let mut session = compiled
+                .instantiate(1)
+                .expect("Session создаётся с допустимым stream");
             let snapshot = session
                 .update_observed(1, &[ProgramScenarioV1::new(1, vec![Srgb8::new([0; 3])])])
-                .unwrap();
+                .expect("наблюдение принимается");
             for (slot, gray) in [(91, expected[0]), (92, expected[1])] {
                 let output = snapshot
                     .outputs()
                     .iter()
                     .find(|output| output.slot() == slot)
-                    .unwrap();
+                    .expect("объявленный output присутствует");
                 assert_eq!(output.source(), Srgb8::new([gray; 3]));
             }
         }
@@ -1531,7 +1554,9 @@ mod assignment_v3_tests {
             .source_over_occurrence(8, 3, 7, 64.0, 0.2, 1)
             .wcag22_visible_unary(true, 10, 8, 3)
             .output(17, 3);
-        let bytes = builder.finish_assignment(&[2]).unwrap();
+        let bytes = builder
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется");
         assert!(decode_program_wire_v1(&bytes).is_err());
         assert!(crate::program_wire::compile_program_wire(&bytes).is_ok());
     }

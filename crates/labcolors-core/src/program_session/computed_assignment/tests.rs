@@ -32,8 +32,10 @@ fn context() -> AppearanceContextId {
     AppearanceContextId::from_inputs(
         AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
         IEC_SRGB_D65_XYZ_FRAME_V1,
-        AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
-        BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+        AdaptingLuminanceCdM2::try_new(64.0)
+            .expect("тестовый контекст находится в допустимой области"),
+        BackgroundLuminanceRatio::try_new(0.2)
+            .expect("тестовый контекст находится в допустимой области"),
         SurroundProfileId::AverageV1,
     )
 }
@@ -48,7 +50,7 @@ fn target(id: u32, anchor: u8, lower: u8, upper: u8, preference: u64) -> Target 
                 1.0,
                 preference,
             )
-            .unwrap(),
+            .expect("тестовая декларация допускает вычисление"),
         ),
     )
 }
@@ -133,14 +135,19 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
         ),
         300,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([118; 3]));
     let current = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("готовое состояние содержит текущий результат")
         .computed_for_test();
     assert_eq!(
         owner.owner_generation.content_identity,
@@ -151,13 +158,16 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
     assert_eq!(current.search.covered, 256);
     assert_eq!(current.execution_profile, execution_profile_identity(300));
     assert_eq!(current.arena.storage.cells.len(), 1);
-    session.prepare_update(update(2, 0)).unwrap().commit();
+    session
+        .prepare_update(update(2, 0))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([150; 3]));
     assert_eq!(
         session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("готовое состояние содержит текущий результат")
             .computed_for_test()
             .search
             .completion,
@@ -175,13 +185,25 @@ fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
         ),
         1,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 0)).unwrap().commit();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 0))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([150; 3]));
-    drop(session.prepare_update(update(2, 255)).unwrap());
+    drop(
+        session
+            .prepare_update(update(2, 255))
+            .expect("наблюдение допускает подготовку перехода"),
+    );
     assert_eq!(rgb(&session), Srgb8::new([150; 3]));
-    session.prepare_update(update(2, 255)).unwrap().commit();
+    session
+        .prepare_update(update(2, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert!(session.state().current_verified().is_none());
     let SessionState::Incomplete { cause, previous } = session.state() else {
         panic!("новая ревизия должна быть Incomplete")
@@ -196,14 +218,17 @@ fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
     assert_eq!(
         previous
             .as_ref()
-            .unwrap()
+            .expect("тестовая декларация допускает вычисление")
             .computed_for_test()
             .observation
             .revision(),
         Revision::new(1)
     );
     let observation = cause.observation.clone();
-    session.prepare_update(update(2, 255)).unwrap().commit();
+    session
+        .prepare_update(update(2, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     let SessionState::Incomplete { cause, .. } = session.state() else {
         panic!()
     };
@@ -216,7 +241,10 @@ fn ready_to_incomplete_commits_new_revision_and_replay_does_not_search() {
         session.prepare_update(update(1, 0)),
         Err(SessionUpdateError::Observation(_))
     ));
-    session.prepare_update(update(3, 0)).unwrap().commit();
+    session
+        .prepare_update(update(3, 0))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([150; 3]));
 }
 
@@ -231,7 +259,7 @@ fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
             ),
             budget,
         )
-        .unwrap()
+        .expect("допустимая декларация компилируется")
     };
     let owner = make(10, 300);
     let renamed = make(91, 300);
@@ -248,8 +276,13 @@ fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
         execution_profile_identity(301)
     );
     for owner in [&owner, &renamed] {
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 0)).unwrap().commit();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("Session создаётся с допустимым stream");
+        session
+            .prepare_update(update(1, 0))
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
         assert_eq!(rgb(&session), Srgb8::new([117; 3]));
     }
     let mut altered = target(10, 101, 100, 255, 0);
@@ -261,7 +294,7 @@ fn opposite_consumer_ids_and_computed_identity_are_data_driven() {
         program(altered, Wcag22CriterionV1::Sc143TextDefault, Wcag22Srgb8V1),
         300,
     )
-    .unwrap();
+    .expect("допустимая декларация компилируется");
     assert_ne!(
         owner.owner_generation.content_identity,
         altered.owner_generation.content_identity
@@ -279,9 +312,14 @@ fn empty_domain_proof_and_unfinished_search_are_distinct() {
             ),
             budget,
         )
-        .unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
+        .expect("допустимая декларация компилируется");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("Session создаётся с допустимым stream");
+        session
+            .prepare_update(update(1, 255))
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
         assert!(session.state().current_verified().is_none());
         assert!(session.state().last_verified().is_none());
         match session.state() {
@@ -313,9 +351,14 @@ fn corrupted_final_encoded_source_never_gets_output() {
         ),
         300,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 0)).unwrap().commit();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 0))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     CORRUPT_FINAL_SOURCE.with(|value| value.set(Some(Srgb8::new([255; 3]))));
     assert!(matches!(
         session.prepare_update(update(2, 255)),
@@ -327,13 +370,16 @@ fn corrupted_final_encoded_source_never_gets_output() {
         session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("готовое состояние содержит текущий результат")
             .computed_for_test()
             .observation
             .revision(),
         Revision::new(1)
     );
-    session.prepare_update(update(2, 255)).unwrap().commit();
+    session
+        .prepare_update(update(2, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([118; 3]));
 }
 
@@ -347,8 +393,10 @@ fn admissible_but_unselected_final_source_cannot_claim_preference() {
         ),
         300,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
     assert!(contrast_passes(
         117,
         255,
@@ -375,8 +423,10 @@ fn computed_physical_recheck_owns_verdict_after_search_pass() {
         ),
         2,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
     evaluator.arm();
     assert!(matches!(
         session.prepare_update(update(1, 255)),
@@ -398,7 +448,7 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         1.0,
         0,
     )
-    .unwrap();
+    .expect("тестовая декларация допускает вычисление");
     let owner = compile_assignment(
         program(
             Target::new(
@@ -410,9 +460,14 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         ),
         200,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    .expect("тестовая декларация допускает вычисление");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(rgb(&session), Srgb8::new([63, 82, 91]));
     let mut strict = declaration;
     strict.max_delta_bits = 0;
@@ -424,9 +479,14 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         ),
         200,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert!(matches!(session.state(), SessionState::Failed { .. }));
 }
 
@@ -494,7 +554,8 @@ fn nested(reverse: bool) -> Program<Wcag22Srgb8V1> {
 
 fn contrast_passes(foreground: u8, background: u8, criterion: Wcag22CriterionV1) -> bool {
     matches!(
-        crate::wcag22::evaluate_wcag22_srgb8([foreground; 3], [background; 3], criterion).unwrap(),
+        crate::wcag22::evaluate_wcag22_srgb8([foreground; 3], [background; 3], criterion)
+            .expect("конечная sRGB8-пара допускает оценку"),
         crate::wcag22::Wcag22AssessmentV1::Evaluated {
             decision: crate::wcag22::Wcag22ApplicableDecisionV1::Pass,
             ..
@@ -542,7 +603,7 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
             }
         }
     }
-    let (_, expected) = expected.unwrap();
+    let (_, expected) = expected.expect("полный oracle нашёл допустимый цвет");
     assert_eq!(expected[0], 150);
     let independent_upper = (0..=255_u8)
         .filter(|&upper| contrast_passes(upper, 255, Wcag22CriterionV1::Sc143TextLargeScale))
@@ -550,25 +611,32 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
             squared_distance(oracle_lab_gray(a), oracle_lab_gray(160))
                 .total_cmp(&squared_distance(oracle_lab_gray(b), oracle_lab_gray(160)))
         })
-        .unwrap();
+        .expect("тестовая декларация допускает вычисление");
     assert!(!contrast_passes(
         independent_upper,
         150,
         Wcag22CriterionV1::Sc143TextLargeScale
     ));
-    let first = compile_assignment(nested(false), 20_000).unwrap();
-    let second = compile_assignment(nested(true), 20_000).unwrap();
+    let first =
+        compile_assignment(nested(false), 20_000).expect("допустимая декларация компилируется");
+    let second =
+        compile_assignment(nested(true), 20_000).expect("допустимая декларация компилируется");
     assert_eq!(
         first.owner_generation.content_identity,
         second.owner_generation.content_identity
     );
     for owner in [&first, &second] {
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("Session создаётся с допустимым stream");
+        session
+            .prepare_update(update(1, 255))
+            .expect("наблюдение допускает подготовку перехода")
+            .commit();
         let current = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("готовое состояние содержит текущий результат")
             .computed_for_test();
         let outputs: Vec<_> = current
             .arena
@@ -639,8 +707,10 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
         ),
         300,
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    .expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
     let both = |revision| {
         let mut value = update(revision, 0);
         let ObservationPayloadInput::Scenarios(scenarios) = &mut value.payload else {
@@ -655,17 +725,26 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
         });
         value
     };
-    session.prepare_update(both(1)).unwrap().commit();
+    session
+        .prepare_update(both(1))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(evaluator.calls().len(), 4);
-    session.prepare_update(both(2)).unwrap().commit();
+    session
+        .prepare_update(both(2))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(evaluator.calls().len(), 8);
-    session.prepare_update(both(2)).unwrap().commit();
+    session
+        .prepare_update(both(2))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     assert_eq!(evaluator.calls().len(), 8);
     assert_eq!(
         session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("готовое состояние содержит текущий результат")
             .computed_for_test()
             .arena
             .storage
@@ -696,7 +775,7 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
         session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("готовое состояние содержит текущий результат")
             .computed_for_test()
             .observation
             .revision(),
@@ -721,13 +800,18 @@ fn fixed_sources_are_not_part_of_computed_freedom() {
         panic!()
     };
     upper.preference = 0;
-    let owner = compile_assignment(declaration, 300).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let owner = compile_assignment(declaration, 300).expect("допустимая декларация компилируется");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("Session создаётся с допустимым stream");
+    session
+        .prepare_update(update(1, 255))
+        .expect("наблюдение допускает подготовку перехода")
+        .commit();
     let outputs = &session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("готовое состояние содержит текущий результат")
         .computed_for_test()
         .arena
         .storage
