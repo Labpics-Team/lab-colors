@@ -357,3 +357,41 @@ test("contrast declarations adapt across the entire sRGB corner cube without a p
   assert.ok(ready > 0 && failed > 0, "both useful selection and impossible declarations are exercised");
   assert.ok(chosenColors.size > 2, "a black/white or lightest-color recipe must not pass");
 });
+
+test("fixed outputs survive mixed reused and changed cases without granting a failed update authority", () => {
+  const dark = [4, 9, 16], light = [245, 252, 250], alternate = [250, 244, 247];
+  const expected = new Map([[11, { rgb: dark, opacity: 1 }], [12, { rgb: dark, opacity: 1 }]]);
+  const bytes = new ProgramWireBuilderV2().source(1, dark).fixedTarget(2, 1)
+    .surfaceInputPort(3).solidPaint(4, 2).inputSurface(5, 3)
+    .sourceOverOccurrence(6, 4, 5, viewing.adaptingLuminance, viewing.backgroundRatio, viewing.surround)
+    .presentationRoot(7, 6).presentationTarget(7, 6)
+    .wcag22VisibleUnary(true, 9, 6, WCAG22_SC143_TEXT_DEFAULT_V1)
+    .output(12, 4).output(11, 4).finish();
+  const history = [
+    ["failed", [dark, dark]], ["ready", [light, alternate]], ["ready", [light, alternate]],
+    ["ready", [light, light]], ["failed", [dark, light]], ["ready", [alternate, light]],
+    ["failed", [alternate, dark]], ["ready", [light, alternate]],
+  ];
+  const runtime = compileProgramWire(bytes, 1);
+  const held = [];
+  try {
+    try {
+      for (const [i, [state, contexts]] of history.entries()) {
+        const snapshot = observe(runtime, BigInt(i + 1), contexts);
+        held.push(snapshot);
+        assert.equal(snapshot.state, state);
+        // A failure may retain the last verified values as history. The first
+        // failure has no such values, and only a ready snapshot is current.
+        assert.deepEqual(outputs(snapshot), i === 0 ? new Map() : expected);
+      }
+    } finally {
+      runtime.free();
+    }
+    for (const [i, snapshot] of held.entries()) {
+      assert.equal(snapshot.state, history[i][0]);
+      assert.deepEqual(outputs(snapshot), i === 0 ? new Map() : expected);
+    }
+  } finally {
+    for (const snapshot of held) snapshot.free();
+  }
+});
