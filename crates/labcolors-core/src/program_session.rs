@@ -4535,7 +4535,11 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut arena.cells);
+    // A single phase already visits cases and then compiled constraint IDs in order.
+    // Only concatenating two phase runs can disturb the public report order.
+    if has_hard_constraints && has_report_constraints {
+        canonicalize_program_report_cells(&mut arena.cells);
+    }
     if has_hard_violation {
         Ok(ProgramEvaluationOutcomeV1::Conflict {
             considered_state_count,
@@ -4651,11 +4655,11 @@ where
             Ok(lengths.map(|length| length / case_count))
         })
         .transpose()?;
-    if let (Some(outputs), Some((_, storage))) = (outputs.as_deref_mut(), previous_storage) {
-        if outputs.is_empty() {
-            outputs.extend_from_slice(&storage.outputs);
-        }
-    }
+    // Compare against the previous verified outputs by reference. A refused
+    // candidate must not copy them into an arena that immediately discards them.
+    let prior_outputs = previous_storage
+        .filter(|_| outputs.as_deref().is_some_and(Vec::is_empty))
+        .map(|(_, storage)| storage.outputs.as_slice());
     let mut has_hard_violation = false;
     let mut output_mismatch = None;
     for case_index in 0..case_count {
@@ -5144,9 +5148,10 @@ where
                     output: output.output,
                     paint,
                 };
-                if outputs.len() == output_index {
+                if prior_outputs.is_none() && outputs.len() == output_index {
                     outputs.push(routed);
-                } else if outputs.get(output_index).copied() != Some(routed)
+                } else if prior_outputs.unwrap_or(outputs).get(output_index).copied()
+                    != Some(routed)
                     && output_mismatch.is_none()
                 {
                     output_mismatch =
@@ -5161,10 +5166,12 @@ where
     }
 
     if let Some(error) = output_mismatch {
-        Err(error)
-    } else {
-        Ok(has_hard_violation)
+        return Err(error);
     }
+    if let (false, Some(outputs), Some(prior)) = (has_hard_violation, outputs, prior_outputs) {
+        outputs.extend_from_slice(prior);
+    }
+    Ok(has_hard_violation)
 }
 
 fn map_program_execution_binding_error<EvaluationError>(

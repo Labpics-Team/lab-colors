@@ -1,77 +1,16 @@
-//! JSON projection of permanent non-Program capabilities retained after C7c.
+//! Проекция результата WCAG в собственные JavaScript-данные.
 
-use std::fmt::Write as _;
+use wasm_bindgen::JsValue;
 
 use crate::error::BindingError;
 
-fn push_str_lit(out: &mut String, value: &str) {
-    out.push_str(&serde_json::to_string(value).expect("string serialization is infallible"));
+fn packed_rgb(bytes: [u8; 3]) -> u32 {
+    u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]])
 }
 
-fn push_key_array<'a>(out: &mut String, name: &str, keys: impl Iterator<Item = &'a str>) {
-    out.push_str(",\"");
-    out.push_str(name);
-    out.push_str("\":[");
-    for (index, key) in keys.enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_str_lit(out, key);
-    }
-    out.push(']');
-}
-
-pub(crate) fn capability_manifest_json() -> String {
-    let manifest = labcolors_core::numerical_capability_manifest_v2();
-    let mut out = String::with_capacity(512);
-    out.push_str("{\"schemaVersion\":");
-    let _ = write!(out, "{}", manifest.schema_version);
-    out.push_str(",\"coverage\":");
-    push_str_lit(&mut out, manifest.coverage.key());
-    out.push_str(",\"sites\":[");
-    for (index, site) in manifest.sites.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"siteId\":");
-        push_str_lit(&mut out, site.site_id.key());
-        push_key_array(
-            &mut out,
-            "stableOutcomes",
-            site.stable_outcomes.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "compatibilityReleases",
-            site.compatibility_releases.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "evidenceClasses",
-            site.evidence_classes.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "artifactIds",
-            site.artifact_ids.iter().map(|v| v.key()),
-        );
-        push_key_array(&mut out, "boundIds", site.bound_ids.iter().map(|v| v.key()));
-        push_key_array(&mut out, "proofIds", site.proof_ids.iter().map(|v| v.key()));
-        push_key_array(
-            &mut out,
-            "runtimeAttestations",
-            site.runtime_attestations.iter().map(|v| v.key()),
-        );
-        out.push('}');
-    }
-    out.push_str("],\"checksum\":");
-    push_str_lit(&mut out, &manifest.checksum.hex());
-    out.push('}');
-    out
-}
-pub(crate) fn wcag22_json(
+pub(crate) fn wcag22(
     assessment: &labcolors_core::wcag22::Wcag22AssessmentV1,
-) -> Result<String, BindingError> {
+) -> Result<JsValue, BindingError> {
     use labcolors_core::NumericalDecisionEvidenceV1;
     use labcolors_core::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1};
 
@@ -107,8 +46,6 @@ pub(crate) fn wcag22_json(
         });
     }
 
-    let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
-    let criterion = criterion.key();
     let decision = match decision {
         Wcag22ApplicableDecisionV1::Pass => "pass",
         Wcag22ApplicableDecisionV1::Fail => "fail",
@@ -119,24 +56,11 @@ pub(crate) fn wcag22_json(
         }
     };
 
-    Ok(format!(
-        concat!(
-            "{{\"kind\":\"evaluated\",\"profileId\":\"{}\",",
-            "\"criterion\":\"{}\",\"foreground\":\"{}\",\"background\":\"{}\",",
-            "\"foregroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
-            "\"backgroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
-            "\"q55Scale\":\"{}\",\"decision\":\"{}\",",
-            "\"evidence\":{{\"kind\":\"canonical-finite-bounded\",",
-            "\"artifactId\":\"{}\",\"artifactSha256\":\"{}\",",
-            "\"boundId\":\"{}\",\"proofId\":\"{}\",",
-            "\"proofSha256\":\"{}\",\"proofPayloadSha256\":\"{}\",",
-            "\"generatorSha256\":\"{}\",\"verifierSha256\":\"{}\",",
-            "\"profileChecksum\":\"{}\",\"profileSha256\":\"{}\"}}}}"
-        ),
+    crate::wcag22_projection(
         profile_id.key(),
-        criterion,
-        hex(measurement.foreground),
-        hex(measurement.background),
+        criterion.key(),
+        packed_rgb(measurement.foreground),
+        packed_rgb(measurement.background),
         measurement.foreground_luminance.lower(),
         measurement.foreground_luminance.upper(),
         measurement.background_luminance.lower(),
@@ -153,5 +77,9 @@ pub(crate) fn wcag22_json(
         profile.verifier_sha256,
         profile.profile_checksum,
         profile.source_sha256,
-    ))
+    )
+    .map_err(|_| BindingError::Internal {
+        // Сохраняем прежнюю публичную диагностику отказа проекции.
+        reason: "WCAG22 projection не распарсился как JSON".to_string(),
+    })
 }

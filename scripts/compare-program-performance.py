@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -10,6 +11,8 @@ import re
 import statistics
 import subprocess
 import time
+
+from program_cpu_profile import summarize_profile
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--harness", type=Path, required=True)
@@ -41,6 +44,20 @@ roots = {"baseline": args.baseline, "candidate": args.candidate}
 def tool_version(*command):
     return subprocess.check_output(command, text=True, timeout=15).strip()
 
+def runtime_payload(root):
+    # Count generated consumer code together, so moving a projection between
+    # WASM and JavaScript cannot appear to reduce its delivered byte cost.
+    paths = [root / "pkg/labcolors_bg.wasm", root / "pkg/labcolors.js", root / "index.js"]
+    paths.extend(sorted((root / "program-wire").glob("*.js")))
+    paths.extend(sorted((root / "pkg/snippets").rglob("*.js")))
+    files = []
+    for path in paths:
+        content = path.read_bytes()
+        files.append({"path": path.relative_to(root).as_posix(), "bytes": len(content),
+                      "sha256": hashlib.sha256(content).hexdigest()})
+    return {"files": files, "totalBytes": sum(item["bytes"] for item in files)}
+
+
 checkout_revision = tool_version("git", "rev-parse", "HEAD")
 if checkout_revision != args.candidate_revision:
     raise SystemExit("candidate revision does not match the checked out source")
@@ -63,24 +80,49 @@ metadata = {
     "npm": tool_version("npm", "--version"),
     "wasmSha256": {label: hashlib.sha256((root / "pkg/labcolors_bg.wasm").read_bytes()).hexdigest()
                    for label, root in roots.items()},
+    "runtimePayload": {label: runtime_payload(root) for label, root in roots.items()},
     "harnessSha256": hashlib.sha256(args.harness.read_bytes()).hexdigest(),
     "samplesAfterWarmup": 3,
-    "rounds": 2,
+    "rounds": 4,
 }
+
+
+def read_measurement(output, label, pattern, nodes):
+    measurement = json.loads(output)
+    expected = metadata["samplesAfterWarmup"]
+    if (measurement["wasmSha256"] != metadata["wasmSha256"][label]
+            or measurement["pattern"] != pattern or measurement["nodes"] != nodes
+            or measurement["samples"] != expected or len(measurement["samplesAfterWarmup"]) != expected):
+        raise ValueError("consumer output does not match the requested artifact and workload")
+    cycles = [measurement["cold"], *measurement["samplesAfterWarmup"]]
+    if len({cycle["checksum"] for cycle in cycles}) != 1:
+        raise ValueError("consumer output differs between cold and warmed cycles")
+    for cycle in cycles:
+        if len(cycle["updatesMs"]) != 64 or not all(
+                type(value) in (int, float) and math.isfinite(value) and value >= 0
+                for value in (cycle["compileMs"], cycle["cycleMs"], *cycle["updatesMs"])):
+            raise ValueError("consumer cycle has no updates or invalid timings")
+    return measurement
+
+
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
+print(json.dumps({"environment": metadata}), flush=True)
 observations = []
-scenarios = {
-    nodes: ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ())
+scenarios = [
+    (nodes, ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ()))
     for nodes in (8, 64, 256, 1024, 4096)
-}
+]
+# Keep all original observations ahead of the connected scaling cases.
+scenarios.extend([(1024, ("ring",)), (2048, ("ring",))])
 deadline = time.monotonic() + args.budget
-for nodes, patterns in scenarios.items():
+for nodes, patterns in scenarios:
     for pattern in patterns:
-        for round_index in range(2):
-            order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
+        for round_index in range(metadata["rounds"]):
+            order = ("baseline", "candidate") if round_index % 2 == 0 else ("candidate", "baseline")
             for label in order:
                 started = time.monotonic()
-                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes),
+                           str(metadata["samplesAfterWarmup"])]
                 record = {"variant": label, "pattern": pattern, "nodes": nodes, "round": round_index}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -92,10 +134,10 @@ for nodes, patterns in scenarios.items():
                         record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
                         if process.returncode == 0:
                             try:
-                                record["measurement"] = json.loads(process.stdout)
+                                record["measurement"] = read_measurement(process.stdout, label, pattern, nodes)
                                 record["status"] = "completed"
-                            except ValueError:
-                                record["status"] = "invalid-output"
+                            except (ValueError, TypeError, KeyError, OverflowError) as error:
+                                record.update(status="invalid-output", error=str(error))
                         else:
                             record["status"] = "failed"
                     except subprocess.TimeoutExpired as error:
@@ -106,99 +148,117 @@ for nodes, patterns in scenarios.items():
                 observations.append(record)
                 name = f"{pattern}-{nodes}-{round_index}-{label}.json"
                 (args.output / name).write_text(json.dumps(record, indent=2) + "\n")
-                print(json.dumps({key: record[key] for key in
-                                  ("variant", "pattern", "nodes", "round", "status", "elapsedSeconds")}),
+                print(json.dumps({key: value for key, value in record.items()
+                                  if key != "stdout" or "measurement" not in record}),
                       flush=True)
 
 summary = []
-for nodes, patterns in scenarios.items():
+for nodes, patterns in scenarios:
     for pattern in patterns:
         row = {"pattern": pattern, "nodes": nodes}
         matching = [r for r in observations if r["pattern"] == pattern and r["nodes"] == nodes]
         for label in roots:
             records = [r for r in matching if r["variant"] == label]
             row[label] = {"statuses": [r["status"] for r in records]}
-            if len(records) == 2 and all(r["status"] == "completed" for r in records):
+            if len(records) == metadata["rounds"] and all(r["status"] == "completed" for r in records):
                 measurements = [r["measurement"] for r in records]
                 samples = [s for m in measurements for s in m["samplesAfterWarmup"]]
                 row[label].update(
+                    coldCycleMedianMs=statistics.median(m["cold"]["cycleMs"] for m in measurements),
                     compileMedianMs=statistics.median(s["compileMs"] for s in samples),
                     cycleMedianMs=statistics.median(s["cycleMs"] for s in samples),
+                    updatesMedianMs=statistics.median(sum(s["updatesMs"]) for s in samples),
                     maxRssKiB=max(m["maxRssKiB"] for m in measurements),
                     wasmSha256=sorted({m["wasmSha256"] for m in measurements}),
                     checksums=sorted({s["checksum"] for s in samples}),
                 )
         if all("compileMedianMs" in row[label] for label in roots):
-            if row["baseline"]["checksums"] != row["candidate"]["checksums"]:
+            if (len(row["baseline"]["checksums"]) != 1
+                    or row["baseline"]["checksums"] != row["candidate"]["checksums"]):
                 raise SystemExit(f"output checksum changed: {pattern}/{nodes}")
+            row["coldCycleSpeedup"] = row["baseline"]["coldCycleMedianMs"] / row["candidate"]["coldCycleMedianMs"]
             row["compileSpeedup"] = row["baseline"]["compileMedianMs"] / row["candidate"]["compileMedianMs"]
             row["cycleSpeedup"] = row["baseline"]["cycleMedianMs"] / row["candidate"]["cycleMedianMs"]
+            row["updatesSpeedup"] = row["baseline"]["updatesMedianMs"] / row["candidate"]["updatesMedianMs"]
         summary.append(row)
 (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 print(json.dumps(summary, indent=2), flush=True)
-# A timeout remains an incomplete observation, never a successful latency sample.
-# Non-timeout consumer failures invalidate the comparison.
-if any(record["status"] not in ("completed", "timeout", "budget-exhausted") for record in observations):
-    raise SystemExit("consumer failure: inspect retained observations")
+# Keep partial diagnostics without reporting a successful comparison.
+if any(record["status"] != "completed" for record in observations):
+    raise SystemExit("incomplete consumer comparison: inspect retained observations")
+
 
 if args.profile:
     # Instrumented processes never enter observations or the latency summary.
-    # Cap diagnostics at one ordinary process budget, shared equally by six runs.
+    # Cap diagnostics at one ordinary process budget, shared by all runs; short cases leave time for larger controls.
+    memory_observer = Path(__file__).with_name("observe-program-memory.mjs").resolve(strict=True)
     profile_cases = [(pattern, nodes, label)
-                     for pattern, nodes in (("repeated", 1024), ("distinct", 1024), ("ring", 256))
+                     for pattern, nodes in (("repeated", 256), ("repeated", 1024), ("distinct", 1024),
+                                            ("ring", 256), ("ring", 1024), ("ring", 2048))
                      for label in roots]
     profile_budget = min(args.timeout, args.budget)
-    profile_timeout = profile_budget / len(profile_cases)
     profile_root = (args.output / "profiles").resolve()
     profile_root.mkdir(parents=True, exist_ok=True)
     profiles = {
         "includedInLatencySummary": False,
         "samplingIntervalUs": 1000,
         "budgetSeconds": profile_budget,
-        "processTimeoutSeconds": profile_timeout,
+        "processTimeoutSeconds": args.timeout,
         "harnessSha256": metadata["harnessSha256"],
+        "memoryObserverSha256": hashlib.sha256(memory_observer.read_bytes()).hexdigest(),
         "observations": [],
     }
     profile_deadline = time.monotonic() + profile_budget
     for pattern, nodes, label in profile_cases:
         profile_path = profile_root / f"{pattern}-{nodes}-{label}.cpuprofile"
         profile_path.unlink(missing_ok=True)
+        memory_path = profile_root / f"{pattern}-{nodes}-{label}.memory.json"
+        memory_path.unlink(missing_ok=True)
         record = {
             "variant": label, "pattern": pattern, "nodes": nodes,
             "sourceRevision": args.baseline_revision if label == "baseline" else args.candidate_revision,
             "wasmSha256": metadata["wasmSha256"][label],
             "profileFile": profile_path.name,
+            "memoryObserverSha256": profiles["memoryObserverSha256"],
         }
         command = ["node", "--cpu-prof", f"--cpu-prof-dir={profile_root}",
                    f"--cpu-prof-name={profile_path.name}", "--cpu-prof-interval=1000",
-                   str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                   str(memory_observer), str(args.harness), str(roots[label]), pattern, str(nodes),
+                   str(metadata["samplesAfterWarmup"])]
         started = time.monotonic()
         remaining = profile_deadline - started
         if remaining <= 0:
             record["status"] = "budget-exhausted"
         else:
             try:
-                process = subprocess.run(command, capture_output=True, text=True,
-                                         timeout=min(profile_timeout, remaining), check=False)
+                process = subprocess.run(
+                    command, capture_output=True, text=True,
+                    timeout=min(args.timeout, remaining), check=False,
+                    env={**os.environ, "LABCOLORS_MEMORY_REPORT": str(memory_path)},
+                )
                 record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
                 record["status"] = "failed"
                 if process.returncode == 0:
                     try:
-                        measurement = json.loads(process.stdout)
-                        samples = [measurement["cold"], *measurement["samplesAfterWarmup"]]
-                        checksums = sorted({sample["checksum"] for sample in samples})
+                        measurement = read_measurement(process.stdout, label, pattern, nodes)
+                        checksums = [measurement["cold"]["checksum"]]
                         reference = next(row[label] for row in summary
                                          if row["pattern"] == pattern and row["nodes"] == nodes)
-                        if (measurement["wasmSha256"] != record["wasmSha256"]
-                                or measurement["pattern"] != pattern or measurement["nodes"] != nodes
-                                or measurement["samples"] != 3 or len(samples) != 4
-                                or len(checksums) != 1
-                                or ("checksums" in reference and checksums != reference["checksums"])):
+                        if checksums != reference["checksums"]:
                             raise ValueError("profiled consumer differs from the measured workload")
+                        memory = json.loads(memory_path.read_text())
+                        if (memory["phase"] != "after-consumer"
+                                or type(memory["linearMemoryBytes"]) is not int
+                                or memory["linearMemoryBytes"] <= 0
+                                or not all(isinstance(memory[key], dict)
+                                           for key in ("processMemory", "heap", "code"))):
+                            raise ValueError("post-consumer memory diagnostic is invalid")
+                        record["memory"] = memory
                         profile = json.loads(profile_path.read_text())
                         if not isinstance(profile.get("nodes"), list) or not profile["nodes"]:
                             raise ValueError("CPU profile contains no call tree")
-                        record.update(status="completed", checksums=checksums)
+                        record.update(status="completed", checksums=checksums,
+                                      cpuSummary=summarize_profile(profile))
                     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                         record.update(status="invalid-output", error=str(error))
             except subprocess.TimeoutExpired as error:
@@ -212,9 +272,47 @@ if args.profile:
                           profileSha256=hashlib.sha256(profile_bytes).hexdigest())
         profiles["observations"].append(record)
         (profile_root / "index.json").write_text(json.dumps(profiles, indent=2) + "\n")
-        print(json.dumps({"cpuProfile": {key: record[key] for key in
-                                         ("variant", "pattern", "nodes", "status", "elapsedSeconds")}}),
+        print(json.dumps({"cpuProfile": {key: value for key, value in record.items()
+                                         if key != "stdout" or record["status"] != "completed"}}),
               flush=True)
-    if any(record["status"] not in ("completed", "timeout", "budget-exhausted")
-           for record in profiles["observations"]):
-        raise SystemExit("profiled consumer failure: inspect retained diagnostics")
+    if any(record["status"] != "completed" for record in profiles["observations"]):
+        raise SystemExit("incomplete consumer profile: inspect retained diagnostics")
+
+    # Cross producer and consumer on the reproducible RSS discrepancy. One JS
+    # builder and one runtime are loaded in each fresh, non-profiled process.
+    # Rotate a balanced sequence so every combination occupies every position.
+    combinations = [(builder, runtime) for builder in roots for runtime in roots]
+    order = (0, 1, 3, 2)
+    reference = next(row for row in summary if (row["pattern"], row["nodes"]) == ("ring", 1024))
+    wire_digests = set()
+    for block in range(len(combinations)):
+        for position in order:
+            builder, runtime = combinations[(position + block) % len(combinations)]
+            command = ["node", str(args.harness), str(roots[runtime]), reference["pattern"],
+                       str(reference["nodes"]), str(metadata["samplesAfterWarmup"]), str(roots[builder])]
+            record = {"builder": builder, "runtime": runtime, "block": block,
+                      "pattern": reference["pattern"], "nodes": reference["nodes"]}
+            remaining = min(args.timeout, deadline - time.monotonic())
+            try:
+                if remaining <= 0:
+                    raise ValueError("ordinary comparison budget exhausted before component controls")
+                result = subprocess.run(command, capture_output=True, text=True, timeout=remaining, check=True)
+                m = read_measurement(result.stdout, runtime, reference["pattern"], reference["nodes"])
+                if [m["cold"]["checksum"]] != reference[runtime]["checksums"]:
+                    raise ValueError("output changed across producer/runtime combinations")
+                if re.fullmatch(r"[0-9a-f]{64}", m["wireSha256"]) is None:
+                    raise ValueError("missing declaration digest")
+                if type(m["maxRssKiB"]) is not int or m["maxRssKiB"] <= 0:
+                    raise ValueError("invalid process peak")
+                wire_digests.add(m["wireSha256"])
+                if len(wire_digests) != 1:
+                    raise ValueError("builders emitted different declarations")
+                record.update(status="completed", wireSha256=m["wireSha256"], wasmSha256=m["wasmSha256"],
+                              checksum=m["cold"]["checksum"], maxRssKiB=m["maxRssKiB"],
+                              coldCycleMs=m["cold"]["cycleMs"],
+                              warmCycleMs=[x["cycleMs"] for x in m["samplesAfterWarmup"]])
+            except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+                record.update(status="failed", error=str(error), stderr=str(getattr(error, "stderr", "") or ""))
+                print(json.dumps({"componentControl": record}), flush=True)
+                raise SystemExit("incomplete crossed component control") from error
+            print(json.dumps({"componentControl": record}), flush=True)

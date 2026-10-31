@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 347,
+   "count": 350,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -864,6 +864,9 @@
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_complete_files_fail_closed_on_addition_removal_and_unknown_override",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_complete_production_dependency_cone_is_bound",
     "test_point_support_surplus_source_binding.PointSupportSurplusSourceBindingTests.test_universal_certificate_separates_scales_and_rejects_symbolic_mutants",
+    "test_program_cpu_profile.CpuTimelineTests.test_equal_timestamps_keep_capture_order_without_inventing_time",
+    "test_program_cpu_profile.CpuTimelineTests.test_invalid_intermediate_timestamp_or_identity_is_not_repaired",
+    "test_program_cpu_profile.CpuTimelineTests.test_out_of_order_events_preserve_weights_and_unattributed_tail",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_observation_alias_is_rejected_by_origin",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_program_session_alias_is_rejected_by_origin",
     "test_program_public_surface.ProgramPublicSurfaceTests.test_arbitrary_root_reexport_alias_is_rejected_by_origin",
@@ -962,7 +965,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f676b43e1472fee411c8c2b37d4a0f1040a8b6e7dc38230164716b6a94e7e8a7",
+ "record_sha256": "d27dad410d9c360c1f9c53ed607234a7efec330c5e8a25b8e2103e077fd42dad",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1988,6 +1991,7 @@
    "program_session::identity::tests::clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit: test",
    "program_session::identity::tests::component_index_matches_connectivity_after_refinement_and_individualization: test",
    "program_session::identity::tests::component_interchange_checks_direction_role_multiplicity_and_boundary: test",
+   "program_session::identity::tests::connected_cycles_build_one_orbit_per_unchanged_search_pass: test",
    "program_session::identity::tests::connected_cycles_keep_unpruned_canonical_bytes: test",
    "program_session::identity::tests::declared_clean_set_constraint_color_binds_every_release_digest_byte: test",
    "program_session::identity::tests::equal_signature_heapsort_preserves_one_left_rotation: test",
@@ -2000,6 +2004,8 @@
    "program_session::identity::tests::exhausted_fault_injection_fuel_never_returns_a_partial_preimage: test",
    "program_session::identity::tests::family_vertex_codec_binds_semantic_release_without_opaque_id_or_artifact_receipt: test",
    "program_session::identity::tests::fixed_color_key_preserves_length_first_order_and_bounds: test",
+   "program_session::identity::tests::graph_adjacency_preserves_typed_multiedges_and_self_loops: test",
+   "program_session::identity::tests::graph_finish_allocations_do_not_grow_per_vertex: test",
    "program_session::identity::tests::hostile_graph_preimage_is_invariant_for_generated_bijections: test",
    "program_session::identity::tests::incremental_refinement_matches_full_refiner_for_all_small_digraphs: test",
    "program_session::identity::tests::incremental_refinement_preserves_middle_and_tied_largest_children: test",
@@ -2008,9 +2014,14 @@
    "program_session::identity::tests::joint_selection_vertex_binds_tag_and_exact_release_identity_bytes: test",
    "program_session::identity::tests::modeled_lcs_release_mutation_affects_only_lcs_aware_constraint_content: test",
    "program_session::identity::tests::pruning_keeps_exact_bytes_on_every_four_vertex_digraph: test",
+   "program_session::identity::tests::refinement_retains_capacity_by_cell_count: test",
+   "program_session::identity::tests::refinement_reuses_initial_singletons_without_per_vertex_allocations: test",
    "program_session::identity::tests::repeated_components_are_canonicalized_with_one_leaf: test",
    "program_session::identity::tests::repeated_components_use_one_bulk_group_instead_of_search_depth: test",
+   "program_session::identity::tests::search_frame_borrows_the_partition_branch_without_another_allocation: test",
    "program_session::identity::tests::small_role_directed_graph_preimage_is_invariant_for_generated_bijections: test",
+   "program_session::identity::tests::sparse_refinement_preserves_clean_middle_and_largest_dirty_children: test",
+   "program_session::identity::tests::sparse_refinement_visits_only_changed_signatures: test",
    "program_session::program_preflight_reservation_tests::a_warm_coordinate_consumes_but_cannot_realize_an_allocation_failure: test",
    "program_session::program_preflight_reservation_tests::an_empty_coordinate_does_not_consume_a_failure_index: test",
    "program_session::program_preflight_reservation_tests::mixed_warm_and_cold_coordinates_keep_stable_failure_indices: test",
@@ -2285,7 +2296,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1319,
+  "enabled_count": 1327,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",

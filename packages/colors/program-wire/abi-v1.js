@@ -22,7 +22,7 @@ import {
   inputArrayLength,
   indexedValues,
   candidateList,
-  rgbBytes,
+  rgb24,
   ByteSink
 } from "./encoding.js";
 export {
@@ -65,10 +65,10 @@ export class ProgramWireBuilderV1 {
 
   source(id, rgb) {
     const checkedId = u32Value(id, "source id");
-    const checkedRgb = rgbBytes(rgb, "source rgb");
+    const checkedRgb = rgb24(rgb, "source rgb");
     const sink = this.entry("sources");
     sink.u32(checkedId);
-    sink.rgb(checkedRgb);
+    sink.rgb24(checkedRgb);
     return this;
   }
 
@@ -91,7 +91,7 @@ export class ProgramWireBuilderV1 {
         }
         return {
           id: u32Value(inputProperty(candidate, "id", "candidate id"), "candidate[" + index + "] id"),
-          rgb: rgbBytes(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
+          rgb: rgb24(inputProperty(candidate, "rgb", "candidate rgb"), "candidate[" + index + "] rgb"),
           opacity: opacityValue(inputProperty(candidate, "opacity", "candidate opacity"), "candidate[" + index + "] opacity"),
         };
       },
@@ -102,7 +102,7 @@ export class ProgramWireBuilderV1 {
     sink.u32(checked.length);
     for (const candidate of checked) {
       sink.u32(candidate.id);
-      sink.rgb(candidate.rgb);
+      sink.rgb24(candidate.rgb);
       sink.f64Bits(candidate.opacity);
     }
     return this;
@@ -220,12 +220,12 @@ export class ProgramWireBuilderV1 {
   exactVisibleUnary(hard, id, occurrence, expectedRgb) {
     const checkedId = u32Value(id, "constraint id");
     const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
-    const checkedRgb = rgbBytes(expectedRgb, "expected rgb");
+    const checkedRgb = rgb24(expectedRgb, "expected rgb");
     const sink = this.constraintEntry(hard);
     sink.u32(checkedId);
     sink.u8(KIND_EXACT_VISIBLE_UNARY);
     sink.u32(checkedOccurrence);
-    sink.rgb(checkedRgb);
+    sink.rgb24(checkedRgb);
     return this;
   }
 
@@ -256,9 +256,10 @@ export class ProgramWireBuilderV1 {
   exactIntrinsicRelationHard(id, reference, candidates) {
     const checkedId = u32Value(id, "constraint id");
     const checkedReference = u32Value(reference, "relation reference");
-    const checked = candidateList(candidates, "relation candidates").map(
-      (candidate, index) => u32Value(candidate, "relation candidate[" + index + "]"),
-    );
+    const checked = candidateList(candidates, "relation candidates");
+    for (let i = 0; i < checked.length; i++) {
+      checked[i] = u32Value(checked[i], "relation candidate", i);
+    }
     const sink = this.constraintEntry(true);
     sink.u32(checkedId);
     sink.u8(KIND_EXACT_INTRINSIC_RELATION);
@@ -281,20 +282,17 @@ export class ProgramWireBuilderV1 {
 
   /** Эмитирует единственные канонические байты объявленного графа. */
   finish() {
-    const header = new ByteSink();
-    for (const byte of PROGRAM_WIRE_MAGIC_V1) header.u8(byte);
-    header.u16(PROGRAM_WIRE_VERSION_V1);
-    header.u32(0); // patched below
-
-    // Check the u32 envelope before copying section payloads. New nested
-    // declarations cannot silently truncate the header length.
-    let declaredLength = header.bytes.length + SECTION_ORDER_V1.length * 4;
+    // magic + u16 version + u32 total, followed by a u32 count per section.
+    const headerLength = PROGRAM_WIRE_MAGIC_V1.length + 2 + 4;
+    let declaredLength = headerLength + SECTION_ORDER_V1.length * 4;
+    const sections = [];
     for (const name of SECTION_ORDER_V1) {
       const { count, sink } = this.section(name);
+      const payload = sink.bytes;
       if (!Number.isSafeInteger(count) || count < 0) {
         invalid("section " + name + " has an invalid entry count");
       }
-      const payloadLength = sink.bytes.length;
+      const payloadLength = payload.length;
       if (!Number.isSafeInteger(payloadLength) || payloadLength < 0) {
         invalid("section " + name + " has an invalid payload length");
       }
@@ -305,28 +303,21 @@ export class ProgramWireBuilderV1 {
         );
       }
       declaredLength += payloadLength;
+      sections.push({ count, payload });
     }
 
-    const body = new ByteSink();
-    for (const name of SECTION_ORDER_V1) {
-      const { count, sink } = this.section(name);
-      body.u32(count);
-      // Поэлементно: spread разворачивает массив в аргументы вызова и падает
-      // на больших секциях (лимит аргументов V8), а не по нашему typed-отказу.
-      for (const byte of sink.bytes) {
-        body.bytes.push(byte);
-      }
-    }
-
-    const total = header.bytes.length + body.bytes.length;
-    if (total !== declaredLength) {
-      invalid("wire sections changed during emission");
-    }
-    const bytes = new Uint8Array(total);
-    bytes.set(header.bytes, 0);
-    bytes.set(body.bytes, header.bytes.length);
+    const bytes = new Uint8Array(declaredLength);
     const view = new DataView(bytes.buffer);
-    view.setUint32(6, total, true);
+    bytes.set(PROGRAM_WIRE_MAGIC_V1);
+    view.setUint16(PROGRAM_WIRE_MAGIC_V1.length, PROGRAM_WIRE_VERSION_V1, true);
+    view.setUint32(headerLength - 4, declaredLength, true);
+    let at = headerLength;
+    for (const { count, payload } of sections) {
+      view.setUint32(at, count, true);
+      at += 4;
+      bytes.set(payload, at);
+      at += payload.length;
+    }
     return bytes;
   }
 }

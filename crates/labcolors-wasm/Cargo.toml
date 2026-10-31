@@ -15,7 +15,7 @@ description = "WASM bindings for the labcolors-core contrast engine, packaged as
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# WASM-граница владеет JSON-проекциями результатов и browser bindings;
+# WASM-граница владеет JS-проекциями результатов и browser bindings;
 # `labcolors-core` остаётся без runtime-зависимостей.
 labcolors-core = { path = "../labcolors-core", default-features = false }
 wasm-bindgen = { workspace = true }
@@ -23,9 +23,11 @@ wasm-bindgen = { workspace = true }
 js-sys = "0.3"
 # Типизированные ошибки WASM-границы.
 thiserror = "2"
-# JSON-декодирование принадлежит только WASM-границе; Core не получает serde.
-# Raw release-WASM закреплён exact size ratchet в `packages/colors/bench/wasm.json`.
-serde = { version = "1", features = ["derive"] }
+
+# Derive the target-independent release manifest from this build's Core registry.
+# Neither the release projection generator nor the JSON serializer ships in WASM.
+[build-dependencies]
+labcolors-conformance = { path = "../labcolors-conformance" }
 serde_json = "1"
 
 [dev-dependencies]

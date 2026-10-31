@@ -610,6 +610,9 @@ jobs:
 
           print("core capability projection: PASS")
           PY
+      - name: validate CPU profile timestamp accounting
+        if: ${{ matrix.lane == 'proof-contracts' }}
+        run: python3 scripts/test_program_cpu_profile.py
       - name: reject WCAG22 source-route redirects and proof vacuums
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_wcag22_source_binding.py

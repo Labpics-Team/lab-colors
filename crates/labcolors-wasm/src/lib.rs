@@ -81,7 +81,7 @@ extern "C" {
     pub type JsWcag22AssessmentV1;
 }
 // Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
-#[wasm_bindgen(inline_js = r#"
+#[wasm_bindgen(inline_js = r##"
 export function programError(message, code, operation) {
   try {
     const error = new Error(message);
@@ -189,8 +189,102 @@ export function certificateProjection(
     bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
-"#)]
+
+const ProjectionString = String;
+export const parseCapabilityManifest = JSON.parse;
+
+function projectionRgbHex(rgb) {
+  // The packed RGB24 value has six hexadecimal digits of four bits each.
+  const digits = "0123456789ABCDEF";
+  let result = "#";
+  for (let shift = 20; shift >= 0; shift -= 4) {
+    result += digits[(rgb >>> shift) & 15];
+  }
+  return result;
+}
+
+export function wcag22Projection(
+  profileId,
+  criterion,
+  foreground,
+  background,
+  foregroundLower,
+  foregroundUpper,
+  backgroundLower,
+  backgroundUpper,
+  q55Scale,
+  decision,
+  artifactId,
+  artifactSha256,
+  boundId,
+  proofId,
+  proofSha256,
+  proofPayloadSha256,
+  generatorSha256,
+  verifierSha256,
+  profileChecksum,
+  profileSha256,
+) {
+  return {
+    kind: "evaluated",
+    profileId,
+    criterion,
+    foreground: projectionRgbHex(foreground),
+    background: projectionRgbHex(background),
+    foregroundLuminanceQ55: {
+      lower: ProjectionString(foregroundLower),
+      upper: ProjectionString(foregroundUpper),
+    },
+    backgroundLuminanceQ55: {
+      lower: ProjectionString(backgroundLower),
+      upper: ProjectionString(backgroundUpper),
+    },
+    q55Scale: ProjectionString(q55Scale),
+    decision,
+    evidence: {
+      kind: "canonical-finite-bounded",
+      artifactId,
+      artifactSha256,
+      boundId,
+      proofId,
+      proofSha256,
+      proofPayloadSha256,
+      generatorSha256,
+      verifierSha256,
+      profileChecksum,
+      profileSha256,
+    },
+  };
+}
+"##)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = parseCapabilityManifest)]
+    fn parse_capability_manifest(json: &str) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = wcag22Projection)]
+    fn wcag22_projection(
+        profile_id: &str,
+        criterion: &str,
+        foreground: u32,
+        background: u32,
+        foreground_lower: u64,
+        foreground_upper: u64,
+        background_lower: u64,
+        background_upper: u64,
+        q55_scale: u64,
+        decision: &str,
+        artifact_id: &str,
+        artifact_sha256: &str,
+        bound_id: &str,
+        proof_id: &str,
+        proof_sha256: &str,
+        proof_payload_sha256: &str,
+        generator_sha256: &str,
+        verifier_sha256: &str,
+        profile_checksum: &str,
+        profile_sha256: &str,
+    ) -> Result<JsValue, JsValue>;
+
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
@@ -414,33 +508,42 @@ fn to_authority_error(
 // а u64::try_from дополнительно проверяет, что bigint не потерял старшие биты.
 fn checked_u32(value: JsValue) -> Option<u32> {
     let number = value.as_f64()?;
-    if number.is_finite() && number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number)
-    {
-        Some(number as u32)
-    } else {
-        None
-    }
+    let integer = number as u32;
+    // Every u32 is exactly representable in f64. Fractions, out-of-range
+    // values, infinities and NaN cannot survive this round trip unchanged.
+    (f64::from(integer) == number).then_some(integer)
 }
 
-fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
-    checked_u32(value)
-        .map(|index| index as usize)
+fn snapshot_output(
+    snapshot: &labcolors_core::program_wire::ProgramSnapshotV1,
+    index: JsValue,
+) -> Result<&labcolors_core::program_wire::ProgramPaintOutputV1, JsValue> {
+    checked_u32(index)
+        .and_then(|i| snapshot.outputs().get(i as usize))
         .ok_or_else(output_index_error)
+}
+
+fn owned_rgb(color: labcolors_core::Srgb8) -> Result<js_sys::Uint8Array, JsValue> {
+    let [red, green, blue] = color.bytes();
+    copy_output_rgb(red, green, blue)
 }
 
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsValue> {
-    let json = terminal_projection::capability_manifest_json();
-    js_sys::JSON::parse(&json)
-        .map(JsValue::unchecked_into)
-        .map_err(|_| {
-            binding_failure_error(
-                BindingFailure::ManifestInternal as u32,
-                "capability manifest не распарсился как JSON",
-            )
-            .into()
-        })
+    // A fresh ordinary JS object per call, without rebuilding and hashing the registry.
+    parse_capability_manifest(include_str!(concat!(
+        env!("OUT_DIR"),
+        "/numerical-capabilities.json"
+    )))
+    .map(JsValue::unchecked_into)
+    .map_err(|_| {
+        binding_failure_error(
+            BindingFailure::ManifestInternal as u32,
+            "capability manifest не распарсился как JSON",
+        )
+        .into()
+    })
 }
 
 /// Точная оценка WCAG 2.2 одной финальной пары sRGB8.
@@ -470,14 +573,9 @@ pub fn evaluate_wcag22(
                     },
                 })
             })?;
-    let json = terminal_projection::wcag22_json(&assessment).map_err(project)?;
-    js_sys::JSON::parse(&json)
+    terminal_projection::wcag22(&assessment)
         .map(JsValue::unchecked_into)
-        .map_err(|_| {
-            project(BindingError::Internal {
-                reason: "WCAG22 projection не распарсился как JSON".to_string(),
-            })
-        })
+        .map_err(project)
 }
 
 /// Выдаёт собственную копию байтов сертификата встроенного дескриптора исходников Core.
@@ -546,12 +644,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<u32, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .outputs()
-            .get(index)
-            .map(|output| output.slot())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(&self.inner, index)?.slot())
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
@@ -559,14 +652,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<js_sys::Uint8Array, JsValue> {
-        let index = checked_output_index(index)?;
-        let output = self
-            .inner
-            .outputs()
-            .get(index)
-            .ok_or_else(output_index_error)?;
-        let [red, green, blue] = output.source().bytes();
-        copy_output_rgb(red, green, blue)
+        owned_rgb(snapshot_output(&self.inner, index)?.source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -574,12 +660,7 @@ impl ProgramSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<f64, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .outputs()
-            .get(index)
-            .map(|output| output.opacity())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(&self.inner, index)?.opacity())
     }
 }
 
@@ -618,42 +699,18 @@ impl ProgramRuntime {
         let surface_count = checked_u32(surface_count)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
             as usize;
-        let row_bytes = surface_count
-            .checked_mul(3)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        let expected = scenario_ids
-            .len()
-            .checked_mul(row_bytes)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        if expected != surfaces.len() {
-            return Err(to_program_js_error(
-                E::Update,
-                ProgramOperation::UpdateObserved,
-            ));
-        }
-        let mut scenarios = Vec::new();
-        scenarios
-            .try_reserve_exact(scenario_ids.len())
-            .map_err(program_observation_reservation_error)?;
-        for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-            let start = row * row_bytes;
-            let mut values = Vec::new();
-            values
-                .try_reserve_exact(surface_count)
-                .map_err(program_observation_reservation_error)?;
-            for offset in 0..surface_count {
-                let byte = start + offset * 3;
-                values.push(labcolors_core::Srgb8::new([
-                    surfaces[byte],
-                    surfaces[byte + 1],
-                    surfaces[byte + 2],
-                ]));
-            }
-            scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
-                scenario_id,
-                values,
-            ));
-        }
+        let scenarios =
+            decode_observed_scenarios(scenario_ids, surfaces, surface_count).map_err(|error| {
+                match error {
+                    ObservedScenarioDecodeError::InvalidShape => {
+                        to_program_js_error(E::Update, ProgramOperation::UpdateObserved)
+                    }
+                    ObservedScenarioDecodeError::ScenarioAllocation(error)
+                    | ObservedScenarioDecodeError::SurfaceAllocation(error) => {
+                        program_observation_reservation_error(error)
+                    }
+                }
+            })?;
         self.inner
             .update_observed(revision, &scenarios)
             .map(|inner| ProgramSnapshot { inner })
@@ -779,44 +836,40 @@ fn attachment_snapshot_error(operation: ProgramOperation) -> JsValue {
     )
 }
 
-fn decode_attachment_scenarios(
+enum ObservedScenarioDecodeError {
+    InvalidShape,
+    ScenarioAllocation(std::collections::TryReserveError),
+    SurfaceAllocation(std::collections::TryReserveError),
+}
+
+// Один owned decoder обслуживает обе runtime-обёртки. Проекция ошибок
+// остаётся снаружи, поэтому код копирования не специализируется по операции.
+#[inline(never)]
+fn decode_observed_scenarios(
     scenario_ids: &[u32],
     surfaces: &[u8],
-    surface_count: JsValue,
-    operation: ProgramOperation,
-) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, JsValue> {
-    let surface_count =
-        checked_u32(surface_count).ok_or_else(|| attachment_snapshot_error(operation))? as usize;
+    surface_count: usize,
+) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, ObservedScenarioDecodeError> {
     let row_bytes = surface_count
         .checked_mul(3)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
+        .ok_or(ObservedScenarioDecodeError::InvalidShape)?;
     let expected = scenario_ids
         .len()
         .checked_mul(row_bytes)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
+        .ok_or(ObservedScenarioDecodeError::InvalidShape)?;
     if expected != surfaces.len() {
-        return Err(attachment_snapshot_error(operation));
+        return Err(ObservedScenarioDecodeError::InvalidShape);
     }
     let mut scenarios = Vec::new();
     scenarios
         .try_reserve_exact(scenario_ids.len())
-        .map_err(|_| {
-            attachment_js_error(
-                "Program attachment scenario allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
+        .map_err(ObservedScenarioDecodeError::ScenarioAllocation)?;
     for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
         let start = row * row_bytes;
         let mut values = Vec::new();
-        values.try_reserve_exact(surface_count).map_err(|_| {
-            attachment_js_error(
-                "Program attachment surface allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
+        values
+            .try_reserve_exact(surface_count)
+            .map_err(ObservedScenarioDecodeError::SurfaceAllocation)?;
         for offset in 0..surface_count {
             let byte = start + offset * 3;
             values.push(labcolors_core::Srgb8::new([
@@ -831,6 +884,29 @@ fn decode_attachment_scenarios(
         ));
     }
     Ok(scenarios)
+}
+
+fn decode_attachment_scenarios(
+    scenario_ids: &[u32],
+    surfaces: &[u8],
+    surface_count: JsValue,
+    operation: ProgramOperation,
+) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, JsValue> {
+    let surface_count =
+        checked_u32(surface_count).ok_or_else(|| attachment_snapshot_error(operation))? as usize;
+    decode_observed_scenarios(scenario_ids, surfaces, surface_count).map_err(|error| match error {
+        ObservedScenarioDecodeError::InvalidShape => attachment_snapshot_error(operation),
+        ObservedScenarioDecodeError::ScenarioAllocation(_) => attachment_js_error(
+            "Program attachment scenario allocation failed",
+            "program_attachment_resource_exhausted",
+            operation,
+        ),
+        ObservedScenarioDecodeError::SurfaceAllocation(_) => attachment_js_error(
+            "Program attachment surface allocation failed",
+            "program_attachment_resource_exhausted",
+            operation,
+        ),
+    })
 }
 
 /// Создаёт один публичный attachment и передаёт все внешние эффекты в `host`.
@@ -1077,27 +1153,15 @@ impl ProgramAttachedSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<u32, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.slot())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(self.inner.snapshot(), index)?.slot())
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
     pub fn output_rgb(
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
-    ) -> Result<Box<[u8]>, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.source().bytes().to_vec().into_boxed_slice())
-            .ok_or_else(output_index_error)
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(snapshot_output(self.inner.snapshot(), index)?.source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1105,13 +1169,7 @@ impl ProgramAttachedSnapshot {
         &self,
         #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
     ) -> Result<f64, JsValue> {
-        let index = checked_output_index(index)?;
-        self.inner
-            .snapshot()
-            .outputs()
-            .get(index)
-            .map(|output| output.opacity())
-            .ok_or_else(output_index_error)
+        Ok(snapshot_output(self.inner.snapshot(), index)?.opacity())
     }
 
     #[wasm_bindgen(js_name = hasRender)]
@@ -1145,13 +1203,8 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
-    pub fn output_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .output()
-            .source()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn output_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.output().source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1204,10 +1257,8 @@ impl ProgramAttachedRender {
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
-    pub fn terminal_composite_rgb(&self) -> Option<Box<[u8]>> {
-        self.inner
-            .terminal_composite()
-            .map(|value| value.bytes().to_vec().into_boxed_slice())
+    pub fn terminal_composite_rgb(&self) -> Result<Option<js_sys::Uint8Array>, JsValue> {
+        self.inner.terminal_composite().map(owned_rgb).transpose()
     }
 }
 
@@ -1224,13 +1275,8 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = outputRgb)]
-    pub fn output_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .output()
-            .source()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn output_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.output().source())
     }
 
     #[wasm_bindgen(js_name = outputOpacity)]
@@ -1292,12 +1338,8 @@ impl AttachedMaterializationAuthority {
     }
 
     #[wasm_bindgen(js_name = terminalCompositeRgb)]
-    pub fn terminal_composite_rgb(&self) -> Box<[u8]> {
-        self.inner
-            .terminal_composite()
-            .bytes()
-            .to_vec()
-            .into_boxed_slice()
+    pub fn terminal_composite_rgb(&self) -> Result<js_sys::Uint8Array, JsValue> {
+        owned_rgb(self.inner.terminal_composite())
     }
 }
 

@@ -97,4 +97,112 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
   assert.deepEqual(root.numericalCapabilityManifest(), manifest);
   assert.equal(numericalCapabilityManifestV2, undefined);
   assert.equal(root.numericalCapabilityManifestV2, undefined);
+
+  await t.test("terminal projections preserve data ownership and property semantics", () => {
+    const evaluate = () =>
+      root.evaluateWcag22("#00000a", "#FFFFFF", "sc-1.4.3-text-default");
+    // Independent snapshots must not alias a future cached projection.
+    const expectedManifest = structuredClone(numericalCapabilityManifest());
+    const expectedAssessment = structuredClone(evaluate());
+    const poisoned = [
+      [Object.prototype, "schemaVersion"],
+      [Object.prototype, "siteId"],
+      [Object.prototype, "kind"],
+      [Object.prototype, "lower"],
+      [Object.prototype, "get"],
+      [Object.prototype, "set"],
+      [Array.prototype, "0"],
+    ];
+    const initialArrayLength = Array.prototype.length;
+    const previous = poisoned.map(([object, key]) => {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (descriptor !== undefined) Object.setPrototypeOf(descriptor, null);
+      return descriptor;
+    });
+    let setterCalls = 0;
+    const poison = {
+      __proto__: null,
+      configurable: true,
+      set() {
+        setterCalls += 1;
+        throw new Error("inherited projection setter");
+      },
+    };
+    let projectedManifest;
+    let assessment;
+    try {
+      for (const [object, key] of poisoned) {
+        Object.defineProperty(object, key, poison);
+      }
+      projectedManifest = numericalCapabilityManifest();
+      assessment = evaluate();
+    } finally {
+      for (let index = 0; index < poisoned.length; index += 1) {
+        const [object, key] = poisoned[index];
+        if (previous[index] === undefined) {
+          delete object[key];
+        } else {
+          Object.defineProperty(object, key, previous[index]);
+        }
+      }
+      // Defining an array index extends length; deleting it does not shrink it.
+      Array.prototype.length = initialArrayLength;
+    }
+
+    assert.equal(Array.prototype.length, initialArrayLength);
+    assert.equal(setterCalls, 0);
+    assert.deepEqual(projectedManifest, expectedManifest);
+    assert.deepEqual(assessment, expectedAssessment);
+    assert.equal(assessment.foreground, "#00000A");
+    assert.equal(assessment.q55Scale, (1n << 55n).toString(), "exact Q55 scale");
+
+    assert.deepEqual(Object.keys(projectedManifest), [
+      "schemaVersion", "coverage", "sites", "checksum",
+    ]);
+    for (const site of projectedManifest.sites) {
+      assert.deepEqual(Object.keys(site), [
+        "siteId", "stableOutcomes", "compatibilityReleases", "evidenceClasses",
+        "artifactIds", "boundIds", "proofIds", "runtimeAttestations",
+      ]);
+    }
+    assert.deepEqual(Object.keys(assessment), [
+      "kind", "profileId", "criterion", "foreground", "background",
+      "foregroundLuminanceQ55", "backgroundLuminanceQ55", "q55Scale",
+      "decision", "evidence",
+    ]);
+    assert.deepEqual(Object.keys(assessment.foregroundLuminanceQ55), ["lower", "upper"]);
+    assert.deepEqual(Object.keys(assessment.backgroundLuminanceQ55), ["lower", "upper"]);
+    assert.deepEqual(Object.keys(assessment.evidence), [
+      "kind", "artifactId", "artifactSha256", "boundId", "proofId",
+      "proofSha256", "proofPayloadSha256", "generatorSha256", "verifierSha256",
+      "profileChecksum", "profileSha256",
+    ]);
+
+    const assertDataProperties = (value) => {
+      if (value === null || typeof value !== "object") return;
+      assert.equal(
+        Object.getPrototypeOf(value),
+        Array.isArray(value) ? Array.prototype : Object.prototype,
+      );
+      assert.deepEqual(Object.getOwnPropertySymbols(value), []);
+      for (const key of Object.keys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        assert.equal(descriptor.get, undefined);
+        assert.equal(descriptor.set, undefined);
+        assert.equal(descriptor.writable, true);
+        assert.equal(descriptor.enumerable, true);
+        assert.equal(descriptor.configurable, true);
+        assertDataProperties(descriptor.value);
+      }
+    };
+    assertDataProperties(projectedManifest);
+    assertDataProperties(assessment);
+
+    projectedManifest.sites[0].siteId = "caller-owned";
+    projectedManifest.sites[0].stableOutcomes[0] = "caller-owned";
+    assessment.foregroundLuminanceQ55.lower = "caller-owned";
+    assessment.evidence.artifactId = "caller-owned";
+    assert.deepEqual(numericalCapabilityManifest(), expectedManifest);
+    assert.deepEqual(evaluate(), expectedAssessment);
+  });
 });
