@@ -163,14 +163,14 @@ function versionedSnapshotTypes(snapshot: ProgramSnapshot | ProgramAttachedSnaps
   const version: number = snapshot.snapshotVersion;
   const revision: bigint = snapshot.revision;
   const reason: string | undefined = snapshot.reason;
+  // @ts-expect-error причина отсутствует вне incomplete.
+  const requiredReason: string = snapshot.reason;
   // @ts-expect-error getter версии доступен только для чтения.
   snapshot.snapshotVersion = 2;
   // @ts-expect-error getter revision доступен только для чтения.
   snapshot.revision = 1n;
   // @ts-expect-error getter reason доступен только для чтения.
   snapshot.reason = "limit";
-  // @ts-expect-error причина отсутствует вне incomplete.
-  const requiredReason: string = snapshot.reason;
   void [version, revision, reason, requiredReason];
 }
 void versionedSnapshotTypes;
