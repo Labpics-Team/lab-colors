@@ -198,6 +198,7 @@ jobs:
               export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$baseline=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
               build_runtime
             )
+            node packages/colors/bench/wire-construction.mjs compare "$baseline/packages/colors" "$candidate"
             python3 scripts/compare-program-performance.py \
               --harness packages/colors/bench/program.mjs \
               --baseline "$baseline/packages/colors" \
