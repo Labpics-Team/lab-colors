@@ -323,7 +323,7 @@
   "packages/colors/program-wire/abi-v1.js": "05f0b38f3e259d90dd9f483eefa5608ac862421f",
   "packages/colors/program-wire/abi-v2.d.ts": "1c29db7a70437ec49fb7fd257587aab4d45911dc",
   "packages/colors/program-wire/abi-v2.js": "b4fdda6c96e51dbd5e797a8898b798e2ed54e6b2",
-  "packages/colors/program-wire/encoding.js": "ae0e5cb7b58e92e74db4c21ecb093536ffa91b62",
+  "packages/colors/program-wire/encoding.js": "b4ab02926495be2c871d814a59f02a584a5aa797",
   "packages/colors/sink.js": "a157333b905db95214f8912a58a6a5492190c344",
   "packages/colors/smoke.consumer.ts": "aa8e47246ddd4ef85b8a52675fa68dfa25948e73",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
@@ -350,7 +350,7 @@
   "packages/colors/test/program-scalar-admission.test.mjs": "6ccfe2ae4d32c0fa71d3c8db3f4c8cfff2e5b180",
   "packages/colors/test/program-selection-builder.test.mjs": "eacaf966a48cdc07577d07e959f68f599bf238cb",
   "packages/colors/test/program-selection-runtime.test.mjs": "c99b8a1b6594b22dcbd32c98b444fb68abf4dd4d",
-  "packages/colors/test/program-wire-boundaries.test.mjs": "b76ff0bc18359bb1f7607cb33d9dddf69a0e5660",
+  "packages/colors/test/program-wire-boundaries.test.mjs": "c3d45d6a922c318f3f3b18b1599797a73a50e416",
   "packages/colors/test/program-wire-input-access.test.mjs": "e2e78902a32234a8fb18fd9cfdd4153d401ed0be",
   "packages/colors/test/program-wire.test.mjs": "10f9caac95feb531fa2e3711cc9057e14e8bbbbd",
   "packages/colors/test/public-api-cleanup.test.mjs": "e1ea85803e118881c88183ff0ee41771e85712a2",
@@ -616,7 +616,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "6f587bfd01c2200e2ec6725e892b9f62d19f977b55f5fbae60489b223064e7af",
+ "record_sha256": "6216bfa5aa0c6d5f30901af8e7c155bcfd43d22937bb05eb778d38301637e518",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

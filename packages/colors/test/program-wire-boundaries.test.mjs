@@ -243,3 +243,14 @@ test("finished wire owns its bytes across section growth and caller mutation", (
   assert.deepEqual(beforeGrowth, expected);
   assert.equal(grown.length - expected.length, 511 * (4 + 3));
 });
+
+// An unrelated empty section must not expose a shared, detachable backing store.
+test("detaching an empty section view does not poison another builder", () => {
+  const first = new ProgramWireBuilderV1(), other = new ProgramWireBuilderV1();
+  const expected = other.finish();
+  const empty = first.section("sources").sink.bytes;
+  structuredClone(empty.buffer, { transfer: [empty.buffer] });
+  assert.deepEqual(other.finish(), expected);
+  assert.deepEqual(first.finish(), expected);
+  assert.deepEqual(first.source(1, [1, 2, 3]).finish(), other.source(1, [1, 2, 3]).finish());
+});

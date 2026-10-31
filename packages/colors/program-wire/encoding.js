@@ -1,12 +1,5 @@
-// Shared canonical scalar encoding for the two supported Program envelopes.
-// Каноническая wire-грамматика авторского Draft-графа Program (v1) — JS-зеркало
-// Rust-модуля crates/labcolors-core/src/program/wire.rs. Одни байты — одна
-// декларация: заголовок LCPW + u16 version + u32 total_len, секции строго в
-// порядке полей CoreProgramDraftV1, LE-скаляры, opacity как f64-bits.
-//
-// Слой 1 двухслойного контракта: байты <-> декларации. Семантику графа
-// проверяет Rust-компилятор Program; этот модуль не выражает семантических
-// отказов и не изобретает fallback.
+// Wire V1/V2: LCPW header, little-endian sections in Core draft order.
+// This module admits scalar inputs; Rust checks graph semantics in program/wire.rs.
 
 export const PROGRAM_WIRE_MAGIC_V1 = Object.freeze([0x4c, 0x43, 0x50, 0x57]); // LCPW
 export const PROGRAM_WIRE_VERSION_V1 = 1;
@@ -183,11 +176,11 @@ export function rgb24(rgb, what) {
 
 /** Little-endian section payload. Only initialized bytes reach the wire. */
 export class ByteSink {
-  #data = new Uint8Array(0);
-  #view = new DataView(this.#data.buffer);
+  #data;
+  #view;
   #length = 0;
 
-  get bytes() { return this.#data.subarray(0, this.#length); }
+  get bytes() { return this.#data ? this.#data.subarray(0, this.#length) : new Uint8Array(); }
 
   #reserve(width) {
     const at = this.#length;
@@ -195,9 +188,10 @@ export class ByteSink {
     if (end > 0xffff_ffff) {
       throw new ProgramWireError(PROGRAM_WIRE_TOO_MANY_ENTRIES, "section exceeds the u32 wire length");
     }
-    if (end > this.#data.length) {
-      const data = new Uint8Array(Math.max(end, Math.min(this.#data.length * 2, 0xffff_ffff)));
-      data.set(this.#data);
+    const capacity = this.#data?.length ?? 0;
+    if (end > capacity) {
+      const data = new Uint8Array(Math.max(end, Math.min(capacity * 2, 0xffff_ffff)));
+      if (capacity) data.set(this.#data);
       this.#data = data;
       this.#view = new DataView(data.buffer);
     }
