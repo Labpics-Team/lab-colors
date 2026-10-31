@@ -1,6 +1,6 @@
 import { ProgramWireBuilderV1 } from "./abi-v1.js";
 import { ByteSink, byteValue, candidateList, f64Value, inputProperty, invalid,
-  rgbBytes, u32Value } from "./encoding.js";
+  rgb24, u32Value } from "./encoding.js";
 
 export { ProgramWireError, PROGRAM_WIRE_INVALID_DECLARATION, PROGRAM_WIRE_TOO_MANY_ENTRIES,
   SURROUND_AVERAGE_V1, SURROUND_DIM_V1, SURROUND_DARK_V1,
@@ -16,14 +16,16 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     payload.u32(checkedId);
     payload.u8(3);
     if (kind === "box") {
-      const lower = rgbBytes(inputProperty(domain, "lower", "computed domain lower"), "computed domain lower");
-      const upper = rgbBytes(inputProperty(domain, "upper", "computed domain upper"), "computed domain upper");
-      if (lower.some((channel, index) => channel > upper[index])) {
-        invalid("computed box lower bounds must not exceed upper bounds");
+      const lower = rgb24(inputProperty(domain, "lower", "computed domain lower"), "computed domain lower");
+      const upper = rgb24(inputProperty(domain, "upper", "computed domain upper"), "computed domain upper");
+      for (let shift = 0; shift < 24; shift += 8) {
+        if (((lower >>> shift) & 255) > ((upper >>> shift) & 255)) {
+          invalid("computed box lower bounds must not exceed upper bounds");
+        }
       }
       payload.u8(1);
-      payload.rgb(lower);
-      payload.rgb(upper);
+      payload.rgb24(lower);
+      payload.rgb24(upper);
     } else if (kind === "gray") {
       const lower = byteValue(inputProperty(domain, "lower", "computed domain lower"), "computed domain lower");
       const upper = byteValue(inputProperty(domain, "upper", "computed domain upper"), "computed domain upper");
@@ -34,12 +36,12 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     } else {
       invalid("computed domain kind must be box or gray");
     }
-    const checkedAnchor = rgbBytes(anchor, "computed anchor");
+    const checkedAnchor = rgb24(anchor, "computed anchor");
     const delta = f64Value(maxDelta, "computed maxDelta");
     if (delta < 0 || !Number.isFinite(delta * delta)) {
       invalid("computed maxDelta must be nonnegative with a finite square");
     }
-    payload.rgb(checkedAnchor);
+    payload.rgb24(checkedAnchor);
     payload.f64Bits(delta === 0 ? 0 : delta);
     // Ввод уже скопирован: дальнейшая запись не вызывает getters клиента.
     const output = this.entry("targets");
@@ -52,7 +54,8 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     const targets = candidateList(targetsInPreferenceOrder, "assignment targets")
       .map((target) => u32Value(target, "assignment target"));
     const payload = new ByteSink();
-    payload.u16(2);
+    payload.u8(2);
+    payload.u8(0);
     payload.u32(targets.length);
     for (const target of targets) payload.u32(target);
     // Getter мог принять вложенное assignment; внешнее не заменяет его.

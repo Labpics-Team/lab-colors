@@ -208,7 +208,7 @@ test("physical scalar admission never coerces caller-owned objects", () => {
 test("wire header u32 bound rejects oversized sparse section before allocation", () => {
   const builder = new ProgramWireBuilderV1();
   const section = builder.section("sources");
-  section.sink.bytes.length = 0xffff_ffff;
+  section.sink = { bytes: { length: 0xffff_ffff } };
   assert.throws(() => builder.finish(), typed(PROGRAM_WIRE_TOO_MANY_ENTRIES));
   assert.equal(section.count, 0);
 });
@@ -225,7 +225,32 @@ test("wire refuses corrupted section counts before serialization", () => {
 test("wire refuses invalid section byte lengths before copying", () => {
   for (const length of [-1, NaN, Infinity]) {
     const builder = new ProgramWireBuilderV1();
-    builder.section("sources").sink.bytes = { length };
+    builder.section("sources").sink = { bytes: { length } };
     assert.throws(() => builder.finish(), typed(PROGRAM_WIRE_INVALID_DECLARATION));
   }
+});
+
+
+test("finished wire owns its bytes across section growth and caller mutation", () => {
+  const builder = new ProgramWireBuilderV1().source(1, [1, 2, 3]);
+  const first = builder.finish();
+  const expected = first.slice();
+  first.fill(0xff);
+  assert.deepEqual(builder.finish(), expected);
+  const beforeGrowth = builder.finish();
+  for (let id = 2; id <= 512; id++) builder.source(id, [0, 0, 0]);
+  const grown = builder.finish();
+  assert.deepEqual(beforeGrowth, expected);
+  assert.equal(grown.length - expected.length, 511 * (4 + 3));
+});
+
+test("transferring a completed empty wire preserves the builder and its siblings", () => {
+  const first = new ProgramWireBuilderV1(), other = new ProgramWireBuilderV1();
+  const expected = other.finish();
+  const empty = first.finish();
+  const transferred = structuredClone(empty, { transfer: [empty.buffer] });
+  assert.deepEqual(transferred, expected);
+  assert.deepEqual(other.finish(), expected);
+  assert.deepEqual(first.finish(), expected);
+  assert.deepEqual(first.source(1, [1, 2, 3]).finish(), other.source(1, [1, 2, 3]).finish());
 });

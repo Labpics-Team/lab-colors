@@ -1,12 +1,5 @@
-// Общие канонические скаляры поддерживаемых версий Program wire.
-// Каноническая wire-грамматика авторского Draft-графа Program (v1) — JS-зеркало
-// Rust-модуля crates/labcolors-core/src/program/wire.rs. Одни байты — одна
-// декларация: заголовок LCPW + u16 version + u32 total_len, секции строго в
-// порядке полей CoreProgramDraftV1, LE-скаляры, opacity как f64-bits.
-//
-// Слой 1 двухслойного контракта: байты <-> декларации. Семантику графа
-// проверяет Rust-компилятор Program; этот модуль не выражает семантических
-// отказов и не изобретает fallback.
+// Канонические скаляры Program wire V1/V2/V3 и little-endian кодирование.
+// Этот модуль проверяет скаляры; семантика графа принадлежит program/wire.rs.
 
 export const PROGRAM_WIRE_MAGIC_V1 = Object.freeze([0x4c, 0x43, 0x50, 0x57]); // LCPW
 export const PROGRAM_WIRE_VERSION_V1 = 1;
@@ -64,16 +57,20 @@ export function invalid(message) {
 }
 
 // Диагностика не преобразует отклонённое значение и не вызывает его hooks.
-export function u32Value(value, what) {
+function indexedPath(what, index) {
+  return index === undefined ? what : what + "[" + index + "]";
+}
+
+export function u32Value(value, what, index) {
   if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
-    invalid(`${what} must be a u32 (received type ${typeof value})`);
+    invalid(indexedPath(what, index) + " must be a u32 (received type " + typeof value + ")");
   }
   return value >>> 0;
 }
 
-export function byteValue(value, what) {
+export function byteValue(value, what, index) {
   if (!Number.isInteger(value) || value < 0 || value > 0xff) {
-    invalid(`${what} must be a byte (received type ${typeof value})`);
+    invalid(indexedPath(what, index) + " must be a byte (received type " + typeof value + ")");
   }
   return value;
 }
@@ -167,52 +164,47 @@ export function candidateList(candidates, what) {
   return indexedValues(candidates, length, what);
 }
 
-export function rgbBytes(rgb, what) {
-  if (inputArrayLength(rgb, what) !== 3) {
-    invalid(`${what} must be an [r, g, b] triple`);
-  }
-  return indexedValues(rgb, 3, what).map((channel, index) => byteValue(channel, `${what}[${index}]`));
+// Keep the three caller-owned reads ordered and complete before validation.
+// The packed number is internal; the wire still carries R, G, B in that order.
+export function rgb24(rgb, what) {
+  if (inputArrayLength(rgb, what) !== 3) invalid(what + " must be an [r, g, b] triple");
+  const r = inputProperty(rgb, 0, what);
+  const g = inputProperty(rgb, 1, what);
+  const b = inputProperty(rgb, 2, what);
+  return byteValue(r, what, 0) | (byteValue(g, what, 1) << 8) | (byteValue(b, what, 2) << 16);
 }
 
-/** Растущий LE-байтовый буфер: те же представления, что у Rust-стороны. */
+/** Stage admitted bytes; only finish() materializes the contiguous wire. */
 export class ByteSink {
-  constructor() {
-    /** @type {number[]} */
-    this.bytes = [];
-  }
+  bytes = [];
+  #float;
 
-  u8(value) {
-    this.bytes.push(value & 0xff);
-  }
-
-  u16(value) {
-    this.bytes.push(value & 0xff, (value >>> 8) & 0xff);
-  }
-
-  u32(value) {
-    this.bytes.push(
-      value & 0xff,
-      (value >>> 8) & 0xff,
-      (value >>> 16) & 0xff,
-      (value >>> 24) & 0xff,
-    );
-  }
-
-  u64(value) {
-    this.u32(Number(value & 0xffff_ffffn));
-    this.u32(Number(value >> 32n));
-  }
-
-  f64Bits(value) {
-    const view = new DataView(new ArrayBuffer(8));
-    view.setFloat64(0, value, true);
-    for (let index = 0; index < 8; index += 1) {
-      this.bytes.push(view.getUint8(index));
+  #room(width) {
+    if (this.bytes.length > 0xffff_ffff - width) {
+      throw new ProgramWireError(PROGRAM_WIRE_TOO_MANY_ENTRIES, "section exceeds the u32 wire length");
     }
   }
 
-  rgb(rgb) {
-    this.bytes.push(rgb[0], rgb[1], rgb[2]);
+  u8(value) { this.#room(1); this.bytes.push(value & 255); }
+  u32(value) {
+    this.#room(4);
+    this.bytes.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, value >>> 24);
+  }
+  u64(value) {
+    this.#room(8);
+    this.u32(Number(value & 0xffff_ffffn));
+    this.u32(Number(value >> 32n));
+  }
+  f64Bits(value) {
+    this.#room(8);
+    // Only sections that actually encode floating-point values need a view.
+    const view = this.#float ??= new DataView(new ArrayBuffer(Float64Array.BYTES_PER_ELEMENT));
+    view.setFloat64(0, value, true);
+    this.u32(view.getUint32(0, true));
+    this.u32(view.getUint32(4, true));
+  }
+  rgb24(value) {
+    this.#room(3);
+    this.bytes.push(value & 255, (value >>> 8) & 255, value >>> 16);
   }
 }
-
