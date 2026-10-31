@@ -616,25 +616,6 @@ impl AttachedMaterializationAuthority {
 mod tests {
     use super::*;
 
-    // Байты получены публичным ProgramWireBuilderV3: target 2, alpha 0.5,
-    // exact visible [96; 3], anchor [64; 3]. Здесь нет отдельного encoder.
-    const GRAY_WIRE: &str = concat!(
-        "4c4350570300cf000000000000000100000002000000030200ff404040000000000000f03f",
-        "00000000010000000100010000000200000001000000060000000100000005000000000000000000e03f",
-        "020000000300000001020000000400000002030000000500000001000000070000000106000000",
-        "0100000008000000040000000700000000000000000050409a9999999999c93f02",
-        "010000000900000008000000010000000900000008000000010000000a0000000108000000606060",
-        "00000000010000001100000004000000",
-    );
-    const BOX_WIRE: &str = concat!(
-        "4c4350570300d30000000000000001000000020000000301000000ffffff404040000000000000f03f",
-        "00000000010000000100010000000200000001000000060000000100000005000000000000000000e03f",
-        "020000000300000001020000000400000002030000000500000001000000070000000106000000",
-        "0100000008000000040000000700000000000000000050409a9999999999c93f02",
-        "010000000900000008000000010000000900000008000000010000000a0000000108000000606060",
-        "00000000010000001100000004000000",
-    );
-
     fn bytes(hex: &str) -> Vec<u8> {
         assert_eq!(hex.len() % 2, 0);
         (0..hex.len())
@@ -669,14 +650,23 @@ mod tests {
 
     #[test]
     fn computed_snapshot_metadata_is_shared_by_standalone_and_attached_ffi() {
-        for (wire, state, reason) in [
-            (GRAY_WIRE, "unsatisfied", None),
-            (BOX_WIRE, "incomplete", Some("limit")),
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
+                .expect("встроенный fixture содержит корректный JSON");
+        for (name, state, reason) in [
+            ("gray", "unsatisfied", None),
+            ("box", "unsatisfied", None),
+            ("relation", "incomplete", Some("limit")),
         ] {
+            let wire = bytes(
+                fixtures["computed"][name]
+                    .as_str()
+                    .expect("общий wire fixture представлен строкой"),
+            );
             let runtime =
-                compile_program_wire(bytes(wire), 100).expect("допустимый Program компилируется");
+                compile_program_wire(wire.clone(), 100).expect("допустимый Program компилируется");
             let ready = runtime
-                .update_observed(1, vec![7], vec![128; 3], 1)
+                .update_observed(1, vec![1], vec![128; 3], 1)
                 .expect("наблюдение принимается");
             assert_eq!(ready.snapshot_version(), 2);
             assert_eq!(ready.revision(), 1);
@@ -688,7 +678,7 @@ mod tests {
                 [64; 3]
             );
             let stopped = runtime
-                .update_observed(2, vec![7], vec![255; 3], 1)
+                .update_observed(2, vec![1], vec![255; 3], 1)
                 .expect("наблюдение принимается");
             assert_eq!(stopped.snapshot_version(), 2);
             assert_eq!(stopped.revision(), 2);
@@ -717,18 +707,17 @@ mod tests {
             .expect("потребитель снимка завершается без panic");
             assert_eq!(held, (2, 1, None, vec![64; 3]));
 
-            let attached =
-                attach_program_wire(bytes(wire), 100, 17, 91, 9, 8, Box::new(AcceptHost))
-                    .expect("Program присоединяется к тестовому host");
+            let attached = attach_program_wire(wire, 100, 91, 501, 71, 61, Box::new(AcceptHost))
+                .expect("Program присоединяется к тестовому host");
             let ready = attached
-                .update_observed(1, vec![7], vec![128; 3], 1)
+                .update_observed(1, vec![1], vec![128; 3], 1)
                 .expect("наблюдение принимается");
             assert_eq!(ready.snapshot_version(), 2);
             assert_eq!(ready.revision(), 1);
             assert_eq!(ready.reason(), None);
             assert!(ready.has_render());
             let stopped = attached
-                .update_observed(2, vec![7], vec![255; 3], 1)
+                .update_observed(2, vec![1], vec![255; 3], 1)
                 .expect("наблюдение принимается");
             assert_eq!(stopped.snapshot_version(), 2);
             assert_eq!(stopped.revision(), 2);
