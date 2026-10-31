@@ -1889,6 +1889,12 @@ fn automorphism_preserves_partition(
     Ok(true)
 }
 
+#[cfg(test)]
+thread_local! {
+    static EXPLORED_ORBIT_BUILDS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
+
 /// Проверяет, лежит ли `candidate` в орбите уже исследованной ветви при
 /// автоморфизмах, стабилизирующих текущее упорядоченное разбиение. Отсечение
 /// точное: отображение сохраняется лишь после совпадения полных сериализаций
@@ -1898,16 +1904,29 @@ fn candidate_is_in_explored_orbit(
     explored: &[usize],
     candidate: usize,
     automorphisms: &[Vec<usize>],
+    orbit: &mut Option<Vec<bool>>,
 ) -> Result<bool, ProgramCompileError> {
     if explored.is_empty() || automorphisms.is_empty() {
         return Ok(false);
     }
     let vertex_count = automorphisms[0].len();
-    let cell_of = partition_cells(partition, vertex_count)?;
     if candidate >= vertex_count {
         return Err(ProgramCompileError::InternalInvariant);
     }
+    if let Some(seen) = orbit.as_deref() {
+        if seen.is_empty() {
+            return Ok(false);
+        }
+        return seen
+            .get(candidate)
+            .copied()
+            .ok_or(ProgramCompileError::InternalInvariant);
+    }
 
+    #[cfg(test)]
+    EXPLORED_ORBIT_BUILDS.with(|builds| builds.set(builds.get() + 1));
+
+    let cell_of = partition_cells(partition, vertex_count)?;
     let mut stabilizers = Vec::new();
     stabilizers
         .try_reserve_exact(automorphisms.len())
@@ -1918,6 +1937,8 @@ fn candidate_is_in_explored_orbit(
         }
     }
     if stabilizers.is_empty() {
+        // Пустой bitmap запоминает отсутствие подходящих стабилизаторов.
+        *orbit = Some(Vec::new());
         return Ok(false);
     }
 
@@ -1953,7 +1974,9 @@ fn candidate_is_in_explored_orbit(
             }
         }
     }
-    Ok(seen[candidate])
+    let contains = seen[candidate];
+    *orbit = Some(seen);
+    Ok(contains)
 }
 
 /// Для каждой вершины хранит клетку, если её компонента после удаления
@@ -2250,6 +2273,9 @@ fn canonical_search_impl(
                 .last_mut()
                 .ok_or(ProgramCompileError::InternalInvariant)?;
             let mut selected = None;
+            // Разбиение, представители и автоморфизмы неизменны до выхода
+            // из этого прохода. После дочерней ветви орбита строится заново.
+            let mut explored_orbit = None;
             while frame.next_candidate < frame.candidates.len() {
                 let candidate = frame.candidates[frame.next_candidate];
                 frame.next_candidate += 1;
@@ -2264,6 +2290,7 @@ fn canonical_search_impl(
                     &frame.explored_candidates,
                     candidate,
                     &automorphisms,
+                    &mut explored_orbit,
                 )? {
                     continue;
                 }
@@ -2275,6 +2302,7 @@ fn canonical_search_impl(
                 selected = Some(candidate);
                 break;
             }
+            drop(explored_orbit);
             match selected {
                 Some(candidate) => {
                     if let Some(remaining) = &mut remaining_branch_expansions {
@@ -3668,6 +3696,26 @@ mod tests {
             }
         }
         graph.finish()
+    }
+
+    #[test]
+    fn connected_cycles_build_one_orbit_per_unchanged_search_pass()
+    -> Result<(), ProgramCompileError> {
+        // Любой ненулевой сдвиг цикла простой длины порождает всю орбиту.
+        // После двух листьев оставшиеся ветви используют один и тот же bitmap.
+        for count in [5, 17] {
+            let graph = connected_cycle_graph(count, false)?;
+            let expected = exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?;
+            EXPLORED_ORBIT_BUILDS.with(|builds| builds.set(0));
+
+            let (actual, leaves) = canonical_search(&graph)?;
+            let builds = EXPLORED_ORBIT_BUILDS.with(core::cell::Cell::get);
+
+            assert_eq!(leaves, 2, "directed prime cycle of length {count}");
+            assert_eq!(builds, 1, "repeated orbit construction for cycle {count}");
+            assert_eq!(actual, expected);
+        }
+        Ok(())
     }
 
     #[test]

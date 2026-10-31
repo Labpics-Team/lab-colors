@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "bc0b4fd6deb4c55919b0c24b920a198864e8b3f37fd31448bc3445642a528a57",
+ "record_sha256": "bfa30b5b7d84c296eb55919dd0a3fcb93d2f78ef0ff985c5c062356917f4350e",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1975,6 +1975,7 @@
    "program_session::identity::tests::clean_set_final_recheck_mutant_release_changes_exactly_one_declared_bit: test",
    "program_session::identity::tests::component_index_matches_connectivity_after_refinement_and_individualization: test",
    "program_session::identity::tests::component_interchange_checks_direction_role_multiplicity_and_boundary: test",
+   "program_session::identity::tests::connected_cycles_build_one_orbit_per_unchanged_search_pass: test",
    "program_session::identity::tests::connected_cycles_keep_unpruned_canonical_bytes: test",
    "program_session::identity::tests::declared_clean_set_constraint_color_binds_every_release_digest_byte: test",
    "program_session::identity::tests::equal_signature_heapsort_preserves_one_left_rotation: test",
@@ -2271,7 +2272,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1305,
+  "enabled_count": 1306,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "family_artifact_tests::axis_membership_matches_the_full_srgb8_cube_oracle: test",
