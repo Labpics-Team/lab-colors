@@ -890,6 +890,7 @@ struct AdjacencyV1 {
 }
 
 impl AdjacencyV1 {
+    #[inline(never)]
     fn get(&self, vertex: usize) -> Option<&[ArcV1]> {
         let bounds = self.offsets.get(vertex..)?.get(..2)?;
         self.arcs.get(bounds[0]..bounds[1])
@@ -906,6 +907,7 @@ impl AdjacencyV1 {
 impl core::ops::Index<usize> for AdjacencyV1 {
     type Output = [ArcV1];
 
+    #[inline(never)]
     fn index(&self, vertex: usize) -> &Self::Output {
         &self.arcs[self.offsets[vertex]..self.offsets[vertex + 1]]
     }
@@ -963,12 +965,14 @@ impl GraphBuilderV1 {
         Ok(())
     }
 
-    fn finish(self) -> Result<CanonicalGraphV1, ProgramCompileError> {
+    // The caller owns every buffer before this fallible construction begins.
+    #[inline(never)]
+    fn fill_adjacency(&self, adjacency: &mut AdjacencyV1) -> Result<(), ProgramCompileError> {
+        let AdjacencyV1 { offsets, arcs } = adjacency;
         let vertex_count = self.colors.len();
         let offset_count = vertex_count
             .checked_add(1)
             .ok_or(ProgramCompileError::ResourceExhausted)?;
-        let mut offsets = Vec::new();
         offsets
             .try_reserve_exact(offset_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
@@ -993,7 +997,6 @@ impl GraphBuilderV1 {
                 .ok_or(ProgramCompileError::ResourceExhausted)?;
         }
         offsets[vertex_count] = arc_count;
-        let mut arcs = Vec::new();
         arcs.try_reserve_exact(arc_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         // Initialization stays private: the counted edges overwrite every
@@ -1047,9 +1050,18 @@ impl GraphBuilderV1 {
                 ordering::sort(row);
             }
         }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<CanonicalGraphV1, ProgramCompileError> {
+        let mut adjacency = AdjacencyV1 {
+            offsets: Vec::new(),
+            arcs: Vec::new(),
+        };
+        self.fill_adjacency(&mut adjacency)?;
         Ok(CanonicalGraphV1 {
             colors: self.colors,
-            adjacency: AdjacencyV1 { offsets, arcs },
+            adjacency,
             edge_count: self.edges.len(),
         })
     }
@@ -2382,18 +2394,15 @@ fn serialize_leaf(
         push_u64_bytes(&mut output, u64::from(color.len()));
         output.extend_from_slice(color.as_slice());
 
-        let outgoing_count = graph.adjacency[vertex]
-            .iter()
-            .filter(|arc| arc.direction == 0)
-            .count();
+        let arcs = &graph.adjacency[vertex];
+        let outgoing_count = arcs.iter().filter(|arc| arc.direction == 0).count();
         push_u64_bytes(&mut output, usize_as_u64(outgoing_count)?);
         outgoing.clear();
         outgoing
             .try_reserve(outgoing_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         outgoing.extend(
-            graph.adjacency[vertex]
-                .iter()
+            arcs.iter()
                 .filter(|arc| arc.direction == 0)
                 .map(|arc| (arc.role, label_of[arc.neighbour])),
         );
@@ -4482,8 +4491,8 @@ mod tests {
     }
 
     #[test]
-    fn graph_adjacency_preserves_typed_multiedges_and_self_loops()
-    -> Result<(), ProgramCompileError> {
+    fn graph_adjacency_preserves_typed_multiedges_and_self_loops() -> Result<(), ProgramCompileError>
+    {
         use EdgeRoleV1::{ProgramMember, SolidTarget, TargetCandidate, TargetSource};
         let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
         let a = builder.add_member(VertexColorV1::new(vertex_tag::SOURCE))?;
@@ -4546,7 +4555,10 @@ mod tests {
         }
         assert!(graph.adjacency.get(expected.len()).is_none());
         assert!(graph.adjacency.get(usize::MAX).is_none());
-        assert_eq!(graph.adjacency.iter().map(|row| row.len()).sum::<usize>(), 16);
+        assert_eq!(
+            graph.adjacency.iter().map(|row| row.len()).sum::<usize>(),
+            16
+        );
 
         let empty = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?.finish()?;
         assert_eq!(empty.edge_count, 0);

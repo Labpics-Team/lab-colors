@@ -101,8 +101,9 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
   await t.test("terminal projections preserve data ownership and property semantics", () => {
     const evaluate = () =>
       root.evaluateWcag22("#00000a", "#FFFFFF", "sc-1.4.3-text-default");
-    const expectedManifest = numericalCapabilityManifest();
-    const expectedAssessment = evaluate();
+    // Independent snapshots must not alias a future cached projection.
+    const expectedManifest = structuredClone(numericalCapabilityManifest());
+    const expectedAssessment = structuredClone(evaluate());
     const poisoned = [
       [Object.prototype, "schemaVersion"],
       [Object.prototype, "siteId"],

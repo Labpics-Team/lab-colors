@@ -184,10 +184,14 @@ def summarize_profile(profile):
     if not samples or len(samples) != len(deltas):
         raise ValueError("CPU profile sample intervals are missing or incomplete")
     self_us = dict.fromkeys(nodes, 0)
-    for node_id, delta in zip(samples, deltas):
-        if (type(node_id) is not int or node_id not in nodes
-                or type(delta) is not int or delta < 0):
-            raise ValueError("CPU profile sample interval is invalid")
+    for sample_index, (node_id, delta) in enumerate(zip(samples, deltas)):
+        node_present = type(node_id) is int and node_id in nodes
+        if (not node_present or type(delta) is not int or delta < 0):
+            raise ValueError(
+                "CPU profile sample interval is invalid: "
+                f"index={sample_index}, node_id={node_id!r}, delta={delta!r}, "
+                f"node_present={node_present}"
+            )
         self_us[node_id] += delta
 
     sampled_us = sum(deltas)
@@ -216,9 +220,11 @@ def summarize_profile(profile):
 
 if args.profile:
     # Instrumented processes never enter observations or the latency summary.
-    # Cap diagnostics at one ordinary process budget, shared equally by six runs.
+    # Cap diagnostics at one ordinary process budget, shared equally by all runs.
+    memory_observer = Path(__file__).with_name("observe-program-memory.mjs").resolve(strict=True)
     profile_cases = [(pattern, nodes, label)
-                     for pattern, nodes in (("repeated", 1024), ("distinct", 1024), ("ring", 256))
+                     for pattern, nodes in (("repeated", 1024), ("distinct", 1024),
+                                            ("ring", 256), ("ring", 2048))
                      for label in roots]
     profile_budget = min(args.timeout, args.budget)
     profile_timeout = profile_budget / len(profile_cases)
@@ -230,29 +236,36 @@ if args.profile:
         "budgetSeconds": profile_budget,
         "processTimeoutSeconds": profile_timeout,
         "harnessSha256": metadata["harnessSha256"],
+        "memoryObserverSha256": hashlib.sha256(memory_observer.read_bytes()).hexdigest(),
         "observations": [],
     }
     profile_deadline = time.monotonic() + profile_budget
     for pattern, nodes, label in profile_cases:
         profile_path = profile_root / f"{pattern}-{nodes}-{label}.cpuprofile"
         profile_path.unlink(missing_ok=True)
+        memory_path = profile_root / f"{pattern}-{nodes}-{label}.memory.json"
+        memory_path.unlink(missing_ok=True)
         record = {
             "variant": label, "pattern": pattern, "nodes": nodes,
             "sourceRevision": args.baseline_revision if label == "baseline" else args.candidate_revision,
             "wasmSha256": metadata["wasmSha256"][label],
             "profileFile": profile_path.name,
+            "memoryObserverSha256": profiles["memoryObserverSha256"],
         }
         command = ["node", "--cpu-prof", f"--cpu-prof-dir={profile_root}",
                    f"--cpu-prof-name={profile_path.name}", "--cpu-prof-interval=1000",
-                   str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                   str(memory_observer), str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
         started = time.monotonic()
         remaining = profile_deadline - started
         if remaining <= 0:
             record["status"] = "budget-exhausted"
         else:
             try:
-                process = subprocess.run(command, capture_output=True, text=True,
-                                         timeout=min(profile_timeout, remaining), check=False)
+                process = subprocess.run(
+                    command, capture_output=True, text=True,
+                    timeout=min(profile_timeout, remaining), check=False,
+                    env={**os.environ, "LABCOLORS_MEMORY_REPORT": str(memory_path)},
+                )
                 record.update(returncode=process.returncode, stdout=process.stdout, stderr=process.stderr)
                 record["status"] = "failed"
                 if process.returncode == 0:
@@ -268,6 +281,14 @@ if args.profile:
                                 or len(checksums) != 1
                                 or ("checksums" in reference and checksums != reference["checksums"])):
                             raise ValueError("profiled consumer differs from the measured workload")
+                        memory = json.loads(memory_path.read_text())
+                        if (memory["phase"] != "after-consumer"
+                                or type(memory["linearMemoryBytes"]) is not int
+                                or memory["linearMemoryBytes"] <= 0
+                                or not all(isinstance(memory[key], dict)
+                                           for key in ("processMemory", "heap", "code"))):
+                            raise ValueError("post-consumer memory diagnostic is invalid")
+                        record["memory"] = memory
                         profile = json.loads(profile_path.read_text())
                         if not isinstance(profile.get("nodes"), list) or not profile["nodes"]:
                             raise ValueError("CPU profile contains no call tree")
