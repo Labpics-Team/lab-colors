@@ -113,6 +113,7 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
       [Object.prototype, "set"],
       [Array.prototype, "0"],
     ];
+    const initialArrayLength = Array.prototype.length;
     const previous = poisoned.map(([object, key]) => {
       const descriptor = Object.getOwnPropertyDescriptor(object, key);
       if (descriptor !== undefined) Object.setPrototypeOf(descriptor, null);
@@ -144,8 +145,11 @@ test("numericalCapabilityManifest publishes the single proof-capable V2 contract
           Object.defineProperty(object, key, previous[index]);
         }
       }
+      // Defining an array index extends length; deleting it does not shrink it.
+      Array.prototype.length = initialArrayLength;
     }
 
+    assert.equal(Array.prototype.length, initialArrayLength);
     assert.equal(setterCalls, 0);
     assert.deepEqual(projectedManifest, expectedManifest);
     assert.deepEqual(assessment, expectedAssessment);

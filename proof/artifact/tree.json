@@ -328,7 +328,7 @@
   "packages/colors/smoke.consumer.ts": "aa8e47246ddd4ef85b8a52675fa68dfa25948e73",
   "packages/colors/test/atomic-write-cleanup.test.mjs": "1db0861ab28d4ad8aee4bc8de6c28720f69e8aac",
   "packages/colors/test/binding-errors.test.mjs": "188d62099c7333d1b4d949571eb2b94c9075e749",
-  "packages/colors/test/capability-manifest.test.mjs": "a40e241237c15b963db3399f32a5f7464a50064f",
+  "packages/colors/test/capability-manifest.test.mjs": "866e268502649e842ebc08ac3c556d6a5628d618",
   "packages/colors/test/certificate-envelope.test.mjs": "38c791c452cdb932cfa9fcaa95b7821c9f472a25",
   "packages/colors/test/certificate-ingress-boundary.test.mjs": "6183851d83dc27a0a5b64910b5a1815af6b06a94",
   "packages/colors/test/certificate-source-boundary.test.mjs": "83ee89a01e30e605c124f0f57fe26aa733561e58",
@@ -617,7 +617,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "30e7c8312f860a94a66b4bc0937cbe70483e96ca11fb834ce60e93342900ec61",
+ "record_sha256": "669853258e3071bbbf1af68694764ec5d547dd467725e09d50cbfedab011be06",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
