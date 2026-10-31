@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "b1d5e2da4ebae2236975234e7ae295ad3292083044f81c028cc99bad29b1889a",
+ "record_sha256": "2f4c5167fb706c21cfd6a971e59c028b35099022c49767da3f8becbe39ec0f13",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1151,6 +1151,7 @@
    "certificate::tests::specialized_key_clone_preserves_every_selector_and_identity: test",
    "cfg_test_module_exclusion_covers_the_relocated_oracles: test",
    "changed_observed_source_requires_a_new_valid_assignment: test",
+   "changing_assignment_invalidates_gap_luminance_bounds: test",
    "characterization_counters_are_non_vacuous: test",
    "check_returns_32_byte_identity_for_valid_bytes: test",
    "clean_set_tests::closed_interval_endpoints_are_rejected: test",
@@ -1691,6 +1692,7 @@
    "point_support_tests::point_support_observation_arenas_share_the_canonical_schema_for_the_session_lifetime: test",
    "point_support_tests::wholly_inactive_plan_is_rejected_but_an_inactive_composition_cell_is_allowed: test",
    "portable_history_and_owned_snapshots_survive_thread_migration: test",
+   "prefix_scores_survive_changed_prefixes_and_pruned_branches: test",
    "production_evaluator_replays_every_oracle_scenario: test",
    "production_replay_is_bound_to_the_exact_independent_oracle_fixture: test",
    "production_src_carries_no_client_anchor_hex: test",
@@ -2281,7 +2283,7 @@
    "wcag_published_ratios_via_public_api: test",
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test"
   ],
-  "enabled_count": 1315,
+  "enabled_count": 1317,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",

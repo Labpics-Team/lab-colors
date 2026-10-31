@@ -8,6 +8,7 @@ use labcolors_core::{Srgb8, oklch_from_hex};
 use std::cmp::Ordering;
 
 pub type Rgb = [u8; 3];
+type Bounds = (u64, u64);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Domain {
@@ -122,7 +123,7 @@ pub struct Run {
     pub pruned: u64,
 }
 
-fn bounds(rgb: Rgb) -> (u64, u64) {
+fn bounds(rgb: Rgb) -> Bounds {
     let assessment = evaluate_wcag22_srgb8(rgb, [255; 3], Wcag22CriterionV1::Sc143TextDefault)
         .expect("валидная sRGB8-пара поддерживается существующим proof-bound evaluator");
     match assessment {
@@ -145,8 +146,12 @@ fn distance_squared(a: [f64; 3], b: [f64; 3]) -> f64 {
     (0..3).map(|i| (a[i] - b[i]).powi(2)).sum()
 }
 
-fn constraints_hold(problem: &Problem, values: &[Rgb]) -> bool {
-    for constraint in &problem.constraints {
+fn constraints_hold(
+    problem: &Problem,
+    values: &[Rgb],
+    mut gap_bounds: impl FnMut(Source, usize, usize) -> Bounds,
+) -> bool {
+    for (index, constraint) in problem.constraints.iter().enumerate() {
         match *constraint {
             Constraint::Contrast {
                 lighter,
@@ -155,18 +160,18 @@ fn constraints_hold(problem: &Problem, values: &[Rgb]) -> bool {
             } => {
                 let lighter = lighter.rgb(values);
                 let darker = darker.rgb(values);
-                // WCAG симметричен, полярность задана клиентом отдельно.
-                if bounds(lighter).0 <= bounds(darker).1 {
-                    return false;
-                }
+                // Один assessment содержит обе яркости. WCAG симметричен,
+                // поэтому авторская полярность остаётся отдельным условием.
                 let assessment = evaluate_wcag22_srgb8(lighter, darker, floor.criterion())
                     .expect("валидная sRGB8-пара имеет полный нормативный verdict");
                 if !matches!(
                     assessment,
                     Wcag22AssessmentV1::Evaluated {
                         decision: Wcag22ApplicableDecisionV1::Pass,
+                        measurement,
                         ..
-                    }
+                    } if measurement.foreground_luminance.lower()
+                        > measurement.background_luminance.upper()
                 ) {
                     return false;
                 }
@@ -176,8 +181,8 @@ fn constraints_hold(problem: &Problem, values: &[Rgb]) -> bool {
                 darker,
                 minimum_q55,
             } => {
-                if u128::from(bounds(lighter.rgb(values)).0)
-                    < u128::from(bounds(darker.rgb(values)).1) + u128::from(minimum_q55)
+                if u128::from(gap_bounds(lighter, index, 0).0)
+                    < u128::from(gap_bounds(darker, index, 1).1) + u128::from(minimum_q55)
                 {
                     return false;
                 }
@@ -188,17 +193,21 @@ fn constraints_hold(problem: &Problem, values: &[Rgb]) -> bool {
 }
 
 pub fn admissible(problem: &Problem, values: &[Rgb]) -> bool {
-    constraints_hold(problem, values)
+    constraints_hold(problem, values, |source, _, _| bounds(source.rgb(values)))
         && problem.targets.iter().zip(values).all(|(target, &rgb)| {
             target.domain.contains(rgb)
                 && distance_squared(lab(rgb), lab(target.anchor)) <= target.max_delta.powi(2)
         })
 }
 
-struct Search<'a> {
+pub struct Search<'a> {
     problem: &'a Problem,
     anchor_lab: Vec<[f64; 3]>,
     values: Vec<Rgb>,
+    constraint_bounds: Vec<[Bounds; 2]>,
+    value_bounds: Vec<Option<Bounds>>,
+    scores: Vec<f64>,
+    scored: Vec<bool>,
     best: Option<(Vec<f64>, Vec<Rgb>)>,
     budget: u64,
     examined: u64,
@@ -214,21 +223,35 @@ impl Search<'_> {
             return;
         }
         self.examined += 1;
-        if !constraints_hold(self.problem, &self.values) {
+        let values = &self.values;
+        let value_bounds = &mut self.value_bounds;
+        if !constraints_hold(
+            self.problem,
+            values,
+            |source, constraint, side| match source {
+                Source::Fixed(_) => self.constraint_bounds[constraint][side],
+                Source::Target(index) => {
+                    *value_bounds[index].get_or_insert_with(|| bounds(values[index]))
+                }
+            },
+        ) {
             return;
         }
-        let scores: Vec<_> = self
-            .values
-            .iter()
-            .zip(&self.anchor_lab)
-            .map(|(&rgb, &anchor)| distance_squared(lab(rgb), anchor))
-            .collect();
+        // Назначенный префикс не меняется при обходе суффикса. Ленивое обновление
+        // сохраняет отсутствие Lab-работы на листьях, отвергнутых constraints.
+        for (index, scored) in self.scored.iter_mut().enumerate() {
+            if !*scored {
+                self.scores[index] =
+                    distance_squared(lab(self.values[index]), self.anchor_lab[index]);
+                *scored = true;
+            }
+        }
         if !self
             .problem
             .targets
             .iter()
             .zip(&self.values)
-            .zip(&scores)
+            .zip(&self.scores)
             .all(|((target, &rgb), &score)| {
                 target.domain.contains(rgb) && score <= target.max_delta.powi(2)
             })
@@ -236,7 +259,8 @@ impl Search<'_> {
             return;
         }
         let replace = self.best.as_ref().is_none_or(|(best, colors)| {
-            let order = scores
+            let order = self
+                .scores
                 .iter()
                 .zip(best)
                 .map(|(a, b)| a.total_cmp(b))
@@ -245,39 +269,52 @@ impl Search<'_> {
             order == Ordering::Less || order == Ordering::Equal && self.values < *colors
         });
         if replace {
-            self.best = Some((scores, self.values.clone()));
+            if let Some((scores, values)) = &mut self.best {
+                scores.copy_from_slice(&self.scores);
+                values.copy_from_slice(&self.values);
+            } else {
+                self.best = Some((self.scores.clone(), self.values.clone()));
+            }
         }
     }
 
-    fn possible(&self, index: usize, lower: Rgb, upper: Rgb) -> bool {
-        let interval = |source: Source| {
+    fn possible(&mut self, index: usize, lower: Rgb, upper: Rgb) -> bool {
+        let mut current = None;
+        let mut interval = |source: Source, constraint: usize, side: usize| {
             let (low, high) = match source {
-                Source::Fixed(rgb) => (rgb, rgb),
-                Source::Target(i) if i < index => (self.values[i], self.values[i]),
-                Source::Target(i) if i == index => (lower, upper),
-                Source::Target(i) => self.problem.targets[i].domain.bounds(),
+                Source::Target(i) if i < index => {
+                    *self.value_bounds[i].get_or_insert_with(|| bounds(self.values[i]))
+                }
+                Source::Target(i) if i == index => {
+                    *current.get_or_insert_with(|| (bounds(lower).0, bounds(upper).1))
+                }
+                _ => self.constraint_bounds[constraint][side],
             };
-            (u128::from(bounds(low).0), u128::from(bounds(high).1))
+            (u128::from(low), u128::from(high))
         };
         self.problem
             .constraints
             .iter()
-            .all(|constraint| match *constraint {
+            .enumerate()
+            .all(|(index, constraint)| match *constraint {
                 Constraint::Contrast {
                     lighter,
                     darker,
                     floor,
                 } => {
                     let (light_factor, dark_factor, offset) = floor.coefficients();
-                    light_factor * interval(lighter).1
-                        >= dark_factor * interval(darker).0
+                    light_factor * interval(lighter, index, 0).1
+                        >= dark_factor * interval(darker, index, 1).0
                             + offset * u128::from(Wcag22LuminanceBoundsQ55V1::scale())
                 }
                 Constraint::Gap {
                     lighter,
                     darker,
                     minimum_q55,
-                } => interval(lighter).1 >= interval(darker).0 + u128::from(minimum_q55),
+                } => {
+                    interval(lighter, index, 0).1
+                        >= interval(darker, index, 1).0 + u128::from(minimum_q55)
+                }
             })
     }
 
@@ -292,6 +329,8 @@ impl Search<'_> {
             } else {
                 [lower[0], lower[1], blue as u8]
             };
+            self.value_bounds[index] = None;
+            self.scored[index] = false;
             if index + 1 == self.values.len() {
                 self.examine();
             } else {
@@ -323,9 +362,35 @@ impl Search<'_> {
             }
         }
     }
+
+    pub fn run(mut self) -> Run {
+        self.examine();
+        // Нулевая цель предпочтения глобально минимальна: это общий закон, не recipe.
+        if self.best.is_some() {
+            return Run {
+                outcome: Outcome::Assigned(self.values),
+                examined: self.examined,
+                pruned: 0,
+            };
+        }
+        if !self.exhausted {
+            self.visit(0);
+        }
+        let best = self.best.map(|(_, values)| values);
+        let outcome = if self.exhausted {
+            Outcome::Unresolved { incumbent: best }
+        } else {
+            best.map_or(Outcome::Unsatisfied, Outcome::Assigned)
+        };
+        Run {
+            outcome,
+            examined: self.examined,
+            pruned: self.pruned,
+        }
+    }
 }
 
-pub fn solve(problem: &Problem, pruning: bool, budget: u64) -> Run {
+pub fn prepare(problem: &Problem, pruning: bool, budget: u64) -> Search<'_> {
     assert!(
         !problem.targets.is_empty(),
         "протокол пробы требует хотя бы одну цель"
@@ -336,38 +401,47 @@ pub fn solve(problem: &Problem, pruning: bool, budget: u64) -> Run {
             .iter()
             .all(|t| !t.id.is_empty() && t.max_delta.is_finite() && t.max_delta >= 0.0)
     );
-    let mut search = Search {
+    let domain_bounds: Vec<_> = problem
+        .targets
+        .iter()
+        .map(|target| {
+            let (lower, upper) = target.domain.bounds();
+            (bounds(lower).0, bounds(upper).1)
+        })
+        .collect();
+    let prepared_bounds = |source| match source {
+        Source::Fixed(rgb) => bounds(rgb),
+        Source::Target(index) => domain_bounds[index],
+    };
+    Search {
         problem,
         anchor_lab: problem.targets.iter().map(|t| lab(t.anchor)).collect(),
         values: problem.targets.iter().map(|t| t.anchor).collect(),
+        constraint_bounds: problem
+            .constraints
+            .iter()
+            .map(|constraint| {
+                let (Constraint::Contrast {
+                    lighter, darker, ..
+                }
+                | Constraint::Gap {
+                    lighter, darker, ..
+                }) = *constraint;
+                [prepared_bounds(lighter), prepared_bounds(darker)]
+            })
+            .collect(),
+        value_bounds: vec![None; problem.targets.len()],
+        scores: vec![0.0; problem.targets.len()],
+        scored: vec![false; problem.targets.len()],
         best: None,
         budget,
         examined: 0,
         pruned: 0,
         exhausted: false,
         pruning,
-    };
-    search.examine();
-    // Нулевая цель предпочтения глобально минимальна: это общий закон, не recipe.
-    if search.best.is_some() {
-        return Run {
-            outcome: Outcome::Assigned(search.values),
-            examined: search.examined,
-            pruned: 0,
-        };
     }
-    if !search.exhausted {
-        search.visit(0);
-    }
-    let best = search.best.map(|(_, values)| values);
-    let outcome = if search.exhausted {
-        Outcome::Unresolved { incumbent: best }
-    } else {
-        best.map_or(Outcome::Unsatisfied, Outcome::Assigned)
-    };
-    Run {
-        outcome,
-        examined: search.examined,
-        pruned: search.pruned,
-    }
+}
+
+pub fn solve(problem: &Problem, pruning: bool, budget: u64) -> Run {
+    prepare(problem, pruning, budget).run()
 }

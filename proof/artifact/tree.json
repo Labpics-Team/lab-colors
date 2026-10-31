@@ -263,10 +263,10 @@
   "crates/labcolors-core/src/wcag22_evidence.rs": "2cc26b2673f92f423c64c9675fad61e3073e1ae2",
   "crates/labcolors-core/src/wcag22_tests.rs": "35644c8e8b66f560364690f924627c1839eefb04",
   "crates/labcolors-core/tests/agnostic_production_surface.rs": "e77c38113418dee27ba8bfa638a37a4de069ce65",
-  "crates/labcolors-core/tests/assignment/README.md": "b0ce23137c7197209b901eec38048711f5d7e308",
-  "crates/labcolors-core/tests/assignment/experiment.rs": "ca410f2b594444e2c0122aa7b70e8c459d4a255d",
+  "crates/labcolors-core/tests/assignment/README.md": "2fdc229c598a3696dedc302aa417acf96a94ec1b",
+  "crates/labcolors-core/tests/assignment/experiment.rs": "4d7db75cef752a8a89ed211b6da89c95427dc3c8",
   "crates/labcolors-core/tests/assignment/oracle.rs": "6de8d1bfb979585f54eb13bce62541c648485344",
-  "crates/labcolors-core/tests/assignment_probe.rs": "8cb21a85a8f7179e4280b242c6dc0f53b7ea9ddc",
+  "crates/labcolors-core/tests/assignment_probe.rs": "194ffb1c73e3d4b319ede207d485950027085618",
   "crates/labcolors-core/tests/c4_absence_law.rs": "0e7a0bd4a90dc45b5ea652c219e9fbbfdc0f9285",
   "crates/labcolors-core/tests/certificate_wire_conformance.rs": "b6f20d0b00b512d33323f18615200272674b6b73",
   "crates/labcolors-core/tests/common/mod.rs": "88bca89d9df5e997a914337938fc6bc39eb4da48",
@@ -615,7 +615,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "39d7a4ae3355ae0907f5745c612f9b928cd1ff01"
  },
- "record_sha256": "a7f3109864a867042607334d29d9413a7ef2f954448c7caef7f648fc8803c208",
+ "record_sha256": "0e7a138a47dfeae29ae2a582d72276ed809a5697d5872e55ca52080a18e30220",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
