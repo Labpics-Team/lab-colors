@@ -80,8 +80,12 @@ use crate::session::{
 };
 use crate::wcag22::Wcag22CriterionV1;
 
+mod computed_assignment;
 #[path = "program_identity.rs"]
 mod identity;
+use computed_assignment::{
+    CandidateOriginV1, ComputedSelectionV1, ComputedTargetV1, ProgramOwnerIdentityV1,
+};
 pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
@@ -211,6 +215,13 @@ impl FinitePaintDomainV1 {
 pub enum TargetIntentV1 {
     FixedSource(SourceId),
     Finite(FinitePaintDomainV1),
+    Computed(ComputedTargetV1),
+}
+
+impl TargetIntentV1 {
+    const fn is_solver_dependent(&self) -> bool {
+        !matches!(self, Self::FixedSource(_))
+    }
 }
 
 /// A Paint-addressable target distinct from both source data and appearance
@@ -1072,6 +1083,7 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
+    computed_budget: Option<u64>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
@@ -1109,6 +1121,7 @@ where
             targets,
             families: Vec::new(),
             joint_selection: None,
+            computed_budget: None,
             observation_group,
             opacities,
             paints,
@@ -1180,8 +1193,21 @@ where
     }
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        prepare_program(self).map(|epoch| CompiledProgram {
+        if self.computed_budget.is_some()
+            || self
+                .targets
+                .iter()
+                .any(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
+        {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+        let epoch = prepare_program(self)?;
+        let ProgramOwnerIdentityV1::Legacy(content_identity) = epoch.content_identity else {
+            return Err(ProgramCompileError::InternalInvariant);
+        };
+        Ok(CompiledProgram {
             owner_generation: Shared::new(epoch),
+            content_identity,
         })
     }
 }
@@ -1465,6 +1491,7 @@ impl CoreProgramDraftV1 {
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
+    InvalidComputedAssignment(computed_assignment::ComputedAdmissionErrorV1),
     DuplicateSource {
         source: SourceId,
     },
@@ -2109,6 +2136,7 @@ use admitted_compiled_joint_space::{
 
 enum CompiledTargetSelectionV1 {
     FixedOnly,
+    Computed(ComputedSelectionV1),
     Finite {
         release_identity: SelectionReleaseIdentityV1,
         space: AdmittedCompiledJointSpaceV1,
@@ -2119,6 +2147,7 @@ impl CompiledTargetSelectionV1 {
     fn state_count(&self) -> usize {
         match self {
             Self::FixedOnly => 1,
+            Self::Computed(_) => 1,
             Self::Finite { space, .. } => space.state_count(),
         }
     }
@@ -2126,6 +2155,7 @@ impl CompiledTargetSelectionV1 {
     const fn release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
         match self {
             Self::FixedOnly => None,
+            Self::Computed(_) => None,
             Self::Finite {
                 release_identity, ..
             } => Some(*release_identity),
@@ -2138,7 +2168,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV9,
+    content_identity: ProgramOwnerIdentityV1,
     evaluator: Evaluation,
     families: Box<[FamilyDeclarationV2]>,
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
@@ -2182,6 +2212,7 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     owner_generation: Shared<ProgramEpochV1<Evaluation>>,
+    content_identity: ProgramContentIdentityV9,
 }
 
 pub(crate) type CompiledCoreProgramV1 = CompiledProgram<CoreProgramEvaluatorsV1>;
@@ -2201,7 +2232,7 @@ where
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
     pub fn content_identity(&self) -> ProgramContentIdentityV9 {
-        self.owner_generation.content_identity
+        self.content_identity
     }
 
     pub(crate) fn selection_release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
@@ -2410,75 +2441,81 @@ where
         stream: ObservationStreamId,
         family_artifacts: FamilyArtifactBundleV2,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateFailureV2> {
-        let family_artifacts = match family_artifacts.bind(&self.owner_generation.families) {
-            Ok(bound) => bound,
-            Err(failure) => {
-                let (cause, family_artifacts) = failure.into_parts();
-                let cause = match cause {
-                    FamilyArtifactBindErrorV2::Contract(cause) => {
-                        ProgramSessionInstantiateError::FamilyArtifacts(cause)
-                    }
-                    FamilyArtifactBindErrorV2::ResourceExhausted => {
-                        ProgramSessionInstantiateError::ResourceExhausted
-                    }
-                };
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts,
-                });
-            }
-        };
-        let bindings = self
-            .owner_generation
-            .binding_template
-            .try_clone_v1()
-            .map_err(map_session_instantiate_error);
-        let bindings = match bindings {
-            Ok(bindings) => bindings,
-            Err(cause) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        let workspace = self
-            .owner_generation
-            .graph
-            .new_workspace()
-            .map_err(map_session_instantiate_error);
-        let workspace = match workspace {
-            Ok(workspace) => workspace,
-            Err(cause) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        let presentation_cache =
-            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations);
-        let presentation_cache = match presentation_cache {
-            Ok(cache) => cache,
-            Err(()) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause: ProgramSessionInstantiateError::ResourceExhausted,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        Ok(Session::new(
-            stream,
-            ProgramSessionPlan {
-                owner_generation: Shared::downgrade(&self.owner_generation),
-                bindings,
-                workspace,
-                presentation_cache,
-                evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
-                family_artifacts,
-            },
-        ))
+        prepare_session_plan(&self.owner_generation, family_artifacts)
+            .map(|plan| Session::new(stream, plan))
     }
+}
+
+fn prepare_session_plan<Evaluation>(
+    owner: &Shared<ProgramEpochV1<Evaluation>>,
+    family_artifacts: FamilyArtifactBundleV2,
+) -> Result<ProgramSessionPlan<Evaluation>, ProgramSessionInstantiateFailureV2>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let family_artifacts = match family_artifacts.bind(&owner.families) {
+        Ok(bound) => bound,
+        Err(failure) => {
+            let (cause, family_artifacts) = failure.into_parts();
+            let cause = match cause {
+                FamilyArtifactBindErrorV2::Contract(cause) => {
+                    ProgramSessionInstantiateError::FamilyArtifacts(cause)
+                }
+                FamilyArtifactBindErrorV2::ResourceExhausted => {
+                    ProgramSessionInstantiateError::ResourceExhausted
+                }
+            };
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts,
+            });
+        }
+    };
+    let bindings = owner
+        .binding_template
+        .try_clone_v1()
+        .map_err(map_session_instantiate_error);
+    let bindings = match bindings {
+        Ok(bindings) => bindings,
+        Err(cause) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    let workspace = owner
+        .graph
+        .new_workspace()
+        .map_err(map_session_instantiate_error);
+    let workspace = match workspace {
+        Ok(workspace) => workspace,
+        Err(cause) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    let presentation_cache = ProgramPresentationCacheV1::try_new(&owner.point_presentations);
+    let presentation_cache = match presentation_cache {
+        Ok(cache) => cache,
+        Err(()) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause: ProgramSessionInstantiateError::ResourceExhausted,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    Ok(ProgramSessionPlan {
+        owner_generation: Shared::downgrade(owner),
+        bindings,
+        workspace,
+        presentation_cache,
+        evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+        family_artifacts,
+    })
 }
 
 /// Failure while preparing mutable storage for one independent Session.
@@ -3198,7 +3235,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportV1<Evaluation>,
-    selected_state_index: Option<usize>,
+    origin: CandidateOriginV1,
 }
 
 impl<Evaluation> session_private::EvidenceSealed for ProgramVerifiedV1<Evaluation> where
@@ -3230,13 +3267,13 @@ where
     /// Index inside the authored total order. `None` means this Program has no
     /// finite targets and therefore performed validation only.
     pub const fn selected_state_index(&self) -> Option<usize> {
-        self.selected_state_index
+        self.origin.declared_state_index()
     }
 
     pub(crate) fn point_causal_certificates(
         &self,
     ) -> impl ExactSizeIterator<Item = ProgramPointCausalCertificateV1<'_>> + '_ {
-        let state = self.selected_state_index.map_or(
+        let state = self.selected_state_index().map_or(
             ProgramPointCausalSelectedStateV1::Fixed,
             ProgramPointCausalSelectedStateV1::Selected,
         );
@@ -4097,6 +4134,7 @@ where
     type OwnerLease = ProgramOwnerLeaseV1<Evaluation>;
     type Verified = ProgramVerifiedV1<Evaluation>;
     type Violation = ProgramConflictV1<Evaluation>;
+    type Incomplete = std::convert::Infallible;
     type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
@@ -4130,7 +4168,7 @@ where
 }
 
 enum ProgramEvaluationOutcomeV1 {
-    Verified { selected_state_index: Option<usize> },
+    Verified { origin: CandidateOriginV1 },
     Conflict { considered_state_count: usize },
 }
 
@@ -4178,19 +4216,19 @@ where
         // следующего prospective update, но ни одно значение не переживает verdict.
         arena.storage_mut().outputs.clear();
     }
+    let ProgramOwnerIdentityV1::Legacy(content_identity) = epoch.content_identity else {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    };
     let report = ProgramReportV1 {
-        content_identity: epoch.content_identity,
+        content_identity,
         selection_release_identity: epoch.target_selection.release_identity(),
         observation,
         arena: arena.into_lease(),
     };
     Ok(match outcome {
-        ProgramEvaluationOutcomeV1::Verified {
-            selected_state_index,
-        } => SessionDecision::Verified(ProgramVerifiedV1 {
-            report,
-            selected_state_index,
-        }),
+        ProgramEvaluationOutcomeV1::Verified { origin } => {
+            SessionDecision::Verified(ProgramVerifiedV1 { report, origin })
+        }
         ProgramEvaluationOutcomeV1::Conflict {
             considered_state_count,
         } => SessionDecision::Violation(ProgramConflictV1 {
@@ -4221,7 +4259,7 @@ where
                 runtime,
                 epoch,
                 scenario_set,
-                None,
+                CandidateOriginV1::Fixed,
                 1,
                 arena,
                 counts,
@@ -4229,6 +4267,9 @@ where
             );
         }
         CompiledTargetSelectionV1::Finite { space, .. } => space,
+        CompiledTargetSelectionV1::Computed(_) => {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
     };
 
     let state_count = space.state_count();
@@ -4251,7 +4292,7 @@ where
                 runtime,
                 epoch,
                 scenario_set,
-                Some(state_index),
+                CandidateOriginV1::DeclaredFinite(state_index),
                 state_index + 1,
                 arena,
                 counts,
@@ -4259,7 +4300,7 @@ where
             )? {
                 ProgramEvaluationOutcomeV1::Verified { .. } => {
                     return Ok(ProgramEvaluationOutcomeV1::Verified {
-                        selected_state_index: Some(state_index),
+                        origin: CandidateOriginV1::DeclaredFinite(state_index),
                     });
                 }
                 ProgramEvaluationOutcomeV1::Conflict { .. } => {
@@ -4399,7 +4440,7 @@ fn collect_program_candidate_into<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
     scenario_set: NonEmptyScenarioSetV1<'_>,
-    selected_state_index: Option<usize>,
+    origin: CandidateOriginV1,
     considered_state_count: usize,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
     counts: ProgramEvaluationCardinalityV1,
@@ -4441,7 +4482,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    let candidate_state_index = selected_state_index.unwrap_or(0);
+    let candidate_state_index = origin.declared_state_index().unwrap_or(0);
     let has_hard_constraints = epoch
         .constraint_phases
         .contains(ProgramEvaluationPhaseV1::Hard);
@@ -4472,7 +4513,8 @@ where
     } else {
         false
     };
-    if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
+    if has_hard_violation && !matches!(origin, CandidateOriginV1::Fixed) {
+        let state_index = candidate_state_index;
         // Search only nominates a finite state. Its fresh hard recheck owns the
         // terminal verdict, so diagnostics cannot mask or mutate that failure.
         if arena.cells.iter().any(|cell| !cell.is_hard()) {
@@ -4541,9 +4583,7 @@ where
             considered_state_count,
         })
     } else {
-        Ok(ProgramEvaluationOutcomeV1::Verified {
-            selected_state_index,
-        })
+        Ok(ProgramEvaluationOutcomeV1::Verified { origin })
     }
 }
 
@@ -4618,11 +4658,12 @@ where
     let previous_storage = previous
         .filter(|verified| {
             Evaluation::supports_evidence_copy()
-                && verified.selected_state_index().is_none()
+                && matches!(verified.origin, CandidateOriginV1::Fixed)
                 && !epoch
                     .constraint_phases
                     .contains(ProgramEvaluationPhaseV1::ReportOnly)
-                && verified.report().content_identity() == epoch.content_identity
+                && ProgramOwnerIdentityV1::Legacy(verified.report().content_identity())
+                    == epoch.content_identity
                 && verified.report().selection_release_identity()
                     == epoch.target_selection.release_identity()
                 && verified
@@ -5278,6 +5319,7 @@ where
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
+        program.computed_budget,
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
@@ -5314,7 +5356,14 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_program_content_identity_v9(&program)?;
+    let content_identity = match program.computed_budget {
+        Some(budget) => {
+            ProgramOwnerIdentityV1::Computed(identity::compile_computed_identity(&program, budget)?)
+        }
+        None => {
+            ProgramOwnerIdentityV1::Legacy(identity::compile_program_content_identity_v9(&program)?)
+        }
+    };
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -5803,8 +5852,7 @@ where
         )?;
     }
     for (target_index, target) in program.targets.iter().enumerate() {
-        if matches!(&target.intent, TargetIntentV1::Finite(_)) && !constrained_targets[target_index]
-        {
+        if target.intent.is_solver_dependent() && !constrained_targets[target_index] {
             return Err(ProgramCompileError::UnconstrainedFiniteTarget { target: target.id });
         }
     }
@@ -5823,7 +5871,7 @@ where
     let finite_count = program
         .targets
         .iter()
-        .filter(|target| matches!(&target.intent, TargetIntentV1::Finite(_)))
+        .filter(|target| target.intent.is_solver_dependent())
         .count();
     if finite_count > 1 {
         let mut has_common_assessment = false;
@@ -5839,8 +5887,7 @@ where
                 None,
             )?;
             if program.targets.iter().enumerate().all(|(index, target)| {
-                !matches!(&target.intent, TargetIntentV1::Finite(_))
-                    || per_constraint_targets[index]
+                !target.intent.is_solver_dependent() || per_constraint_targets[index]
             }) {
                 has_common_assessment = true;
                 break;
@@ -5976,7 +6023,17 @@ fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
     authored_selection: Option<&MaterialisedSelectionV1>,
+    computed_budget: Option<u64>,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
+    if let Some(budget) = computed_budget {
+        return computed_assignment::compile_selection(
+            graph,
+            authored_targets,
+            authored_selection,
+            budget,
+        )
+        .map(CompiledTargetSelectionV1::Computed);
+    }
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
         binding: CompiledPaintInputSlotV1,
@@ -6360,10 +6417,10 @@ where
                         constraint: constraint.id,
                         reference: reference_id,
                     })?;
-                if matches!(
-                    program.targets[reference_index].intent,
-                    TargetIntentV1::Finite(_)
-                ) {
+                if program.targets[reference_index]
+                    .intent
+                    .is_solver_dependent()
+                {
                     return Err(
                         ProgramCompileError::SolverDependentIntrinsicRelationReference {
                             constraint: constraint.id,
@@ -6458,7 +6515,7 @@ where
                     .filter_map(|node| match *node {
                         IndexedDependencyNodeV1::Target(index) => {
                             let target = &program.targets[index];
-                            matches!(target.intent, TargetIntentV1::Finite(_)).then_some(target.id)
+                            target.intent.is_solver_dependent().then_some(target.id)
                         }
                         _ => None,
                     })
@@ -6925,6 +6982,7 @@ where
                 })
                 .map(|candidate| candidate.value)
                 .ok_or(ProgramCompileError::InternalInvariant)?,
+            TargetIntentV1::Computed(target) => EncodedPointPaintValueV1::opaque(target.anchor()),
         };
         paint_inputs.push((target_paint_input_id(target.id), value));
     }

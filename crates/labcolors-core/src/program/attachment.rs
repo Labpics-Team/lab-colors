@@ -661,6 +661,7 @@ fn prepared_disposition<'prepared>(
     transition: &'prepared CorePreparedSessionTransitionV1<'_>,
 ) -> Result<PreparedDispositionV1<'prepared>, AttachmentInvariantV1> {
     match transition.disposition() {
+        PreparedSessionDispositionV1::Incomplete(cause) => match *cause {},
         PreparedSessionDispositionV1::Idempotent { raw_head, .. } => raw_head
             .revision()
             .map(|revision| PreparedDispositionV1::ConfirmExact {

@@ -2508,6 +2508,7 @@ fn retired_production_slots_retain_high_water_capacity_without_reallocation() {
                 .commit(update)
                 .expect("the second N+1 pass must reuse retained capacity");
             match state {
+                SessionState::Incomplete { cause, .. } => match *cause {},
                 SessionState::Ready { current } => {
                     current.report().observation().arena_slot().index()
                 }

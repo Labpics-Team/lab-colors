@@ -2295,6 +2295,7 @@ impl<'a> EvidenceViewV1<'a> {
             SessionState::Ready { .. } => StateKindV1::Ready,
             SessionState::Stale { .. } => StateKindV1::Stale,
             SessionState::Failed { .. } => StateKindV1::Failed,
+            SessionState::Incomplete { cause, .. } => match *cause {},
         }
     }
 
@@ -2317,6 +2318,7 @@ impl<'a> EvidenceViewV1<'a> {
     /// Индекс cause-сертификата в [`Self::certificates`] для `Failed`.
     pub(crate) const fn cause_certificate_index(self) -> Option<usize> {
         match self.state() {
+            SessionState::Incomplete { cause, .. } => match *cause {},
             SessionState::Failed { .. } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
         }
@@ -2327,6 +2329,7 @@ impl<'a> EvidenceViewV1<'a> {
         self,
     ) -> impl ExactSizeIterator<Item = CertificateV1<'a>> + FusedIterator + 'a {
         let (first, second) = match self.state() {
+            SessionState::Incomplete { cause, .. } => match *cause {},
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
                 (Some(CertificateV1::verified(current)), None)
@@ -4323,7 +4326,8 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         }
         ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
-        ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
+        ProgramCompileError::InternalInvariant
+        | ProgramCompileError::InvalidComputedAssignment(_) => CompileErrorV1::InternalInvariant,
     }
 }
 
