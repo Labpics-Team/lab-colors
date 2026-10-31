@@ -31,6 +31,8 @@
   конверты и сериализация.
 - [JavaScript и WASM](../packages/colors/README.md):
   создание программы и чтение результатов.
+- [Вычисляемое назначение V3](contracts/program-assignment-v3.md):
+  допустимые области, авторские опоры, совместный выбор и состояния результата.
 
 - [Swift](contracts/swift-binding.md): Program, отображение и жизненный цикл.
 - [Kotlin для Android](../bindings/kotlin/README.md): установка AAR, Program и ресурсы.
