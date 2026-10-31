@@ -80,62 +80,17 @@ use crate::session::{
 };
 use crate::wcag22::Wcag22CriterionV1;
 
-#[cfg(test)]
 mod computed_assignment;
 #[path = "program_identity.rs"]
 mod identity;
-#[cfg(test)]
-use computed_assignment::{ComputedIdentityV1, ComputedSelectionV1, ComputedTargetV1};
+use computed_assignment::{
+    CandidateOriginV1, ComputedSelectionV1, ComputedTargetV1, ProgramOwnerIdentityV1,
+};
 pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
 pub(crate) use identity::graph_schema_for_test as program_identity_graph_schema_for_test;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProgramOwnerIdentityV1 {
-    Legacy(ProgramContentIdentityV9),
-    #[cfg(test)]
-    Computed(ComputedIdentityV1),
-}
-
-impl ProgramOwnerIdentityV1 {
-    const fn legacy(self) -> Option<ProgramContentIdentityV9> {
-        match self {
-            Self::Legacy(identity) => Some(identity),
-            #[cfg(test)]
-            Self::Computed(_) => None,
-        }
-    }
-}
-
-enum CandidateOriginV1 {
-    Fixed,
-    DeclaredFinite(usize),
-    #[cfg(test)]
-    Computed {
-        identity: ComputedIdentityV1,
-        values: Box<[Srgb8]>,
-    },
-}
-
-// Закрытая проба не добавляет payload и Drop обычному evidence Program.
-#[cfg(not(test))]
-const _: () = {
-    assert!(std::mem::size_of::<CandidateOriginV1>() <= std::mem::size_of::<Option<usize>>());
-    assert!(!std::mem::needs_drop::<CandidateOriginV1>());
-};
-
-impl CandidateOriginV1 {
-    const fn declared_state_index(&self) -> Option<usize> {
-        match self {
-            Self::DeclaredFinite(index) => Some(*index),
-            Self::Fixed => None,
-            #[cfg(test)]
-            Self::Computed { .. } => None,
-        }
-    }
-}
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -260,7 +215,6 @@ impl FinitePaintDomainV1 {
 pub enum TargetIntentV1 {
     FixedSource(SourceId),
     Finite(FinitePaintDomainV1),
-    #[cfg(test)]
     Computed(ComputedTargetV1),
 }
 
@@ -1129,7 +1083,6 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
-    #[cfg(test)]
     computed_budget: Option<u64>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
@@ -1168,7 +1121,6 @@ where
             targets,
             families: Vec::new(),
             joint_selection: None,
-            #[cfg(test)]
             computed_budget: None,
             observation_group,
             opacities,
@@ -1241,7 +1193,6 @@ where
     }
 
     pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        #[cfg(test)]
         if self.computed_budget.is_some()
             || self
                 .targets
@@ -1251,14 +1202,11 @@ where
             return Err(ProgramCompileError::InternalInvariant);
         }
         let epoch = prepare_program(self)?;
-        #[cfg(test)]
-        let content_identity = epoch
-            .content_identity
-            .legacy()
-            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let ProgramOwnerIdentityV1::Legacy(content_identity) = epoch.content_identity else {
+            return Err(ProgramCompileError::InternalInvariant);
+        };
         Ok(CompiledProgram {
             owner_generation: Shared::new(epoch),
-            #[cfg(test)]
             content_identity,
         })
     }
@@ -1543,7 +1491,6 @@ impl CoreProgramDraftV1 {
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
-    #[cfg(test)]
     InvalidComputedAssignment(computed_assignment::ComputedAdmissionErrorV1),
     DuplicateSource {
         source: SourceId,
@@ -2189,7 +2136,6 @@ use admitted_compiled_joint_space::{
 
 enum CompiledTargetSelectionV1 {
     FixedOnly,
-    #[cfg(test)]
     Computed(ComputedSelectionV1),
     Finite {
         release_identity: SelectionReleaseIdentityV1,
@@ -2201,7 +2147,6 @@ impl CompiledTargetSelectionV1 {
     fn state_count(&self) -> usize {
         match self {
             Self::FixedOnly => 1,
-            #[cfg(test)]
             Self::Computed(_) => 1,
             Self::Finite { space, .. } => space.state_count(),
         }
@@ -2210,7 +2155,6 @@ impl CompiledTargetSelectionV1 {
     const fn release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
         match self {
             Self::FixedOnly => None,
-            #[cfg(test)]
             Self::Computed(_) => None,
             Self::Finite {
                 release_identity, ..
@@ -2268,7 +2212,6 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     owner_generation: Shared<ProgramEpochV1<Evaluation>>,
-    #[cfg(test)]
     content_identity: ProgramContentIdentityV9,
 }
 
@@ -2289,15 +2232,7 @@ where
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
     pub fn content_identity(&self) -> ProgramContentIdentityV9 {
-        #[cfg(test)]
-        {
-            self.content_identity
-        }
-        #[cfg(not(test))]
-        {
-            let ProgramOwnerIdentityV1::Legacy(identity) = self.owner_generation.content_identity;
-            identity
-        }
+        self.content_identity
     }
 
     pub(crate) fn selection_release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
@@ -4281,10 +4216,9 @@ where
         // следующего prospective update, но ни одно значение не переживает verdict.
         arena.storage_mut().outputs.clear();
     }
-    let content_identity = epoch
-        .content_identity
-        .legacy()
-        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+    let ProgramOwnerIdentityV1::Legacy(content_identity) = epoch.content_identity else {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    };
     let report = ProgramReportV1 {
         content_identity,
         selection_release_identity: epoch.target_selection.release_identity(),
@@ -4333,7 +4267,6 @@ where
             );
         }
         CompiledTargetSelectionV1::Finite { space, .. } => space,
-        #[cfg(test)]
         CompiledTargetSelectionV1::Computed(_) => {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
@@ -5386,7 +5319,6 @@ where
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
-        #[cfg(test)]
         program.computed_budget,
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
@@ -5424,7 +5356,14 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_owner_identity(&program)?;
+    let content_identity = match program.computed_budget {
+        Some(budget) => {
+            ProgramOwnerIdentityV1::Computed(identity::compile_computed_identity(&program, budget)?)
+        }
+        None => {
+            ProgramOwnerIdentityV1::Legacy(identity::compile_program_content_identity_v9(&program)?)
+        }
+    };
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -6084,9 +6023,8 @@ fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
     authored_selection: Option<&MaterialisedSelectionV1>,
-    #[cfg(test)] computed_budget: Option<u64>,
+    computed_budget: Option<u64>,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
-    #[cfg(test)]
     if let Some(budget) = computed_budget {
         return computed_assignment::compile_selection(
             graph,
@@ -7044,7 +6982,6 @@ where
                 })
                 .map(|candidate| candidate.value)
                 .ok_or(ProgramCompileError::InternalInvariant)?,
-            #[cfg(test)]
             TargetIntentV1::Computed(target) => EncodedPointPaintValueV1::opaque(target.anchor()),
         };
         paint_inputs.push((target_paint_input_id(target.id), value));

@@ -204,7 +204,6 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
-    #[cfg(test)]
     pub(super) const TARGET_COMPUTED: u8 = 30;
 }
 
@@ -1081,7 +1080,6 @@ where
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
-            #[cfg(test)]
             TargetIntentV1::Computed(target) => {
                 let mut color = VertexColorV1::new(vertex_tag::TARGET_COMPUTED);
                 color.push_bytes(&target.identity_bytes())?;
@@ -2352,7 +2350,6 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    #[cfg(test)]
     if program.computed_budget.is_some()
         || program
             .targets
@@ -2367,22 +2364,7 @@ where
     Ok(ProgramContentIdentityV9(*digest.as_bytes()))
 }
 
-pub(super) fn compile_owner_identity<Evaluation>(
-    program: &Program<Evaluation>,
-) -> Result<ProgramOwnerIdentityV1, ProgramCompileError>
-where
-    Evaluation: ProgramConstraintEvaluatorSetV1,
-    ProgramConstraintInvocationOf<Evaluation>: Copy,
-{
-    #[cfg(test)]
-    if let Some(budget) = program.computed_budget {
-        return compile_computed_identity(program, budget).map(ProgramOwnerIdentityV1::Computed);
-    }
-    compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
-}
-
-#[cfg(test)]
-fn compile_computed_identity<Evaluation>(
+pub(super) fn compile_computed_identity<Evaluation>(
     program: &Program<Evaluation>,
     budget: u64,
 ) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>

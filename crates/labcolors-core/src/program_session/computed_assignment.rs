@@ -5,7 +5,31 @@ use super::*;
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProgramOwnerIdentityV1 {
+    Legacy(ProgramContentIdentityV9),
+    Computed(ComputedIdentityV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ComputedIdentityV1(pub(super) [u8; 32]);
+
+pub(super) enum CandidateOriginV1 {
+    Fixed,
+    DeclaredFinite(usize),
+    Computed {
+        identity: ComputedIdentityV1,
+        values: Box<[Srgb8]>,
+    },
+}
+
+impl CandidateOriginV1 {
+    pub(super) const fn declared_state_index(&self) -> Option<usize> {
+        match self {
+            Self::DeclaredFinite(index) => Some(*index),
+            Self::Fixed | Self::Computed { .. } => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignmentDomainV1 {
