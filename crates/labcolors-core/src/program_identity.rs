@@ -41,7 +41,7 @@ mod refinement {
         records: Vec<RefinementRecordV1>,
         groups: Vec<Group>,
         split_parents: Vec<usize>,
-        recycled_singletons: Vec<Vec<usize>>,
+        cell_storage: Vec<CellMembers>,
         #[cfg(test)]
         trace_starts: Vec<usize>,
     }
@@ -84,8 +84,8 @@ mod refinement {
             let mut non_singletons = 0_usize;
             let mut maximum_records = 0_usize;
             let mut maximum_atoms = 0_usize;
-            self.recycled_singletons = partition.cells;
-            for (cell_id, vertices) in self.recycled_singletons.iter().enumerate() {
+            self.cell_storage = partition.cells;
+            for (cell_id, vertices) in self.cell_storage.iter().enumerate() {
                 if vertices.is_empty() {
                     return Err(ProgramCompileError::InternalInvariant);
                 }
@@ -96,7 +96,7 @@ mod refinement {
                     non_singletons += 1;
                     maximum_records = maximum_records.max(len);
                 }
-                for &vertex in vertices {
+                for &vertex in vertices.iter() {
                     let slot = self
                         .cell_of
                         .get_mut(vertex)
@@ -132,10 +132,8 @@ mod refinement {
             if self.order.len() != vertex_count {
                 return Err(ProgramCompileError::InternalInvariant);
             }
-            // Keep only buffers whose retained capacity cannot follow a large
-            // parent into a tiny descendant. Refinement never merges singletons.
-            self.recycled_singletons
-                .retain(|vertices| vertices.len() == 1);
+            // Reuse the outer allocation after copying its members into `order`.
+            self.cell_storage.clear();
             // Dirty vertices and the clean representative are distinct members
             // of one descendant of an initial cell.
             self.signatures
@@ -282,17 +280,11 @@ mod refinement {
         order: &[usize],
         cells: &[Cell],
         by_start: &mut [usize],
-        recycled_singletons: &mut Vec<Vec<usize>>,
+        cell_storage: &mut Vec<CellMembers>,
     ) -> Result<PartitionV1, ProgramCompileError> {
-        // Refinement preserves each input singleton. Reuse its inner buffer
-        // and the input outer Vec instead of allocating them again.
-        let mut result = core::mem::take(recycled_singletons);
-        let additional = cells
-            .len()
-            .checked_sub(result.len())
-            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let mut result = core::mem::take(cell_storage);
         result
-            .try_reserve_exact(additional)
+            .try_reserve_exact(cells.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         // Logical intervals partition 0..V. Only their starts are read below.
         for (index, cell) in cells.iter().enumerate() {
@@ -302,7 +294,6 @@ mod refinement {
             *slot = index;
         }
         let mut cursor = 0;
-        let mut completed = 0;
         while cursor < order.len() {
             let index = *by_start
                 .get(cursor)
@@ -310,7 +301,7 @@ mod refinement {
             let cell = cells
                 .get(index)
                 .ok_or(ProgramCompileError::InternalInvariant)?;
-            if cell.logical_start != cursor || cell.len == 0 || completed == cells.len() {
+            if cell.logical_start != cursor || cell.len == 0 || result.len() == cells.len() {
                 return Err(ProgramCompileError::InternalInvariant);
             }
             let physical_end = cell
@@ -320,25 +311,12 @@ mod refinement {
             let vertices = order
                 .get(cell.physical_begin..physical_end)
                 .ok_or(ProgramCompileError::InternalInvariant)?;
-            // The prefix is finalized; the suffix contains spare singletons.
-            // Appending a non-singleton moves its displaced spare to the end.
-            if cell.len == 1 && completed < result.len() {
-                let singleton = &mut result[completed];
-                if singleton.len() != 1 {
-                    return Err(ProgramCompileError::InternalInvariant);
-                }
-                singleton[0] = vertices[0];
-            } else {
-                result.push(copy_vertices(vertices)?);
-                let appended = result.len() - 1;
-                result.swap(completed, appended);
-            }
-            completed += 1;
+            result.push(CellMembers::copy_from(vertices)?);
             cursor = cursor
                 .checked_add(cell.len)
                 .ok_or(ProgramCompileError::InternalInvariant)?;
         }
-        if cursor != order.len() || completed != cells.len() || result.len() != completed {
+        if cursor != order.len() || result.len() != cells.len() {
             return Err(ProgramCompileError::InternalInvariant);
         }
         Ok(PartitionV1 { cells: result })
@@ -354,7 +332,7 @@ mod refinement {
         }
         // Only the final partition survives the refinement phase. Its output
         // allocations can reuse memory occupied by the worklists and signatures.
-        let (order, cells, mut by_start, mut singletons) = {
+        let (order, cells, mut by_start, mut storage) = {
             let mut workspace = Workspace::default();
             let non_singletons = workspace.prepare(
                 graph,
@@ -373,14 +351,14 @@ mod refinement {
                 workspace.order,
                 workspace.cells,
                 workspace.cell_of,
-                workspace.recycled_singletons,
+                workspace.cell_storage,
             )
         };
         Ok(EquitablePartitionV1(materialize(
             &order,
             &cells,
             &mut by_start,
-            &mut singletons,
+            &mut storage,
         )?))
     }
 
@@ -624,7 +602,7 @@ mod refinement {
                     .rounds
                     .try_reserve(1)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                trace.rounds.push(snapshot.cells);
+                trace.rounds.push(snapshot.member_sets());
             }
 
             if !changed || non_singletons == 0 || next_dirty.is_empty() {
@@ -2142,8 +2120,50 @@ pub(crate) const fn edge_role_count_for_test() -> usize {
     EDGE_ROLES_V1.len()
 }
 
+/// A singleton belongs to its partition; it has no separate allocation.
+#[cfg_attr(test, derive(Clone, Debug, Eq, PartialEq))]
+enum CellMembers {
+    One(usize),
+    Group(Vec<usize>),
+}
+
+impl CellMembers {
+    fn copy_from(vertices: &[usize]) -> Result<Self, ProgramCompileError> {
+        match vertices {
+            [] => Err(ProgramCompileError::InternalInvariant),
+            [vertex] => Ok(Self::One(*vertex)),
+            _ => Ok(Self::Group(copy_vertices(vertices)?)),
+        }
+    }
+
+    fn as_slice(&self) -> &[usize] {
+        match self {
+            Self::One(vertex) => core::slice::from_ref(vertex),
+            Self::Group(vertices) => vertices,
+        }
+    }
+}
+
+impl core::ops::Deref for CellMembers {
+    type Target = [usize];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+#[cfg(test)]
+impl core::ops::DerefMut for CellMembers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::One(vertex) => core::slice::from_mut(vertex),
+            Self::Group(vertices) => vertices,
+        }
+    }
+}
+
 struct PartitionV1 {
-    cells: Vec<Vec<usize>>,
+    cells: Vec<CellMembers>,
 }
 
 /// Клетки однородны по цвету вершины и полным типизированным спискам соседних клеток.
@@ -2151,6 +2171,11 @@ struct PartitionV1 {
 struct EquitablePartitionV1(PartitionV1);
 
 impl PartitionV1 {
+    #[cfg(test)]
+    fn member_sets(&self) -> Vec<Vec<usize>> {
+        self.cells.iter().map(|cell| cell.to_vec()).collect()
+    }
+
     fn initial(graph: &CanonicalGraphV1) -> Result<Self, ProgramCompileError> {
         let mut order = Vec::new();
         order
@@ -2180,7 +2205,7 @@ impl PartitionV1 {
             while end < order.len() && graph.colors[order[start]] == graph.colors[order[end]] {
                 end += 1;
             }
-            cells.push(copy_vertices(&order[start..end])?);
+            cells.push(CellMembers::copy_from(&order[start..end])?);
             start = end;
         }
         Ok(Self { cells })
@@ -2235,7 +2260,7 @@ fn partition_cells(
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     cell_of.resize(vertex_count, usize::MAX);
     for (cell_index, cell) in partition.cells.iter().enumerate() {
-        for &vertex in cell {
+        for &vertex in cell.iter() {
             let slot = cell_of
                 .get_mut(vertex)
                 .ok_or(ProgramCompileError::InternalInvariant)?;
@@ -2301,11 +2326,16 @@ fn individualize(
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for (index, cell) in partition.cells.iter().enumerate() {
         if index != cell_index {
-            cells.push(copy_vertices(cell)?);
+            cells.push(CellMembers::copy_from(cell)?);
             continue;
         }
-        cells.push(copy_vertices(&[vertex])?);
+        cells.push(CellMembers::One(vertex));
 
+        if let [left, right] = cell.as_slice() {
+            let other = if *left == vertex { *right } else { *left };
+            cells.push(CellMembers::One(other));
+            continue;
+        }
         let mut remainder = Vec::new();
         remainder
             .try_reserve_exact(cell.len() - 1)
@@ -2315,7 +2345,7 @@ fn individualize(
                 .copied()
                 .filter(|candidate| *candidate != vertex),
         );
-        cells.push(remainder);
+        cells.push(CellMembers::Group(remainder));
     }
     Ok(PartitionV1 { cells })
 }
@@ -2784,7 +2814,7 @@ fn factor_component_twins(
                 return Err(ProgramCompileError::InternalInvariant);
             }
             ordered.fill(usize::MAX);
-            for vertex in cell {
+            for &vertex in cell.iter() {
                 let slot = ordered
                     .get_mut(component_of[vertex])
                     .ok_or(ProgramCompileError::InternalInvariant)?;
@@ -2797,7 +2827,7 @@ fn factor_component_twins(
                 if vertex == usize::MAX {
                     return Err(ProgramCompileError::InternalInvariant);
                 }
-                cells.push(copy_vertices(&[vertex])?);
+                cells.push(CellMembers::One(vertex));
             }
         }
         // У остальных non-singleton клеток нет дуг к этим компонентам.
@@ -3870,7 +3900,7 @@ mod tests {
             let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
             component_index_matches_union_oracle(&graph, &partition)?;
             if let Some(cell) = partition.0.first_non_singleton() {
-                for &vertex in &partition.0.cells[cell] {
+                for &vertex in partition.0.cells[cell].iter() {
                     let child =
                         refine_partition(&graph, individualize(&partition.0, cell, vertex)?)?;
                     component_index_matches_union_oracle(&graph, &child)?;
@@ -4031,8 +4061,8 @@ mod tests {
         let mut trace = RefinementTraceV1::default();
         let actual = refine_partition_impl(graph, partition, Some(&mut trace))?;
         assert_eq!(
-            ordered_cell_sets(actual.0.cells.clone()),
-            ordered_cell_sets(expected.0.cells),
+            ordered_cell_sets(actual.0.member_sets()),
+            ordered_cell_sets(expected.0.member_sets()),
             "ordered final cell sets",
         );
         assert_eq!(
@@ -4051,7 +4081,7 @@ mod tests {
             if cell.len() < 2 {
                 continue;
             }
-            for &vertex in cell {
+            for &vertex in cell.iter() {
                 assert_refinement_matches_full(
                     graph,
                     individualize(&partition.0, cell_index, vertex)?,
@@ -4119,7 +4149,7 @@ mod tests {
             );
             ordering::sort(&mut stable);
             assert!(
-                ordered_cell_sets(partition.0.cells).contains(&stable),
+                ordered_cell_sets(partition.0.member_sets()).contains(&stable),
                 "the unchanged cell retains exactly its members",
             );
             check_initial_and_individualized_refinement(&graph)?;
@@ -4659,16 +4689,18 @@ mod tests {
         let mut allocation_counts = Vec::new();
         for count in [32_usize, 128] {
             let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
-            let vertices = (0..count + 2)
+            let vertices = (0..2 * count)
                 .map(|_| builder.add_member(VertexColorV1::new(vertex_tag::SOURCE)))
                 .collect::<Result<Vec<_>, _>>()?;
-            builder.add_edge(vertices[count], vertices[0], EdgeRoleV1::TargetSource)?;
-            builder.add_edge(vertices[count + 1], vertices[1], EdgeRoleV1::TargetSource)?;
+            // Every member of one coarse group must become a *new* singleton.
+            for i in 0..count {
+                builder.add_edge(vertices[count + i], vertices[i], EdgeRoleV1::TargetSource)?;
+            }
             let graph = builder.finish()?;
             let mut cells = Vec::with_capacity(count + 2);
-            cells.push(vec![0]);
-            cells.extend(vertices[..count].iter().map(|&vertex| vec![vertex]));
-            cells.push(vertices[count..].to_vec());
+            cells.push(CellMembers::One(0));
+            cells.extend(vertices[..count].iter().copied().map(CellMembers::One));
+            cells.push(CellMembers::copy_from(&vertices[count..])?);
             let initial = PartitionV1 { cells };
             let expected = full_refine_partition_reference(
                 &graph,
@@ -4681,13 +4713,13 @@ mod tests {
                 refine_partition(&graph, initial)
             });
             let actual = actual?;
-            assert!(actual.0.is_discrete(), "the remaining pair must split");
+            assert!(actual.0.is_discrete(), "each new singleton must be emitted");
             assert_eq!(actual.0.cells, expected.0.cells, "complete ordered result");
             allocation_counts.push(events.alloc + events.realloc);
         }
         assert!(
             allocation_counts[1] <= allocation_counts[0],
-            "more retained singletons must not require more allocations: {allocation_counts:?}",
+            "singleton count must not determine allocation count: {allocation_counts:?}",
         );
         Ok(())
     }
@@ -4711,8 +4743,8 @@ mod tests {
             assert!(!actual.0.is_discrete(), "the cycle must stay equitable");
             assert_eq!(actual.0.cells.len(), 2, "root and cycle cells");
             assert_eq!(
-                ordered_cell_sets(actual.0.cells.clone()),
-                ordered_cell_sets(expected.0.cells),
+                ordered_cell_sets(actual.0.member_sets()),
+                ordered_cell_sets(expected.0.member_sets()),
                 "complete ordered cell sets",
             );
             capacities.push((initial_capacity, actual.0.cells.capacity()));
@@ -4725,7 +4757,7 @@ mod tests {
     }
 
     // Full-round implementation frozen from 5bf2d944. Only the record type,
-    // function name and round trace differ from that source.
+    // storage adapters, function name and round trace differ from that source.
     struct FullRefinementRecordV1 {
         vertex: usize,
         signature: Vec<RefinementAtomV1>,
@@ -4756,7 +4788,7 @@ mod tests {
                 records
                     .try_reserve_exact(cell.len())
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                for &vertex in &cell {
+                for &vertex in cell.iter() {
                     let arcs = graph
                         .adjacency
                         .get(vertex)
@@ -4791,12 +4823,15 @@ mod tests {
                         .try_reserve_exact(end - start)
                         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                     split.extend(records[start..end].iter().map(|record| record.vertex));
-                    next_cells.push(split);
+                    next_cells.push(match split.as_slice() {
+                        [vertex] => CellMembers::One(*vertex),
+                        _ => CellMembers::Group(split),
+                    });
                     start = end;
                 }
             }
 
-            rounds.push(next_cells.clone());
+            rounds.push(next_cells.iter().map(|cell| cell.to_vec()).collect());
             if next_cells.len() == previous_count {
                 partition.cells = next_cells;
                 return Ok(EquitablePartitionV1(partition));
@@ -4869,7 +4904,7 @@ mod tests {
             None => Ok(serialize_leaf(graph, &partition)?.preimage),
             Some(cell) => {
                 let mut best: Option<Vec<u8>> = None;
-                for &vertex in &partition.cells[cell] {
+                for &vertex in partition.cells[cell].iter() {
                     let preimage =
                         exhaustive_preimage(graph, individualize(&partition, cell, vertex)?)?;
                     if best.as_ref().is_none_or(|current| preimage < *current) {
