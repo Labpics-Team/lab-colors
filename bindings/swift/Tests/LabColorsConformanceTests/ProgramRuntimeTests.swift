@@ -197,7 +197,15 @@ final class ProgramRuntimeTests: XCTestCase {
             XCTAssertEqual(try held[0].outputRgb(index: 0), Data([64, 64, 64]))
             XCTAssertEqual(held[0].revision(), 1)
             XCTAssertThrowsError(try runtime.updateUnknown(revision: 1, reasonId: 7)) { assertCode($0, "program_update") }
-            XCTAssertThrowsError(try runtime.updateObserved(revision: 5, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)) { assertCode($0, "program_update") }
+            let current = try XCTUnwrap(held.last)
+            let backgrounds = try XCTUnwrap(history.last?.backgrounds)
+            let surfaces = Data(backgrounds.flatMap { $0 })
+            var conflicting = surfaces; conflicting[0] ^= 1
+            XCTAssertThrowsError(try runtime.updateObserved(revision: current.revision(), scenarioIds: [1], surfaces: conflicting, surfaceCount: 1)) { assertCode($0, "program_update") }
+            let replay = try runtime.updateObserved(revision: current.revision(), scenarioIds: [1], surfaces: surfaces, surfaceCount: 1)
+            XCTAssertEqual(replay.revision(), current.revision())
+            XCTAssertEqual(replay.state(), current.state())
+            XCTAssertEqual(try replay.outputRgb(index: 0), try current.outputRgb(index: 0))
             let high = try runtime.updateObserved(revision: .max, scenarioIds: [1], surfaces: Data([128, 128, 128]), surfaceCount: 1)
             XCTAssertEqual(high.revision(), .max)
             XCTAssertEqual(high.state(), "ready")

@@ -165,7 +165,14 @@ class ContractTest {
                     }
                     assertArrayEquals(rgb(64, 64, 64), held.first().outputRgb(0u)); assertEquals(1uL, held.first().revision())
                     expectCode("program_update") { runtime.updateUnknown(1uL, 7u).close() }
-                    expectCode("program_update") { runtime.updateObserved(5uL, listOf(1u), rgb(0, 0, 0), 1u).close() }
+                    val current = held.last()
+                    val surfaces = history.getJSONObject(history.length() - 1).getJSONArray("backgrounds").getJSONArray(0).rgb()
+                    val conflicting = surfaces.copyOf().apply { this[0] = (this[0].toInt() xor 1).toByte() }
+                    expectCode("program_update") { runtime.updateObserved(current.revision(), listOf(1u), conflicting, 1u).close() }
+                    runtime.updateObserved(current.revision(), listOf(1u), surfaces, 1u).use {
+                        assertEquals(current.revision(), it.revision()); assertEquals(current.state(), it.state())
+                        assertArrayEquals(current.outputRgb(0u), it.outputRgb(0u))
+                    }
                     runtime.updateObserved(ULong.MAX_VALUE, listOf(1u), rgb(128, 128, 128), 1u).use {
                         assertEquals(ULong.MAX_VALUE, it.revision()); assertEquals("ready", it.state())
                     }

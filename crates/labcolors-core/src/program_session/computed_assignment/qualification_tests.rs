@@ -5,6 +5,22 @@ use crate::session::SessionState;
 use crate::spaces::oklab::{srgb_linear_to_lms_root, srgb_linear_to_oklab, srgb8_box_oklab_bounds};
 use crate::spaces::srgb::srgb_linear_from_srgb8;
 
+// f64::next_up/down стабилизированы после MSRV 1.85; соседние значения сохраняем точно.
+fn next_up(value: f64) -> f64 {
+    if value.is_nan() || value == f64::INFINITY {
+        return value;
+    }
+    if value == 0.0 {
+        return f64::from_bits(1);
+    }
+    let bits = value.to_bits();
+    f64::from_bits(if value < 0.0 { bits - 1 } else { bits + 1 })
+}
+
+fn next_down(value: f64) -> f64 {
+    -next_up(-value)
+}
+
 fn point(rgb: [u8; 3]) -> [f64; 3] {
     srgb_linear_to_oklab(srgb_linear_from_srgb8(Srgb8::new(rgb)))
 }
@@ -185,7 +201,7 @@ fn signed_bounds_zero_and_gray_have_discriminating_cases() {
         let center = point(rgb);
         assert_eq!(domain.lower_score(center).to_bits(), 0_f64.to_bits());
         for axis in 0..3 {
-            for adjacent in [center[axis].next_down(), center[axis].next_up()] {
+            for adjacent in [next_down(center[axis]), next_up(center[axis])] {
                 let mut anchor = center;
                 anchor[axis] = adjacent;
                 assert_eq!(
@@ -263,9 +279,9 @@ fn program_assignment_matches_full_cartesian_oracle_at_tolerance_boundaries() {
                 .sqrt();
             for max_delta in [
                 0.0,
-                nearest.next_down().max(0.0),
+                next_down(nearest).max(0.0),
                 nearest,
-                nearest.next_up(),
+                next_up(nearest),
                 1.0,
             ] {
                 for backdrop in [0_u8, 128, 255] {
@@ -586,7 +602,7 @@ fn nested_alpha_region_search_matches_fixed_program_exhaustion() {
         [0.0, 1.0],
         [0.5, 0.5],
         [0.75, 0.875],
-        [near_opaque, near_opaque.next_up()],
+        [near_opaque, next_up(near_opaque)],
         [1.0, 1.0],
     ] {
         let mut expected: Option<([f64; 2], [u8; 2])> = None;
