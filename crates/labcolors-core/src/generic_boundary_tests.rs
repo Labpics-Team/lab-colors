@@ -2140,7 +2140,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "fn compile_outputs(",
     );
     for required in [
-        "targets.sort_unstable(); targets.dedup();",
+        "ordering::sort(&mut targets); targets.dedup();",
         "CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => { targets.push(*occurrence); }",
         ".binary_search_by_key(occurrence, |binding| binding.occurrence)",
         "*occurrence_context_index = index;",
