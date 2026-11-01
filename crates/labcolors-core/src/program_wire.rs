@@ -572,6 +572,7 @@ pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -637,6 +638,14 @@ pub struct ProgramSnapshotV1 {
     revision: u64,
     state: ProgramSnapshotStateV1,
     outputs: Vec<ProgramPaintOutputV1>,
+    composites: Vec<ProgramPresentationCompositeV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    rgb: crate::Srgb8,
 }
 
 impl ProgramSnapshotV1 {
@@ -670,6 +679,27 @@ impl ProgramSnapshotV1 {
     #[must_use]
     pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
         &self.outputs
+    }
+
+    /// Нормальный encoded-sRGB8 итог root для точного observed scenario.
+    /// Возвращает только данные готового снимка, включая нулевой вклад target.
+    /// Неизвестные ID и неготовый снимок дают `None`; полномочия не выдаются.
+    #[must_use]
+    pub fn presentation_composite_rgb(&self, root: u32, scenario: u32) -> Option<crate::Srgb8> {
+        let mut rgb = None;
+        for value in self
+            .composites
+            .iter()
+            .filter(|value| value.root == root && value.scenario == scenario)
+        {
+            // Разные target одного root обязаны сохранять один нормальный итог.
+            // Несогласованные записи не превращаются в выбор первого значения.
+            if rgb.is_some_and(|previous| previous != value.rgb) {
+                return None;
+            }
+            rgb = Some(value.rgb);
+        }
+        rgb
     }
 }
 
@@ -1303,7 +1333,9 @@ where
 {
     inner: Option<ProgramInnerAttachmentV1<H>>,
     output_count: usize,
+    presentation_count: usize,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
     current_render: Option<ProgramAttachedRenderV1>,
 }
 
@@ -1325,6 +1357,7 @@ impl CompiledProgramV1 {
         H: ProgramPointSinkHostV1,
     {
         let output_count = self.owner.output_slots().count();
+        let presentation_count = self.owner.point_presentation_count();
         if output_count != 1 {
             return Err(ProgramAttachErrorV1::Binding);
         }
@@ -1391,7 +1424,9 @@ impl CompiledProgramV1 {
         Ok(ProgramAttachmentV1 {
             inner: Some(inner),
             output_count,
+            presentation_count,
             outputs_scratch,
+            composites_scratch: Vec::new(),
             current_render: None,
         })
     }
@@ -1512,9 +1547,17 @@ where
         let Self {
             inner,
             output_count,
+            presentation_count,
             outputs_scratch,
+            composites_scratch,
             current_render,
         } = self;
+        let scenario_count = match update {
+            crate::program::UpdateV1::Observed { scenarios, .. } => scenarios.len(),
+            crate::program::UpdateV1::Unknown { .. } => 0,
+        };
+        reserve_snapshot_composites(composites_scratch, *presentation_count, scenario_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         outputs_scratch
             .try_reserve_exact(*output_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
@@ -1524,7 +1567,8 @@ where
         let commit = attachment
             .update(update)
             .map_err(map_attachment_update_error)?;
-        let snapshot = attachment_snapshot_from_commit(commit, outputs_scratch)?;
+        let snapshot =
+            attachment_snapshot_from_commit(commit, outputs_scratch, composites_scratch)?;
         *current_render = snapshot.render();
         Ok(snapshot)
     }
@@ -1581,10 +1625,12 @@ fn attachment_snapshot_from_commit(
         crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
     >,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
+    composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
 ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
     let snapshot = snapshot_from_evidence_into(
         commit.evidence(),
         outputs_scratch,
+        composites_scratch,
         commit.snapshot_version(),
     )
     .map_err(|error| match error {
@@ -1743,6 +1789,7 @@ impl CompiledProgramV1 {
             owner: self.owner,
             session,
             outputs_scratch: Vec::new(),
+            composites_scratch: Vec::new(),
         })
     }
 }
@@ -1758,6 +1805,11 @@ impl ProgramSessionV1 {
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        reserve_snapshot_composites(
+            &mut self.composites_scratch,
+            self.owner.point_presentation_count(),
+            scenarios.len(),
+        )?;
         self.outputs_scratch
             .try_reserve_exact(self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
@@ -1770,6 +1822,7 @@ impl ProgramSessionV1 {
         snapshot_from_evidence_into(
             evidence,
             &mut self.outputs_scratch,
+            &mut self.composites_scratch,
             self.owner.snapshot_version(),
         )
     }
@@ -1796,6 +1849,7 @@ impl ProgramSessionV1 {
         snapshot_from_evidence_into(
             transition.commit(),
             &mut self.outputs_scratch,
+            &mut self.composites_scratch,
             self.owner.snapshot_version(),
         )
     }
@@ -1836,6 +1890,7 @@ impl SchemaOrderedScenarioSourceV1 for ProgramScenarioSourceV1<'_> {
 fn snapshot_from_evidence_into(
     evidence: crate::program::EvidenceViewV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
+    composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
     snapshot_version: u32,
 ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
     use crate::program::{CertificateV1, ObservationHeadV1, StateKindV1};
@@ -1853,6 +1908,28 @@ fn snapshot_from_evidence_into(
         StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
     };
     outputs_scratch.clear();
+    composites_scratch.clear();
+    if let Some(verified) = evidence.current_verified() {
+        for composite in verified.presentation_composites() {
+            let composite = composite.ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
+            // Память зарезервирована до commit; ошибки чтения не запускают
+            // аллокацию после публикации Session или внешнего эффекта sink.
+            if composite.scenarios.len()
+                > composites_scratch
+                    .capacity()
+                    .saturating_sub(composites_scratch.len())
+            {
+                return Err(ProgramRuntimeErrorV1::InternalInvariant);
+            }
+            composites_scratch.extend(composite.scenarios.iter().map(|scenario| {
+                ProgramPresentationCompositeV1 {
+                    root: composite.root,
+                    scenario: scenario.value(),
+                    rgb: crate::Srgb8::new(composite.rgb),
+                }
+            }));
+        }
+    }
     match snapshot_version {
         1 => {
             if let Some(verified) =
@@ -1878,7 +1955,22 @@ fn snapshot_from_evidence_into(
         revision,
         state,
         outputs: std::mem::take(outputs_scratch),
+        composites: std::mem::take(composites_scratch),
     })
+}
+
+fn reserve_snapshot_composites(
+    destination: &mut Vec<ProgramPresentationCompositeV1>,
+    presentation_count: usize,
+    scenario_count: usize,
+) -> Result<(), ProgramRuntimeErrorV1> {
+    let capacity = presentation_count
+        .checked_mul(scenario_count)
+        .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?;
+    destination.clear();
+    destination
+        .try_reserve_exact(capacity)
+        .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
 }
 
 fn copy_snapshot_outputs<'a>(
@@ -1917,6 +2009,57 @@ mod runtime_tests {
             .exact_visible_unary(true, 10, 8, expected)
             .output(17, 4);
         builder.finish().unwrap()
+    }
+
+    #[test]
+    fn composite_readout_is_current_scenario_bound_and_owned() -> Result<(), ProgramRuntimeErrorV1>
+    {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let initial = runtime.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(301, vec![rgb]),
+                ProgramScenarioV1::new(101, vec![rgb]),
+            ],
+        )?;
+        assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 101), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 0), None);
+        assert_eq!(initial.presentation_composite_rgb(17, 101), None);
+        let stale = runtime.update_unknown(2, 3)?;
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert_eq!(stale.outputs(), initial.outputs());
+        assert_eq!(stale.presentation_composite_rgb(9, 101), None);
+        let failed =
+            runtime.update_observed(3, &[ProgramScenarioV1::new(101, vec![Srgb8::new([0; 3])])])?;
+        assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
+        assert_eq!(failed.presentation_composite_rgb(9, 101), None);
+        drop(runtime);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        Ok(())
+    }
+
+    #[test]
+    fn composite_readout_rejects_conflicting_root_records_and_capacity_overflow()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let mut snapshot = runtime.update_observed(1, &[ProgramScenarioV1::new(101, vec![rgb])])?;
+        snapshot.composites.push(snapshot.composites[0]);
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), Some(rgb));
+        snapshot.composites.push(ProgramPresentationCompositeV1 {
+            root: 9,
+            scenario: 101,
+            rgb: Srgb8::new([0; 3]),
+        });
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), None);
+        assert_eq!(
+            reserve_snapshot_composites(&mut Vec::new(), usize::MAX, 2),
+            Err(ProgramRuntimeErrorV1::ResourceExhausted)
+        );
+        Ok(())
     }
 
     fn computed_runtime_wire() -> Vec<u8> {

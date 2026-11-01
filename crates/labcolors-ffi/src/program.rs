@@ -245,6 +245,21 @@ impl ProgramSnapshot {
     pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> {
         Ok(output(&self.inner, index)?.opacity())
     }
+    pub fn presentation_composite_rgb(
+        &self,
+        root: u32,
+        scenario: u32,
+    ) -> Result<Vec<u8>, LabColorsError> {
+        self.inner
+            .presentation_composite_rgb(root, scenario)
+            .map(|rgb| rgb.bytes().to_vec())
+            .ok_or_else(|| {
+                LabColorsError::new(
+                    "presentation_composite_unavailable",
+                    "readPresentationComposite",
+                )
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

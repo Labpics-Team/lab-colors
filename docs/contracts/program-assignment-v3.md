@@ -150,6 +150,16 @@ V3 использует `snapshotVersion === 2` у standalone и attached snapsh
 V1/V2 сохраняют `snapshotVersion === 1`, прежние состояния и историческую
 семантику outputs; перед применением таких outputs также нужно проверять `state`.
 
+`ProgramSnapshot.presentationCompositeRgb(rootId, scenarioId)` читает нормальный
+финальный encoded-sRGB8 итог из проверенного replay. Root должен иметь объявленный
+`presentationTarget`; `scenarioId` — исходный observed ID, не индекс physical case.
+Отдельная копия трёх байтов сохраняет различия сценариев и доступна только в `ready`.
+Пустой причинный вклад target, включая opacity 0, не делает нормальную композицию
+недоступной. Getter не даёт materialization authority или renderer provenance.
+Неизвестные ID и неготовый snapshot возвращают `presentation_composite_unavailable`,
+нецелые или выходящие за `u32` JS-значения — `invalid_composite_id`; обе ошибки имеют
+операцию `readPresentationComposite` и распознаются `isBindingError`.
+
 `attachProgramWire` использует существующий атомарный переход:
 подготовка → успешная установка или отзыв host → commit → публикация stamp.
 После `incomplete` или `unsatisfied` успешно отозванный результат не остаётся

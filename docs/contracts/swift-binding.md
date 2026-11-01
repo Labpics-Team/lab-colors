@@ -43,7 +43,12 @@ let builder = try ProgramWireBuilderV3()
 Ревизия имеет тип `UInt64`, идентификаторы имеют тип `UInt32`.
 
 `ProgramSnapshot` предоставляет `snapshotVersion()`, `revision()`, `reason()`,
-`state()`, `outputCount()`, `outputSlot`, `outputRgb` и `outputOpacity`.
+`state()`, `outputCount()`, `outputSlot`, `outputRgb`, `outputOpacity` и
+`presentationCompositeRgb(root:scenario:)`. Последний возвращает отдельный `Data`
+нормального encoded-sRGB8 итога root для исходного observed scenario ID, включая
+нулевой вклад target. Нужен готовый snapshot и root с `presentationTarget`.
+Отсутствующая пара либо неготовый snapshot дают `presentation_composite_unavailable`
+с операцией `readPresentationComposite`. Данные не предоставляют materialization authority.
 V1/V2 возвращают snapshot version 1 с прежними `waiting`, `ready`, `stale`,
 `failed`; их outputs могут содержать предыдущий успешный результат.
 V3 возвращает version 2: только `ready` содержит текущие outputs.

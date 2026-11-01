@@ -2457,6 +2457,12 @@ impl ContentIdentityV9 {
 pub(crate) struct VerifiedOutputV1<'a> {
     inner: &'a CoreVerifiedOutcomeV1,
 }
+
+pub(crate) struct PresentationCompositeV1<'a> {
+    pub(crate) root: u32,
+    pub(crate) scenarios: &'a [ScenarioId],
+    pub(crate) rgb: [u8; 3],
+}
 impl<'a> VerifiedOutputV1<'a> {
     #[cfg(test)]
     pub(crate) fn observation(self) -> ObservationV1<'a> {
@@ -2480,6 +2486,19 @@ impl<'a> VerifiedOutputV1<'a> {
         self,
     ) -> impl ExactSizeIterator<Item = PointPhysicalEvidenceV1> + 'a {
         self.inner.point_domains()
+    }
+    pub(crate) fn presentation_composites(
+        self,
+    ) -> impl ExactSizeIterator<Item = Option<PresentationCompositeV1<'a>>> + 'a {
+        use crate::session::SessionEvidenceV1;
+        self.inner.presentation_composites().map(move |composite| {
+            let composite = composite?;
+            Some(PresentationCompositeV1 {
+                root: composite.root.value(),
+                scenarios: self.inner.observation().provenance(composite.case_index)?,
+                rgb: composite.rgb,
+            })
+        })
     }
 }
 

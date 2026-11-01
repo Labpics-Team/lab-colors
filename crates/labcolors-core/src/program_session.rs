@@ -3334,6 +3334,13 @@ pub(crate) struct PointPhysicalEvidenceV1 {
     target: OccurrenceId,
     domain: ExactFinalOwnedPointDomainV1,
 }
+
+/// Данные нормального пересчёта не несут полномочий причинного сертификата.
+pub(crate) struct PresentationCompositeV1 {
+    pub(crate) root: PresentationRootId,
+    pub(crate) case_index: usize,
+    pub(crate) rgb: [u8; 3],
+}
 impl PointPhysicalEvidenceV1 {
     pub(crate) const fn presentation_root(self) -> PresentationRootId {
         self.root
@@ -3380,6 +3387,20 @@ impl<E: ProgramConstraintEvaluatorSetV1> ProgramVerifiedOutcomeV1<E> {
                 target: record.target,
                 domain: record.domain,
             })
+    }
+    pub(crate) fn presentation_composites(
+        &self,
+    ) -> impl ExactSizeIterator<Item = Option<PresentationCompositeV1>> + '_ {
+        let storage = &self.arena().storage;
+        storage.point_causal_records.iter().map(|record| {
+            let steps = record.replay.get(&storage.point_causal_steps)?;
+            let summary = PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(steps)?;
+            Some(PresentationCompositeV1 {
+                root: record.presentation_root,
+                case_index: record.case_index,
+                rgb: summary.normal_root(),
+            })
+        })
     }
     fn into_arena(self) -> ProgramEvaluationArenaReturnV1<E> {
         match self {
