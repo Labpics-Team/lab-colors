@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire, isProgramError } from "../index.js";
+import init, { attachProgramWire, compileProgramWire, isProgramError } from "../index.js";
 import {
   PROGRAM_WIRE_INVALID_DECLARATION,
   ProgramWireBuilderV1,
@@ -137,3 +137,155 @@ for (const hard of [true, false]) {
     assert.deepEqual(builder.finish(), fresh.finish());
   });
 }
+
+function usingRuntime(builder, run) {
+  const runtime = compileProgramWire(builder.finish(), 101);
+  const snapshots = [];
+  const observed = (revision, ids, surfaces, surfaceCount = 1) => {
+    const snapshot = runtime.updateObserved(revision, new Uint32Array(ids), new Uint8Array(surfaces), surfaceCount);
+    snapshots.push(snapshot);
+    return snapshot;
+  };
+  const unknown = (revision) => {
+    const snapshot = runtime.updateUnknown(revision, 99);
+    snapshots.push(snapshot);
+    return snapshot;
+  };
+  try { run({ observed, unknown }); }
+  finally {
+    for (const snapshot of snapshots) snapshot.free();
+    runtime.free();
+  }
+}
+
+test("public report retains nominal rejection and provenance without veto or mutation", () => {
+  const source = [0, 199, 64];
+  const builder = pointBuilder(source, 1, source).declaredSrgb8CleanSet(false, 81, 71, 61);
+  usingRuntime(builder, ({ observed }) => {
+    const snapshot = observed(1n, [9, 7], [0, 0, 0, 0, 0, 0]);
+    const report = snapshot.assessmentReport();
+    assert.equal(snapshot.state, "ready");
+    assert.deepEqual([...snapshot.outputRgb(0)], source);
+    assert.equal(snapshot.outputOpacity(0), 1);
+    assert.equal(report.streamId, 101);
+    assert.equal(report.revision, 1n);
+    assert.equal(report.contentIdentity.length, 32);
+    assert.deepEqual(report.scenarioProvenance, [
+      { caseIndex: 0, scenarioId: 7 }, { caseIndex: 0, scenarioId: 9 },
+    ]);
+    assert.deepEqual(report.cells, [
+      { constraintId: 81, caseIndex: 0, hard: false, assessment: {
+        kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+        visible: source, rejectedBlueInterval: [64, 108],
+      } },
+      { constraintId: 82, caseIndex: 0, hard: true, assessment: {
+        kind: "exact-srgb8", verdict: "pass",
+      } },
+    ]);
+    const originalIdentity = [...report.contentIdentity];
+    report.contentIdentity.fill(0);
+    assert.deepEqual([...snapshot.assessmentReport().contentIdentity], originalIdentity);
+    assert.throws(() => { report.cells[0].assessment.visible[0] = 255; }, TypeError);
+    const reordered = observed(2n, [7, 9], [0, 0, 0, 0, 0, 0]).assessmentReport();
+    assert.deepEqual(reordered.scenarioProvenance, report.scenarioProvenance);
+    assert.deepEqual(reordered.cells, report.cells);
+  });
+});
+
+test("public lint reports the final alpha point and explicit domain absence", () => {
+  const examples = [
+    { source: [128, 128, 129], opacity: 0.5, backdrop: [128, 128, 127], final: [128, 128, 128],
+      expected: { kind: "declared-srgb8-clean-set", verdict: "pass", visible: [128, 128, 128] } },
+    { source: [255, 255, 255], opacity: 0.5, backdrop: [1, 1, 3], final: [128, 128, 129],
+      expected: { kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+        visible: [128, 128, 129] } },
+    { source: [0, 0, 0], opacity: 1, backdrop: [0, 0, 0], final: [0, 0, 0],
+      expected: { kind: "declared-srgb8-clean-set", verdict: "violation", reason: "final-owned-domain-absent" } },
+  ];
+  for (const example of examples) {
+    const builder = pointBuilder(example.source, example.opacity, example.final)
+      .declaredSrgb8CleanSet(false, 81, 71, 61);
+    usingRuntime(builder, ({ observed }) => {
+      const snapshot = observed(1n, [1], example.backdrop);
+      assert.equal(snapshot.state, "ready");
+      assert.deepEqual([...snapshot.outputRgb(0)], example.source);
+      assert.equal(snapshot.outputOpacity(0), example.opacity);
+      const assessment = snapshot.assessmentReport().cells[0].assessment;
+      if (example.expected.reason === "rejected") {
+        const { rejectedBlueInterval, ...summary } = assessment;
+        assert.equal(rejectedBlueInterval.length, 2);
+        assert.deepEqual(summary, example.expected);
+      } else {
+        assert.deepEqual(assessment, example.expected);
+      }
+    });
+  }
+});
+
+test("report availability distinguishes evaluated empty, off, stale and failed snapshots", () => {
+  const emptyBuilder = new ProgramWireBuilderV1()
+    .source(1, [0, 0, 0]).fixedTarget(2, 1).solidPaint(3, 2).output(17, 3);
+  usingRuntime(emptyBuilder, ({ observed, unknown }) => {
+    const waiting = unknown(1n);
+    assert.equal(waiting.state, "waiting");
+    assert.equal(waiting.assessmentReport(), null);
+    const ready = observed(2n, [1], [], 0);
+    assert.deepEqual(ready.assessmentReport().cells, []);
+  });
+  usingRuntime(pointBuilder([0, 199, 63], 1, [0, 199, 63]), ({ observed }) => {
+    const report = observed(1n, [1], [0, 0, 0]).assessmentReport();
+    assert.equal(report.cells.length, 1);
+    assert.equal(report.cells[0].assessment.kind, "exact-srgb8");
+  });
+  const builder = pointBuilder([128, 128, 129], 0.5, [128, 128, 128])
+    .declaredSrgb8CleanSet(false, 81, 71, 61);
+  usingRuntime(builder, ({ observed, unknown }) => {
+    const first = observed(1n, [1], [128, 128, 127]);
+    const stale = unknown(2n);
+    assert.equal(stale.state, "stale");
+    assert.equal(stale.outputCount(), 1);
+    assert.equal(stale.assessmentReport(), null);
+    const fresh = observed(3n, [1], [128, 128, 127]);
+    assert.equal(fresh.assessmentReport().revision, 3n);
+    const failed = observed(4n, [1], [0, 0, 0]);
+    assert.equal(failed.state, "failed");
+    assert.equal(failed.outputCount(), 1);
+    assert.equal(failed.assessmentReport(), null);
+    assert.equal(first.assessmentReport().revision, 1n);
+    assert.deepEqual(first.assessmentReport().cells[0].assessment.visible, [128, 128, 128]);
+  });
+});
+
+test("attached snapshot uses the same final report owner and removes it after revoke", () => {
+  const source = [0, 199, 64];
+  const builder = pointBuilder(source, 1, source).declaredSrgb8CleanSet(false, 81, 71, 61);
+  const intents = [];
+  const attachment = attachProgramWire(builder.finish(), 101, 91, 901, 71, 61, (intent) => {
+    intents.push(intent);
+    return true;
+  });
+  let ready;
+  let stale;
+  try {
+    ready = attachment.updateObserved(1n, new Uint32Array([1]), new Uint8Array([0, 0, 0]), 1);
+    assert.equal(ready.assessmentReport().cells[0].assessment.reason, "rejected");
+    assert.deepEqual([...ready.outputRgb(0)], source);
+    assert.equal(intents.at(-1).operation, "setAll");
+    stale = attachment.updateUnknown(2n, 99);
+    assert.equal(stale.assessmentReport(), null);
+    assert.equal(intents.at(-1).operation, "revokeAll");
+    assert.equal(ready.assessmentReport().revision, 1n);
+  } finally {
+    stale?.free();
+    ready?.free();
+    attachment.dispose(true);
+    attachment.free();
+  }
+});
+
+test("report read error classes remain in the existing public error contract", () => {
+  for (const code of ["program_resource_exhausted", "program_internal_invariant"]) {
+    assert.equal(isProgramError(Object.assign(new Error(code), { code, operation: "assessmentReport" })), true);
+  }
+  assert.equal(isProgramError(Object.assign(new Error("wrong"), { code: "program_update", operation: "assessmentReport" })), false);
+});
