@@ -19,6 +19,11 @@ export {
 } from "./pkg/labcolors.js";
 
 export type {
+  ProgramAssessmentReportV1,
+  ProgramAssessmentCellV1,
+  ProgramScenarioProvenanceV1,
+  ProgramConstraintAssessmentV1,
+  ProgramAssessmentVerdictV1,
   NumericalCapabilitySiteV2,
   NumericalCapabilityManifestV2,
   Wcag22DecisionV1,
@@ -91,6 +96,7 @@ export type ProgramError = Error & (
   | Readonly<{ code: ProgramAttachmentFreeErrorCode; operation: "attachmentFree" }>
   | Readonly<{ code: ProgramPhysicalIdentityErrorCode; operation: "physicalIdentity" }>
   | Readonly<{ code: ProgramMaterializationErrorCode; operation: "materializationAuthority" }>
+  | Readonly<{ code: ProgramInfrastructureErrorCode; operation: "assessmentReport" }>
 );
 export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];

@@ -3322,6 +3322,15 @@ pub(crate) struct DeclaredSrgb8CleanSetEvidenceV1<'a> {
 }
 
 impl DeclaredSrgb8CleanSetEvidenceV1<'_> {
+    /// Копирует сохранённый исход, сохраняя обязательные payload каждого варианта.
+    /// Это проекция свидетельства; повторного вычисления предиката здесь нет.
+    pub(crate) const fn outcome(self) -> Result<Srgb8, CoreDeclaredSrgb8CleanSetViolationV1> {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(evidence) => Ok(evidence.visible()),
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence) => Err(*evidence),
+        }
+    }
+
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self.inner {
             DeclaredSrgb8CleanSetEvidenceRefV1::Pass(_) => VerdictV1::Pass,

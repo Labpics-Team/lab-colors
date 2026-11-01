@@ -5,6 +5,7 @@
 //! effects принадлежат npm-приложению, не WASM.
 
 mod error;
+mod program_report_projection;
 mod terminal_projection;
 
 use std::cell::{Cell, RefCell};
@@ -33,6 +34,46 @@ export interface NumericalCapabilityManifestV2 {
   readonly coverage: string;
   readonly sites: ReadonlyArray<NumericalCapabilitySiteV2>;
   readonly checksum: string;
+}
+
+
+export type ProgramAssessmentVerdictV1 = "pass" | "violation";
+export type ProgramConstraintAssessmentV1 =
+  | Readonly<{
+      kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
+      verdict: ProgramAssessmentVerdictV1;
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "pass";
+      visible: readonly [number, number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "violation"; reason: "rejected";
+      visible: readonly [number, number, number];
+      rejectedBlueInterval: readonly [number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "violation";
+      reason: "final-owned-domain-absent";
+    }>;
+export interface ProgramAssessmentCellV1 {
+  readonly constraintId: number;
+  readonly caseIndex: number;
+  readonly hard: boolean;
+  readonly assessment: ProgramConstraintAssessmentV1;
+}
+export interface ProgramScenarioProvenanceV1 {
+  readonly caseIndex: number;
+  readonly scenarioId: number;
+}
+/** Историческое свидетельство одного Ready-снимка; без права публикации. */
+export interface ProgramAssessmentReportV1 {
+  /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
+  readonly contentIdentity: Uint8Array;
+  readonly streamId: number;
+  readonly revision: bigint;
+  readonly scenarioProvenance: ReadonlyArray<ProgramScenarioProvenanceV1>;
+  readonly cells: ReadonlyArray<ProgramAssessmentCellV1>;
 }
 
 export type Wcag22CriterionV1 =
@@ -189,6 +230,48 @@ export function certificateProjection(
     bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
+
+
+const reportFreeze = Object.freeze;
+const ReportBytes = Uint8Array;
+const reportPush = Array.prototype.push;
+
+export function reportArray() { return []; }
+export function reportArrayPush(array, value) { reportPush.call(array, value); }
+export function reportScenario(caseIndex, scenarioId) {
+  return reportFreeze({ caseIndex, scenarioId });
+}
+export function reportSummary(kind, verdict) { return reportFreeze({ kind, verdict }); }
+export function reportAccepted(red, green, blue) {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "pass",
+    visible: reportFreeze([red, green, blue]),
+  });
+}
+export function reportRejected(red, green, blue, lower, upper) {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+    visible: reportFreeze([red, green, blue]),
+    rejectedBlueInterval: reportFreeze([lower, upper]),
+  });
+}
+export function reportDomainAbsent() {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "violation",
+    reason: "final-owned-domain-absent",
+  });
+}
+export function reportCell(constraintId, caseIndex, hard, assessment) {
+  return reportFreeze({ constraintId, caseIndex, hard, assessment });
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells) {
+  return reportFreeze({
+    contentIdentity: new ReportBytes(contentIdentity),
+    streamId, revision,
+    scenarioProvenance: reportFreeze(scenarioProvenance),
+    cells: reportFreeze(cells),
+  });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = programError)]
@@ -224,6 +307,42 @@ extern "C" {
         payload_sha256: &[u8],
         binding_sha256: &[u8],
     ) -> JsValue;
+
+    #[wasm_bindgen(catch, js_name = reportArray)]
+    fn report_array() -> Result<js_sys::Array, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportArrayPush)]
+    fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = reportScenario)]
+    fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSummary)]
+    fn report_summary(kind: &str, verdict: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportAccepted)]
+    fn report_accepted(red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportRejected)]
+    fn report_rejected(
+        red: u8,
+        green: u8,
+        blue: u8,
+        lower: u8,
+        upper: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportDomainAbsent)]
+    fn report_domain_absent() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportCell)]
+    fn report_cell(
+        constraint_id: u32,
+        case_index: usize,
+        hard: bool,
+        assessment: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportProjection)]
+    fn report_projection(
+        content_identity: &[u8],
+        stream_id: u32,
+        revision: u64,
+        scenario_provenance: &js_sys::Array,
+        cells: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
@@ -279,6 +398,7 @@ enum ProgramOperation {
     AttachmentUpdateUnknown,
     AttachmentDispose,
     MaterializationAuthority,
+    AssessmentReport,
 }
 
 impl ProgramOperation {
@@ -292,6 +412,7 @@ impl ProgramOperation {
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
+            Self::AssessmentReport => "assessmentReport",
         }
     }
 }
@@ -530,6 +651,17 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
+    #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
+    pub fn assessment_report(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project(self.inner.assessment_report()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::AssessmentReport,
+            )
+        })
+    }
+
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
@@ -1062,6 +1194,19 @@ pub struct ProgramAttachedSnapshot {
 
 #[wasm_bindgen]
 impl ProgramAttachedSnapshot {
+    /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
+    #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
+    pub fn assessment_report(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project(self.inner.snapshot().assessment_report()).map_err(
+            |_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::AssessmentReport,
+                )
+            },
+        )
+    }
+
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().to_string()

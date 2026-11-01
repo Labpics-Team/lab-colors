@@ -410,6 +410,7 @@ export function isProgramError(error) {
     if (operation === "attachmentFree") return ATTACHMENT_FREE_ERROR_CODES.has(code);
     if (operation === "materializationAuthority") return MATERIALIZATION_ERROR_CODES.has(code);
     if (operation === "physicalIdentity") return PHYSICAL_IDENTITY_ERROR_CODES.has(code);
+    if (operation === "assessmentReport") return PROGRAM_INFRASTRUCTURE_ERROR_CODES.includes(code);
     return false;
   } catch {
     return false;

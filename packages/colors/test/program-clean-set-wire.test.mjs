@@ -222,18 +222,19 @@ test("public lint reports the final alpha point and explicit domain absence", ()
   }
 });
 
-test("report availability distinguishes evaluated empty, off, stale and failed snapshots", () => {
+test("report availability rejects incomplete point declarations and distinguishes off, waiting, stale and failed", () => {
   const emptyBuilder = new ProgramWireBuilderV1()
     .source(1, [0, 0, 0]).fixedTarget(2, 1).solidPaint(3, 2).output(17, 3);
-  usingRuntime(emptyBuilder, ({ observed, unknown }) => {
+  assert.throws(() => compileProgramWire(emptyBuilder.finish(), 101),
+    (error) => isProgramError(error) && error.operation === "compileProgramWire"
+      && error.code === "program_compile");
+  usingRuntime(pointBuilder([0, 199, 63], 1, [0, 199, 63]), ({ observed, unknown }) => {
     const waiting = unknown(1n);
     assert.equal(waiting.state, "waiting");
     assert.equal(waiting.assessmentReport(), null);
-    const ready = observed(2n, [1], [], 0);
-    assert.deepEqual(ready.assessmentReport().cells, []);
-  });
-  usingRuntime(pointBuilder([0, 199, 63], 1, [0, 199, 63]), ({ observed }) => {
-    const report = observed(1n, [1], [0, 0, 0]).assessmentReport();
+    const ready = observed(2n, [1], [0, 0, 0]);
+    assert.equal(ready.state, "ready");
+    const report = ready.assessmentReport();
     assert.equal(report.cells.length, 1);
     assert.equal(report.cells[0].assessment.kind, "exact-srgb8");
   });

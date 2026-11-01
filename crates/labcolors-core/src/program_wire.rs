@@ -367,6 +367,30 @@ mod fv01_red_tests {
     }
 
     #[test]
+    fn public_report_preflight_failure_preserves_attachment_and_same_revision_retry() {
+        let mut attachment = ready_attachment();
+        let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])];
+        let first = attachment.update_observed(1, &scenarios).unwrap();
+        let render = first.render().unwrap();
+        let previous_report = first.snapshot().assessment_report().unwrap().clone();
+        let bound = attachment.assessment_cells_per_case;
+        // CapacityOverflow воспроизводит отказ того же preflight до host-эффекта,
+        // без попытки выделить огромную память и без изменения входного сценария.
+        attachment.assessment_cells_per_case = usize::MAX;
+        assert!(matches!(
+            attachment.update_observed(2, &scenarios),
+            Err(ProgramAttachmentUpdateErrorV1::ResourceExhausted)
+        ));
+        assert_eq!(attachment.current_render(), Some(render));
+        assert_eq!(first.snapshot().assessment_report(), Some(&previous_report));
+        attachment.assessment_cells_per_case = bound;
+        let retry = attachment.update_observed(2, &scenarios).unwrap();
+        assert_eq!(retry.render().unwrap().revision(), 2);
+        assert_eq!(retry.render().unwrap().sink_stamp().sequence(), 2);
+        assert_eq!(retry.snapshot().assessment_report().unwrap().revision(), 2);
+    }
+
+    #[test]
     fn public_attachment_resource_failure_keeps_head_and_allows_same_revision_retry() {
         let mut attachment = ready_attachment();
         let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])];
@@ -560,11 +584,21 @@ pub struct CompiledProgramV1 {
     owner: crate::program::OwnerV1,
 }
 
+#[path = "program_assessment_report.rs"]
+mod assessment_report;
+
+use assessment_report::ProgramAssessmentReportScratchV1;
+pub use assessment_report::{
+    ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
+    ProgramConstraintAssessmentV1, ProgramScenarioProvenanceV1,
+};
+
 /// Единственный runtime-владелец одной Session публичного Program.
 pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    assessment_scratch: ProgramAssessmentReportScratchV1,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -626,6 +660,7 @@ impl ProgramPaintOutputV1 {
 pub struct ProgramSnapshotV1 {
     state: ProgramSnapshotStateV1,
     outputs: Vec<ProgramPaintOutputV1>,
+    assessment_report: Option<ProgramAssessmentReportV1>,
 }
 
 impl ProgramSnapshotV1 {
@@ -637,6 +672,13 @@ impl ProgramSnapshotV1 {
     #[must_use]
     pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
         &self.outputs
+    }
+
+    /// Проверенные оценки текущего Ready-снимка. Исторические outputs вне Ready
+    /// не получают новую привязку к наблюдению и не создают актуальный отчёт.
+    #[must_use]
+    pub fn assessment_report(&self) -> Option<&ProgramAssessmentReportV1> {
+        self.assessment_report.as_ref()
     }
 }
 
@@ -1270,7 +1312,9 @@ where
 {
     inner: Option<ProgramInnerAttachmentV1<H>>,
     output_count: usize,
+    assessment_cells_per_case: usize,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    assessment_scratch: ProgramAssessmentReportScratchV1,
     current_render: Option<ProgramAttachedRenderV1>,
 }
 
@@ -1292,6 +1336,11 @@ impl CompiledProgramV1 {
         H: ProgramPointSinkHostV1,
     {
         let output_count = self.owner.output_slots().count();
+        let assessment_cells_per_case = self
+            .owner
+            .evidence_cell_bounds(1)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?
+            .verified_cells();
         if output_count != 1 {
             return Err(ProgramAttachErrorV1::Binding);
         }
@@ -1358,7 +1407,9 @@ impl CompiledProgramV1 {
         Ok(ProgramAttachmentV1 {
             inner: Some(inner),
             output_count,
+            assessment_cells_per_case,
             outputs_scratch,
+            assessment_scratch: ProgramAssessmentReportScratchV1::default(),
             current_render: None,
         })
     }
@@ -1479,9 +1530,21 @@ where
         let Self {
             inner,
             output_count,
+            assessment_cells_per_case,
             outputs_scratch,
+            assessment_scratch,
             current_render,
         } = self;
+        let scenario_count = match &update {
+            crate::program::UpdateV1::Observed { scenarios, .. } => scenarios.len(),
+            crate::program::UpdateV1::Unknown { .. } => 0,
+        };
+        let cell_count = assessment_cells_per_case
+            .checked_mul(scenario_count)
+            .ok_or(ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        assessment_scratch
+            .reserve(cell_count, scenario_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         outputs_scratch
             .try_reserve_exact(*output_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
@@ -1491,7 +1554,7 @@ where
         let commit = attachment
             .update(update)
             .map_err(map_attachment_update_error)?;
-        let snapshot = attachment_snapshot_from_commit(commit, outputs_scratch)?;
+        let snapshot = attachment_snapshot_from_commit(commit, outputs_scratch, assessment_scratch);
         *current_render = snapshot.render();
         Ok(snapshot)
     }
@@ -1548,9 +1611,10 @@ fn attachment_snapshot_from_commit(
         crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
     >,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
-) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
-    let snapshot = snapshot_from_evidence_into(commit.evidence(), outputs_scratch)
-        .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+    assessment_scratch: &mut ProgramAssessmentReportScratchV1,
+) -> ProgramAttachedSnapshotV1 {
+    let snapshot =
+        snapshot_from_evidence_into(commit.evidence(), outputs_scratch, assessment_scratch);
     let render = commit.render_outputs().next().map(|render| {
         let mut terminal_composite = None;
         let mut saw_matching_certificate = false;
@@ -1610,7 +1674,7 @@ fn attachment_snapshot_from_commit(
             terminal_composite_ambiguous,
         }
     });
-    Ok(ProgramAttachedSnapshotV1 { snapshot, render })
+    ProgramAttachedSnapshotV1 { snapshot, render }
 }
 
 /// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
@@ -1695,6 +1759,7 @@ impl CompiledProgramV1 {
             owner: self.owner,
             session,
             outputs_scratch: Vec::new(),
+            assessment_scratch: ProgramAssessmentReportScratchV1::default(),
         })
     }
 }
@@ -1713,14 +1778,25 @@ impl ProgramSessionV1 {
         self.outputs_scratch
             .try_reserve_exact(self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+        let cell_count = self
+            .owner
+            .evidence_cell_bounds(scenarios.len())
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
+            .verified_cells();
+        self.assessment_scratch
+            .reserve(cell_count, scenarios.len())
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
             .prepare_schema_ordered_update(&mut self.session, revision, &source)
             .map_err(map_runtime_update_error)?;
         let evidence = transition.commit();
-        snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        Ok(snapshot_from_evidence_into(
+            evidence,
+            &mut self.outputs_scratch,
+            &mut self.assessment_scratch,
+        ))
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -1742,8 +1818,11 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(map_runtime_update_error)?;
-        snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        Ok(snapshot_from_evidence_into(
+            transition.commit(),
+            &mut self.outputs_scratch,
+            &mut self.assessment_scratch,
+        ))
     }
 }
 
@@ -1782,7 +1861,8 @@ impl SchemaOrderedScenarioSourceV1 for ProgramScenarioSourceV1<'_> {
 fn snapshot_from_evidence_into(
     evidence: crate::program::EvidenceViewV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
-) -> Result<ProgramSnapshotV1, ()> {
+    assessment_scratch: &mut ProgramAssessmentReportScratchV1,
+) -> ProgramSnapshotV1 {
     use crate::program::{CertificateV1, StateKindV1};
     let state = match evidence.kind() {
         StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
@@ -1791,6 +1871,8 @@ fn snapshot_from_evidence_into(
         StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
     };
     outputs_scratch.clear();
+    assessment_scratch.clear();
+    let mut assessment_report = None;
     if let Some(verified) = evidence
         .certificates()
         .find_map(|certificate| match certificate {
@@ -1798,19 +1880,30 @@ fn snapshot_from_evidence_into(
             CertificateV1::Conflict(_) => None,
         })
     {
-        outputs_scratch
-            .try_reserve_exact(verified.outputs().len())
-            .map_err(|_| ())?;
+        // Все ёмкости зарезервированы до commit или установки sink.
+        // Здесь остаётся только копирование уже проверенного свидетельства.
         outputs_scratch.extend(verified.outputs().map(|output| ProgramPaintOutputV1 {
             slot: output.output_slot().value(),
             source: output.source(),
             opacity: output.opacity(),
         }));
+        if let crate::program::ObservationHeadV1::Observed { stream, revision } =
+            evidence.observation_head()
+        {
+            let observation = verified.observation();
+            if state == ProgramSnapshotStateV1::Ready
+                && stream == observation.stream()
+                && revision == observation.revision()
+            {
+                assessment_report = Some(assessment_scratch.copy_verified(verified));
+            }
+        }
     }
-    Ok(ProgramSnapshotV1 {
+    ProgramSnapshotV1 {
         state,
         outputs: std::mem::take(outputs_scratch),
-    })
+        assessment_report,
+    }
 }
 
 #[cfg(test)]
@@ -2009,6 +2102,165 @@ mod runtime_tests {
             assert_eq!(snapshot.outputs()[0].source(), crate::Srgb8::new([0x40; 3]));
             assert_eq!(snapshot.outputs()[0].opacity().to_bits(), 0.5_f64.to_bits());
         }
+    }
+
+    fn clean_set_runtime_wire(
+        source: Srgb8,
+        opacity: f64,
+        final_color: Srgb8,
+        hard: Option<bool>,
+    ) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(11, source)
+            .fixed_target(21, 11)
+            .surface_input_port(31)
+            .opacity_input(32, opacity)
+            .solid_paint(42, 21)
+            .opacity_paint(41, 42, 32)
+            .input_surface(51, 31)
+            .source_over_occurrence(61, 41, 51, 64.0, 0.2, 1)
+            .presentation_root(71, 61)
+            .presentation_target(71, 61)
+            .exact_visible_unary(true, 82, 61, final_color)
+            .output(91, 41);
+        if let Some(hard) = hard {
+            builder.declared_srgb8_clean_set(hard, 81, 71, 61);
+        }
+        builder.finish().unwrap()
+    }
+
+    #[test]
+    fn public_lint_report_preserves_nominal_rejection_output_and_duplicate_provenance() {
+        let source = Srgb8::new([0, 199, 64]);
+        let compiled =
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))
+                .unwrap();
+        let identity = compiled.content_identity();
+        let mut session = compiled.instantiate(100).unwrap();
+        let snapshot = session
+            .update_observed(
+                1,
+                &[
+                    ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])]),
+                    ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])]),
+                ],
+            )
+            .unwrap();
+        let report = snapshot.assessment_report().unwrap();
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(snapshot.outputs()[0].source(), source);
+        assert_eq!(snapshot.outputs()[0].opacity(), 1.0);
+        assert_eq!(report.content_identity(), identity);
+        assert_eq!(report.stream_id(), 100);
+        assert_eq!(report.revision(), 1);
+        assert_eq!(
+            report
+                .scenario_provenance()
+                .iter()
+                .map(|value| (value.case_index(), value.scenario_id()))
+                .collect::<Vec<_>>(),
+            vec![(0, 7), (0, 9)]
+        );
+        assert_eq!(
+            report
+                .cells()
+                .iter()
+                .map(|cell| cell.constraint_id())
+                .collect::<Vec<_>>(),
+            vec![81, 82]
+        );
+        let cell = report.cells()[0];
+        assert!(!cell.hard());
+        assert_eq!(cell.case_index(), 0);
+        assert_eq!(
+            cell.assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetRejected {
+                visible: source,
+                rejected_blue_interval: [64, 108],
+            }
+        );
+    }
+
+    #[test]
+    fn public_lint_uses_final_alpha_composition_and_removes_stale_or_failed_report() {
+        let source = Srgb8::new([128, 128, 129]);
+        let final_color = Srgb8::new([128; 3]);
+        let compiled = compile_program_wire(&clean_set_runtime_wire(
+            source,
+            0.5,
+            final_color,
+            Some(false),
+        ))
+        .unwrap();
+        let mut session = compiled.instantiate(100).unwrap();
+        let scenario = || ProgramScenarioV1::new(7, vec![Srgb8::new([128, 128, 127])]);
+        let first = session.update_observed(1, &[scenario()]).unwrap();
+        assert_eq!(
+            first.assessment_report().unwrap().cells()[0].assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
+                visible: final_color
+            }
+        );
+        assert_eq!(first.outputs()[0].source(), source);
+        assert_eq!(first.outputs()[0].opacity(), 0.5);
+        let stale = session.update_unknown(2, 99).unwrap();
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert!(stale.assessment_report().is_none());
+        assert_eq!(stale.outputs(), first.outputs());
+        let fresh = session.update_observed(3, &[scenario()]).unwrap();
+        assert_eq!(fresh.assessment_report().unwrap().revision(), 3);
+        let failed = session
+            .update_observed(4, &[ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])])])
+            .unwrap();
+        assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
+        assert!(failed.assessment_report().is_none());
+        assert_eq!(failed.outputs(), first.outputs());
+        drop(session);
+        assert_eq!(first.assessment_report().unwrap().revision(), 1);
+        assert_eq!(
+            first.assessment_report().unwrap().cells()[0].assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
+                visible: final_color
+            }
+        );
+    }
+
+    #[test]
+    fn public_lint_distinguishes_absent_domain_and_invalid_empty_program() {
+        let source = Srgb8::new([0; 3]);
+        let compiled =
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))
+                .unwrap();
+        let mut session = compiled.instantiate(100).unwrap();
+        let waiting = session.update_unknown(1, 99).unwrap();
+        assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
+        assert!(waiting.assessment_report().is_none());
+        let absent = session
+            .update_observed(2, &[ProgramScenarioV1::new(7, vec![source])])
+            .unwrap();
+        assert_eq!(absent.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(
+            absent.assessment_report().unwrap().cells()[0].assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent
+        );
+
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(1, source)
+            .fixed_target(2, 1)
+            .solid_paint(3, 2)
+            .output(17, 3);
+        let bytes = builder.finish().unwrap();
+        // Пустая point-декларация не задаёт наблюдение и оценку output.
+        assert!(matches!(
+            decode_program_wire_v1(&bytes).unwrap().compile(),
+            Err(crate::program::CompileErrorV1::EmptySurfaceInputPortSet)
+        ));
+        assert!(matches!(
+            compile_program_wire(&bytes),
+            Err(ProgramRuntimeErrorV1::Compile)
+        ));
     }
 
     #[test]

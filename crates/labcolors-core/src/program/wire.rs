@@ -1239,6 +1239,21 @@ impl ProgramWireBuilderV1 {
         self
     }
 
+    pub(crate) fn declared_srgb8_clean_set(
+        &mut self,
+        hard: bool,
+        id: u32,
+        root: u32,
+        occurrence: u32,
+    ) -> &mut Self {
+        let section = self.constraint_section(hard);
+        push_u32(section, id);
+        section.push(KIND_CLEAN_SET);
+        push_u32(section, root);
+        push_u32(section, occurrence);
+        self
+    }
+
     pub(crate) fn exact_intrinsic_relation_hard(
         &mut self,
         id: u32,
