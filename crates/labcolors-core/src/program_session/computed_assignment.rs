@@ -309,13 +309,21 @@ pub(super) fn compile_selection(
     if compiled.is_empty() {
         return Err(invalid(ComputedAdmissionErrorV1::EmptySelection));
     }
-    compiled.sort_unstable_by_key(|target| target.declaration.preference);
-    if compiled
-        .iter()
-        .enumerate()
-        .any(|(i, target)| target.declaration.preference != i as u64)
-    {
-        return Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder));
+    for index in 0..compiled.len() {
+        loop {
+            let preference = compiled[index].declaration.preference;
+            if preference == index as u64 {
+                break;
+            }
+            // Сначала проверяем u64: на wasm32 преобразование индекса усечёт старшие биты.
+            if preference >= compiled.len() as u64
+                || compiled[preference as usize].declaration.preference == preference
+            {
+                return Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder));
+            }
+            // Каждый обмен окончательно ставит один ранг вместе со всей записью на его место.
+            compiled.swap(index, preference as usize);
+        }
     }
     let mut tuple_count = 1_u64;
     for target in compiled.iter_mut().rev() {

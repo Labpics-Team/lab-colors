@@ -697,6 +697,228 @@ fn missing_assignment_order_and_legacy_identity_reject_computed_capability() {
 }
 
 #[test]
+fn compiled_preferences_keep_target_payloads_under_declaration_permutations() {
+    let owner =
+        compile_assignment(nested(false), 20_000).expect("допустимая декларация компилируется");
+    for reversed in [false, true] {
+        let mut targets = vec![target(10, 150, 120, 180, 1), target(20, 160, 0, 255, 0)];
+        if reversed {
+            targets.reverse();
+        }
+        let selection = compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
+            .expect("плотные уникальные ранги допускаются в любом порядке деклараций");
+        assert_eq!(selection.tuple_count, 61 * 256);
+        for (actual, (id, anchor, count, suffix_count)) in selection
+            .targets
+            .iter()
+            .zip([(20, 160, 256, 61), (10, 150, 61, 1)])
+        {
+            assert_eq!(actual.declaration.anchor, Srgb8::new([anchor; 3]));
+            assert_eq!(actual.count, count);
+            assert_eq!(actual.suffix_count, suffix_count);
+            assert_eq!(actual.anchor_lab, lab(Srgb8::new([anchor; 3])));
+            assert_eq!(
+                Some(actual.binding),
+                owner
+                    .owner_generation
+                    .graph
+                    .bind_paint_input(target_paint_input_id(TargetId::new(id)))
+            );
+        }
+    }
+}
+
+#[test]
+fn compiled_preferences_reject_duplicate_missing_and_out_of_range_ranks() {
+    let owner =
+        compile_assignment(nested(false), 20_000).expect("допустимая декларация компилируется");
+    for ranks in [
+        [0, 0],
+        [1, 1],
+        [1, 2],
+        [0, 2],
+        [0, u64::MAX],
+        [1_u64 << 32, 1],
+        [0, (1_u64 << 32) + 1],
+    ] {
+        for reversed in [false, true] {
+            let mut targets = vec![
+                target(10, 150, 120, 180, ranks[0]),
+                target(20, 160, 0, 255, ranks[1]),
+            ];
+            if reversed {
+                targets.reverse();
+            }
+            assert!(matches!(
+                compile_selection(&owner.owner_generation.graph, &targets, None, 20_000),
+                Err(ProgramCompileError::InvalidComputedAssignment(
+                    ComputedAdmissionErrorV1::InvalidPreferenceOrder
+                ))
+            ));
+        }
+    }
+}
+
+fn four_preference_targets() -> Program<Wcag22Srgb8V1> {
+    let mut declaration = nested(false);
+    let mut previous = OccurrenceId::new(15);
+    for (id, anchor, rank) in [(30, 170, 2), (40, 180, 3)] {
+        declaration.targets.push(target(id, anchor, 0, 0, rank));
+        declaration.paints.push(Paint::Solid {
+            id: PaintId::new(id + 3),
+            target: TargetId::new(id),
+        });
+        declaration.surfaces.push(Surface::FromOccurrence {
+            id: SurfaceId::new(id + 4),
+            occurrence: previous,
+        });
+        previous = OccurrenceId::new(id + 5);
+        declaration.occurrences.push(Occurrence::new(
+            OccurrenceId::new(id + 5),
+            PaintId::new(id + 3),
+            SurfaceId::new(id + 4),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            context(),
+        ));
+    }
+    declaration.constraints = ConstraintSet::new(
+        vec![ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(6),
+            previous,
+            Wcag22CriterionV1::Sc143TextLargeScale,
+        )],
+        vec![],
+    );
+    declaration
+}
+
+#[test]
+fn compiled_preferences_preserve_payloads_across_long_cycles() {
+    let owner = compile_assignment(four_preference_targets(), 20_000)
+        .expect("допустимая декларация компилируется");
+    let expected = [
+        target(10, 150, 100, 101, 0),
+        target(20, 160, 110, 112, 1),
+        target(30, 170, 120, 123, 2),
+        target(40, 180, 130, 134, 3),
+    ];
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    let permutation = [a, b, c, d];
+                    if (0..4).any(|i| permutation[..i].contains(&permutation[i])) {
+                        continue;
+                    }
+                    let targets = permutation.map(|i| expected[i].clone());
+                    let selection =
+                        compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
+                            .expect("каждая перестановка плотных рангов допустима");
+                    assert_eq!(selection.tuple_count, 120);
+                    for (index, actual) in selection.targets.iter().enumerate() {
+                        let TargetIntentV1::Computed(declaration) = &expected[index].intent else {
+                            unreachable!();
+                        };
+                        assert_eq!(
+                            actual.declaration.identity_bytes(),
+                            declaration.identity_bytes()
+                        );
+                        assert_eq!(actual.anchor_lab, lab(declaration.anchor));
+                        assert_eq!(actual.count, [2, 3, 4, 5][index]);
+                        assert_eq!(actual.suffix_count, [60, 20, 5, 1][index]);
+                        assert_eq!(
+                            Some(actual.binding),
+                            owner
+                                .owner_generation
+                                .graph
+                                .bind_paint_input(target_paint_input_id(expected[index].id))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compiled_preferences_keep_declaration_errors_before_order_validation() {
+    let owner =
+        compile_assignment(nested(false), 20_000).expect("допустимая декларация компилируется");
+    for (domain, max_delta_bits, expected) in [
+        (
+            AssignmentDomainV1::Gray { lower: 2, upper: 1 },
+            1.0_f64.to_bits(),
+            ComputedAdmissionErrorV1::InvalidDomain,
+        ),
+        (
+            AssignmentDomainV1::Gray { lower: 0, upper: 1 },
+            f64::NAN.to_bits(),
+            ComputedAdmissionErrorV1::InvalidTolerance,
+        ),
+    ] {
+        let invalid = Target::new(
+            TargetId::new(20),
+            TargetIntentV1::Computed(ComputedTargetV1 {
+                domain,
+                anchor: Srgb8::new([160; 3]),
+                max_delta_bits,
+                preference: 1,
+            }),
+        );
+        let mut targets = [target(10, 150, 120, 180, u64::MAX), invalid];
+        for _ in 0..2 {
+            assert!(matches!(
+                compile_selection(&owner.owner_generation.graph, &targets, None, 20_000),
+                Err(ProgramCompileError::InvalidComputedAssignment(error)) if error == expected
+            ));
+            targets.reverse();
+        }
+    }
+}
+
+#[test]
+fn compiled_preferences_keep_order_validation_before_cardinality_overflow() {
+    let owner = compile_assignment(four_preference_targets(), 20_000)
+        .expect("допустимая декларация компилируется");
+    for (ranks, expected) in [
+        ([0, 1, 2], ComputedAdmissionErrorV1::CardinalityOverflow),
+        ([0, 1, 1], ComputedAdmissionErrorV1::InvalidPreferenceOrder),
+        (
+            [0, 1, u64::MAX],
+            ComputedAdmissionErrorV1::InvalidPreferenceOrder,
+        ),
+    ] {
+        let mut targets = ranks.map(|rank| {
+            Target::new(
+                TargetId::new(10),
+                TargetIntentV1::Computed(
+                    ComputedTargetV1::new(
+                        AssignmentDomainV1::Cube {
+                            lower: [0; 3],
+                            upper: [255; 3],
+                        },
+                        Srgb8::new([150; 3]),
+                        1.0,
+                        rank,
+                    )
+                    .expect("каждый domain допустим отдельно"),
+                ),
+            )
+        });
+        for (index, target) in targets.iter_mut().enumerate() {
+            target.id = TargetId::new((index as u32 + 1) * 10);
+        }
+        for _ in 0..2 {
+            assert!(matches!(
+                compile_selection(&owner.owner_generation.graph, &targets, None, 20_000),
+                Err(ProgramCompileError::InvalidComputedAssignment(error)) if error == expected
+            ));
+            targets.reverse();
+        }
+    }
+}
+
+#[test]
 fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
     let evaluator = crate::constraints::CountingProgramWcag22Srgb8V1::default();
     let owner = compile_assignment(
