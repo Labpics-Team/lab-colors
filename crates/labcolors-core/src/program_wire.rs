@@ -2012,49 +2012,41 @@ mod runtime_tests {
     }
 
     #[test]
-    fn composite_readout_is_current_scenario_bound_and_owned() {
+    fn composite_readout_is_current_scenario_bound_and_owned() -> Result<(), ProgramRuntimeErrorV1>
+    {
         let rgb = Srgb8::new([64; 3]);
-        let mut runtime = compile_program_wire(&runtime_wire(rgb))
-            .unwrap()
-            .instantiate(1)
-            .unwrap();
-        let initial = runtime
-            .update_observed(
-                1,
-                &[
-                    ProgramScenarioV1::new(301, vec![rgb]),
-                    ProgramScenarioV1::new(101, vec![rgb]),
-                ],
-            )
-            .unwrap();
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let initial = runtime.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(301, vec![rgb]),
+                ProgramScenarioV1::new(101, vec![rgb]),
+            ],
+        )?;
         assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
         assert_eq!(initial.presentation_composite_rgb(9, 101), Some(rgb));
         assert_eq!(initial.presentation_composite_rgb(9, 0), None);
         assert_eq!(initial.presentation_composite_rgb(17, 101), None);
-        let stale = runtime.update_unknown(2, 3).unwrap();
+        let stale = runtime.update_unknown(2, 3)?;
         assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
         assert_eq!(stale.outputs(), initial.outputs());
         assert_eq!(stale.presentation_composite_rgb(9, 101), None);
-        let failed = runtime
-            .update_observed(3, &[ProgramScenarioV1::new(101, vec![Srgb8::new([0; 3])])])
-            .unwrap();
+        let failed =
+            runtime.update_observed(3, &[ProgramScenarioV1::new(101, vec![Srgb8::new([0; 3])])])?;
         assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
         assert_eq!(failed.presentation_composite_rgb(9, 101), None);
         drop(runtime);
         assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        Ok(())
     }
 
     #[test]
-    fn composite_readout_rejects_conflicting_root_records_and_capacity_overflow() {
+    fn composite_readout_rejects_conflicting_root_records_and_capacity_overflow()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let rgb = Srgb8::new([64; 3]);
-        let mut runtime = compile_program_wire(&runtime_wire(rgb))
-            .unwrap()
-            .instantiate(1)
-            .unwrap();
-        let mut snapshot = runtime
-            .update_observed(1, &[ProgramScenarioV1::new(101, vec![rgb])])
-            .unwrap();
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let mut snapshot = runtime.update_observed(1, &[ProgramScenarioV1::new(101, vec![rgb])])?;
         snapshot.composites.push(snapshot.composites[0]);
         assert_eq!(snapshot.presentation_composite_rgb(9, 101), Some(rgb));
         snapshot.composites.push(ProgramPresentationCompositeV1 {
@@ -2067,6 +2059,7 @@ mod runtime_tests {
             reserve_snapshot_composites(&mut Vec::new(), usize::MAX, 2),
             Err(ProgramRuntimeErrorV1::ResourceExhausted)
         );
+        Ok(())
     }
 
     fn computed_runtime_wire() -> Vec<u8> {
