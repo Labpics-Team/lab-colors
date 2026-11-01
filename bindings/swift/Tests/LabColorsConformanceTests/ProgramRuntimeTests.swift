@@ -143,6 +143,8 @@ final class ProgramRuntimeTests: XCTestCase {
             }
         }
         XCTAssertEqual(try held[0].outputRgb(index: 0), Data([0, 0, 0]))
+        XCTAssertEqual(try held[0].presentationCompositeRgb(root: 71, scenario: 1), Data([0, 0, 0]))
+        XCTAssertThrowsError(try held[0].presentationCompositeRgb(root: 91, scenario: 1)) { assertCode($0, "presentation_composite_unavailable") }
         var copied = try held[0].outputRgb(index: 0); copied[0] = 200
         XCTAssertEqual(try held[0].outputRgb(index: 0), Data([0, 0, 0]))
         XCTAssertThrowsError(try held[0].outputRgb(index: 1)) { assertCode($0, "invalid_output_index") }

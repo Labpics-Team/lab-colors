@@ -100,6 +100,8 @@ class ContractTest {
                     }
                 }
                 val first = held.first()
+                assertArrayEquals(rgb(0, 0, 0), first.presentationCompositeRgb(71u, 1u))
+                expectCode("presentation_composite_unavailable") { first.presentationCompositeRgb(91u, 1u) }
                 first.outputRgb(0u)[0] = 123
                 assertArrayEquals(rgb(0, 0, 0), first.outputRgb(0u))
                 expectCode("invalid_output_index") { first.outputRgb(1u) }

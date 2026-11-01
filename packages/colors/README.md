@@ -367,6 +367,15 @@ V1 сохраняет прежние байты и отказывается от
 результат через attachment; старый цвет не возвращается как новый.
 V1/V2 сохраняют снимки версии 1 и прежние исторические outputs.
 
+`snapshot.presentationCompositeRgb(rootId, scenarioId)` возвращает отдельный
+`Uint8Array` из трёх байтов нормального encoded-sRGB8 итога presentation root.
+Нужен root с объявленным `presentationTarget` и исходный ID observed-сценария,
+а не output slot или индекс сценария. Каждый сценарий читается отдельно, даже
+если его входы совпадают с другим. Значение доступно только в `ready` для всех
+версий wire; старый ready snapshot сохраняет результат своей ревизии.
+Нулевая opacity и совпадение source с background сохраняют нормальный итог.
+Эти данные не являются materialization authority и не подтверждают renderer.
+
 [Договор V3 и пример](https://github.com/Labpics-Team/lab-colors/blob/main/docs/contracts/program-assignment-v3.md)
 описывают domains, порядок выбора, состояния и ограничения численного профиля.
 
@@ -378,6 +387,10 @@ V1/V2 сохраняют снимки версии 1 и прежние исто�
 `internal_error`. Для `numericalCapabilityManifest` доступен `internal_error`.
 Неверный индекс в `outputSlot`, `outputRgb` или `outputOpacity` возвращает
 `invalid_output_index` с операцией `readProgramOutput`; snapshot сохраняется.
+Для `presentationCompositeRgb` операция — `readPresentationComposite`:
+`invalid_composite_id` означает ID вне `u32`, а `presentation_composite_unavailable` —
+отсутствующий root/scenario либо неготовый snapshot. Входы не преобразуются;
+причину неготовности показывает `state`.
 
 Текст `message` служит диагностикой. Проверка читает каждое поле один раз,
 не преобразует значения и возвращает `false` для неизвестной пары или ошибки

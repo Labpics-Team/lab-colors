@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "b57a815fe3ced25219fbc3b7b4882bc64b55ea9e756cac0e3bb91e122738754d",
+ "record_sha256": "a40acaf0ef3aade7c068441fde5402d5e977d928dbb35714b4cacae98e113e78",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1198,6 +1198,7 @@
    "compiled_dependency_plan_tests::snapshot_diff_reports_exact_changed_and_unchanged_counts: test",
    "compiled_dependency_plan_tests::snapshot_diff_two_independent_terminals_partial_change: test",
    "compiled_program_instantiates_and_updates: test",
+   "composite_projection_keeps_root_scenario_and_owned_snapshot: test",
    "composition::tests::admitted_opacity_multiplication_is_closed_at_boundaries_and_underflow: test",
    "composition::tests::admitted_opacity_predecessor_is_exact_and_stays_inside_the_domain: test",
    "composition::tests::final_bytes_preserve_rgb_order_at_monotonicity_proof_cuts: test",
@@ -2075,6 +2076,8 @@
    "program_wire::fv01_red_tests::public_attachment_rejects_an_intermediate_presentation_target: test",
    "program_wire::fv01_red_tests::public_attachment_resource_failure_keeps_head_and_allows_same_revision_retry: test",
    "program_wire::fv01_red_tests::ready_attachment_is_the_only_materialization_authority_source: test",
+   "program_wire::runtime_tests::composite_readout_is_current_scenario_bound_and_owned: test",
+   "program_wire::runtime_tests::composite_readout_rejects_conflicting_root_records_and_capacity_overflow: test",
    "program_wire::runtime_tests::computed_attachment_revokes_stopped_outputs_and_preserves_rejected_head: test",
    "program_wire::runtime_tests::computed_full_rgb_domain_finishes_through_public_runtime: test",
    "program_wire::runtime_tests::computed_snapshot_keeps_current_output_separate_from_legacy_history: test",
@@ -2328,7 +2331,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1362,
+  "enabled_count": 1365,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",

@@ -4,6 +4,33 @@ use std::sync::{Arc, Mutex, Weak};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[test]
+fn composite_projection_keeps_root_scenario_and_owned_snapshot() -> TestResult {
+    let runtime = compile_program_wire(wire("adaptive"), 1)?;
+    let first = runtime.update_observed(1, vec![101, 301], vec![255; 6], 1)?;
+    assert_eq!(first.presentation_composite_rgb(71, 101)?, [0; 3]);
+    assert_eq!(first.presentation_composite_rgb(71, 301)?, [0; 3]);
+    let mut copied = first.presentation_composite_rgb(71, 101)?;
+    copied.fill(255);
+    assert_eq!(first.presentation_composite_rgb(71, 101)?, [0; 3]);
+    expect_error(
+        first.presentation_composite_rgb(91, 101),
+        "presentation_composite_unavailable",
+    );
+    expect_error(
+        first.presentation_composite_rgb(71, 0),
+        "presentation_composite_unavailable",
+    );
+    let stale = runtime.update_unknown(2, 7)?;
+    expect_error(
+        stale.presentation_composite_rgb(71, 101),
+        "presentation_composite_unavailable",
+    );
+    drop(runtime);
+    assert_eq!(first.presentation_composite_rgb(71, 301)?, [0; 3]);
+    Ok(())
+}
+
 fn fixtures() -> serde_json::Value {
     serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
         .expect("committed Program fixtures must be valid JSON")

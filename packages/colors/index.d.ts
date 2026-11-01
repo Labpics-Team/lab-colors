@@ -208,5 +208,9 @@ export type BindingError = Error & (
     }>
   | Readonly<{ operation: "numericalCapabilityManifest"; code: "internal_error" }>
   | Readonly<{ operation: "readProgramOutput"; code: "invalid_output_index" }>
+  | Readonly<{
+      operation: "readPresentationComposite";
+      code: "invalid_composite_id" | "presentation_composite_unavailable";
+    }>
 );
 export declare function isBindingError(error: unknown): error is BindingError;

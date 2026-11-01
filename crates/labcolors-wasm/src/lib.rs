@@ -127,6 +127,8 @@ const bindingFailures = [
   ["internal_error", "evaluateWcag22"],
   ["internal_error", "numericalCapabilityManifest"],
   ["invalid_output_index", "readProgramOutput"],
+  ["invalid_composite_id", "readPresentationComposite"],
+  ["presentation_composite_unavailable", "readPresentationComposite"],
 ];
 
 export function bindingFailure(kind, reason) {
@@ -248,6 +250,8 @@ enum BindingFailure {
     Wcag22Internal,
     ManifestInternal,
     OutputIndex,
+    CompositeId,
+    CompositeUnavailable,
 }
 
 fn to_js_error(error: BindingError) -> JsValue {
@@ -598,6 +602,30 @@ impl ProgramSnapshot {
             .get(index)
             .map(|output| output.opacity())
             .ok_or_else(output_index_error)
+    }
+
+    /// Нормальный итог root в точном scenario; отдельная копия данных без полномочий.
+    #[wasm_bindgen(js_name = presentationCompositeRgb)]
+    pub fn presentation_composite_rgb(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] root: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] scenario: JsValue,
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        let invalid =
+            || binding_failure_error(BindingFailure::CompositeId as u32, "IDs must be u32");
+        let root = checked_u32(root).ok_or_else(invalid)?;
+        let scenario = checked_u32(scenario).ok_or_else(invalid)?;
+        let rgb = self
+            .inner
+            .presentation_composite_rgb(root, scenario)
+            .ok_or_else(|| {
+                binding_failure_error(
+                    BindingFailure::CompositeUnavailable as u32,
+                    "ready snapshot has no composite for these IDs",
+                )
+            })?;
+        let [red, green, blue] = rgb.bytes();
+        copy_output_rgb(red, green, blue)
     }
 }
 

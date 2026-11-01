@@ -1387,6 +1387,12 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   );
   snapshot.state;
   snapshot.outputCount();
+  const composite: Uint8Array = snapshot.presentationCompositeRgb(71, 1);
+  void composite;
+  // @ts-expect-error root is an opaque u32 number, not text
+  snapshot.presentationCompositeRgb("71", 1);
+  // @ts-expect-error the observed scenario ID is required
+  snapshot.presentationCompositeRgb(71);
   return runtime;
 }
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
@@ -1450,7 +1456,7 @@ void (null as unknown as RoleRecipe);
 async function verifyAdaptiveContract(consumer) {
   // Тот же контракт исполняется вне checkout против установленного tarball.
   const paths = [];
-  for (const filename of ["program-adaptive-contract.test.mjs", "program-assignment-runtime.test.mjs"]) {
+  for (const filename of ["program-adaptive-contract.test.mjs", "program-assignment-runtime.test.mjs", "program-composite-readout.test.mjs"]) {
     const path = resolve(consumer, filename);
     await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
     paths.push(path);

@@ -491,6 +491,8 @@ export function isBindingError(error) {
         return code === "internal_error";
       case "readProgramOutput":
         return code === "invalid_output_index";
+      case "readPresentationComposite":
+        return code === "invalid_composite_id" || code === "presentation_composite_unavailable";
       default:
         return false;
     }
