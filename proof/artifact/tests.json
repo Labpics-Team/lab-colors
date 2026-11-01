@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f0d5a9793d2fd8e33a71043b2476470a08f0749c97895e81d4bb4962503cf7b0",
+ "record_sha256": "b57a815fe3ced25219fbc3b7b4882bc64b55ea9e756cac0e3bb91e122738754d",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1993,6 +1993,11 @@
    "program_session::computed_assignment::qualification_tests::signed_bounds_zero_and_gray_have_discriminating_cases: test",
    "program_session::computed_assignment::qualification_tests::unrelated_declarations_preserve_authored_dark_and_fixed_light_intents: test",
    "program_session::computed_assignment::tests::admissible_but_unselected_final_source_cannot_claim_preference: test",
+   "program_session::computed_assignment::tests::compiled_preferences_keep_declaration_errors_before_order_validation: test",
+   "program_session::computed_assignment::tests::compiled_preferences_keep_order_validation_before_cardinality_overflow: test",
+   "program_session::computed_assignment::tests::compiled_preferences_keep_target_payloads_under_declaration_permutations: test",
+   "program_session::computed_assignment::tests::compiled_preferences_preserve_payloads_across_long_cycles: test",
+   "program_session::computed_assignment::tests::compiled_preferences_reject_duplicate_missing_and_out_of_range_ranks: test",
    "program_session::computed_assignment::tests::computed_new_rgb_and_valid_anchor_use_real_program: test",
    "program_session::computed_assignment::tests::computed_physical_recheck_owns_verdict_after_search_pass: test",
    "program_session::computed_assignment::tests::computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence: test",
@@ -2323,7 +2328,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1357,
+  "enabled_count": 1362,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",
