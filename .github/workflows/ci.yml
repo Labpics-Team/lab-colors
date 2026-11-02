@@ -3,7 +3,7 @@ name: CI
 # Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
 # из того же коммита, что и caller, независимо от checkout и squash-истории.
 # Граф заданий проверяется вместе с этим snapshot, а не считается заранее
-# одобренным. Задания исполняются на эфемерных GitHub-hosted VM без секретов.
+# одобренным. Source admission и объявленные OS/runner requirements обязательны.
 
 on:
   push:

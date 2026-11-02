@@ -3,7 +3,7 @@ name: Native conformance
 # Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
 # из того же коммита, что и caller, независимо от checkout и squash-истории.
 # Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
-# на одноразовых эфемерных GitHub-hosted VM без секретов и общего состояния.
+# с обязательным source admission и объявленными OS/runner requirements.
 # Ручное сравнение authoring не меняет обязательные проверки пакета.
 
 on:

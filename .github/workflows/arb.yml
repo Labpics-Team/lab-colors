@@ -16,12 +16,196 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source-admission:
+    name: source admission (arb)
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      head_sha: ${{ steps.identity.outputs.head_sha }}
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      caller_sha: ${{ steps.identity.outputs.caller_sha }}
+      recipe_sha: ${{ steps.identity.outputs.recipe_sha }}
+      recipe_ref: ${{ steps.identity.outputs.recipe_ref }}
+      recipe_path: ${{ steps.identity.outputs.recipe_path }}
+      run_id: ${{ steps.identity.outputs.run_id }}
+      run_attempt: ${{ steps.identity.outputs.run_attempt }}
+    steps:
+      - name: Require owned source and native recipe identity
+        id: identity
+        shell: bash
+        env:
+          CI_REPOSITORY: ${{ github.repository }}
+          CI_REPOSITORY_ID: ${{ github.repository_id }}
+          CI_SOURCE_SHA: ${{ github.sha }}
+          CI_CALLER_SHA: ${{ github.workflow_sha }}
+          CI_NATIVE_JOB: ${{ toJSON(job) }}
+          CI_EVENT: ${{ github.event_name }}
+          CI_REF: ${{ github.ref }}
+          CI_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          CI_HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          CI_RUNNER_OS: ${{ runner.os }}
+          CI_RUNNER_ARCH: ${{ runner.arch }}
+          CI_RUNNER_NAME: ${{ runner.name }}
+          CI_EXPECTED_RECIPE_PATH: .github/workflows/arb.yml
+          CI_REQUIRED_RUNNER_ENVIRONMENT: self-hosted
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          def validate_owned_source(environment, mode):
+              """Native metadata определяет источник; caller input не выдаёт полномочия."""
+              import json, re
+          
+              def required(name):
+                  value = environment.get(name, "")
+                  if not isinstance(value, str) or not value:
+                      raise ValueError("INCOMPLETE: missing native " + name)
+                  return value
+          
+              def sha(name):
+                  value = required(name)
+                  if re.fullmatch(r"[0-9a-f]{40}", value) is None or value == "0" * 40:
+                      raise ValueError("INCOMPLETE: invalid native " + name)
+                  return value
+          
+              if environment.get("GITHUB_ACTIONS") != "true":
+                  raise ValueError("INCOMPLETE: native GitHub Actions context is required")
+              repository = required("CI_REPOSITORY")
+              repository_id = required("CI_REPOSITORY_ID")
+              if repository != "Labpics-Team/lab-colors" or repository_id != "1221255339":
+                  raise ValueError("REFUSED: source repository is outside the owned scope")
+          
+              try:
+                  native_job = json.loads(required("CI_NATIVE_JOB"))
+              except (ValueError, TypeError) as error:
+                  raise ValueError("INCOMPLETE: invalid native job context") from error
+              if not isinstance(native_job, dict):
+                  raise ValueError("INCOMPLETE: native job context is not an object")
+              environment = dict(environment)
+              for name, property_name in (
+                  ("CI_RECIPE_SHA", "workflow_sha"),
+                  ("CI_RECIPE_REF", "workflow_ref"),
+                  ("CI_RECIPE_REPOSITORY", "workflow_repository"),
+                  ("CI_RECIPE_PATH", "workflow_file_path"),
+                  ("CI_CHECK_RUN_ID", "check_run_id"),
+              ):
+                  value = native_job.get(property_name)
+                  if property_name == "check_run_id" and type(value) is int and value > 0:
+                      value = str(value)
+                  if not isinstance(value, str) or not value:
+                      raise ValueError("INCOMPLETE: missing native job." + property_name)
+                  environment[name] = value
+              source_sha = sha("CI_SOURCE_SHA")
+              caller_sha = sha("CI_CALLER_SHA")
+              recipe_sha = sha("CI_RECIPE_SHA")
+              recipe_repository = required("CI_RECIPE_REPOSITORY")
+              recipe_path = required("CI_RECIPE_PATH")
+              expected_path = required("CI_EXPECTED_RECIPE_PATH")
+              recipe_ref = required("CI_RECIPE_REF")
+              if recipe_repository != repository or recipe_path != expected_path:
+                  raise ValueError("REFUSED: executing recipe repository or path differs")
+              if re.fullmatch(r"\.github/workflows/[a-z0-9-]+\.yml", recipe_path) is None:
+                  raise ValueError("REFUSED: invalid executing recipe path")
+              prefix = repository + "/" + recipe_path + "@"
+              if not recipe_ref.startswith(prefix) or not recipe_ref[len(prefix):]:
+                  raise ValueError("INCOMPLETE: executing recipe ref is not bound to its file")
+          
+              event = required("CI_EVENT")
+              ref = required("CI_REF")
+              if event == "pull_request":
+                  head_repository = required("CI_HEAD_REPOSITORY")
+                  head_id = required("CI_HEAD_REPOSITORY_ID")
+                  sha("CI_HEAD_SHA")
+                  if head_repository != repository or head_id != repository_id:
+                      raise ValueError("REFUSED: foreign pull request head")
+                  if re.fullmatch(r"refs/pull/[1-9][0-9]*/merge", ref) is None:
+                      raise ValueError("REFUSED: unsupported pull request source ref")
+              elif event == "merge_group":
+                  if not ref.startswith("refs/heads/gh-readonly-queue/main/"):
+                      raise ValueError("REFUSED: merge group is outside main")
+              elif event == "push":
+                  if ref != "refs/heads/main" and not ref.startswith("refs/tags/colors-v"):
+                      raise ValueError("REFUSED: push is outside main or the release scope")
+              elif event in ("workflow_dispatch", "schedule"):
+                  if mode == "protected" and ref != "refs/heads/main":
+                      raise ValueError("REFUSED: manual or scheduled source is outside main")
+                  if mode == "bootstrap" and not ref.startswith("refs/heads/"):
+                      raise ValueError("REFUSED: bootstrap source is not an owned branch")
+              else:
+                  raise ValueError("REFUSED: unsupported source event")
+          
+              runner_environment = required("CI_RUNNER_ENVIRONMENT")
+              runner_os = required("CI_RUNNER_OS")
+              runner_arch = required("CI_RUNNER_ARCH")
+              runner_name = required("CI_RUNNER_NAME")
+              expected_environment = required("CI_REQUIRED_RUNNER_ENVIRONMENT")
+              if runner_environment not in ("self-hosted", "github-hosted"):
+                  raise ValueError("INCOMPLETE: unknown runner environment")
+              if expected_environment not in ("any", "self-hosted", "github-hosted"):
+                  raise ValueError("REFUSED: unknown execution requirement")
+              if expected_environment != "any" and runner_environment != expected_environment:
+                  raise ValueError("REFUSED: required runner environment is unavailable")
+              for name in ("CI_RUN_ID", "CI_RUN_ATTEMPT", "CI_CHECK_RUN_ID"):
+                  if re.fullmatch(r"[1-9][0-9]*", required(name)) is None:
+                      raise ValueError("INCOMPLETE: invalid native " + name)
+              if mode == "bootstrap":
+                  # Только временный native FULLSHA allowlist разрешает этот recipe.
+                  if recipe_sha != caller_sha:
+                      raise ValueError("REFUSED: bootstrap recipe is not the caller snapshot")
+              elif mode == "protected":
+                  if recipe_ref != prefix + "refs/heads/main":
+                      raise ValueError("REFUSED: recipe is not the protected main worker")
+                  if event in ("push", "workflow_dispatch", "schedule") and recipe_sha != source_sha:
+                      raise ValueError("REFUSED: exact main or release recipe has not executed")
+              else:
+                  raise ValueError("REFUSED: unknown recipe mode")
+              return {
+                  "source_sha": source_sha,
+                  "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
+                  "caller_sha": caller_sha,
+                  "recipe_sha": recipe_sha,
+                  "recipe_ref": recipe_ref,
+                  "recipe_repository": recipe_repository,
+                  "recipe_path": recipe_path,
+                  "runner_environment": runner_environment,
+                  "runner_os": runner_os,
+                  "runner_arch": runner_arch,
+                  "runner_name": runner_name,
+                  "run_id": environment["CI_RUN_ID"],
+                  "run_attempt": environment["CI_RUN_ATTEMPT"],
+                  "check_run_id": environment["CI_CHECK_RUN_ID"],
+                  "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
+              }
+          try:
+              binding = validate_owned_source(os.environ, 'bootstrap')
+          except ValueError as error:
+              raise SystemExit(str(error))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              for key, value in binding.items():
+                  output.write('CI_BOUND_' + key.upper() + '=' + value + '\n')
+              output.write('CI_VERIFIED_SOURCE_SHA=' + binding['source_sha'] + '\n')
+              output.write('CI_VERIFIED_CALLER_SHA=' + binding['caller_sha'] + '\n')
+              output.write('CI_VERIFIED_RECIPE_SHA=' + binding['recipe_sha'] + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              for key, value in binding.items():
+                  output.write(key + '=' + value + '\n')
+          print(json.dumps(binding, sort_keys=True))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('Source ' + binding['source_sha'] + '\n\nCaller ' + binding['caller_sha'] + '\n\nExecuting recipe ' + binding['recipe_sha'] + '\n\nIdentity relation ' + binding['identity_relation'] + '\n')
+          PY
+
   diagnostic-build-runtime:
+    needs: ["source-admission"]
     name: two offline builds and runtime tests (no artifact)
     # Docker is root-equivalent, so the job runs on a fresh ephemeral
     # GitHub-hosted VM that is discarded after this single run.
     # EXT-09: disposable runner invariant — proof test requires ubuntu-latest
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     # 480 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
     # 360-минутный конверт поднят: history-replay на новом железе ещё невозможен);
     # перекалибровать по фактическим прогонам.
@@ -30,9 +214,16 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
     steps:
+      - name: Require declared execution environment
+        shell: bash
+        env:
+          ACTUAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          test "$ACTUAL_RUNNER_ENVIRONMENT" = self-hosted || { echo 'REFUSED: required runner environment is unavailable' >&2; exit 1; }
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
+          ref: ${{ needs.source-admission.outputs.source_sha }}
 
       - name: complete fast Arb contract with exact skip manifest
         shell: bash
