@@ -13,6 +13,7 @@ export function initSync() {}
 export function issueSourceCertificateEnvelope() {}
 export function decodeCertificateEnvelope() { copierCalls += 1; }
 export function compileProgramWire() { copierCalls += 1; }
+export function finalRasterSourceOverWire() { throw new Error("Unexpected raster call in allocation test"); }
 export function attachProgramWire() { copierCalls += 1; return new ProgramAttachment(); }
 export function evaluateWcag22() {}
 export function numericalCapabilityManifest() {}

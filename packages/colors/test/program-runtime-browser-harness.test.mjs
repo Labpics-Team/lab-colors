@@ -23,6 +23,7 @@ import {
   reserveEphemeralPort,
   verifyBrowserConsumer,
   verifyBrowserSelection,
+  verifyBrowserAssignment,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -716,5 +717,31 @@ test("browser selection readout requires every context, preserved snapshots and 
   ]) {
     const invalid = structuredClone(good); mutate(invalid);
     assert.throws(() => verifyBrowserSelection(invalid), /browser finite selection drifted/u);
+  }
+});
+
+test("browser assignment readout distinguishes stopped search, revoked CSS and later fresh output", () => {
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'assignment-attachment', 'assignment-host',
+    'assignment-first', 'assignment-stopped', 'assignment-replay', 'assignment-restored'];
+  const ready = (revision) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
+    outputs: [{ slot: 91, rgb: [24, 24, 24], opacity: 1 }] });
+  const stopped = { version: 2, revision: '2', state: 'incomplete', reason: 'limit', hasRender: false, outputs: [] };
+  const good = { initial: ready('1'), held: ready('1'), restored: ready('3'), stopped, replay: structuredClone(stopped),
+    css: 'rgb(24, 24, 24)', computed: 'rgb(24, 24, 24)', afterStop: '', afterRestore: 'rgb(24, 24, 24)',
+    operations: ['setAll', 'revokeAll', 'confirmExact', 'setAll'], acquired: names, released: names.toReversed(),
+    readback: Object.fromEntries(names.map((name) => [name, true])) };
+  assert.doesNotThrow(() => verifyBrowserAssignment(good));
+  for (const mutate of [
+    (x) => { x.stopped.state = 'unsatisfied'; },
+    (x) => { x.stopped.outputs = ready('1').outputs; },
+    (x) => { x.stopped.hasRender = true; },
+    (x) => { x.afterStop = x.css; },
+    (x) => { x.restored = structuredClone(stopped); },
+    (x) => { x.held.revision = '3'; },
+    (x) => { x.operations[2] = 'setAll'; },
+    (x) => { x.readback['assignment-host'] = false; },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserAssignment(invalid), /browser computed assignment drifted/u);
   }
 });

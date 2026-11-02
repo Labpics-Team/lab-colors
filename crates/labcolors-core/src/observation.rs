@@ -346,7 +346,9 @@ mod arena {
 }
 
 pub(crate) use arena::ObservationArenaPoolV1;
+mod finite_field;
 use arena::ObservationBackingV1;
+pub(crate) use finite_field::{empty_field_schema, prepare_field_observation};
 
 /// Sealed observation admitted against the exact schema owned by its sealed
 /// Session plan.
@@ -355,9 +357,20 @@ pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
     revision: Revision,
     backing: Shared<ObservationBackingV1>,
+    field: Option<Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>>,
 }
 
 impl RevisionBoundObservationV1 {
+    pub(crate) fn field_payload(
+        &self,
+    ) -> Option<&crate::field_effect::final_raster::FieldObservedPayloadV1> {
+        self.field.as_deref()
+    }
+    pub(crate) fn field_payload_owner(
+        &self,
+    ) -> Option<&Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>> {
+        self.field.as_ref()
+    }
     pub(crate) const fn stream(&self) -> ObservationStreamId {
         self.stream
     }
@@ -418,6 +431,11 @@ impl RevisionBoundObservationV1 {
         self.stream == other.stream
             && self.revision == other.revision
             && Shared::ptr_eq(&self.backing, &other.backing)
+            && match (&self.field, &other.field) {
+                (Some(left), Some(right)) => Shared::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     fn has_canonical_input(
@@ -425,7 +443,8 @@ impl RevisionBoundObservationV1 {
         schema: &CanonicalObservationSchemaV1,
         scenarios: &[ScenarioInput],
     ) -> bool {
-        self.backing.schema() == schema
+        self.field.is_none()
+            && self.backing.schema() == schema
             && canonical_input_matches_set(self.backing.set(), scenarios)
     }
 
@@ -435,7 +454,8 @@ impl RevisionBoundObservationV1 {
         source: &Source,
         order: &[usize],
     ) -> bool {
-        self.backing.schema() == schema
+        self.field.is_none()
+            && self.backing.schema() == schema
             && schema_ordered_input_matches_set(
                 self.backing.set(),
                 source,
@@ -753,6 +773,7 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                     stream,
                     revision: update.revision,
                     backing,
+                    field: None,
                 },
             }))
         }
@@ -857,6 +878,7 @@ pub(crate) fn prepare_schema_ordered_observation<
             stream,
             revision,
             backing,
+            field: None,
         },
     }))
 }

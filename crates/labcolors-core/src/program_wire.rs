@@ -1,4 +1,4 @@
-//! Публичная проверка, компиляция и runtime канонических Program wire-байтов (v1).
+//! Публичная проверка, компиляция и runtime канонических Program wire-байтов.
 //!
 //! Проверка возвращает content identity без runtime authority. Компиляция создаёт
 //! immutable owner для Session или terminal point attachment; физическим sink
@@ -7,6 +7,14 @@
 //! Отказы формата и семантики остаются раздельными. Возвращённая нехватка ресурсов
 //! или внутренний сбой сохраняют свой класс при проверке, компиляции и update;
 //! они не превращаются в отказ пользовательского графа или observation.
+
+mod finite_field;
+pub use finite_field::{
+    FinalRasterAssessmentVerdictV1, FinalRasterCleanlinessAssessmentV1,
+    FinalRasterCleanlinessRequirementV1, FinalRasterCleanlinessViolationV1,
+    MAX_FINAL_RASTER_PIXELS_V1, ProgramCurrentFinalRasterV1, ProgramFinalRasterErrorV1,
+    ProgramFinalRasterInputV1, final_raster_source_over_wire_v1,
+};
 
 use crate::Srgb8;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
@@ -70,7 +78,8 @@ fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize)
             },
             *offset,
         ),
-        ProgramWireErrorV1::ResourceExhausted { section } => (
+        ProgramWireErrorV1::ResourceExhausted { section }
+        | ProgramWireErrorV1::AssignmentResourceExhausted { section } => (
             match section {
                 Section::Sources => "sources",
                 Section::Targets => "targets",
@@ -123,6 +132,12 @@ fn checked_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
     let draft = decoded.map_err(|error| {
+        if matches!(
+            error,
+            ProgramWireErrorV1::AssignmentResourceExhausted { .. }
+        ) {
+            return ProgramWireCheckErrorV1::ResourceExhausted;
+        }
         let (section, offset) = section_name(&error);
         ProgramWireCheckErrorV1::Wire { section, offset }
     })?;
@@ -367,12 +382,19 @@ mod fv01_red_tests {
     }
 
     #[test]
-    fn public_report_preflight_failure_preserves_attachment_and_same_revision_retry() {
+    fn public_report_preflight_failure_preserves_attachment_and_same_revision_retry()
+    -> Result<(), ProgramAttachmentUpdateErrorV1> {
         let mut attachment = ready_attachment();
         let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])];
-        let first = attachment.update_observed(1, &scenarios).unwrap();
-        let render = first.render().unwrap();
-        let previous_report = first.snapshot().assessment_report().unwrap().clone();
+        let first = attachment.update_observed(1, &scenarios)?;
+        let render = first
+            .render()
+            .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?;
+        let previous_report = first
+            .snapshot()
+            .assessment_report()
+            .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+            .clone();
         let bound = attachment.assessment_cells_per_case;
         // CapacityOverflow воспроизводит отказ того же preflight до host-эффекта,
         // без попытки выделить огромную память и без изменения входного сценария.
@@ -384,10 +406,31 @@ mod fv01_red_tests {
         assert_eq!(attachment.current_render(), Some(render));
         assert_eq!(first.snapshot().assessment_report(), Some(&previous_report));
         attachment.assessment_cells_per_case = bound;
-        let retry = attachment.update_observed(2, &scenarios).unwrap();
-        assert_eq!(retry.render().unwrap().revision(), 2);
-        assert_eq!(retry.render().unwrap().sink_stamp().sequence(), 2);
-        assert_eq!(retry.snapshot().assessment_report().unwrap().revision(), 2);
+        let retry = attachment.update_observed(2, &scenarios)?;
+        assert_eq!(
+            retry
+                .render()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .revision(),
+            2
+        );
+        assert_eq!(
+            retry
+                .render()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .sink_stamp()
+                .sequence(),
+            2
+        );
+        assert_eq!(
+            retry
+                .snapshot()
+                .assessment_report()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .revision(),
+            2
+        );
+        Ok(())
     }
 
     #[test]
@@ -599,6 +642,7 @@ pub struct ProgramSessionV1 {
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
     assessment_scratch: ProgramAssessmentReportScratchV1,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -625,6 +669,8 @@ pub enum ProgramSnapshotStateV1 {
     Ready,
     Stale,
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Один сертифицированный Paint output.
@@ -658,12 +704,44 @@ impl ProgramPaintOutputV1 {
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
+    snapshot_version: u32,
+    revision: u64,
     state: ProgramSnapshotStateV1,
     outputs: Vec<ProgramPaintOutputV1>,
     assessment_report: Option<ProgramAssessmentReportV1>,
+    composites: Vec<ProgramPresentationCompositeV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    rgb: crate::Srgb8,
 }
 
 impl ProgramSnapshotV1 {
+    /// Версия проекции: 1 сохраняет historical outputs V1/V2, 2 показывает current V3.
+    #[must_use]
+    pub const fn snapshot_version(&self) -> u32 {
+        self.snapshot_version
+    }
+
+    /// Ревизия принятого наблюдения, независимо от наличия current outputs.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Причина остановки вычисления; Unknown reason ID имеет отдельный смысл.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        if self.snapshot_version == 2 && matches!(self.state, ProgramSnapshotStateV1::Incomplete) {
+            Some("limit")
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub const fn state(&self) -> ProgramSnapshotStateV1 {
         self.state
@@ -679,6 +757,27 @@ impl ProgramSnapshotV1 {
     #[must_use]
     pub fn assessment_report(&self) -> Option<&ProgramAssessmentReportV1> {
         self.assessment_report.as_ref()
+    }
+
+    /// Нормальный encoded-sRGB8 итог root для точного observed scenario.
+    /// Возвращает только данные готового снимка, включая нулевой вклад target.
+    /// Неизвестные ID и неготовый снимок дают `None`; полномочия не выдаются.
+    #[must_use]
+    pub fn presentation_composite_rgb(&self, root: u32, scenario: u32) -> Option<crate::Srgb8> {
+        let mut rgb = None;
+        for value in self
+            .composites
+            .iter()
+            .filter(|value| value.root == root && value.scenario == scenario)
+        {
+            // Разные target одного root обязаны сохранять один нормальный итог.
+            // Несогласованные записи не превращаются в выбор первого значения.
+            if rgb.is_some_and(|previous| previous != value.rgb) {
+                return None;
+            }
+            rgb = Some(value.rgb);
+        }
+        rgb
     }
 }
 
@@ -1313,8 +1412,10 @@ where
     inner: Option<ProgramInnerAttachmentV1<H>>,
     output_count: usize,
     assessment_cells_per_case: usize,
+    presentation_count: usize,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
     assessment_scratch: ProgramAssessmentReportScratchV1,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
     current_render: Option<ProgramAttachedRenderV1>,
 }
 
@@ -1341,6 +1442,7 @@ impl CompiledProgramV1 {
             .evidence_cell_bounds(1)
             .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?
             .verified_cells();
+        let presentation_count = self.owner.point_presentation_count();
         if output_count != 1 {
             return Err(ProgramAttachErrorV1::Binding);
         }
@@ -1408,8 +1510,10 @@ impl CompiledProgramV1 {
             inner: Some(inner),
             output_count,
             assessment_cells_per_case,
+            presentation_count,
             outputs_scratch,
             assessment_scratch: ProgramAssessmentReportScratchV1::default(),
+            composites_scratch: Vec::new(),
             current_render: None,
         })
     }
@@ -1531,10 +1635,16 @@ where
             inner,
             output_count,
             assessment_cells_per_case,
+            presentation_count,
             outputs_scratch,
             assessment_scratch,
+            composites_scratch,
             current_render,
         } = self;
+        let revision = match &update {
+            crate::program::UpdateV1::Observed { revision, .. }
+            | crate::program::UpdateV1::Unknown { revision, .. } => *revision,
+        };
         let scenario_count = match &update {
             crate::program::UpdateV1::Observed { scenarios, .. } => scenarios.len(),
             crate::program::UpdateV1::Unknown { .. } => 0,
@@ -1545,6 +1655,8 @@ where
         assessment_scratch
             .reserve(cell_count, scenario_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        reserve_snapshot_composites(composites_scratch, *presentation_count, scenario_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         outputs_scratch
             .try_reserve_exact(*output_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
@@ -1554,7 +1666,13 @@ where
         let commit = attachment
             .update(update)
             .map_err(map_attachment_update_error)?;
-        let snapshot = attachment_snapshot_from_commit(commit, outputs_scratch, assessment_scratch);
+        let snapshot = attachment_snapshot_from_commit(
+            commit,
+            outputs_scratch,
+            assessment_scratch,
+            composites_scratch,
+            revision,
+        )?;
         *current_render = snapshot.render();
         Ok(snapshot)
     }
@@ -1612,24 +1730,36 @@ fn attachment_snapshot_from_commit(
     >,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
     assessment_scratch: &mut ProgramAssessmentReportScratchV1,
-) -> ProgramAttachedSnapshotV1 {
-    let snapshot =
-        snapshot_from_evidence_into(commit.evidence(), outputs_scratch, assessment_scratch);
+    composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
+    revision: u64,
+) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
+    let snapshot = snapshot_from_evidence_into(
+        commit.evidence(),
+        outputs_scratch,
+        assessment_scratch,
+        composites_scratch,
+        commit.snapshot_version(),
+        revision,
+    )
+    .map_err(|error| match error {
+        ProgramRuntimeErrorV1::ResourceExhausted => {
+            ProgramAttachmentUpdateErrorV1::ResourceExhausted
+        }
+        _ => ProgramAttachmentUpdateErrorV1::InternalInvariant,
+    })?;
     let render = commit.render_outputs().next().map(|render| {
         let mut terminal_composite = None;
         let mut saw_matching_certificate = false;
         let mut saw_empty_domain = false;
         let mut saw_conflicting_composite = false;
-        for certificate in render
-            .certificate()
-            .point_causal_certificates()
-            .filter(|certificate| {
-                certificate.presentation_root().value() == render.root().value()
-                    && certificate.target().value() == render.occurrence().value()
-            })
-        {
+        for domain in render.evidence().point_domains() {
+            if domain.presentation_root().value() != render.root().value()
+                || domain.target().value() != render.occurrence().value()
+            {
+                continue;
+            }
             saw_matching_certificate = true;
-            match certificate.domain() {
+            match domain.domain() {
                 crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
                     saw_empty_domain = true;
                 }
@@ -1662,11 +1792,11 @@ fn attachment_snapshot_from_commit(
                 published.sink_stamp().sequence(),
                 published.sink_stamp().binding_epoch().value().get(),
             ),
-            content_identity: *render.certificate().content_identity().as_bytes(),
+            content_identity: *render.evidence().content_identity().as_bytes(),
             presentation_root: render.root().value(),
             occurrence: render.occurrence().value(),
             context: ProgramAppearanceContextIdV1::from_core(render.context()),
-            // Closed Program V1 имеет единственный composition profile:
+            // Общий Program сохраняет единственный composition profile:
             // EncodedSrgb8SourceOverV1. Это профиль математики, не утверждение
             // о topology, числе слоёв или наблюдении реального renderer-а.
             physical_identity: Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
@@ -1674,7 +1804,7 @@ fn attachment_snapshot_from_commit(
             terminal_composite_ambiguous,
         }
     });
-    ProgramAttachedSnapshotV1 { snapshot, render }
+    Ok(ProgramAttachedSnapshotV1 { snapshot, render })
 }
 
 /// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
@@ -1684,6 +1814,8 @@ fn attachment_snapshot_from_commit(
 pub enum ProgramRuntimeErrorV1 {
     Wire,
     Compile,
+    /// Распознанное сочетание возможностей пока не поддержано владельцем Program.
+    Unsupported,
     FamilyArtifactsRequired,
     Instantiate,
     Update,
@@ -1702,15 +1834,15 @@ pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, Progra
     compile_draft(decode_program_wire_v1(bytes))
 }
 
-/// Compile a supported Program envelope into the existing immutable runtime owner.
+/// Компилирует поддерживаемую wire-версию в существующий immutable owner.
 ///
-/// A V2 selection release orders the complete finite candidate space. Every
-/// observation still passes all hard constraints before the shared Session
-/// selects, rechecks and publishes a result. No scientific profile is implied.
+/// V2 задаёт полный порядок конечных кандидатов, V3 — области и предпочтение
+/// вычисляемого назначения. Общая Session проверяет ограничения и фактический
+/// результат; остановленный поиск V3 не публикует промежуточный кандидат.
 ///
 /// # Errors
-/// Returns the same typed format, graph, resource and family admission failures
-/// as the V1-only entry point.
+/// Возвращает типизированные отказы формата, графа, ресурсов, family admission
+/// либо распознанного неподдержанного сочетания возможностей.
 pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
     compile_draft(decode_program_wire(bytes))
 }
@@ -1718,8 +1850,14 @@ pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRu
 fn compile_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
-    let draft = decoded.map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+    let draft = decoded.map_err(|error| match error {
+        ProgramWireErrorV1::AssignmentResourceExhausted { .. } => {
+            ProgramRuntimeErrorV1::ResourceExhausted
+        }
+        _ => ProgramRuntimeErrorV1::Wire,
+    })?;
     let owner = draft.compile().map_err(|error| match error {
+        crate::program::CompileErrorV1::Unsupported => ProgramRuntimeErrorV1::Unsupported,
         crate::program::CompileErrorV1::ResourceExhausted => {
             ProgramRuntimeErrorV1::ResourceExhausted
         }
@@ -1760,6 +1898,7 @@ impl CompiledProgramV1 {
             session,
             outputs_scratch: Vec::new(),
             assessment_scratch: ProgramAssessmentReportScratchV1::default(),
+            composites_scratch: Vec::new(),
         })
     }
 }
@@ -1775,6 +1914,14 @@ impl ProgramSessionV1 {
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        self.owner
+            .validate_point_observation()
+            .map_err(map_runtime_update_error)?;
+        reserve_snapshot_composites(
+            &mut self.composites_scratch,
+            self.owner.point_presentation_count(),
+            scenarios.len(),
+        )?;
         self.outputs_scratch
             .try_reserve_exact(self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
@@ -1792,11 +1939,14 @@ impl ProgramSessionV1 {
             .prepare_schema_ordered_update(&mut self.session, revision, &source)
             .map_err(map_runtime_update_error)?;
         let evidence = transition.commit();
-        Ok(snapshot_from_evidence_into(
+        snapshot_from_evidence_into(
             evidence,
             &mut self.outputs_scratch,
             &mut self.assessment_scratch,
-        ))
+            &mut self.composites_scratch,
+            self.owner.snapshot_version(),
+            revision,
+        )
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -1818,16 +1968,20 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(map_runtime_update_error)?;
-        Ok(snapshot_from_evidence_into(
+        snapshot_from_evidence_into(
             transition.commit(),
             &mut self.outputs_scratch,
             &mut self.assessment_scratch,
-        ))
+            &mut self.composites_scratch,
+            self.owner.snapshot_version(),
+            revision,
+        )
     }
 }
 
 fn map_runtime_update_error(error: crate::program::UpdateErrorV1) -> ProgramRuntimeErrorV1 {
     match error {
+        crate::program::UpdateErrorV1::Unsupported => ProgramRuntimeErrorV1::Unsupported,
         crate::program::UpdateErrorV1::ResourceExhausted { .. } => {
             ProgramRuntimeErrorV1::ResourceExhausted
         }
@@ -1862,16 +2016,62 @@ fn snapshot_from_evidence_into(
     evidence: crate::program::EvidenceViewV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
     assessment_scratch: &mut ProgramAssessmentReportScratchV1,
-) -> ProgramSnapshotV1 {
+    composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
+    snapshot_version: u32,
+    revision: u64,
+) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
     use crate::program::{CertificateV1, StateKindV1};
     let state = match evidence.kind() {
         StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
         StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
         StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
         StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
+        StateKindV1::Unsatisfied => ProgramSnapshotStateV1::Unsatisfied,
+        StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
     };
     outputs_scratch.clear();
     assessment_scratch.clear();
+    composites_scratch.clear();
+    if let Some(verified) = evidence.current_verified() {
+        // Field owner очищает point records; проекция копирует только его point evidence.
+        for composite in verified.presentation_composites() {
+            let composite = composite.ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
+            if composite.scenarios.len()
+                > composites_scratch
+                    .capacity()
+                    .saturating_sub(composites_scratch.len())
+            {
+                return Err(ProgramRuntimeErrorV1::InternalInvariant);
+            }
+            composites_scratch.extend(composite.scenarios.iter().map(|scenario| {
+                ProgramPresentationCompositeV1 {
+                    root: composite.root,
+                    scenario: scenario.value(),
+                    rgb: crate::Srgb8::new(composite.rgb),
+                }
+            }));
+        }
+    }
+    match snapshot_version {
+        1 => {
+            if let Some(verified) =
+                evidence
+                    .certificates()
+                    .find_map(|certificate| match certificate {
+                        CertificateV1::Verified(verified) => Some(verified),
+                        CertificateV1::Conflict(_) => None,
+                    })
+            {
+                copy_snapshot_outputs(verified.outputs(), outputs_scratch)?;
+            }
+        }
+        2 => {
+            if let Some(verified) = evidence.current_verified() {
+                copy_snapshot_outputs(verified.outputs(), outputs_scratch)?;
+            }
+        }
+        _ => return Err(ProgramRuntimeErrorV1::InternalInvariant),
+    }
     let mut assessment_report = None;
     if let Some(verified) = evidence
         .certificates()
@@ -1880,18 +2080,12 @@ fn snapshot_from_evidence_into(
             CertificateV1::Conflict(_) => None,
         })
     {
-        // Все ёмкости зарезервированы до commit или установки sink.
-        // Здесь остаётся только копирование уже проверенного свидетельства.
-        outputs_scratch.extend(verified.outputs().map(|output| ProgramPaintOutputV1 {
-            slot: output.output_slot().value(),
-            source: output.source(),
-            opacity: output.opacity(),
-        }));
         if let crate::program::ObservationHeadV1::Observed { stream, revision } =
             evidence.observation_head()
         {
             let observation = verified.observation();
             if state == ProgramSnapshotStateV1::Ready
+                && !observation.is_field()
                 && stream == observation.stream()
                 && revision == observation.revision()
             {
@@ -1899,11 +2093,43 @@ fn snapshot_from_evidence_into(
             }
         }
     }
-    ProgramSnapshotV1 {
+    Ok(ProgramSnapshotV1 {
+        snapshot_version,
+        revision,
         state,
         outputs: std::mem::take(outputs_scratch),
         assessment_report,
+        composites: std::mem::take(composites_scratch),
+    })
+}
+
+fn reserve_snapshot_composites(
+    destination: &mut Vec<ProgramPresentationCompositeV1>,
+    presentation_count: usize,
+    scenario_count: usize,
+) -> Result<(), ProgramRuntimeErrorV1> {
+    let capacity = presentation_count
+        .checked_mul(scenario_count)
+        .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?;
+    destination.clear();
+    destination
+        .try_reserve_exact(capacity)
+        .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+}
+
+fn copy_snapshot_outputs<'a>(
+    outputs: impl ExactSizeIterator<Item = crate::program::CertifiedPaintOutputV1<'a>>,
+    destination: &mut Vec<ProgramPaintOutputV1>,
+) -> Result<(), ProgramRuntimeErrorV1> {
+    if outputs.len() > destination.capacity().saturating_sub(destination.len()) {
+        return Err(ProgramRuntimeErrorV1::InternalInvariant);
     }
+    destination.extend(outputs.map(|output| ProgramPaintOutputV1 {
+        slot: output.output_slot().value(),
+        source: output.source(),
+        opacity: output.opacity(),
+    }));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1927,6 +2153,551 @@ mod runtime_tests {
             .exact_visible_unary(true, 10, 8, expected)
             .output(17, 4);
         builder.finish().unwrap()
+    }
+
+    fn final_raster_runtime() -> ProgramSessionV1 {
+        compile_program_wire(&final_raster_source_over_wire_v1(
+            1,
+            2,
+            3,
+            17,
+            FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
+        ))
+        .unwrap()
+        .instantiate(101)
+        .unwrap()
+    }
+
+    fn final_raster_payload(shade: u8) -> ProgramFinalRasterInputV1 {
+        ProgramFinalRasterInputV1::try_new(
+            1,
+            1,
+            1,
+            [0; 32],
+            1,
+            &[[0; 4]],
+            2,
+            &[[shade, shade, shade, 255]],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn field_owner_refuses_point_observation_before_admission() {
+        struct UnreadablePointSource;
+        impl SchemaOrderedScenarioSourceV1 for UnreadablePointSource {
+            fn scenario_count(&self) -> usize {
+                panic!("unsupported point source must not be read");
+            }
+            fn scenario_id(&self, _: usize) -> ScenarioId {
+                panic!("unsupported point source must not be read");
+            }
+            fn value_count(&self, _: usize) -> usize {
+                panic!("unsupported point source must not be read");
+            }
+            fn value(&self, _: usize, _: usize) -> Srgb8 {
+                panic!("unsupported point source must not be read");
+            }
+        }
+
+        let mut runtime = final_raster_runtime();
+        runtime
+            .update_final_raster(1, &final_raster_payload(64))
+            .unwrap();
+        let old_head = runtime.session.evidence().observation_head();
+        let scenarios = [crate::program::ScenarioV1::new(7, &[])];
+        let refused = runtime
+            .owner
+            .prepare_update(
+                &mut runtime.session,
+                crate::program::UpdateV1::Observed {
+                    revision: 2,
+                    scenarios: &scenarios,
+                },
+            )
+            .err();
+        assert!(matches!(
+            refused,
+            Some(crate::program::UpdateErrorV1::Unsupported)
+        ));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+
+        let refused = runtime
+            .owner
+            .prepare_schema_ordered_update(&mut runtime.session, 2, &UnreadablePointSource)
+            .err();
+        assert!(matches!(
+            refused,
+            Some(crate::program::UpdateErrorV1::Unsupported)
+        ));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+        assert_eq!(
+            runtime.session.evidence().kind(),
+            crate::program::StateKindV1::Ready
+        );
+        {
+            let current = runtime
+                .current_final_raster(runtime.content_identity(), 17, 1, [0; 32])
+                .unwrap();
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
+        }
+        runtime
+            .update_final_raster(2, &final_raster_payload(65))
+            .unwrap();
+    }
+
+    #[test]
+    fn wrong_point_update_preserves_field_commit_and_unknown_lifecycle() {
+        let mut runtime = final_raster_runtime();
+        let initial = runtime
+            .update_final_raster(1, &final_raster_payload(64))
+            .unwrap();
+        assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
+        assert!(initial.assessment_report().is_none());
+        let old_head = runtime.session.evidence().observation_head();
+
+        let refused = runtime.update_observed(2, &[ProgramScenarioV1::new(7, vec![])]);
+        assert!(matches!(refused, Err(ProgramRuntimeErrorV1::Unsupported)));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+        assert_eq!(
+            runtime.session.evidence().kind(),
+            crate::program::StateKindV1::Ready
+        );
+        {
+            let current = runtime
+                .current_final_raster(runtime.content_identity(), 17, 1, [0; 32])
+                .unwrap();
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
+        }
+
+        let retried = runtime
+            .update_final_raster(2, &final_raster_payload(65))
+            .unwrap();
+        assert_eq!(retried.state(), ProgramSnapshotStateV1::Ready);
+        assert!(retried.assessment_report().is_none());
+        {
+            let current = runtime
+                .current_final_raster(runtime.content_identity(), 17, 2, [0; 32])
+                .unwrap();
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[65; 3]]);
+        }
+
+        let unknown = runtime.update_unknown(3, 23).unwrap();
+        assert_eq!(unknown.state(), ProgramSnapshotStateV1::Stale);
+        assert!(unknown.assessment_report().is_none());
+        assert!(matches!(
+            runtime.current_final_raster(runtime.content_identity(), 17, 2, [0; 32]),
+            Err(ProgramFinalRasterErrorV1::Stale)
+        ));
+        runtime
+            .update_final_raster(4, &final_raster_payload(66))
+            .unwrap();
+        let current = runtime
+            .current_final_raster(runtime.content_identity(), 17, 4, [0; 32])
+            .unwrap();
+        assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[66; 3]]);
+
+        let rgb = Srgb8::new([64; 3]);
+        let mut point = compile_program_wire(&runtime_wire(rgb))
+            .unwrap()
+            .instantiate(102)
+            .unwrap();
+        let point_snapshot = point
+            .update_observed(1, &[ProgramScenarioV1::new(7, vec![rgb])])
+            .unwrap();
+        assert_eq!(point_snapshot.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(point_snapshot.outputs()[0].source(), rgb);
+    }
+
+    #[test]
+    fn composite_readout_is_current_scenario_bound_and_owned() -> Result<(), ProgramRuntimeErrorV1>
+    {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let initial = runtime.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(301, vec![rgb]),
+                ProgramScenarioV1::new(101, vec![rgb]),
+            ],
+        )?;
+        assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 101), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 0), None);
+        assert_eq!(initial.presentation_composite_rgb(17, 101), None);
+        let stale = runtime.update_unknown(2, 3)?;
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert_eq!(stale.outputs(), initial.outputs());
+        assert_eq!(stale.presentation_composite_rgb(9, 101), None);
+        let failed =
+            runtime.update_observed(3, &[ProgramScenarioV1::new(101, vec![Srgb8::new([0; 3])])])?;
+        assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
+        assert_eq!(failed.presentation_composite_rgb(9, 101), None);
+        drop(runtime);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        Ok(())
+    }
+
+    #[test]
+    fn composite_readout_rejects_conflicting_root_records_and_capacity_overflow()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let mut snapshot = runtime.update_observed(1, &[ProgramScenarioV1::new(101, vec![rgb])])?;
+        snapshot.composites.push(snapshot.composites[0]);
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), Some(rgb));
+        snapshot.composites.push(ProgramPresentationCompositeV1 {
+            root: 9,
+            scenario: 101,
+            rgb: Srgb8::new([0; 3]),
+        });
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), None);
+        assert_eq!(
+            reserve_snapshot_composites(&mut Vec::new(), usize::MAX, 2),
+            Err(ProgramRuntimeErrorV1::ResourceExhausted)
+        );
+        Ok(())
+    }
+
+    fn computed_runtime_wire() -> Vec<u8> {
+        computed_runtime_wire_for_domain(false)
+    }
+
+    fn computed_runtime_wire_for_domain(full_cube: bool) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        if full_cube {
+            builder.computed_box_target(2, [0; 3], [255; 3], Srgb8::new([64; 3]), 1.0);
+        } else {
+            builder.computed_gray_target(2, 0, 255, Srgb8::new([64; 3]), 1.0);
+        }
+        builder
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_unary(true, 10, 8, Srgb8::new([96; 3]))
+            .output(17, 4);
+        builder
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется")
+    }
+
+    fn computed_incomplete_runtime_wire() -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(11, Srgb8::new([96; 3]))
+            .fixed_target(12, 11)
+            .computed_box_target(2, [0; 3], [255; 3], Srgb8::new([64; 3]), 1.0)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .solid_paint(13, 12)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .source_over_occurrence(18, 13, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_relation_hard(10, 18, &[8])
+            .output(17, 4);
+        builder
+            .finish_assignment(&[2])
+            .expect("валидная relation-декларация кодируется")
+    }
+
+    #[test]
+    fn direct_assignment_policy_rejects_previous_experimental_tag() {
+        let mut bytes = computed_runtime_wire();
+        // header10 + sources4 + target-count4 + gray-target19 + families4
+        // + assignment-count4: поле policy находится на offset45.
+        assert_eq!(&bytes[45..47], &[2, 0]);
+        bytes[45] = 1;
+        assert_eq!(
+            compile_program_wire(&bytes).err(),
+            Some(ProgramRuntimeErrorV1::Wire)
+        );
+    }
+
+    #[test]
+    fn computed_full_rgb_domain_finishes_through_public_runtime() {
+        let mut session = compile_program_wire(&computed_runtime_wire_for_domain(true))
+            .expect("полный RGB domain допускается")
+            .instantiate(100)
+            .expect("stream допускается");
+        for (revision, backdrop, expected) in [
+            (1, 128, Some([64; 3])),
+            (2, 255, None),
+            (3, 0, Some([191; 3])),
+        ] {
+            let snapshot = session
+                .update_observed(
+                    revision,
+                    &[ProgramScenarioV1::new(7, vec![Srgb8::new([backdrop; 3])])],
+                )
+                .expect("наблюдение вычисляется");
+            if let Some(rgb) = expected {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+                assert_eq!(snapshot.outputs()[0].source(), Srgb8::new(rgb));
+            } else {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Unsatisfied);
+                assert!(snapshot.outputs().is_empty());
+            }
+            assert_eq!(snapshot.reason(), None);
+        }
+    }
+
+    #[test]
+    fn computed_snapshot_keeps_current_output_separate_from_legacy_history() {
+        let mut session = compile_program_wire(&computed_runtime_wire())
+            .expect("V3 проходит обычный публичный вход")
+            .instantiate(100)
+            .expect("Session создаётся с допустимым stream");
+        let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
+        let ready = session
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
+        assert_eq!(ready.snapshot_version(), 2);
+        assert_eq!(ready.revision(), 1);
+        assert_eq!(ready.reason(), None);
+        assert_eq!(ready.state().key(), "ready");
+        assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
+
+        let stale = session
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(stale.state().key(), "stale");
+        assert_eq!(stale.snapshot_version(), 2);
+        assert_eq!(stale.revision(), 2);
+        assert_eq!(stale.reason(), None);
+        assert!(stale.outputs().is_empty());
+        let unsatisfied = session
+            .update_observed(3, &scenarios(255))
+            .expect("наблюдение принимается");
+        assert_eq!(unsatisfied.state().key(), "unsatisfied");
+        assert_eq!(unsatisfied.revision(), 3);
+        assert_eq!(unsatisfied.reason(), None);
+        assert!(unsatisfied.outputs().is_empty());
+        let recovered = session
+            .update_observed(4, &scenarios(0))
+            .expect("наблюдение принимается");
+        assert_eq!(recovered.state().key(), "ready");
+        assert_eq!(recovered.outputs()[0].source(), Srgb8::new([191; 3]));
+        assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
+
+        let mut legacy = compile_program_wire_v1(&runtime_wire(Srgb8::new([96; 3])))
+            .expect("V1 Program компилируется")
+            .instantiate(101)
+            .expect("Session создаётся с допустимым stream");
+        let _ = legacy
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
+        let historical = legacy
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(historical.state().key(), "stale");
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(historical.outputs()[0].source(), Srgb8::new([64; 3]));
+    }
+
+    #[test]
+    fn computed_snapshot_unknown_reason_is_not_search_limit() {
+        let mut session = compile_program_wire(&computed_runtime_wire())
+            .expect("допустимый Program компилируется")
+            .instantiate(100)
+            .expect("Session создаётся с допустимым stream");
+        let waiting = session
+            .update_unknown(1, u32::MAX)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(waiting.snapshot_version(), 2);
+        assert_eq!(waiting.revision(), 1);
+        assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
+        assert_eq!(waiting.reason(), None);
+        assert!(waiting.outputs().is_empty());
+    }
+
+    #[test]
+    fn v3_admission_exhaustion_preserves_old_wire_error_classification() {
+        for version in [1_u16, 2, 3] {
+            let mut bytes = b"LCPW".to_vec();
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&14_u32.to_le_bytes());
+            bytes.extend_from_slice(&4097_u32.to_le_bytes());
+            if version == 3 {
+                assert_eq!(
+                    compile_program_wire(&bytes).err(),
+                    Some(ProgramRuntimeErrorV1::ResourceExhausted)
+                );
+                assert_eq!(
+                    check_program_wire(&bytes),
+                    Err(ProgramWireCheckErrorV1::ResourceExhausted)
+                );
+            } else {
+                assert_eq!(
+                    compile_program_wire(&bytes).err(),
+                    Some(ProgramRuntimeErrorV1::Wire)
+                );
+                assert_eq!(
+                    check_program_wire(&bytes),
+                    Err(ProgramWireCheckErrorV1::Wire {
+                        section: "sources",
+                        offset: 0
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn computed_attachment_revokes_stopped_outputs_and_preserves_rejected_head() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct Host {
+            reject: Rc<Cell<bool>>,
+            installed: Rc<RefCell<Vec<ProgramPointSinkIntentV1>>>,
+        }
+
+        impl ProgramPointSinkHostV1 for Host {
+            fn try_install(
+                &mut self,
+                intent: ProgramPointSinkIntentV1,
+            ) -> Result<(), ProgramPointSinkHostErrorV1> {
+                if self.reject.get()
+                    || self
+                        .installed
+                        .borrow()
+                        .last()
+                        .is_some_and(|previous| previous.desired_stamp() != intent.expected_stamp())
+                {
+                    return Err(ProgramPointSinkHostErrorV1::Rejected);
+                }
+                self.installed.borrow_mut().push(intent);
+                Ok(())
+            }
+        }
+
+        for (full_cube, stopped_state, reason) in [
+            (false, ProgramSnapshotStateV1::Unsatisfied, None),
+            (true, ProgramSnapshotStateV1::Incomplete, Some("limit")),
+        ] {
+            let installed = Rc::new(RefCell::new(Vec::new()));
+            let reject = Rc::new(Cell::new(false));
+            let wire = if full_cube {
+                computed_incomplete_runtime_wire()
+            } else {
+                computed_runtime_wire()
+            };
+            let compiled = compile_program_wire(&wire).expect("допустимый Program компилируется");
+            let identity = compiled.content_identity();
+            let mut attachment = compiled
+                .attach(
+                    100,
+                    17,
+                    91,
+                    9,
+                    8,
+                    Host {
+                        reject: Rc::clone(&reject),
+                        installed: Rc::clone(&installed),
+                    },
+                )
+                .expect("подготовка тестового сценария успешна");
+            let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
+            let first = attachment
+                .update_observed(1, &scenarios(128))
+                .expect("наблюдение принимается");
+            assert_eq!(first.snapshot().snapshot_version(), 2);
+            assert_eq!(first.snapshot().revision(), 1);
+            assert_eq!(first.snapshot().reason(), None);
+            assert_eq!(
+                first
+                    .render()
+                    .expect("готовый результат содержит render")
+                    .content_identity(),
+                identity
+            );
+            assert_eq!(
+                attachment
+                    .current_materialization_authority()
+                    .expect("готовый результат имеет authority")
+                    .revision(),
+                1
+            );
+
+            reject.set(true);
+            assert!(matches!(
+                attachment.update_observed(2, &scenarios(255)),
+                Err(ProgramAttachmentUpdateErrorV1::Sink(
+                    ProgramPointSinkErrorV1::Host(ProgramPointSinkHostErrorV1::Rejected)
+                ))
+            ));
+            assert_eq!(installed.borrow().len(), 1);
+            assert_eq!(
+                attachment
+                    .current_materialization_authority()
+                    .expect("готовый результат имеет authority")
+                    .revision(),
+                1
+            );
+            reject.set(false);
+
+            let stopped = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
+            assert_eq!(stopped.snapshot().snapshot_version(), 2);
+            assert_eq!(stopped.snapshot().revision(), 2);
+            assert_eq!(stopped.snapshot().state(), stopped_state);
+            assert_eq!(stopped.snapshot().reason(), reason);
+            assert!(stopped.snapshot().outputs().is_empty());
+            assert!(stopped.render().is_none());
+            assert!(attachment.current_render().is_none());
+            assert_eq!(
+                attachment.current_materialization_authority(),
+                Err(ProgramMaterializationAuthorityErrorV1::NotReady)
+            );
+            assert_eq!(
+                installed.borrow()[1].operation(),
+                ProgramPointSinkOperationV1::RevokeAll
+            );
+            assert!(installed.borrow()[1].point().is_none());
+
+            let replay = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
+            assert_eq!(replay, stopped);
+            assert_eq!(
+                installed.borrow()[2].operation(),
+                ProgramPointSinkOperationV1::ConfirmExact
+            );
+            assert!(installed.borrow()[2].point().is_none());
+            assert!(attachment.update_observed(1, &scenarios(128)).is_err());
+            assert!(attachment.update_observed(2, &scenarios(0)).is_err());
+            assert_eq!(installed.borrow().len(), 3);
+
+            let recovered = attachment
+                .update_observed(3, &scenarios(128))
+                .expect("наблюдение принимается");
+            assert_eq!(recovered.snapshot().state(), ProgramSnapshotStateV1::Ready);
+            assert_eq!(recovered.snapshot().revision(), 3);
+            assert_eq!(recovered.snapshot().reason(), None);
+            assert_eq!(
+                recovered.snapshot().outputs()[0].source(),
+                Srgb8::new([64; 3])
+            );
+            assert_eq!(
+                installed.borrow()[3].operation(),
+                ProgramPointSinkOperationV1::SetAll
+            );
+            assert_eq!(first.snapshot().revision(), 1);
+            assert_eq!(first.snapshot().outputs()[0].source(), Srgb8::new([64; 3]));
+        }
     }
 
     #[test]
@@ -2131,23 +2902,23 @@ mod runtime_tests {
     }
 
     #[test]
-    fn public_lint_report_preserves_nominal_rejection_output_and_duplicate_provenance() {
+    fn public_lint_report_preserves_nominal_rejection_output_and_duplicate_provenance()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let source = Srgb8::new([0, 199, 64]);
         let compiled =
-            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))
-                .unwrap();
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))?;
         let identity = compiled.content_identity();
-        let mut session = compiled.instantiate(100).unwrap();
-        let snapshot = session
-            .update_observed(
-                1,
-                &[
-                    ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])]),
-                    ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])]),
-                ],
-            )
-            .unwrap();
-        let report = snapshot.assessment_report().unwrap();
+        let mut session = compiled.instantiate(100)?;
+        let snapshot = session.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])]),
+                ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])]),
+            ],
+        )?;
+        let report = snapshot
+            .assessment_report()
+            .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
         assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(snapshot.outputs()[0].source(), source);
         assert_eq!(snapshot.outputs()[0].opacity(), 1.0);
@@ -2180,10 +2951,12 @@ mod runtime_tests {
                 rejected_blue_interval: [64, 108],
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn public_lint_uses_final_alpha_composition_and_removes_stale_or_failed_report() {
+    fn public_lint_uses_final_alpha_composition_and_removes_stale_or_failed_report()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let source = Srgb8::new([128, 128, 129]);
         let final_color = Srgb8::new([128; 3]);
         let compiled = compile_program_wire(&clean_set_runtime_wire(
@@ -2191,57 +2964,78 @@ mod runtime_tests {
             0.5,
             final_color,
             Some(false),
-        ))
-        .unwrap();
-        let mut session = compiled.instantiate(100).unwrap();
+        ))?;
+        let mut session = compiled.instantiate(100)?;
         let scenario = || ProgramScenarioV1::new(7, vec![Srgb8::new([128, 128, 127])]);
-        let first = session.update_observed(1, &[scenario()]).unwrap();
+        let first = session.update_observed(1, &[scenario()])?;
         assert_eq!(
-            first.assessment_report().unwrap().cells()[0].assessment(),
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
             ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
                 visible: final_color
             }
         );
         assert_eq!(first.outputs()[0].source(), source);
         assert_eq!(first.outputs()[0].opacity(), 0.5);
-        let stale = session.update_unknown(2, 99).unwrap();
+        let stale = session.update_unknown(2, 99)?;
         assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
         assert!(stale.assessment_report().is_none());
         assert_eq!(stale.outputs(), first.outputs());
-        let fresh = session.update_observed(3, &[scenario()]).unwrap();
-        assert_eq!(fresh.assessment_report().unwrap().revision(), 3);
-        let failed = session
-            .update_observed(4, &[ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])])])
-            .unwrap();
+        let fresh = session.update_observed(3, &[scenario()])?;
+        assert_eq!(
+            fresh
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .revision(),
+            3
+        );
+        let failed =
+            session.update_observed(4, &[ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])])])?;
         assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
         assert!(failed.assessment_report().is_none());
         assert_eq!(failed.outputs(), first.outputs());
         drop(session);
-        assert_eq!(first.assessment_report().unwrap().revision(), 1);
         assert_eq!(
-            first.assessment_report().unwrap().cells()[0].assessment(),
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .revision(),
+            1
+        );
+        assert_eq!(
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
             ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
                 visible: final_color
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn public_lint_distinguishes_absent_domain_and_invalid_empty_program() {
+    fn public_lint_distinguishes_absent_domain_and_invalid_empty_program()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let source = Srgb8::new([0; 3]);
         let compiled =
-            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))
-                .unwrap();
-        let mut session = compiled.instantiate(100).unwrap();
-        let waiting = session.update_unknown(1, 99).unwrap();
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))?;
+        let mut session = compiled.instantiate(100)?;
+        let waiting = session.update_unknown(1, 99)?;
         assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
         assert!(waiting.assessment_report().is_none());
-        let absent = session
-            .update_observed(2, &[ProgramScenarioV1::new(7, vec![source])])
-            .unwrap();
+        let absent = session.update_observed(2, &[ProgramScenarioV1::new(7, vec![source])])?;
         assert_eq!(absent.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(
-            absent.assessment_report().unwrap().cells()[0].assessment(),
+            absent
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
             ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent
         );
 
@@ -2251,16 +3045,19 @@ mod runtime_tests {
             .fixed_target(2, 1)
             .solid_paint(3, 2)
             .output(17, 3);
-        let bytes = builder.finish().unwrap();
+        let bytes = builder.finish().map_err(|_| ProgramRuntimeErrorV1::Wire)?;
         // Пустая point-декларация не задаёт наблюдение и оценку output.
         assert!(matches!(
-            decode_program_wire_v1(&bytes).unwrap().compile(),
+            decode_program_wire_v1(&bytes)
+                .map_err(|_| ProgramRuntimeErrorV1::Wire)?
+                .compile(),
             Err(crate::program::CompileErrorV1::EmptySurfaceInputPortSet)
         ));
         assert!(matches!(
             compile_program_wire(&bytes),
             Err(ProgramRuntimeErrorV1::Compile)
         ));
+        Ok(())
     }
 
     #[test]
@@ -2284,6 +3081,8 @@ impl ProgramSnapshotStateV1 {
             Self::Ready => "ready",
             Self::Stale => "stale",
             Self::Failed => "failed",
+            Self::Unsatisfied => "unsatisfied",
+            Self::Incomplete => "incomplete",
         }
     }
 }
@@ -2296,8 +3095,16 @@ mod snapshot_state_contract {
     fn wire_state_projection_preserves_every_lifecycle_state() {
         use ProgramSnapshotStateV1::*;
         assert_eq!(
-            [Waiting, Ready, Stale, Failed].map(ProgramSnapshotStateV1::key),
-            ["waiting", "ready", "stale", "failed"]
+            [Waiting, Ready, Stale, Failed, Unsatisfied, Incomplete]
+                .map(ProgramSnapshotStateV1::key),
+            [
+                "waiting",
+                "ready",
+                "stale",
+                "failed",
+                "unsatisfied",
+                "incomplete"
+            ]
         );
     }
 }

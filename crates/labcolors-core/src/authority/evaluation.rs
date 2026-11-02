@@ -159,3 +159,54 @@ impl AuthorityStateV1 {
 #[cfg(test)]
 #[path = "evaluation_tests.rs"]
 mod tests;
+
+impl AuthorityStateV1 {
+    /// Частичный успех не возвращает current field evaluation.
+    /// Обе fresh ветви сопоставляются с AUTH именно этого immutable owner.
+    pub(crate) fn evaluate_program_final_raster(
+        &self,
+        materialization: &crate::program_session::finite_field::FinalRasterMaterializationV1,
+        current: &crate::observation::RevisionBoundObservationV1,
+    ) -> Result<(), crate::program_session::finite_field::FinalRasterRefusalV1> {
+        use crate::program_session::finite_field::FinalRasterRefusalV1 as E;
+        let mut fresh = Self::new();
+        fresh
+            .admit_program_final_raster_technical_quality(
+                materialization,
+                current,
+                AuthorityExpectedCurrentV1::Vacant,
+            )
+            .map_err(|_| E::TechnicalQuality)?;
+        let descriptor = fresh
+            .read(AuthorityIdV1::TechnicalQuality)
+            .ok_or(E::TechnicalQuality)?;
+        self.require(descriptor).map_err(|_| E::TechnicalQuality)?;
+        use crate::field_effect::final_raster::{
+            FinalRasterCleanlinessAssessmentV1 as A, FinalRasterCleanlinessRequirementV1 as C,
+        };
+        let policy = materialization.cleanliness_requirement()?;
+        let expected_assessment = match policy {
+            C::Off => A::off(),
+            C::ReportOnlyExactNominalSrgb8V2 => {
+                Self::assess_program_final_raster_clean_convention(materialization, current)?
+            }
+            C::MandatoryExactNominalSrgb8V2 => {
+                fresh.admit_program_final_raster_clean_convention(
+                    materialization,
+                    current,
+                    AuthorityExpectedCurrentV1::Vacant,
+                )?;
+                let descriptor = fresh
+                    .read(AuthorityIdV1::CleanConvention)
+                    .ok_or(E::CleanConvention)?;
+                self.require(descriptor).map_err(|_| E::CleanConvention)?;
+                A::assessed(policy, materialization.pixels().len(), 0, None)
+                    .map_err(|_| E::CleanConvention)?
+            }
+        };
+        if expected_assessment != materialization.cleanliness_assessment() {
+            return Err(E::CleanConvention);
+        }
+        Ok(())
+    }
+}

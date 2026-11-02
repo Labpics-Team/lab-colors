@@ -7,6 +7,7 @@
 import initWasm, {
   initSync as initWasmSync,
   compileProgramWire as compileProgramWireWasm,
+  finalRasterSourceOverWire as finalRasterSourceOverWireWasm,
   attachProgramWire as attachProgramWireWasm,
   decodeCertificateEnvelope as decodeCertificateEnvelopeWasm,
   issueSourceCertificateEnvelope as issueSourceCertificateEnvelopeWasm,
@@ -205,15 +206,29 @@ function copyObservedInputs(scenarioIds, surfaces, surfaceCount, operation) {
 }
 
 export function compileProgramWire(bytes, streamId) {
-  return compileProgramWireWasm(copyProgramInput(
+  const runtime = compileProgramWireWasm(copyProgramInput(
     bytes, byteStorage, "compileProgramWire", "program_wire",
   ), streamId);
+  runtimeStates.set(runtime, { busy: false });
+  return runtime;
 }
+export function finalRasterSourceOverWire(sourcePort, destinationPort, operator, outputSlot, cleanliness) {
+  return finalRasterSourceOverWireWasm(sourcePort, destinationPort, operator, outputSlot, cleanliness);
+}
+export const MAX_FINAL_RASTER_PIXELS = 65_536;
+const runtimeStates = new WeakMap();
+function withRuntimeOperation(runtime, operation, callback) {
+  const state = runtimeStates.get(runtime);
+  if (state?.busy) throw programIngressError(operation, "program_runtime_busy");
+  if (state) state.busy = true;
+  try { return callback(); } finally { if (state) state.busy = false; }
+}
+
 
 const runtimeUpdateObserved = ProgramRuntime.prototype.updateObserved;
 ProgramRuntime.prototype.updateObserved = function updateObserved(revision, scenarioIds, surfaces, surfaceCount) {
   const [ownedIds, ownedSurfaces] = copyObservedInputs(scenarioIds, surfaces, surfaceCount, "updateObserved");
-  return runtimeUpdateObserved.call(this, revision, ownedIds, ownedSurfaces, surfaceCount);
+  return withRuntimeOperation(this, "updateObserved", () => runtimeUpdateObserved.call(this, revision, ownedIds, ownedSurfaces, surfaceCount));
 };
 
 // Идентичность и тело принадлежат Core; аргументы вызывающего кода не передаются.
@@ -335,11 +350,13 @@ const COMPILE_PROGRAM_ERROR_CODES = new Set([
   ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
   "program_wire",
   "program_compile",
+  "program_unsupported",
   "program_family_artifacts_required",
   "program_instantiate",
 ]);
 const UPDATE_PROGRAM_ERROR_CODES = new Set([
   "program_update",
+  "program_unsupported",
   ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
 ]);
 const ATTACHMENT_ERROR_CODES = new Set([
@@ -391,6 +408,11 @@ const PHYSICAL_IDENTITY_ERROR_CODES = new Set([
   "program_physical_identity",
 ]);
 
+const RUNTIME_BUSY_OPERATIONS = new Set([
+  "updateObserved", "updateUnknown", "updateFinalRaster", "consumeFinalRaster",
+  "contentIdentity", "finalRasterRefusal", "free",
+]);
+
 export function isProgramError(error) {
   // A caught value may be a revoked Proxy or expose throwing/stateful getters.
   // Classify one observation; never replace the original failure with a probe error.
@@ -398,6 +420,10 @@ export function isProgramError(error) {
     if (!(error instanceof Error)) return false;
     const operation = error.operation;
     const code = error.code;
+    if (code === "program_runtime_busy") return RUNTIME_BUSY_OPERATIONS.has(operation);
+    if (operation === "finalRasterSourceOverWire" || operation === "updateFinalRaster" || operation === "consumeFinalRaster") {
+      return FINAL_RASTER_ERROR_CODES.has(code);
+    }
     if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
     if (operation === "updateObserved" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
@@ -491,6 +517,8 @@ export function isBindingError(error) {
         return code === "internal_error";
       case "readProgramOutput":
         return code === "invalid_output_index";
+      case "readPresentationComposite":
+        return code === "invalid_composite_id" || code === "presentation_composite_unavailable";
       default:
         return false;
     }
@@ -498,3 +526,51 @@ export function isBindingError(error) {
     return false;
   }
 }
+
+// Полный field payload проверяется до JS snapshot и generated WASM copies.
+const FINAL_RASTER_ERROR_CODES = new Set([
+  "program_resource_exhausted",
+  "program_field_extent", "program_field_dpr", "program_field_length",
+  "program_field_premultiplied", "program_field_ports", "program_field_update",
+  "program_field_unsupported", "program_field_transparent", "program_field_convention",
+  "program_field_tq", "program_field_cc", "program_field_stale", "program_field_program",
+  "program_field_output", "program_field_context", "program_field_internal",
+  "program_field_consumer_rejected",
+]);
+const runtimeFinalUpdate = ProgramRuntime.prototype.updateFinalRaster;
+ProgramRuntime.prototype.updateFinalRaster = function (
+  revision, width, height, dpr, context, sourcePort, source, destinationPort, destination,
+) {
+  return withRuntimeOperation(this, "updateFinalRaster", () => {
+    const invalid = () => programIngressError("updateFinalRaster", "program_field_length");
+    if (!Number.isInteger(width) || !Number.isInteger(height) ||
+        width <= 0 || height <= 0 || width > 0xffff_ffff || height > 0xffff_ffff ||
+        !Number.isInteger(dpr) || dpr < 1 || dpr > 4) throw invalid();
+    const count = width * height;
+    if (!Number.isSafeInteger(count) || count > MAX_FINAL_RASTER_PIXELS)
+      throw programIngressError("updateFinalRaster", "program_resource_exhausted");
+    const c = inspectTypedArrayStorage(context, byteStorage, invalid);
+    const s = inspectTypedArrayStorage(source, byteStorage, invalid);
+    const d = inspectTypedArrayStorage(destination, byteStorage, invalid);
+    if (c.length !== 32 || s.length !== count * 4 || d.length !== count * 4) throw invalid();
+    const own = (value, inspected) => copyProgramInput(value, byteStorage,
+      "updateFinalRaster", "program_field_length", undefined, inspected);
+    return runtimeFinalUpdate.call(this, revision, width, height, dpr,
+      own(context, c), sourcePort, own(source, s), destinationPort, own(destination, d));
+  });
+};
+const runtimeConsumeFinal = ProgramRuntime.prototype.consumeFinalRaster;
+ProgramRuntime.prototype.consumeFinalRaster = function (revision, content, output, context, consumer) {
+  return withRuntimeOperation(this, "consumeFinalRaster", () => {
+    const identity = copyProgramInput(content, byteStorage, "consumeFinalRaster", "program_field_program", 32);
+    const boundContext = copyProgramInput(context, byteStorage, "consumeFinalRaster", "program_field_context", 32);
+    return runtimeConsumeFinal.call(this, revision, identity, output, boundContext, consumer);
+  });
+};
+for (const method of ["updateUnknown", "contentIdentity", "finalRasterRefusal", "free"]) {
+  const original = ProgramRuntime.prototype[method];
+  ProgramRuntime.prototype[method] = function (...args) {
+    return withRuntimeOperation(this, method, () => original.apply(this, args));
+  };
+}
+if (Symbol.dispose) ProgramRuntime.prototype[Symbol.dispose] = ProgramRuntime.prototype.free;

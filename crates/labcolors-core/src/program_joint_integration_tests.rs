@@ -2193,7 +2193,10 @@ fn equivalent_recompiled_owner_is_a_new_generation_and_cannot_revive_old_session
     let SessionState::Ready { current } = old_session.commit(update(1, 0x00)).unwrap() else {
         panic!("the first owner must certify its admitted input");
     };
-    assert_eq!(current.report().content_identity(), first_content_identity);
+    assert_eq!(
+        current.report().content_identity(),
+        first_content_identity.legacy().unwrap()
+    );
 
     let replacement_evaluator = CountingProgramWcag22Srgb8V1::default();
     let replacement_calls = replacement_evaluator.clone();

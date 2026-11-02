@@ -1,8 +1,8 @@
 # Lab Colors для Android
 
 Kotlin вызывает общий Rust Core через сгенерированный UniFFI API. Builder
-кодирует ProgramWire v1/v2 без JavaScript. Цветовая математика и выбор
-результата не дублируются.
+кодирует ProgramWire v1/v2/v3 без JavaScript; V4 вызывает генератор wire из Core.
+Цветовая математика и выбор результата не дублируются.
 
 ## Подключение
 
@@ -82,6 +82,36 @@ Builder принадлежит одному вызывающему контек�
 декларацию. Сессия допускает перенос между потоками, но одновременная запись
 и повторный вход получают явный отказ, не скрытую очередь.
 
+Для вычисляемых целей используйте `ProgramWireBuilderV3`. Приложение объявляет
+область, опору, допуск и порядок предпочтения; затем добавляет обычный граф
+поверхностей, opacity, occurrences, ограничений и outputs:
+
+```kotlin
+val builder = ProgramWireBuilderV3()
+    .computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), byteArrayOf(64, 64, 64), 1.0)
+    .assignment(listOf(21u))
+```
+
+`ProgramWireDomainV3.Gray` принимает `UByte`-границы множества `[g, g, g]`.
+`Box(lower, upper)` принимает два `ByteArray` по три encoded sRGB8-канала.
+Границы включены; смысл цели и опору задаёт клиент. `anchor` может лежать вне
+области. `maxDelta` конечен, неотрицателен и имеет конечный квадрат в
+[метрике V3](../../docs/contracts/program-assignment-v3.md).
+Каждая вычисляемая цель входит в `assignment` ровно один раз; порядок задаёт
+лексикографическое предпочтение. Core сохраняет допустимую авторскую композицию,
+а при нарушении ограничений вычисляет разрешённую замену. Фиксированные цели
+можно использовать вместе с вычисляемыми; смесь с конечным выбором пока
+возвращает `program_unsupported`.
+
+`snapshotVersion()` равен `1u` для V1/V2 и `2u` для V3. В version 1 сохранена
+прежняя семантика outputs, включая предыдущий успешный результат. В version 2
+outputs доступны только в `ready`; `unsatisfied`, `incomplete`, `waiting` и
+`stale` имеют нулевой `outputCount()`. `unsatisfied` означает доказанное
+отсутствие решения, `incomplete` — незавершённый поиск. `reason(): String?`
+равен `"limit"` только у `incomplete`; `revision(): ULong` всегда сообщает
+принятую ревизию. Сохранённый snapshot остаётся неизменным, но не подтверждает
+актуальность старого цвета.
+
 ## Привязка к интерфейсу и ресурсы
 
 `attachProgramWire` принимает `ProgramPointSinkHost`. `tryInstall` выполняется
@@ -89,11 +119,52 @@ Builder принадлежит одному вызывающему контек�
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
 внешними потребителями; подтверждение рендера не выводится из расчёта цвета.
+`CONFIRM_EXACT` подтверждает прежнее состояние и stamp без повторной установки.
+После отзыва `point == null` допустим, только если у host также нет paint и
+совпадают sequence/binding epoch.
+
+Attached snapshot предоставляет те же `snapshotVersion`, `revision` и `reason`.
+Новая принятая ревизия с `incomplete` или `unsatisfied` сначала отзывает прежний
+paint. Если host отклоняет команду, сохраняется прежний head. Attachment
+устанавливает один terminal point, а не транзакцию нескольких независимых UI-выходов.
 
 Объекты UniFFI освобождаются через `use`/`close`. Для attachment сначала отзовите
 внешнюю привязку и вызовите `dispose(true)`, затем `close()`. Освобождение памяти
 не означает отзыв внешнего UI. `dispose(false)` сохраняет живую привязку для
 повтора. После закрытия native handle использовать объект нельзя.
+
+## Полный растр V4
+
+`ProgramWireBuilderV4(sourcePort, destinationPort, operatorId, outputSlot, cleanliness)`
+принимает `ULong` raster ports и operator, `UInt` output slot и
+`ProgramFinalRasterCleanlinessRequirement`: `OFF`,
+`LINT_EXACT_NOMINAL_SRGB8_V2` или `MANDATORY_EXACT_NOMINAL_SRGB8_V2`.
+`finish()` получает bytes через сгенерированную функцию `finalRasterWire`.
+Core исполняет source-over и сохраняет переданные locked premultiplied RGBA8.
+
+`runtime.updateFinalRaster(revision, width, height, dpr, context, sourcePort,
+source, destinationPort, destination)` принимает полные `ByteArray` обоих
+источников. Core проверяет extent, DPR, предел 65536 пикселей, bytes и ревизию.
+`finalRasterContentIdentity()` возвращает 32-byte identity программы.
+
+`consumeFinalRaster(revision, content, output, context, consumer)` проверяет
+текущий допуск до синхронного `ProgramFinalRasterConsumer.consume(raster)`.
+Callback получает owned `ProgramFinalRasterBytes`: scope, width, height,
+devicePixelRatio, revision, outputSlot, RGB8 pixels и cleanliness.
+`true` подтверждает приём; `false` даёт `program_field_consumer_rejected`;
+`ProgramFinalRasterCallbackException.InvocationFailed` —
+`program_field_consumer_failed`. Память полученных records и массивов
+принадлежит Kotlin и сохраняется после `close()` runtime.
+
+Cleanliness передаёт requirement, verdict, checkedPixelCount, violationCount,
+firstViolation, profile и profileRelease. Lint сохраняет Ready и точные pixels
+при нарушении. Mandatory сохраняет Ready только при соответствии конвенции;
+`finalRasterRefusal()` сообщает код и первый witness отказа. Failed-растр даёт
+`program_field_stale` при потреблении до вызова callback.
+Копия frame сохраняет сведения своей ревизии; текущий допуск проверяет новый вызов Core.
+`assessmentReport()` field-снимка возвращает `null`.
+[Полный контракт растра](../../docs/contracts/final-raster-v1.md) задаёт область
+opaque RGB8, физическую модель и ограничения.
 
 ## Проверки
 

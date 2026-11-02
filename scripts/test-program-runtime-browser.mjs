@@ -950,6 +950,97 @@ export function verifyBrowserSelection(result) {
   }
 }
 
+export function browserAssignmentScenario(origin) {
+  return 'const done=arguments[arguments.length-1]; const browserCleanup=' + browserCleanup.toString()
+    + '; (' + browserAssignmentConsumer.toString() + ')(' + JSON.stringify(origin)
+    + ').then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));';
+}
+
+async function browserAssignmentConsumer(origin) {
+  const resources = [], handles = [], acquired = [], released = [];
+  let primary, result, element, attachment;
+  const property = '--assignment';
+  try {
+    const api = await import(origin + '/index.js');
+    const { ProgramWireBuilderV3 } = await import(origin + '/program-wire/abi-v3.js');
+    await api.init();
+    const wire = new ProgramWireBuilderV3()
+      .computedTarget(21, { kind: 'box', lower: [0, 0, 0], upper: [255, 255, 255] }, [24, 24, 24], 1)
+      .assignment([21]).surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 41, 51, 64, .2, 1).presentationRoot(71, 61).presentationTarget(71, 61)
+      .wcag22VisibleUnary(true, 81, 61, 1).output(91, 41).finish();
+    element = document.createElement('span');
+    element.textContent = 'Assignment'; element.style.color = `var(${property})`;
+    document.body.append(element);
+    const host = { sequence: 0n, epoch: null, operations: [] };
+    attachment = api.attachProgramWire(wire, 1, 91, 501, 71, 61, (intent) => {
+      if (intent.sinkOutput !== 501 || intent.expectedSequence !== host.sequence
+        || (host.epoch !== null && intent.bindingEpoch !== host.epoch)) return false;
+      if (intent.operation === 'setAll') {
+        if (intent.point?.slot !== 91 || intent.point.opacity !== 1 || intent.point.source.length !== 3) return false;
+        const [r, g, b] = intent.point.source;
+        element.style.setProperty(property, `rgb(${r}, ${g}, ${b})`);
+      } else if (intent.operation === 'revokeAll') {
+        if (intent.point !== null) return false;
+        element.style.removeProperty(property);
+      } else if (intent.operation !== 'confirmExact' || intent.desiredSequence !== intent.expectedSequence) return false;
+      host.sequence = intent.desiredSequence; host.epoch = intent.bindingEpoch;
+      host.operations.push(intent.operation); return true;
+    });
+    acquired.push('assignment-attachment', 'assignment-host');
+    resources.push({ name: 'assignment-attachment', release() {
+      attachment.dispose(true); attachment.free(); released.push('assignment-attachment');
+    } }, { name: 'assignment-host', release() {
+      element.style.removeProperty(property); element.remove(); released.push('assignment-host');
+    } });
+    const observe = (name, revision, background) => {
+      const handle = attachment.updateObserved(revision, new Uint32Array([1]), new Uint8Array(background), 1);
+      handles.push({ name, handle }); acquired.push(name);
+      resources.push({ name, release() { handle.free(); released.push(name); } }); return handle;
+    };
+    const read = (snapshot) => ({ version: snapshot.snapshotVersion, revision: String(snapshot.revision),
+      state: snapshot.state, reason: snapshot.reason ?? null, hasRender: snapshot.hasRender(),
+      outputs: Array.from({ length: snapshot.outputCount() }, (_, i) => ({ slot: snapshot.outputSlot(i),
+        rgb: Array.from(snapshot.outputRgb(i)), opacity: snapshot.outputOpacity(i) })),
+    });
+    const first = observe('assignment-first', 1n, [255, 255, 255]);
+    const initial = read(first), css = element.style.getPropertyValue(property);
+    const computed = getComputedStyle(element).color;
+    const stopped = observe('assignment-stopped', 2n, [0, 0, 0]);
+    const afterStop = element.style.getPropertyValue(property);
+    const replay = observe('assignment-replay', 2n, [0, 0, 0]);
+    const restored = observe('assignment-restored', 3n, [255, 255, 255]);
+    result = { initial, stopped: read(stopped), replay: read(replay), restored: read(restored), held: read(first),
+      css, computed, afterStop, afterRestore: element.style.getPropertyValue(property), operations: host.operations };
+  } catch (error) { primary = error; }
+  const outcome = browserCleanup(primary, resources.toReversed());
+  if (element?.isConnected && !resources.some(({ name }) => name === 'assignment-host')) element.remove();
+  return { ...result, ...outcome, acquired, released, readback: {
+    ...Object.fromEntries(handles.map(({ name, handle }) => [name, handle.__wbg_ptr === 0])),
+    'assignment-attachment': attachment?.__wbg_ptr === 0,
+    'assignment-host': !element?.isConnected && element?.style.getPropertyValue(property) === '',
+  } };
+}
+
+export function verifyBrowserAssignment(result) {
+  const ready = (revision) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
+    outputs: [{ slot: 91, rgb: [24, 24, 24], opacity: 1 }] });
+  const stopped = { version: 2, revision: '2', state: 'incomplete', reason: 'limit', hasRender: false, outputs: [] };
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'assignment-attachment', 'assignment-host',
+    'assignment-first', 'assignment-stopped', 'assignment-replay', 'assignment-restored'];
+  if (result.error || result.cleanupError
+    || ![result.initial, result.held].every((value) => isDeepStrictEqual(value, ready('1')))
+    || !isDeepStrictEqual(result.restored, ready('3'))
+    || ![result.stopped, result.replay].every((value) => isDeepStrictEqual(value, stopped))
+    || result.css !== 'rgb(24, 24, 24)' || result.computed !== 'rgb(24, 24, 24)'
+    || result.afterStop !== '' || result.afterRestore !== result.css
+    || !isDeepStrictEqual(result.operations, ['setAll', 'revokeAll', 'confirmExact', 'setAll'])
+    || !isDeepStrictEqual(result.acquired, names) || !isDeepStrictEqual(result.released, names.toReversed())
+    || names.some((name) => result.readback?.[name] !== true)) {
+    fail('browser computed assignment drifted: ' + JSON.stringify(result));
+  }
+}
+
 export function verifyBrowserConsumer(result) {
   const equal = isDeepStrictEqual;
   const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [12, 34, 56], opacity: 0.875 }] };
@@ -1167,6 +1258,9 @@ async function main() {
   const selection = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserSelectionScenario });
   verifyBrowserSelection(selection);
   console.log('LAB_COLORS_PROGRAM_SELECTION_BROWSER_RESULT ' + JSON.stringify(selection));
+  const assignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserAssignmentScenario });
+  verifyBrowserAssignment(assignment);
+  console.log('LAB_COLORS_PROGRAM_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(assignment));
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);

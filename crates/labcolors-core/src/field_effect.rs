@@ -12,6 +12,8 @@
     reason = "V7 field capability staged infrastructure; consumed by C7e Glow lowering in the next slice"
 )]
 
+pub(crate) mod final_raster;
+
 use crate::Srgb8;
 use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
 use crate::session::SessionObservationBindingPermitV1;

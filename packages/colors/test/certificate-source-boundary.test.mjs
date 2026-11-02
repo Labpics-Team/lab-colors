@@ -19,6 +19,7 @@ export function issueSourceCertificateEnvelope(...args) {
 export function decodeCertificateEnvelope() { throw new Error("Unexpected decoder call"); }
 export function attachProgramWire() { throw new Error("Unexpected attachment call"); }
 export function compileProgramWire() {}
+export function finalRasterSourceOverWire() { throw new Error("Unexpected raster call in source issuance test"); }
 export function evaluateWcag22() {}
 export function numericalCapabilityManifest() {}
 export class ProgramRuntime {}

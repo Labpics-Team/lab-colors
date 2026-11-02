@@ -28,6 +28,7 @@ export function decodeCertificateEnvelope(bytes) {
 }
 export function attachProgramWire() { throw new Error("Unexpected attachment call in ingress test"); }
 export function compileProgramWire() { throw new Error("Unexpected compiler call in ingress test"); }
+export function finalRasterSourceOverWire() { throw new Error("Unexpected raster call in ingress test"); }
 export function evaluateWcag22() { throw new Error("Unexpected evaluator call in ingress test"); }
 export function numericalCapabilityManifest() { throw new Error("Unexpected manifest call in ingress test"); }
 export class ProgramRuntime {}

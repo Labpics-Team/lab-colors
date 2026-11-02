@@ -105,6 +105,11 @@ def weighted_bounds(weight: Fraction, code: int) -> tuple[int, int]:
 
     assert 0 <= lower <= upper <= Q
     assert upper - lower <= 1
+    if upper - lower != int(code != 0):
+        raise ValueError(
+            f"lower-only Q55 encoding cannot represent weight={weight}, code={code}: "
+            f"bounds=({lower}, {upper})"
+        )
     return lower, upper
 
 
@@ -125,15 +130,15 @@ def emit(artifact_path: Path | None) -> None:
         artifact_path.write_bytes(canonical)
     profile_digest = hashlib.sha256(PROFILE_BYTES).hexdigest()
     generator_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    print("//! Generated WCAG 2.2 sRGB8 Q55 weighted contribution bounds.")
+    print("//! Сгенерированные нижние Q55-границы вкладов WCAG 2.2 sRGB8.")
     print("//!")
     print("//! DO NOT EDIT: regenerate with `python3 scripts/generate_wcag22_q55.py`.")
-    print("//! Canonical digest covers each lower/upper u64 in channel/code order,")
-    print("//! little-endian, without Rust formatting.")
+    print("//! Верхняя граница: lower + u64::from(code != 0), проверено для всех 768 строк.")
+    print("//! Canonical digest сохраняет все пары lower/upper u64 в channel/code order,")
+    print("//! little-endian, независимо от сжатого Rust-представления.")
     print()
     print(f"pub(crate) const Q55_SCALE: u64 = {Q};")
-    print("pub(crate) const PROFILE_CHECKSUM: &str =")
-    print(f'    "{profile_checksum()}";')
+    print(f'pub(crate) const PROFILE_CHECKSUM: &str = "{profile_checksum()}";')
     print("pub(crate) const PROFILE_SOURCE_SHA256: &str =")
     print(f'    "{profile_digest}";')
     print("pub(crate) const GENERATOR_SHA256: &str =")
@@ -141,11 +146,11 @@ def emit(artifact_path: Path | None) -> None:
     print("pub(crate) const ARTIFACT_SHA256: &str =")
     print(f'    "{digest}";')
     print("#[rustfmt::skip]")
-    print("pub(crate) static WEIGHTED_CONTRIBUTION_BOUNDS: [[[u64; 2]; 256]; 3] = [")
+    print("pub(crate) static WEIGHTED_CONTRIBUTION_LOWER: [[u64; 256]; 3] = [")
     for weight, table in zip(WEIGHTS, tables):
         print(f"    [ // exact weight {weight.numerator}/{weight.denominator}")
         for offset in range(0, 256, 4):
-            cells = ", ".join(f"[{lo}, {hi}]" for lo, hi in table[offset : offset + 4])
+            cells = ", ".join(str(lo) for lo, _hi in table[offset : offset + 4])
             print(f"        {cells},")
         print("    ],")
     print("];")

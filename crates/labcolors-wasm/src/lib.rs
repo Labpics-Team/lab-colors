@@ -11,6 +11,7 @@ mod terminal_projection;
 use std::cell::{Cell, RefCell};
 
 use wasm_bindgen::prelude::*;
+mod finite_field;
 
 use crate::error::BindingError;
 
@@ -121,7 +122,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22AssessmentV1;
 }
-// Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
+// Приватные индексы JS: runtime — 0..7 и 15, attachment — 8..14.
+// Сопоставления, таблица, граница message и browser-тест меняются вместе.
 #[wasm_bindgen(inline_js = r#"
 export function programError(message, code, operation) {
   try {
@@ -150,11 +152,12 @@ const programFailureCodes = [
   "program_attachment_internal_invariant",
   "program_attachment_non_terminal_target",
   "program_attachment",
+  "program_unsupported",
 ];
 
 export function programFailure(kind, operation) {
   return programError(
-    kind < 8 ? "Program runtime operation failed" : "Program attachment admission failed",
+    kind < 8 || kind === 15 ? "Program runtime operation failed" : "Program attachment admission failed",
     programFailureCodes[kind],
     operation,
   );
@@ -166,6 +169,8 @@ const bindingFailures = [
   ["internal_error", "evaluateWcag22"],
   ["internal_error", "numericalCapabilityManifest"],
   ["invalid_output_index", "readProgramOutput"],
+  ["invalid_composite_id", "readPresentationComposite"],
+  ["presentation_composite_unavailable", "readPresentationComposite"],
 ];
 
 export function bindingFailure(kind, reason) {
@@ -272,8 +277,58 @@ export function reportProjection(contentIdentity, streamId, revision, scenarioPr
     cells: reportFreeze(cells),
   });
 }
+export function reportFinalRasterViolation(pixelIndex, red, green, blue, lower, upper) {
+  return reportFreeze({ pixelIndex,
+    composite: reportFreeze([red, green, blue]),
+    rejectedBlueInterval: reportFreeze([lower, upper]),
+  });
+}
+export function reportFinalRasterCleanliness(mode, verdict, checkedPixelCount, violationCount, firstViolation, profile, release) {
+  return reportFreeze({ mode, verdict, profile,
+    profileRelease: profile === null ? null : new ReportBytes(release),
+    checkedPixelCount, violationCount, firstViolation,
+  });
+}
+export function consumeFinalRasterRgb(bytes, width, height, dpr, revision, slot, cleanliness, callback) {
+  const pixels = new ReportBytes(bytes);
+  return callback(reportFreeze({
+    scope: "ModeledFinalRasterV1", width, height, devicePixelRatio: dpr,
+    revision, outputSlot: slot, pixels, cleanliness,
+  })) === true;
+}
 "#)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = consumeFinalRasterRgb)]
+    fn consume_final_raster_rgb(
+        bytes: &[u8],
+        width: u32,
+        height: u32,
+        dpr: u8,
+        revision: u64,
+        slot: u32,
+        cleanliness: &JsValue,
+        callback: &js_sys::Function,
+    ) -> Result<bool, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFinalRasterViolation)]
+    fn report_final_raster_violation(
+        pixel_index: u32,
+        red: u8,
+        green: u8,
+        blue: u8,
+        lower: u8,
+        upper: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFinalRasterCleanliness)]
+    fn report_final_raster_cleanliness(
+        mode: &str,
+        verdict: &str,
+        checked: u32,
+        violations: u32,
+        first: &JsValue,
+        profile: &JsValue,
+        release: &[u8],
+    ) -> Result<JsValue, JsValue>;
+
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
@@ -365,6 +420,8 @@ enum BindingFailure {
     Wcag22Internal,
     ManifestInternal,
     OutputIndex,
+    CompositeId,
+    CompositeUnavailable,
 }
 
 fn to_js_error(error: BindingError) -> JsValue {
@@ -432,6 +489,7 @@ fn to_program_js_error(
         E::Update => 4,
         E::ResourceExhausted => 5,
         E::InternalInvariant => 6,
+        E::Unsupported => 15,
         _ => 7,
     };
     program_failure_error(kind, operation.key()).into()
@@ -662,6 +720,21 @@ impl ProgramSnapshot {
         })
     }
 
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
+
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
@@ -712,6 +785,30 @@ impl ProgramSnapshot {
             .get(index)
             .map(|output| output.opacity())
             .ok_or_else(output_index_error)
+    }
+
+    /// Нормальный итог root в точном scenario; отдельная копия данных без полномочий.
+    #[wasm_bindgen(js_name = presentationCompositeRgb)]
+    pub fn presentation_composite_rgb(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] root: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] scenario: JsValue,
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        let invalid =
+            || binding_failure_error(BindingFailure::CompositeId as u32, "IDs must be u32");
+        let root = checked_u32(root).ok_or_else(invalid)?;
+        let scenario = checked_u32(scenario).ok_or_else(invalid)?;
+        let rgb = self
+            .inner
+            .presentation_composite_rgb(root, scenario)
+            .ok_or_else(|| {
+                binding_failure_error(
+                    BindingFailure::CompositeUnavailable as u32,
+                    "ready snapshot has no composite for these IDs",
+                )
+            })?;
+        let [red, green, blue] = rgb.bytes();
+        copy_output_rgb(red, green, blue)
     }
 }
 
@@ -1207,6 +1304,21 @@ impl ProgramAttachedSnapshot {
         )
     }
 
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot().snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.snapshot().revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.snapshot().reason().map(str::to_owned)
+    }
+
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().to_string()
@@ -1546,6 +1658,16 @@ mod browser_tests {
                 "program_compile",
             ),
             (
+                E::Unsupported,
+                ProgramOperation::CompileProgramWire,
+                "program_unsupported",
+            ),
+            (
+                E::Unsupported,
+                ProgramOperation::AttachProgramWire,
+                "program_unsupported",
+            ),
+            (
                 E::FamilyArtifactsRequired,
                 ProgramOperation::CompileProgramWire,
                 "program_family_artifacts_required",
@@ -1661,6 +1783,9 @@ mod browser_tests {
             .expect("observed update");
 
         assert_eq!(snapshot.state(), "ready");
+        assert_eq!(snapshot.snapshot_version(), 1);
+        assert_eq!(snapshot.revision(), 1);
+        assert_eq!(snapshot.reason(), None);
         assert_eq!(snapshot.output_count(), 1);
         assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
         assert_eq!(
@@ -1668,6 +1793,16 @@ mod browser_tests {
             &[20, 20, 20]
         );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
+
+        let stale = runtime
+            .update_unknown(2_u64.into(), 41.into())
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(stale.state(), "stale");
+        assert_eq!(stale.snapshot_version(), 1);
+        assert_eq!(stale.revision(), 2);
+        assert_eq!(stale.reason(), None);
+        assert_eq!(stale.output_count(), 1);
+        assert_eq!(snapshot.revision(), 1);
     }
 
     #[wasm_bindgen_test]

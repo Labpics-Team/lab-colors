@@ -1764,7 +1764,7 @@ fn verified_snapshot_mints_attached_render_output_and_exact_confirm_only_for_ide
         let outputs: Vec<_> = committed.render_outputs().collect();
         assert_eq!(outputs.len(), 2);
         let output = outputs[0];
-        assert_eq!(output.certificate().observation().revision(), 1);
+        assert_eq!(output.evidence().observation().revision(), 1);
         assert_eq!(output.output(), OUTPUT_A);
         assert_eq!(output.paint().source(), Srgb8::new([12, 34, 56]));
         assert_eq!(output.root(), ROOT);

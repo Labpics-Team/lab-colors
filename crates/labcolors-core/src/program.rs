@@ -69,6 +69,9 @@ use crate::observation::{
 };
 #[cfg(test)]
 use crate::program_session::DeclaredJointSelectionV1;
+use crate::program_session::finite_field::{
+    self, FinalRasterMaterializationV1, FinalRasterRefusalV1,
+};
 use crate::program_session::{
     CompiledCoreProgramV1, CompiledPointOutputPresentationV1, CompositionProfile, ConstraintId,
     ConstraintInvocation, CoreProgramConstraintInvocationV1, CoreProgramDraftErrorV1,
@@ -78,16 +81,17 @@ use crate::program_session::{
     DeclaredSrgb8CleanSetViolationV1 as CoreDeclaredSrgb8CleanSetViolationV1,
     FinitePaintDomainAdmissionErrorV1, FinitePaintDomainV1 as CoreFinitePaintDomainV1,
     JointCandidateStateV1, Occurrence, OpacityInput, OutputBinding, OutputSlotId, Paint,
-    PointOutputPresentationBindErrorV1, PointPresentationRootV1, PointPresentationTargetV1,
-    PresentationRootId, ProgramCompileError, ProgramConflictV1, ProgramConstraintCellV1,
-    ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
-    ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1,
-    ProgramIntrinsicUnaryPassEvidenceV1, ProgramIntrinsicUnaryViolationEvidenceV1,
-    ProgramPaintOutputV1, ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1,
-    ProgramReportV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
-    ProgramSessionPlan, ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
-    TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
+    PointOutputPresentationBindErrorV1, PointPhysicalEvidenceV1, PointPresentationRootV1,
+    PointPresentationTargetV1, PresentationRootId, ProgramCompileError, ProgramConflictV1,
+    ProgramConstraintCellV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
+    ProgramConstraintSubjectV1, ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9,
+    ProgramIntrinsicPaintBindingV1, ProgramIntrinsicUnaryPassEvidenceV1,
+    ProgramIntrinsicUnaryViolationEvidenceV1, ProgramOwnerIdentityV1, ProgramPaintOutputV1,
+    ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1, ProgramReportV1,
+    ProgramSessionEvaluationError, ProgramSessionInstantiateError, ProgramSessionPlan,
+    ProgramVerifiedOutcomeV1, ProgramVerifiedV1, ProgramViolationOutcomeV1,
+    ProgramVisibleRelationBindingV1, Source, SourceId, Surface, Target, TargetCandidateChoiceV1,
+    TargetCandidateId, TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 #[cfg(test)]
 pub(crate) use crate::relation::DirectedRelationErrorV1;
@@ -105,7 +109,13 @@ type CoreVerifiedV1 = ProgramVerifiedV1<CoreProgramEvaluatorsV1>;
 type CoreConflictV1 = ProgramConflictV1<CoreProgramEvaluatorsV1>;
 type CoreProgramPlanV1 = ProgramSessionPlan<CoreProgramEvaluatorsV1>;
 type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
-type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
+type CoreVerifiedOutcomeV1 = ProgramVerifiedOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreViolationOutcomeV1 = ProgramViolationOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreProgramStateV1 = SessionState<
+    CoreVerifiedOutcomeV1,
+    CoreViolationOutcomeV1,
+    crate::program_session::computed_assignment::ComputedStoppedV1,
+>;
 type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
@@ -541,6 +551,8 @@ impl AppearanceContextV1 {
 /// Закрытая классификация ошибки компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKindV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource,
     /// Повторно объявлена цель.
@@ -800,6 +812,8 @@ pub(crate) enum JointOrderErrorV1 {
 /// [`Self::related_handle`] — только удобные проекции полного payload.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CompileErrorV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource {
         /// Повторный ID.
@@ -1200,6 +1214,8 @@ impl CompileErrorV1 {
             Self::UnconstrainedFiniteTarget { .. } => Kind::UnconstrainedFiniteTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
+            Self::Unsupported => Kind::Unsupported,
+            Self::InvalidAssignment => Kind::InvalidAssignment,
             Self::MissingJointSelection => Kind::MissingJointSelection,
             Self::JointSelectionWithoutTargets => Kind::JointSelectionWithoutTargets,
             Self::JointStateDuplicateTarget { .. } => Kind::JointStateDuplicateTarget,
@@ -1316,6 +1332,8 @@ impl CompileErrorV1 {
             | Self::EmptyOutputSet
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1409,6 +1427,8 @@ impl CompileErrorV1 {
             | Self::DuplicateOutputSlot { .. }
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1433,6 +1453,44 @@ impl DraftV1 {
         Self {
             inner: CoreProgramDraftV1::new(),
         }
+    }
+
+    pub(crate) fn push_final_raster_source_over(
+        &mut self,
+        source: u64,
+        destination: u64,
+        operator: u64,
+        output: u32,
+        cleanliness: crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1,
+    ) {
+        use crate::field_effect::*;
+        self.inner.push_field_input(FieldInputDeclarationV1::new(
+            FieldInputPortIdV1::new(source),
+            FieldInputKindV1::PremultipliedRgba8V1,
+        ));
+        self.inner.push_field_input(FieldInputDeclarationV1::new(
+            FieldInputPortIdV1::new(destination),
+            FieldInputKindV1::PremultipliedRgba8V1,
+        ));
+        self.inner
+            .push_field_operator(FieldOperatorDeclarationV1::new(
+                FieldOperatorInstanceIdV1::new(operator),
+                FieldExecutionProfileV1::PremultipliedSourceOver {
+                    source: FieldValueRefV1::Input(FieldInputPortIdV1::new(source)),
+                    destination: FieldValueRefV1::Input(FieldInputPortIdV1::new(destination)),
+                },
+                FieldWorkingSpaceV1::EncodedSrgb8PremultipliedV1,
+                FieldPrecisionV1::FixedQ32V1,
+                FieldQuantizationV1::RoundHalfUpSrgb8V1,
+                CarrierIntentV1::Present,
+            ));
+        self.inner.push_field_output(
+            crate::program_session::ProgramFieldOutputBindingV1::final_opaque(
+                crate::program_session::OutputSlotId::new(output),
+                FieldOperatorInstanceIdV1::new(operator),
+                cleanliness,
+            ),
+        );
     }
 
     /// Объявляет неизменяемый исходный encoded sRGB8 сигнал.
@@ -1844,6 +1902,26 @@ impl DraftV1 {
         self
     }
 
+    pub(crate) fn push_computed_target(
+        &mut self,
+        id: TargetIdV1,
+        domain: crate::program_session::computed_assignment::AssignmentDomainV1,
+        anchor: Srgb8,
+        max_delta: f64,
+    ) {
+        self.inner.push_target(Target::new(
+            id.into_core(),
+            crate::program_session::TargetIntentV1::Computed(
+                crate::program_session::computed_assignment::ComputedTargetV1::declared(
+                    domain, anchor, max_delta,
+                ),
+            ),
+        ));
+    }
+    pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
+        self.inner.set_assignment(order);
+    }
+
     /// Связывает клиентский output slot с выбранным encoded Paint.
     pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner
@@ -1915,8 +1993,12 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV9 {
-        ContentIdentityV9::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ProgramOwnerIdentityV1 {
+        self.compiled.content_identity()
+    }
+
+    pub(crate) fn snapshot_version(&self) -> u32 {
+        self.content_identity().snapshot_version()
     }
 
     /// Точный авторский `SelectionRelease` конечного Program; у fixed-only
@@ -2025,6 +2107,9 @@ impl OwnerV1 {
         if !self.compiled.owns_session(&session.session) {
             return Err(UpdateErrorV1::OwnerMismatch);
         }
+        if matches!(update, UpdateV1::Observed { .. }) {
+            self.validate_point_observation()?;
+        }
         let transition = session.prepare_update(update)?;
         Ok(PreparedSessionTransitionV1 { transition })
     }
@@ -2046,7 +2131,68 @@ impl OwnerV1 {
         if !self.compiled.owns_session(&session.session) {
             return Err(UpdateErrorV1::OwnerMismatch);
         }
+        self.validate_point_observation()?;
         let transition = session.prepare_schema_ordered_observed(revision, source)?;
+        Ok(PreparedSessionTransitionV1 { transition })
+    }
+
+    /// Проверяет вид наблюдения до admission и чтения клиентского source.
+    pub(crate) fn validate_point_observation(&self) -> Result<(), UpdateErrorV1> {
+        if self.compiled.supports_point_observation() {
+            Ok(())
+        } else {
+            Err(UpdateErrorV1::Unsupported)
+        }
+    }
+
+    pub(crate) fn validate_final_raster_input(
+        &self,
+        payload: &crate::field_effect::final_raster::FieldObservedPayloadV1,
+    ) -> Result<(), crate::program_session::finite_field::FinalRasterRefusalV1> {
+        self.compiled.validate_final_field_payload(payload)
+    }
+
+    /// Отказ raster-проекции читается только владельцем той же Session.
+    pub(crate) fn final_raster_refusal(&self, session: &SessionV1) -> Option<FinalRasterRefusalV1> {
+        if !self.compiled.owns_session(&session.session) {
+            return Some(FinalRasterRefusalV1::ProgramBinding);
+        }
+        finite_field::current_refusal(&session.session)
+    }
+
+    /// Проверяет owner-эпоху и все current bindings до выдачи materialization.
+    pub(crate) fn current_final_raster<'session>(
+        &'session self,
+        session: &'session SessionV1,
+        content_identity: [u8; 32],
+        output: u32,
+        revision: u64,
+        context: [u8; 32],
+    ) -> Result<&'session FinalRasterMaterializationV1, FinalRasterRefusalV1> {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(FinalRasterRefusalV1::ProgramBinding);
+        }
+        let (materialization, current) = finite_field::current_final_raster(&session.session)?;
+        materialization.check_current(current, content_identity, output, revision, context)?;
+        Ok(materialization)
+    }
+
+    pub(crate) fn prepare_field_update<'s>(
+        &self,
+        session: &'s mut SessionV1,
+        revision: u64,
+        payload: crate::shared::Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>,
+    ) -> Result<PreparedSessionTransitionV1<'s>, UpdateErrorV1> {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(UpdateErrorV1::OwnerMismatch);
+        }
+        self.compiled
+            .validate_final_field_payload(&payload)
+            .map_err(|_| UpdateErrorV1::OwnerMismatch)?;
+        let transition = session
+            .session
+            .prepare_field(Revision::new(revision), payload)
+            .map_err(map_session_update_error)?;
         Ok(PreparedSessionTransitionV1 { transition })
     }
 
@@ -2250,6 +2396,8 @@ pub(crate) enum StateKindV1 {
     Stale,
     /// Текущая ревизия имеет исчерпывающий конфликт.
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Текущая сырая голова наблюдений независимо от evaluator lifecycle.
@@ -2284,6 +2432,11 @@ pub(crate) struct EvidenceViewV1<'a> {
 }
 
 impl<'a> EvidenceViewV1<'a> {
+    pub(crate) fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
+        self.state()
+            .current_verified()
+            .map(|inner| VerifiedOutputV1 { inner })
+    }
     const fn state(self) -> &'a CoreProgramStateV1 {
         self.session.state()
     }
@@ -2294,7 +2447,15 @@ impl<'a> EvidenceViewV1<'a> {
             SessionState::Waiting => StateKindV1::Waiting,
             SessionState::Ready { .. } => StateKindV1::Ready,
             SessionState::Stale { .. } => StateKindV1::Stale,
-            SessionState::Failed { .. } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => StateKindV1::Unsatisfied,
+            SessionState::Incomplete { .. } => StateKindV1::Incomplete,
         }
     }
 
@@ -2317,7 +2478,15 @@ impl<'a> EvidenceViewV1<'a> {
     /// Индекс cause-сертификата в [`Self::certificates`] для `Failed`.
     pub(crate) const fn cause_certificate_index(self) -> Option<usize> {
         match self.state() {
-            SessionState::Failed { .. } => Some(0),
+            SessionState::Incomplete { .. }
+            | SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => None,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
         }
     }
@@ -2326,15 +2495,25 @@ impl<'a> EvidenceViewV1<'a> {
     pub(crate) fn certificates(
         self,
     ) -> impl ExactSizeIterator<Item = CertificateV1<'a>> + FusedIterator + 'a {
+        let legacy =
+            |current: &'a CoreVerifiedOutcomeV1| current.legacy().map(CertificateV1::verified);
         let (first, second) = match self.state() {
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
-                (Some(CertificateV1::verified(current)), None)
+                (legacy(current), None)
             }
-            SessionState::Failed { cause, previous } => (
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(cause),
+                previous,
+            } => (
                 Some(CertificateV1::conflict(cause)),
-                previous.as_ref().map(CertificateV1::verified),
+                previous.as_ref().and_then(legacy),
             ),
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            }
+            | SessionState::Incomplete { .. } => (None, None),
         };
         CertificatesV1::new(first, second)
     }
@@ -2376,6 +2555,55 @@ impl ContentIdentityV9 {
     /// Возвращает 256-битное каноническое представление identity.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct VerifiedOutputV1<'a> {
+    inner: &'a CoreVerifiedOutcomeV1,
+}
+
+pub(crate) struct PresentationCompositeV1<'a> {
+    pub(crate) root: u32,
+    pub(crate) scenarios: &'a [ScenarioId],
+    pub(crate) rgb: [u8; 3],
+}
+impl<'a> VerifiedOutputV1<'a> {
+    #[cfg(test)]
+    pub(crate) fn observation(self) -> ObservationV1<'a> {
+        use crate::session::SessionEvidenceV1;
+        ObservationV1 {
+            inner: self.inner.observation(),
+        }
+    }
+    pub(crate) fn content_identity(self) -> ProgramOwnerIdentityV1 {
+        self.inner.content_identity()
+    }
+    pub(crate) fn outputs(
+        self,
+    ) -> impl ExactSizeIterator<Item = CertifiedPaintOutputV1<'a>> + FusedIterator + 'a {
+        self.inner
+            .outputs()
+            .iter()
+            .map(CertifiedPaintOutputV1::from_core)
+    }
+    pub(crate) fn point_domains(
+        self,
+    ) -> impl ExactSizeIterator<Item = PointPhysicalEvidenceV1> + 'a {
+        self.inner.point_domains()
+    }
+    pub(crate) fn presentation_composites(
+        self,
+    ) -> impl ExactSizeIterator<Item = Option<PresentationCompositeV1<'a>>> + 'a {
+        use crate::session::SessionEvidenceV1;
+        self.inner.presentation_composites().map(move |composite| {
+            let composite = composite?;
+            Some(PresentationCompositeV1 {
+                root: composite.root.value(),
+                scenarios: self.inner.observation().provenance(composite.case_index)?,
+                rgb: composite.rgb,
+            })
+        })
     }
 }
 
@@ -2570,6 +2798,10 @@ impl<'a> ObservationV1<'a> {
     /// Возвращает канонические уникальные физические cases.
     ///
     /// Дубликаты значений схлопываются, а их ID сохраняются в provenance.
+    pub(crate) fn is_field(self) -> bool {
+        self.inner.field_payload().is_some()
+    }
+
     pub(crate) fn physical_cases(
         self,
     ) -> impl ExactSizeIterator<Item = PhysicalCaseV1<'a>> + FusedIterator + 'a {
@@ -3687,6 +3919,8 @@ impl InstantiateErrorV1 {
 /// Закрытая классификация ошибки одного атомарного update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UpdateErrorKindV1 {
+    /// Вид наблюдения не поддержан скомпилированным owner.
+    Unsupported,
     /// Session принадлежит другой точной owner-эпохе.
     OwnerMismatch,
     /// Наблюдение нарушает скомпилированную schema.
@@ -3905,6 +4139,8 @@ impl UpdateInvariantFailureV1 {
 /// авторитетные IDs и факты отказа находятся в этом enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateErrorV1 {
+    /// Point-наблюдение не поддержано owner с field-выходом.
+    Unsupported,
     /// Session создана другой точной owner-эпохой.
     OwnerMismatch,
     /// Наблюдение не содержит ни одного физического сценария.
@@ -3964,6 +4200,7 @@ impl UpdateErrorV1 {
     /// Возвращает стабильный класс ошибки без потери её payload.
     pub(crate) const fn kind(&self) -> UpdateErrorKindV1 {
         match self {
+            Self::Unsupported => UpdateErrorKindV1::Unsupported,
             Self::OwnerMismatch => UpdateErrorKindV1::OwnerMismatch,
             Self::EmptyScenarioSet
             | Self::DuplicateScenarioId { .. }
@@ -4333,6 +4570,11 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
+        ProgramCompileError::InvalidComputedAssignment(error) => match error {
+            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::MixedSelection => CompileErrorV1::Unsupported,
+            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::CardinalityOverflow => CompileErrorV1::ResourceExhausted,
+            _ => CompileErrorV1::InvalidAssignment,
+        },
     }
 }
 

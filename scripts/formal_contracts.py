@@ -137,11 +137,11 @@ CONTRACTS.update({
     ),
     "session::proofs::current_evidence_never_promotes_historical_state": (
         {"render authority must never promote historical evidence to current", "last good evidence must remain distinct from current authority"},
-        {"ready evidence authorizes", "historical evidence does not authorize", "no evidence remains absent"},
+        {"ready evidence authorizes", "historical evidence does not authorize", "no evidence remains absent", "incomplete retains only historical evidence", "incomplete has no invented evidence"},
     ),
     "session::proofs::state_displacement_conserves_every_owned_payload": (
-        {"displacement must empty the old state before publication", "displacement must retain exactly the old good and violation payloads"},
-        {"failed state keeps two owned payloads", "first violation has no invented predecessor", "empty state has nothing to retire"},
+        {"displacement must empty the old state before publication", "displacement must retain exactly the old good violation and incomplete payloads"},
+        {"failed state keeps two owned payloads", "first violation has no invented predecessor", "empty state has nothing to retire", "incomplete state keeps two owned payloads", "first incomplete has no invented predecessor"},
     ),
     "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap": (
         {"sink mutation must refuse exhausted sequence instead of wrapping", "sink CAS must preserve the entire expected token", "sink successor must advance exactly once within the same epoch"},
@@ -158,8 +158,8 @@ MUTANTS += (
      "    if records >= MAX_ADMISSION_ENTRIES_V1 {", "    if records > MAX_ADMISSION_ENTRIES_V1 {"),
     ("historical-evidence-promotion", "session.rs", "session::proofs::current_evidence_never_promotes_historical_state",
      "render authority must never promote historical evidence to current",
-     "            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } => None,",
-     "            Self::Stale { previous } => Some(previous),\n            Self::Waiting | Self::Failed { .. } => None,"),
+     "            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } | Self::Incomplete { .. } => {\n                None\n            }",
+     "            Self::Stale { previous } => Some(previous),\n            Self::Waiting | Self::Failed { .. } | Self::Incomplete { .. } => None,"),
     ("sink-stamp-no-advance", "program/attachment.rs", "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap",
      "sink successor must advance exactly once within the same epoch",
      "        match self.sequence.checked_add(1) {", "        match self.sequence.checked_add(0) {"),
