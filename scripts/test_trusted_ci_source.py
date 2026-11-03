@@ -16,6 +16,19 @@ import unittest
 from trusted_ci_source import guard_program, validate_owned_source
 
 
+def require_native_smoke_route(blocks):
+    admission = blocks["source-admission"]
+    smoke = blocks["native-identity-smoke"]
+    if re.findall(r"(?m)^    if: (.+)$", admission) != ["${{ !inputs.guard_only }}"]:
+        raise AssertionError("direct source admission must exclude reusable-only smoke")
+    if re.findall(r"(?m)^    if: (.+)$", smoke) != ["${{ inputs.guard_only }}"]:
+        raise AssertionError("smoke must keep its declared condition")
+    if re.findall(r"(?m)^    uses: (.+)$", smoke) != ["./.github/workflows/trusted-source-smoke-worker.yml"]:
+        raise AssertionError("smoke must enter its existing guarded reusable worker")
+    if re.search(r"(?m)^    (?:needs|runs-on):", smoke):
+        raise AssertionError("reusable-only smoke must not acquire a direct runner dependency")
+
+
 _UNSET = object()
 
 
@@ -223,12 +236,33 @@ class TestOwnedSourceGuard(unittest.TestCase):
                 for job, block in blocks.items():
                     if job == "source-admission":
                         continue
+                    if filename == "full-domain-run.yml" and job == "native-identity-smoke":
+                        require_native_smoke_route(blocks)
+                        continue
                     match = re.search(r"(?m)^    needs: (.+)$", block)
                     self.assertIsNotNone(match, job)
                     value = match.group(1)
                     needs = json.loads(value) if value.startswith("[") else [value]
                     self.assertIn("source-admission", needs, job)
                     self.require_guarded_condition(block)
+
+    def test_manual_smoke_uses_only_the_existing_guarded_reusable_worker(self):
+        source = (Path(__file__).resolve().parents[1] / ".github/workflows/full-domain-run.yml").read_text()
+        blocks = dict(re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\n((?:(?!^  [a-zA-Z0-9_-]+:\n)[\s\S])*)", source.split("\njobs:\n", 1)[1]))
+        require_native_smoke_route(blocks)
+        for job, before, after in (
+            ("source-admission", "!inputs.guard_only", "true"),
+            ("native-identity-smoke", "inputs.guard_only", "true"),
+            ("native-identity-smoke", "trusted-source-smoke-worker.yml", "ci-worker.yml"),
+            ("native-identity-smoke", "    uses:", "    needs: source-admission\n    uses:"),
+        ):
+            with self.subTest(job=job, mutation=before):
+                mutant = dict(blocks)
+                self.assertIn(before, mutant[job])
+                mutant[job] = mutant[job].replace(before, after, 1)
+                with self.assertRaises(AssertionError):
+                    require_native_smoke_route(mutant)
+
 
     @staticmethod
     def require_self_hosted_selector(block):

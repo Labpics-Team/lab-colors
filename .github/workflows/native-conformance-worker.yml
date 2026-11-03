@@ -348,6 +348,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: prepare the declared Android SDK
+        uses: android-actions/setup-android@035682743ab223ec9c6169af09811dff8247e520
+        env:
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+        with:
+          cmdline-tools-version: '15859902'
+          packages: ''
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24.14.0'
@@ -403,6 +410,13 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - name: prepare the declared Android SDK
+        uses: android-actions/setup-android@035682743ab223ec9c6169af09811dff8247e520
+        env:
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+        with:
+          cmdline-tools-version: '15859902'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: android-sdk-${{ github.sha }}

@@ -652,6 +652,7 @@ jobs:
       - name: terminal Program in real browser
         # Единственная команда связывает конечный Program с проверенным архивом.
         env:
+          BASH_ENV: ""
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}

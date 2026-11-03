@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   source-admission:
+    if: ${{ !inputs.guard_only }}
     name: source admission (full-domain-run)
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 5
@@ -556,5 +557,4 @@ jobs:
 
   native-identity-smoke:
     if: ${{ inputs.guard_only }}
-    needs: source-admission
     uses: ./.github/workflows/trusted-source-smoke-worker.yml

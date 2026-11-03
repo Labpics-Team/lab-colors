@@ -1,5 +1,7 @@
 """Локальные байты пакета и изоляция полномочий публикации."""
 from pathlib import Path
+import os
+import tempfile
 import json
 import re
 import subprocess
@@ -67,6 +69,12 @@ def require_condition(source, name, expected):
         raise AssertionError("job condition can skip required execution: " + name)
 
 
+def require_terminal_browser_environment(step):
+    values = re.findall(r"(?m)^          BASH_ENV: ([^\r\n]+)$", step)
+    if values not in (['""'], ["''"]):
+        raise AssertionError("terminal browser must clear inherited BASH_ENV")
+
+
 def validate(ci, package, release):
     for caller in [job(ci,"wasm"),job(release,"prepare")]:
         if "    uses: ./.github/workflows/package-worker.yml\n" not in caller:
@@ -114,6 +122,7 @@ def validate(ci, package, release):
     shells = re.findall(r"(?m)^        shell: ([^\r\n]+)$", browser_steps[0])
     if shells not in (["bash"], ["\"bash\""], ["'bash'"]):
         raise AssertionError("terminal browser shell does not execute the command")
+    require_terminal_browser_environment(browser_steps[0])
     runs = re.findall(r"(?ms)^        run: (.*?)(?=^        \S|\Z)", browser_steps[0])
     statements = [[line.strip() for line in run.splitlines()
                    if line.strip() and not line.lstrip().startswith("#")]
@@ -609,6 +618,45 @@ class ChromeDependencyReleaseTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, '')
                 self.assertIn('unsupported Chrome dependency release: ' + distro + ':' + release, result.stderr)
+
+class BrowserStartupEnvironmentTests(unittest.TestCase):
+    def step(self):
+        source = (ROOT / ".github/workflows/package-worker.yml").read_text()
+        return next(block for block in re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "wasm"))
+                    if 'run: node scripts/test-program-runtime-browser.mjs ' in block)
+
+    def execute(self, step):
+        command = re.search(r"(?m)^        run: (.+)$", step).group(1)
+        with tempfile.TemporaryDirectory(prefix="browser-shell-control-") as name:
+            root = Path(name)
+            startup = root / "startup.sh"
+            startup.write_text("exit 0\n")
+            trace = root / "argv"
+            node = root / "node"
+            node.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$TRACE_FILE"\nexit 23\n')
+            node.chmod(0o700)
+            environment = dict(os.environ, PATH=str(root) + ":/usr/bin:/bin",
+                               BASH_ENV=str(startup), TRACE_FILE=str(trace),
+                               VERIFIED_TARBALL="exact-package.tgz", VERIFIED_TARBALL_SHA256="a" * 64)
+            if re.search(r"(?m)^          BASH_ENV: (?:\"\"|'')$", step):
+                environment["BASH_ENV"] = ""
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+                                    env=environment, text=True, capture_output=True, timeout=5)
+            return result.returncode, trace.read_text().splitlines() if trace.exists() else []
+
+    def test_inherited_startup_cannot_skip_browser_or_erase_failure(self):
+        code, arguments = self.execute(self.step())
+        self.assertEqual(code, 23)
+        self.assertEqual(arguments, ["scripts/test-program-runtime-browser.mjs", "exact-package.tgz", "a" * 64])
+
+    def test_removing_empty_environment_is_detected_and_reproduces_skip(self):
+        step = self.step()
+        require_terminal_browser_environment(step)
+        mutant = re.sub(r"(?m)^          BASH_ENV: .*\n", "", step)
+        with self.assertRaisesRegex(AssertionError, "BASH_ENV"):
+            require_terminal_browser_environment(mutant)
+        self.assertEqual(self.execute(mutant), (0, []))
+
 
 if __name__=="__main__":
     unittest.main()
