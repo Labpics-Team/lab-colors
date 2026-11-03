@@ -107,12 +107,14 @@ def validate(ci, package, release):
     browser_command = ('node scripts/test-program-runtime-browser.mjs '
                        '"$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"')
     browser_steps = [block for block in blocks if browser_command in block]
-    # Последний оператор сохраняет код завершения браузера и связывает его с проверенным архивом.
+    # Отдельный шаг с одной командой исключает ранний выход и маскировку её статуса.
     if len(browser_steps) != 1:
         raise AssertionError("terminal browser invocation changed")
-    statements = [line.strip() for line in browser_steps[0].splitlines()
-                  if line.strip() and not line.lstrip().startswith("#")]
-    if statements[-1] != browser_command:
+    runs = re.findall(r"(?ms)^        run: (.*?)(?=^        \S|\Z)", browser_steps[0])
+    statements = [[line.strip() for line in run.splitlines()
+                   if line.strip() and not line.lstrip().startswith("#")]
+                  for run in runs]
+    if statements != [[browser_command]]:
         raise AssertionError("terminal browser invocation is not executed")
     if "uses: actions/download-artifact@" in owner:
         raise AssertionError("local consumers depend on external storage")
@@ -246,7 +248,15 @@ class CiStorageTests(unittest.TestCase):
         for index,before,after in [
             (1, browser, "printf '%s\\n' 'node scripts/test-program-runtime-browser.mjs'"),
             (1, browser, '# ' + browser),
+            (1, '        run: ' + browser,
+             '        run: |\n          exit 0\n          ' + browser),
+            (1, '        run: ' + browser,
+             '        run: |\n          if false; then\n          ' + browser + '\n          fi'),
+            (1, browser, 'false && ' + browser),
+            (1, browser, 'trap \'exit 0\' EXIT; ' + browser),
             (1, browser, browser + ' || true'),
+            (1, browser, browser + '\n          || true'),
+            (1, browser, browser + '\n          && false || true'),
             (1, browser, 'if false; then ' + browser + '; fi'),
             (1, browser, browser.replace('$VERIFIED_TARBALL_SHA256', '$OTHER_SHA256')),
             (0,'    uses: ./.github/workflows/package-worker.yml','    uses: ./.github/workflows/other.yml'),

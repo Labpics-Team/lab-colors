@@ -623,13 +623,7 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
-      - name: terminal Program in real browser
-        # Сначала проверяет crate-boundary, затем устанавливает exact verified
-        # tarball и исполняет тот же Program path через публичный package root.
-        env:
-          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
-          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
-          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+      - name: test WASM crate in real browser
         run: |
           set -euo pipefail
           : "${CHROME_PATH:?}" "${CHROMEDRIVER_PATH:?}" "${RUNNER_TEMP:?}"
@@ -654,7 +648,14 @@ jobs:
           writeFileSync(process.env.WASM_BINDGEN_TEST_WEBDRIVER_JSON, `${JSON.stringify(capabilities)}\n`);
           NODE
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
-          node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
+
+      - name: terminal Program in real browser
+        # Единственная команда связывает конечный Program с проверенным архивом.
+        env:
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
       - name: retain packer identity for the isolated publisher
         id: packer
         run: |
