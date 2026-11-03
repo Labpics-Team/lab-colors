@@ -96,6 +96,89 @@ test("V3 назначает цвет по двум декларациям и с�
   }
 });
 
+test("V3 независимые computed-группы сохраняют обе опоры и каждый hard constraint", () => {
+  // Обе authored-опоры допустимы на белом: их совместное расстояние равно нулю.
+  // Отдельный чёрный фон делает пустой ровно одну серую область; это различает
+  // пропуск любого conjunct без искусственного общего ограничения между группами.
+  for (const id of [sameIds, reversedIds]) for (const hard of [[true, true], [false, true], [true, false]]) {
+    const anchors = [0, 96];
+    const builder = new ProgramWireBuilderV3()
+      .computedTarget(id(21), gray(0, 1), triple(anchors[0]), 1)
+      .computedTarget(id(22), gray(96, 97), triple(anchors[1]), 1).assignment([id(21), id(22)])
+      .surfaceInputPort(id(31)).surfaceInputPort(id(32))
+      .solidPaint(id(41), id(21)).solidPaint(id(42), id(22))
+      .inputSurface(id(51), id(31)).inputSurface(id(52), id(32))
+      .sourceOverOccurrence(id(61), id(41), id(51), 64, .2, SURROUND_AVERAGE_V1)
+      .sourceOverOccurrence(id(62), id(42), id(52), 64, .2, SURROUND_AVERAGE_V1)
+      .presentationRoot(id(71), id(61)).presentationTarget(id(71), id(61))
+      .presentationRoot(id(72), id(62)).presentationTarget(id(72), id(62))
+      .wcag22VisibleUnary(hard[0], id(81), id(61), WCAG22_SC143_TEXT_DEFAULT_V1)
+      .wcag22VisibleUnary(hard[1], id(82), id(62), WCAG22_SC143_TEXT_DEFAULT_V1)
+      .output(id(91), id(41)).output(id(92), id(42));
+    const runtime = compileProgramWire(builder.finish(), 100), held = [];
+    const read = (revision, backgrounds) => {
+      const ordered = [31, 32].map((port, index) => [id(port), triple(backgrounds[index])])
+        .sort(([a], [b]) => a - b).flatMap(([, rgb]) => rgb);
+      return own(held, runtime.updateObserved(revision, new Uint32Array([9, 7]),
+        new Uint8Array([...ordered, ...ordered]), 2));
+    };
+    const check = (snapshot, revision, state, backgrounds) => {
+      assert.equal(snapshot.snapshotVersion, 2);
+      assert.equal(snapshot.revision, revision);
+      assert.equal(snapshot.state, state);
+      assert.equal(snapshot.reason, undefined);
+      if (state !== "ready") {
+        assert.equal(snapshot.outputCount(), 0);
+        assert.equal(snapshot.assessmentReport(), null);
+        for (const method of ["outputRgb", "outputSlot", "outputOpacity"]) {
+          assert.throws(() => snapshot[method](0), (error) => isBindingError(error)
+            && error.operation === "readProgramOutput" && error.code === "invalid_output_index");
+        }
+        return;
+      }
+      assert.deepEqual(outputs(snapshot), new Map([
+        [id(91), { rgb: triple(anchors[0]), opacity: 1 }],
+        [id(92), { rgb: triple(anchors[1]), opacity: 1 }],
+      ]));
+      const report = snapshot.assessmentReport();
+      assert.notEqual(report, null);
+      assert.equal(report.streamId, 100);
+      assert.equal(report.revision, revision);
+      assert.equal(report.contentIdentity.length, 32);
+      assert.ok([...report.contentIdentity].some((value) => value !== 0));
+      assert.deepEqual(report.scenarioProvenance, [{ caseIndex: 0, scenarioId: 7 }, { caseIndex: 0, scenarioId: 9 }]);
+      const expected = [81, 82].map((constraint, index) => ({
+        constraintId: id(constraint), caseIndex: 0, hard: hard[index],
+        assessment: { kind: "wcag22-srgb8", verdict: contrast(anchors[index], backgrounds[index]) >= 4.5 ? "pass" : "violation" },
+      })).sort((a, b) => a.constraintId - b.constraintId);
+      assert.deepEqual(report.cells, expected);
+    };
+    try {
+      for (const anchor of anchors) {
+        assert.equal(grayOracle(anchor, anchor + 1, anchor, 255), anchor);
+        assert.equal(grayOracle(anchor, anchor + 1, anchor, 0), null);
+      }
+      check(own(held, runtime.updateUnknown(1n, 99)), 1n, "waiting");
+      const first = read(2n, [255, 255]);
+      check(first, 2n, "ready", [255, 255]);
+      const repeat = read(2n, [255, 255]);
+      check(repeat, 2n, "ready", [255, 255]);
+      assert.deepEqual(repeat.assessmentReport(), first.assessmentReport());
+      for (const [index, backgrounds] of [[0, [0, 255]], [1, [255, 0]]]) {
+        check(read(BigInt(index + 3), backgrounds), BigInt(index + 3), hard[index] ? "unsatisfied" : "ready", backgrounds);
+      }
+      check(own(held, runtime.updateUnknown(5n, 99)), 5n, "stale");
+      const recovered = read(6n, [255, 255]);
+      check(recovered, 6n, "ready", [255, 255]);
+      assert.deepEqual([...recovered.assessmentReport().contentIdentity], [...first.assessmentReport().contentIdentity]);
+      for (const [revision, backgrounds] of [[4n, [255, 255]], [6n, [0, 255]]]) {
+        assert.throws(() => read(revision, backgrounds), errorIs("updateObserved", "program_update"));
+      }
+      check(first, 2n, "ready", [255, 255]);
+    } finally { release(held); runtime.free(); }
+  }
+});
+
 test("V3 point report сохраняет off/lint/auto, final evidence и lifecycle обоих публичных владельцев", () => {
   // В опубликованном Clean Set v2 [0,199,64] попадает в interval [64,108],
   // а сосед [0,199,63] допустим. В объявленном двухцветном box это единственный

@@ -5639,6 +5639,7 @@ where
         &constraints,
         &dependency_index,
         &mut dependency_scratch,
+        &target_selection,
     )?;
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
     let occurrence_contexts =
@@ -6112,6 +6113,7 @@ fn validate_terminal_dependency_cone<Evaluation>(
     constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>],
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
+    target_selection: &CompiledTargetSelectionV1,
 ) -> Result<(), ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -6161,7 +6163,10 @@ where
         .iter()
         .filter(|target| target.intent.is_solver_dependent())
         .count();
-    if finite_count > 1 {
+    // Computed выбирает полную tuple по всем ограничениям; общей строки для
+    // независимых групп не требуется. Покрытие каждой цели и output проверено выше.
+    // Дополнительное условие конечного выбора V1/V2 сохраняет прежний контракт.
+    if finite_count > 1 && !matches!(target_selection, CompiledTargetSelectionV1::Computed(_)) {
         let mut has_common_assessment = false;
         let mut per_constraint_targets = false_slots(program.targets.len())?;
         for constraint in constraints {

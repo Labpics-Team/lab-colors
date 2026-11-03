@@ -1226,3 +1226,38 @@ fn full_rgb_product_budget_limits_search_instead_of_admission() {
         assert!(session.state().current_verified().is_none());
     }
 }
+
+#[test]
+fn computed_independent_groups_preserve_target_and_output_coverage() {
+    let declaration = || cube_product([FULL_RGB; 3], [0, 96, 48], 1.0, None);
+    assert!(compile_assignment(declaration(), EXECUTION_NODE_LIMIT_V1).is_ok());
+
+    let mut missing_target = declaration();
+    missing_target.constraints.hard.pop();
+    assert!(matches!(
+        compile_assignment(missing_target, EXECUTION_NODE_LIMIT_V1),
+        Err(ProgramCompileError::UnconstrainedFiniteTarget { target })
+            if target == TargetId::new(30)
+    ));
+
+    let mut missing_output = declaration();
+    missing_output.sources.push(Source::new(
+        SourceId::new(40),
+        ColorSignal::from_srgb8(Srgb8::new([255; 3])),
+    ));
+    missing_output
+        .targets
+        .push(Target::fixed(TargetId::new(40), SourceId::new(40)));
+    missing_output.paints.push(Paint::Solid {
+        id: PaintId::new(40),
+        target: TargetId::new(40),
+    });
+    missing_output
+        .outputs
+        .push(OutputBinding::new(OutputSlotId::new(40), PaintId::new(40)));
+    assert!(matches!(
+        compile_assignment(missing_output, EXECUTION_NODE_LIMIT_V1),
+        Err(ProgramCompileError::UnassessedOutput { output, paint })
+            if output == OutputSlotId::new(40) && paint == PaintId::new(40)
+    ));
+}
