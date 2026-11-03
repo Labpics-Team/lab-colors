@@ -2569,15 +2569,18 @@ pub(crate) struct PresentationCompositeV1<'a> {
     pub(crate) rgb: [u8; 3],
 }
 impl<'a> VerifiedOutputV1<'a> {
-    #[cfg(test)]
     pub(crate) fn observation(self) -> ObservationV1<'a> {
-        use crate::session::SessionEvidenceV1;
         ObservationV1 {
-            inner: self.inner.observation(),
+            inner: crate::session::SessionEvidenceV1::observation(self.inner),
         }
     }
     pub(crate) fn content_identity(self) -> ProgramOwnerIdentityV1 {
         self.inner.content_identity()
+    }
+    pub(crate) fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = &'a CoreProgramConstraintCellV1> + FusedIterator + 'a {
+        self.inner.cells().iter()
     }
     pub(crate) fn outputs(
         self,
@@ -2595,12 +2598,12 @@ impl<'a> VerifiedOutputV1<'a> {
     pub(crate) fn presentation_composites(
         self,
     ) -> impl ExactSizeIterator<Item = Option<PresentationCompositeV1<'a>>> + 'a {
-        use crate::session::SessionEvidenceV1;
         self.inner.presentation_composites().map(move |composite| {
             let composite = composite?;
             Some(PresentationCompositeV1 {
                 root: composite.root.value(),
-                scenarios: self.inner.observation().provenance(composite.case_index)?,
+                scenarios: crate::session::SessionEvidenceV1::observation(self.inner)
+                    .provenance(composite.case_index)?,
                 rgb: composite.rgb,
             })
         })
@@ -4572,7 +4575,6 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
         ProgramCompileError::InvalidComputedAssignment(error) => match error {
             crate::program_session::computed_assignment::ComputedAdmissionErrorV1::MixedSelection => CompileErrorV1::Unsupported,
-            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::CardinalityOverflow => CompileErrorV1::ResourceExhausted,
             _ => CompileErrorV1::InvalidAssignment,
         },
     }

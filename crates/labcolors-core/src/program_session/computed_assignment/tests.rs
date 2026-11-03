@@ -155,7 +155,7 @@ fn computed_new_rgb_and_valid_anchor_use_real_program() {
     );
     assert_eq!(&*current.values, &[Srgb8::new([118; 3])]);
     assert_eq!(current.search.completion, CompletionV1::Complete);
-    assert_eq!(current.search.covered, 256);
+    assert_eq!(current.search.open_regions, 0);
     assert_eq!(current.execution_profile, execution_profile_identity(300));
     assert_eq!(current.arena.storage.cells.len(), 1);
     session
@@ -334,7 +334,7 @@ fn empty_domain_proof_and_unfinished_search_are_distinct() {
             } => {
                 assert_eq!(budget, 300);
                 assert_eq!(cause.search.completion, CompletionV1::Complete);
-                assert_eq!(cause.search.covered, 51);
+                assert_eq!(cause.search.open_regions, 0);
             }
             _ => panic!("пустая область не даёт output"),
         }
@@ -646,7 +646,7 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
             .map(|output| output.paint.source().bytes()[0])
             .collect();
         assert_eq!(outputs, expected);
-        assert_eq!(current.search.covered, 61 * 256);
+        assert_eq!(current.search.open_regions, 0);
         assert_eq!(current.arena.storage.cells.len(), 1);
     }
 }
@@ -707,15 +707,13 @@ fn compiled_preferences_keep_target_payloads_under_declaration_permutations() {
         }
         let selection = compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
             .expect("плотные уникальные ранги допускаются в любом порядке деклараций");
-        assert_eq!(selection.tuple_count, 61 * 256);
-        for (actual, (id, anchor, count, suffix_count)) in selection
+        for (actual, (id, anchor, count)) in selection
             .targets
             .iter()
-            .zip([(20, 160, 256, 61), (10, 150, 61, 1)])
+            .zip([(20, 160, 256), (10, 150, 61)])
         {
             assert_eq!(actual.declaration.anchor, Srgb8::new([anchor; 3]));
-            assert_eq!(actual.count, count);
-            assert_eq!(actual.suffix_count, suffix_count);
+            assert_eq!(actual.declaration.domain.cardinality(), Some(count));
             assert_eq!(actual.anchor_lab, lab(Srgb8::new([anchor; 3])));
             assert_eq!(
                 Some(actual.binding),
@@ -814,7 +812,6 @@ fn compiled_preferences_preserve_payloads_across_long_cycles() {
                     let selection =
                         compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
                             .expect("каждая перестановка плотных рангов допустима");
-                    assert_eq!(selection.tuple_count, 120);
                     for (index, actual) in selection.targets.iter().enumerate() {
                         let TargetIntentV1::Computed(declaration) = &expected[index].intent else {
                             unreachable!();
@@ -824,8 +821,10 @@ fn compiled_preferences_preserve_payloads_across_long_cycles() {
                             declaration.identity_bytes()
                         );
                         assert_eq!(actual.anchor_lab, lab(declaration.anchor));
-                        assert_eq!(actual.count, [2, 3, 4, 5][index]);
-                        assert_eq!(actual.suffix_count, [60, 20, 5, 1][index]);
+                        assert_eq!(
+                            actual.declaration.domain.cardinality(),
+                            Some([2, 3, 4, 5][index])
+                        );
                         assert_eq!(
                             Some(actual.binding),
                             owner
@@ -877,15 +876,18 @@ fn compiled_preferences_keep_declaration_errors_before_order_validation() {
 }
 
 #[test]
-fn compiled_preferences_keep_order_validation_before_cardinality_overflow() {
+fn compiled_preferences_validate_order_without_product_cardinality_bound() {
     let owner = compile_assignment(four_preference_targets(), 20_000)
         .expect("допустимая декларация компилируется");
     for (ranks, expected) in [
-        ([0, 1, 2], ComputedAdmissionErrorV1::CardinalityOverflow),
-        ([0, 1, 1], ComputedAdmissionErrorV1::InvalidPreferenceOrder),
+        ([0, 1, 2], None),
+        (
+            [0, 1, 1],
+            Some(ComputedAdmissionErrorV1::InvalidPreferenceOrder),
+        ),
         (
             [0, 1, u64::MAX],
-            ComputedAdmissionErrorV1::InvalidPreferenceOrder,
+            Some(ComputedAdmissionErrorV1::InvalidPreferenceOrder),
         ),
     ] {
         let mut targets = ranks.map(|rank| {
@@ -909,10 +911,18 @@ fn compiled_preferences_keep_order_validation_before_cardinality_overflow() {
             target.id = TargetId::new((index as u32 + 1) * 10);
         }
         for _ in 0..2 {
-            assert!(matches!(
-                compile_selection(&owner.owner_generation.graph, &targets, None, 20_000),
-                Err(ProgramCompileError::InvalidComputedAssignment(error)) if error == expected
-            ));
+            let result = compile_selection(&owner.owner_generation.graph, &targets, None, 20_000);
+            if let Some(expected) = expected {
+                assert!(matches!(
+                    result,
+                    Err(ProgramCompileError::InvalidComputedAssignment(error)) if error == expected
+                ));
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "валидный порядок не зависит от мощности RGB8-произведения"
+                );
+            }
             targets.reverse();
         }
     }
@@ -1044,4 +1054,175 @@ fn fixed_sources_are_not_part_of_computed_freedom() {
         150,
         Wcag22CriterionV1::Sc143TextLargeScale
     ));
+}
+
+
+fn cube_product(
+    domains: [AssignmentDomainV1; 3],
+    anchors: [u8; 3],
+    max_delta: f64,
+    exact: Option<[u8; 3]>,
+) -> Program<CoreProgramEvaluatorsV1> {
+    let targets: Vec<_> = domains
+        .into_iter()
+        .enumerate()
+        .map(|(i, domain)| {
+            Target::new(
+                TargetId::new(10 * (i as u32 + 1)),
+                TargetIntentV1::Computed(
+                    ComputedTargetV1::new(domain, Srgb8::new([anchors[i]; 3]), max_delta, i as u64)
+                        .expect("каждая отдельная RGB8-область допустима"),
+                ),
+            )
+        })
+        .collect();
+    let invocation = |i: usize| match exact {
+        Some(values) => CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new([values[i]; 3])),
+        None => CoreProgramConstraintInvocationV1::Wcag22Srgb8(Wcag22CriterionV1::Sc143TextDefault),
+    };
+    let mut declaration = program(targets[0].clone(), invocation(0), CoreProgramEvaluatorsV1);
+    declaration.targets = targets;
+    declaration.paints = (0..3)
+        .map(|i| Paint::Solid {
+            id: PaintId::new(3 + 10 * i),
+            target: TargetId::new(10 * (i + 1)),
+        })
+        .collect();
+    declaration.occurrences = (0..3)
+        .map(|i| {
+            Occurrence::new(
+                OccurrenceId::new(5 + 10 * i),
+                PaintId::new(3 + 10 * i),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context(),
+            )
+        })
+        .collect();
+    declaration.constraints = ConstraintSet::new(
+        (0..3)
+            .map(|i| {
+                ConstraintInvocation::visible_unary_hard(
+                    ConstraintId::new(6 + 10 * i),
+                    OccurrenceId::new(5 + 10 * i),
+                    invocation(i as usize),
+                )
+            })
+            .collect(),
+        vec![],
+    );
+    declaration.outputs = (0..3)
+        .map(|i| OutputBinding::new(OutputSlotId::new(7 + 10 * i), PaintId::new(3 + 10 * i)))
+        .collect();
+    declaration
+}
+
+const FULL_RGB: AssignmentDomainV1 = AssignmentDomainV1::Cube {
+    lower: [0; 3],
+    upper: [255; 3],
+};
+
+#[test]
+fn full_rgb_products_admit_authored_exact_and_singleton_control() {
+    let anchors = [24, 36, 48];
+    for max_delta in [0.0, 1.0] {
+        for domains in [
+            [FULL_RGB; 3],
+            anchors.map(|gray| AssignmentDomainV1::Cube {
+                lower: [gray; 3],
+                upper: [gray; 3],
+            }),
+        ] {
+            let owner = compile_assignment(cube_product(domains, anchors, max_delta, None), 1)
+                .expect("размер произведения не запрещает точный допустимый authored tuple");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("stream допустим");
+            session
+                .prepare_update(update(1, 255))
+                .expect("наблюдение допустимо")
+                .commit();
+            let current = session
+                .state()
+                .current_verified()
+                .expect("authored tuple допустим")
+                .computed_for_test();
+            assert_eq!(&*current.values, &anchors.map(|gray| Srgb8::new([gray; 3])));
+            assert_eq!(current.search.completion, CompletionV1::AuthoredExact);
+            assert_eq!(current.search.visited, 1);
+            assert_eq!(current.search.regions, 0);
+        }
+    }
+}
+
+#[test]
+fn full_rgb_products_search_and_prove_empty_with_singleton_controls() {
+    let anchors = [24, 36, 48];
+    let expected = [25, 37, 49];
+    for max_delta in [0.0, 1.0] {
+        for domains in [
+            [FULL_RGB; 3],
+            expected.map(|gray| AssignmentDomainV1::Cube {
+                lower: [gray; 3],
+                upper: [gray; 3],
+            }),
+        ] {
+            let owner = compile_assignment(
+                cube_product(domains, anchors, max_delta, Some(expected)),
+                EXECUTION_NODE_LIMIT_V1,
+            )
+            .expect("большое произведение допускается до действительного поиска");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("stream допустим");
+            session
+                .prepare_update(update(1, 255))
+                .expect("наблюдение допустимо")
+                .commit();
+            if max_delta > 0.0 {
+                let current = session
+                    .state()
+                    .current_verified()
+                    .expect("exact-visible оставляет один допустимый tuple")
+                    .computed_for_test();
+                assert_eq!(&*current.values, &expected.map(|gray| Srgb8::new([gray; 3])));
+                assert_eq!(current.search.completion, CompletionV1::Complete);
+                assert!(current.search.regions > 0);
+                assert!(current.search.visited <= EXECUTION_NODE_LIMIT_V1);
+            } else {
+                let SessionState::Failed {
+                    cause: ProgramViolationOutcomeV1::Computed(cause),
+                    ..
+                } = session.state()
+                else {
+                    panic!("нулевой delta несовместим с exact-visible; нужен полный Unsatisfied");
+                };
+                assert_eq!(cause.search.completion, CompletionV1::Complete);
+            }
+        }
+    }
+}
+
+#[test]
+fn full_rgb_product_budget_limits_search_instead_of_admission() {
+    for budget in [0, 1, 2] {
+        let owner = compile_assignment(
+            cube_product([FULL_RGB; 3], [24, 36, 48], 1.0, Some([25, 37, 49])),
+            budget,
+        )
+        .expect("бюджет ограничивает посещения, а не RGB8-произведение");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("stream допустим");
+        session
+            .prepare_update(update(1, 255))
+            .expect("наблюдение допустимо")
+            .commit();
+        let SessionState::Incomplete { cause, .. } = session.state() else {
+            panic!("бюджета недостаточно для полного доказательства");
+        };
+        assert_eq!(cause.search.completion, CompletionV1::BudgetExhausted);
+        assert_eq!(cause.search.visited, budget);
+        assert!(session.state().current_verified().is_none());
+    }
 }

@@ -77,6 +77,19 @@ impl AssignmentDomainV1 {
         }
     }
 
+    // Целочисленное деление пополам требует не более ceil(log2 длины) шагов на ось.
+    fn split_depth(self) -> usize {
+        let axis_depth = |lower, upper| {
+            (u16::from(upper) - u16::from(lower) + 1)
+                .next_power_of_two()
+                .trailing_zeros() as usize
+        };
+        match self {
+            Self::Cube { lower, upper } => (0..3).map(|i| axis_depth(lower[i], upper[i])).sum(),
+            Self::Gray { lower, upper } => axis_depth(lower, upper),
+        }
+    }
+
     fn cardinality(self) -> Option<u64> {
         match self {
             Self::Cube { lower, upper } => (0..3).try_fold(1_u64, |count, i| {
@@ -138,7 +151,6 @@ pub(crate) enum ComputedAdmissionErrorV1 {
     MixedSelection,
     EmptySelection,
     InvalidPreferenceOrder,
-    CardinalityOverflow,
 }
 
 // Предел экспериментального синхронного профиля; не клиентская политика.
@@ -211,15 +223,12 @@ struct CompiledComputedTargetV1 {
     binding: CompiledPaintInputSlotV1,
     declaration: ComputedTargetV1,
     anchor_lab: [f64; 3],
-    count: u64,
-    suffix_count: u64,
 }
 
 pub(super) struct ComputedSelectionV1 {
     targets: Box<[CompiledComputedTargetV1]>,
     budget: u64,
     execution_profile: [u8; 32],
-    tuple_count: u64,
 }
 
 pub(super) fn assign_preference(
@@ -288,7 +297,7 @@ pub(super) fn compile_selection(
         let TargetIntentV1::Computed(declaration) = &target.intent else {
             continue;
         };
-        let count = declaration
+        declaration
             .domain
             .cardinality()
             .ok_or(invalid(ComputedAdmissionErrorV1::InvalidDomain))?;
@@ -302,8 +311,6 @@ pub(super) fn compile_selection(
                 .ok_or(ProgramCompileError::InternalInvariant)?,
             declaration: declaration.clone(),
             anchor_lab: lab(declaration.anchor),
-            count,
-            suffix_count: 1,
         });
     }
     if compiled.is_empty() {
@@ -325,18 +332,10 @@ pub(super) fn compile_selection(
             compiled.swap(index, preference as usize);
         }
     }
-    let mut tuple_count = 1_u64;
-    for target in compiled.iter_mut().rev() {
-        target.suffix_count = tuple_count;
-        tuple_count = tuple_count
-            .checked_mul(target.count)
-            .ok_or(invalid(ComputedAdmissionErrorV1::CardinalityOverflow))?;
-    }
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
         budget,
         execution_profile: execution_profile_identity(budget),
-        tuple_count,
     })
 }
 
@@ -364,8 +363,16 @@ struct SearchEvidenceV1 {
     points: u64,
     endpoint_evaluations: u64,
     examined: u64,
-    covered: u64,
-    tuple_count: u64,
+    // Учёт незавершённых областей обхода не зависит от мощности произведения.
+    // Каждая новая область расходует посещение: open_regions <= regions <= visited <= budget.
+    open_regions: u64,
+}
+
+impl SearchEvidenceV1 {
+    fn close_region(&mut self) -> Result<(), ()> {
+        self.open_regions = self.open_regions.checked_sub(1).ok_or(())?;
+        Ok(())
+    }
 }
 
 struct SearchResultV1 {
@@ -392,6 +399,7 @@ fn region_node(
     }
     evidence.visited += 1;
     evidence.regions += 1;
+    evidence.open_regions += 1;
     Some(RegionNodeV1 {
         depth,
         domain,
@@ -569,26 +577,6 @@ where
     let count = selection.targets.len();
     let allocate = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
-    let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
-    let mut scores = buffer(count, 0.0).map_err(allocate)?;
-    let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
-    let constraints = region_constraints(epoch).map_err(allocate)?;
-    let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
-    let mut pruning = RegionPruningV1 {
-        constraints,
-        lower,
-        endpoint_evaluations: 0,
-    };
-    let mut stack = Vec::new();
-    // log2 tuple cardinality <=64. Округление глубины трёх RGB-осей добавляет
-    // менее трёх шагов на target; ещё один нужен для continuation leaf.
-    let stack_limit = count
-        .checked_mul(4)
-        .and_then(|value| value.checked_add(65))
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    stack
-        .try_reserve_exact(stack_limit)
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::BudgetExhausted,
         visited: 0,
@@ -596,8 +584,7 @@ where
         points: 0,
         endpoint_evaluations: 0,
         examined: 0,
-        covered: 0,
-        tuple_count: selection.tuple_count,
+        open_regions: 0,
     };
     if selection.budget == 0 {
         return Ok(SearchResultV1 {
@@ -635,6 +622,29 @@ where
             });
         }
     }
+    let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
+    let mut scores = buffer(count, 0.0).map_err(allocate)?;
+    let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
+    let constraints = region_constraints(epoch).map_err(allocate)?;
+    let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
+    let mut pruning = RegionPruningV1 {
+        constraints,
+        lower,
+        endpoint_evaluations: 0,
+    };
+    let mut stack = Vec::new();
+    // DFS хранит не более одной второй ветви на каждый шаг деления и одного
+    // продолжения листа на target. Граница следует длинам осей, не произведению.
+    let stack_limit = selection
+        .targets
+        .iter()
+        .try_fold(1_usize, |capacity, target| {
+            capacity.checked_add(target.declaration.domain.split_depth() + 1)
+        })
+        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    stack
+        .try_reserve_exact(stack_limit)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut has_best = false;
     let Some(root) = region_node(
         0,
@@ -666,7 +676,9 @@ where
                 && pruning.may_pass(selection, runtime, epoch, scenario_set, node, &values)?;
             evidence.endpoint_evaluations = pruning.endpoint_evaluations;
             if !possible {
-                evidence.covered += volume * target.suffix_count;
+                evidence
+                    .close_region()
+                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
                 continue;
             }
             if volume > 64 {
@@ -688,6 +700,10 @@ where
                 } else {
                     (right, left)
                 };
+                // Обе непересекающиеся ветви уже приняты; теперь закрываем родителя.
+                evidence
+                    .close_region()
+                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
                 stack.push(second);
                 stack.push(first);
                 continue;
@@ -709,10 +725,15 @@ where
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         let value = node.domain.value(ordinal);
         if ordinal + 1 < volume {
+            // Продолжение сохраняет открытое обязательство всей листовой области.
             stack.push(RegionNodeV1 {
                 ordinal: Some(ordinal + 1),
                 ..node
             });
+        } else {
+            evidence
+                .close_region()
+                .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
         }
         values[depth] = value;
         scores[depth] = squared_distance(lab(value), target.anchor_lab);
@@ -720,7 +741,6 @@ where
         let worse_prefix = has_best
             && compare_scores(&scores[..=depth], &best_scores[..=depth]) == Ordering::Greater;
         if scores[depth] > delta * delta || worse_prefix {
-            evidence.covered += target.suffix_count;
             continue;
         }
         if depth + 1 < count {
@@ -738,7 +758,6 @@ where
             stack.push(next);
             continue;
         }
-        evidence.covered += 1;
         evidence.examined += 1;
         apply::<Evaluation>(selection, runtime, &values)?;
         if !scan_program_candidate(
@@ -758,7 +777,8 @@ where
             has_best = true;
         }
     }
-    if evidence.covered != evidence.tuple_count {
+    // Пустой стек не доказывает полноту: потерянная ветвь оставит обязательство.
+    if evidence.open_regions != 0 {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     evidence.completion = CompletionV1::Complete;

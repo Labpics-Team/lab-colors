@@ -39,8 +39,11 @@ function current(snapshot, revision, state, expected, slot = 91) {
   assert.equal(snapshot.revision, revision);
   assert.equal(snapshot.state, state);
   assert.equal(snapshot.reason, state === "incomplete" ? "limit" : undefined);
-  if (state === "ready") assert.deepEqual(outputs(snapshot), new Map([[slot, { rgb: expected, opacity: 1 }]]));
-  else {
+  if (state === "ready") {
+    assert.deepEqual(outputs(snapshot), new Map([[slot, { rgb: expected, opacity: 1 }]]));
+    assert.notEqual(snapshot.assessmentReport(), null);
+  } else {
+    assert.equal(snapshot.assessmentReport(), null);
     assert.equal(snapshot.outputCount(), 0);
     for (const method of ["outputRgb", "outputSlot", "outputOpacity"]) {
       assert.throws(() => snapshot[method](0), (error) => isBindingError(error)
@@ -90,6 +93,74 @@ test("V3 назначает цвет по двум декларациям и с�
       assert.ok(contrast(fixture.anchor < 128 ? 0 : 255, fixture.backgrounds[0]) > contrast(fixture.anchor, fixture.backgrounds[0]));
       current(held[0], 1n, "ready", triple(fixture.anchor), id(91));
     } finally { release(held); runtime.free(); }
+  }
+});
+
+test("V3 point report сохраняет off/lint/auto, final evidence и lifecycle обоих публичных владельцев", () => {
+  // В опубликованном Clean Set v2 [0,199,64] попадает в interval [64,108],
+  // а сосед [0,199,63] допустим. В объявленном двухцветном box это единственный
+  // допустимый auto-результат; локальный подбор и численная метрика не нужны oracle.
+  const dirty = [0, 199, 64], clean = [0, 199, 63];
+  for (const attached of [false, true]) for (const mode of ["off", "lint", "auto"]) {
+    const builder = new ProgramWireBuilderV3()
+      .computedTarget(21, { kind: "box", lower: clean, upper: dirty }, dirty, 1).assignment([21])
+      .surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 41, 51, 64, .2, SURROUND_AVERAGE_V1)
+      .presentationRoot(71, 61).presentationTarget(71, 61)
+      .wcag22VisibleUnary(true, 81, 61, WCAG22_SC143_TEXT_DEFAULT_V1).output(91, 41);
+    if (mode !== "off") builder.declaredSrgb8CleanSet(mode === "auto", 82, 71, 61);
+    const wire = builder.finish(), held = [];
+    const owner = attached ? attachProgramWire(wire, 100, 91, 501, 71, 61, () => true)
+      : compileProgramWire(wire, 100);
+    let retained;
+    try {
+      const read = (revision) => owner.updateObserved(revision, new Uint32Array([9, 7]), new Uint8Array(6), 1);
+      const first = own(held, read(1n)), expected = mode === "auto" ? clean : dirty;
+      current(first, 1n, "ready", expected);
+      const report = first.assessmentReport();
+      assert.notEqual(report, null);
+      assert.equal(report.streamId, 100);
+      assert.equal(report.revision, 1n);
+      assert.equal(report.contentIdentity.length, 32);
+      assert.ok([...report.contentIdentity].some((value) => value !== 0));
+      assert.deepEqual(report.scenarioProvenance, [{ caseIndex: 0, scenarioId: 7 }, { caseIndex: 0, scenarioId: 9 }]);
+      assert.deepEqual(report.cells.map((cell) => [cell.constraintId, cell.caseIndex, cell.hard]),
+        mode === "off" ? [[81, 0, true]] : [[81, 0, true], [82, 0, mode === "auto"]]);
+      assert.deepEqual(report.cells[0].assessment, { kind: "wcag22-srgb8", verdict: "pass" });
+      if (mode === "lint") assert.deepEqual(report.cells[1].assessment, {
+        kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+        visible: dirty, rejectedBlueInterval: [64, 108],
+      });
+      if (mode === "auto") assert.deepEqual(report.cells[1].assessment,
+        { kind: "declared-srgb8-clean-set", verdict: "pass", visible: clean });
+      if (attached) {
+        const render = own(held, first.render());
+        assert.notEqual(render, undefined);
+        assert.deepEqual([...report.contentIdentity], [...render.contentIdentity()]);
+      }
+      const repeat = own(held, read(1n));
+      const repeatedReport = repeat.assessmentReport();
+      assert.notEqual(repeatedReport, null);
+      assert.equal(repeatedReport.streamId, report.streamId);
+      assert.equal(repeatedReport.revision, report.revision);
+      assert.deepEqual([...repeatedReport.contentIdentity], [...report.contentIdentity]);
+      assert.deepEqual(repeatedReport.scenarioProvenance, report.scenarioProvenance);
+      assert.deepEqual(repeatedReport.cells, report.cells);
+      current(own(held, owner.updateUnknown(2n, 99)), 2n, "stale");
+      current(own(held, observe(owner, 3n, [[255, 255, 255]])), 3n, "unsatisfied");
+      const recovered = own(held, read(4n));
+      current(recovered, 4n, "ready", expected);
+      assert.equal(recovered.assessmentReport().revision, 4n);
+      assert.deepEqual([...recovered.assessmentReport().contentIdentity], [...report.contentIdentity]);
+      assert.equal(first.assessmentReport().revision, 1n);
+      retained = report;
+    } finally {
+      release(held);
+      if (attached) owner.dispose(true);
+      owner.free();
+    }
+    assert.equal(retained.revision, 1n);
+    assert.equal(retained.cells.length, mode === "off" ? 1 : 2);
   }
 });
 

@@ -2073,13 +2073,7 @@ fn snapshot_from_evidence_into(
         _ => return Err(ProgramRuntimeErrorV1::InternalInvariant),
     }
     let mut assessment_report = None;
-    if let Some(verified) = evidence
-        .certificates()
-        .find_map(|certificate| match certificate {
-            CertificateV1::Verified(verified) => Some(verified),
-            CertificateV1::Conflict(_) => None,
-        })
-    {
+    if let Some(verified) = evidence.current_verified() {
         if let crate::program::ObservationHeadV1::Observed { stream, revision } =
             evidence.observation_head()
         {

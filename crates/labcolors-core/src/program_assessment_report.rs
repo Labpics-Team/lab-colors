@@ -1,7 +1,12 @@
 //! Owned-проекция финальных оценок Program. Вычисление остаётся у Core evaluator.
 
 use crate::Srgb8;
-use crate::program::{AssessmentV1, ConstraintModeV1, VerdictV1, VerifiedCertificateV1};
+use crate::program::VerifiedOutputV1;
+use crate::program_session::{
+    CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramViolationEvidenceV1,
+    DeclaredSrgb8CleanSetViolationV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
+    ProgramConstraintViolationEvidenceV1,
+};
 
 /// Сохранённый исход ограничения, без нового вычисления на стороне потребителя.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +154,7 @@ impl ProgramAssessmentReportScratchV1 {
     /// Копирование не аллоцирует, не переоценивает и не меняет выбранные Paint.
     pub(super) fn copy_verified(
         &mut self,
-        verified: VerifiedCertificateV1<'_>,
+        verified: VerifiedOutputV1<'_>,
     ) -> ProgramAssessmentReportV1 {
         let observation = verified.observation();
         for (case_index, case) in observation.physical_cases().enumerate() {
@@ -166,8 +171,8 @@ impl ProgramAssessmentReportScratchV1 {
             .extend(verified.cells().map(|cell| ProgramAssessmentCellV1 {
                 constraint_id: cell.constraint().value(),
                 case_index: cell.case_index(),
-                hard: cell.mode() == ConstraintModeV1::Hard,
-                assessment: copy_assessment(cell.assessment()),
+                hard: cell.is_hard(),
+                assessment: copy_assessment(cell.result()),
             }));
         ProgramAssessmentReportV1 {
             content_identity: *verified.content_identity().as_bytes(),
@@ -179,30 +184,59 @@ impl ProgramAssessmentReportScratchV1 {
     }
 }
 
-fn copy_assessment(assessment: AssessmentV1<'_>) -> ProgramConstraintAssessmentV1 {
-    let verdict = match assessment.verdict() {
-        VerdictV1::Pass => ProgramAssessmentVerdictV1::Pass,
-        VerdictV1::Violation => ProgramAssessmentVerdictV1::Violation,
+fn copy_assessment(
+    assessment: &ProgramConstraintResultV1<CoreProgramEvaluatorsV1>,
+) -> ProgramConstraintAssessmentV1 {
+    let verdict = if assessment.is_violation() {
+        ProgramAssessmentVerdictV1::Violation
+    } else {
+        ProgramAssessmentVerdictV1::Pass
     };
     match assessment {
-        AssessmentV1::ExactSrgb8(_) => ProgramConstraintAssessmentV1::ExactSrgb8 { verdict },
-        AssessmentV1::Wcag22Srgb8(_) => ProgramConstraintAssessmentV1::Wcag22Srgb8 { verdict },
-        AssessmentV1::IntrinsicUnary(_) => {
-            ProgramConstraintAssessmentV1::IntrinsicUnary { verdict }
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::ExactSrgb8(_),
+        ))
+        | ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::ExactSrgb8(_),
+            ),
+        ) => ProgramConstraintAssessmentV1::ExactSrgb8 { verdict },
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::Wcag22Srgb8(_),
+        ))
+        | ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::Wcag22Srgb8(_),
+            ),
+        ) => ProgramConstraintAssessmentV1::Wcag22Srgb8 { verdict },
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::IntrinsicUnary(_))
+        | ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::IntrinsicUnary(_),
+        ) => ProgramConstraintAssessmentV1::IntrinsicUnary { verdict },
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(_))
+        | ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(_)) => {
+            ProgramConstraintAssessmentV1::Relation { verdict }
         }
-        AssessmentV1::Relation(_) => ProgramConstraintAssessmentV1::Relation { verdict },
-        AssessmentV1::DeclaredSrgb8CleanSet(value) => match value.outcome() {
-            Ok(visible) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass { visible },
-            Err(crate::program_session::DeclaredSrgb8CleanSetViolationV1::Rejected {
-                visible,
-                rejected_blue_interval,
-            }) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetRejected {
-                visible,
-                rejected_blue_interval: rejected_blue_interval.endpoints(),
-            },
-            Err(
-                crate::program_session::DeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
-            ) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent,
+        ProgramConstraintResultV1::Pass(
+            ProgramConstraintPassEvidenceV1::DeclaredSrgb8CleanSet(value),
+        ) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
+            visible: value.visible(),
         },
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(
+                DeclaredSrgb8CleanSetViolationV1::Rejected {
+                    visible,
+                    rejected_blue_interval,
+                },
+            ),
+        ) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetRejected {
+            visible: *visible,
+            rejected_blue_interval: rejected_blue_interval.endpoints(),
+        },
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::DeclaredSrgb8CleanSet(
+                DeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
+            ),
+        ) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent,
     }
 }

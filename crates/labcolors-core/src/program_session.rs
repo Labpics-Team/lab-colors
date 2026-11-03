@@ -3384,6 +3384,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> ProgramVerifiedOutcomeV1<E> {
     pub(crate) fn outputs(&self) -> &[ProgramPaintOutputV1] {
         &self.arena().storage.outputs
     }
+    pub(crate) fn cells(&self) -> &[ProgramConstraintCellV1<E>] {
+        &self.arena().storage.cells
+    }
     fn arena(&self) -> &ProgramEvaluationArenaLeaseV1<E> {
         match self {
             Self::Legacy(value) => &value.report.arena,

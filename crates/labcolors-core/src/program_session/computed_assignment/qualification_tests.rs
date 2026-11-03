@@ -698,3 +698,54 @@ fn nested_alpha_region_search_matches_fixed_program_exhaustion() {
         "нужны достижимые оба terminal исхода"
     );
 }
+
+
+#[test]
+fn structural_partition_covers_each_point_once_with_bounded_stack_depth() {
+    for domain in [
+        AssignmentDomainV1::Gray {
+            lower: 0,
+            upper: 255,
+        },
+        AssignmentDomainV1::Gray {
+            lower: 123,
+            upper: 251,
+        },
+        AssignmentDomainV1::Cube {
+            lower: [3, 123, 251],
+            upper: [7, 127, 255],
+        },
+        AssignmentDomainV1::Cube {
+            lower: [0, 128, 255],
+            upper: [255, 128, 255],
+        },
+        AssignmentDomainV1::Cube {
+            lower: [120; 3],
+            upper: [128; 3],
+        },
+        AssignmentDomainV1::Cube {
+            lower: [12, 34, 56],
+            upper: [12, 34, 56],
+        },
+    ] {
+        let expected = values(domain);
+        let mut actual = Vec::new();
+        let mut pending = vec![(domain, 0)];
+        while let Some((region, depth)) = pending.pop() {
+            assert!(depth <= domain.split_depth());
+            let (lower, upper) = region.bounds();
+            if lower == upper {
+                actual.push(lower);
+            } else {
+                let (left, right) = region.split();
+                pending.push((left, depth + 1));
+                pending.push((right, depth + 1));
+            }
+        }
+        actual.sort_unstable();
+        assert_eq!(
+            actual, expected,
+            "разбиение должно сохранять точное непересекающееся покрытие {domain:?}"
+        );
+    }
+}
