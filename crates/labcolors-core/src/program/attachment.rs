@@ -1128,7 +1128,7 @@ where
                 sink_output: binding.sink_output,
             }
         }));
-        emissions.sort_unstable_by_key(|binding| binding.output);
+        crate::ordering::sort_by_key(&mut emissions, |binding| binding.output);
         for adjacent in emissions.windows(2) {
             if adjacent[0].output == adjacent[1].output {
                 return Err(AttachmentCreateErrorV1::DuplicateEmissionOutput {
@@ -1237,7 +1237,7 @@ where
                 });
             }
         }
-        presentations.sort_unstable_by_key(|binding| {
+        crate::ordering::sort_by_key(&mut presentations, |binding| {
             (
                 binding.compiled.output_ordinal(),
                 binding.compiled.presentation_ordinal(),
