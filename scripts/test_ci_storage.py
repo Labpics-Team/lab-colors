@@ -110,6 +110,10 @@ def validate(ci, package, release):
     # Отдельный шаг с одной командой исключает ранний выход и маскировку её статуса.
     if len(browser_steps) != 1:
         raise AssertionError("terminal browser invocation changed")
+    # Явный Bash перекрывает наследуемые defaults.run.shell.
+    shells = re.findall(r"(?m)^        shell: ([^\r\n]+)$", browser_steps[0])
+    if shells not in (["bash"], ["\"bash\""], ["'bash'"]):
+        raise AssertionError("terminal browser shell does not execute the command")
     runs = re.findall(r"(?ms)^        run: (.*?)(?=^        \S|\Z)", browser_steps[0])
     statements = [[line.strip() for line in run.splitlines()
                    if line.strip() and not line.lstrip().startswith("#")]
@@ -159,6 +163,34 @@ class CiStorageTests(unittest.TestCase):
 
     def test_current_package_graph_retains_only_the_release_handoff(self):
         validate(*self.sources)
+
+    def test_terminal_browser_shell_overrides_inherited_defaults(self):
+        browser = ('node scripts/test-program-runtime-browser.mjs '
+                   '"$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"')
+        marker = '        shell: bash\n        run: ' + browser
+        self.assertEqual(self.sources[1].count(marker), 1)
+        for shell in ('true {0}', 'python', ''):
+            values = list(self.sources)
+            replacement = (('        shell: ' + shell + '\n') if shell else '')
+            replacement += '        run: ' + browser
+            values[1] = values[1].replace(marker, replacement, 1)
+            with self.subTest(shell=shell), self.assertRaises(AssertionError):
+                validate(*values)
+        for shell in ('"bash"', "'bash'"):
+            values = list(self.sources)
+            values[1] = values[1].replace(marker,
+                '        shell: ' + shell + '\n        run: ' + browser, 1)
+            validate(*values)
+        for scope in ('workflow', 'job'):
+            values = list(self.sources)
+            if scope == 'workflow':
+                values[1] = values[1].replace('\njobs:\n',
+                    '\ndefaults:\n  run:\n    shell: true {0}\njobs:\n', 1)
+            else:
+                values[1] = values[1].replace('  wasm:\n',
+                    '  wasm:\n    defaults:\n      run:\n        shell: true {0}\n', 1)
+            # Небезопасный default не применяется к явно выбранному Bash.
+            validate(*values)
 
     def test_read_only_native_token_is_confined_to_source_admission(self):
         values = list(self.sources)

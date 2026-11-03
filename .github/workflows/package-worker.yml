@@ -655,6 +655,7 @@ jobs:
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        shell: bash
         run: node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
       - name: retain packer identity for the isolated publisher
         id: packer
