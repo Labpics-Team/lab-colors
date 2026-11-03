@@ -2524,7 +2524,8 @@ mod tests {
         }
     }
     #[test]
-    fn final_raster_policy_color_binds_exact_nominal_release_with_one_bit_mutation() {
+    fn final_raster_policy_color_binds_exact_nominal_release_with_one_bit_mutation()
+    -> Result<(), ProgramCompileError> {
         use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1;
         let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
         let mutant = clean_set_final_recheck_mutant_release_v1();
@@ -2535,10 +2536,10 @@ mod tests {
             FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
             FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2,
         ] {
-            let baseline = field_output_color(Some(policy)).unwrap();
+            let baseline = field_output_color(Some(policy))?;
             assert_eq!(
                 baseline,
-                field_output_color_for_release(Some(policy), release).unwrap(),
+                field_output_color_for_release(Some(policy), release)?,
             );
             assert_eq!(baseline.as_slice().len(), HASH_BOUND_COLOR_BYTES_V9);
             assert_eq!(baseline.as_slice()[0], vertex_tag::OUTPUT);
@@ -2546,51 +2547,44 @@ mod tests {
             assert_eq!(&baseline.as_slice()[2..], &release);
             assert_ne!(
                 baseline,
-                field_output_color_for_release(Some(policy), mutant).unwrap(),
+                field_output_color_for_release(Some(policy), mutant)?,
             );
         }
         assert_ne!(
             field_output_color(Some(
                 FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
-            ))
-            .unwrap(),
+            ))?,
             field_output_color(Some(
                 FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2,
-            ))
-            .unwrap(),
+            ))?,
         );
+        Ok(())
     }
 
     #[test]
-    fn final_raster_off_color_preserves_bytes_and_is_release_independent() {
+    fn final_raster_off_color_preserves_bytes_and_is_release_independent()
+    -> Result<(), ProgramCompileError> {
         use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1;
         let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
         let mutant = clean_set_final_recheck_mutant_release_v1();
         let off = Some(FinalRasterCleanlinessRequirementV1::Off);
         let mut previous = VertexColorV1::new(vertex_tag::OUTPUT);
-        previous.push_u64(0x46494e414c524742).unwrap();
-        previous
-            .push_u64(FinalRasterCleanlinessRequirementV1::Off as u64)
-            .unwrap();
+        previous.push_u64(0x46494e414c524742)?;
+        previous.push_u64(FinalRasterCleanlinessRequirementV1::Off as u64)?;
 
-        assert_eq!(field_output_color(off).unwrap(), previous);
+        assert_eq!(field_output_color(off)?, previous);
+        assert_eq!(field_output_color_for_release(off, release)?, previous);
+        assert_eq!(field_output_color_for_release(off, mutant)?, previous);
         assert_eq!(
-            field_output_color_for_release(off, release).unwrap(),
-            previous
-        );
-        assert_eq!(
-            field_output_color_for_release(off, mutant).unwrap(),
-            previous
-        );
-        assert_eq!(
-            field_output_color_for_release(None, release).unwrap(),
+            field_output_color_for_release(None, release)?,
             VertexColorV1::new(vertex_tag::OUTPUT),
         );
         assert_eq!(
-            field_output_color_for_release(None, release).unwrap(),
-            field_output_color_for_release(None, mutant).unwrap(),
+            field_output_color_for_release(None, release)?,
+            field_output_color_for_release(None, mutant)?,
         );
-        assert_ne!(previous, field_output_color(None).unwrap());
+        assert_ne!(previous, field_output_color(None)?);
+        Ok(())
     }
 
     use proptest::prelude::*;

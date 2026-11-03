@@ -234,19 +234,19 @@ impl ProgramSessionV1 {
 mod tests {
     use super::*;
     use crate::authority::{AuthorityExpectedCurrentV1, AuthorityStateV1};
-    fn session() -> ProgramSessionV1 {
-        compile_program_wire(&final_raster_source_over_wire_v1(
+    fn session() -> Result<ProgramSessionV1, ProgramFinalRasterErrorV1> {
+        Ok(compile_program_wire(&final_raster_source_over_wire_v1(
             1,
             2,
             3,
             17,
             FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
         ))
-        .unwrap()
+        .map_err(ProgramFinalRasterErrorV1::Runtime)?
         .instantiate(101)
-        .unwrap()
+        .map_err(ProgramFinalRasterErrorV1::Runtime)?)
     }
-    fn payload(shade: u8) -> ProgramFinalRasterInputV1 {
+    fn payload(shade: u8) -> Result<ProgramFinalRasterInputV1, ProgramFinalRasterErrorV1> {
         ProgramFinalRasterInputV1::try_new(
             1,
             1,
@@ -257,7 +257,6 @@ mod tests {
             2,
             &[[shade, shade, shade, 255]],
         )
-        .unwrap()
     }
     #[test]
     fn final_raster_input_preserves_cross_invalid_error_order() {
@@ -322,21 +321,22 @@ mod tests {
     }
 
     #[test]
-    fn final_raster_metadata_reservation_failure_preserves_exact_commit_and_authority() {
+    fn final_raster_metadata_reservation_failure_preserves_exact_commit_and_authority()
+    -> Result<(), ProgramFinalRasterErrorV1> {
         use crate::program_session::{
             fail_program_preflight_reservation_for_test,
             program_preflight_failure_remaining_for_test,
         };
-        let mut session = session();
+        let mut session = session()?;
         let identity = session.content_identity();
-        let previous = payload(64);
-        session.update_final_raster(1, &previous).unwrap();
-        let next = payload(65);
+        let previous = payload(64)?;
+        session.update_final_raster(1, &previous)?;
+        let next = payload(65)?;
         let (old_materialization, old_observation, old_certificate, old_subject) = {
-            let materialization = session
-                .owner
-                .current_final_raster(&session.session, identity, 17, 1, [0; 32])
-                .unwrap();
+            let materialization =
+                session
+                    .owner
+                    .current_final_raster(&session.session, identity, 17, 1, [0; 32])?;
             (
                 std::ptr::from_ref(materialization),
                 materialization.observation().backing_ptr_for_test(),
@@ -346,7 +346,7 @@ mod tests {
         };
         {
             let _failure = fail_program_preflight_reservation_for_test(0);
-            session.update_final_raster(1, &previous).unwrap();
+            session.update_final_raster(1, &previous)?;
             assert_eq!(program_preflight_failure_remaining_for_test(), Some(0));
             assert!(matches!(
                 session.update_final_raster(2, &next),
@@ -356,10 +356,10 @@ mod tests {
             ));
             assert_eq!(program_preflight_failure_remaining_for_test(), None);
         }
-        let retained = session
-            .owner
-            .current_final_raster(&session.session, identity, 17, 1, [0; 32])
-            .unwrap();
+        let retained =
+            session
+                .owner
+                .current_final_raster(&session.session, identity, 17, 1, [0; 32])?;
         assert_eq!(std::ptr::from_ref(retained), old_materialization);
         assert_eq!(
             retained.observation().backing_ptr_for_test(),
@@ -369,8 +369,7 @@ mod tests {
         assert_eq!(retained.subject(), old_subject);
         assert_eq!(
             session
-                .current_final_raster(identity, 17, 1, [0; 32])
-                .unwrap()
+                .current_final_raster(identity, 17, 1, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[64; 3]]
@@ -378,30 +377,30 @@ mod tests {
         assert_eq!(session.final_raster_refusal(), None);
         {
             let _failure = fail_program_preflight_reservation_for_test(1);
-            session.update_final_raster(2, &next).unwrap();
+            session.update_final_raster(2, &next)?;
             assert_eq!(program_preflight_failure_remaining_for_test(), Some(0));
         }
         assert_eq!(
             session
-                .current_final_raster(identity, 17, 2, [0; 32])
-                .unwrap()
+                .current_final_raster(identity, 17, 2, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[65; 3]]
         );
+        Ok(())
     }
 
     #[test]
-    fn final_raster_refusals_skip_success_storage_reservation() {
+    fn final_raster_refusals_skip_success_storage_reservation()
+    -> Result<(), ProgramFinalRasterErrorV1> {
         use crate::program_session::{
             fail_program_preflight_reservation_for_test,
             program_preflight_failure_remaining_for_test,
         };
-        let mut session = session();
-        session.update_final_raster(1, &payload(64)).unwrap();
+        let mut session = session()?;
+        session.update_final_raster(1, &payload(64)?)?;
         let transparent =
-            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])
-                .unwrap();
+            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])?;
         let rejected = ProgramFinalRasterInputV1::try_new(
             1,
             1,
@@ -411,18 +410,17 @@ mod tests {
             &[[0; 4]],
             2,
             &[[0, 199, 64, 255]],
-        )
-        .unwrap();
-        let next = payload(65);
+        )?;
+        let next = payload(65)?;
         {
             let _failure = fail_program_preflight_reservation_for_test(0);
-            session.update_final_raster(2, &transparent).unwrap();
+            session.update_final_raster(2, &transparent)?;
             assert_eq!(
                 session.final_raster_refusal(),
                 Some(ProgramFinalRasterErrorV1::TransparentFinalPixel { pixel_index: 0 })
             );
             assert_eq!(program_preflight_failure_remaining_for_test(), Some(0));
-            session.update_final_raster(3, &rejected).unwrap();
+            session.update_final_raster(3, &rejected)?;
             assert!(matches!(
                 session.final_raster_refusal(),
                 Some(ProgramFinalRasterErrorV1::ConventionRejected { pixel_index: 0, .. })
@@ -440,31 +438,29 @@ mod tests {
                 Some(ProgramFinalRasterErrorV1::ConventionRejected { pixel_index: 0, .. })
             ));
         }
-        session.update_final_raster(4, &next).unwrap();
+        session.update_final_raster(4, &next)?;
         assert_eq!(session.final_raster_refusal(), None);
         assert_eq!(
             session
-                .current_final_raster(session.content_identity(), 17, 4, [0; 32])
-                .unwrap()
+                .current_final_raster(session.content_identity(), 17, 4, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[65; 3]]
         );
+        Ok(())
     }
 
     #[test]
-    fn retired_final_raster_success_owners_release_all_three_observation_slots() {
-        let mut session = session();
-        let ready = payload(64);
+    fn retired_final_raster_success_owners_release_all_three_observation_slots()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut session = session()?;
+        let ready = payload(64)?;
         let transparent =
-            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])
-                .unwrap();
+            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])?;
         // Failed удерживает cause + previous; следующий Ready требует третьего
         // слота. Повтор цикла обнаруживает pinned lease через публичный update.
         for (revision, refused) in (1_u64..).zip([false, true, false, false, true, false]) {
-            session
-                .update_final_raster(revision, if refused { &transparent } else { &ready })
-                .unwrap();
+            session.update_final_raster(revision, if refused { &transparent } else { &ready })?;
             if refused {
                 assert_eq!(
                     session.final_raster_refusal(),
@@ -473,24 +469,28 @@ mod tests {
             } else {
                 assert_eq!(
                     session
-                        .current_final_raster(session.content_identity(), 17, revision, [0; 32])
-                        .unwrap()
+                        .current_final_raster(session.content_identity(), 17, revision, [0; 32])?
                         .pixels()
                         .collect::<Vec<_>>(),
                     vec![[64; 3]]
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn no_partial_authority_combination_can_release_current_output() {
-        let mut session = session();
-        session.update_final_raster(1, &payload(64)).unwrap();
-        let materialization = session
-            .owner
-            .current_final_raster(&session.session, session.content_identity(), 17, 1, [0; 32])
-            .unwrap();
+    fn no_partial_authority_combination_can_release_current_output()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut session = session()?;
+        session.update_final_raster(1, &payload(64)?)?;
+        let materialization = session.owner.current_final_raster(
+            &session.session,
+            session.content_identity(),
+            17,
+            1,
+            [0; 32],
+        )?;
         let current = materialization.observation();
         let mut tq_only = AuthorityStateV1::new();
         tq_only
@@ -499,7 +499,7 @@ mod tests {
                 current,
                 AuthorityExpectedCurrentV1::Vacant,
             )
-            .unwrap();
+            .map_err(|_| ProgramFinalRasterErrorV1::TechnicalQuality)?;
         assert_eq!(
             tq_only.evaluate_program_final_raster(materialization, current),
             Err(FinalRasterRefusalV1::CleanConvention)
@@ -511,7 +511,7 @@ mod tests {
                 current,
                 AuthorityExpectedCurrentV1::Vacant,
             )
-            .unwrap();
+            .map_err(|_| ProgramFinalRasterErrorV1::CleanConvention)?;
         assert_eq!(
             cc_only.evaluate_program_final_raster(materialization, current),
             Err(FinalRasterRefusalV1::TechnicalQuality)
@@ -522,17 +522,19 @@ mod tests {
                 current,
                 AuthorityExpectedCurrentV1::Vacant,
             )
-            .unwrap();
+            .map_err(|_| ProgramFinalRasterErrorV1::TechnicalQuality)?;
         assert!(
             cc_only
                 .evaluate_program_final_raster(materialization, current)
                 .is_ok()
         );
+        Ok(())
     }
     #[test]
-    fn final_raster_projections_reject_foreign_equal_content_owner_before_lookup() {
-        let mut current = session();
-        let foreign = session();
+    fn final_raster_projections_reject_foreign_equal_content_owner_before_lookup()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut current = session()?;
+        let foreign = session()?;
         let identity = current.content_identity();
         assert_eq!(foreign.content_identity(), identity);
         assert!(matches!(
@@ -546,7 +548,7 @@ mod tests {
             Some(FinalRasterRefusalV1::ProgramBinding)
         );
 
-        current.update_final_raster(1, &payload(64)).unwrap();
+        current.update_final_raster(1, &payload(64)?)?;
         assert!(matches!(
             foreign
                 .owner
@@ -560,23 +562,24 @@ mod tests {
         assert_eq!(current.final_raster_refusal(), None);
         assert_eq!(
             current
-                .current_final_raster(identity, 17, 1, [0; 32])
-                .unwrap()
+                .current_final_raster(identity, 17, 1, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[64; 3]]
         );
+        Ok(())
     }
 
     #[test]
-    fn owner_raster_projection_preserves_binding_refusal_and_recovery() {
-        let mut current = session();
+    fn owner_raster_projection_preserves_binding_refusal_and_recovery()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut current = session()?;
         let identity = current.content_identity();
         assert!(matches!(
             current.current_final_raster(identity, 17, 1, [0; 32]),
             Err(ProgramFinalRasterErrorV1::Stale)
         ));
-        current.update_final_raster(1, &payload(64)).unwrap();
+        current.update_final_raster(1, &payload(64)?)?;
         let mut other_identity = identity;
         other_identity[0] ^= 1;
         for (content, output, revision, context, expected) in [
@@ -618,7 +621,9 @@ mod tests {
                         reason_id: 0,
                     },
                 )
-                .unwrap();
+                .map_err(|error| {
+                    ProgramFinalRasterErrorV1::Runtime(map_runtime_update_error(error))
+                })?;
             let _evidence = prepared.commit();
         }
         assert_eq!(current.final_raster_refusal(), None);
@@ -626,11 +631,10 @@ mod tests {
             current.current_final_raster(identity, 17, 1, [0; 32]),
             Err(ProgramFinalRasterErrorV1::Stale)
         ));
-        current.update_final_raster(3, &payload(65)).unwrap();
+        current.update_final_raster(3, &payload(65)?)?;
         let transparent =
-            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])
-                .unwrap();
-        current.update_final_raster(4, &transparent).unwrap();
+            ProgramFinalRasterInputV1::try_new(1, 1, 1, [0; 32], 1, &[[0; 4]], 2, &[[0; 4]])?;
+        current.update_final_raster(4, &transparent)?;
         assert_eq!(
             current.final_raster_refusal(),
             Some(ProgramFinalRasterErrorV1::TransparentFinalPixel { pixel_index: 0 })
@@ -639,44 +643,45 @@ mod tests {
             current.current_final_raster(identity, 17, 3, [0; 32]),
             Err(ProgramFinalRasterErrorV1::Stale)
         ));
-        current.update_final_raster(5, &payload(66)).unwrap();
+        current.update_final_raster(5, &payload(66)?)?;
         assert_eq!(current.final_raster_refusal(), None);
         assert_eq!(
             current
-                .current_final_raster(identity, 17, 5, [0; 32])
-                .unwrap()
+                .current_final_raster(identity, 17, 5, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[66; 3]]
         );
+        Ok(())
     }
 
     #[test]
-    fn dropping_prepared_field_transition_preserves_exact_previous_commit() {
-        let mut session = session();
-        session.update_final_raster(1, &payload(64)).unwrap();
-        let next = payload(65);
+    fn dropping_prepared_field_transition_preserves_exact_previous_commit()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut session = session()?;
+        session.update_final_raster(1, &payload(64)?)?;
+        let next = payload(65)?;
         {
             let prepared = session
                 .owner
                 .prepare_field_update(&mut session.session, 2, Shared::clone(&next.0))
-                .unwrap();
+                .map_err(|error| {
+                    ProgramFinalRasterErrorV1::Runtime(map_runtime_update_error(error))
+                })?;
             drop(prepared);
         }
         {
-            let old = session
-                .current_final_raster(session.content_identity(), 17, 1, [0; 32])
-                .unwrap();
+            let old = session.current_final_raster(session.content_identity(), 17, 1, [0; 32])?;
             assert_eq!(old.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
         }
-        session.update_final_raster(2, &next).unwrap();
+        session.update_final_raster(2, &next)?;
         assert_eq!(
             session
-                .current_final_raster(session.content_identity(), 17, 2, [0; 32])
-                .unwrap()
+                .current_final_raster(session.content_identity(), 17, 2, [0; 32])?
                 .pixels()
                 .collect::<Vec<_>>(),
             vec![[65; 3]]
         );
+        Ok(())
     }
 }

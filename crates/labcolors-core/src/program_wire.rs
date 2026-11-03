@@ -2149,20 +2149,22 @@ mod runtime_tests {
         builder.finish().unwrap()
     }
 
-    fn final_raster_runtime() -> ProgramSessionV1 {
-        compile_program_wire(&final_raster_source_over_wire_v1(
+    fn final_raster_runtime() -> Result<ProgramSessionV1, ProgramFinalRasterErrorV1> {
+        Ok(compile_program_wire(&final_raster_source_over_wire_v1(
             1,
             2,
             3,
             17,
             FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
         ))
-        .unwrap()
+        .map_err(ProgramFinalRasterErrorV1::Runtime)?
         .instantiate(101)
-        .unwrap()
+        .map_err(ProgramFinalRasterErrorV1::Runtime)?)
     }
 
-    fn final_raster_payload(shade: u8) -> ProgramFinalRasterInputV1 {
+    fn final_raster_payload(
+        shade: u8,
+    ) -> Result<ProgramFinalRasterInputV1, ProgramFinalRasterErrorV1> {
         ProgramFinalRasterInputV1::try_new(
             1,
             1,
@@ -2173,11 +2175,11 @@ mod runtime_tests {
             2,
             &[[shade, shade, shade, 255]],
         )
-        .unwrap()
     }
 
     #[test]
-    fn field_owner_refuses_point_observation_before_admission() {
+    fn field_owner_refuses_point_observation_before_admission()
+    -> Result<(), ProgramFinalRasterErrorV1> {
         struct UnreadablePointSource;
         impl SchemaOrderedScenarioSourceV1 for UnreadablePointSource {
             fn scenario_count(&self) -> usize {
@@ -2194,10 +2196,8 @@ mod runtime_tests {
             }
         }
 
-        let mut runtime = final_raster_runtime();
-        runtime
-            .update_final_raster(1, &final_raster_payload(64))
-            .unwrap();
+        let mut runtime = final_raster_runtime()?;
+        runtime.update_final_raster(1, &final_raster_payload(64)?)?;
         let old_head = runtime.session.evidence().observation_head();
         let scenarios = [crate::program::ScenarioV1::new(7, &[])];
         let refused = runtime
@@ -2230,22 +2230,19 @@ mod runtime_tests {
             crate::program::StateKindV1::Ready
         );
         {
-            let current = runtime
-                .current_final_raster(runtime.content_identity(), 17, 1, [0; 32])
-                .unwrap();
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 1, [0; 32])?;
             assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
         }
-        runtime
-            .update_final_raster(2, &final_raster_payload(65))
-            .unwrap();
+        runtime.update_final_raster(2, &final_raster_payload(65)?)?;
+        Ok(())
     }
 
     #[test]
-    fn wrong_point_update_preserves_field_commit_and_unknown_lifecycle() {
-        let mut runtime = final_raster_runtime();
-        let initial = runtime
-            .update_final_raster(1, &final_raster_payload(64))
-            .unwrap();
+    fn wrong_point_update_preserves_field_commit_and_unknown_lifecycle()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut runtime = final_raster_runtime()?;
+        let initial = runtime.update_final_raster(1, &final_raster_payload(64)?)?;
         assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
         assert!(initial.assessment_report().is_none());
         let old_head = runtime.session.evidence().observation_head();
@@ -2258,49 +2255,44 @@ mod runtime_tests {
             crate::program::StateKindV1::Ready
         );
         {
-            let current = runtime
-                .current_final_raster(runtime.content_identity(), 17, 1, [0; 32])
-                .unwrap();
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 1, [0; 32])?;
             assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
         }
 
-        let retried = runtime
-            .update_final_raster(2, &final_raster_payload(65))
-            .unwrap();
+        let retried = runtime.update_final_raster(2, &final_raster_payload(65)?)?;
         assert_eq!(retried.state(), ProgramSnapshotStateV1::Ready);
         assert!(retried.assessment_report().is_none());
         {
-            let current = runtime
-                .current_final_raster(runtime.content_identity(), 17, 2, [0; 32])
-                .unwrap();
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 2, [0; 32])?;
             assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[65; 3]]);
         }
 
-        let unknown = runtime.update_unknown(3, 23).unwrap();
+        let unknown = runtime
+            .update_unknown(3, 23)
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
         assert_eq!(unknown.state(), ProgramSnapshotStateV1::Stale);
         assert!(unknown.assessment_report().is_none());
         assert!(matches!(
             runtime.current_final_raster(runtime.content_identity(), 17, 2, [0; 32]),
             Err(ProgramFinalRasterErrorV1::Stale)
         ));
-        runtime
-            .update_final_raster(4, &final_raster_payload(66))
-            .unwrap();
-        let current = runtime
-            .current_final_raster(runtime.content_identity(), 17, 4, [0; 32])
-            .unwrap();
+        runtime.update_final_raster(4, &final_raster_payload(66)?)?;
+        let current = runtime.current_final_raster(runtime.content_identity(), 17, 4, [0; 32])?;
         assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[66; 3]]);
 
         let rgb = Srgb8::new([64; 3]);
         let mut point = compile_program_wire(&runtime_wire(rgb))
-            .unwrap()
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?
             .instantiate(102)
-            .unwrap();
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
         let point_snapshot = point
             .update_observed(1, &[ProgramScenarioV1::new(7, vec![rgb])])
-            .unwrap();
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
         assert_eq!(point_snapshot.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(point_snapshot.outputs()[0].source(), rgb);
+        Ok(())
     }
 
     #[test]
@@ -3055,14 +3047,16 @@ mod runtime_tests {
     }
 
     #[test]
-    fn family_graphs_fail_closed_until_a_public_trust_parameter_exists() {
+    fn family_graphs_fail_closed_until_a_public_trust_parameter_exists()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let mut builder = ProgramWireBuilderV1::new();
         builder.family(1, [7; 32]);
-        let bytes = builder.finish().unwrap();
+        let bytes = builder.finish().map_err(|_| ProgramRuntimeErrorV1::Wire)?;
         assert!(matches!(
             compile_program_wire_v1(&bytes),
             Err(ProgramRuntimeErrorV1::Compile | ProgramRuntimeErrorV1::FamilyArtifactsRequired)
         ));
+        Ok(())
     }
 }
 
