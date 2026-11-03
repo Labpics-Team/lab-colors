@@ -506,7 +506,7 @@ jobs:
               CUPS_PACKAGE=libcups2
               GLIB_PACKAGE=libglib2.0-0
               ;;
-            debian:trixie|ubuntu:noble)
+            debian:trixie|ubuntu:noble|ubuntu:resolute)
               ALSA_PACKAGE=libasound2t64
               ATK_PACKAGE=libatk1.0-0t64
               ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64
