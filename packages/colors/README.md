@@ -12,7 +12,7 @@ Lab Colors выбирает подходящие значения с учёто�
 ## Установка
 
 ```sh
-npm install @labpics/colors@^1
+npm install @labpics/colors@^2
 ```
 
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
