@@ -13,6 +13,10 @@ permissions:
 
 jobs:
   source-admission:
+    if: >-
+      github.repository == 'Labpics-Team/lab-colors' &&
+      github.event_name == 'push' && github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'colors-v')
     name: source admission (publish-worker)
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 5
@@ -54,7 +58,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys
           def validate_owned_source(environment, mode):
-              """Native metadata определяет источник; caller input не выдаёт полномочия."""
+              """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
               import json, re
           
               def required(name):
@@ -160,7 +164,7 @@ jobs:
                       raise ValueError("REFUSED: exact main or release recipe has not executed")
               else:
                   raise ValueError("REFUSED: unknown recipe mode")
-              return {
+              binding = {
                   "source_sha": source_sha,
                   "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
                   "caller_sha": caller_sha,
@@ -177,6 +181,10 @@ jobs:
                   "check_run_id": environment["CI_CHECK_RUN_ID"],
                   "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
               }
+              for key, value in binding.items():
+                  if re.search(r"[\x00-\x1f\x7f]", value) is not None:
+                      raise ValueError("REFUSED: control character in native " + key)
+              return binding
           try:
               binding = validate_owned_source(os.environ, 'bootstrap')
           except ValueError as error:
@@ -1448,12 +1456,13 @@ jobs:
             process.exitCode = 1;
           });
           NODE
-      # The snapshot is tamper-evident, not immutable against same-UID code. Keep
-      # the pre-publish hash recheck adjacent to the sole npm publish command.
+      # Процедура bootstrap заканчивается явным отказом до публикации.
       - name: Refuse publication from the bootstrap recipe
         run: |
           echo 'REFUSED: bootstrap recipe cannot publish' >&2
           exit 1
+      # Повторная проверка хеша перед единственным npm publish обнаруживает
+      # изменение архива между проверкой и выпуском под тем же UID.
       - name: npm publish verified CI tarball (trusted OIDC, no rebuild/repack)
         env:
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}

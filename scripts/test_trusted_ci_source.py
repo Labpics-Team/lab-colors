@@ -1,4 +1,4 @@
-"""Разрешённый source и отказ foreign/missing identity до checkout."""
+"""Разрешённый источник и отказ при чужой или отсутствующей identity до загрузки кода."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ import tempfile
 import unittest
 
 from trusted_ci_source import guard_program, validate_owned_source
+
+
+_UNSET = object()
 
 
 class TestOwnedSourceGuard(unittest.TestCase):
@@ -44,7 +47,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
             "CI_CHECK_RUN_ID": "101",
         }
 
-    def execute(self, environment, mode="bootstrap", program=None):
+    def execute(self, environment, mode="bootstrap", program=None, check_run_id=_UNSET):
         with tempfile.TemporaryDirectory(prefix="owned-source-guard-") as name:
             root = Path(name)
             env_file, summary = root / "env", root / "summary"
@@ -52,12 +55,15 @@ class TestOwnedSourceGuard(unittest.TestCase):
             summary.touch()
             env = dict(os.environ)
             environment = dict(environment)
+            native_check = environment.get("CI_CHECK_RUN_ID") if check_run_id is _UNSET else check_run_id
+            if isinstance(native_check, str) and native_check.isdigit():
+                native_check = int(native_check)
             environment["CI_NATIVE_JOB"] = json.dumps({
                 "workflow_sha": environment.get("CI_RECIPE_SHA"),
                 "workflow_ref": environment.get("CI_RECIPE_REF"),
                 "workflow_repository": environment.get("CI_RECIPE_REPOSITORY"),
                 "workflow_file_path": environment.get("CI_RECIPE_PATH"),
-                "check_run_id": environment.get("CI_CHECK_RUN_ID"),
+                "check_run_id": native_check,
             })
             env.update(environment)
             env.update(GITHUB_ENV=str(env_file), GITHUB_STEP_SUMMARY=str(summary), GITHUB_OUTPUT=str(root / "outputs"))
@@ -65,12 +71,13 @@ class TestOwnedSourceGuard(unittest.TestCase):
                 [sys.executable, "-c", program or guard_program(mode)],
                 env=env, capture_output=True, text=True, timeout=5,
             )
-            return result, env_file.read_text(), summary.read_text()
+            outputs = root / "outputs"
+            return result, env_file.read_text(), summary.read_text(), outputs.read_text() if outputs.exists() else ""
 
     def test_owned_source_has_nonempty_distinct_native_identities(self):
         environment = self.fixture()
         environment["CI_RECIPE_SHA"] = "c" * 40
-        result, output, summary = self.execute(environment, mode="protected")
+        result, output, summary, outputs = self.execute(environment, mode="protected")
         self.assertEqual(result.returncode, 0, result.stderr)
         binding = json.loads(result.stdout)
         self.assertEqual(binding["source_sha"], "a" * 40)
@@ -79,6 +86,46 @@ class TestOwnedSourceGuard(unittest.TestCase):
         self.assertIn("CI_VERIFIED_SOURCE_SHA=" + "a" * 40, output)
         self.assertIn("CI_VERIFIED_RECIPE_SHA=" + "c" * 40, output)
         self.assertNotIn("PASS", summary)
+        lines = outputs.splitlines()
+        self.assertEqual(len(lines), len(binding))
+        self.assertEqual(dict(line.split("=", 1) for line in lines), binding)
+
+    def test_native_check_run_number_is_positive_integer_only(self):
+        for value in (True, False, 0, -1, 101.0, None):
+            with self.subTest(value=value):
+                result, output, summary, outputs = self.execute(self.fixture(), check_run_id=value)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("INCOMPLETE", result.stderr)
+                self.assertEqual((output, summary, outputs), ("", "", ""))
+        result, _, _, outputs = self.execute(self.fixture(), check_run_id=101)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["check_run_id"], "101")
+        self.assertIn("check_run_id=101", outputs.splitlines())
+
+    def test_metadata_control_characters_are_refused_before_identity_outputs(self):
+        for field in ("CI_RUNNER_NAME", "CI_RUNNER_OS", "CI_RUNNER_ARCH", "CI_RECIPE_REF"):
+            for control in ("\n", "\r", "\x7f"):
+                with self.subTest(field=field, control=repr(control)):
+                    environment = self.fixture()
+                    environment[field] += control + "source_sha=" + "d" * 40
+                    result, output, summary, outputs = self.execute(environment)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("REFUSED: control character", result.stderr)
+                    self.assertEqual((output, summary, outputs), ("", "", ""))
+
+    def require_guarded_condition(self, block):
+        condition = re.search(r"(?ms)^    if: (.*?)(?=^    \S|\Z)", block)
+        if condition and "always()" in condition.group(1):
+            self.assertIn("needs.source-admission.result == 'success'", condition.group(1))
+
+    def test_multiline_always_condition_cannot_hide_failed_admission(self):
+        for marker in (">-", "|"):
+            with self.subTest(marker=marker):
+                prefix = "    if: " + marker + "\n      ${{ always()"
+                suffix = " }}\n    runs-on: [self-hosted, Linux, X64]\n"
+                with self.assertRaises(AssertionError):
+                    self.require_guarded_condition(prefix + suffix)
+                self.require_guarded_condition(prefix + " && needs.source-admission.result == 'success'" + suffix)
 
     def test_foreign_head_is_refused_before_any_published_identity(self):
         for field, value in (
@@ -90,10 +137,10 @@ class TestOwnedSourceGuard(unittest.TestCase):
             with self.subTest(field=field):
                 environment = self.fixture()
                 environment[field] = value
-                result, output, summary = self.execute(environment)
+                result, output, summary, outputs = self.execute(environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("REFUSED", result.stderr)
-                self.assertEqual((output, summary), ("", ""))
+                self.assertEqual((output, summary, outputs), ("", "", ""))
 
     def test_missing_or_malformed_actual_recipe_cannot_use_caller_as_fallback(self):
         for field in (
@@ -105,25 +152,25 @@ class TestOwnedSourceGuard(unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     environment = self.fixture()
                     environment[field] = value
-                    result, output, summary = self.execute(environment)
+                    result, output, summary, outputs = self.execute(environment)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("INCOMPLETE", result.stderr)
-                    self.assertEqual((output, summary), ("", ""))
+                    self.assertEqual((output, summary, outputs), ("", "", ""))
 
     def test_bootstrap_keeps_caller_recipe_snapshot_and_requires_native_context(self):
         environment = self.fixture()
         environment["CI_RECIPE_REF"] = "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@refs/pull/849/merge"
-        result, _, _ = self.execute(environment)
+        result, _, _, outputs = self.execute(environment)
         self.assertEqual(result.returncode, 0, result.stderr)
         environment["CI_RECIPE_SHA"] = "c" * 40
-        result, output, _ = self.execute(environment)
+        result, output, summary, outputs = self.execute(environment)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(output, "")
+        self.assertEqual((output, summary, outputs), ("", "", ""))
         environment = self.fixture()
         environment["GITHUB_ACTIONS"] = "false"
-        result, output, _ = self.execute(environment)
+        result, output, summary, outputs = self.execute(environment)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(output, "")
+        self.assertEqual((output, summary, outputs), ("", "", ""))
 
     def test_protected_mode_rejects_unexecuted_main_recipe_and_wrong_callee(self):
         cases = (
@@ -136,9 +183,9 @@ class TestOwnedSourceGuard(unittest.TestCase):
         for change in cases:
             with self.subTest(change=change):
                 environment = self.fixture() | change
-                result, output, _ = self.execute(environment, mode="protected")
+                result, output, summary, outputs = self.execute(environment, mode="protected")
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(output, "")
+                self.assertEqual((output, summary, outputs), ("", "", ""))
 
     def test_each_source_worker_is_bound_to_native_admission_before_steps(self):
         root = Path(__file__).resolve().parents[1] / ".github/workflows"
@@ -159,6 +206,16 @@ class TestOwnedSourceGuard(unittest.TestCase):
                 admission = blocks["source-admission"]
                 self.assertIn("CI_NATIVE_JOB: ${{ toJSON(job) }}", admission)
                 self.assertNotIn("continue-on-error:", admission)
+                if filename == "publish-worker.yml":
+                    expected = (
+                        "github.repository == 'Labpics-Team/lab-colors' && "
+                        "github.event_name == 'push' && github.ref_type == 'tag' && "
+                        "startsWith(github.ref_name, 'colors-v')"
+                    )
+                    for job in ("source-admission", "prepare", "publish"):
+                        condition = re.search(r"(?ms)^    if: >-\n(.*?)(?=^    \S|\Z)", blocks[job])
+                        self.assertIsNotNone(condition, job)
+                        self.assertEqual(" ".join(line.strip() for line in condition.group(1).splitlines()), expected, job)
                 guard = admission.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0]
                 program = "\n".join(line[10:] for line in guard.splitlines())
                 observed_function = next(node for node in ast.parse(program).body if isinstance(node, ast.FunctionDef))
@@ -171,27 +228,25 @@ class TestOwnedSourceGuard(unittest.TestCase):
                     value = match.group(1)
                     needs = json.loads(value) if value.startswith("[") else [value]
                     self.assertIn("source-admission", needs, job)
-                    condition = re.search(r"(?m)^    if: (.+)$", block)
-                    if condition and "always()" in condition.group(1):
-                        self.assertIn("needs.source-admission.result == 'success'", condition.group(1))
+                    self.require_guarded_condition(block)
 
     def test_reject_all_and_repo_only_mutants_are_detected(self):
         environment = self.fixture()
-        healthy, _, _ = self.execute(environment)
+        healthy, _, _, outputs = self.execute(environment)
         self.assertEqual(healthy.returncode, 0, healthy.stderr)
         program = guard_program("bootstrap")
         reject_all = program.replace('    event = required("CI_EVENT")', '    raise ValueError("REFUSED: reject-all mutant")\n    event = required("CI_EVENT")')
-        rejected, output, _ = self.execute(environment, program=reject_all)
+        rejected, output, summary, outputs = self.execute(environment, program=reject_all)
         self.assertNotEqual(rejected.returncode, 0)
-        self.assertEqual(output, "")
+        self.assertEqual((output, summary, outputs), ("", "", ""))
         mutant = program.replace(
             "if head_repository != repository or head_id != repository_id:",
             "if False:",
         )
         self.assertNotEqual(mutant, program)
         foreign = environment | {"CI_HEAD_REPOSITORY_ID": "42"}
-        healthy, _, _ = self.execute(foreign)
-        sabotaged, output, _ = self.execute(foreign, program=mutant)
+        healthy, _, _, outputs = self.execute(foreign)
+        sabotaged, output, _, outputs = self.execute(foreign, program=mutant)
         self.assertNotEqual(healthy.returncode, 0)
         self.assertEqual(sabotaged.returncode, 0, sabotaged.stderr)
         self.assertIn("CI_VERIFIED_SOURCE_SHA", output)

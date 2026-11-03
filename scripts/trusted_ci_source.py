@@ -1,4 +1,4 @@
-"""Доверенный источник и фактически исполняемый CI recipe до checkout."""
+"""Доверенный источник и фактически выполняемая процедура CI до загрузки кода."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 
 
 def validate_owned_source(environment, mode):
-    """Native metadata определяет источник; caller input не выдаёт полномочия."""
+    """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
     import json, re
 
     def required(name):
@@ -115,7 +115,7 @@ def validate_owned_source(environment, mode):
             raise ValueError("REFUSED: exact main or release recipe has not executed")
     else:
         raise ValueError("REFUSED: unknown recipe mode")
-    return {
+    binding = {
         "source_sha": source_sha,
         "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
         "caller_sha": caller_sha,
@@ -132,10 +132,14 @@ def validate_owned_source(environment, mode):
         "check_run_id": environment["CI_CHECK_RUN_ID"],
         "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
     }
+    for key, value in binding.items():
+        if re.search(r"[\x00-\x1f\x7f]", value) is not None:
+            raise ValueError("REFUSED: control character in native " + key)
+    return binding
 
 
 def guard_program(mode):
-    """Одна реализация проецируется в trusted YAML; action@main не перезагружается."""
+    """Одна реализация проецируется в доверенный YAML; action@main не перезагружается."""
     return (
         "import json, os, sys\n"
         + inspect.getsource(validate_owned_source)

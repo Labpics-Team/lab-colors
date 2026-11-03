@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -83,12 +84,18 @@ class ArbBuildRecipeTests(unittest.TestCase):
             if line.lstrip().startswith("runs-on:")
         ]
 
-        # GitHub-hosted раннер одноразовый по построению: каждый прогон
-        # получает свежую эфемерную VM без секретов и без общего состояния.
+        # Размещение не доказывает изоляцию. Допуск источника и native gate
+        # сохраняют отдельные проверки до исполнения proof-нагрузки.
         self.assertEqual(
             runner_contracts,
-            ["runs-on: ubuntu-latest"],
+            ["runs-on: [self-hosted, Linux, X64]"] * 2,
         )
+        self.assertIn("  source-admission:\n", source)
+        self.assertIn('    needs: ["source-admission"]\n', source)
+        self.assertIn("CI_NATIVE_JOB: ${{ toJSON(job) }}", source)
+        self.assertIn("ref: ${{ needs.source-admission.outputs.source_sha }}", source)
+        self.assertNotIn("sudo sysctl -w", source)
+        self.assertNotIn("tee /proc/sys/kernel/core_pattern", source)
         self.assertIn("proof/region/v1/arb/tests/gate.py", source)
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)
         self.assertEqual(source.count("- .github/workflows/arb.yml"), 1)
@@ -110,20 +117,13 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 self.assertIn(probe_contract, source)
         self.assertNotIn("pipeline.NativeDockerBuildBackendV1", source)
         for required in (
-            'apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns',
-            'if [[ -f "$apparmor_userns" ]]; then',
-            'original_userns="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"',
-            'echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns"',
-            "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
-            'echo "LABCOLORS_APPARMOR_USERNS_V1="',
-            'kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1',
             'mkdir "$scope/tasks" "$scope/proof"',
             "printf '+memory +pids' > \"$scope/cgroup.subtree_control\"",
             "printf '+memory +pids' > \"$scope/proof/cgroup.subtree_control\"",
             "printf '2' > \"$scope/proof/pids.max\"",
             'mkdir "$scope/proof/observer"',
             '"$scope/proof/cgroup.subtree_control"',
-            'scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+            'scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"',
             'echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"',
             'echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"',
             '"$LABCOLORS_EXECUTOR_CGROUP_V1/observer/cgroup.procs"',
@@ -141,14 +141,8 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 self.assertIn(required, source)
         self.assertNotIn("grep --ignore-case --quiet skipped", source)
         self.assertNotIn("python3 -m unittest", source)
-        # The kernel precondition is fail-closed and host-explicit: either the
-        # restriction sysctl is read, validated, and lifted, or its absence is
-        # the proof; an unconditional presence test would fail closed on
-        # kernels without AppArmor userns mediation.
-        self.assertNotIn(
-            "test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns",
-            source,
-        )
+        # Требуемые namespace, dumpability и точное размещение observer
+        # проверяются executor/native gate; workflow не меняет общие sysctl.
         self.assertLess(
             source.index("proof/region/v1/arb/tests/gate.py"),
             source.index("LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"),
@@ -174,7 +168,15 @@ class ArbBuildRecipeTests(unittest.TestCase):
     def test_pr_gate_cannot_green_skip_a_fork_without_execution(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
 
-        self.assertNotIn("github.event.pull_request.head.repo.full_name", source)
+        admission, worker = re.split(r"(?m)^  (?=\S)", source.split("\njobs:\n", 1)[1], maxsplit=2)[1:]
+        self.assertIn("github.event.pull_request.head.repo.full_name", admission)
+        self.assertIn("github.event.pull_request.head.repo.id", admission)
+        self.assertIn('if head_repository != repository or head_id != repository_id:', admission)
+        self.assertIn('raise ValueError("REFUSED: foreign pull request head")', admission)
+        self.assertNotIn("actions/checkout@", admission)
+        self.assertIn('    needs: ["source-admission"]\n', worker)
+        self.assertIn("ref: ${{ needs.source-admission.outputs.source_sha }}", worker)
+        self.assertNotIn("continue-on-error:", admission)
 
     def test_privileged_workflow_has_no_automatic_pull_request_trigger(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -183,7 +185,6 @@ class ArbBuildRecipeTests(unittest.TestCase):
         self.assertIn("\n  push:\n", source)
         self.assertIn("branches: [main]", source)
         self.assertNotIn("\n  pull_request:\n", source)
-        self.assertNotIn("pull_request", source)
 
     def test_exact_suite_gate_rejects_expected_failure(self) -> None:
         class BrokenRequiredTest(unittest.TestCase):

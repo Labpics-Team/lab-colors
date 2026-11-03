@@ -46,7 +46,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys
           def validate_owned_source(environment, mode):
-              """Native metadata определяет источник; caller input не выдаёт полномочия."""
+              """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
               import json, re
           
               def required(name):
@@ -152,7 +152,7 @@ jobs:
                       raise ValueError("REFUSED: exact main or release recipe has not executed")
               else:
                   raise ValueError("REFUSED: unknown recipe mode")
-              return {
+              binding = {
                   "source_sha": source_sha,
                   "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
                   "caller_sha": caller_sha,
@@ -169,6 +169,10 @@ jobs:
                   "check_run_id": environment["CI_CHECK_RUN_ID"],
                   "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
               }
+              for key, value in binding.items():
+                  if re.search(r"[\x00-\x1f\x7f]", value) is not None:
+                      raise ValueError("REFUSED: control character in native " + key)
+              return binding
           try:
               binding = validate_owned_source(os.environ, 'bootstrap')
           except ValueError as error:
@@ -217,7 +221,7 @@ jobs:
           python3 - <<'PY'
           import os
           def validate_owned_source(environment, mode):
-              """Native metadata определяет источник; caller input не выдаёт полномочия."""
+              """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
               import json, re
           
               def required(name):
@@ -323,7 +327,7 @@ jobs:
                       raise ValueError("REFUSED: exact main or release recipe has not executed")
               else:
                   raise ValueError("REFUSED: unknown recipe mode")
-              return {
+              binding = {
                   "source_sha": source_sha,
                   "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
                   "caller_sha": caller_sha,
@@ -340,6 +344,10 @@ jobs:
                   "check_run_id": environment["CI_CHECK_RUN_ID"],
                   "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
               }
+              for key, value in binding.items():
+                  if re.search(r"[\x00-\x1f\x7f]", value) is not None:
+                      raise ValueError("REFUSED: control character in native " + key)
+              return binding
           foreign = dict(os.environ)
           foreign.update(CI_EVENT="pull_request", CI_REF="refs/pull/1/merge", CI_HEAD_REPOSITORY="foreign/lab-colors", CI_HEAD_REPOSITORY_ID="42", CI_HEAD_SHA="b"*40)
           try:

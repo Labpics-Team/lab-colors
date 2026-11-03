@@ -58,7 +58,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys
           def validate_owned_source(environment, mode):
-              """Native metadata определяет источник; caller input не выдаёт полномочия."""
+              """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
               import json, re
           
               def required(name):
@@ -164,7 +164,7 @@ jobs:
                       raise ValueError("REFUSED: exact main or release recipe has not executed")
               else:
                   raise ValueError("REFUSED: unknown recipe mode")
-              return {
+              binding = {
                   "source_sha": source_sha,
                   "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
                   "caller_sha": caller_sha,
@@ -181,6 +181,10 @@ jobs:
                   "check_run_id": environment["CI_CHECK_RUN_ID"],
                   "identity_relation": "same-revision" if source_sha == recipe_sha else "distinct-revisions",
               }
+              for key, value in binding.items():
+                  if re.search(r"[\x00-\x1f\x7f]", value) is not None:
+                      raise ValueError("REFUSED: control character in native " + key)
+              return binding
           try:
               binding = validate_owned_source(os.environ, 'bootstrap')
           except ValueError as error:
@@ -247,7 +251,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"
           # One observer subtree per engine.  A shared one cannot work here:
           # its budget is two tasks, the controller stays in the observer it
           # entered, and the second engine's BUILD would fork into a full
@@ -421,19 +425,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          apparmor_userns=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [[ -f "$apparmor_userns" ]]; then
-            original_userns="$(cat "$apparmor_userns")"
-            case "$original_userns" in
-              0|1) ;;
-              *) exit 78 ;;
-            esac
-            echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-            test "$(cat "$apparmor_userns")" = 0
-          else
-            echo "LABCOLORS_APPARMOR_USERNS_V1=" >> "$GITHUB_ENV"
-          fi
           scope="$LABCOLORS_CGROUP_SCOPE_V1"
           sudo mkdir "$scope"
           sudo chown "$(id -u):$(id -g)" \
@@ -452,8 +443,7 @@ jobs:
             grep --fixed-strings --quiet 'pids' "$scope/$engine/cgroup.subtree_control"
             test "$(cat "$scope/$engine/pids.max")" = 2
           done
-          echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null
-          test "$(cat /proc/sys/kernel/core_pattern)" = core
+          # Executor закрепляет execute-only образ и dumpability дочернего процесса.
 
       - name: seal the full-domain dual proof
         shell: bash
@@ -511,10 +501,5 @@ jobs:
               fi
             done
             sudo rmdir "$LABCOLORS_CGROUP_SCOPE_V1" || record_failure
-          fi
-          if [[ -n "${LABCOLORS_APPARMOR_USERNS_V1:-}" ]]; then
-            sudo sysctl -w \
-              "kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1" \
-              >/dev/null || record_failure
           fi
           exit "$status"
