@@ -97,7 +97,14 @@ test("publication readback consumes the publisher digest in its own credential-f
   const readback = workflow.split("\n  verify-publication:\n");
   assert.equal(readback.length, 2);
   assert.match(readback[0], /tarball_sha256: \$\{\{ steps\.verified-artifact\.outputs\.sha256 \}\}/u);
-  assert.match(readback[1], /needs: \[prepare, publish\]/u);
+  const needs = /^\s+needs: \[([^\]]+)\]$/mu.exec(readback[1]);
+  assert.ok(needs, "publication readback declares its job dependencies");
+  const dependencies = needs[1].split(",")
+    .map((dependency) => dependency.trim().replace(/^(["'])(.*?)\1$/u, "$2"));
+  for (const dependency of ["prepare", "publish", "source-admission"]) {
+    assert.ok(dependencies.includes(dependency), "publication readback needs " + dependency);
+  }
+  assert.match(readback[1], /ref: \$\{\{ needs\.source-admission\.outputs\.source_sha \}\}/u);
   assert.match(readback[1], /EXPECTED_TARBALL_SHA256: \$\{\{ needs\.publish\.outputs\.tarball_sha256 \}\}/u);
   assert.match(readback[1], /node scripts\/verify-published-package\.mjs/u);
   assert.match(readback[1], /timeout-minutes: 30/u);
