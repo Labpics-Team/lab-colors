@@ -1056,7 +1056,6 @@ fn fixed_sources_are_not_part_of_computed_freedom() {
     ));
 }
 
-
 fn cube_product(
     domains: [AssignmentDomainV1; 3],
     anchors: [u8; 3],
@@ -1185,7 +1184,10 @@ fn full_rgb_products_search_and_prove_empty_with_singleton_controls() {
                     .current_verified()
                     .expect("exact-visible оставляет один допустимый tuple")
                     .computed_for_test();
-                assert_eq!(&*current.values, &expected.map(|gray| Srgb8::new([gray; 3])));
+                assert_eq!(
+                    &*current.values,
+                    &expected.map(|gray| Srgb8::new([gray; 3]))
+                );
                 assert_eq!(current.search.completion, CompletionV1::Complete);
                 assert!(current.search.regions > 0);
                 assert!(current.search.visited <= EXECUTION_NODE_LIMIT_V1);

@@ -699,7 +699,6 @@ fn nested_alpha_region_search_matches_fixed_program_exhaustion() {
     );
 }
 
-
 #[test]
 fn structural_partition_covers_each_point_once_with_bounded_stack_depth() {
     for domain in [

@@ -229,8 +229,8 @@
   "crates/labcolors-core/src/program_relation_tests.rs": "3a69421e5f00fd8c951c55f702dd9e6b50f8d556",
   "crates/labcolors-core/src/program_session.rs": "c3a829ea42b99e3d5ca92f27abebf4f061119c60",
   "crates/labcolors-core/src/program_session/computed_assignment.rs": "9a295217e7e3459d063f283030a9c801db04709f",
-  "crates/labcolors-core/src/program_session/computed_assignment/qualification_tests.rs": "7ba0cb4e19e436a84087960a9b78a3fcd386db6e",
-  "crates/labcolors-core/src/program_session/computed_assignment/tests.rs": "cf063ecf2b289a9b5161da86ee3c656797075da6",
+  "crates/labcolors-core/src/program_session/computed_assignment/qualification_tests.rs": "c52679d8a5bb332c53a2dd2cf536a1d625da72b6",
+  "crates/labcolors-core/src/program_session/computed_assignment/tests.rs": "e1402a39208baddef52080c0b3d3bd17ef2118ef",
   "crates/labcolors-core/src/program_session/dependency_tests.rs": "d78cae20b2c188c558925b1d1579ab28e124b5ce",
   "crates/labcolors-core/src/program_session/finite_field.rs": "0ee961840d5d20733a615bc1ece448186046d64d",
   "crates/labcolors-core/src/program_session_tests.rs": "fd3cb960002b8a51528a85444bb969ca35f1e939",
@@ -639,7 +639,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "102b2a14628314f76a24060986bf1226219ad3014d85bd89b5409d49a4e14b26",
+ "record_sha256": "585ad352c3d6ef0bc5bcff545e155f30dc91bf4fd073e2d9f737470b3140a1d5",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
