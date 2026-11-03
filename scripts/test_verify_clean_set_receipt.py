@@ -41,6 +41,7 @@ TRANSITIVE_EXECUTOR_ROLES = (
     "content_digest_source",
     "joint_selection_source",
     "observation_runtime_source",
+    "ordering_source",
     "point_attachment_source",
     "session_runtime_source",
     "signal_transport_source",

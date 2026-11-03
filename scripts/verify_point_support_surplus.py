@@ -22,6 +22,7 @@ if not __debug__:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/point_support.rs"
+ORDERING_SOURCE = REPO_ROOT / "crates/labcolors-core/src/ordering.rs"
 OBSERVATION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/observation.rs"
 LCS_OCCURRENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lcs_occurrence.rs"
 NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
@@ -90,6 +91,7 @@ EXPECTED_WOLFRAM_RESULT_SHA256 = (
 
 SOURCE_CONE_PATHS = (
     POINT_SOURCE,
+    ORDERING_SOURCE,
     OBSERVATION_SOURCE,
     LCS_OCCURRENCE_SOURCE,
     SESSION_SOURCE,
@@ -180,6 +182,7 @@ def verify_source_binding() -> tuple[str, int]:
     sources = read_source_cone()
     digest = source_closure_digest(sources)
     mutations = (
+        (ORDERING_SOURCE, b"compare(&values[left], &values[right]).is_lt()", b"compare(&values[left], &values[right]).is_gt()"),
         (POINT_SOURCE, b"matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::RequiredFailure(_))", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::Failure(_))", b"false"),

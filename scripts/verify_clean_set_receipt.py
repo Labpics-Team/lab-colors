@@ -77,9 +77,9 @@ EXCLUDED_CLAIMS = (
     "independent human holdout validation of the fitted frontier",
 )
 
-# Первый точный product receipt намеренно связывает файлы целиком. После
-# разделения исходников схему надо выпустить заново, а не ослаблять замыкание
-# незаметно.
+# Точный product receipt связывает файлы целиком. После разделения исходников
+# новые зависимости добавляют в замыкание и выпускают квитанцию заново.
+# Ослаблять привязку до фрагментов исходников без новой схемы нельзя.
 PRODUCT_ARTIFACT_PATHS = {
     "appearance_executor_source": "crates/labcolors-core/src/appearance.rs",
     "classifier_source": "crates/labcolors-core/src/clean_set.rs",
@@ -89,6 +89,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "joint_selection_source": "crates/labcolors-core/src/joint.rs",
     "module_registration_source": "crates/labcolors-core/src/lib.rs",
     "observation_runtime_source": "crates/labcolors-core/src/observation.rs",
+    "ordering_source": "crates/labcolors-core/src/ordering.rs",
     "point_attachment_allocator_oracle": "crates/labcolors-core/src/test_support.rs",
     "point_attachment_source": "crates/labcolors-core/src/program/attachment.rs",
     "point_attachment_test_support": "crates/labcolors-core/src/program/attachment/support.rs",

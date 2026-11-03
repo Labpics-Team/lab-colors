@@ -535,7 +535,7 @@ const FINAL_RASTER_ERROR_CODES = new Set([
   "program_field_unsupported", "program_field_transparent", "program_field_convention",
   "program_field_tq", "program_field_cc", "program_field_stale", "program_field_program",
   "program_field_output", "program_field_context", "program_field_internal",
-  "program_field_consumer_rejected",
+  "program_field_consumer_rejected", "program_field_consumer_failed",
 ]);
 const runtimeFinalUpdate = ProgramRuntime.prototype.updateFinalRaster;
 ProgramRuntime.prototype.updateFinalRaster = function (

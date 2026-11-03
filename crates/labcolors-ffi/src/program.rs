@@ -965,33 +965,8 @@ mod tests {
     }
 }
 
-fn final_raster_code(error: core::ProgramFinalRasterErrorV1) -> &'static str {
-    use core::ProgramFinalRasterErrorV1 as E;
-    match error {
-        E::InvalidExtent => "program_field_extent",
-        E::InvalidDevicePixelRatio => "program_field_dpr",
-        E::InvalidLength => "program_field_length",
-        E::InvalidPremultipliedPixel => "program_field_premultiplied",
-        E::PortBinding => "program_field_ports",
-        E::ResourceExhausted | E::Runtime(core::ProgramRuntimeErrorV1::ResourceExhausted) => {
-            "program_resource_exhausted"
-        }
-        E::Runtime(_) => "program_field_update",
-        E::Unsupported => "program_field_unsupported",
-        E::TransparentFinalPixel { .. } => "program_field_transparent",
-        E::ConventionRejected { .. } => "program_field_convention",
-        E::TechnicalQuality => "program_field_tq",
-        E::CleanConvention => "program_field_cc",
-        E::Stale => "program_field_stale",
-        E::ProgramBinding => "program_field_program",
-        E::OutputBinding => "program_field_output",
-        E::ContextBinding => "program_field_context",
-        _ => "program_field_internal",
-    }
-}
-
 fn final_raster_error(error: core::ProgramFinalRasterErrorV1, operation: &str) -> LabColorsError {
-    LabColorsError::new(final_raster_code(error), operation)
+    LabColorsError::new(error.code(), operation)
 }
 
 /// Требование переносится в Core без собственной классификации или смены policy.
@@ -1205,7 +1180,7 @@ fn project_final_raster_refusal(
     error: core::ProgramFinalRasterErrorV1,
 ) -> Result<ProgramFinalRasterRefusal, LabColorsError> {
     let mut refusal = ProgramFinalRasterRefusal {
-        code: final_raster_code(error).into(),
+        code: error.code().into(),
         pixel_index: None,
         composite: None,
         rejected_blue_interval: None,

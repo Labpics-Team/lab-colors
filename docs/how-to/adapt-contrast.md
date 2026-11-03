@@ -7,7 +7,7 @@
 В каталоге приложения установите пакет из npm и сохраните lockfile:
 
 ```sh
-npm install @labpics/colors@^1
+npm install @labpics/colors@^2
 ```
 
 Сохраните в `adaptive-color.mjs`:

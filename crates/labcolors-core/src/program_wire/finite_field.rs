@@ -102,6 +102,34 @@ impl From<FinalRasterRefusalV1> for ProgramFinalRasterErrorV1 {
     }
 }
 
+impl ProgramFinalRasterErrorV1 {
+    /// Стабильный код отказа; адаптеры не определяют собственное отображение.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidExtent => "program_field_extent",
+            Self::InvalidDevicePixelRatio => "program_field_dpr",
+            Self::InvalidLength => "program_field_length",
+            Self::InvalidPremultipliedPixel => "program_field_premultiplied",
+            Self::PortBinding => "program_field_ports",
+            Self::ResourceExhausted
+            | Self::Runtime(ProgramRuntimeErrorV1::ResourceExhausted) => {
+                "program_resource_exhausted"
+            }
+            Self::Runtime(_) => "program_field_update",
+            Self::Unsupported => "program_field_unsupported",
+            Self::TransparentFinalPixel { .. } => "program_field_transparent",
+            Self::ConventionRejected { .. } => "program_field_convention",
+            Self::TechnicalQuality => "program_field_tq",
+            Self::CleanConvention => "program_field_cc",
+            Self::Stale => "program_field_stale",
+            Self::ProgramBinding => "program_field_program",
+            Self::OutputBinding => "program_field_output",
+            Self::ContextBinding => "program_field_context",
+        }
+    }
+}
+
 /// Полный immutable row-major payload. Внешние массивы копируются после budget/shape checks.
 pub struct ProgramFinalRasterInputV1(Shared<FieldObservedPayloadV1>);
 impl ProgramFinalRasterInputV1 {

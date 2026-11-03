@@ -101,7 +101,7 @@ export type ProgramFinalRasterErrorCode =
   | "program_field_unsupported" | "program_field_transparent" | "program_field_convention"
   | "program_field_tq" | "program_field_cc" | "program_field_stale" | "program_field_program"
   | "program_field_output" | "program_field_context" | "program_field_internal"
-  | "program_field_consumer_rejected";
+  | "program_field_consumer_rejected" | "program_field_consumer_failed";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramRuntimeBusyErrorCode; operation: ProgramRuntimeBusyOperation }>
   | Readonly<{ code: ProgramFinalRasterErrorCode; operation: "finalRasterSourceOverWire" | "updateFinalRaster" | "consumeFinalRaster" }>

@@ -12,7 +12,7 @@ WASM и UniFFI вызывают её, не создавая отдельного
 не требует ещё одной реализации цветовых операций.
 Языковой builder только кодирует канонический wire и проверяется независимыми
 байтовыми примерами. V4 builder получает wire через общий генератор Core;
-полный растр потребляется через сгенерированный callback с собственными bytes и отчётом.
+полный растр потребляется через сгенерированный callback с собственными байтами и отчётом.
 [Контракт полного растра](final-raster-v1.md) задаёт off/lint/mandatory и область.
 Предварительно вычисленные токены не заменяют runtime.
 
@@ -58,3 +58,45 @@ ABI и установка проверяются на поддерживаемы
 Неподдерживаемая возможность должна оставаться явным отказом или отсутствием
 заявления о поддержке. Скрывать её за заглушкой, фиксированными токенами или
 успехом соседней платформы нельзя.
+
+## Kotlin: снимок и полный растр
+
+`snapshotVersion()` равен `1u` для V1/V2 и `2u` для V3. В version 1 сохранена
+прежняя семантика outputs, включая предыдущий успешный результат. В version 2
+outputs доступны только в `ready`; `unsatisfied`, `incomplete`, `waiting` и
+`stale` имеют нулевой `outputCount()`. `unsatisfied` означает доказанное
+отсутствие решения, `incomplete` — незавершённый поиск. `reason(): String?`
+равен `"limit"` только у `incomplete`; `revision(): ULong` всегда сообщает
+принятую ревизию. Сохранённый snapshot остаётся неизменным, но не подтверждает
+актуальность старого цвета.
+
+`ProgramWireBuilderV4(sourcePort, destinationPort, operatorId, outputSlot, cleanliness)`
+принимает `ULong` raster ports и operator, `UInt` output slot и
+`ProgramFinalRasterCleanlinessRequirement`: `OFF`,
+`LINT_EXACT_NOMINAL_SRGB8_V2` или `MANDATORY_EXACT_NOMINAL_SRGB8_V2`.
+`finish()` получает bytes через сгенерированную функцию `finalRasterWire`.
+Core исполняет source-over и сохраняет переданные locked premultiplied RGBA8.
+
+`runtime.updateFinalRaster(revision, width, height, dpr, context, sourcePort,
+source, destinationPort, destination)` принимает полные `ByteArray` обоих
+источников. Core проверяет extent, DPR, предел 65536 пикселей, bytes и ревизию.
+`finalRasterContentIdentity()` возвращает 32-byte identity программы.
+
+`consumeFinalRaster(revision, content, output, context, consumer)` проверяет
+текущий допуск до синхронного `ProgramFinalRasterConsumer.consume(raster)`.
+Callback получает owned `ProgramFinalRasterBytes`: scope, width, height,
+devicePixelRatio, revision, outputSlot, RGB8 pixels и cleanliness.
+`true` подтверждает приём; `false` даёт `program_field_consumer_rejected`;
+`ProgramFinalRasterCallbackException.InvocationFailed` —
+`program_field_consumer_failed`. Память полученных records и массивов
+принадлежит Kotlin и сохраняется после `close()` runtime.
+
+Cleanliness передаёт requirement, verdict, checkedPixelCount, violationCount,
+firstViolation, profile и profileRelease. Lint сохраняет Ready и точные pixels
+при нарушении. Mandatory сохраняет Ready только при соответствии конвенции;
+`finalRasterRefusal()` сообщает код и первый witness отказа. Failed-растр даёт
+`program_field_stale` при потреблении до вызова callback.
+Копия frame сохраняет сведения своей ревизии; текущий допуск проверяет новый вызов Core.
+`assessmentReport()` field-снимка возвращает `null`.
+[Полный контракт растра](final-raster-v1.md) задаёт область
+opaque RGB8, физическую модель и ограничения.

@@ -396,7 +396,7 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
       POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
     ) ||
     !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
-    proof.source_negative_controls !== 43 ||
+    proof.source_negative_controls !== 44 ||
     !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
     !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
     !Array.isArray(proof.source_files) ||
@@ -419,15 +419,8 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
     }
     const sourceBytes = await readFile(resolve(REPO_ROOT, expectedPath));
     const actualHash = sha256(sourceBytes);
-    // GitHub PR merge-ref may cache stale source files with a different hash
-    // than local HEAD. The proof_payload_sha256 already guarantees integrity
-    // of the entire source cone via cryptographic binding. Per-file hash
-    // verification against the working tree is therefore relaxed: we only
-    // require that the file exists and is readable. True drift detection is
-    // enforced by the proof payload digest and source_closure_sha256 checks
-    // above, which are immune to merge-ref staleness.
-    if (!sourceBytes || sourceBytes.length === 0) {
-      fail(`point-support proof source file ${expectedPath} is missing or empty`);
+    if (actualHash !== sourceFile.sha256) {
+      fail(`point-support proof source file ${expectedPath} differs from current source`);
     }
   }
   const algebra = proof.universal_algebraic_certificate;
@@ -1319,7 +1312,39 @@ try {
     return true;
   });
   assert.equal(rasterCalls, 1);
-  assert.deepEqual(rasterTarget, new Uint8Array([128, 128, 128, 64, 64, 64, 32, 32, 32, 96, 96, 96]));
+  const expectedRaster = new Uint8Array([128, 128, 128, 64, 64, 64, 32, 32, 32, 96, 96, 96]);
+  assert.deepEqual(rasterTarget, expectedRaster);
+  let refusedRasterCalls = 0;
+  assert.throws(
+    () => raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, () => {
+      refusedRasterCalls++;
+      return false;
+    }),
+    (error) => colors.isProgramError(error)
+      && error.code === "program_field_consumer_rejected"
+      && error.operation === "consumeFinalRaster",
+  );
+  for (const cause of [new Error("consumer stopped"), undefined]) {
+    assert.throws(
+      () => raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, () => {
+        refusedRasterCalls++;
+        throw cause;
+      }),
+      (error) => colors.isProgramError(error)
+        && error.code === "program_field_consumer_failed"
+        && error.operation === "consumeFinalRaster",
+    );
+  }
+  assert.equal(refusedRasterCalls, 3);
+  assert.equal(raster.finalRasterRefusal(), null);
+  raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, (frame) => {
+    assert.equal(frame.revision, 1n);
+    assert.equal(frame.cleanliness.verdict, "pass");
+    assert.deepEqual(Array.from(frame.pixels), Array.from(expectedRaster));
+    rasterCalls++;
+    return true;
+  });
+  assert.equal(rasterCalls, 2);
 } finally {
   rasterSnapshot?.free();
   raster.free();
@@ -1483,6 +1508,8 @@ void sourceCertificateBytes;
 void sourceCertificateError;
 void certificateDecodeError;
 
+const rasterCallbackFailure: ProgramErrorCode = "program_field_consumer_failed";
+void rasterCallbackFailure;
 const rasterBudget: 65536 = MAX_FINAL_RASTER_PIXELS;
 function finalRasterTypes(context: Uint8Array, source: Uint8Array, destination: Uint8Array): ProgramRuntime {
   const wire: Uint8Array = finalRasterSourceOverWire(1n, 2n, 3n, 17, "mandatory-exact-nominal-srgb8-v2");

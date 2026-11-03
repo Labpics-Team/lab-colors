@@ -6,32 +6,8 @@ use labcolors_core::program_wire::{
     ProgramFinalRasterErrorV1 as E, ProgramFinalRasterInputV1, final_raster_source_over_wire_v1,
 };
 
-fn code(error: E) -> &'static str {
-    match error {
-        E::InvalidExtent => "program_field_extent",
-        E::InvalidDevicePixelRatio => "program_field_dpr",
-        E::InvalidLength => "program_field_length",
-        E::InvalidPremultipliedPixel => "program_field_premultiplied",
-        E::PortBinding => "program_field_ports",
-        E::ResourceExhausted => "program_resource_exhausted",
-        E::Runtime(labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted) => {
-            "program_resource_exhausted"
-        }
-        E::Runtime(_) => "program_field_update",
-        E::Unsupported => "program_field_unsupported",
-        E::TransparentFinalPixel { .. } => "program_field_transparent",
-        E::ConventionRejected { .. } => "program_field_convention",
-        E::TechnicalQuality => "program_field_tq",
-        E::CleanConvention => "program_field_cc",
-        E::Stale => "program_field_stale",
-        E::ProgramBinding => "program_field_program",
-        E::OutputBinding => "program_field_output",
-        E::ContextBinding => "program_field_context",
-        _ => "program_field_internal",
-    }
-}
 fn error(error: E, operation: &str) -> JsValue {
-    let object: JsValue = program_error("Final raster was refused", code(error), operation).into();
+    let object: JsValue = program_error("Final raster was refused", error.code(), operation).into();
     match error {
         E::TransparentFinalPixel { pixel_index } | E::ConventionRejected { pixel_index, .. } => {
             let _ =
@@ -254,7 +230,15 @@ impl ProgramRuntime {
             raster.output_slot(),
             &cleanliness,
             &consumer,
-        )?;
+        )
+        .map_err(|_| -> JsValue {
+            program_error(
+                "Final raster consumer failed",
+                "program_field_consumer_failed",
+                "consumeFinalRaster",
+            )
+            .into()
+        })?;
         if !accepted {
             return Err(program_error(
                 "Final raster consumer refused bytes",

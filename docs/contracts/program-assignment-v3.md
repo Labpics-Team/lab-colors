@@ -190,11 +190,13 @@ Attachment по-прежнему устанавливает один terminal po
 | --- | --- |
 | `program_wire` | Неверные bytes, версия или тег |
 | `program_compile` | Недопустимый разобранный граф или параметры |
-| `program_unsupported` | Распознанное неподдержанное сочетание assignment и finite selection |
+| `program_unsupported` | Неподдержанное сочетание assignment и finite selection либо вид наблюдения |
 | `program_resource_exhausted` | Ресурсы admission или проверяемая cardinality исчерпаны |
 
-`program_unsupported` относится к операциям `compileProgramWire` и
-`attachProgramWire`. Старые ошибки observations, host, индексов и lifecycle
+`compileProgramWire` и `attachProgramWire` возвращают `program_unsupported`
+для смешанного assignment и finite selection. Операции обновления возвращают
+этот код для неподдержанного вида наблюдения. Старые ошибки observations, host,
+индексов и lifecycle
 остаются действующими. JavaScript builder использует прежние
 `PROGRAM_WIRE_INVALID_DECLARATION` и `PROGRAM_WIRE_TOO_MANY_ENTRIES`;
 decoder независимо проверяет сырые bytes.
