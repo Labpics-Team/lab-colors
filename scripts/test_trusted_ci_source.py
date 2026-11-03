@@ -230,6 +230,40 @@ class TestOwnedSourceGuard(unittest.TestCase):
                     self.assertIn("source-admission", needs, job)
                     self.require_guarded_condition(block)
 
+    @staticmethod
+    def require_self_hosted_selector(block):
+        selector = re.search(r"(?m)^    runs-on: (.+)$", block)
+        if selector is None:
+            raise AssertionError("guarded job has no declared runner selector")
+        labels = selector.group(1).strip().strip("[]").split(",")
+        labels = [label.strip().strip("\"'") for label in labels]
+        if "self-hosted" not in labels:
+            raise AssertionError("self-hosted guard requires a self-hosted selector")
+
+    def test_self_hosted_guard_and_runner_selector_agree(self):
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/native-conformance-worker.yml"
+        source = workflow.read_text().split("\njobs:\n", 1)[1]
+        blocks = dict(re.findall(
+            r"(?m)^  ([a-zA-Z0-9_-]+):\n((?:(?!^  [a-zA-Z0-9_-]+:\n)[\s\S])*)",
+            source,
+        ))
+        guarded = 0
+        for job, block in blocks.items():
+            if 'test "$ACTUAL_RUNNER_ENVIRONMENT" = self-hosted' in block:
+                with self.subTest(job=job):
+                    self.require_self_hosted_selector(block)
+                    guarded += 1
+        self.assertGreater(guarded, 0, "environment checks must be exercised")
+
+    def test_hosted_selector_mutation_is_detected_with_legal_platform_neighbors(self):
+        for selector in ("ubuntu-24.04", "macos-15"):
+            with self.subTest(selector=selector):
+                with self.assertRaisesRegex(AssertionError, "self-hosted selector"):
+                    self.require_self_hosted_selector("    runs-on: " + selector + "\n")
+        for selector in ("[self-hosted, Linux, X64]", "[self-hosted, macOS]"):
+            with self.subTest(selector=selector):
+                self.require_self_hosted_selector("    runs-on: " + selector + "\n")
+
     def test_reject_all_and_repo_only_mutants_are_detected(self):
         environment = self.fixture()
         healthy, _, _, outputs = self.execute(environment)

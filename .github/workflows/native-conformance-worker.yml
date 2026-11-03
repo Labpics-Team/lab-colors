@@ -274,7 +274,7 @@ jobs:
   apple-package:
     needs: ["source-admission"]
     name: swift package (macOS and iOS)
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 40
     env:
       XCODE_VERSION: '16.4'
@@ -324,7 +324,7 @@ jobs:
   android-build:
     needs: ["source-admission"]
     name: build Android SDK
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 35
     steps:
       - name: Require declared execution environment
@@ -373,7 +373,7 @@ jobs:
   android-consumer:
     name: android consumer (${{ matrix.name }})
     needs: ["android-build", "source-admission"]
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 35
     strategy:
       fail-fast: false
