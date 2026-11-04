@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 from ci_workflow_binding import TestCiWorkflowBinding, verify_ci_binding
 import shutil
@@ -148,7 +149,7 @@ def browser_script(workflow: str | None = None) -> str:
             workflow = (REPO / ".github/workflows/package-worker.yml").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise AssertionError("cannot read browser workflow as UTF-8") from error
-    anchor = "      - name: terminal Program in real browser\n"
+    anchor = "      - name: test WASM crate in real browser\n"
     if workflow.count(anchor) != 1:
         raise AssertionError("browser step anchor must be unique")
     step = workflow.split(anchor, 1)[1].split("\n      - ", 1)[0]
@@ -165,6 +166,35 @@ def browser_script(workflow: str | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def terminal_script(workflow: str | None = None) -> str:
+    if workflow is None:
+        try:
+            workflow = (REPO / ".github/workflows/package-worker.yml").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise AssertionError("cannot read browser workflow as UTF-8") from error
+    anchor = "      - name: terminal Program in real browser\n"
+    if workflow.count(anchor) != 1:
+        raise AssertionError("terminal Program step anchor must be unique")
+    step = workflow.split(anchor, 1)[1].split("\n      - ", 1)[0]
+    if re.search(r"(?m)^        (?:if|continue-on-error):", step):
+        raise AssertionError("terminal Program must remain mandatory and blocking")
+    if re.findall(r"(?m)^        shell: (.+)$", step) != ["bash"]:
+        raise AssertionError("terminal Program must execute in Bash")
+    if len(re.findall(r"(?m)^        env:$", step)) != 1:
+        raise AssertionError("terminal Program must declare one verified input map")
+    expected = {
+        "VERIFIED_TARBALL": "${{ steps.verified-release.outputs.tarball }}",
+        "VERIFIED_TARBALL_SHA256": "${{ steps.verified-release-identity.outputs.sha256 }}",
+    }
+    for name, value in expected.items():
+        if re.findall(r"(?m)^          " + name + r": (.+)$", step) != [value]:
+            raise AssertionError("terminal Program must bind " + name + " to verified output")
+    commands = re.findall(r"(?m)^        run: (.+)$", step)
+    if len(commands) != 1 or commands[0] in ("|", ">", "|-", ">-"):
+        raise AssertionError("terminal Program must have one scalar command")
+    return commands[0] + "\n"
+
+
 class BrowserBinaryAdmissionTest(unittest.TestCase):
     def test_script_read_errors_remain_assertions(self) -> None:
         for error in (OSError("unreadable workflow"),
@@ -175,18 +205,33 @@ class BrowserBinaryAdmissionTest(unittest.TestCase):
                 self.assertIs(failure.exception.__cause__, error)
 
     def test_script_extraction_preserves_body_and_stops_at_next_step(self) -> None:
-        source = ("      - name: terminal Program in real browser\n"
+        source = ("      - name: test WASM crate in real browser\n"
                   "        run: |\n          echo first\n\n          echo second\n"
                   "      - name: next\n        run: |\n          echo foreign\n")
         self.assertEqual(browser_script(source), "echo first\n\necho second\n")
-        for mutant in (source.replace("terminal Program in real browser", "renamed"),
+        workflow = (REPO / ".github/workflows/package-worker.yml").read_text(encoding="utf-8")
+        terminal_script(workflow)
+        anchor = "      - name: terminal Program in real browser\n"
+        before, suffix = workflow.split(anchor, 1)
+        step, after = suffix.split("\n      - ", 1)
+        for name, value in (
+            ("VERIFIED_TARBALL", "${{ steps.verified-release.outputs.tarball }}"),
+            ("VERIFIED_TARBALL_SHA256", "${{ steps.verified-release-identity.outputs.sha256 }}"),
+        ):
+            line = "          " + name + ": " + value + "\n"
+            self.assertEqual(step.count(line), 1)
+            for replacement in ("", "          " + name + ": unverified\n", line + line):
+                with self.subTest(input=name, replacement=replacement), self.assertRaises(AssertionError):
+                    terminal_script(before + anchor + step.replace(line, replacement, 1) + "\n      - " + after)
+        for mutant in (source.replace("test WASM crate in real browser", "renamed"),
                        source.replace("        run: |\n", "        run: >\n", 1),
                        source + source):
             with self.subTest(mutant=mutant), self.assertRaises(AssertionError):
                 browser_script(mutant)
 
     def exercise(self, *, script: str | None = None, wasm_exit: int = 0,
-                 missing_browser: bool = False, capabilities: dict | None = None) -> dict:
+                 product_exit: int = 0, missing_browser: bool = False,
+                 capabilities: dict | None = None) -> dict:
         node = shutil.which("node")
         bash = shutil.which("bash")
         if node is None or bash is None:
@@ -237,21 +282,29 @@ sys.exit(int(os.environ["WASM_EXIT"]))
             wasm.chmod(0o755)
             node_wrapper = bin_dir / "node"
             node_wrapper.write_text(f"#!{sys.executable}\n" + r'''
-import os, pathlib, sys
+import json, os, pathlib, sys
 if sys.argv[1:2] == ["scripts/test-program-runtime-browser.mjs"]:
-    pathlib.Path(os.environ["PRODUCT_MARKER"]).write_text("called\n")
+    pathlib.Path(os.environ["PRODUCT_MARKER"]).write_text(json.dumps(sys.argv[1:]))
+    sys.exit(int(os.environ["PRODUCT_EXIT"]))
 else:
     os.execv(os.environ["REAL_NODE"], [os.environ["REAL_NODE"], *sys.argv[1:]])
 ''')
             node_wrapper.chmod(0o755)
+            tarball = '/fixture/archive " quoted.tgz'
+            environment = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "REAL_NODE": node, "RUNNER_TEMP": str(temp), "GITHUB_JOB": "wasm",
+                "CHROME_PATH": str(browser), "CHROMEDRIVER_PATH": str(driver),
+                "WASM_BINDGEN_TEST_WEBDRIVER_JSON": str(inherited), "WASM_EXIT": str(wasm_exit),
+                "CAPTURED": str(captured), "PRODUCT_MARKER": str(product_marker), "WASM_MARKER": str(wasm_marker),
+                "PRODUCT_EXIT": str(product_exit), "VERIFIED_TARBALL": tarball,
+                "VERIFIED_TARBALL_SHA256": "a" * 64}
             result = subprocess.run([bash, "--noprofile", "--norc", "-c", script or browser_script()],
-                cwd=root, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                    "REAL_NODE": node, "RUNNER_TEMP": str(temp), "GITHUB_JOB": "wasm",
-                    "CHROME_PATH": str(browser), "CHROMEDRIVER_PATH": str(driver),
-                    "WASM_BINDGEN_TEST_WEBDRIVER_JSON": str(inherited), "WASM_EXIT": str(wasm_exit),
-                    "CAPTURED": str(captured), "PRODUCT_MARKER": str(product_marker), "WASM_MARKER": str(wasm_marker),
-                    "VERIFIED_TARBALL": "/fixture/archive.tgz", "VERIFIED_TARBALL_SHA256": "a" * 64},
-                capture_output=True, text=True, timeout=15)
+                cwd=root, env=environment, capture_output=True, text=True, timeout=15)
+            # Шаги исполняются отдельно; ошибка WASM не допускает terminal Program.
+            if result.returncode == 0:
+                result = subprocess.run([bash, "--noprofile", "--norc", "-c", terminal_script()],
+                    cwd=root, env=environment | {"BASH_ENV": ""},
+                    capture_output=True, text=True, timeout=15)
             capture = json.loads(captured.read_text()) if captured.exists() else None
             self.assertEqual(webdriver.read_bytes(), before, "source capabilities must not be rewritten")
             self.assertEqual(inherited.read_text(), "foreign configuration\n")
@@ -263,7 +316,8 @@ else:
                                     ([] if missing_browser else ['verified " chrome'])))
             return {"code": result.returncode, "stderr": result.stderr, "capture": capture,
                     "product_called": product_marker.exists(), "wasm_called": wasm_marker.exists(),
-                    "original": original, "browser": str(browser)}
+                    "original": original, "browser": str(browser), "tarball": tarball,
+                    "product_args": json.loads(product_marker.read_text()) if product_marker.exists() else None}
 
     def test_real_bash_binds_verified_browser_and_preserves_every_option(self) -> None:
         result = self.exercise()
@@ -275,11 +329,17 @@ else:
         self.assertEqual(result["capture"]["args"], ["test", "--headless", "--chrome", "--chromedriver",
                         str(Path(result["browser"]).with_name("verified driver")), "crates/labcolors-wasm", "--locked"])
         self.assertTrue(result["product_called"])
+        self.assertEqual(result["product_args"], ["scripts/test-program-runtime-browser.mjs",
+                         result["tarball"], "a" * 64])
 
     def test_failed_wasm_run_cleans_temp_and_prevents_product_probe(self) -> None:
         result = self.exercise(wasm_exit=42)
         self.assertEqual(result["code"], 42, result)
         self.assertFalse(result["product_called"])
+        result = self.exercise(product_exit=43)
+        self.assertEqual(result["code"], 43, result)
+        self.assertTrue(result["wasm_called"])
+        self.assertTrue(result["product_called"])
 
     def test_missing_executable_and_invalid_options_fail_before_wasm_pack(self) -> None:
         cases = (self.exercise(missing_browser=True),

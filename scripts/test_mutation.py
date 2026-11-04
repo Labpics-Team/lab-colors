@@ -1846,6 +1846,27 @@ class MutationTruthTest(unittest.TestCase):
                   ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
         jobs = workflow_job_blocks(source, "ci-worker.yml")
 
+        def require_dependencies(block: str, expected: set[str]) -> None:
+            declarations = re.findall(r"(?m)^    needs: (.+)$", block)
+            self.assertEqual(len(declarations), 1, "one explicit dependency declaration")
+            dependencies = json.loads(declarations[0])
+            self.assertIsInstance(dependencies, list)
+            self.assertEqual(len(dependencies), len(set(dependencies)), "no duplicate dependencies")
+            self.assertEqual(set(dependencies), expected, "complete independent proof graph")
+
+        def require_guarded_aggregate(block: str, proofs: set[str]) -> None:
+            require_dependencies(block, proofs | {"source-admission"})
+            conditions = re.findall(r"(?m)^    if: (.+)$", block)
+            self.assertEqual(len(conditions), 1, "one aggregate admission condition")
+            # always() сохраняет итог при отказе дочернего proof; единственное
+            # условие допуска — успешный source-admission. Добавленный фильтр
+            # по результату proof скрыл бы обязательный отказ aggregate.
+            self.assertRegex(
+                conditions[0],
+                r"\A\$\{\{\s*(?:always\(\)|\(always\(\)\))\s*&&\s*"
+                r"needs\.source-admission\.result\s*==\s*'success'\s*\}\}\Z",
+            )
+
         workers = {
             "core-tests-worker": (
                 "    timeout-minutes: 20\n",
@@ -1881,7 +1902,12 @@ class MutationTruthTest(unittest.TestCase):
         for worker, required in workers.items():
             with self.subTest(worker=worker):
                 block = jobs[worker]
-                self.assertIn("    runs-on: ubuntu-latest\n", block)
+                placement = re.findall(r"(?m)^    runs-on: \[([^\]\n]+)\]$", block)
+                self.assertEqual(len(placement), 1, "explicit heavy-job placement")
+                labels = [label.strip() for label in placement[0].split(",")]
+                self.assertEqual(len(labels), 3)
+                self.assertEqual(set(labels), {"self-hosted", "Linux", "X64"})
+                require_dependencies(block, {"source-admission"})
                 self.assertIn("    strategy:\n      fail-fast: false\n", block)
                 self.assertNotIn("continue-on-error:", block)
                 for needle in required:
@@ -1922,14 +1948,12 @@ class MutationTruthTest(unittest.TestCase):
         ):
             with self.subTest(aggregate=aggregate):
                 block = jobs[aggregate]
-                self.assertIn("    if: ${{ always() }}\n", block)
-                self.assertIn(f"    needs: {worker}\n", block)
+                require_guarded_aggregate(block, {worker})
                 self.assertIn("    permissions: {}\n", block)
                 self.assertNotIn("continue-on-error:", block)
 
         formal = jobs["formal-core"]
-        self.assertIn("    if: ${{ always() }}\n", formal)
-        self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
+        require_guarded_aggregate(formal, {"formal-positive", "formal-mutants"})
         self.assertIn("--phase assemble", formal)
         self.assertIn("formal_outputs.py restore", formal)
         self.assertIn("--parts 10", formal)
@@ -1946,8 +1970,7 @@ class MutationTruthTest(unittest.TestCase):
 
         aggregate = jobs["test"]
         self.assertIn("    name: test\n", aggregate)
-        self.assertIn("    if: ${{ always() }}\n", aggregate)
-        self.assertIn("    needs: [core-tests, region-proof, authority-mutation]\n", aggregate)
+        require_guarded_aggregate(aggregate, {"core-tests", "region-proof", "authority-mutation"})
         self.assertIn("    permissions: {}\n", aggregate)
         self.assertNotIn("continue-on-error:", aggregate)
         for variable, lane in (("CORE_TESTS", "core-tests"),
@@ -2038,38 +2061,18 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        # Эфемерные раннеры (GitHub-hosted или self-hosted без секретов)
-        # не несят ни секретов, ни состояния, поэтому fork-PR — штатный
-        # режим опенсорс-гейта: workers не держат fork-гейтов, а каждая
-        # job закреплена на одной одноразовой метке.
+        # Hosted metadata jobs остаются лёгкими; source admission и Linux
+        # builds исполняются по self-hosted пути. Scope проверяет trusted worker.
         ci_ephemeral = {
             name: block
             for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
             if "runs-on: ubuntu-latest" in block
         }
-        self.assertEqual(
-            set(ci_ephemeral),
-            {
-                "formal-positive",
-                "formal-mutants",
-                "formal-core",
-                "msrv",
-                "lint",
-                "docs",
-                "test",
-                "core-tests-worker",
-                "core-tests",
-                "region-proof-worker",
-                "region-proof",
-                "authority-mutation-worker",
-                "authority-mutation",
-                "transport-distribution",
-                "transport-distribution-attestation",
-                "evaluate-distribution",
-                "evaluate-distribution-attestation",
-                "audit",
-            },
-        )
+        self.assertEqual(set(ci_ephemeral), {
+            "formal-core", "test", "core-tests", "region-proof",
+            "authority-mutation", "transport-distribution-attestation",
+            "evaluate-distribution-attestation",
+        })
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
         )
@@ -2083,14 +2086,16 @@ class MutationTruthTest(unittest.TestCase):
             ("native-conformance-worker.yml", native_worker),
         ):
             with self.subTest(worker=worker_name):
-                self.assertNotIn("head.repo.full_name", source)
+                self.assertIn("head.repo.full_name", source)
+                admission = workflow_job_blocks(source, worker_name)["source-admission"]
+                self.assertIn("CI_NATIVE_JOB: ${{ toJSON(job) }}", admission)
+                self.assertIn("REFUSED: foreign pull request head", admission)
         ci_jobs = ci_worker.split("\njobs:\n", 1)[1]
         native_jobs = native_worker.split("\njobs:\n", 1)[1]
         self.assertNotIn("github.run_attempt == 1", ci_jobs)
         self.assertNotIn("github.run_attempt == 1", native_jobs)
 
-        # Модель выбора concurrency-группы caller'ов: допуск больше не
-        # ветвится по происхождению PR — эфемерные раннеры исполняют любой.
+        # Concurrency caller сохраняется независимо от отдельного source admission.
         def run_policy(
             event: str,
             attempt: int,
@@ -2324,10 +2329,12 @@ const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const sha = '0123456789abcdef0123456789abcdef01234567';
 const prefix = 'Labpics-Team/lab-colors/.github/workflows/';
 const names = [
-  ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
+  ['source admission (ci-worker)', 'source admission (package-worker)',
+   'formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
-  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package'],
+  ['source admission (native-conformance-worker)',
+   'swift package (Linux)', 'swift package (macOS and iOS)', 'android package'],
 ];
 const mutations = {
   valid: () => {},
@@ -2354,6 +2361,8 @@ const mutations = {
   foreignJob: (_runs, jobs) => { jobs[0][0].run_id = 999; },
   failedJob: (_runs, jobs) => { jobs[0][0].conclusion = 'failure'; },
   duplicateJob: (_runs, jobs) => { jobs[0].push(jobs[0][0]); },
+  missingSourceGuard: (_runs, jobs) => { jobs[0] = jobs[0].filter((job) => !job.name.endsWith('source admission (ci-worker)')); },
+  skippedSourceGuard: (_runs, jobs) => { jobs[0].find((job) => job.name.endsWith('source admission (ci-worker)')).conclusion = 'skipped'; },
   missingFormal: (_runs, jobs) => { jobs[0] = jobs[0].filter((job) => !job.name.endsWith('formal core (Kani)')); },
   skippedFormal: (_runs, jobs) => { jobs[0].find((job) => job.name.endsWith('formal core (Kani)')).conclusion = 'skipped'; },
   missingApple: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('swift package (macOS and iOS)')); },

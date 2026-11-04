@@ -488,8 +488,8 @@ class ToolingTests(unittest.TestCase):
             )
             self.assertIsNotNone(aggregate, "stable core-tests aggregate must exist")
             aggregate_block = aggregate[1]
-            self.assertIn("    if: ${{ always() }}\n", aggregate_block)
-            self.assertIn("    needs: core-tests-worker\n", aggregate_block)
+            self.assertIn("    if: ${{ (always()) && needs.source-admission.result == 'success' }}\n", aggregate_block)
+            self.assertIn('    needs: ["core-tests-worker", "source-admission"]\n', aggregate_block)
             self.assertIn('test "$CORE_SHARDS" = success', aggregate_block)
             self.assertNotIn("continue-on-error:", aggregate_block)
 
@@ -508,6 +508,20 @@ class ToolingTests(unittest.TestCase):
             (
                 "  core-tests:\n",
                 "  core-tests:\n    continue-on-error: true\n",
+            ),
+            (
+                '    needs: ["core-tests-worker", "source-admission"]\n',
+                '    needs: ["core-tests-worker"]\n',
+            ),
+            (
+                '    needs: ["core-tests-worker", "source-admission"]\n',
+                '    needs: ["source-admission"]\n',
+            ),
+            (
+                "  core-tests:\n    name: core tests and artifact contracts\n"
+                "    if: ${{ (always()) && needs.source-admission.result == 'success' }}\n",
+                "  core-tests:\n    name: core tests and artifact contracts\n"
+                "    if: ${{ always() }}\n",
             ),
         )
         for anchor, replacement in mutations:
