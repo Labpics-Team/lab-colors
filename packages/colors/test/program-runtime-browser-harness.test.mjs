@@ -25,6 +25,7 @@ import {
   verifyBrowserSelection,
   verifyBrowserAssignment,
   verifyBrowserLockedAssignment,
+  verifyBrowserBudgetAssignment,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -721,22 +722,24 @@ test("browser selection readout requires every context, preserved snapshots and 
   }
 });
 
-function assignmentBrowserReadout({ locked = false, rgb = [120, 120, 120] } = {}) {
+function assignmentBrowserReadout({ locked = false, budget = false, rgb = [120, 120, 120] } = {}) {
+  const refused = locked || budget;
   const names = ['temp-install', 'browser', 'browser-session', 'server', 'assignment-attachment', 'assignment-host',
     'assignment-first', 'assignment-stopped', 'assignment-replay', 'assignment-restored'];
   const css = (value) => `rgb(${value.join(', ')})`;
   const ready = (revision, color = [24, 24, 24]) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
     outputs: [{ slot: 91, rgb: color, opacity: 1 }] });
-  const stopped = locked ? { version: 2, revision: '2', state: 'unsatisfied', reason: null, hasRender: false, outputs: [] }
+  const stopped = refused ? { version: 2, revision: '2', state: budget ? 'incomplete' : 'unsatisfied',
+    reason: budget ? 'limit' : null, hasRender: false, outputs: [] }
     : ready('2', rgb);
   return { initial: ready('1'), held: ready('1'), restored: ready('3'), stopped, replay: structuredClone(stopped),
     css: css([24, 24, 24]), computed: css([24, 24, 24]), backgroundBefore: css([255, 255, 255]),
-    afterStop: locked ? '' : css(rgb), computedAfterStop: locked ? css([0, 0, 0]) : css(rgb),
+    afterStop: refused ? '' : css(rgb), computedAfterStop: refused ? css([0, 0, 0]) : css(rgb),
     backgroundAfterStop: css([0, 0, 0]), afterRestore: css([24, 24, 24]), computedAfterRestore: css([24, 24, 24]),
     backgroundAfterRestore: css([255, 255, 255]),
-    refusalAuthority: locked ? { rejected: true, recognized: true, code: 'program_materialization_not_ready',
+    refusalAuthority: refused ? { rejected: true, recognized: true, code: 'program_materialization_not_ready',
       operation: 'materializationAuthority' } : undefined,
-    operations: ['setAll', locked ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'], acquired: names,
+    operations: ['setAll', refused ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'], acquired: names,
     released: names.toReversed(), readback: Object.fromEntries(names.map((name) => [name, true])) };
 }
 
@@ -793,5 +796,30 @@ test("browser assignment locked domain requires genuine refusal, revoked sink an
   ]) {
     const invalid = structuredClone(good); mutate(invalid);
     assert.throws(() => verifyBrowserLockedAssignment(invalid), /browser computed assignment drifted/u);
+  }
+});
+
+
+test("browser assignment limit revokes CSS, preserves refusal on replay and recovers at a fresh revision", () => {
+  const good = assignmentBrowserReadout({ budget: true });
+  assert.doesNotThrow(() => verifyBrowserBudgetAssignment(good));
+  // Unsatisfied и limit не взаимозаменяемы даже при одинаковом пустом sink.
+  assert.throws(() => verifyBrowserBudgetAssignment(assignmentBrowserReadout({ locked: true })), /browser computed assignment drifted/u);
+  assert.throws(() => verifyBrowserBudgetAssignment(assignmentBrowserReadout()), /browser computed assignment drifted/u);
+  for (const mutate of [
+    (x) => { x.stopped.reason = null; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = true; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs = x.initial.outputs; x.replay = structuredClone(x.stopped); },
+    (x) => { x.afterStop = x.css; },
+    (x) => { x.computedAfterStop = x.css; },
+    (x) => { x.refusalAuthority.rejected = false; },
+    (x) => { x.operations[1] = 'setAll'; },
+    (x) => { x.replay.state = 'ready'; },
+    (x) => { x.restored = structuredClone(x.stopped); },
+    (x) => { x.held.revision = '3'; },
+    (x) => { x.readback['assignment-host'] = false; },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserBudgetAssignment(invalid), /browser computed assignment drifted/u);
   }
 });

@@ -950,10 +950,10 @@ export function verifyBrowserSelection(result) {
   }
 }
 
-export function browserAssignmentScenario(origin, locked = false) {
+export function browserAssignmentScenario(origin, locked = false, budget = false) {
   return 'const done=arguments[arguments.length-1]; const browserCleanup=' + browserCleanup.toString()
     + '; (' + browserAssignmentConsumer.toString() + ')(' + JSON.stringify(origin)
-    + ', ' + JSON.stringify(locked)
+    + ', ' + JSON.stringify(locked) + ', ' + JSON.stringify(budget)
     + ').then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));';
 }
 
@@ -961,7 +961,11 @@ export function browserLockedAssignmentScenario(origin) {
   return browserAssignmentScenario(origin, true);
 }
 
-async function browserAssignmentConsumer(origin, locked) {
+export function browserBudgetAssignmentScenario(origin) {
+  return browserAssignmentScenario(origin, false, true);
+}
+
+async function browserAssignmentConsumer(origin, locked, budget) {
   const resources = [], handles = [], acquired = [], released = [];
   let primary, result, element, attachment;
   const property = '--assignment';
@@ -973,12 +977,16 @@ async function browserAssignmentConsumer(origin, locked) {
     const anchor = [24, 24, 24];
     const domain = locked ? { kind: 'box', lower: anchor, upper: anchor }
       : { kind: 'box', lower: [0, 0, 0], upper: [255, 255, 255] };
-    const wire = new ProgramWireBuilderV3()
+    const builder = new ProgramWireBuilderV3()
       .computedTarget(21, domain, anchor, locked ? 0 : 1)
       .assignment([21]).surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
       .sourceOverOccurrence(61, 41, 51, 64, .2, SURROUND_AVERAGE_V1)
       .presentationRoot(71, 61).presentationTarget(71, 61)
-      .wcag22VisibleUnary(true, 81, 61, WCAG22_SC143_TEXT_DEFAULT_V1).output(91, 41).finish();
+      .wcag22VisibleUnary(true, 81, 61, WCAG22_SC143_TEXT_DEFAULT_V1).output(91, 41);
+    // Существующий Node witness исчерпывает поиск отношения на чёрном фоне;
+    // это самостоятельный исход limit, а не доказательство несовместимости.
+    if (budget) builder.source(11, anchor).fixedTarget(22, 11).exactIntrinsicRelationHard(82, 22, [21]);
+    const wire = builder.finish();
     element = document.createElement('span');
     element.textContent = 'Assignment'; element.style.color = `var(${property})`;
     document.body.append(element);
@@ -1023,7 +1031,7 @@ async function browserAssignmentConsumer(origin, locked) {
     const computedAfterStop = getComputedStyle(element).color;
     const backgroundAfterStop = getComputedStyle(element).backgroundColor;
     let refusalAuthority;
-    if (locked) {
+    if (locked || budget) {
       refusalAuthority = { rejected: false };
       try { attachment.materializationAuthority().free(); }
       catch (error) {
@@ -1055,7 +1063,11 @@ export function verifyBrowserLockedAssignment(result) {
   verifyBrowserAssignmentHistory(result, true);
 }
 
-function verifyBrowserAssignmentHistory(result, locked) {
+export function verifyBrowserBudgetAssignment(result) {
+  verifyBrowserAssignmentHistory(result, false, true);
+}
+
+function verifyBrowserAssignmentHistory(result, locked, budget = false) {
   const anchor = [24, 24, 24];
   const css = (rgb) => `rgb(${rgb.join(', ')})`;
   const ready = (revision) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
@@ -1069,9 +1081,11 @@ function verifyBrowserAssignmentHistory(result, locked) {
   // WCAG 2.2 SC 1.4.3: независимый oracle конечного непрозрачного sRGB на чёрном фоне.
   const linear = (channel) => { const s = channel / 255; return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4; };
   const contrast = bounded ? (.2126 * linear(rgb[0]) + .7152 * linear(rgb[1]) + .0722 * linear(rgb[2]) + .05) / .05 : 0;
-  const contextOutcome = locked
+  const refused = locked || budget;
+  const contextOutcome = refused
     ? result.stopped?.version === 2 && result.stopped.revision === '2'
-      && result.stopped.state === 'unsatisfied' && result.stopped.reason === null && result.stopped.hasRender === false
+      && result.stopped.state === (budget ? 'incomplete' : 'unsatisfied')
+      && result.stopped.reason === (budget ? 'limit' : null) && result.stopped.hasRender === false
       && isDeepStrictEqual(result.stopped.outputs, [])
       && result.afterStop === '' && result.computedAfterStop === css([0, 0, 0])
       && result.refusalAuthority?.rejected === true
@@ -1090,7 +1104,7 @@ function verifyBrowserAssignmentHistory(result, locked) {
     || result.backgroundBefore !== css([255, 255, 255]) || result.backgroundAfterStop !== css([0, 0, 0])
     || result.afterRestore !== result.css || result.computedAfterRestore !== result.css
     || result.backgroundAfterRestore !== css([255, 255, 255])
-    || !isDeepStrictEqual(result.operations, ['setAll', locked ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'])
+    || !isDeepStrictEqual(result.operations, ['setAll', refused ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'])
     || !isDeepStrictEqual(result.acquired, names) || !isDeepStrictEqual(result.released, names.toReversed())
     || names.some((name) => result.readback?.[name] !== true)) {
     fail('browser computed assignment drifted: ' + JSON.stringify(result));
@@ -1320,6 +1334,9 @@ async function main() {
   const lockedAssignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserLockedAssignmentScenario });
   verifyBrowserLockedAssignment(lockedAssignment);
   console.log('LAB_COLORS_PROGRAM_LOCKED_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(lockedAssignment));
+  const budgetAssignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserBudgetAssignmentScenario });
+  verifyBrowserBudgetAssignment(budgetAssignment);
+  console.log('LAB_COLORS_PROGRAM_BUDGET_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(budgetAssignment));
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);
