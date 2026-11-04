@@ -76,11 +76,11 @@
       "sha256": "d64be0e793fffc430df7a86e804f5ffd7906269c4cc1a881b2eea2f4eca17139"
     },
     {
-      "bytes": 26568,
+      "bytes": 26563,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_wire/finite_field.rs",
       "role": "final_raster_wire_source",
-      "sha256": "f15b19bbbf981b72f3163c7b52798cbb817ecff56416342ea60d2d634788cca9"
+      "sha256": "87b3e0a34d3b2d2e9f540d839cdaf06036c0d992a7626606222a1cdbfa248fe9"
     },
     {
       "bytes": 7737,
