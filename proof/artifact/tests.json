@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 347,
+   "count": 371,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -678,8 +678,15 @@
     "test_ci_peer_gate.PeerGateTest.test_unknown_status_is_red_not_pending",
     "test_ci_peer_gate.PeerGateTest.test_unsupported_event_fails_closed",
     "test_ci_peer_gate.PeerGateTest.test_wrong_head_and_wrong_event_do_not_satisfy_admission",
+    "test_ci_storage.BrowserStartupEnvironmentTests.test_inherited_startup_cannot_skip_browser_or_erase_failure",
+    "test_ci_storage.BrowserStartupEnvironmentTests.test_removing_empty_environment_is_detected_and_reproduces_skip",
+    "test_ci_storage.ChromeDependencyReleaseTests.test_legacy_and_time64_supported_releases",
+    "test_ci_storage.ChromeDependencyReleaseTests.test_unknown_release_cannot_select_a_plausible_abi",
     "test_ci_storage.CiStorageTests.test_current_package_graph_retains_only_the_release_handoff",
+    "test_ci_storage.CiStorageTests.test_read_only_native_token_is_confined_to_source_admission",
+    "test_ci_storage.CiStorageTests.test_required_admission_and_publish_execution_cannot_be_skipped",
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
+    "test_ci_storage.CiStorageTests.test_terminal_browser_shell_overrides_inherited_defaults",
     "test_ci_storage.NativeStorageTests.test_only_sdk_transfer_survives",
     "test_ci_storage.NativeStorageTests.test_reintroduced_diagnostics_and_weakened_transfer_are_rejected",
     "test_document_bytes.DocumentBytesTests.test_c1_controls_are_rejected_through_the_document_check",
@@ -882,6 +889,23 @@
     "test_strict_secret_scan.StrictSecretScanTest.test_required_workflow_runs_probe_and_candidate_in_same_policy",
     "test_strict_secret_scan.StrictSecretScanTest.test_run_rejects_incomplete_probe_and_bad_sha",
     "test_strict_secret_scan.StrictSecretScanTest.test_scan_uses_raw_git_blob_when_checkout_transcodes",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_admitted_snapshot_keeps_source_caller_recipe_identity_and_native_context",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_bootstrap_publication_refuses_before_npm_publish",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_each_source_worker_is_bound_to_native_admission_before_steps",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_foreign_head_is_refused_before_any_published_identity",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_hosted_selector_mutation_is_detected_with_legal_platform_neighbors",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_main_recipe_preserves_three_distinct_pr_identities",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_manual_smoke_uses_only_the_existing_guarded_reusable_worker",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_metadata_control_characters_are_refused_before_identity_outputs",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_missing_or_malformed_actual_recipe_cannot_use_caller_as_fallback",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_multiline_always_condition_cannot_hide_failed_admission",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_native_check_run_number_is_positive_integer_only",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_native_rule_rejects_unexecuted_main_recipe_and_wrong_callee",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_nonmain_native_snapshot_cannot_mix_any_revision",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_old_wrapper_mode_argument_cannot_select_a_parallel_policy",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_owned_source_has_nonempty_distinct_native_identities",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_reject_all_and_repo_only_mutants_are_detected",
+    "test_trusted_ci_source.TestOwnedSourceGuard.test_self_hosted_guard_and_runner_selector_agree",
     "test_verify_clean_set_receipt.CapsuleReplayTests.test_full_replay_is_offline_and_does_not_need_the_research_repository",
     "test_verify_clean_set_receipt.CapsuleReplayTests.test_identity_mode_never_claims_or_executes_mathematical_replay",
     "test_verify_clean_set_receipt.CapsuleReplayTests.test_matching_counts_and_hash_labels_do_not_hide_wrong_derived_bytes",
@@ -962,7 +986,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f676b43e1472fee411c8c2b37d4a0f1040a8b6e7dc38230164716b6a94e7e8a7",
+ "record_sha256": "98d144dbf32f46b97e322fe393d2fdbd408a85ddeb1cb38b72a4c32fee78885a",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
