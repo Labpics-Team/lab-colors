@@ -144,7 +144,7 @@ test("trusted npm publishing grants OIDC only to the verified publisher", () => 
   const worker = readFileSync(new URL("../../../.github/workflows/publish-worker.yml", import.meta.url), "utf8");
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(caller, /name: publish\n/u);
-  assert.match(caller, /uses: \.\/\.github\/workflows\/publish-worker\.yml/u);
+  assert.match(caller, /^    uses: Labpics-Team\/lab-colors\/\.github\/workflows\/publish-worker\.yml@main$/mu);
   assert.match(caller, /id-token: write/u);
   assert.doesNotMatch(caller, /secrets:|NPM_TOKEN|secrets: inherit/u);
   const [top, afterPrepare] = worker.split("\n  prepare:\n");

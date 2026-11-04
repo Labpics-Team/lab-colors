@@ -325,8 +325,7 @@ jobs:
               file: "ci.yml",
               path: ".github/workflows/ci.yml",
               worker: {
-                path: `Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${expectedSha}`,
-                sha: expectedSha,
+                path: "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml",
               },
               requiredJobs: [
                 "source admission (ci-worker)",
@@ -345,8 +344,7 @@ jobs:
               file: "native-conformance.yml",
               path: ".github/workflows/native-conformance.yml",
               worker: {
-                path: `Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@${expectedSha}`,
-                sha: expectedSha,
+                path: "Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml",
               },
               requiredJobs: [
                 "source admission (native-conformance-worker)",
@@ -385,6 +383,19 @@ jobs:
             throw new Error(`GitHub API pagination exceeded 1000 ${field} records for ${path}`);
           }
 
+          // path сохраняет выбранный ref; sha отдельно связывает его с выполненным commit.
+          // Локальный reusable-call имеет path@SHA и наследует тот же main ref.
+          function admittedWorkflowPath(reference) {
+            if (reference?.sha !== expectedSha || reference?.ref !== "refs/heads/main") return null;
+            const path = reference?.path;
+            if (typeof path !== "string") return null;
+            const separator = path.lastIndexOf("@");
+            if (separator < 0) return null;
+            const ref = path.slice(separator + 1);
+            if (ref !== "main" && ref !== expectedSha) return null;
+            return path.slice(0, separator);
+          }
+
           async function canonicalRun(spec) {
             const query = new URLSearchParams({
               branch: "main",
@@ -411,19 +422,17 @@ jobs:
             if (!Array.isArray(references) || references.length === 0 || references.length > 16) {
               throw new Error(`${spec.path} run ${run.id}: immutable workflow references are incomplete`);
             }
-            const primary = references.filter(reference =>
-              reference?.path === spec.worker.path && reference?.sha === spec.worker.sha);
-            if (primary.length !== 1 || new Set(references.map(reference => reference?.path)).size !== references.length) {
+            const workflowPaths = references.map(admittedWorkflowPath);
+            const primary = workflowPaths.filter(path => path === spec.worker.path);
+            if (primary.length !== 1 || new Set(workflowPaths).size !== references.length) {
               throw new Error(`${spec.path} run ${run.id}: primary worker is missing or repeated`);
             }
             if (spec.key === 'ci') {
-              for (const reference of references) {
+              for (const path of workflowPaths) {
                 const expectedPrefix = repository + '/.github/workflows/';
-                const expectedSuffix = '@' + expectedSha;
-                const path = reference?.path;
-                const name = typeof path === 'string' && path.startsWith(expectedPrefix) && path.endsWith(expectedSuffix)
-                  ? path.slice(expectedPrefix.length, -expectedSuffix.length) : '';
-                if (!/^[A-Za-z0-9_-]+\.ya?ml$/u.test(name) || reference?.sha !== expectedSha) {
+                const name = typeof path === 'string' && path.startsWith(expectedPrefix)
+                  ? path.slice(expectedPrefix.length) : '';
+                if (!/^[A-Za-z0-9_-]+\.ya?ml$/u.test(name)) {
                   throw new Error(`${spec.path} run ${run.id}: workflow escaped the admitted source revision`);
                 }
               }

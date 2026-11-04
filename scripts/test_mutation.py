@@ -2262,21 +2262,17 @@ class MutationTruthTest(unittest.TestCase):
         self.assertNotIn("callerJob:", workflow)
         self.assertNotIn("job.name === name || job.name.endsWith", workflow)
         self.assertNotIn("легаси", workflow.casefold())
-        self.assertIn(
-            'path: `Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@${expectedSha}`',
-            workflow,
-        )
-        self.assertIn("sha: expectedSha,", workflow)
-        self.assertIn(
-            'path: `Labpics-Team/lab-colors/.github/workflows/'
-            'native-conformance-worker.yml@${expectedSha}`,\n'
-            '                sha: expectedSha,',
-            workflow,
-        )
+        for worker in ("ci-worker.yml", "native-conformance-worker.yml"):
+            self.assertIn(
+                'path: "Labpics-Team/lab-colors/.github/workflows/' + worker + '",',
+                workflow,
+            )
         self.assertIn("const references = run.referenced_workflows;", workflow)
         self.assertIn("references.length !== 1", workflow)
-        self.assertIn("reference?.path === spec.worker.path", workflow)
-        self.assertIn("reference?.sha === spec.worker.sha", workflow)
+        self.assertIn("const workflowPaths = references.map(admittedWorkflowPath);", workflow)
+        self.assertIn("path === spec.worker.path", workflow)
+        self.assertIn('reference?.sha !== expectedSha', workflow)
+        self.assertIn('reference?.ref !== "refs/heads/main"', workflow)
         self.assertIn(
             'join(process.env.GITHUB_WORKSPACE, "packages/colors/package.json"), "utf8",',
             workflow,
@@ -2319,7 +2315,7 @@ class MutationTruthTest(unittest.TestCase):
         )
         native_calls = re.findall(r"(?m)^    uses: (\S+)$", native)
         self.assertEqual(
-            native_calls, ["./.github/workflows/native-conformance-worker.yml"]
+            native_calls, ["Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@main"]
         )
         # Исполняем сам guard; сеть и запись outputs заменены на границе VM.
         harness = r"""
@@ -2338,16 +2334,16 @@ const names = [
 ];
 const mutations = {
   valid: () => {},
-  validClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha}); },
-  escapedClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + '../other.yml@' + sha, sha}); },
-  staleClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + 'a'.repeat(40), sha}); },
-  wrongDigestClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha: 'a'.repeat(40)}); },
-  foreignClosure: (runs) => { runs[0].referenced_workflows.push({path: 'foreign/repo/.github/workflows/package-worker.yml@' + sha, sha}); },
+  validClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha, ref: 'refs/heads/main'}); },
+  escapedClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + '../other.yml@' + sha, sha, ref: 'refs/heads/main'}); },
+  staleClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + 'a'.repeat(40), sha, ref: 'refs/heads/main'}); },
+  wrongDigestClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha: 'a'.repeat(40), ref: 'refs/heads/main'}); },
+  foreignClosure: (runs) => { runs[0].referenced_workflows.push({path: 'foreign/repo/.github/workflows/package-worker.yml@' + sha, sha, ref: 'refs/heads/main'}); },
   staleCIPath: (runs) => { runs[0].referenced_workflows[0].path = prefix + 'ci-worker.yml@' + 'a'.repeat(40); },
   staleCISha: (runs) => { runs[0].referenced_workflows[0].sha = 'a'.repeat(40); },
   staleNativePath: (runs) => { runs[1].referenced_workflows[0].path = prefix + 'native-conformance-worker.yml@' + 'a'.repeat(40); },
   staleNativeSha: (runs) => { runs[1].referenced_workflows[0].sha = 'a'.repeat(40); },
-  staleNativeRevision: (runs) => { runs[1].referenced_workflows[0] = {path: prefix + 'native-conformance-worker.yml@' + 'a'.repeat(40), sha: 'a'.repeat(40)}; },
+  staleNativeRevision: (runs) => { runs[1].referenced_workflows[0] = {path: prefix + 'native-conformance-worker.yml@' + 'a'.repeat(40), sha: 'a'.repeat(40), ref: 'refs/heads/main'}; },
   missingRefs: (runs) => { delete runs[0].referenced_workflows; },
   extraRefs: (runs) => { runs[0].referenced_workflows.push(runs[0].referenced_workflows[0]); },
   foreignPath: (runs) => { runs[0].referenced_workflows[0].path = 'foreign/repo/ci-worker.yml@' + sha; },
@@ -2379,8 +2375,8 @@ const mutations = {
       head_sha: sha, head_branch: 'main', event: 'push',
       status: 'completed', conclusion: 'success', run_attempt: 2,
       referenced_workflows: [{
-        path: prefix + name + '-worker.yml@' + sha,
-        sha,
+        path: prefix + name + '-worker.yml@main',
+        ref: 'refs/heads/main', sha,
       }],
     }));
     const jobs = names.map((group, index) => group.map(name => ({

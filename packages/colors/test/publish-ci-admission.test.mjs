@@ -46,8 +46,8 @@ function producerNames(files) {
 function evidence() {
   const nativeReferences = [...workflow("native-conformance.yml").matchAll(/^    uses: (\S+)$/gmu)];
   assert.deepEqual(nativeReferences.map((match) => match[1]),
-    ["./.github/workflows/native-conformance-worker.yml"],
-    "native caller must bind one worker from its own source revision");
+    [repository + "/.github/workflows/native-conformance-worker.yml@main"],
+    "native caller must select the owned protected worker");
   const ciNames = producerNames(["ci-worker.yml", "package-worker.yml"]);
   assert.ok(ciNames.includes("core tests and artifact contracts"), "healthy control lacks the Core aggregate");
   assert.ok(ciNames.includes("test"), "healthy control lacks the full verification aggregate");
@@ -57,11 +57,14 @@ function evidence() {
     head_sha: sha, head_branch: "main", event: "push",
     status: "completed", conclusion: "success", referenced_workflows: references,
   });
-  const ci = run(101, "ci.yml", ["ci-worker.yml", "package-worker.yml"].map((file) => ({
-    path: repository + "/.github/workflows/" + file + "@" + sha, sha,
+  // GitHub сохраняет выбранный caller ref в path, а разрешённый commit сообщает в sha.
+  // Вложенный локальный вызов получает path@SHA при том же ref=refs/heads/main.
+  const ci = run(101, "ci.yml", ["ci-worker.yml", "package-worker.yml"].map((file, index) => ({
+    path: repository + "/.github/workflows/" + file + "@" + (index === 0 ? "main" : sha),
+    ref: "refs/heads/main", sha,
   })));
   const native = run(202, "native-conformance.yml", [{
-    path: repository + nativeReferences[0][1].slice(1) + "@" + sha, sha,
+    path: nativeReferences[0][1], ref: "refs/heads/main", sha,
   }]);
   const jobs = (id, names) => names.map((name, index) => ({
     id: id * 100 + index, run_id: id, name: "caller / nested caller / " + name,
@@ -128,6 +131,46 @@ test("publication admits successful current producer jobs at arbitrary caller de
   assert.deepEqual(result.writes, ["ci_run_id=101\nci_run_attempt=1\nnative_run_id=202\n"]);
 });
 
+test("publication admits resolved local workflow paths from the same canonical main source", async () => {
+  const record = evidence();
+  for (const runs of Object.values(record.runs)) {
+    for (const reference of runs[0].referenced_workflows) {
+      reference.path = reference.path.replace(/@main$/u, "@" + sha);
+    }
+  }
+  const result = await admit(record);
+  assert.equal(result.exitCode, 0, result.errors.join("\n"));
+  assert.deepEqual(result.writes, ["ci_run_id=101\nci_run_attempt=1\nnative_run_id=202\n"]);
+});
+
+test("publication requires the resolved SHA and canonical ref independently of path aliases", async () => {
+  for (const [file, index, reason] of [
+    ["ci.yml", 0, /primary worker is missing or repeated/u],
+    ["ci.yml", 1, /escaped the admitted source revision/u],
+    ["native-conformance.yml", 0, /primary worker is missing or repeated/u],
+  ]) {
+    for (const mutate of [
+      reference => { reference.sha = "0".repeat(40); },
+      reference => { delete reference.sha; },
+      reference => { reference.ref = "refs/heads/other"; },
+      reference => { reference.ref = "refs/tags/main"; },
+      reference => { delete reference.ref; },
+      reference => { reference.path = reference.path.replace(/@[^@]+$/u, "@other"); },
+    ]) {
+      const record = evidence();
+      mutate(record.runs[file][0].referenced_workflows[index]);
+      assertRefused(await admit(record), reason);
+    }
+  }
+});
+
+test("publication rejects duplicate workflow identity across branch and resolved paths", async () => {
+  const record = evidence();
+  const references = record.runs["ci.yml"][0].referenced_workflows;
+  references.push({ ...references[1], path: references[1].path.replace(/@[0-9a-f]{40}$/u, "@main") });
+  assertRefused(await admit(record), /primary worker is missing or repeated/u);
+});
+
 for (const condition of ["missing", "duplicate", "foreign-run", "failure", "skipped", "in-progress"]) {
   test("publication refuses " + condition + " verification aggregate without partial outputs", async () => {
     const record = evidence();
@@ -158,7 +201,7 @@ test("publication refuses workflow references from another source revision", asy
       const record = evidence();
       const reference = record.runs[file][0].referenced_workflows[index];
       if (coordinate !== "sha") {
-        reference.path = reference.path.replace(/@[0-9a-f]{40}$/u, "@" + "0".repeat(40));
+        reference.path = reference.path.replace(/@[^@]+$/u, "@" + "0".repeat(40));
       }
       if (coordinate !== "path") reference.sha = "0".repeat(40);
       assertRefused(await admit(record), reason);
