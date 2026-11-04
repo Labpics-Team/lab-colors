@@ -74,29 +74,29 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, sys
-          def validate_owned_source(environment, mode):
+          def validate_owned_source(environment):
               """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
               import json, re
-          
+
               def required(name):
                   value = environment.get(name, "")
                   if not isinstance(value, str) or not value:
                       raise ValueError("INCOMPLETE: missing native " + name)
                   return value
-          
+
               def sha(name):
                   value = required(name)
                   if re.fullmatch(r"[0-9a-f]{40}", value) is None or value == "0" * 40:
                       raise ValueError("INCOMPLETE: invalid native " + name)
                   return value
-          
+
               if environment.get("GITHUB_ACTIONS") != "true":
                   raise ValueError("INCOMPLETE: native GitHub Actions context is required")
               repository = required("CI_REPOSITORY")
               repository_id = required("CI_REPOSITORY_ID")
               if repository != "Labpics-Team/lab-colors" or repository_id != "1221255339":
                   raise ValueError("REFUSED: source repository is outside the owned scope")
-          
+
               try:
                   native_job = json.loads(required("CI_NATIVE_JOB"))
               except (ValueError, TypeError) as error:
@@ -131,7 +131,9 @@ jobs:
               prefix = repository + "/" + recipe_path + "@"
               if not recipe_ref.startswith(prefix) or not recipe_ref[len(prefix):]:
                   raise ValueError("INCOMPLETE: executing recipe ref is not bound to its file")
-          
+
+              protected_main = recipe_ref == prefix + "refs/heads/main"
+
               event = required("CI_EVENT")
               ref = required("CI_REF")
               if event == "pull_request":
@@ -149,13 +151,13 @@ jobs:
                   if ref != "refs/heads/main" and not ref.startswith("refs/tags/colors-v"):
                       raise ValueError("REFUSED: push is outside main or the release scope")
               elif event in ("workflow_dispatch", "schedule"):
-                  if mode == "protected" and ref != "refs/heads/main":
+                  if protected_main and ref != "refs/heads/main":
                       raise ValueError("REFUSED: manual or scheduled source is outside main")
-                  if mode == "bootstrap" and not ref.startswith("refs/heads/"):
+                  if not protected_main and not ref.startswith("refs/heads/"):
                       raise ValueError("REFUSED: bootstrap source is not an owned branch")
               else:
                   raise ValueError("REFUSED: unsupported source event")
-          
+
               runner_environment = required("CI_RUNNER_ENVIRONMENT")
               runner_os = required("CI_RUNNER_OS")
               runner_arch = required("CI_RUNNER_ARCH")
@@ -170,17 +172,13 @@ jobs:
               for name in ("CI_RUN_ID", "CI_RUN_ATTEMPT", "CI_CHECK_RUN_ID"):
                   if re.fullmatch(r"[1-9][0-9]*", required(name)) is None:
                       raise ValueError("INCOMPLETE: invalid native " + name)
-              if mode == "bootstrap":
-                  # Только временный native FULLSHA allowlist разрешает этот recipe.
-                  if recipe_sha != caller_sha:
-                      raise ValueError("REFUSED: bootstrap recipe is not the caller snapshot")
-              elif mode == "protected":
-                  if recipe_ref != prefix + "refs/heads/main":
-                      raise ValueError("REFUSED: recipe is not the protected main worker")
+              if protected_main:
                   if event in ("push", "workflow_dispatch", "schedule") and recipe_sha != source_sha:
                       raise ValueError("REFUSED: exact main or release recipe has not executed")
-              else:
-                  raise ValueError("REFUSED: unknown recipe mode")
+              elif not source_sha == caller_sha == recipe_sha:
+                  # Допуск конкретного FULLSHA принадлежит native Listener, а не этому
+                  # guard. Здесь разрешённый snapshot не вправе подменять свою identity.
+                  raise ValueError("REFUSED: admitted snapshot differs from source or caller")
               binding = {
                   "source_sha": source_sha,
                   "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
@@ -203,7 +201,7 @@ jobs:
                       raise ValueError("REFUSED: control character in native " + key)
               return binding
           try:
-              binding = validate_owned_source(os.environ, 'bootstrap')
+              binding = validate_owned_source(os.environ)
           except ValueError as error:
               raise SystemExit(str(error))
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
