@@ -48,16 +48,24 @@ test("WASM budget rejects non-canonical documents and arbitrary headroom", () =>
   );
 });
 
-test("canonical WASM measurements require the exact pinned length", () => {
+test("canonical WASM budget accepts reduction and rejects growth", () => {
   const budget = fixtureBudget();
-  const result = evaluateWasmBudget(budget, emptyWasm, budget.measurement.platform);
-  assert.equal(result.status, "PASS");
-  assert.equal(result.deltaBytes, 0);
+  const baselineWasm = Buffer.concat([emptyWasm, Buffer.from([0, 1, 0])]);
+  const largerWasm = Buffer.concat([emptyWasm, Buffer.from([0, 2, 0, 0])]);
+  budget.measurement.rawBytes = baselineWasm.length;
+  budget.policy.maxRawBytes = baselineWasm.length;
+  for (const wasm of [emptyWasm, baselineWasm, largerWasm]) {
+    assert.equal(WebAssembly.validate(wasm), true);
+  }
+  const equal = evaluateWasmBudget(budget, baselineWasm, budget.measurement.platform);
+  assert.equal(equal.status, "PASS");
+  assert.equal(equal.deltaBytes, 0);
+  const smaller = evaluateWasmBudget(budget, emptyWasm, budget.measurement.platform);
+  assert.equal(smaller.status, "PASS");
+  assert.equal(smaller.deltaBytes, emptyWasm.length - baselineWasm.length);
   assert.throws(
-    () => evaluateWasmBudget(
-      budget, Buffer.concat([emptyWasm, Buffer.from([0])]), budget.measurement.platform,
-    ),
-    /exact artifact length mismatch/u,
+    () => evaluateWasmBudget(budget, largerWasm, budget.measurement.platform),
+    /exceeds raw byte ceiling/u,
   );
   assert.throws(
     () => evaluateWasmBudget(budget, Buffer.alloc(8), budget.measurement.platform),

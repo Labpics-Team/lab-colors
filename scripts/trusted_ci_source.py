@@ -8,7 +8,7 @@ import os
 import re
 
 
-def validate_owned_source(environment, mode):
+def validate_owned_source(environment):
     """Служебные поля GitHub определяют источник; вход вызывающего файла не выдаёт полномочия."""
     import json, re
 
@@ -66,6 +66,8 @@ def validate_owned_source(environment, mode):
     if not recipe_ref.startswith(prefix) or not recipe_ref[len(prefix):]:
         raise ValueError("INCOMPLETE: executing recipe ref is not bound to its file")
 
+    protected_main = recipe_ref == prefix + "refs/heads/main"
+
     event = required("CI_EVENT")
     ref = required("CI_REF")
     if event == "pull_request":
@@ -83,9 +85,9 @@ def validate_owned_source(environment, mode):
         if ref != "refs/heads/main" and not ref.startswith("refs/tags/colors-v"):
             raise ValueError("REFUSED: push is outside main or the release scope")
     elif event in ("workflow_dispatch", "schedule"):
-        if mode == "protected" and ref != "refs/heads/main":
+        if protected_main and ref != "refs/heads/main":
             raise ValueError("REFUSED: manual or scheduled source is outside main")
-        if mode == "bootstrap" and not ref.startswith("refs/heads/"):
+        if not protected_main and not ref.startswith("refs/heads/"):
             raise ValueError("REFUSED: bootstrap source is not an owned branch")
     else:
         raise ValueError("REFUSED: unsupported source event")
@@ -104,17 +106,13 @@ def validate_owned_source(environment, mode):
     for name in ("CI_RUN_ID", "CI_RUN_ATTEMPT", "CI_CHECK_RUN_ID"):
         if re.fullmatch(r"[1-9][0-9]*", required(name)) is None:
             raise ValueError("INCOMPLETE: invalid native " + name)
-    if mode == "bootstrap":
-        # Только временный native FULLSHA allowlist разрешает этот recipe.
-        if recipe_sha != caller_sha:
-            raise ValueError("REFUSED: bootstrap recipe is not the caller snapshot")
-    elif mode == "protected":
-        if recipe_ref != prefix + "refs/heads/main":
-            raise ValueError("REFUSED: recipe is not the protected main worker")
+    if protected_main:
         if event in ("push", "workflow_dispatch", "schedule") and recipe_sha != source_sha:
             raise ValueError("REFUSED: exact main or release recipe has not executed")
-    else:
-        raise ValueError("REFUSED: unknown recipe mode")
+    elif not source_sha == caller_sha == recipe_sha:
+        # Допуск конкретного FULLSHA принадлежит native Listener, а не этому
+        # guard. Здесь разрешённый snapshot не вправе подменять свою identity.
+        raise ValueError("REFUSED: admitted snapshot differs from source or caller")
     binding = {
         "source_sha": source_sha,
         "head_sha": environment.get("CI_HEAD_SHA", "") if event == "pull_request" else "",
@@ -138,14 +136,14 @@ def validate_owned_source(environment, mode):
     return binding
 
 
-def guard_program(mode):
+def guard_program():
     """Одна реализация проецируется в доверенный YAML; action@main не перезагружается."""
     return (
         "import json, os, sys\n"
         + inspect.getsource(validate_owned_source)
         + "\n"
         + "try:\n"
-        + "    binding = validate_owned_source(os.environ, " + repr(mode) + ")\n"
+        + "    binding = validate_owned_source(os.environ)\n"
         + "except ValueError as error:\n"
         + "    raise SystemExit(str(error))\n"
         + "with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:\n"

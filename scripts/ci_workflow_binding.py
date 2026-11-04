@@ -18,7 +18,7 @@ WORKFLOW_PATHS: Final = (
     ".github/workflows/ci-worker.yml",
     ".github/workflows/package-worker.yml",
 )
-LOCAL_WORKER: Final = "./.github/workflows/ci-worker.yml"
+PROTECTED_WORKER: Final = "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@main"
 SHA_PATTERN: Final = re.compile(r"[0-9a-f]{40}")
 # Пробелы после ':' не превращают специальные YAML-префиксы в plain scalar.
 NONPLAIN_PREFIXES: Final = ("|", ">", "&", "*", "!", "'", '"')
@@ -74,14 +74,14 @@ def _parse_caller(source: str) -> None:
         ("jobs", "worker", "permissions", "contents"): "read",
         ("jobs", "worker", "permissions", "id-token"): "write",
         ("jobs", "worker", "permissions", "attestations"): "write",
-        ("jobs", "worker", "uses"): LOCAL_WORKER,
+        ("jobs", "worker", "uses"): PROTECTED_WORKER,
     }
     if jobs != expected:
-        raise BindingError("ci.yml must contain exactly one local CI worker call")
+        raise BindingError("ci.yml must contain exactly one protected main CI worker call")
 
 
 def verify_ci_binding(repo: Path, environment: Mapping[str, str]) -> str:
-    """Сопоставить байты caller'а и worker'а с реальным snapshot workflow."""
+    """Сопоставить предлагаемые YAML с caller snapshot; runtime recipe проверяет native admission."""
     try:
         local_workflows = {path: (repo / path).read_bytes() for path in WORKFLOW_PATHS}
         caller = local_workflows[WORKFLOW_PATHS[0]].decode("utf-8")
@@ -172,10 +172,19 @@ class TestCiWorkflowBinding(unittest.TestCase):
     def _git_text(self, arguments: tuple[str, ...]) -> str:
         return self._git(arguments).stdout.decode("utf-8").strip()
 
-    def test_accepts_exact_local_call_at_workflow_sha(self) -> None:
+    def test_accepts_exact_main_call_at_caller_sha(self) -> None:
         observed = verify_ci_binding(
             self.root,
             {**self.git_env, "GITHUB_ACTIONS": "true", "CI_WORKFLOW_SHA": self.candidate},
+        )
+        self.assertEqual(observed, self.candidate)
+
+
+    def test_candidate_snapshot_does_not_claim_the_protected_recipe_bytes(self) -> None:
+        observed = verify_ci_binding(
+            self.root,
+            {**self.git_env, "GITHUB_ACTIONS": "true", "CI_WORKFLOW_SHA": self.candidate,
+             "CI_VERIFIED_RECIPE_SHA": self.base},
         )
         self.assertEqual(observed, self.candidate)
 

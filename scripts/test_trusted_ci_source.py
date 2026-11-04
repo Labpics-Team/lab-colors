@@ -60,7 +60,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
             "CI_CHECK_RUN_ID": "101",
         }
 
-    def execute(self, environment, mode="bootstrap", program=None, check_run_id=_UNSET):
+    def execute(self, environment, program=None, check_run_id=_UNSET):
         with tempfile.TemporaryDirectory(prefix="owned-source-guard-") as name:
             root = Path(name)
             env_file, summary = root / "env", root / "summary"
@@ -81,7 +81,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
             env.update(environment)
             env.update(GITHUB_ENV=str(env_file), GITHUB_STEP_SUMMARY=str(summary), GITHUB_OUTPUT=str(root / "outputs"))
             result = subprocess.run(
-                [sys.executable, "-c", program or guard_program(mode)],
+                [sys.executable, "-c", program or guard_program()],
                 env=env, capture_output=True, text=True, timeout=5,
             )
             outputs = root / "outputs"
@@ -90,7 +90,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
     def test_owned_source_has_nonempty_distinct_native_identities(self):
         environment = self.fixture()
         environment["CI_RECIPE_SHA"] = "c" * 40
-        result, output, summary, outputs = self.execute(environment, mode="protected")
+        result, output, summary, outputs = self.execute(environment)
         self.assertEqual(result.returncode, 0, result.stderr)
         binding = json.loads(result.stdout)
         self.assertEqual(binding["source_sha"], "a" * 40)
@@ -102,6 +102,56 @@ class TestOwnedSourceGuard(unittest.TestCase):
         lines = outputs.splitlines()
         self.assertEqual(len(lines), len(binding))
         self.assertEqual(dict(line.split("=", 1) for line in lines), binding)
+
+
+    def test_main_recipe_preserves_three_distinct_pr_identities(self):
+        environment = self.fixture() | {
+            "CI_SOURCE_SHA": "a" * 40, "CI_CALLER_SHA": "b" * 40,
+            "CI_RECIPE_SHA": "c" * 40,
+        }
+        result, _, _, _ = self.execute(environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binding = json.loads(result.stdout)
+        self.assertEqual((binding["source_sha"], binding["caller_sha"], binding["recipe_sha"]),
+                         ("a" * 40, "b" * 40, "c" * 40))
+
+    def test_nonmain_native_snapshot_cannot_mix_any_revision(self):
+        environment = self.fixture() | {
+            "CI_RECIPE_REF": "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@refs/pull/849/merge",
+        }
+        healthy, _, _, _ = self.execute(environment)
+        self.assertEqual(healthy.returncode, 0, healthy.stderr)
+        for field in ("CI_SOURCE_SHA", "CI_CALLER_SHA", "CI_RECIPE_SHA"):
+            with self.subTest(field=field):
+                result, output, summary, outputs = self.execute(environment | {field: "c" * 40})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual((output, summary, outputs), ("", "", ""))
+
+
+    def test_publication_requires_protected_main_native_recipe(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/publish-worker.yml").read_text()
+        anchor = "      - name: Require protected publication recipe\n"
+        self.assertEqual(workflow.count(anchor), 1)
+        step = workflow.split(anchor, 1)[1].split("\n      # ", 1)[0]
+        self.assertIn("NATIVE_RECIPE_REF: " + chr(36) + "{{ job.workflow_ref }}", step)
+        script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+        main = "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@refs/heads/main"
+        for reference in (main, "", main.replace("main", "other"), main.replace("refs/heads/main", "a" * 40)):
+            with self.subTest(reference=reference):
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script],
+                    env=dict(os.environ) | {"NATIVE_RECIPE_REF": reference}, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode == 0, reference == main)
+
+    def test_old_wrapper_mode_argument_cannot_select_a_parallel_policy(self):
+        program = guard_program()
+        mutant = program.replace("validate_owned_source(os.environ)",
+                                  "validate_owned_source(os.environ, 'bootstrap')")
+        self.assertNotEqual(mutant, program)
+        healthy, _, _, _ = self.execute(self.fixture())
+        self.assertEqual(healthy.returncode, 0, healthy.stderr)
+        result, output, summary, outputs = self.execute(self.fixture(), program=mutant)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((output, summary, outputs), ("", "", ""))
 
     def test_native_check_run_number_is_positive_integer_only(self):
         for value in (True, False, 0, -1, 101.0, None):
@@ -170,7 +220,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
                     self.assertIn("INCOMPLETE", result.stderr)
                     self.assertEqual((output, summary, outputs), ("", "", ""))
 
-    def test_bootstrap_keeps_caller_recipe_snapshot_and_requires_native_context(self):
+    def test_admitted_snapshot_keeps_source_caller_recipe_identity_and_native_context(self):
         environment = self.fixture()
         environment["CI_RECIPE_REF"] = "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@refs/pull/849/merge"
         result, _, _, outputs = self.execute(environment)
@@ -185,10 +235,10 @@ class TestOwnedSourceGuard(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((output, summary, outputs), ("", "", ""))
 
-    def test_protected_mode_rejects_unexecuted_main_recipe_and_wrong_callee(self):
+    def test_native_rule_rejects_unexecuted_main_recipe_and_wrong_callee(self):
         cases = (
             {"CI_EVENT": "push", "CI_REF": "refs/heads/main", "CI_RECIPE_SHA": "c" * 40},
-            {"CI_RECIPE_REF": "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@refs/heads/other"},
+            {"CI_RECIPE_REF": "Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@refs/heads/other", "CI_RECIPE_SHA": "c" * 40},
             {"CI_RECIPE_PATH": ".github/workflows/other.yml"},
             {"CI_RECIPE_REPOSITORY": "foreign/repo"},
             {"CI_EVENT": "workflow_dispatch", "CI_REF": "refs/heads/other"},
@@ -196,7 +246,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
         for change in cases:
             with self.subTest(change=change):
                 environment = self.fixture() | change
-                result, output, summary, outputs = self.execute(environment, mode="protected")
+                result, output, summary, outputs = self.execute(environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual((output, summary, outputs), ("", "", ""))
 
@@ -231,6 +281,12 @@ class TestOwnedSourceGuard(unittest.TestCase):
                         self.assertEqual(" ".join(line.strip() for line in condition.group(1).splitlines()), expected, job)
                 guard = admission.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0]
                 program = "\n".join(line[10:] for line in guard.splitlines())
+                calls = [node for node in ast.walk(ast.parse(program))
+                         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                         and node.func.id == "validate_owned_source"]
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(len(calls[0].args), 1)
+                self.assertEqual(calls[0].keywords, [])
                 observed_function = next(node for node in ast.parse(program).body if isinstance(node, ast.FunctionDef))
                 self.assertEqual(ast.dump(ast.Module(body=[observed_function], type_ignores=[]), include_attributes=False), expected_function)
                 for job, block in blocks.items():
@@ -302,7 +358,7 @@ class TestOwnedSourceGuard(unittest.TestCase):
         environment = self.fixture()
         healthy, _, _, outputs = self.execute(environment)
         self.assertEqual(healthy.returncode, 0, healthy.stderr)
-        program = guard_program("bootstrap")
+        program = guard_program()
         reject_all = program.replace('    event = required("CI_EVENT")', '    raise ValueError("REFUSED: reject-all mutant")\n    event = required("CI_EVENT")')
         rejected, output, summary, outputs = self.execute(environment, program=reject_all)
         self.assertNotEqual(rejected.returncode, 0)

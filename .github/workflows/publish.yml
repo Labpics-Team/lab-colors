@@ -23,4 +23,4 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: ./.github/workflows/publish-worker.yml
+    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main

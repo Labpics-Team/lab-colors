@@ -37,6 +37,6 @@ jobs:
     name: Native conformance
     permissions:
       contents: read
-    uses: ./.github/workflows/native-conformance-worker.yml
+    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@main
     with:
       authoring_baseline: ${{ inputs.authoring_baseline || '' }}
