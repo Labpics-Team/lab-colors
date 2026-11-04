@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 import os
 from pathlib import Path
@@ -130,19 +129,65 @@ class TestOwnedSourceGuard(unittest.TestCase):
 
     def test_publication_requires_protected_main_native_recipe(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/publish-worker.yml").read_text()
+        proof = json.loads((Path(__file__).resolve().parents[1] /
+            "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json").read_text())
+
+        def require_point_proof_controls(source, contract):
+            self.assertEqual(contract["schema_version"], 2)
+            self.assertEqual(contract["source_binding_schema_version"], 2)
+            self.assertEqual(contract["proof_id"], "point-support-reference-surplus-integer-v1")
+            controls = contract["source_negative_controls"]
+            self.assertIs(type(controls), int)
+            self.assertGreater(controls, 0)
+            guards = re.findall(r"\bpointProof\.source_negative_controls !== ([0-9]+) \|\|", source)
+            self.assertEqual(len(guards), 1)
+            self.assertEqual(int(guards[0]), controls)
+
+        require_point_proof_controls(workflow, proof)
+        count = proof["source_negative_controls"]
+        guard = "pointProof.source_negative_controls !== " + str(count)
+        with self.assertRaises(AssertionError):
+            require_point_proof_controls(workflow.replace(guard,
+                "pointProof.source_negative_controls !== " + str(count - 1), 1), proof)
+        for field, invalid in (("schema_version", 3), ("source_negative_controls", True)):
+            with self.subTest(proof_field=field), self.assertRaises(AssertionError):
+                require_point_proof_controls(workflow, proof | {field: invalid})
         anchor = "      - name: Require protected publication recipe\n"
         self.assertEqual(workflow.count(anchor), 1)
-        step = workflow.split(anchor, 1)[1].split("\n      # ", 1)[0]
-        self.assertIn("NATIVE_RECIPE_REF: " + chr(36) + "{{ needs.source-admission.outputs.recipe_ref }}", step)
+        self.assertLess(workflow.index(anchor), workflow.index("      - name: npm publish verified CI tarball"))
+        native = chr(36) + "{{ needs.source-admission.outputs.recipe_ref }}"
+
+        def require_recipe_guard(source):
+            self.assertEqual(source.count(anchor), 1)
+            step = source.split(anchor, 1)[1].split("\n      - ", 1)[0]
+            # Комментарий не завершает шаг и не вправе скрыть условный пропуск.
+            self.assertEqual(re.findall(r"(?m)^        ((?!#)\S.*)$", step), ["env:", "run: |"])
+            self.assertEqual(re.findall(r"(?m)^          NATIVE_RECIPE_REF: (.+)$", step), [native])
+            block = re.search(r"(?m)^        run: \|\n((?:          [^\n]*\n|\n)+)", step)
+            self.assertIsNotNone(block)
+            return "\n".join(line[10:] if line else "" for line in block[1].splitlines())
+
+        script = require_recipe_guard(workflow)
         self.assertIn("recipe_ref: " + chr(36) + "{{ steps.identity.outputs.recipe_ref }}", workflow)
-        script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+        self.assertEqual(require_recipe_guard(workflow.replace(anchor,
+            anchor + "        # Условия исполнения не меняются.\n", 1)), script)
+        for metadata in ("if: false", "continue-on-error: true", "shell: pwsh"):
+            with self.subTest(metadata=metadata), self.assertRaises(AssertionError):
+                require_recipe_guard(workflow.replace(anchor, anchor + "        " + metadata + "\n", 1))
+        mapping = "          NATIVE_RECIPE_REF: " + native + "\n"
+        for replacement in ("", "          NATIVE_RECIPE_REF: unverified\n", mapping + mapping):
+            with self.subTest(mapping=replacement), self.assertRaises(AssertionError):
+                require_recipe_guard(workflow.replace(mapping, replacement, 1))
+        comment = "      # Повторная проверка хеша перед единственным npm publish обнаруживает\n"
+        self.assertEqual(workflow.count(comment), 1)
+        with self.assertRaises(AssertionError):
+            require_recipe_guard(workflow.replace(comment, comment + "        if: false\n", 1))
         main = "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@refs/heads/main"
         for reference in (main, "", main.replace("main", "other"), main.replace("refs/heads/main", "a" * 40)):
             with self.subTest(reference=reference):
                 result = subprocess.run(["bash", "--noprofile", "--norc", "-c", script],
                     env=dict(os.environ) | {"NATIVE_RECIPE_REF": reference}, capture_output=True, timeout=5)
                 self.assertEqual(result.returncode == 0, reference == main)
-
     def test_old_wrapper_mode_argument_cannot_select_a_parallel_policy(self):
         program = guard_program()
         mutant = program.replace("validate_owned_source(os.environ)",
@@ -253,7 +298,10 @@ class TestOwnedSourceGuard(unittest.TestCase):
 
     def test_each_source_worker_is_bound_to_native_admission_before_steps(self):
         root = Path(__file__).resolve().parents[1] / ".github/workflows"
-        expected_function = ast.dump(ast.parse(inspect.getsource(validate_owned_source)), include_attributes=False)
+        expected_program = ast.dump(ast.parse(guard_program()), include_attributes=False)
+
+        def require_guard_program(program):
+            self.assertEqual(ast.dump(ast.parse(program), include_attributes=False), expected_program)
         workers = (
             "arb.yml", "ci-worker.yml", "dual-proof.yml", "full-domain-corpus.yml",
             "full-domain-run.yml", "mutation-worker.yml", "native-conformance-worker.yml",
@@ -282,14 +330,15 @@ class TestOwnedSourceGuard(unittest.TestCase):
                         self.assertEqual(" ".join(line.strip() for line in condition.group(1).splitlines()), expected, job)
                 guard = admission.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0]
                 program = "\n".join(line[10:] for line in guard.splitlines())
-                calls = [node for node in ast.walk(ast.parse(program))
-                         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                         and node.func.id == "validate_owned_source"]
-                self.assertEqual(len(calls), 1)
-                self.assertEqual(len(calls[0].args), 1)
-                self.assertEqual(calls[0].keywords, [])
-                observed_function = next(node for node in ast.parse(program).body if isinstance(node, ast.FunctionDef))
-                self.assertEqual(ast.dump(ast.Module(body=[observed_function], type_ignores=[]), include_attributes=False), expected_function)
+                require_guard_program(program)
+                call = "validate_owned_source(os.environ)"
+                self.assertEqual(program.count(call), 1)
+                rewritten = program.replace(call,
+                    "validate_owned_source(dict(os.environ, "
+                    "CI_HEAD_REPOSITORY=os.environ['CI_REPOSITORY'], "
+                    "CI_HEAD_REPOSITORY_ID=os.environ['CI_REPOSITORY_ID']))", 1)
+                with self.assertRaises(AssertionError):
+                    require_guard_program(rewritten)
                 for job, block in blocks.items():
                     if job == "source-admission":
                         continue

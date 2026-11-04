@@ -206,11 +206,10 @@ jobs:
     if: ${{ !inputs.guard_only }}
     needs: ["source-admission"]
     name: one source-bound full-domain Arb BUILD to RUN receipt
-    # Docker is root-equivalent, so the job runs on a fresh ephemeral
-    # GitHub-hosted VM that is discarded after this single run.  The full
-    # 2^24 RUN is one continuous native execution; the 480-minute envelope
-    # mirrors the Arb build/runtime gate and must be recalibrated from the
-    # actual run duration.
+    # Docker требует допуска с полномочиями root; изоляцией и lifecycle
+    # self-hosted ресурса владеет Runner. Полный RUN 2^24 выполняется непрерывно;
+    # лимит 480 минут сохраняет бюджет Arb build/runtime и уточняется только
+    # по измеренному времени исполнения.
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 480
     env:
