@@ -41,6 +41,7 @@ TRANSITIVE_EXECUTOR_ROLES = (
     "composition_executor_source",
     "computed_selection_source",
     "content_digest_source",
+    "field_effect_executor_source",
     "final_raster_payload_source",
     "final_raster_session_source",
     "final_raster_wire_source",

@@ -55,6 +55,13 @@
       "sha256": "f332c8a4b2e60cc6c56a87e8f4c011d9fc4f052e15fb05b000da5e808d9f60f3"
     },
     {
+      "bytes": 104398,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/field_effect.rs",
+      "role": "field_effect_executor_source",
+      "sha256": "dd6a70e24403a4edcc532cdf83aced7518026fa6262c7b8f115958b182936ac9"
+    },
+    {
       "bytes": 9704,
       "license": "MIT",
       "path": "crates/labcolors-core/src/field_effect/final_raster.rs",
@@ -209,18 +216,18 @@
       "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf"
     },
     {
-      "bytes": 42463,
+      "bytes": 42544,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "7a5b79e256c22d30194c259ad07f1f070c51c66f081f315476d0617d93b5d139"
+      "sha256": "5c720903933a7573622840cddc9702a45b92d057079bf640e92c2f2236912958"
     },
     {
-      "bytes": 38592,
+      "bytes": 38628,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "63e38774aeeab67882e1bea2efc50042dc2a30251df3a576ba0c8ae13966816a"
+      "sha256": "941f7544e0943b4b80e3ecc22eaf03a70fe1d2f8c417f5afccd865d9be3187db"
     },
     {
       "bytes": 8445,

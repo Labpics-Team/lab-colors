@@ -88,6 +88,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "composition_executor_source": "crates/labcolors-core/src/composition.rs",
     "computed_selection_source": "crates/labcolors-core/src/program_session/computed_assignment.rs",
     "content_digest_source": "crates/labcolors-core/src/sha256.rs",
+    "field_effect_executor_source": "crates/labcolors-core/src/field_effect.rs",
     "final_raster_payload_source": "crates/labcolors-core/src/field_effect/final_raster.rs",
     "final_raster_session_source": "crates/labcolors-core/src/program_session/finite_field.rs",
     "final_raster_wire_source": "crates/labcolors-core/src/program_wire/finite_field.rs",
