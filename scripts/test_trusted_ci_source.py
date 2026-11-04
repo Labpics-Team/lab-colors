@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import json
 import os
 from pathlib import Path
@@ -133,8 +132,25 @@ class TestOwnedSourceGuard(unittest.TestCase):
         anchor = "      - name: Refuse publication from the bootstrap recipe\n"
         self.assertEqual(workflow.count(anchor), 1)
         self.assertLess(workflow.index(anchor), workflow.index("      - name: npm publish verified CI tarball"))
-        step = workflow.split(anchor, 1)[1].split("\n      # ", 1)[0]
-        script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+        def require_refusal(source):
+            self.assertEqual(source.count(anchor), 1)
+            step = source.split(anchor, 1)[1].split("\n      - ", 1)[0]
+            # Проверяется весь шаг: metadata после комментария тоже может отменить отказ.
+            self.assertEqual(re.findall(r"(?m)^        ((?!#)\S.*)$", step), ["run: |"])
+            block = re.search(r"(?m)^        run: \|\n((?:          [^\n]*\n|\n)+)", step)
+            self.assertIsNotNone(block)
+            return "\n".join(line[10:] if line else "" for line in block[1].splitlines())
+
+        script = require_refusal(workflow)
+        self.assertEqual(require_refusal(workflow.replace(anchor,
+            anchor + "        # Условия исполнения не меняются.\n", 1)), script)
+        for metadata in ("if: false", "continue-on-error: true", "shell: pwsh"):
+            with self.subTest(metadata=metadata), self.assertRaises(AssertionError):
+                require_refusal(workflow.replace(anchor, anchor + "        " + metadata + "\n", 1))
+        comment = "      # Повторная проверка хеша перед единственным npm publish обнаруживает\n"
+        self.assertEqual(workflow.count(comment), 1)
+        with self.assertRaises(AssertionError):
+            require_refusal(workflow.replace(comment, comment + "        if: false\n", 1))
         for reference in ("", "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@refs/heads/main",
                           "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@" + "a" * 40):
             with self.subTest(reference=reference):
@@ -253,7 +269,10 @@ class TestOwnedSourceGuard(unittest.TestCase):
 
     def test_each_source_worker_is_bound_to_native_admission_before_steps(self):
         root = Path(__file__).resolve().parents[1] / ".github/workflows"
-        expected_function = ast.dump(ast.parse(inspect.getsource(validate_owned_source)), include_attributes=False)
+        expected_program = ast.dump(ast.parse(guard_program()), include_attributes=False)
+
+        def require_guard_program(program):
+            self.assertEqual(ast.dump(ast.parse(program), include_attributes=False), expected_program)
         workers = (
             "arb.yml", "ci-worker.yml", "dual-proof.yml", "full-domain-corpus.yml",
             "full-domain-run.yml", "mutation-worker.yml", "native-conformance-worker.yml",
@@ -282,14 +301,15 @@ class TestOwnedSourceGuard(unittest.TestCase):
                         self.assertEqual(" ".join(line.strip() for line in condition.group(1).splitlines()), expected, job)
                 guard = admission.split("          python3 - <<'PY'\n", 1)[1].split("          PY\n", 1)[0]
                 program = "\n".join(line[10:] for line in guard.splitlines())
-                calls = [node for node in ast.walk(ast.parse(program))
-                         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                         and node.func.id == "validate_owned_source"]
-                self.assertEqual(len(calls), 1)
-                self.assertEqual(len(calls[0].args), 1)
-                self.assertEqual(calls[0].keywords, [])
-                observed_function = next(node for node in ast.parse(program).body if isinstance(node, ast.FunctionDef))
-                self.assertEqual(ast.dump(ast.Module(body=[observed_function], type_ignores=[]), include_attributes=False), expected_function)
+                require_guard_program(program)
+                call = "validate_owned_source(os.environ)"
+                self.assertEqual(program.count(call), 1)
+                rewritten = program.replace(call,
+                    "validate_owned_source(dict(os.environ, "
+                    "CI_HEAD_REPOSITORY=os.environ['CI_REPOSITORY'], "
+                    "CI_HEAD_REPOSITORY_ID=os.environ['CI_REPOSITORY_ID']))", 1)
+                with self.assertRaises(AssertionError):
+                    require_guard_program(rewritten)
                 for job, block in blocks.items():
                     if job == "source-admission":
                         continue
