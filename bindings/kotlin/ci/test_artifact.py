@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import importlib.util
@@ -341,11 +342,57 @@ class ArtifactTests(unittest.TestCase):
 
     def test_android_aggregate_requires_all_finished_consumers(self):
         workflow = (ROOT.parents[2] / ".github/workflows/native-conformance-worker.yml").read_text()
-        aggregate = workflow.split("  android-package:\n", 1)[1]
-        self.assertIn("needs: [android-build, android-consumer]", aggregate)
-        self.assertIn("if: always()", aggregate)
-        self.assertIn("BUILD_RESULT: ${{ needs.android-build.result }}", aggregate)
-        self.assertIn("CONSUMER_RESULT: ${{ needs.android-consumer.result }}", aggregate)
+        aggregates = re.findall(
+            r"(?ms)^  android-package:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            workflow,
+        )
+        self.assertEqual(len(aggregates), 1)
+        aggregate = aggregates[0]
+
+        def require_aggregate_contract(block):
+            conditions = re.findall(r"(?m)^    if: (.+)$", block)
+            self.assertEqual(len(conditions), 1, "aggregate requires one admission condition")
+            self.assertEqual(
+                conditions[0].replace("(always())", "always()"),
+                "${{ always() && needs.source-admission.result == 'success' }}",
+            )
+            needs = re.findall(r"(?m)^    needs: (.+)$", block)
+            self.assertEqual(len(needs), 1, "aggregate requires one dependency declaration")
+            dependencies = json.loads(needs[0])
+            self.assertIsInstance(dependencies, list)
+            self.assertEqual(len(dependencies), 3)
+            self.assertEqual(set(dependencies), {"android-build", "android-consumer", "source-admission"})
+            self.assertNotIn("continue-on-error:", block)
+            self.assertEqual(block.count("BUILD_RESULT: ${{ needs.android-build.result }}"), 1)
+            self.assertEqual(block.count("CONSUMER_RESULT: ${{ needs.android-consumer.result }}"), 1)
+
+        require_aggregate_contract(aggregate)
+        mutations = (
+            (
+                '    needs: ["android-build", "android-consumer", "source-admission"]\n',
+                '    needs: ["android-build", "android-consumer"]\n',
+            ),
+            (
+                '    needs: ["android-build", "android-consumer", "source-admission"]\n',
+                '    needs: ["android-build", "android-consumer", "source-admission", "source-admission"]\n',
+            ),
+            (
+                "    if: ${{ (always()) && needs.source-admission.result == 'success' }}\n",
+                "    if: ${{ always() }}\n",
+            ),
+        )
+        for anchor, replacement in mutations:
+            self.assertEqual(aggregate.count(anchor), 1)
+            with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
+                require_aggregate_contract(aggregate.replace(anchor, replacement, 1))
+        for declaration in (
+            '    needs: ["android-build", "android-consumer", "source-admission"]\n',
+            "    if: ${{ always() }}\n",
+            "    continue-on-error: true\n",
+        ):
+            with self.subTest(declaration=declaration), self.assertRaises(AssertionError):
+                require_aggregate_contract(declaration + aggregate)
+
         script = "\n".join(line[10:] for line in aggregate.split("        run: |\n", 1)[1].splitlines())
         good = {"BUILD_RESULT": "success", "CONSUMER_RESULT": "success"}
         environment = {key: value for key, value in os.environ.items() if key not in (*good, "BASH_ENV", "ENV")}

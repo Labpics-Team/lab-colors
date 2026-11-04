@@ -2858,25 +2858,28 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: ./.github/workflows/publish-worker.yml"""
+    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main"""
+        # Защищённый main worker владеет допуском source, caller и recipe.
         self.assertEqual(active, expected)
+        owned_binding = "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main"
 
         hostile_bindings = (
-            "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main",
+            "./.github/workflows/publish-worker.yml",
             "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@" + "a" * 40,
             "foreign/lab-colors/.github/workflows/publish-worker.yml@main",
+            "Labpics-Team/lab-colors/.github/workflows/other.yml@main",
             "./.github/workflows/other.yml",
             "$/github/workflows/publish-worker.yml",
         )
         for binding in hostile_bindings:
             with self.subTest(binding=binding):
                 self.assertNotEqual(
-                    active.replace("./.github/workflows/publish-worker.yml", binding),
+                    active.replace(owned_binding, binding),
                     expected,
                 )
         for injection in (
-            "\n    uses: ./.github/workflows/publish-worker.yml",
-            "\n  duplicate:\n    uses: ./.github/workflows/publish-worker.yml",
+            "\n    uses: " + owned_binding,
+            "\n  duplicate:\n    uses: " + owned_binding,
             "\njobs: {}",
         ):
             with self.subTest(injection=injection):

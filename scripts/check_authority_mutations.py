@@ -300,9 +300,10 @@ CC_MUTANTS = {
     "cc-source-instead-of-composite": (CC_SOURCE, CC_COMMAND,
         "        let composite = materialization.terminal_composite();",
         "        let composite = materialization.output().source();"),
+    # Мутант точечного допуска не затрагивает независимую оценку конечного растра.
     "cc-ignore-classifier": (CC_SOURCE, CC_COMMAND,
-        "            ExactNominalSrgb8CleanSetV2.classify(composite)",
-        "            ExactNominalSrgb8CleanSetV2.classify(Srgb8::new([0; 3]))"),
+        "        if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) =\n            ExactNominalSrgb8CleanSetV2.classify(composite)\n        {",
+        "        if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) =\n            ExactNominalSrgb8CleanSetV2.classify(Srgb8::new([0; 3]))\n        {"),
     "cc-reject-all": (CC_SOURCE, CC_COMMAND,
         "        let composite = materialization.terminal_composite();",
         "        return Err(CleanConventionErrorV1::UnsupportedScope);\n        let composite = materialization.terminal_composite();"),

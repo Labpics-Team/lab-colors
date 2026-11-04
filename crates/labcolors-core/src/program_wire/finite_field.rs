@@ -262,7 +262,7 @@ mod tests {
     use super::*;
     use crate::authority::{AuthorityExpectedCurrentV1, AuthorityStateV1};
     fn session() -> Result<ProgramSessionV1, ProgramFinalRasterErrorV1> {
-        Ok(compile_program_wire(&final_raster_source_over_wire_v1(
+        compile_program_wire(&final_raster_source_over_wire_v1(
             1,
             2,
             3,
@@ -271,7 +271,7 @@ mod tests {
         ))
         .map_err(ProgramFinalRasterErrorV1::Runtime)?
         .instantiate(101)
-        .map_err(ProgramFinalRasterErrorV1::Runtime)?)
+        .map_err(ProgramFinalRasterErrorV1::Runtime)
     }
     fn payload(shade: u8) -> Result<ProgramFinalRasterInputV1, ProgramFinalRasterErrorV1> {
         ProgramFinalRasterInputV1::try_new(

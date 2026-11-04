@@ -14,7 +14,16 @@ fn input(
     Input::try_new(width, height, dpr, context, 1, source, 2, destination)
 }
 fn runtime() -> Result<labcolors_core::program_wire::ProgramSessionV1, E> {
-    Ok(compile_program_wire(&final_raster_source_over_wire_v1(1,2,3,17,labcolors_core::program_wire::FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2)).map_err(E::Runtime)?.instantiate(100).map_err(E::Runtime)?)
+    compile_program_wire(&final_raster_source_over_wire_v1(
+        1,
+        2,
+        3,
+        17,
+        labcolors_core::program_wire::FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
+    ))
+    .map_err(E::Runtime)?
+    .instantiate(100)
+    .map_err(E::Runtime)
 }
 #[test]
 fn public_complete_spatial_raster_has_independent_source_over_bytes() -> Result<(), E> {

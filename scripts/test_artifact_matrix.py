@@ -488,8 +488,22 @@ class ToolingTests(unittest.TestCase):
             )
             self.assertIsNotNone(aggregate, "stable core-tests aggregate must exist")
             aggregate_block = aggregate[1]
-            self.assertIn("    if: ${{ always() }}\n", aggregate_block)
-            self.assertIn("    needs: core-tests-worker\n", aggregate_block)
+            conditions = re.findall(r"(?m)^    if: (.+)$", aggregate_block)
+            self.assertEqual(len(conditions), 1, "aggregate requires one admission condition")
+            # Допускается только избыточная скобка вокруг always(), а не иной предикат.
+            self.assertEqual(
+                conditions[0].replace("(always())", "always()"),
+                "${{ always() && needs.source-admission.result == 'success' }}",
+            )
+            needs = re.findall(r"(?m)^    needs: (.+)$", aggregate_block)
+            self.assertEqual(len(needs), 1, "aggregate requires one dependency declaration")
+            dependencies = json.loads(needs[0])
+            self.assertIsInstance(dependencies, list)
+            self.assertEqual(len(dependencies), 2)
+            self.assertEqual(set(dependencies), {"core-tests-worker", "source-admission"})
+            self.assertEqual(
+                aggregate_block.count("CORE_SHARDS: ${{ needs.core-tests-worker.result }}"), 1
+            )
             self.assertIn('test "$CORE_SHARDS" = success', aggregate_block)
             self.assertNotIn("continue-on-error:", aggregate_block)
 
@@ -508,6 +522,30 @@ class ToolingTests(unittest.TestCase):
             (
                 "  core-tests:\n",
                 "  core-tests:\n    continue-on-error: true\n",
+            ),
+            (
+                '    needs: ["core-tests-worker", "source-admission"]\n',
+                '    needs: ["core-tests-worker"]\n',
+            ),
+            (
+                '    needs: ["core-tests-worker", "source-admission"]\n',
+                '    needs: ["core-tests-worker", "source-admission", "source-admission"]\n',
+            ),
+            (
+                "  core-tests:\n",
+                "  core-tests:\n    needs: [\"core-tests-worker\", \"source-admission\"]\n",
+            ),
+            (
+                "  core-tests:\n",
+                "  core-tests:\n    if: ${{ always() }}\n",
+            ),
+            (
+                "  core-tests:\n"
+                "    name: core tests and artifact contracts\n"
+                "    if: ${{ (always()) && needs.source-admission.result == 'success' }}\n",
+                "  core-tests:\n"
+                "    name: core tests and artifact contracts\n"
+                "    if: ${{ always() }}\n",
             ),
         )
         for anchor, replacement in mutations:
