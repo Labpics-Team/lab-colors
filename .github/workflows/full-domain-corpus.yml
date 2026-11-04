@@ -234,9 +234,9 @@ jobs:
   shard-probe:
     needs: ["source-admission"]
     name: bounded full-domain shard probe
-    # Dispatch-only: the full 2^24 replay is a long-running lane; this job
-    # proves the sharded streaming mechanism on a bounded prefix of the exact
-    # full manifest on an ephemeral GitHub-hosted VM.
+    # Только workflow_dispatch: полный проход 2^24 — отдельное долгое задание.
+    # Probe проверяет потоковую обработку шардов на ограниченном префиксе
+    # точного полного manifest на self-hosted runner.
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 120
     env:
