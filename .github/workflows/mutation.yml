@@ -1,9 +1,8 @@
 name: mutation (scheduled, report-only)
 
-# Тонкий caller: только расписание, concurrency и права. Job graph, шардирование и
-# пины принадлежат worker того же коммита, что и caller —
-# каждый job исполняется на одноразовой эфемерной GitHub-hosted VM без секретов
-# и общего состояния. Своих inputs у worker нет by design.
+# Тонкий caller задаёт расписание, concurrency и права. Job graph, шардирование
+# и пины принадлежат mutation-worker.yml. Изоляция и очистка self-hosted раннеров
+# принадлежат инфраструктурному контракту Labpics-infra. Своих inputs у worker нет.
 
 on:
   schedule:

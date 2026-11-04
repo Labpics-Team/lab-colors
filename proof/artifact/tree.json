@@ -10,8 +10,8 @@
   ".github/workflows/dual-proof.yml": "57b8e5efb39642392a3abbc1bbe32a0ee9742968",
   ".github/workflows/full-domain-corpus.yml": "9e5e88b3e22612a9e05beadd7aaed99bf1697c80",
   ".github/workflows/full-domain-run.yml": "3e88bdde58cb723afea7b579764a1e1a0af6d4fa",
-  ".github/workflows/mutation-worker.yml": "ad177576bf3aa8c91ee73b1b60cd37457e21812d",
-  ".github/workflows/mutation.yml": "78454e91d46dafad990f1e7668cefddabe701dd3",
+  ".github/workflows/mutation-worker.yml": "4a2677f3eff8ee9d9e1cb2aa074ad964db3ab082",
+  ".github/workflows/mutation.yml": "9aaee6520bb0d875e261e27cd39aa21599b75376",
   ".github/workflows/native-conformance-worker.yml": "ed76c3192daf582c79b5762adf71605525d0efeb",
   ".github/workflows/native-conformance.yml": "10beedb5f358038b61acf5d7a4fab3210d13b49a",
   ".github/workflows/package-worker.yml": "e3335a995f35f7d4a43ed5ae6e6c2ce5015c5e2e",
@@ -640,7 +640,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "be14c141df16cd2f444187e0d5cedf9d36a9f109b9a6adc9b87d3f93e1df2697",
+ "record_sha256": "478d1fb729fb555a651af5b470b9a78da37634fe7f3fe53203c788745363cb00",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

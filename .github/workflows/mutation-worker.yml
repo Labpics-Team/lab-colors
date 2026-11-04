@@ -4,10 +4,10 @@ name: mutation worker
 # unviable и unattributed failure остаются видимыми данными, пока полный
 # baseline не обоснует отдельный явный ratchet.
 #
-# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное):
-# расписание живёт в тонком caller'е (mutation.yml), который закрепляет этот
-# файл полным commit SHA и не может изменить ни job graph, ни пины. Своих
-# inputs у worker нет by design.
+# Worker выполняется на self-hosted раннерах. Изоляция и очистка исполнителя
+# принадлежат инфраструктурному контракту Labpics-infra. Тонкий caller
+# (mutation.yml) задаёт расписание; worker владеет job graph и пинами.
+# Своих inputs у worker нет.
 
 on:
   workflow_call:
