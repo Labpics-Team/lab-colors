@@ -366,7 +366,7 @@
   "packages/colors/test/program-composite-readout.test.mjs": "0ced400a8974acdef322246d013cace13fdb44cf",
   "packages/colors/test/program-composition-oracle.test.mjs": "c9b7dba3ecc744a2022d00a6bd6ac894a0c5c0bb",
   "packages/colors/test/program-error-admission.test.mjs": "8b3f01d3d4b24751c7e31642f9e53ae438a9f1d7",
-  "packages/colors/test/program-runtime-browser-harness.test.mjs": "0d8070dc07046ecc2b31367c3a04f6d978f366ab",
+  "packages/colors/test/program-runtime-browser-harness.test.mjs": "529ae49126660782b31096980904b1b9a67fae3d",
   "packages/colors/test/program-scalar-admission.test.mjs": "6ccfe2ae4d32c0fa71d3c8db3f4c8cfff2e5b180",
   "packages/colors/test/program-selection-builder.test.mjs": "eacaf966a48cdc07577d07e959f68f599bf238cb",
   "packages/colors/test/program-selection-runtime.test.mjs": "c99b8a1b6594b22dcbd32c98b444fb68abf4dd4d",
@@ -597,7 +597,7 @@
   "scripts/region_unittest_shard.py": "769cf4e32517707f96d3a904f909dbf8d78a7ea2",
   "scripts/release-evidence.mjs": "0867419482af8aecd61026870a429ef90b4532a8",
   "scripts/source_tree.py": "59e295ee7cf8a47c7668d04cad016fa5e58e29a0",
-  "scripts/test-program-runtime-browser.mjs": "d85a0939d5541ad6b282f1fe010427a2c3c1e6cc",
+  "scripts/test-program-runtime-browser.mjs": "613809dd3e4a70d8b78776870e0a0f7c9a6c0e83",
   "scripts/test_artifact_matrix.py": "2d8a6338d8432a0b5defaf31c7f52783a553586b",
   "scripts/test_certificate_source_build.py": "4b10feb589a615166048cb7513a03a7a36d0e32e",
   "scripts/test_ci_peer_gate.py": "a30f1b4957d4a5ede7b2ee24d40e62e4de23da1a",
@@ -640,7 +640,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "d96bbceb1fcb2dff40fbd15ab5df553accba15c862381bd96cfe30f12ca5109b",
+ "record_sha256": "0320556eb5d000e278b02561256b578dfaaa234ba6d845cf9f31262af3e25790",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
