@@ -1073,7 +1073,8 @@ function verifyBrowserAssignmentHistory(result, locked) {
     ? result.stopped?.version === 2 && result.stopped.revision === '2'
       && result.stopped.state === 'unsatisfied' && result.stopped.reason === null && result.stopped.hasRender === false
       && isDeepStrictEqual(result.stopped.outputs, [])
-      && result.afterStop === '' && result.refusalAuthority?.rejected === true
+      && result.afterStop === '' && result.computedAfterStop === css([0, 0, 0])
+      && result.refusalAuthority?.rejected === true
       && result.refusalAuthority.recognized === true && result.refusalAuthority.code === 'program_materialization_not_ready'
       && result.refusalAuthority.operation === 'materializationAuthority'
     : result.stopped?.version === 2 && result.stopped.revision === '2'

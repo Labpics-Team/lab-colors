@@ -745,15 +745,16 @@ test("browser assignment readout permits full RGB adaptation and rejects wrong c
   assert.doesNotThrow(() => verifyBrowserAssignment(good));
   assert.doesNotThrow(() => verifyBrowserAssignment(assignmentBrowserReadout({ rgb: [80, 140, 100] })));
   for (const mutate of [
-    (x) => { x.stopped.state = 'incomplete'; },
-    (x) => { x.stopped.outputs[0].rgb = [24, 24, 24]; x.afterStop = x.computedAfterStop = x.css; },
-    (x) => { x.stopped.outputs[0].opacity = .5; },
-    (x) => { x.stopped.outputs[0].rgb[0] = 256; },
-    (x) => { x.stopped.outputs[0].rgb[0] = 120.5; },
-    (x) => { x.stopped.outputs[0].slot = 17; },
-    (x) => { x.stopped.outputs = []; },
-    (x) => { delete x.stopped.outputs; },
-    (x) => { x.stopped.hasRender = false; },
+    (x) => { x.stopped.state = 'incomplete'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb = [24, 24, 24]; x.afterStop = x.computedAfterStop = x.css; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].opacity = .5; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb = [-1, 255, 255]; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb[0] = 256; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb[0] = 120.5; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].slot = 17; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs = []; x.replay = structuredClone(x.stopped); },
+    (x) => { delete x.stopped.outputs; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = false; x.replay = structuredClone(x.stopped); },
     (x) => { x.backgroundAfterStop = 'rgb(255, 255, 255)'; },
     (x) => { x.afterStop = x.css; },
     (x) => { x.computedAfterStop = x.css; },
@@ -777,12 +778,13 @@ test("browser assignment locked domain requires genuine refusal, revoked sink an
   historical.replay = structuredClone(historical.stopped);
   assert.throws(() => verifyBrowserLockedAssignment(historical), /browser computed assignment drifted/u);
   for (const mutate of [
-    (x) => { x.stopped.state = 'ready'; },
-    (x) => { x.stopped.state = 'incomplete'; x.stopped.reason = 'limit'; },
-    (x) => { x.stopped.hasRender = true; },
+    (x) => { x.stopped.state = 'ready'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.state = 'incomplete'; x.stopped.reason = 'limit'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = true; x.replay = structuredClone(x.stopped); },
     (x) => { delete x.stopped.outputs; x.replay = structuredClone(x.stopped); },
     (x) => { x.stopped.outputs = [{ slot: 999, rgb: [500, -1, 0], opacity: 2 }]; x.replay = structuredClone(x.stopped); },
     (x) => { x.afterStop = x.css; },
+    (x) => { x.computedAfterStop = x.css; },
     (x) => { x.refusalAuthority.rejected = false; },
     (x) => { x.refusalAuthority.recognized = false; },
     (x) => { x.refusalAuthority.code = 'program_update'; },

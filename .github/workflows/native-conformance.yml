@@ -1,9 +1,8 @@
 name: Native conformance
 
-# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
-# из того же коммита, что и caller, независимо от checkout и squash-истории.
-# Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
-# с обязательным source admission и объявленными OS/runner requirements.
+# PR проверяет продуктовый снимок процедурой из защищённого main.
+# Изменённые граф и toolchain-пины требуют квалификации этой редакции процедуры.
+# Source admission и объявленные OS/runner requirements обязательны.
 # Ручное сравнение authoring не меняет обязательные проверки пакета.
 
 on:
