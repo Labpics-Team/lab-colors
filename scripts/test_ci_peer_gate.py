@@ -189,6 +189,9 @@ def terminal_script(workflow: str | None = None) -> str:
     for name, value in expected.items():
         if re.findall(r"(?m)^          " + name + r": (.+)$", step) != [value]:
             raise AssertionError("terminal Program must bind " + name + " to verified output")
+    empty_startup = re.findall(r"(?m)^          BASH_ENV: (.+)$", step)
+    if len(empty_startup) != 1 or re.fullmatch(r"(?:\"\"|'')(?:[ \t]+#.*)?[ \t]*", empty_startup[0]) is None:
+        raise AssertionError("terminal Program must clear inherited Bash startup")
     commands = re.findall(r"(?m)^        run: (.+)$", step)
     if len(commands) != 1 or commands[0] in ("|", ">", "|-", ">-"):
         raise AssertionError("terminal Program must have one scalar command")
@@ -223,6 +226,15 @@ class BrowserBinaryAdmissionTest(unittest.TestCase):
             for replacement in ("", "          " + name + ": unverified\n", line + line):
                 with self.subTest(input=name, replacement=replacement), self.assertRaises(AssertionError):
                     terminal_script(before + anchor + step.replace(line, replacement, 1) + "\n      - " + after)
+        startup_lines = re.findall(r"(?m)^          BASH_ENV: .+\n", step)
+        self.assertEqual(len(startup_lines), 1)
+        startup = startup_lines[0]
+        for replacement in ("", "          BASH_ENV: inherited\n", startup + startup):
+            with self.subTest(startup=replacement), self.assertRaises(AssertionError):
+                terminal_script(before + anchor + step.replace(startup, replacement, 1) + "\n      - " + after)
+        for literal in ("''", '\"\" # literal empty startup'):
+            self.assertEqual(terminal_script(workflow.replace(startup, "          BASH_ENV: " + literal + "\n", 1)),
+                             terminal_script(workflow))
         for mutant in (source.replace("test WASM crate in real browser", "renamed"),
                        source.replace("        run: |\n", "        run: >\n", 1),
                        source + source):

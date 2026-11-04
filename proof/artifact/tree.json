@@ -600,7 +600,7 @@
   "scripts/test-program-runtime-browser.mjs": "8516266bfcb2b1550714d9bc84ae140fc4b11db8",
   "scripts/test_artifact_matrix.py": "9d7444e48eb5bb470d45ae3da3367d5b33516e6c",
   "scripts/test_certificate_source_build.py": "4b10feb589a615166048cb7513a03a7a36d0e32e",
-  "scripts/test_ci_peer_gate.py": "88e46ee81d51111a481516cc01120b48f09402e0",
+  "scripts/test_ci_peer_gate.py": "77397856d551b302f7ea81c9c1516b5443ba7099",
   "scripts/test_ci_storage.py": "968dfe18a72438fcc63aab213e127ad225c4f466",
   "scripts/test_distribution_notices.mjs": "64412401e7b5817cad9ac370f4da3fe269e76076",
   "scripts/test_distribution_outputs.mjs": "bb2fd1aac381a8a37fcd656c2d183f690b9c3686",
@@ -640,7 +640,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "9b145dfbf791bae23e7dafa2cd053953fa6360946ac592678d6d2ab4b1436317",
+ "record_sha256": "ab57121f323be09374df1d41ab8a9ec22782f063ce5e757517946fa79c19e878",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
