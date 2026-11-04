@@ -3,6 +3,8 @@ import init, {
   ProgramRuntime,
   ProgramSnapshot,
   ProgramAttachedSnapshot,
+  ProgramAttachment,
+  attachProgramWire,
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
@@ -19,6 +21,8 @@ import type {
   ProgramAttachmentErrorCode,
   ProgramUpdateErrorCode,
   ProgramOperation,
+  ProgramAttachmentBindings,
+  ProgramPointSinkHost,
   UntrustedCertificateEnvelopeV1,
 } from "@labpics/colors";
 import {
@@ -136,6 +140,42 @@ function scalarInputTypes(
 }
 
 void scalarInputTypes;
+
+function attachmentScopeTypes(bytes: Uint8Array): ProgramAttachment {
+  const bindings: ProgramAttachmentBindings = {
+    emissions: [{ slot: 91, sinkOutput: 501 }, { slot: 92, sinkOutput: 502 }],
+    presentations: [{ slot: 91, root: 71, occurrence: 61 }, { slot: 92, root: 72, occurrence: 62 }],
+  };
+  const host: ProgramPointSinkHost = (intent) => {
+    const scope: Uint32Array = intent.scope;
+    const singleton: number | null = intent.sinkOutput;
+    for (const point of intent.points) {
+      const source: Uint8Array = point.source;
+      const sinkOutput: number = point.sinkOutput;
+      void source; void sinkOutput;
+    }
+    for (const composite of intent.presentationComposites) {
+      const root: number = composite.root;
+      const source: Uint8Array = composite.source;
+      void root; void source;
+    }
+    void scope; void singleton;
+    return true;
+  };
+  const attachment = attachProgramWire(bytes, 1, bindings, host);
+  const snapshot = attachment.updateObserved(1n, new Uint32Array([1]), new Uint8Array([0, 0, 0]), 1);
+  snapshot.renderCount();
+  snapshot.renderAt(0).presentationRoot();
+  attachment.materializationAuthorityForBinding(71, 61).terminalCompositeRgb();
+  // @ts-expect-error Каждый emission обязан назвать sink output.
+  attachProgramWire(bytes, 1, { emissions: [{ slot: 91 }], presentations: [] }, host);
+  // @ts-expect-error Индекс binding остаётся number.
+  snapshot.renderAt(0n);
+  // @ts-expect-error Root остаётся number и не приводится из строки.
+  attachment.materializationAuthorityForBinding("71", 61);
+  return attachment;
+}
+void attachmentScopeTypes;
 
 function declaredCleanSetInputTypes(builder: ProgramWireBuilderV1): void {
   const chained: ProgramWireBuilderV1 = builder.declaredSrgb8CleanSet(true, 81, 71, 61);

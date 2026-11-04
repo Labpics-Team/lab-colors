@@ -81,6 +81,7 @@ fn update_error(error: core::ProgramAttachmentUpdateErrorV1, operation: &str) ->
             E::Sink(S::AlreadyInstalled) => "program_attachment_already_installed",
             E::Sink(S::Host(H::Rejected)) => "program_attachment_host_rejected",
             E::Sink(S::Host(H::Protocol)) => "program_attachment_host_protocol",
+            E::Sink(S::Host(H::ResourceExhausted)) => "program_attachment_resource_exhausted",
             _ => "program_attachment_update_unknown",
         },
         operation,
@@ -100,6 +101,7 @@ fn authority_error(error: core::ProgramMaterializationAuthorityErrorV1) -> LabCo
             E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
             E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
             E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
+            E::AmbiguousBindings => "program_materialization_ambiguous_bindings",
             _ => "program_materialization_authority",
         },
         "materializationAuthority",
@@ -435,14 +437,49 @@ pub struct ProgramPointPaint {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointSinkPoint {
+    pub sink_output: u32,
+    pub paint: ProgramPointPaint,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointPresentationComposite {
+    pub root: u32,
+    pub scenario: u32,
+    pub source: Vec<u8>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointEmissionBinding {
+    pub slot: u32,
+    pub sink_output: u32,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointPresentationBinding {
+    pub slot: u32,
+    pub root: u32,
+    pub occurrence: u32,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramAttachmentBindings {
+    pub emissions: Vec<ProgramPointEmissionBinding>,
+    pub presentations: Vec<ProgramPointPresentationBinding>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct ProgramPointSinkIntent {
     pub operation: ProgramPointSinkOperation,
     pub revision: u64,
     pub expected_sequence: u64,
     pub desired_sequence: u64,
     pub binding_epoch: u64,
-    pub sink_output: u32,
+    pub sink_output: Option<u32>,
     pub point: Option<ProgramPointPaint>,
+    pub scope: Vec<u32>,
+    pub points: Vec<ProgramPointSinkPoint>,
+    pub presentation_composites: Vec<ProgramPointPresentationComposite>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -468,7 +505,7 @@ struct NativeHost {
 impl core::ProgramPointSinkHostV1 for NativeHost {
     fn try_install(
         &mut self,
-        intent: core::ProgramPointSinkIntentV1,
+        intent: core::ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), core::ProgramPointSinkHostErrorV1> {
         use core::ProgramPointSinkHostErrorV1 as E;
         let operation = match intent.operation() {
@@ -479,11 +516,53 @@ impl core::ProgramPointSinkHostV1 for NativeHost {
             }
             _ => return Err(E::Protocol),
         };
-        let point = intent.point().map(|point| ProgramPointPaint {
-            slot: point.slot(),
-            source: point.source().bytes().to_vec(),
-            opacity: point.opacity(),
-        });
+        let paint = |point: core::ProgramPaintOutputV1| -> Result<ProgramPointPaint, E> {
+            let mut source = Vec::new();
+            source
+                .try_reserve_exact(3)
+                .map_err(|_| E::ResourceExhausted)?;
+            source.extend_from_slice(&point.source().bytes());
+            Ok(ProgramPointPaint {
+                slot: point.slot(),
+                source,
+                opacity: point.opacity(),
+            })
+        };
+        let point = intent.point().map(paint).transpose()?;
+        let scope_values = intent.scope();
+        let mut scope = Vec::new();
+        scope
+            .try_reserve_exact(scope_values.len())
+            .map_err(|_| E::ResourceExhausted)?;
+        scope.extend(scope_values);
+        let point_values = intent.points();
+        let mut points = Vec::new();
+        points
+            .try_reserve_exact(point_values.len())
+            .map_err(|_| E::ResourceExhausted)?;
+        for entry in point_values {
+            points.push(ProgramPointSinkPoint {
+                sink_output: entry.sink_output(),
+                paint: paint(entry.output())?,
+            });
+        }
+        let composites = intent.presentation_composites();
+        let mut presentation_composites = Vec::new();
+        presentation_composites
+            .try_reserve_exact(composites.len())
+            .map_err(|_| E::ResourceExhausted)?;
+        for composite in composites {
+            let mut source = Vec::new();
+            source
+                .try_reserve_exact(3)
+                .map_err(|_| E::ResourceExhausted)?;
+            source.extend_from_slice(&composite.visible().bytes());
+            presentation_composites.push(ProgramPointPresentationComposite {
+                root: composite.root(),
+                scenario: composite.scenario(),
+                source,
+            });
+        }
         let projected = ProgramPointSinkIntent {
             operation,
             revision: intent.revision(),
@@ -492,6 +571,9 @@ impl core::ProgramPointSinkHostV1 for NativeHost {
             binding_epoch: intent.expected_stamp().binding_epoch(),
             sink_output: intent.sink_output(),
             point,
+            scope,
+            points,
+            presentation_composites,
         };
         match self.callback.try_install(projected) {
             Ok(true) => Ok(()),
@@ -528,6 +610,52 @@ pub fn attach_program_wire(
             NativeHost { callback: host },
         )
         .map_err(|e| attach_error(e, operation))?;
+    Ok(Arc::new(ProgramAttachment {
+        inner: Mutex::new(inner),
+    }))
+}
+
+/// Общий binding-контракт для языков без overload; scalar facade использует тот же Core owner.
+#[uniffi::export]
+pub fn attach_program_wire_with_bindings(
+    bytes: Vec<u8>,
+    stream_id: u32,
+    bindings: ProgramAttachmentBindings,
+    host: Box<dyn ProgramPointSinkHost>,
+) -> Result<Arc<ProgramAttachment>, LabColorsError> {
+    let operation = "attachProgramWire";
+    let resource = || LabColorsError::new("program_attachment_resource_exhausted", operation);
+    let maximum = core::MAX_PROGRAM_POINT_BINDINGS_V1 as usize;
+    if bindings.emissions.len() > maximum || bindings.presentations.len() > maximum {
+        return Err(resource());
+    }
+    let mut emissions = Vec::new();
+    emissions
+        .try_reserve_exact(bindings.emissions.len())
+        .map_err(|_| resource())?;
+    emissions.extend(
+        bindings
+            .emissions
+            .iter()
+            .map(|row| core::ProgramPointEmissionBindingV1::new(row.slot, row.sink_output)),
+    );
+    let mut presentations = Vec::new();
+    presentations
+        .try_reserve_exact(bindings.presentations.len())
+        .map_err(|_| resource())?;
+    presentations.extend(bindings.presentations.iter().map(|row| {
+        core::ProgramPointPresentationBindingV1::new(row.slot, row.root, row.occurrence)
+    }));
+    let owner =
+        core::compile_program_wire(&bytes).map_err(|error| runtime_error(error, operation))?;
+    let inner = owner
+        .attach_bindings(
+            stream_id,
+            &emissions,
+            &presentations,
+            NativeHost { callback: host },
+        )
+        .map_err(|error| attach_error(error, operation))?;
     Ok(Arc::new(ProgramAttachment {
         inner: Mutex::new(inner),
     }))
@@ -579,9 +707,19 @@ impl ProgramAttachment {
         binding_epoch: u64,
     ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
         let inner = enter(&self.inner, "materializationAuthority")?;
-        let render = inner.current_render().ok_or_else(|| {
-            authority_error(core::ProgramMaterializationAuthorityErrorV1::NotReady)
-        })?;
+        let render = match inner.current_renders() {
+            [render] => *render,
+            [] => {
+                return Err(authority_error(
+                    core::ProgramMaterializationAuthorityErrorV1::NotReady,
+                ));
+            }
+            _ => {
+                return Err(authority_error(
+                    core::ProgramMaterializationAuthorityErrorV1::AmbiguousBindings,
+                ));
+            }
+        };
         let identity: [u8; 32] = content_identity.as_slice().try_into().map_err(|_| {
             authority_error(core::ProgramMaterializationAuthorityErrorV1::StaleIdentity)
         })?;
@@ -595,6 +733,17 @@ impl ProgramAttachment {
                 core::ProgramMaterializationCandidateV1::AttachedCommit,
                 expected,
             )
+            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
+            .map_err(authority_error)
+    }
+
+    pub fn materialization_authority_for_binding(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
+        enter(&self.inner, "materializationAuthority")?
+            .current_materialization_authority_for(root, occurrence)
             .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
             .map_err(authority_error)
     }
@@ -660,7 +809,19 @@ impl ProgramAttachedSnapshot {
         Ok(output(self.inner.snapshot(), index)?.opacity())
     }
     pub fn has_render(&self) -> bool {
-        self.inner.render().is_some()
+        !self.inner.renders().is_empty()
+    }
+    pub fn render_count(&self) -> u64 {
+        self.inner.renders().len() as u64
+    }
+    pub fn render_at(&self, index: u32) -> Result<Arc<ProgramAttachedRender>, LabColorsError> {
+        let inner = self
+            .inner
+            .renders()
+            .get(index as usize)
+            .copied()
+            .ok_or_else(|| LabColorsError::new("invalid_output_index", "readProgramOutput"))?;
+        Ok(Arc::new(ProgramAttachedRender { inner }))
     }
     pub fn render(&self) -> Option<Arc<ProgramAttachedRender>> {
         self.inner
@@ -822,6 +983,192 @@ mod tests {
             assert_eq!(code, "program_unsupported");
             assert_eq!(operation, expected_operation);
         }
+    }
+
+    #[test]
+    fn full_attachment_enumerates_renders_and_requires_explicit_binding_authority() {
+        struct CaptureHost(Arc<Mutex<Vec<ProgramPointSinkIntent>>>);
+
+        impl ProgramPointSinkHost for CaptureHost {
+            fn try_install(
+                &self,
+                intent: ProgramPointSinkIntent,
+            ) -> Result<bool, ProgramPointSinkCallbackError> {
+                self.0
+                    .lock()
+                    .expect("host хранит собственные команды")
+                    .push(intent);
+                Ok(true)
+            }
+        }
+
+        fn authority_refusal(
+            result: Result<Arc<AttachedMaterializationAuthority>, LabColorsError>,
+            expected: &str,
+        ) {
+            match result {
+                Err(LabColorsError::Refused { code, operation }) => {
+                    assert_eq!(code, expected);
+                    assert_eq!(operation, "materializationAuthority");
+                }
+                Ok(_) => panic!("отказ не должен выдавать authority"),
+            }
+        }
+
+        // Wire из публичного ProgramWireBuilderV1: два terminal bindings с точными ограничениями.
+        let wire = bytes(concat!(
+            "4c435057010003010000020000000b0000004040400c000000a0a0a00200000015000000010b00000016000000010c000000",
+            "0000000000000000010000001f00000000000000020000002900000001150000002a00000001160000000100000033000000011f000000",
+            "020000003d000000290000003300000000000000000050409a9999999999c93f013e0000002a0000003300000000000000000050409a9999999999c93f01",
+            "02000000470000003d000000480000003e00000002000000470000003d000000480000003e0000000200000051000000013d00000040404052000000013e000000a0a0a000000000020000005b000000290000005c0000002a000000",
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let attachment = attach_program_wire_with_bindings(
+            wire,
+            17,
+            ProgramAttachmentBindings {
+                emissions: vec![
+                    ProgramPointEmissionBinding {
+                        slot: 91,
+                        sink_output: 501,
+                    },
+                    ProgramPointEmissionBinding {
+                        slot: 92,
+                        sink_output: 502,
+                    },
+                ],
+                presentations: vec![
+                    ProgramPointPresentationBinding {
+                        slot: 91,
+                        root: 71,
+                        occurrence: 61,
+                    },
+                    ProgramPointPresentationBinding {
+                        slot: 92,
+                        root: 72,
+                        occurrence: 62,
+                    },
+                ],
+            },
+            Box::new(CaptureHost(Arc::clone(&calls))),
+        )
+        .expect("полный scope присоединяется через публичный native порт");
+
+        let ready = attachment
+            .update_observed(1, vec![1], vec![128; 3], 1)
+            .expect("полный scope атомарно публикуется");
+        assert_eq!(ready.render_count(), 2);
+        assert!(ready.has_render());
+        assert!(ready.render().is_none());
+        assert!(matches!(
+            ready.render_at(2),
+            Err(LabColorsError::Refused { code, operation })
+                if code == "invalid_output_index" && operation == "readProgramOutput"
+        ));
+        let first = ready
+            .render_at(0)
+            .expect("первый render доступен по индексу");
+        let second = ready
+            .render_at(1)
+            .expect("второй render доступен по индексу");
+        assert_eq!(
+            (
+                first.output_slot(),
+                first.sink_output(),
+                first.presentation_root(),
+                first.occurrence()
+            ),
+            (91, 501, 71, 61)
+        );
+        assert_eq!(
+            (
+                second.output_slot(),
+                second.sink_output(),
+                second.presentation_root(),
+                second.occurrence()
+            ),
+            (92, 502, 72, 62)
+        );
+        assert_eq!(first.output_rgb(), [64; 3]);
+        assert_eq!(second.output_rgb(), [160; 3]);
+        {
+            let calls = calls
+                .lock()
+                .expect("host команды сохранены независимо от borrow");
+            let installed = &calls[0];
+            assert_eq!(installed.scope, [501, 502]);
+            assert_eq!(installed.sink_output, None);
+            assert!(installed.point.is_none());
+            assert_eq!(installed.points.len(), 2);
+            assert_eq!(installed.points[0].sink_output, 501);
+            assert_eq!(installed.points[0].paint.slot, 91);
+            assert_eq!(installed.points[0].paint.source, [64; 3]);
+            assert_eq!(installed.points[1].sink_output, 502);
+            assert_eq!(installed.points[1].paint.source, [160; 3]);
+            assert_eq!(installed.presentation_composites.len(), 2);
+            assert_eq!(installed.presentation_composites[0].root, 71);
+            assert_eq!(installed.presentation_composites[0].scenario, 1);
+            assert_eq!(installed.presentation_composites[0].source, [64; 3]);
+            assert_eq!(installed.presentation_composites[1].root, 72);
+            assert_eq!(installed.presentation_composites[1].source, [160; 3]);
+        }
+        authority_refusal(
+            attachment.materialization_authority(),
+            "program_materialization_ambiguous_bindings",
+        );
+        authority_refusal(
+            attachment.materialization_authority_for(
+                1,
+                first.content_identity(),
+                first.binding_epoch(),
+            ),
+            "program_materialization_ambiguous_bindings",
+        );
+        let authority = attachment
+            .materialization_authority_for_binding(72, 62)
+            .expect("Core допускает authority выбранного current binding");
+        assert_eq!(authority.output_slot(), 92);
+        assert_eq!(authority.presentation_root(), 72);
+        assert_eq!(authority.occurrence(), 62);
+        assert_eq!(authority.output_rgb(), [160; 3]);
+        assert_eq!(authority.revision(), second.revision());
+        assert_eq!(authority.binding_epoch(), second.binding_epoch());
+        authority_refusal(
+            attachment.materialization_authority_for_binding(71, 62),
+            "program_materialization_terminal_binding_mismatch",
+        );
+
+        let stale = attachment
+            .update_unknown(2, 41)
+            .expect("полный scope отзывается");
+        assert_eq!(stale.render_count(), 0);
+        assert_eq!(ready.render_count(), 2);
+        assert_eq!(
+            ready
+                .render_at(0)
+                .expect("исторический render сохранён")
+                .output_rgb(),
+            [64; 3]
+        );
+        authority_refusal(
+            attachment.materialization_authority_for_binding(72, 62),
+            "program_materialization_not_ready",
+        );
+        {
+            let calls = calls.lock().expect("отзыв сохраняет полный scope");
+            let revoked = calls.last().expect("host получил отзыв");
+            assert!(matches!(
+                revoked.operation,
+                ProgramPointSinkOperation::RevokeAll
+            ));
+            assert_eq!(revoked.scope, [501, 502]);
+            assert_eq!(revoked.sink_output, None);
+            assert!(revoked.points.is_empty());
+            assert!(revoked.presentation_composites.is_empty());
+        }
+        attachment
+            .dispose(true)
+            .expect("владелец подтвердил полный отзыв");
     }
 
     #[test]

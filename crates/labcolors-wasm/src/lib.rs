@@ -240,6 +240,24 @@ export function certificateProjection(
 const reportFreeze = Object.freeze;
 const ReportBytes = Uint8Array;
 const reportPush = Array.prototype.push;
+const HostIds = Uint32Array;
+
+// Все allocation host-проекции исполняются под wasm-bindgen catch, до callback.
+export function pointSinkPoint(slot, sinkOutput, source, opacity) {
+  return reportFreeze({ slot, sinkOutput, source, opacity });
+}
+export function pointSinkComposite(root, scenario, source) {
+  return reportFreeze({ root, scenario, source });
+}
+export function pointSinkIntent(operation, revision, expectedSequence, desiredSequence, bindingEpoch, scope, points, presentationComposites) {
+  return reportFreeze({
+    operation, revision, expectedSequence, desiredSequence, bindingEpoch,
+    scope: new HostIds(scope),
+    points: reportFreeze(points), presentationComposites: reportFreeze(presentationComposites),
+    sinkOutput: scope.length === 1 ? scope[0] : null,
+    point: points.length === 1 ? points[0] : null,
+  });
+}
 
 export function reportArray() { return []; }
 export function reportArrayPush(array, value) { reportPush.call(array, value); }
@@ -298,6 +316,27 @@ export function consumeFinalRasterRgb(bytes, width, height, dpr, revision, slot,
 }
 "#)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = pointSinkPoint)]
+    fn point_sink_point(
+        slot: u32,
+        sink_output: u32,
+        source: &JsValue,
+        opacity: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = pointSinkComposite)]
+    fn point_sink_composite(root: u32, scenario: u32, source: &JsValue)
+    -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = pointSinkIntent)]
+    fn point_sink_intent(
+        operation: &str,
+        revision: u64,
+        expected_sequence: u64,
+        desired_sequence: u64,
+        binding_epoch: u64,
+        scope: &js_sys::Array,
+        points: &js_sys::Array,
+        composites: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = consumeFinalRasterRgb)]
     fn consume_final_raster_rgb(
         bytes: &[u8],
@@ -558,6 +597,7 @@ fn to_attachment_update_error(
         E::Sink(Sink::AlreadyInstalled) => "program_attachment_already_installed",
         E::Sink(Sink::Host(Host::Rejected)) => "program_attachment_host_rejected",
         E::Sink(Sink::Host(Host::Protocol)) => "program_attachment_host_protocol",
+        E::Sink(Sink::Host(Host::ResourceExhausted)) => "program_attachment_resource_exhausted",
         // Будущий non_exhaustive-вариант не должен маскироваться под
         // известный `Update`: package classifier обязан отказать ему.
         _ => "program_attachment_update_unknown",
@@ -579,6 +619,7 @@ fn to_authority_error(
         E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
         E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
         E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
+        E::AmbiguousBindings => "program_materialization_ambiguous_bindings",
         _ => "program_materialization_authority",
     };
     attachment_js_error(
@@ -916,86 +957,61 @@ struct JsPointSinkHostV1 {
 impl labcolors_core::program_wire::ProgramPointSinkHostV1 for JsPointSinkHostV1 {
     fn try_install(
         &mut self,
-        intent: labcolors_core::program_wire::ProgramPointSinkIntentV1,
+        intent: labcolors_core::program_wire::ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), labcolors_core::program_wire::ProgramPointSinkHostErrorV1> {
-        let object = js_sys::Object::new();
-        let object_value: JsValue = object.clone().into();
+        use labcolors_core::program_wire::ProgramPointSinkHostErrorV1 as E;
+        let resource = |_| E::ResourceExhausted;
         let operation = match intent.operation() {
             labcolors_core::program_wire::ProgramPointSinkOperationV1::SetAll => "setAll",
             labcolors_core::program_wire::ProgramPointSinkOperationV1::RevokeAll => "revokeAll",
             labcolors_core::program_wire::ProgramPointSinkOperationV1::ConfirmExact => {
                 "confirmExact"
             }
-            _ => return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol),
+            _ => return Err(E::Protocol),
         };
-        let set = |key: &str, value: &JsValue| {
-            js_sys::Reflect::set(&object_value, &JsValue::from_str(key), value).is_ok()
-        };
-        let bigint = |value: u64| -> JsValue { js_sys::BigInt::from(value).into() };
-        if !set("operation", &JsValue::from_str(operation))
-            || !set("revision", &bigint(intent.revision()))
-            || !set(
-                "expectedSequence",
-                &bigint(intent.expected_stamp().sequence()),
-            )
-            || !set(
-                "desiredSequence",
-                &bigint(intent.desired_stamp().sequence()),
-            )
-            || !set(
-                "bindingEpoch",
-                &bigint(intent.expected_stamp().binding_epoch()),
-            )
-            || !set(
-                "sinkOutput",
-                &JsValue::from_f64(f64::from(intent.sink_output())),
-            )
-        {
-            return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol);
+        let points = report_array().map_err(resource)?;
+        for entry in intent.points() {
+            let point = entry.output();
+            let [red, green, blue] = point.source().bytes();
+            let source: JsValue = copy_output_rgb(red, green, blue).map_err(resource)?.into();
+            let record =
+                point_sink_point(point.slot(), entry.sink_output(), &source, point.opacity())
+                    .map_err(resource)?;
+            report_array_push(&points, &record).map_err(resource)?;
         }
-        let point = match intent.point() {
-            Some(point) => {
-                let point_object = js_sys::Object::new();
-                let point_value: JsValue = point_object.clone().into();
-                let rgb = point.source().bytes();
-                let rgb = js_sys::Uint8Array::from(&rgb[..]);
-                if js_sys::Reflect::set(
-                    &point_value,
-                    &JsValue::from_str("slot"),
-                    &JsValue::from_f64(f64::from(point.slot())),
-                )
-                .is_err()
-                    || js_sys::Reflect::set(&point_value, &JsValue::from_str("source"), &rgb.into())
-                        .is_err()
-                    || js_sys::Reflect::set(
-                        &point_value,
-                        &JsValue::from_str("opacity"),
-                        &JsValue::from_f64(point.opacity()),
-                    )
-                    .is_err()
-                {
-                    return Err(
-                        labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol,
-                    );
-                }
-                point_value
-            }
-            None => JsValue::NULL,
-        };
-        if !set("point", &point) {
-            return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol);
+        let composites = report_array().map_err(resource)?;
+        for composite in intent.presentation_composites() {
+            let [red, green, blue] = composite.visible().bytes();
+            let source: JsValue = copy_output_rgb(red, green, blue).map_err(resource)?.into();
+            let record = point_sink_composite(composite.root(), composite.scenario(), &source)
+                .map_err(resource)?;
+            report_array_push(&composites, &record).map_err(resource)?;
         }
+        let scope = report_array().map_err(resource)?;
+        for output in intent.scope() {
+            report_array_push(&scope, &JsValue::from_f64(f64::from(output))).map_err(resource)?;
+        }
+        // Конструкторы JS могут бросить исключение. Catch сохраняет Rust Busy/lease
+        // и даёт typed отказ до внешнего эффекта вместо потери Drop через WASM.
+        let value = point_sink_intent(
+            operation,
+            intent.revision(),
+            intent.expected_stamp().sequence(),
+            intent.desired_stamp().sequence(),
+            intent.expected_stamp().binding_epoch(),
+            &scope,
+            &points,
+            &composites,
+        )
+        .map_err(resource)?;
         let status = self
             .callback
-            .call1(&JsValue::UNDEFINED, &object_value)
-            .map_err(|_| labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol)?;
-        let accepted = status
-            .as_bool()
-            .ok_or(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol)?;
-        if !accepted {
-            Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Rejected)
-        } else {
-            Ok(())
+            .call1(&JsValue::UNDEFINED, &value)
+            .map_err(|_| E::Protocol)?;
+        match status.as_bool() {
+            Some(true) => Ok(()),
+            Some(false) => Err(E::Rejected),
+            None => Err(E::Protocol),
         }
     }
 }
@@ -1067,10 +1083,8 @@ fn decode_attachment_scenarios(
 pub fn attach_program_wire(
     bytes: &[u8],
     #[wasm_bindgen(unchecked_param_type = "number")] stream_id: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] output_slot: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] sink_output: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] presentation_root: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] occurrence: JsValue,
+    emission_bindings: &[u32],
+    presentation_bindings: &[u32],
     host: &js_sys::Function,
 ) -> Result<ProgramAttachment, JsValue> {
     let parse = |value: JsValue| {
@@ -1083,19 +1097,48 @@ pub fn attach_program_wire(
         })
     };
     let stream_id = parse(stream_id)?;
-    let output_slot = parse(output_slot)?;
-    let sink_output = parse(sink_output)?;
-    let presentation_root = parse(presentation_root)?;
-    let occurrence = parse(occurrence)?;
+    let binding_error = || {
+        attachment_js_error(
+            "Program attachment binding shape is invalid",
+            "program_attachment_binding",
+            ProgramOperation::AttachProgramWire,
+        )
+    };
+    if emission_bindings.len() % 2 != 0 || presentation_bindings.len() % 3 != 0 {
+        return Err(binding_error());
+    }
+    let maximum = labcolors_core::program_wire::MAX_PROGRAM_POINT_BINDINGS_V1 as usize;
+    let resource = || {
+        attachment_js_error(
+            "Program attachment binding budget was exceeded",
+            "program_attachment_resource_exhausted",
+            ProgramOperation::AttachProgramWire,
+        )
+    };
+    if emission_bindings.len() / 2 > maximum || presentation_bindings.len() / 3 > maximum {
+        return Err(resource());
+    }
+    let mut emissions = Vec::new();
+    emissions
+        .try_reserve_exact(emission_bindings.len() / 2)
+        .map_err(|_| resource())?;
+    emissions.extend(emission_bindings.chunks_exact(2).map(|row| {
+        labcolors_core::program_wire::ProgramPointEmissionBindingV1::new(row[0], row[1])
+    }));
+    let mut presentations = Vec::new();
+    presentations
+        .try_reserve_exact(presentation_bindings.len() / 3)
+        .map_err(|_| resource())?;
+    presentations.extend(presentation_bindings.chunks_exact(3).map(|row| {
+        labcolors_core::program_wire::ProgramPointPresentationBindingV1::new(row[0], row[1], row[2])
+    }));
     let compiled = labcolors_core::program_wire::compile_program_wire(bytes)
         .map_err(|error| to_program_js_error(error, ProgramOperation::AttachProgramWire))?;
     let inner = compiled
-        .attach(
+        .attach_bindings(
             stream_id,
-            output_slot,
-            sink_output,
-            presentation_root,
-            occurrence,
+            &emissions,
+            &presentations,
             JsPointSinkHostV1 {
                 callback: host.clone(),
             },
@@ -1203,6 +1246,28 @@ impl ProgramAttachment {
             .map_err(to_authority_error)
     }
 
+    /// Выбирает один terminal binding, не распространяя его authority на весь scope.
+    #[wasm_bindgen(js_name = materializationAuthorityForBinding)]
+    pub fn materialization_authority_for_binding(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] root: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] occurrence: JsValue,
+    ) -> Result<AttachedMaterializationAuthority, JsValue> {
+        let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
+        let mismatch = || {
+            to_authority_error(
+                labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch,
+            )
+        };
+        let root = checked_u32(root).ok_or_else(mismatch)?;
+        let occurrence = checked_u32(occurrence).ok_or_else(mismatch)?;
+        self.inner
+            .borrow()
+            .current_materialization_authority_for(root, occurrence)
+            .map(|inner| AttachedMaterializationAuthority { inner })
+            .map_err(to_authority_error)
+    }
+
     /// Проверяет переданные caller-ом revision, identity и epoch против current head.
     #[wasm_bindgen(js_name = materializationAuthorityFor)]
     pub fn materialization_authority_for(
@@ -1212,11 +1277,15 @@ impl ProgramAttachment {
         #[wasm_bindgen(unchecked_param_type = "bigint")] binding_epoch: JsValue,
     ) -> Result<AttachedMaterializationAuthority, JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
-        let render = self.inner.borrow().current_render().ok_or_else(|| {
-            to_authority_error(
-                labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::NotReady,
-            )
-        })?;
+        let render = {
+            use labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1 as E;
+            let inner = self.inner.borrow();
+            match inner.current_renders() {
+                [render] => *render,
+                [] => return Err(to_authority_error(E::NotReady)),
+                _ => return Err(to_authority_error(E::AmbiguousBindings)),
+            }
+        };
         let content_identity: [u8; 32] = content_identity.try_into().map_err(|_| {
             attachment_js_error(
                 "Materialization content identity must contain 32 bytes",
@@ -1373,7 +1442,27 @@ impl ProgramAttachedSnapshot {
 
     #[wasm_bindgen(js_name = hasRender)]
     pub fn has_render(&self) -> bool {
-        self.inner.render().is_some()
+        !self.inner.renders().is_empty()
+    }
+
+    #[wasm_bindgen(js_name = renderCount)]
+    pub fn render_count(&self) -> usize {
+        self.inner.renders().len()
+    }
+
+    /// Копирует один binding по индексу; его область остаётся точечной.
+    #[wasm_bindgen(js_name = renderAt)]
+    pub fn render_at(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
+    ) -> Result<ProgramAttachedRender, JsValue> {
+        let index = checked_output_index(index)?;
+        self.inner
+            .renders()
+            .get(index)
+            .copied()
+            .map(|inner| ProgramAttachedRender { inner })
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen]

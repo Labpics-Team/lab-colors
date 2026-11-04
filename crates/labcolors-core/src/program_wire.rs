@@ -9,6 +9,8 @@
 //! они не превращаются в отказ пользовательского графа или observation.
 
 mod finite_field;
+#[cfg(test)]
+mod scope_tests;
 pub use finite_field::{
     FinalRasterAssessmentVerdictV1, FinalRasterCleanlinessAssessmentV1,
     FinalRasterCleanlinessRequirementV1, FinalRasterCleanlinessViolationV1,
@@ -340,13 +342,12 @@ mod fv01_red_tests {
     #[derive(Default)]
     struct Host {
         stamp: Option<ProgramPointSinkStampV1>,
-        intents: Vec<ProgramPointSinkIntentV1>,
     }
 
     impl ProgramPointSinkHostV1 for Host {
         fn try_install(
             &mut self,
-            intent: ProgramPointSinkIntentV1,
+            intent: ProgramPointSinkIntentV1<'_>,
         ) -> Result<(), ProgramPointSinkHostErrorV1> {
             if self
                 .stamp
@@ -355,7 +356,6 @@ mod fv01_red_tests {
                 return Err(ProgramPointSinkHostErrorV1::Rejected);
             }
             self.stamp = Some(intent.desired_stamp());
-            self.intents.push(intent);
             Ok(())
         }
     }
@@ -873,18 +873,65 @@ pub enum ProgramPointSinkOperationV1 {
     ConfirmExact,
 }
 
-/// Полный атомарный intent терминального point sink.
+/// Один paint в полном снимке host. Source и straight opacity не заменяются композицией.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProgramPointSinkIntentV1 {
+pub struct ProgramPointSinkPointV1 {
+    output: ProgramPaintOutputV1,
+    sink_output: u32,
+}
+
+impl ProgramPointSinkPointV1 {
+    #[must_use]
+    pub const fn output(self) -> ProgramPaintOutputV1 {
+        self.output
+    }
+
+    #[must_use]
+    pub const fn sink_output(self) -> u32 {
+        self.sink_output
+    }
+}
+
+/// Вычисленная композиция объявленной точки в одном observation case.
+/// Это данные prospective снимка; они не являются whole-field или human authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    visible: crate::Srgb8,
+}
+
+impl ProgramPointPresentationCompositeV1 {
+    #[must_use]
+    pub const fn root(self) -> u32 {
+        self.root
+    }
+
+    #[must_use]
+    pub const fn scenario(self) -> u32 {
+        self.scenario
+    }
+
+    #[must_use]
+    pub const fn visible(self) -> crate::Srgb8 {
+        self.visible
+    }
+}
+
+/// Полный атомарный intent одного terminal point scope.
+/// Borrow заканчивается вместе с синхронным host callback.
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramPointSinkIntentV1<'a> {
     operation: ProgramPointSinkOperationV1,
     revision: u64,
     expected: ProgramPointSinkStampV1,
     desired: ProgramPointSinkStampV1,
-    point: Option<ProgramPaintOutputV1>,
-    sink_output: u32,
+    scope: &'a [crate::program::attachment::handoff::HandoffPointSinkOutputIdV1],
+    points: &'a [crate::program::attachment::handoff::HandoffPublishedPointV1],
+    composites: &'a [crate::program::attachment::PointSinkPresentationCompositeV1],
 }
 
-impl ProgramPointSinkIntentV1 {
+impl<'a> ProgramPointSinkIntentV1<'a> {
     /// Вид команды.
     #[must_use]
     pub const fn operation(self) -> ProgramPointSinkOperationV1 {
@@ -909,16 +956,59 @@ impl ProgramPointSinkIntentV1 {
         self.desired
     }
 
-    /// Paint patch для SetAll/ConfirmExact; для RevokeAll отсутствует.
+    /// Совместимая scalar-проекция; batch никогда не выдаётся как первая точка.
     #[must_use]
-    pub const fn point(self) -> Option<ProgramPaintOutputV1> {
-        self.point
+    pub fn point(self) -> Option<ProgramPaintOutputV1> {
+        match self.points {
+            [point] => Some(public_sink_point(*point).output()),
+            _ => None,
+        }
     }
 
-    /// Непрозрачный host-side ID принадлежащего sink output.
+    /// Совместимая scalar-проекция принадлежащего scope.
     #[must_use]
-    pub const fn sink_output(self) -> u32 {
-        self.sink_output
+    pub fn sink_output(self) -> Option<u32> {
+        match self.scope {
+            [output] => Some(output.value()),
+            _ => None,
+        }
+    }
+
+    /// Весь неизменяемый owned scope, в том числе для RevokeAll.
+    pub fn scope(self) -> impl ExactSizeIterator<Item = u32> + 'a {
+        self.scope.iter().map(|output| output.value())
+    }
+
+    /// Полный сертифицированный paint patch; пустой для RevokeAll.
+    pub fn points(self) -> impl ExactSizeIterator<Item = ProgramPointSinkPointV1> + 'a {
+        self.points.iter().copied().map(public_sink_point)
+    }
+
+    /// Все уже вычисленные композиции, без повторного evaluator.
+    pub fn presentation_composites(
+        self,
+    ) -> impl ExactSizeIterator<Item = ProgramPointPresentationCompositeV1> + 'a {
+        self.composites
+            .iter()
+            .map(|composite| ProgramPointPresentationCompositeV1 {
+                root: composite.root(),
+                scenario: composite.scenario(),
+                visible: composite.visible(),
+            })
+    }
+}
+
+fn public_sink_point(
+    point: crate::program::attachment::handoff::HandoffPublishedPointV1,
+) -> ProgramPointSinkPointV1 {
+    let paint = point.paint();
+    ProgramPointSinkPointV1 {
+        output: ProgramPaintOutputV1 {
+            slot: point.output().value(),
+            source: paint.source(),
+            opacity: f64::from_bits(paint.opacity_bits()),
+        },
+        sink_output: point.sink_output().value(),
     }
 }
 
@@ -928,6 +1018,7 @@ impl ProgramPointSinkIntentV1 {
 pub enum ProgramPointSinkHostErrorV1 {
     Rejected,
     Protocol,
+    ResourceExhausted,
 }
 
 /// Единственная публичная граница эффекта attachment.
@@ -938,7 +1029,7 @@ pub enum ProgramPointSinkHostErrorV1 {
 pub trait ProgramPointSinkHostV1 {
     fn try_install(
         &mut self,
-        intent: ProgramPointSinkIntentV1,
+        intent: ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), ProgramPointSinkHostErrorV1>;
 }
 
@@ -1091,6 +1182,7 @@ pub enum ProgramMaterializationAuthorityErrorV1 {
     TerminalBindingMismatch,
     MissingPointAbsenceProof,
     AmbiguousObservationCases,
+    AmbiguousBindings,
 }
 
 /// Материализация, полученная только из `Ready` commit attachment.
@@ -1269,7 +1361,7 @@ impl ProgramAttachedRenderV1 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramAttachedSnapshotV1 {
     snapshot: ProgramSnapshotV1,
-    render: Option<ProgramAttachedRenderV1>,
+    renders: Vec<ProgramAttachedRenderV1>,
 }
 
 impl ProgramAttachedSnapshotV1 {
@@ -1281,8 +1373,17 @@ impl ProgramAttachedSnapshotV1 {
 
     /// Exact render commit; `None` для Waiting/Stale/Failed.
     #[must_use]
-    pub const fn render(&self) -> Option<ProgramAttachedRenderV1> {
-        self.render
+    pub fn render(&self) -> Option<ProgramAttachedRenderV1> {
+        match self.renders.as_slice() {
+            [render] => Some(*render),
+            _ => None,
+        }
+    }
+
+    /// Все точечные bindings одного committed scope, без переноса point proof на весь batch.
+    #[must_use]
+    pub fn renders(&self) -> &[ProgramAttachedRenderV1] {
+        &self.renders
     }
 }
 
@@ -1346,7 +1447,6 @@ pub enum ProgramDisposeErrorV1<E> {
 
 struct ProgramPointSinkHostAdapterV1<H> {
     host: H,
-    sink_output: crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
 }
 
 impl<H> crate::program::attachment::handoff::HandoffPointSinkHostV1
@@ -1356,7 +1456,7 @@ where
 {
     fn try_install(
         &mut self,
-        intent: crate::program::attachment::handoff::HandoffPointSinkHostIntentV1,
+        intent: crate::program::attachment::handoff::HandoffPointSinkHostIntentV1<'_>,
     ) -> Result<(), crate::program::attachment::handoff::HandoffPointSinkHostErrorV1> {
         let operation = match intent.operation() {
             1 => ProgramPointSinkOperationV1::SetAll,
@@ -1369,20 +1469,14 @@ where
             }
         };
         let binding_epoch = intent.binding_epoch().value().get();
-        let point = intent
-            .point()
-            .map(|(output, _sink_output, paint)| ProgramPaintOutputV1 {
-                slot: output.value(),
-                source: paint.source(),
-                opacity: f64::from_bits(paint.opacity_bits()),
-            });
         let public_intent = ProgramPointSinkIntentV1 {
             operation,
             revision: intent.revision(),
             expected: ProgramPointSinkStampV1::new(intent.expected_sequence(), binding_epoch),
             desired: ProgramPointSinkStampV1::new(intent.desired_sequence(), binding_epoch),
-            point,
-            sink_output: self.sink_output.value(),
+            scope: intent.scope(),
+            points: intent.points(),
+            composites: intent.presentation_composites(),
         };
         self.host
             .try_install(public_intent)
@@ -1393,12 +1487,51 @@ where
                 ProgramPointSinkHostErrorV1::Protocol => {
                     crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::Protocol
                 }
+                ProgramPointSinkHostErrorV1::ResourceExhausted => {
+                    crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::ResourceExhausted
+                }
             })
     }
 }
 
 type ProgramInnerAttachmentV1<H> =
     crate::program::attachment::handoff::HandoffAttachmentV1<ProgramPointSinkHostAdapterV1<H>>;
+
+/// Не доверенная связь одного Program output с принадлежащим host ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointEmissionBindingV1 {
+    slot: u32,
+    sink_output: u32,
+}
+
+/// Budget одного binding списка соответствует записи существующего LCPW.
+pub const MAX_PROGRAM_POINT_BINDINGS_V1: u32 = crate::program::wire::MAX_SECTION_ENTRIES_V1;
+
+impl ProgramPointEmissionBindingV1 {
+    #[must_use]
+    pub const fn new(slot: u32, sink_output: u32) -> Self {
+        Self { slot, sink_output }
+    }
+}
+
+/// Не доверенная точечная связь; один output может иметь несколько presentations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointPresentationBindingV1 {
+    slot: u32,
+    root: u32,
+    occurrence: u32,
+}
+
+impl ProgramPointPresentationBindingV1 {
+    #[must_use]
+    pub const fn new(slot: u32, root: u32, occurrence: u32) -> Self {
+        Self {
+            slot,
+            root,
+            occurrence,
+        }
+    }
+}
 
 /// Публичный типизированный attachment для одного неизменяемого Program и sink,
 /// принадлежащего host.
@@ -1416,14 +1549,14 @@ where
     outputs_scratch: Vec<ProgramPaintOutputV1>,
     assessment_scratch: ProgramAssessmentReportScratchV1,
     composites_scratch: Vec<ProgramPresentationCompositeV1>,
-    current_render: Option<ProgramAttachedRenderV1>,
+    renders_scratch: Vec<ProgramAttachedRenderV1>,
+    current_renders: Vec<ProgramAttachedRenderV1>,
 }
 
 impl CompiledProgramV1 {
     /// Создаёт один точный terminal point attachment из скомпилированного Program.
     ///
-    /// Первый публичный seam поддерживает один output и одну presentation target;
-    /// вся остальная топология output/presentation отклоняется допуском Core.
+    /// Scalar facade переводит связь в тот же полный binding admission.
     pub fn attach<H>(
         self,
         stream_id: u32,
@@ -1436,6 +1569,30 @@ impl CompiledProgramV1 {
     where
         H: ProgramPointSinkHostV1,
     {
+        self.attach_bindings(
+            stream_id,
+            &[ProgramPointEmissionBindingV1::new(output_slot, sink_output)],
+            &[ProgramPointPresentationBindingV1::new(
+                output_slot,
+                presentation_root,
+                occurrence,
+            )],
+            host,
+        )
+    }
+
+    /// Привязывает весь Program к одному атомарному host scope.
+    /// Покрытие, fan-out, terminal semantics и уникальность ID проверяет Core owner.
+    pub fn attach_bindings<H>(
+        self,
+        stream_id: u32,
+        emissions: &[ProgramPointEmissionBindingV1],
+        presentations: &[ProgramPointPresentationBindingV1],
+        host: H,
+    ) -> Result<ProgramAttachmentV1<H>, ProgramAttachErrorV1>
+    where
+        H: ProgramPointSinkHostV1,
+    {
         let output_count = self.owner.output_slots().count();
         let assessment_cells_per_case = self
             .owner
@@ -1443,49 +1600,78 @@ impl CompiledProgramV1 {
             .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?
             .verified_cells();
         let presentation_count = self.owner.point_presentation_count();
-        if output_count != 1 {
+        if emissions.len() != output_count || presentations.len() != presentation_count {
             return Err(ProgramAttachErrorV1::Binding);
         }
-        self.owner
-            .bind_terminal_point_output_presentation(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                crate::program::PresentationRootIdV1::new(presentation_root),
-                crate::program::OccurrenceIdV1::new(occurrence),
-            )
-            .map_err(map_attachment_binding_error)?;
+        let mut authored_presentations = Vec::new();
+        authored_presentations
+            .try_reserve_exact(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        for binding in presentations {
+            self.owner
+                .bind_terminal_point_output_presentation(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    crate::program::PresentationRootIdV1::new(binding.root),
+                    crate::program::OccurrenceIdV1::new(binding.occurrence),
+                )
+                .map_err(map_attachment_binding_error)?;
+            authored_presentations.push(
+                crate::program::attachment::AuthoredPointPresentationBindingV1::new(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    crate::program::PresentationRootIdV1::new(binding.root),
+                    crate::program::OccurrenceIdV1::new(binding.occurrence),
+                ),
+            );
+        }
+        let mut emission_order = Vec::new();
+        emission_order
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        emission_order.extend_from_slice(emissions);
+        emission_order.sort_unstable_by_key(|binding| binding.slot);
+        let mut authored_emissions = Vec::new();
+        authored_emissions
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        let mut owned_scope = Vec::new();
+        owned_scope
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        for binding in emission_order {
+            let sink_output = crate::program::attachment::handoff::HandoffPointSinkOutputIdV1::new(
+                binding.sink_output,
+            );
+            authored_emissions.push(
+                crate::program::attachment::AuthoredPointEmissionBindingV1::new(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    sink_output,
+                ),
+            );
+            owned_scope.push(sink_output);
+        }
         let mut outputs_scratch = Vec::new();
         outputs_scratch
             .try_reserve_exact(output_count)
             .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
 
-        let sink_output_id =
-            crate::program::attachment::handoff::HandoffPointSinkOutputIdV1::new(sink_output);
+        let mut renders_scratch = Vec::new();
+        renders_scratch
+            .try_reserve_exact(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        let mut current_renders = Vec::new();
+        current_renders
+            .try_reserve_exact(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
         let sink = crate::program::attachment::handoff::handoff_point_sink(
-            sink_output_id,
-            ProgramPointSinkHostAdapterV1 {
-                host,
-                sink_output: sink_output_id,
-            },
+            owned_scope,
+            ProgramPointSinkHostAdapterV1 { host },
         );
-        let emissions = [
-            crate::program::attachment::AuthoredPointEmissionBindingV1::new(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                sink_output_id,
-            ),
-        ];
-        let presentations = [
-            crate::program::attachment::AuthoredPointPresentationBindingV1::new(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                crate::program::PresentationRootIdV1::new(presentation_root),
-                crate::program::OccurrenceIdV1::new(occurrence),
-            ),
-        ];
         let inner = self
             .owner
             .attach_external(
                 stream_id,
-                &emissions,
-                &presentations,
+                &authored_emissions,
+                &authored_presentations,
                 crate::family_artifact::FamilyArtifactBundleV2::empty(),
                 sink,
             )
@@ -1514,7 +1700,8 @@ impl CompiledProgramV1 {
             outputs_scratch,
             assessment_scratch: ProgramAssessmentReportScratchV1::default(),
             composites_scratch: Vec::new(),
-            current_render: None,
+            renders_scratch,
+            current_renders,
         })
     }
 }
@@ -1590,14 +1777,35 @@ where
             }
         });
         if disposed {
-            self.current_render = None;
+            self.current_renders.clear();
         }
         result
     }
 
     /// Текущий committed render; исторический snapshot его не заменяет.
     pub fn current_render(&self) -> Option<ProgramAttachedRenderV1> {
-        self.current_render
+        match self.current_renders.as_slice() {
+            [render] => Some(*render),
+            _ => None,
+        }
+    }
+
+    /// Все точечные bindings текущего head; каждый сохраняет собственную область доказательства.
+    #[must_use]
+    pub fn current_renders(&self) -> &[ProgramAttachedRenderV1] {
+        &self.current_renders
+    }
+
+    #[must_use]
+    pub fn current_render_for(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Option<ProgramAttachedRenderV1> {
+        self.current_renders
+            .iter()
+            .copied()
+            .find(|render| render.presentation_root() == root && render.occurrence() == occurrence)
     }
 
     /// Допускает authority только из текущего committed head attachment.
@@ -1607,9 +1815,12 @@ where
         candidate: ProgramMaterializationCandidateV1,
         expected: ProgramMaterializationExpectationV1,
     ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
-        let Some(render) = self.current_render else {
+        if self.current_renders.is_empty() {
             return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
-        };
+        }
+        let render = self
+            .current_render_for(expected.presentation_root, expected.occurrence)
+            .ok_or(ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch)?;
         materialization_authority_from_render(render, candidate, expected)
     }
 
@@ -1617,9 +1828,30 @@ where
     pub fn current_materialization_authority(
         &self,
     ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
-        let Some(render) = self.current_render else {
-            return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
+        let render = match self.current_renders.as_slice() {
+            [] => return Err(ProgramMaterializationAuthorityErrorV1::NotReady),
+            [render] => *render,
+            _ => return Err(ProgramMaterializationAuthorityErrorV1::AmbiguousBindings),
         };
+        materialization_authority_from_render(
+            render,
+            ProgramMaterializationCandidateV1::AttachedCommit,
+            render.expectation(),
+        )
+    }
+
+    /// Выдаёт authority ровно для указанного текущего terminal binding.
+    pub fn current_materialization_authority_for(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
+        if self.current_renders.is_empty() {
+            return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
+        }
+        let render = self
+            .current_render_for(root, occurrence)
+            .ok_or(ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch)?;
         materialization_authority_from_render(
             render,
             ProgramMaterializationCandidateV1::AttachedCommit,
@@ -1639,7 +1871,8 @@ where
             outputs_scratch,
             assessment_scratch,
             composites_scratch,
-            current_render,
+            renders_scratch,
+            current_renders,
         } = self;
         let revision = match &update {
             crate::program::UpdateV1::Observed { revision, .. }
@@ -1660,6 +1893,9 @@ where
         outputs_scratch
             .try_reserve_exact(*output_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        renders_scratch
+            .try_reserve_exact(*presentation_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         let attachment = inner
             .as_mut()
             .ok_or(ProgramAttachmentUpdateErrorV1::AlreadyDisposed)?;
@@ -1671,9 +1907,12 @@ where
             outputs_scratch,
             assessment_scratch,
             composites_scratch,
+            renders_scratch,
             revision,
         )?;
-        *current_render = snapshot.render();
+        // Capacity полного immutable presentation scope зарезервирована до host effect.
+        current_renders.clear();
+        current_renders.extend_from_slice(snapshot.renders());
         Ok(snapshot)
     }
 }
@@ -1695,7 +1934,7 @@ fn map_attachment_update_error(
         },
         crate::program::attachment::AttachmentUpdateErrorV1::SinkPrepare(error)
         | crate::program::attachment::AttachmentUpdateErrorV1::SinkInstall(error) => {
-            ProgramAttachmentUpdateErrorV1::Sink(map_sink_error(error))
+            map_sink_error(error)
         }
         crate::program::attachment::AttachmentUpdateErrorV1::InternalInvariant(_) => {
             ProgramAttachmentUpdateErrorV1::InternalInvariant
@@ -1705,9 +1944,9 @@ fn map_attachment_update_error(
 
 fn map_sink_error(
     error: crate::program::attachment::handoff::HandoffPointSinkErrorV1,
-) -> ProgramPointSinkErrorV1 {
+) -> ProgramAttachmentUpdateErrorV1 {
     use crate::program::attachment::handoff::HandoffPointSinkErrorV1 as Error;
-    match error {
+    let sink_error = match error {
         Error::PatchScopeMismatch => ProgramPointSinkErrorV1::PatchScopeMismatch,
         Error::StampMismatch => ProgramPointSinkErrorV1::StampMismatch,
         Error::RevisionMismatch => ProgramPointSinkErrorV1::RevisionMismatch,
@@ -1719,8 +1958,16 @@ fn map_sink_error(
             crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::Protocol => {
                 ProgramPointSinkHostErrorV1::Protocol
             }
+            crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::ResourceExhausted => {
+                return ProgramAttachmentUpdateErrorV1::ResourceExhausted;
+            }
         }),
-    }
+        Error::ResourceExhausted => return ProgramAttachmentUpdateErrorV1::ResourceExhausted,
+        Error::PresentationEvidenceMismatch => {
+            return ProgramAttachmentUpdateErrorV1::InternalInvariant;
+        }
+    };
+    ProgramAttachmentUpdateErrorV1::Sink(sink_error)
 }
 
 fn attachment_snapshot_from_commit(
@@ -1731,6 +1978,7 @@ fn attachment_snapshot_from_commit(
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
     assessment_scratch: &mut ProgramAssessmentReportScratchV1,
     composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
+    renders_scratch: &mut Vec<ProgramAttachedRenderV1>,
     revision: u64,
 ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
     let snapshot = snapshot_from_evidence_into(
@@ -1747,7 +1995,8 @@ fn attachment_snapshot_from_commit(
         }
         _ => ProgramAttachmentUpdateErrorV1::InternalInvariant,
     })?;
-    let render = commit.render_outputs().next().map(|render| {
+    renders_scratch.clear();
+    for render in commit.render_outputs() {
         let mut terminal_composite = None;
         let mut saw_matching_certificate = false;
         let mut saw_empty_domain = false;
@@ -1780,7 +2029,7 @@ fn attachment_snapshot_from_commit(
         }
         let paint = render.paint();
         let published = render.published_stamp();
-        ProgramAttachedRenderV1 {
+        renders_scratch.push(ProgramAttachedRenderV1 {
             output: ProgramPaintOutputV1 {
                 slot: render.output().value(),
                 source: paint.source(),
@@ -1802,9 +2051,12 @@ fn attachment_snapshot_from_commit(
             physical_identity: Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
             terminal_composite,
             terminal_composite_ambiguous,
-        }
-    });
-    Ok(ProgramAttachedSnapshotV1 { snapshot, render })
+        });
+    }
+    Ok(ProgramAttachedSnapshotV1 {
+        snapshot,
+        renders: core::mem::take(renders_scratch),
+    })
 }
 
 /// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
@@ -2545,26 +2797,36 @@ mod runtime_tests {
         use std::cell::{Cell, RefCell};
         use std::rc::Rc;
 
+        struct RecordedIntent {
+            desired: ProgramPointSinkStampV1,
+            operation: ProgramPointSinkOperationV1,
+            point: Option<ProgramPaintOutputV1>,
+        }
+
         struct Host {
             reject: Rc<Cell<bool>>,
-            installed: Rc<RefCell<Vec<ProgramPointSinkIntentV1>>>,
+            installed: Rc<RefCell<Vec<RecordedIntent>>>,
         }
 
         impl ProgramPointSinkHostV1 for Host {
             fn try_install(
                 &mut self,
-                intent: ProgramPointSinkIntentV1,
+                intent: ProgramPointSinkIntentV1<'_>,
             ) -> Result<(), ProgramPointSinkHostErrorV1> {
                 if self.reject.get()
                     || self
                         .installed
                         .borrow()
                         .last()
-                        .is_some_and(|previous| previous.desired_stamp() != intent.expected_stamp())
+                        .is_some_and(|previous| previous.desired != intent.expected_stamp())
                 {
                     return Err(ProgramPointSinkHostErrorV1::Rejected);
                 }
-                self.installed.borrow_mut().push(intent);
+                self.installed.borrow_mut().push(RecordedIntent {
+                    desired: intent.desired_stamp(),
+                    operation: intent.operation(),
+                    point: intent.point(),
+                });
                 Ok(())
             }
         }
@@ -2649,20 +2911,20 @@ mod runtime_tests {
                 Err(ProgramMaterializationAuthorityErrorV1::NotReady)
             );
             assert_eq!(
-                installed.borrow()[1].operation(),
+                installed.borrow()[1].operation,
                 ProgramPointSinkOperationV1::RevokeAll
             );
-            assert!(installed.borrow()[1].point().is_none());
+            assert!(installed.borrow()[1].point.is_none());
 
             let replay = attachment
                 .update_observed(2, &scenarios(255))
                 .expect("наблюдение принимается");
             assert_eq!(replay, stopped);
             assert_eq!(
-                installed.borrow()[2].operation(),
+                installed.borrow()[2].operation,
                 ProgramPointSinkOperationV1::ConfirmExact
             );
-            assert!(installed.borrow()[2].point().is_none());
+            assert!(installed.borrow()[2].point.is_none());
             assert!(attachment.update_observed(1, &scenarios(128)).is_err());
             assert!(attachment.update_observed(2, &scenarios(0)).is_err());
             assert_eq!(installed.borrow().len(), 3);
@@ -2678,7 +2940,7 @@ mod runtime_tests {
                 Srgb8::new([64; 3])
             );
             assert_eq!(
-                installed.borrow()[3].operation(),
+                installed.borrow()[3].operation,
                 ProgramPointSinkOperationV1::SetAll
             );
             assert_eq!(first.snapshot().revision(), 1);

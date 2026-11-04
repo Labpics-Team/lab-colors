@@ -228,12 +228,51 @@ struct AttachedRenderPatchEntryV1<SinkOutputId> {
     paint: EncodedPointPaintV1,
 }
 
+/// Конечная композиция в объявленном point-сценарии; данные не являются authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointSinkPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    visible: crate::Srgb8,
+}
+
+impl PointSinkPresentationCompositeV1 {
+    pub(crate) const fn new(root: u32, scenario: u32, visible: crate::Srgb8) -> Self {
+        Self {
+            root,
+            scenario,
+            visible,
+        }
+    }
+
+    pub(crate) const fn root(self) -> u32 {
+        self.root
+    }
+
+    pub(crate) const fn scenario(self) -> u32 {
+        self.scenario
+    }
+
+    pub(crate) const fn visible(self) -> crate::Srgb8 {
+        self.visible
+    }
+}
+
+/// Уже вычисленные point-композиции prospective перехода; это ещё не authority.
+#[derive(Clone, Copy)]
+pub(crate) enum PointSinkPresentationEvidenceV1<'a> {
+    Verified(super::VerifiedOutputV1<'a>),
+    #[cfg(any(test, kani))]
+    Fixture(&'a [PointSinkPresentationCompositeV1]),
+}
+
 /// Единственные три intent, принимаемые терминальным point sink.
 pub(crate) enum PointSinkIntentV1<'a, SinkOutputId> {
     SetAll {
         revision: u64,
         stamp: PointSinkMutationStampV1,
         patch: &'a [PointSinkPatchEntryV1<SinkOutputId>],
+        presentation: PointSinkPresentationEvidenceV1<'a>,
     },
     RevokeAll {
         revision: u64,
@@ -654,6 +693,7 @@ pub(super) enum PreparedDispositionV1<'a> {
     SetAll {
         revision: u64,
         outputs: &'a [ProgramPaintOutputV1],
+        presentation: super::VerifiedOutputV1<'a>,
     },
 }
 
@@ -676,6 +716,7 @@ fn prepared_disposition<'prepared>(
         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
             revision: verified.observation().revision().value(),
             outputs: verified.outputs(),
+            presentation: super::VerifiedOutputV1 { inner: verified },
         }),
         PreparedSessionDispositionV1::Violation(violation) => {
             Ok(PreparedDispositionV1::RevokeAll {
@@ -1350,8 +1391,12 @@ where
             PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => {}
         }
 
-        let action = match disposition {
-            PreparedDispositionV1::SetAll { revision, outputs } => {
+        let (intent, desired_sink_stamp, action) = match disposition {
+            PreparedDispositionV1::SetAll {
+                revision,
+                outputs,
+                presentation,
+            } => {
                 stage_complete_patches(
                     &self.emissions,
                     &self.presentations,
@@ -1360,20 +1405,6 @@ where
                     &mut self.scratch_render_patch,
                 )
                 .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
-                PreparedPatchActionV1::SetAll { revision }
-            }
-            PreparedDispositionV1::RevokeAll { revision } => {
-                self.scratch_sink_patch.clear();
-                self.scratch_render_patch.clear();
-                PreparedPatchActionV1::RevokeAll { revision }
-            }
-            PreparedDispositionV1::ConfirmExact { revision } => {
-                PreparedPatchActionV1::ConfirmExact { revision }
-            }
-        };
-
-        let (intent, desired_sink_stamp) = match action {
-            PreparedPatchActionV1::SetAll { revision } => {
                 let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
                     AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::SinkStampExhausted,
@@ -1384,11 +1415,15 @@ where
                         revision,
                         stamp,
                         patch: &self.scratch_sink_patch,
+                        presentation: PointSinkPresentationEvidenceV1::Verified(presentation),
                     },
                     stamp.desired(),
+                    PreparedPatchActionV1::SetAll { revision },
                 )
             }
-            PreparedPatchActionV1::RevokeAll { revision } => {
+            PreparedDispositionV1::RevokeAll { revision } => {
+                self.scratch_sink_patch.clear();
+                self.scratch_render_patch.clear();
                 let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
                     AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::SinkStampExhausted,
@@ -1397,14 +1432,16 @@ where
                 (
                     PointSinkIntentV1::RevokeAll { revision, stamp },
                     stamp.desired(),
+                    PreparedPatchActionV1::RevokeAll { revision },
                 )
             }
-            PreparedPatchActionV1::ConfirmExact { revision } => (
+            PreparedDispositionV1::ConfirmExact { revision } => (
                 PointSinkIntentV1::ConfirmExact {
                     revision,
                     published_stamp: self.expected_sink_stamp,
                 },
                 self.expected_sink_stamp,
+                PreparedPatchActionV1::ConfirmExact { revision },
             ),
         };
         let sink_prepared = self

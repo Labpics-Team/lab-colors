@@ -181,9 +181,12 @@ if (report !== null) {
 ```ts
 import { attachProgramWire } from "@labpics/colors";
 
-const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
-  // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
-  // затем одним действием обновляет собственный renderer-surface.
+const attachment = attachProgramWire(programBytes, 1, {
+  emissions: [{ slot: 91, sinkOutput: 501 }],
+  presentations: [{ slot: 91, root: 71, occurrence: 61 }],
+}, (intent) => {
+  // Приложение проверяет scope, expectedSequence и bindingEpoch,
+  // затем одним действием обновляет весь собственный renderer-surface.
   return applyOwnedPointIntent(intent);
 });
 try {
@@ -195,7 +198,7 @@ try {
   );
   try {
     if (snapshot.state === "ready") {
-      const authority = attachment.materializationAuthority();
+      const authority = attachment.materializationAuthorityForBinding(71, 61);
       try {
         console.log(authority.terminalCompositeRgb());
       } finally {
@@ -211,6 +214,32 @@ try {
   attachment.free();
 }
 ```
+
+Один attachment охватывает все outputs Program. `emissions` связывает каждый
+output slot с принадлежащим приложению sink ID; `presentations` перечисляет
+все объявленные terminal bindings. Один Paint может участвовать в нескольких
+привязках. Неполное или повторное покрытие отвергается до вызова host.
+
+Host получает весь `scope`, массив `points` с исходными RGB и straight alpha и
+отдельный `presentationComposites` с конечными RGB по `(root, scenario)`.
+Композиции вычисляет Core до вызова host. При `revokeAll` оба массива пусты,
+а `scope` по-прежнему перечисляет всё, что необходимо отозвать. `confirmExact`
+требует сверить весь установленный набор. Совместимые поля `point` и `sinkOutput`
+доступны только для одного элемента; для нескольких элементов они равны `null`.
+Прежняя сигнатура с семью аргументами переводится в тот же binding-контракт.
+
+При изменении фона приложение передаёт новую ревизию в `updateObserved` того же
+attachment. Core повторно решает ограничения и передаёт host полный результат.
+Отказ host сохраняет предыдущий committed head и допускает повтор той же ревизии.
+Принятый `updateUnknown` или неудовлетворимые ограничения отзывают весь scope;
+следующее допустимое наблюдение позволяет восстановить его.
+
+`renderCount()` и `renderAt(index)` читают все bindings снимка; `render()`
+возвращает значение только для единственной привязки. Для нескольких bindings
+`materializationAuthority()` и `materializationAuthorityFor()` возвращают
+`program_materialization_ambiguous_bindings`. Используйте
+`materializationAuthorityForBinding(root, occurrence)` для конкретной привязки.
+Доказательство каждой привязки сохраняет свою точечную область применимости.
 
 `materializationAuthority()` читает только успешно установленный
 attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —

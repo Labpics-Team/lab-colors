@@ -1541,6 +1541,10 @@ const attachmentHost: ProgramPointSinkHost = (intent) => {
 };
 function attachTypes(wire: Uint8Array): ProgramAttachment {
   const attachment: ProgramAttachment = attachProgramWire(wire, 7, 17, 91, 9, 8, attachmentHost);
+  const scopeAttachment: ProgramAttachment = attachProgramWire(wire, 8, {
+    emissions: [{ slot: 17, sinkOutput: 91 }],
+    presentations: [{ slot: 17, root: 9, occurrence: 8 }],
+  }, attachmentHost);
   const snapshot: ProgramAttachedSnapshot = attachment.updateObserved(
     1n,
     new Uint32Array([1]),
@@ -1549,8 +1553,15 @@ function attachTypes(wire: Uint8Array): ProgramAttachment {
   );
   const authority: AttachedMaterializationAuthority = attachment.materializationAuthority();
   snapshot.state;
+  snapshot.renderCount();
+  snapshot.renderAt(0).presentationRoot();
   authority.terminalCompositeRgb();
   attachment.materializationAuthorityFor(1n, authority.contentIdentity(), authority.bindingEpoch());
+  scopeAttachment.materializationAuthorityForBinding(9, 8).terminalCompositeRgb();
+  // @ts-expect-error Полная emission связь обязана назвать sinkOutput.
+  attachProgramWire(wire, 8, { emissions: [{ slot: 17 }], presentations: [] }, attachmentHost);
+  // @ts-expect-error Индекс binding принимает number.
+  snapshot.renderAt(0n);
   return attachment;
 }
 void attachTypes;
@@ -1566,7 +1577,7 @@ void (null as unknown as RoleRecipe);
 async function verifyAdaptiveContract(consumer) {
   // Тот же контракт исполняется вне checkout против установленного tarball.
   const paths = [];
-  for (const filename of ["program-adaptive-contract.test.mjs", "program-assignment-runtime.test.mjs", "program-composite-readout.test.mjs"]) {
+  for (const filename of ["program-adaptive-contract.test.mjs", "program-assignment-runtime.test.mjs", "program-composite-readout.test.mjs", "program-attachment-scope.test.mjs"]) {
     const path = resolve(consumer, filename);
     await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
     paths.push(path);

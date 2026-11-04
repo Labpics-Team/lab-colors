@@ -14,6 +14,7 @@ import initWasm, {
   ProgramAttachment,
   ProgramRuntime,
 } from "./pkg/labcolors.js";
+import { MAX_SECTION_ENTRIES_V1 } from "./program-wire/encoding.js";
 
 let initState = "idle";
 let initFlight;
@@ -290,6 +291,7 @@ for (const [method, operation] of [
   ["updateUnknown", "attachmentUpdateUnknown"],
   ["materializationAuthority", "materializationAuthority"],
   ["materializationAuthorityFor", "materializationAuthority"],
+  ["materializationAuthorityForBinding", "materializationAuthority"],
   ["dispose", "attachmentDispose"],
 ]) {
   const original = ProgramAttachment.prototype[method];
@@ -332,9 +334,73 @@ if (Symbol.dispose) {
   ProgramAttachment.prototype[Symbol.dispose] = ProgramAttachment.prototype.free;
 }
 
+function copyAttachmentBindings(bindings) {
+  const invalid = () => programIngressError("attachProgramWire", "program_attachment_binding");
+  const resource = () => programIngressError("attachProgramWire", "program_attachment_resource_exhausted");
+  const property = (object, key) => {
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) throw invalid();
+      return descriptor.value;
+    } catch {
+      throw invalid();
+    }
+  };
+  const tables = [property(bindings, "emissions"), property(bindings, "presentations")];
+  const fields = [["slot", "sinkOutput"], ["slot", "root", "occurrence"]];
+  const lengths = tables.map((table) => {
+    let isArray;
+    try {
+      isArray = Array.isArray(table);
+    } catch {
+      throw invalid();
+    }
+    if (!isArray) throw invalid();
+    const length = property(table, "length");
+    if (!Number.isSafeInteger(length) || length < 0) throw invalid();
+    // Это существующий budget записи LCPW; новая таблица не меняет grammar или solver.
+    if (length > MAX_SECTION_ENTRIES_V1) throw resource();
+    return length;
+  });
+  const result = [];
+  for (let tableIndex = 0; tableIndex < tables.length; tableIndex++) {
+    let flattened;
+    try {
+      flattened = new scenarioStorage.Type(lengths[tableIndex] * fields[tableIndex].length);
+    } catch {
+      throw resource();
+    }
+    for (let row = 0; row < lengths[tableIndex]; row++) {
+      const record = property(tables[tableIndex], String(row));
+      for (let column = 0; column < fields[tableIndex].length; column++) {
+        const value = property(record, fields[tableIndex][column]);
+        if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) throw invalid();
+        flattened[row * fields[tableIndex].length + column] = value;
+      }
+    }
+    result.push(flattened);
+  }
+  return result;
+}
+
 export function attachProgramWire(...args) {
-  args[0] = copyProgramInput(args[0], byteStorage, "attachProgramWire", "program_wire");
-  const attachment = attachProgramWireWasm(...args);
+  const bytes = copyProgramInput(args[0], byteStorage, "attachProgramWire", "program_wire");
+  let bindings, host;
+  if (args.length === 4) {
+    bindings = args[2];
+    host = args[3];
+  } else if (args.length === 7) {
+    bindings = {
+      emissions: [{ slot: args[2], sinkOutput: args[3] }],
+      presentations: [{ slot: args[2], root: args[4], occurrence: args[5] }],
+    };
+    host = args[6];
+  } else {
+    throw programIngressError("attachProgramWire", "program_attachment_binding");
+  }
+  if (typeof host !== "function") throw programIngressError("attachProgramWire", "program_attachment_binding");
+  const [emissions, presentations] = copyAttachmentBindings(bindings);
+  const attachment = attachProgramWireWasm(bytes, args[1], emissions, presentations, host);
   attachmentStates.set(attachment, { busy: false, disposed: false });
   return attachment;
 }
@@ -402,6 +468,7 @@ const MATERIALIZATION_ERROR_CODES = new Set([
   "program_materialization_terminal_binding_mismatch",
   "program_materialization_missing_point_absence_proof",
   "program_materialization_ambiguous_observation_cases",
+  "program_materialization_ambiguous_bindings",
   "program_attachment_busy",
 ]);
 const PHYSICAL_IDENTITY_ERROR_CODES = new Set([

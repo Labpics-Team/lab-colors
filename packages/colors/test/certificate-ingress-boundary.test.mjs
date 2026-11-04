@@ -44,9 +44,11 @@ test("certificate size refusal precedes entry into the generated WASM copier", a
   // Node сохраняет primary assertion и возможную отдельную ошибку after-hook.
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(join(directory, "pkg"));
+  await mkdir(join(directory, "program-wire"));
   await Promise.all([
     writeFile(join(directory, "package.json"), '{"type":"module"}\n'),
     writeFile(join(directory, "index.js"), await readFile(new URL("../index.js", import.meta.url))),
+    writeFile(join(directory, "program-wire/encoding.js"), await readFile(new URL("../program-wire/encoding.js", import.meta.url))),
     writeFile(join(directory, "pkg/labcolors.js"), instrumentedBinding),
   ]);
   const api = await import(pathToFileURL(join(directory, "index.js")).href);

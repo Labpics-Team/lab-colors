@@ -10,20 +10,20 @@ use crate::composition::AdmittedOpacityV1;
 #[derive(Default)]
 struct AtomicHost {
     calls: u8,
-    accepted: Option<HandoffPointSinkHostIntentV1>,
+    accepted: Option<HandoffRecordedHostIntentV1>,
     failure: Option<HandoffPointSinkHostErrorV1>,
 }
 
 impl HandoffPointSinkHostV1 for AtomicHost {
     fn try_install(
         &mut self,
-        intent: HandoffPointSinkHostIntentV1,
+        intent: HandoffPointSinkHostIntentV1<'_>,
     ) -> Result<(), HandoffPointSinkHostErrorV1> {
         self.calls += 1;
         if let Some(error) = self.failure {
             return Err(error);
         }
-        self.accepted = Some(intent);
+        self.accepted = Some(HandoffRecordedHostIntentV1::from_intent(intent));
         Ok(())
     }
 }
@@ -63,13 +63,15 @@ fn any_writer() -> Option<AdmittedHandoffPointSinkWriterV1<AtomicHost>> {
         None
     };
     Some(AdmittedHandoffPointSinkWriterV1 {
-        owned_scope: [owned],
+        owned_scope: vec![owned],
         binding_epoch: stamp.binding_epoch(),
         committed: HandoffCommittedPointStateV1 {
             stamp,
             revision,
-            point,
+            points: point.into_iter().collect(),
+            composites: Vec::new(),
         },
+        retired: None,
         host: AtomicHost::default(),
     })
 }
@@ -94,7 +96,7 @@ fn preparation_is_exact_and_has_no_publication_effect() {
     let Some(mut writer) = any_writer() else {
         return;
     };
-    let old = writer.committed;
+    let old = writer.committed.clone();
     let Some(query) = (if kani::any() {
         Some(old.stamp)
     } else {
@@ -118,6 +120,7 @@ fn preparation_is_exact_and_has_no_publication_effect() {
                 None => return,
             },
             patch: &patches[..length],
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         },
         1 => PointSinkIntentV1::RevokeAll {
             revision,
@@ -144,40 +147,46 @@ fn preparation_is_exact_and_has_no_publication_effect() {
         HandoffCommittedPointStateV1 {
             stamp: PointSinkStampV1::new(query.sequence() + 1, query.binding_epoch()),
             revision: Some(revision),
-            point: if kind == 0 {
-                Some(HandoffPublishedPointV1 {
+            points: if kind == 0 {
+                vec![HandoffPublishedPointV1 {
                     output: point.output(),
                     sink_output: point.sink_output(),
                     paint,
-                })
+                }]
             } else {
-                None
+                Vec::new()
             },
+            composites: Vec::new(),
         }
     } else {
-        old
+        old.clone()
     };
     let actual = match writer.prepare(intent) {
         Err(error) => Some(error),
         Ok(prepared) => {
             let staged = prepared
                 .staged
+                .as_ref()
                 .expect("successful preparation has a pending command");
+            let command =
+                staged.host_intent(&prepared.writer.owned_scope, &prepared.writer.committed);
             assert!(
-                staged.expected_stamp == old.stamp && staged.desired == expected,
+                staged.expected_stamp() == old.stamp
+                    && staged.desired(&prepared.writer.committed) == &expected,
                 "handoff preparation must retain the exact previous and desired state"
             );
             assert!(
-                staged.host_intent.revision() == revision
-                    && staged.host_intent.expected_sequence() == query.sequence()
-                    && staged.host_intent.desired_sequence() == expected.stamp.sequence()
-                    && staged.host_intent.binding_epoch() == query.binding_epoch()
-                    && staged.host_intent.point()
-                        == expected.point.map(|p| (p.output, p.sink_output, p.paint)),
+                command.revision() == revision
+                    && command.expected_sequence() == query.sequence()
+                    && command.desired_sequence() == expected.stamp.sequence()
+                    && command.binding_epoch() == query.binding_epoch()
+                    && command.scope() == prepared.writer.owned_scope
+                    && command.points() == expected.points
+                    && command.presentation_composites() == expected.composites,
                 "handoff command must preserve every publication field"
             );
             assert!(
-                staged.host_intent.operation()
+                command.operation()
                     == if kind == 0 {
                         1
                     } else if kind == 1 {
@@ -201,11 +210,11 @@ fn preparation_is_exact_and_has_no_publication_effect() {
     kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
     kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
     kani::cover!(
-        actual.is_none() && kind > 1 && old.point.is_some(),
+        actual.is_none() && kind > 1 && !old.points.is_empty(),
         "published value confirmed"
     );
     kani::cover!(
-        actual.is_none() && kind > 1 && old.point.is_none(),
+        actual.is_none() && kind > 1 && old.points.is_empty(),
         "empty value confirmed"
     );
     kani::cover!(
@@ -223,7 +232,7 @@ fn preparation_is_exact_and_has_no_publication_effect() {
 }
 
 fn valid_intent<'a>(
-    old: HandoffCommittedPointStateV1,
+    old: &HandoffCommittedPointStateV1,
     point: &'a [PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1>],
     kind: u8,
     revision: u64,
@@ -233,6 +242,7 @@ fn valid_intent<'a>(
             revision,
             stamp: PointSinkMutationStampV1::new(old.stamp)?,
             patch: point,
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         },
         1 => PointSinkIntentV1::RevokeAll {
             revision,
@@ -251,13 +261,13 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
     let Some(mut writer) = any_writer() else {
         return;
     };
-    let old = writer.committed;
+    let old = writer.committed.clone();
     let Some(paint) = any_paint() else {
         return;
     };
     let points = [patch(writer.owned_scope[0], paint)];
     let kind: u8 = kani::any();
-    let Some(intent) = valid_intent(old, &points, kind, kani::any()) else {
+    let Some(intent) = valid_intent(&old, &points, kind, kani::any()) else {
         return;
     };
     let error = if kani::any() {
@@ -267,40 +277,38 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
     };
     writer.host.failure = Some(error);
     let mut prepared = writer.prepare(intent).expect("valid exact intent prepares");
-    let staged = prepared.staged;
-    let expected = staged.expect("prepared command exists");
-    assert!(
-        prepared.try_install() == Err(HandoffPointSinkErrorV1::Host(error)),
-        "handoff must propagate the exact host refusal"
+    let pending = prepared.staged.clone();
+    let staged = pending.as_ref().expect("valid preparation is pending");
+    let expected = staged.desired(&old).clone();
+    let expected_command = HandoffRecordedHostIntentV1::from_intent(
+        staged.host_intent(&prepared.writer.owned_scope, &old),
     );
     assert!(
-        prepared.writer.committed == old
-            && prepared.staged == staged
+        prepared.try_install() == Err(HandoffPointSinkErrorV1::Host(error))
+            && prepared.writer.committed == old
+            && prepared.staged == pending
             && prepared.writer.host.calls == 1
             && prepared.writer.host.accepted.is_none(),
-        "failed handoff must preserve committed and retryable state"
+        "rejected handoff must retain the exact whole state and pending command"
     );
     prepared.writer.host.failure = None;
     assert!(
-        prepared.try_install().is_ok(),
-        "exact handoff retry must remain usable"
-    );
-    assert!(
-        prepared.writer.committed == expected.desired
+        prepared.try_install().is_ok()
+            && prepared.writer.committed == expected
             && prepared.staged.is_none()
             && prepared.writer.host.calls == 2
-            && prepared.writer.host.accepted == Some(expected.host_intent),
+            && prepared.writer.host.accepted == Some(expected_command),
         "successful handoff must commit the complete acknowledged command exactly once"
     );
     assert!(
         prepared.try_install() == Err(HandoffPointSinkErrorV1::AlreadyInstalled)
             && prepared.writer.host.calls == 2
-            && prepared.writer.committed == expected.desired,
+            && prepared.writer.committed == expected,
         "a consumed handoff must never call the host again"
     );
     prepared.finish_after_session();
     assert!(
-        writer.committed == expected.desired && writer.host.calls == 2,
+        writer.committed == expected && writer.host.calls == 2,
         "finishing the handoff must preserve its acknowledged result"
     );
     kani::cover!(kind == 0, "rejected set retried");
@@ -321,12 +329,12 @@ fn stale_prepared_command_never_reaches_the_host() {
     let Some(mut writer) = any_writer() else {
         return;
     };
-    let old = writer.committed;
+    let old = writer.committed.clone();
     let Some(paint) = any_paint() else {
         return;
     };
     let points = [patch(writer.owned_scope[0], paint)];
-    let Some(intent) = valid_intent(old, &points, kani::any(), kani::any()) else {
+    let Some(intent) = valid_intent(&old, &points, kani::any(), kani::any()) else {
         return;
     };
     let Some(changed) = any_stamp() else {
@@ -339,8 +347,8 @@ fn stale_prepared_command_never_reaches_the_host() {
     // Hostile внутренний drift: обычное эксклюзивное Rust-заимствование его
     // запрещает, но install обязан самостоятельно проверить ожидаемый stamp.
     prepared.writer.committed.stamp = changed;
-    let before = prepared.writer.committed;
-    let pending = prepared.staged;
+    let before = prepared.writer.committed.clone();
+    let pending = prepared.staged.clone();
     assert!(
         prepared.try_install() == Err(HandoffPointSinkErrorV1::StampMismatch)
             && prepared.writer.host.calls == 0

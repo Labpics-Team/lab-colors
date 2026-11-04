@@ -34,9 +34,11 @@ test("snapshot allocation failures keep operation-specific codes before the copi
   const directory = await mkdtemp(join(tmpdir(), "labcolors-storage-allocation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(join(directory, "pkg"));
+  await mkdir(join(directory, "program-wire"));
   await Promise.all([
     writeFile(join(directory, "package.json"), '{"type":"module"}\n'),
     writeFile(join(directory, "index.js"), await readFile(new URL("../index.js", import.meta.url))),
+    writeFile(join(directory, "program-wire/encoding.js"), await readFile(new URL("../program-wire/encoding.js", import.meta.url))),
     writeFile(join(directory, "pkg/labcolors.js"), binding),
   ]);
 
@@ -176,6 +178,23 @@ test("snapshot allocation failures keep operation-specific codes before the copi
     }
   }
   assert.equal(coerced, false, "scalar admission must never call user conversion hooks");
+  const bindings = {
+    emissions: [{ slot: 1, sinkOutput: 11 }, { slot: 2, sinkOutput: 12 }],
+    presentations: [{ slot: 1, root: 21, occurrence: 31 }, { slot: 2, root: 22, occurrence: 32 }],
+  };
+  for (const field of ["emissions", "presentations"]) {
+    const revoked = Proxy.revocable([], {});
+    revoked.revoke();
+    const copierBefore = generated.copierCalls;
+    assert.throws(() => api.attachProgramWire(bytes, 1, { ...bindings, [field]: revoked.proxy }, () => true),
+      (error) => api.isProgramError(error) && error.code === "program_attachment_binding");
+    assert.equal(generated.copierCalls, copierBefore);
+  }
+  const copierBefore = generated.copierCalls;
+  const complete = api.attachProgramWire(bytes, 1, bindings, () => true);
+  assert.equal(generated.copierCalls, copierBefore + 1, "полный обычный binding snapshot доходит до транспорта");
+  complete.dispose(true);
+  complete.free();
   attachment.dispose(true);
   attachment.free();
 });

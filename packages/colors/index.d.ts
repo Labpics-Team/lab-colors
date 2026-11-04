@@ -88,6 +88,7 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_terminal_binding_mismatch"
   | "program_materialization_missing_point_absence_proof"
   | "program_materialization_ambiguous_observation_cases"
+  | "program_materialization_ambiguous_bindings"
   | "program_attachment_busy";
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramRuntimeBusyOperation =
@@ -189,14 +190,38 @@ export interface ProgramPointSinkPoint {
   readonly source: Uint8Array;
   readonly opacity: number;
 }
+export interface ProgramPointSinkPublishedPoint extends ProgramPointSinkPoint {
+  readonly sinkOutput: number;
+}
+export interface ProgramPointPresentationComposite {
+  readonly root: number;
+  readonly scenario: number;
+  readonly source: Uint8Array;
+}
+export interface ProgramPointEmissionBinding {
+  readonly slot: number;
+  readonly sinkOutput: number;
+}
+export interface ProgramPointPresentationBinding {
+  readonly slot: number;
+  readonly root: number;
+  readonly occurrence: number;
+}
+export interface ProgramAttachmentBindings {
+  readonly emissions: readonly ProgramPointEmissionBinding[];
+  readonly presentations: readonly ProgramPointPresentationBinding[];
+}
 export interface ProgramPointSinkIntent {
   readonly operation: ProgramPointSinkOperation;
   readonly revision: bigint;
   readonly expectedSequence: bigint;
   readonly desiredSequence: bigint;
   readonly bindingEpoch: bigint;
-  readonly sinkOutput: number;
+  readonly sinkOutput: number | null;
   readonly point: ProgramPointSinkPoint | null;
+  readonly scope: Uint32Array;
+  readonly points: readonly ProgramPointSinkPublishedPoint[];
+  readonly presentationComposites: readonly ProgramPointPresentationComposite[];
 }
 export type ProgramPointSinkHost = (intent: ProgramPointSinkIntent) => boolean;
 
@@ -215,6 +240,12 @@ export declare function evaluateWcag22(
   criterion: Wcag22CriterionV1,
 ): Wcag22AssessmentV1;
 
+export declare function attachProgramWire(
+  bytes: Uint8Array,
+  streamId: number,
+  bindings: ProgramAttachmentBindings,
+  host: ProgramPointSinkHost,
+): ProgramAttachment;
 export declare function attachProgramWire(
   bytes: Uint8Array,
   streamId: number,

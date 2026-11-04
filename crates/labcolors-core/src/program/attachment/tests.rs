@@ -648,6 +648,7 @@ fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
             revision: 1,
             stamp: foreign_transition,
             patch: &[],
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));

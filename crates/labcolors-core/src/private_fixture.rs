@@ -502,7 +502,7 @@ where
             &emissions,
             &presentations,
             FamilyArtifactBundleV2::empty(),
-            handoff_point_sink(sink_output, host),
+            handoff_point_sink(vec![sink_output], host),
         )
         .map_err(|_| PrivateFixtureErrorV1::AttachmentRejected)?;
 
@@ -1151,8 +1151,11 @@ mod wasm_abi {
     impl HandoffPointSinkHostV1 for WasmHostPointSinkV1 {
         fn try_install(
             &mut self,
-            intent: HandoffPointSinkHostIntentV1,
+            intent: HandoffPointSinkHostIntentV1<'_>,
         ) -> Result<(), HandoffPointSinkHostErrorV1> {
+            if intent.scope().len() != 1 || intent.points().len() > 1 {
+                return Err(HandoffPointSinkHostErrorV1::Protocol);
+            }
             let (output, sink_output) = match intent.point() {
                 Some((output, sink_output, paint)) => {
                     let [red, green, blue] = paint.source().bytes();
@@ -1364,6 +1367,7 @@ mod tests {
     use core::cell::{Cell, RefCell, UnsafeCell};
     use std::rc::Rc;
 
+    use crate::program::attachment::handoff::HandoffRecordedHostIntentV1;
     use crate::program_session::CORE_PROGRAM_ASSESSMENT_CALLS;
 
     use super::*;
@@ -1371,8 +1375,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct HostOracleV1 {
         generation: Option<u32>,
-        published: Option<HandoffPointSinkHostIntentV1>,
-        installs: Vec<HandoffPointSinkHostIntentV1>,
+        published: Option<HandoffRecordedHostIntentV1>,
+        installs: Vec<HandoffRecordedHostIntentV1>,
         tombstone: Option<u32>,
         local_drop_count: usize,
         invalid_drop_count: usize,
@@ -1388,18 +1392,19 @@ mod tests {
     impl HandoffPointSinkHostV1 for NativeFixtureHostV1 {
         fn try_install(
             &mut self,
-            intent: HandoffPointSinkHostIntentV1,
+            intent: HandoffPointSinkHostIntentV1<'_>,
         ) -> Result<(), HandoffPointSinkHostErrorV1> {
             self.armed = true;
             let mut oracle = self.oracle.borrow_mut();
             if oracle.generation != Some(self.generation) {
                 return Err(HandoffPointSinkHostErrorV1::Rejected);
             }
-            oracle.installs.push(intent);
+            let recorded = HandoffRecordedHostIntentV1::from_intent(intent);
+            oracle.installs.push(recorded.clone());
             if let Some(error) = oracle.next_install_error.take() {
                 return Err(error);
             }
-            oracle.published = Some(intent);
+            oracle.published = Some(recorded);
             Ok(())
         }
     }
@@ -1670,7 +1675,7 @@ mod tests {
             .complete_run(generation, executed)
             .unwrap()
             .unwrap();
-        let before = oracle.borrow().published;
+        let before = oracle.borrow().published.clone();
 
         assert_eq!(
             instance.update(observed_update(31, 0, 2, Srgb8::new([128, 128, 128]))),
@@ -2145,7 +2150,7 @@ mod tests {
     impl HandoffPointSinkHostV1 for HostileFixedBufferHostV1 {
         fn try_install(
             &mut self,
-            _intent: HandoffPointSinkHostIntentV1,
+            _intent: HandoffPointSinkHostIntentV1<'_>,
         ) -> Result<(), HandoffPointSinkHostErrorV1> {
             // SAFETY: the outer entry deliberately holds no references to its
             // exported-equivalent buffer cells while this callback runs.
