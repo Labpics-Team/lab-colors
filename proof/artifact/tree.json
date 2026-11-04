@@ -15,7 +15,7 @@
   ".github/workflows/native-conformance-worker.yml": "ed76c3192daf582c79b5762adf71605525d0efeb",
   ".github/workflows/native-conformance.yml": "7486d9590d637f3972c6daf4f9f4ba2156f0d75b",
   ".github/workflows/package-worker.yml": "e3335a995f35f7d4a43ed5ae6e6c2ce5015c5e2e",
-  ".github/workflows/publish-worker.yml": "65d9fddb646e7710858201f41500e92cf6c0b5ca",
+  ".github/workflows/publish-worker.yml": "9c8166e8fabc951ce7dcd9341963a4d0b4044de6",
   ".github/workflows/publish.yml": "00de31cd696ee91ae5b47f97143c59a23e3e4ec4",
   ".github/workflows/trusted-source-smoke-worker.yml": "a5b590c9352b68e72a5f485bfe4e73b6fd36eb3e",
   ".github/workflows/verification-lanes.yml": "2b64d559dc883637e803b45367e8ba617ad8948a",
@@ -623,7 +623,7 @@
   "scripts/test_strict_secret_scan.py": "5696e7fcd544b0627ae8f730ce2b2ad3271dd582",
   "scripts/test_swift_surface.mjs": "ef6d52ecf9e74bec8dab126b2192405604c7dcca",
   "scripts/test_transport_distribution.mjs": "483eff5cdcdedd9507ef7ed6d1444e8ee6ffb2f1",
-  "scripts/test_trusted_ci_source.py": "ba3fdb2bad35c1ba44f51a78a6a0ce6210ab503b",
+  "scripts/test_trusted_ci_source.py": "45da6a87436f0a44206df2fff14c330004331c10",
   "scripts/test_verify_clean_set_receipt.py": "54b4fbe7c5b4edfc2c91f3f66c872aa4640c2a45",
   "scripts/test_verify_core_formal.py": "85372064d897d0bb7048b8aa7436817eb6a74e67",
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
@@ -640,7 +640,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "75a2cda09b7815fbd190bc57c8f7c032f3b512655ce28718f4721cbd1b47eb44",
+ "record_sha256": "8af5ffcc24e7ffaa0e003838ea0821fb76a4a4bfefc6837fd6d7ac8a993e87f8",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

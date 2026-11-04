@@ -1457,7 +1457,7 @@ jobs:
       # Выпуск требует фактически выполняемой процедуры защищённого main.
       - name: Require protected publication recipe
         env:
-          NATIVE_RECIPE_REF: ${{ job.workflow_ref }}
+          NATIVE_RECIPE_REF: ${{ needs.source-admission.outputs.recipe_ref }}
         run: |
           set -euo pipefail
           test "$NATIVE_RECIPE_REF" = "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@refs/heads/main"

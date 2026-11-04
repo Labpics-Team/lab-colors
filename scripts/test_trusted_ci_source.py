@@ -133,7 +133,8 @@ class TestOwnedSourceGuard(unittest.TestCase):
         anchor = "      - name: Require protected publication recipe\n"
         self.assertEqual(workflow.count(anchor), 1)
         step = workflow.split(anchor, 1)[1].split("\n      # ", 1)[0]
-        self.assertIn("NATIVE_RECIPE_REF: " + chr(36) + "{{ job.workflow_ref }}", step)
+        self.assertIn("NATIVE_RECIPE_REF: " + chr(36) + "{{ needs.source-admission.outputs.recipe_ref }}", step)
+        self.assertIn("recipe_ref: " + chr(36) + "{{ steps.identity.outputs.recipe_ref }}", workflow)
         script = "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
         main = "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@refs/heads/main"
         for reference in (main, "", main.replace("main", "other"), main.replace("refs/heads/main", "a" * 40)):
