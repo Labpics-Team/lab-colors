@@ -112,8 +112,7 @@ impl ProgramFinalRasterErrorV1 {
             Self::InvalidLength => "program_field_length",
             Self::InvalidPremultipliedPixel => "program_field_premultiplied",
             Self::PortBinding => "program_field_ports",
-            Self::ResourceExhausted
-            | Self::Runtime(ProgramRuntimeErrorV1::ResourceExhausted) => {
+            Self::ResourceExhausted | Self::Runtime(ProgramRuntimeErrorV1::ResourceExhausted) => {
                 "program_resource_exhausted"
             }
             Self::Runtime(_) => "program_field_update",

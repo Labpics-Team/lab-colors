@@ -10,6 +10,9 @@
 npm install @labpics/colors@^2
 ```
 
+Примеру требуется API 2.x. Если этой версии ещё нет в npm, установите
+проверенный архив выпуска: `npm install /путь/к/labpics-colors-2.0.0.tgz`.
+
 Сохраните в `adaptive-color.mjs`:
 
 ```js
