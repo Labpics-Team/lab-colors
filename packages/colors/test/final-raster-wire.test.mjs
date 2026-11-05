@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   initSync, compileProgramWire, finalRasterSourceOverWire, isProgramError,
-} from "../index.js";
-import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
-initSync({ module: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
+} from "@labpics/colors";
+import { ProgramWireBuilderV1 } from "@labpics/colors/program-wire/abi-v1.js";
+initSync({ module: readFileSync(new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm"))) });
 
 const context = new Uint8Array(32).fill(7);
 const opaque = (rgb) => Uint8Array.from(rgb.flatMap(pixel => [...pixel,255]));

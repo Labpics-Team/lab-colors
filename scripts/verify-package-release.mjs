@@ -1577,7 +1577,13 @@ void (null as unknown as RoleRecipe);
 async function verifyAdaptiveContract(consumer) {
   // Тот же контракт исполняется вне checkout против установленного tarball.
   const paths = [];
-  for (const filename of ["program-adaptive-contract.test.mjs", "program-assignment-runtime.test.mjs", "program-composite-readout.test.mjs", "program-attachment-scope.test.mjs"]) {
+  for (const filename of [
+    "program-adaptive-contract.test.mjs",
+    "program-assignment-runtime.test.mjs",
+    "program-composite-readout.test.mjs",
+    "program-attachment-scope.test.mjs",
+    "final-raster-wire.test.mjs",
+  ]) {
     const path = resolve(consumer, filename);
     await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
     paths.push(path);
