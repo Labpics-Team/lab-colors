@@ -2,8 +2,12 @@
 """Отрицательные контроли чтения формального результата; Kani запускается отдельно."""
 
 import copy
+from contextlib import contextmanager
 import json
 import os
+import select
+import sys
+import time
 import unittest
 from unittest import mock
 import signal
@@ -17,7 +21,7 @@ from verify_core_formal import (
     assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, formal_source_files,
     fragment_base,
     selected_mutants, selected_positive_harnesses,
-    validate_report, validate_mutant, run_kani,
+    validate_report, validate_mutant, run_kani, _run_logged_command,
 )
 
 
@@ -93,6 +97,11 @@ def valid_subset_report(harnesses):
 
 
 class FormalReportTests(unittest.TestCase):
+    def setUp(self):
+        if not hasattr(signal, "SIGKILL"):
+            # Windows only exercises the mocked Linux launcher contract.
+            self.enterContext(mock.patch("verify_core_formal.signal.SIGKILL", 9, create=True))
+
     def test_checkout_rejects_corrupt_blob_even_when_status_and_bytes_match(self):
         with tempfile.TemporaryDirectory() as temporary:
             checkout = Path(temporary)
@@ -473,19 +482,21 @@ class FormalReportTests(unittest.TestCase):
 
     def test_timeout_terminates_the_solver_process_group(self):
         with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch("verify_core_formal.os.killpg") as terminate:
+            with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
+                "verify_core_formal.os.killpg", create=True
+            ) as terminate, mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0, 1200]):
                 launch.return_value.pid = 4242
-                launch.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 1200), -9]
+                launch.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 0.1), -9]
                 with self.assertRaises(subprocess.TimeoutExpired):
                     run_kani(Path(temporary) / "result.json")
                 terminate.assert_called_once_with(4242, signal.SIGKILL)
-                self.assertEqual(launch.return_value.wait.call_count, 2)
+                launch.return_value.wait.assert_has_calls([mock.call(timeout=0.1), mock.call()])
                 self.assertTrue(launch.call_args.kwargs["start_new_session"])
 
     def test_completed_wrapper_still_cleans_its_solver_group(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "result.json"
-            with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch("verify_core_formal.os.killpg") as terminate:
+            with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
                 launch.return_value.pid = 4243
                 launch.return_value.returncode = 1
                 def completed(*args, **kwargs):
@@ -500,7 +511,7 @@ class FormalReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "result.json"
             with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
-                "verify_core_formal.os.killpg"
+                "verify_core_formal.os.killpg", create=True
             ):
                 launch.return_value.pid = 4244
                 launch.return_value.returncode = 0
@@ -523,7 +534,7 @@ class FormalReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "result.json"
             with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
-                "verify_core_formal.os.killpg"
+                "verify_core_formal.os.killpg", create=True
             ):
                 launch.return_value.pid = 4245
                 launch.return_value.returncode = 1
@@ -537,6 +548,66 @@ class FormalReportTests(unittest.TestCase):
                 command = launch.call_args.args[0]
                 self.assertFalse(any(arg.startswith("--jobs") for arg in command))
                 self.assertIn("--concrete-playback", command)
+
+    def test_relay_launch_preserves_argv_and_excludes_bash_startup_environment(self):
+        root = Path(__file__).resolve().parents[1]
+        command = ["cargo", "kani", "space and 'quote", "$(not-a-shell-command)"]
+        log = root / "example.log"
+        with mock.patch.dict(os.environ, {"BASH_ENV": "foreign-startup.sh"}), mock.patch(
+            "verify_core_formal.subprocess.Popen"
+        ) as launch, mock.patch("verify_core_formal.os.killpg", create=True):
+            launch.return_value.pid = 4246
+            launch.return_value.wait.return_value = 0
+            self.assertEqual(_run_logged_command(command, log), 0)
+            self.assertEqual(launch.call_args.args[0], [
+                "bash", "--noprofile", "--norc", str(root / "scripts/ci/relay_formal_command.sh"),
+                str(log), *command,
+            ])
+            self.assertNotIn("BASH_ENV", launch.call_args.kwargs["env"])
+            self.assertNotIn("stdout", launch.call_args.kwargs)
+            self.assertEqual(launch.call_args.kwargs["stderr"], subprocess.STDOUT)
+        self.assertIn(root / "scripts/ci/relay_formal_command.sh", formal_source_files())
+
+    def test_cancellation_during_spawn_still_cleans_group_and_restores_handlers(self):
+        previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+        for signum in previous:
+            with self.subTest(signum=signum), mock.patch(
+                "verify_core_formal.subprocess.Popen"
+            ) as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
+                process = mock.Mock(pid=4247)
+                process.wait.return_value = 0
+
+                def spawned(*args, **kwargs):
+                    signal.getsignal(signum)(signum, None)
+                    return process
+
+                launch.side_effect = spawned
+                with self.assertRaises(SystemExit) as stopped:
+                    _run_logged_command(["unused"], Path("unused.log"))
+                self.assertEqual(stopped.exception.code, 128 + signum)
+                terminate.assert_called_once_with(4247, signal.SIGKILL)
+                process.wait.assert_called_once_with()
+                for restored, handler in previous.items():
+                    self.assertEqual(signal.getsignal(restored), handler)
+
+    def test_cancellation_during_cleanup_is_not_success(self):
+        with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
+            "verify_core_formal.os.killpg", create=True
+        ) as terminate:
+            launch.return_value.pid = 4248
+            launch.return_value.wait.return_value = 0
+            terminate.side_effect = lambda *args: signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
+            with self.assertRaises(SystemExit) as stopped:
+                _run_logged_command(["unused"], Path("unused.log"))
+            self.assertEqual(stopped.exception.code, 130)
+
+    def test_spawn_failure_restores_signal_handlers(self):
+        previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+        with mock.patch("verify_core_formal.subprocess.Popen", side_effect=OSError("spawn failed")):
+            with self.assertRaisesRegex(OSError, "spawn failed"):
+                _run_logged_command(["unused"], Path("unused.log"))
+        for signum, handler in previous.items():
+            self.assertEqual(signal.getsignal(signum), handler)
 
     def test_target_failure_may_make_its_later_cover_unreachable(self):
         report = {"verification_results": {
@@ -849,6 +920,126 @@ class FormalReportTests(unittest.TestCase):
                     git("config", "--unset", "core.trustctime")
                     source.write_bytes(b"trusted\n")
                     other.write_bytes(b"trusted other\n")
+
+
+@unittest.skipUnless(sys.platform == "linux", "relay uses Linux process groups and GNU tee")
+class FormalRelayProcessTests(unittest.TestCase):
+    @contextmanager
+    def driver(self, directory, code, *, args=(), timeout=5, environment=None, log=None):
+        log = log or directory / "command.log"
+        group = directory / "group"
+        command = [sys.executable, "-u", "-c", (
+            "import os; from pathlib import Path; "
+            f"Path({str(group)!r}).write_text(str(os.getpgrp()))\n" + code
+        ), *args]
+        launcher = (
+            "import json, subprocess, sys; from pathlib import Path; "
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from verify_core_formal import _run_logged_command\n"
+            "try:\n"
+            "    result = _run_logged_command(json.loads(sys.argv[1]), Path(sys.argv[2]), "
+            "timeout=float(sys.argv[3]))\n"
+            "except subprocess.TimeoutExpired:\n"
+            "    sys.exit(124)\n"
+            "sys.exit(result)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", launcher, json.dumps(command), str(log), str(timeout)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment, start_new_session=True,
+        )
+        try:
+            yield process, log, group
+        finally:
+            for pid in (int(group.read_text()) if group.exists() else None, process.pid):
+                if pid is not None:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            process.wait(timeout=10)
+            process.stdout.close()
+
+    def test_command_status_and_literal_arguments_survive_relay(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            startup = directory / "startup.sh"
+            marker = directory / "startup-executed"
+            startup.write_text(f"touch '{marker}'\n")
+            environment = dict(os.environ, BASH_ENV=str(startup))
+            arguments = ["space and 'quote", "$(not-a-shell-command)", "semicolon;literal"]
+            for status in (0, 1):
+                with self.subTest(status=status), self.driver(
+                    directory,
+                    f"import json, sys; print(json.dumps(sys.argv[1:])); sys.exit({status})",
+                    args=arguments, environment=environment,
+                ) as (process, log, group):
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, status)
+                    self.assertEqual(json.loads(output), arguments)
+                    self.assertEqual(log.read_bytes(), output)
+                    self.assertFalse(marker.exists())
+
+    def test_logfile_failure_is_not_command_success_or_semantic_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for status in (0, 1):
+                with self.subTest(status=status), self.driver(
+                    directory, f"import sys; print('command-output'); sys.exit({status})",
+                    log=directory / "missing-directory" / "command.log",
+                ) as (process, log, group):
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 125)
+                    self.assertIn(b"command-output\n", output)
+                    self.assertFalse(log.exists())
+
+    def test_closed_stdout_retains_the_complete_log_and_reports_relay_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with self.driver(directory, "print('begin'); print('x' * 65536); print('end')") as (
+                process, log, group
+            ):
+                process.stdout.close()
+                self.assertEqual(process.wait(timeout=10), 125)
+                self.assertEqual(log.read_bytes(), b"begin\n" + b"x" * 65536 + b"\nend\n")
+
+    def test_live_output_and_tree_cleanup_on_signals_and_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            tree = directory / "tree.json"
+            child = (
+                "import json, os, subprocess, sys, time; from pathlib import Path; "
+                "descendant = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"Path({str(tree)!r}).write_text(json.dumps([os.getppid(), os.getpid(), descendant.pid])); "
+                "print('relay-ready', flush=True); time.sleep(60)"
+            )
+            command = f"import subprocess, sys; subprocess.run([sys.executable, '-u', '-c', {child!r}])"
+            for signum, timeout, expected in ((signal.SIGTERM, 5, 143), (signal.SIGINT, 5, 130), (None, 2, 124)):
+                with self.subTest(signum=signum), self.driver(directory, command, timeout=timeout) as (
+                    process, log, group
+                ):
+                    readable, _, _ = select.select([process.stdout], [], [], 10)
+                    self.assertTrue(readable, "command did not produce its readiness marker")
+                    self.assertEqual(process.stdout.readline(), b"relay-ready\n")
+                    self.assertIsNone(process.poll(), "stdout was only replayed after completion")
+                    owned = [int(group.read_text()), *json.loads(tree.read_text())]
+                    if signum is not None:
+                        process.send_signal(signum)
+                    self.assertEqual(process.wait(timeout=10), expected)
+                    self.assertIn(b"relay-ready\n", log.read_bytes())
+                    deadline = time.monotonic() + 3
+                    while True:
+                        live = []
+                        for pid in owned:
+                            state = Path(f"/proc/{pid}/stat")
+                            try:
+                                if state.read_text().split(") ", 1)[1].split()[0] != "Z":
+                                    live.append(pid)
+                            except FileNotFoundError:
+                                pass
+                        if not live or time.monotonic() >= deadline:
+                            break
+                        time.sleep(0.01)
+                    self.assertEqual(live, [], "owned command processes survived cleanup")
 
 
 if __name__ == "__main__":

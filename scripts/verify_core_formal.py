@@ -11,6 +11,7 @@ import signal
 import stat
 from pathlib import Path
 import subprocess
+import time
 
 from formal_contracts import CONTRACTS, MUTANTS, SOURCES
 
@@ -174,6 +175,54 @@ def validate_mutant(report: dict, returncode: int, mutant: tuple) -> None:
             raise ValueError("mutant failed outside its declared semantic properties")
 
 
+def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200) -> int:
+    """Relay output without buffering it in Python; own the entire command group."""
+    requested_signal = None
+    previous_handlers = {}
+    process = None
+
+    def request_stop(signum, frame):
+        nonlocal requested_signal
+        if requested_signal is None:
+            requested_signal = signum
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, request_stop)
+        environment = os.environ.copy()
+        environment.pop("BASH_ENV", None)
+        process = subprocess.Popen(
+            ["bash", "--noprofile", "--norc", str(ROOT / "scripts/ci/relay_formal_command.sh"),
+             str(log), *command],
+            cwd=ROOT, env=environment, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout
+        while requested_signal is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                returncode = process.wait(timeout=min(0.1, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        try:
+            if process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    process.wait()
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+        if requested_signal is not None:
+            raise SystemExit(128 + requested_signal)
+    return returncode
+
+
 def run_kani(
     output: Path,
     *,
@@ -202,19 +251,8 @@ def run_kani(
             if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
                 command.append("--gen-c")
     log = output.with_suffix(".log")
-    with log.open("w", encoding="utf-8") as stream:
-        process = subprocess.Popen(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        try:
-            process.wait(timeout=1200)
-        finally:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-    print(log.read_text(encoding="utf-8"), end="", flush=True)
-    return json.loads(output.read_text(encoding="utf-8")), process.returncode
+    returncode = _run_logged_command(command, log)
+    return json.loads(output.read_text(encoding="utf-8")), returncode
 
 
 def digest(path: Path) -> str:
@@ -231,6 +269,7 @@ def formal_source_files() -> list[Path]:
         CORE / "program_wire.rs",
         Path(__file__),
         ROOT / "scripts/formal_contracts.py",
+        ROOT / "scripts/ci/relay_formal_command.sh",
     ]
     for source in SOURCES:
         files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])
