@@ -36,7 +36,9 @@ FOOTER = re.compile(rb"(?:VERIFICATION (?:SUCCESSFUL|FAILED|INCONCLUSIVE)|Verifi
 
 
 def new_group() -> dict:
-    return {"steps": 0, "printed_steps": 0, "expression_bytes": 0, "samples": []}
+    return {"steps": 0, "printed_steps": 0, "expression_bytes": 0,
+            "unsliced_steps": 0, "sliced_steps": 0,
+            "unsliced_expression_bytes": 0, "sliced_expression_bytes": 0, "samples": []}
 
 
 class Attribution:
@@ -50,6 +52,7 @@ class Attribution:
         self.sections = self.headers = self.printed_steps = self.parse_errors = 0
         self.expected_steps: int | None = None
         self.record_printed = False
+        self.record_sliced = False
         self.in_expression = False
 
     def feed(self, chunk: bytes) -> None:
@@ -104,8 +107,10 @@ class Attribution:
             self.parse_errors += 1
             return
         self.current["expression_bytes"] += length
+        category = "sliced" if self.record_sliced else "unsliced"
+        self.current[f"{category}_expression_bytes"] += length
         if len(self.current["samples"]) < 2:
-            self.current["samples"].append(prefix.decode("utf-8", errors="replace")[:512])
+            self.current["samples"].append((category + ": " + prefix.decode("utf-8", errors="replace"))[:512])
 
     def _line(self, prefix: bytes, length: int) -> None:
         if prefix == b"Program constraints:" and length == len(prefix):
@@ -124,6 +129,7 @@ class Attribution:
             self.current = self._group(match[2], length > len(prefix))
             self.current["steps"] += 1
             self.record_printed = self.in_expression = False
+            self.record_sliced = False
             return
         match = PRINTED.match(prefix)
         if match:
@@ -131,8 +137,11 @@ class Attribution:
             if match[1] is not None and int(match[1]) != self.printed_steps + 1:
                 self.parse_errors += 1
             self.printed_steps += 1
+            self.record_sliced = match[1] is None
             if self.current is not None:
                 self.current["printed_steps"] += 1
+                category = "sliced" if self.record_sliced else "unsliced"
+                self.current[f"{category}_steps"] += 1
             self.record_printed = self.in_expression = True
             self._expression(prefix[match.end():], max(0, length - match.end()))
             return
@@ -153,24 +162,32 @@ class Attribution:
                     and self.headers == self.expected_steps
                     and self.line_bytes == 0 and self.parse_errors == 0)
         by_steps = sorted(self.groups.items(), key=lambda item: (
-            -item[1]["steps"], -item[1]["expression_bytes"], item[0]))
+            -item[1]["unsliced_steps"], -item[1]["unsliced_expression_bytes"],
+            -item[1]["steps"], item[0]))
         by_bytes = sorted(self.groups.items(), key=lambda item: (
-            -item[1]["expression_bytes"], -item[1]["steps"], item[0]))
+            -item[1]["unsliced_expression_bytes"], -item[1]["unsliced_steps"],
+            -item[1]["expression_bytes"], item[0]))
         selected = dict(by_steps[:10] + by_bytes[:10])
         for key, group in by_steps:
             if len(selected) == 20:
                 break
             selected.setdefault(key, group)
         top = sorted(selected.items(), key=lambda item: (
-            -item[1]["steps"], -item[1]["expression_bytes"], item[0]))
+            -item[1]["unsliced_steps"], -item[1]["unsliced_expression_bytes"],
+            -item[1]["steps"], item[0]))
+        groups = (*self.groups.values(), self.unknown, self.overflow)
         return {
             "marker": "SSA_ATTRIBUTION_COMPLETE" if complete else "SSA_ATTRIBUTION_INCOMPLETE",
             "formal_verification": False, "harness": HARNESS, "argv": list(COMMAND),
             "complete": complete, "eof": eof, "returncode": returncode, "error": error,
             "expected_steps": self.expected_steps, "source_headers": self.headers,
             "printed_steps": self.printed_steps, "sections": self.sections,
-            "printed_expression_bytes": sum(group["expression_bytes"] for group in
-                                            (*self.groups.values(), self.unknown, self.overflow)),
+            "unsliced_printed_steps": sum(group["unsliced_steps"] for group in groups),
+            "sliced_printed_steps": sum(group["sliced_steps"] for group in groups),
+            "printed_expression_bytes": sum(group["expression_bytes"] for group in groups),
+            "unsliced_expression_bytes": sum(group["unsliced_expression_bytes"] for group in groups),
+            "sliced_expression_bytes": sum(group["sliced_expression_bytes"] for group in groups),
+            "ranking": "unsliced printed steps and expression bytes",
             "parse_errors": self.parse_errors, "scanned_raw_bytes": self.raw_bytes,
             "stream": "stdout+stderr", "unfinished_line": self.line_bytes != 0,
             "unfinished_line_bytes": self.line_bytes, "oversized_lines": self.oversized_lines,
@@ -258,7 +275,7 @@ def self_test() -> None:
     assert "--harness-timeout" not in COMMAND and "--export-json" not in COMMAND
     toy = (b"size of program expression: 4 steps\nProgram constraints:\n"
            b"// 1 file proof.rs line 8 column 2 function f\n(1) x == 1\n"
-           b"    guard: g\n// 2 file proof.rs line 9 function f\n(sliced) y == 2\n"
+           b"    guard: g\n// 2 file proof.rs line 9 function f\n(sliced) y == 2\n    guard: h\n"
            b"// 3 file proof.rs line 10 function f\n(3) ASSERT(z)\n// 4 \n")
 
     def parse(data: bytes, width: int = 7, code: int = 0) -> dict:
@@ -272,6 +289,12 @@ def self_test() -> None:
         assert result["complete"] and result["scanned_raw_bytes"] == len(toy)
         assert result["formal_verification"] is False
         assert result["source_headers"] == 4 and result["printed_steps"] == 3
+        assert result["unsliced_printed_steps"] == 2 and result["sliced_printed_steps"] == 1
+        assert result["unsliced_expression_bytes"] == 16 and result["sliced_expression_bytes"] == 7
+        sliced = next(group for group in result["top_groups"] if group["line"] == "9")
+        assert sliced["sliced_steps"] == 1 and sliced["unsliced_steps"] == 0
+        assert sliced["sliced_expression_bytes"] == 7 and sliced["unsliced_expression_bytes"] == 0
+        assert all(sample.startswith("sliced: ") for sample in sliced["samples"])
         assert result["unknown"]["steps"] == 1
     huge = toy.replace(b"x == 1", b"x" * (READ_BYTES * 4))
     result = parse(huge, READ_BYTES)
@@ -297,12 +320,18 @@ def self_test() -> None:
     profile = Attribution()
     for index in range(21):
         group = profile._group(f"file proof.rs line 1 function common{index}".encode(), False)
-        group.update(steps=100 - index, expression_bytes=100)
+        group.update(steps=100 - index, expression_bytes=100,
+                     unsliced_steps=100 - index, unsliced_expression_bytes=100)
+        discarded = profile._group(f"file proof.rs line 1 function discarded{index}".encode(), False)
+        discarded.update(steps=1000000, expression_bytes=100000000,
+                         sliced_steps=1000000, sliced_expression_bytes=100000000)
     huge_group = profile._group(b"file proof.rs line 1 function few_huge", False)
-    huge_group.update(steps=1, expression_bytes=10000000)
+    huge_group.update(steps=1, expression_bytes=10000000,
+                      unsliced_steps=1, unsliced_expression_bytes=10000000)
     rows = profile.summary(eof=True, returncode=0)["top_groups"]
     assert len(rows) == 20 and any(row["function"] == "few_huge" for row in rows)
     assert {f"common{index}" for index in range(10)} <= {row["function"] for row in rows}
+    assert all(not row["function"].startswith("discarded") for row in rows)
     if os.name == "posix":
         for code in (0, 1):
             child = (sys.executable, "-c", f"import sys;sys.stdout.buffer.write({toy!r});sys.exit({code})")

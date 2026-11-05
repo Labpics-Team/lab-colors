@@ -561,7 +561,7 @@
   "scripts/check_authority_mutations.py": "3fb38cc8d54d8d89cd0a24b1e0f54b392d1b6ba9",
   "scripts/check_evaluation_mutations.py": "d3350e229a5022ab5e12c4c6436e46254963bd75",
   "scripts/check_science_mutations.py": "d948037ad2bfd0fba80109c618e45a1b6515c96a",
-  "scripts/ci/attribute_formal_ssa.py": "2f182407f7f4aa8a3054e55a13106b9a04c40502",
+  "scripts/ci/attribute_formal_ssa.py": "6d95fa5f34212f197f56d14cdcb2fd115212bde2",
   "scripts/ci/distribution_outputs.mjs": "21e7b6e2412686d3727b136dd6aba8f1879f1d4b",
   "scripts/ci/formal_outputs.py": "1f02a58cef575fa9788b79871449cf43f3cdc739",
   "scripts/ci/observe_hosted_signals.sh": "073461c5445d77568a3a1b094d0704b3cf088823",
@@ -642,7 +642,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "9b92292ce99d7aa8b703585ad86bf29fd75737bf89afc8f40ab2e771f6be7efc",
+ "record_sha256": "ba4c92e28073260155cd65423a4854c9588fed509f06f8bd8eb839fe3621fbc2",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
