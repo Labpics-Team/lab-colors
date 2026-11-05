@@ -4,6 +4,16 @@
 formal_failure_cleanup() {
   local formal_failure_status=$?
   trap - EXIT
+  local formal_running_pid
+  for formal_running_pid in $(jobs -pr); do
+    if [[ "$formal_running_pid" == "${formal_memory_watcher_pid:-}" ]]; then
+      kill "$formal_running_pid" 2>/dev/null || true
+    fi
+  done
+  if [[ -n "${formal_memory_watcher_pid:-}" ]]; then
+    wait "$formal_memory_watcher_pid" 2>/dev/null || true
+    unset formal_memory_watcher_pid
+  fi
   if [[ "$formal_failure_status" == 0 ]]; then
     return 0
   fi
@@ -47,4 +57,52 @@ PY
 
 observe_hosted_signals() {
   trap formal_failure_cleanup EXIT
+  python3 -u - <<'PY' &
+from pathlib import Path
+import os
+import re
+import time
+
+cgroup = next((line.split(':', 2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines()
+               if line.startswith('0::')), None)
+cgroup_root = Path('/sys/fs/cgroup') / cgroup.lstrip('/') if cgroup is not None else None
+page_kib = os.sysconf('SC_PAGE_SIZE') // 1024
+for sample in range(120):
+    memory = {}
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        key, value = line.split(':', 1)
+        if key in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree'):
+            memory[key] = int(value.split()[0])
+    print('FORMAL_MEMORY', f'sample={sample + 1}', f'epoch_s={int(time.time())}',
+          *(f'{key}_kib={value}' for key, value in memory.items()), flush=True)
+    if cgroup_root is not None:
+        counters = []
+        for name in ('memory.current', 'memory.peak', 'memory.max', 'memory.swap.current', 'memory.swap.max'):
+            try:
+                value = (cgroup_root / name).read_text().strip()
+                if value == 'max' or value.isdecimal():
+                    counters.append(f'{name}={value}')
+            except OSError:
+                pass
+        try:
+            for line in (cgroup_root / 'memory.events').read_text().splitlines():
+                key, value = line.split()
+                if key in ('low', 'high', 'max', 'oom', 'oom_kill', 'oom_group_kill') and value.isdecimal():
+                    counters.append(f'event.{key}={value}')
+        except OSError:
+            pass
+        print('FORMAL_CGROUP_MEMORY', *counters, flush=True)
+    processes = []
+    for process in Path('/proc').glob('[0-9]*'):
+        try:
+            rss = int((process / 'statm').read_text().split()[1]) * page_kib
+            comm = re.sub(r'[^a-zA-Z0-9_.-]', '_', (process / 'comm').read_text().strip())[:32]
+            processes.append((rss, int(process.name), comm))
+        except (OSError, ValueError, IndexError):
+            pass
+    print('FORMAL_RSS', *(f'pid={pid},rss_kib={rss},comm={comm}'
+                          for rss, pid, comm in sorted(processes, reverse=True)[:6]), flush=True)
+    time.sleep(5)
+PY
+  formal_memory_watcher_pid=$!
 }
