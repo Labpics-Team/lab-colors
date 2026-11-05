@@ -24,8 +24,8 @@ pub(crate) fn sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Or
 // Один цикл сортировки обслуживает типы записей компилятора и handoff.
 // Передача операций по индексам сохраняет владение элементами и обходится без аллокаций.
 #[inline(never)]
-fn sort_indices(n: usize, operation: &mut dyn FnMut(usize, usize, bool) -> bool) {
-    fn sift(mut root: usize, end: usize, operation: &mut dyn FnMut(usize, usize, bool) -> bool) {
+fn sort_indices(n: usize, operation: &mut impl FnMut(usize, usize, bool) -> bool) {
+    fn sift(mut root: usize, end: usize, operation: &mut impl FnMut(usize, usize, bool) -> bool) {
         while root < end / 2 {
             let mut child = root * 2 + 1;
             if child + 1 < end && operation(child, child + 1, false) {
