@@ -181,6 +181,10 @@ class ArbBuildRecipeTests(unittest.TestCase):
             self.assertEqual(jobs.count("uses: actions/checkout@"), 1)
             self.assertIn("persist-credentials: false", jobs)
             self.assertNotRegex(jobs, r"(?m)^          ref:")
+            for step in re.split(r"(?m)^      - ", jobs)[1:]:
+                conditions = re.findall(r"(?m)^        if: (.+)$", step)
+                cleanup = step.startswith("name: remove disposable inputs and cgroup\n")
+                self.assertEqual(conditions, ["always()"] if cleanup else [])
             for gate, count in (
                 ("proof/region/v1/arb/tests/gate.py", 2),
                 ("proof/region/v1/mpfi/tests/gate.py", 2),
@@ -197,6 +201,10 @@ class ArbBuildRecipeTests(unittest.TestCase):
             ("  diagnostic-build-runtime:\n", "  diagnostic-build-runtime:\n    if: false\n"),
             ("  diagnostic-build-runtime:\n", "  diagnostic-build-runtime:\n    needs: source-admission\n"),
             ("    steps:\n", "    continue-on-error: true\n    steps:\n"),
+            (
+                "      - name: one source-bound BUILD to RUN receipt and evaluator runtime\n",
+                "      - name: one source-bound BUILD to RUN receipt and evaluator runtime\n        if: false\n",
+            ),
             ("PYTHONOPTIMIZE=2 python3 proof/region/v1/arb/tests/gate.py", "true"),
             ("PYTHONOPTIMIZE=2 python3 proof/region/v1/mpfi/tests/gate.py", "true"),
             ("proof/region/v1/arb/tests/native_gate.py receipt", "true"),
