@@ -125,32 +125,32 @@
       "sha256": "db55fc1b5a01f955544c17e5d1606c49aaa0b63e1b591eaf7cf50a44abfb1060"
     },
     {
-      "bytes": 58924,
+      "bytes": 59957,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment.rs",
       "role": "point_attachment_source",
-      "sha256": "e4e8933535b2ed3cbb96c2ab8cffcce9b865d181df810688a86dec7115105862"
+      "sha256": "0ff825f127eb16f7ab3cc306484094a167af6a2174bd53158390ab54dce62005"
     },
     {
-      "bytes": 36087,
+      "bytes": 36125,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment/support.rs",
       "role": "point_attachment_test_support",
-      "sha256": "1c56f2397fe052f4969a0fbbb952bad1560e86d84da07c1f129822ec9be14cb5"
+      "sha256": "34606e3c88c06dbd41b8f341f5b721b101d0ae7fd96a551a0fe71a1f574e6254"
     },
     {
-      "bytes": 85245,
+      "bytes": 88694,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/attachment/tests.rs",
       "role": "point_attachment_tests",
-      "sha256": "422b1ed95595a6cf5a8a99baab4146db1059148925e959e2aef70f3618613d7d"
+      "sha256": "21322302197642bd10d9842933227f24c45ba3c78e8285f618e73534c24c01aa"
     },
     {
-      "bytes": 217359,
+      "bytes": 217589,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program.rs",
       "role": "program_facade_source",
-      "sha256": "073daa8bf1db8b6e5d11203bb2e4d9c74c74cced69a26d4e99345494fe2838a9"
+      "sha256": "5088664ffde4b0aa86984939048da5ab1bb77ef1df7b8c67dc8885d9488e550f"
     },
     {
       "bytes": 146521,
@@ -160,11 +160,11 @@
       "sha256": "c07ff86df062b6b26af433f7aef108a830c07dd65e2d3070f856f8ee8a5df240"
     },
     {
-      "bytes": 261436,
+      "bytes": 262142,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session.rs",
       "role": "program_source",
-      "sha256": "887480a30cac629634d0ba032585ec783fa44edc7ebb8098d863633a173f6e8b"
+      "sha256": "5915d379faf5def490fff37800873b1446daf14a6186875dfaa89342ccbd2fb6"
     },
     {
       "bytes": 21892,

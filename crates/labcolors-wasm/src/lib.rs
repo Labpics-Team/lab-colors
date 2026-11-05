@@ -250,12 +250,13 @@ export function pointSinkComposite(root, scenario, source) {
   return reportFreeze({ root, scenario, source });
 }
 export function pointSinkIntent(operation, revision, expectedSequence, desiredSequence, bindingEpoch, scope, points, presentationComposites) {
+  const point = points.length === 1 ? points[0] : null;
   return reportFreeze({
     operation, revision, expectedSequence, desiredSequence, bindingEpoch,
     scope: new HostIds(scope),
     points: reportFreeze(points), presentationComposites: reportFreeze(presentationComposites),
     sinkOutput: scope.length === 1 ? scope[0] : null,
-    point: points.length === 1 ? points[0] : null,
+    point: point === null ? null : reportFreeze({ slot: point.slot, source: point.source, opacity: point.opacity }),
   });
 }
 

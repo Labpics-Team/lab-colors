@@ -114,8 +114,8 @@ impl<SinkOutputId: Copy> AttachedPointPresentationV1<SinkOutputId> {
 
 /// Непередаваемый compiler-side permit полного terminal scope.
 ///
-/// Значение создаётся только после точной output→sink и
-/// output→presentation bijection, удерживает exact owner generation и
+/// Значение создаётся после полного покрытия outputs и terminal targets
+/// с точным совпадением Paint, удерживает exact owner generation и
 /// поглощается единственным host admission. Content identity сама по себе не
 /// является этим полномочием.
 pub(crate) struct BoundPointSinkScopePermitV1<'a, SinkOutputId> {
@@ -1143,7 +1143,7 @@ impl<SinkOutputId> PreparedAttachmentBindingsV1<SinkOutputId>
 where
     SinkOutputId: Copy + Eq,
 {
-    /// Проверяет authored terminal bindings и завершает все их allocation.
+    /// Проверяет terminal coverage и явные authored bindings до host admission.
     fn try_new(
         owner: &OwnerV1,
         authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
@@ -1221,7 +1221,7 @@ where
             return Err(AttachmentCreateErrorV1::EmptyPresentations);
         }
         let expected_presentations = owner.compiled.point_presentation_count();
-        if authored_presentations.len() != expected_presentations {
+        if authored_presentations.len() > expected_presentations {
             return Err(AttachmentCreateErrorV1::PresentationCount {
                 expected: expected_presentations,
                 actual: authored_presentations.len(),
@@ -1271,10 +1271,27 @@ where
                 });
             }
         }
-        for (presentation_ordinal, presentation) in presentations.iter().enumerate() {
-            if presentation.compiled.presentation_ordinal() != presentation_ordinal {
+        for presentation_ordinal in owner.compiled.terminal_point_presentation_ordinals() {
+            if presentations
+                .binary_search_by_key(&presentation_ordinal, |binding| {
+                    binding.compiled.presentation_ordinal()
+                })
+                .is_err()
+            {
                 return Err(AttachmentCreateErrorV1::MissingCompiledPresentation {
                     presentation_ordinal,
+                });
+            }
+        }
+        // Aliases разделяют Paint, но не создают дополнительные renderer targets.
+        presentations.sort_unstable_by_key(|binding| binding.compiled.paint());
+        for (emission, (_, paint)) in emissions.iter().zip(owner.compiled.outputs()) {
+            if presentations
+                .binary_search_by_key(&paint, |binding| binding.compiled.paint())
+                .is_err()
+            {
+                return Err(AttachmentCreateErrorV1::MissingOutputPresentation {
+                    output: emission.output,
                 });
             }
         }
@@ -1284,30 +1301,6 @@ where
                 binding.compiled.presentation_ordinal(),
             )
         });
-        let mut presentation_index = 0;
-        for emission in &emissions {
-            if presentations
-                .get(presentation_index)
-                .is_none_or(|presentation| {
-                    presentation.compiled.output_ordinal() != emission.output_ordinal
-                })
-            {
-                return Err(AttachmentCreateErrorV1::MissingOutputPresentation {
-                    output: emission.output,
-                });
-            }
-            while presentations
-                .get(presentation_index)
-                .is_some_and(|presentation| {
-                    presentation.compiled.output_ordinal() == emission.output_ordinal
-                })
-            {
-                presentation_index += 1;
-            }
-        }
-        if presentation_index != presentations.len() {
-            return Err(AttachmentCreateErrorV1::InternalInvariant);
-        }
         for binding in &emissions {
             if !owned_scope.contains(&binding.sink_output) {
                 return Err(AttachmentCreateErrorV1::UnownedSinkOutput {

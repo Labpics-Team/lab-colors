@@ -2444,6 +2444,23 @@ where
         self.owner_generation.point_presentations.len()
     }
 
+    /// Полное покрытие renderer bindings относится к terminal targets;
+    /// ancestor targets сохраняют собственные evaluation ordinals.
+    pub(crate) fn terminal_point_presentation_ordinals(&self) -> impl Iterator<Item = usize> + '_ {
+        self.owner_generation
+            .point_presentations
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, presentation)| {
+                (presentation.target == presentation.terminal).then_some(ordinal)
+            })
+    }
+
+    pub(crate) fn terminal_point_presentation_count(&self) -> usize {
+        self.terminal_point_presentation_ordinals().count()
+    }
+
     pub(crate) fn output_count(&self) -> usize {
         self.owner_generation.outputs.len()
     }

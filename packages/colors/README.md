@@ -219,6 +219,9 @@ try {
 output slot с принадлежащим приложению sink ID; `presentations` перечисляет
 все объявленные terminal bindings. Один Paint может участвовать в нескольких
 привязках. Неполное или повторное покрытие отвергается до вызова host.
+Ancestor targets участвуют в вычислениях и не требуют terminal binding.
+Output slots одного Paint публикуются все вместе и могут использовать одну
+presentation; её slot приложение выбирает явно.
 
 Host получает весь `scope`, массив `points` с исходными RGB и straight alpha и
 отдельный `presentationComposites` с конечными RGB по `(root, scenario)`.

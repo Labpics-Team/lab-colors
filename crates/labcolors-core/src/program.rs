@@ -2037,6 +2037,11 @@ impl OwnerV1 {
         self.compiled.point_presentation_count()
     }
 
+    /// Число terminal targets, требующих отдельного renderer binding.
+    pub(crate) fn terminal_point_presentation_count(&self) -> usize {
+        self.compiled.terminal_point_presentation_count()
+    }
+
     /// Проверяет и минтит terminal point binding для внешнего attachment seam.
     ///
     /// `OwnerV1` сохраняет границу между публичным wire wrapper и generic

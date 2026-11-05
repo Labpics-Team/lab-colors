@@ -49,11 +49,13 @@ function patch(intent) {
   };
 }
 
-function sink() {
+function sink(batch = true) {
   const host = { sequence: 0n, epoch: null, current: null, calls: [], reject: false };
   host.install = (intent) => {
-    assert.equal(intent.point, null, "batch не имеет неявной первой точки");
-    assert.equal(intent.sinkOutput, null);
+    if (batch) {
+      assert.equal(intent.point, null, "batch не имеет неявной первой точки");
+      assert.equal(intent.sinkOutput, null);
+    }
     assert.equal(intent.expectedSequence, host.sequence);
     if (host.epoch !== null) assert.equal(intent.bindingEpoch, host.epoch);
     const projected = patch(intent);
@@ -222,6 +224,139 @@ test("binding admission отвергает неполный scope и accessors �
     }
   }
   assert.equal(reads, 0);
+  assert.equal(calls, 0);
+});
+
+function mixedTargetGraph() {
+  return new ProgramWireBuilderV1()
+    .source(1, firstSource).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, .5)
+    .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
+    .sourceOverOccurrence(8, 4, 7, 64, .2, 1).occurrenceSurface(11, 8)
+    .sourceOverOccurrence(12, 4, 11, 64, .2, 1)
+    .presentationRoot(9, 12).presentationTarget(9, 8).presentationTarget(9, 12)
+    .exactVisibleUnary(false, 10, 12, firstSource).output(17, 4).finish();
+}
+
+function aliasGraph(distinctPaint = false) {
+  const builder = new ProgramWireBuilderV1()
+    .source(1, firstSource).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, .5)
+    .solidPaint(3, 2).opacityPaint(4, 3, 5).inputSurface(7, 6)
+    .sourceOverOccurrence(8, 4, 7, 64, .2, 1)
+    .presentationRoot(9, 8).presentationTarget(9, 8)
+    .exactVisibleUnary(false, 10, 8, firstSource).output(17, 4);
+  if (distinctPaint) builder.source(11, firstSource).fixedTarget(12, 11)
+    .solidPaint(14, 12).opacityPaint(15, 14, 5)
+    .sourceOverOccurrence(16, 15, 7, 64, .2, 1).exactVisibleUnary(false, 21, 16, firstSource);
+  return builder.output(18, distinctPaint ? 15 : 4).finish();
+}
+
+test("ancestor evaluation targets сохраняют полный snapshot при одном terminal binding", () => {
+  const host = sink(false), attachment = attachProgramWire(mixedTargetGraph(), 11, {
+    emissions: [{ slot: 17, sinkOutput: 501 }],
+    presentations: [{ slot: 17, root: 9, occurrence: 12 }],
+  }, host.install), held = [];
+  const own = (handle) => (held.push(handle), handle);
+  try {
+    const rows = [[101, [4, 8, 12]], [102, [100, 120, 140]]];
+    const first = own(observe(attachment, 1n, rows));
+    assert.equal(first.state, "ready");
+    assert.equal(first.outputCount(), 1);
+    assert.equal(first.renderCount(), 1);
+    const render = own(first.renderAt(0));
+    assert.equal(render.presentationRoot(), 9);
+    assert.equal(render.occurrence(), 12);
+    assert.deepEqual(host.current.scope, [501]);
+    assert.deepEqual(host.current.points, [{ slot: 17, sinkOutput: 501, source: firstSource, opacity: .5 }]);
+    assert.equal(host.current.composites.length, 2, "host получает конечный RGB по уникальным root/scenario");
+    for (const value of host.current.composites) {
+      const [, background] = rows.find(([scenario]) => scenario === value.scenario);
+      assert.equal(value.root, 9);
+      assert.deepEqual(value.source, over(firstSource, 2, over(firstSource, 2, background)));
+    }
+    assert.throws(() => attachment.materializationAuthorityForBinding(9, 8),
+      programError("program_materialization_terminal_binding_mismatch"));
+    const changed = own(observe(attachment, 2n, [[103, [40, 80, 120]]]));
+    assert.equal(changed.renderCount(), 1);
+    const authority = own(attachment.materializationAuthorityForBinding(9, 12));
+    assert.equal(authority.outputSlot(), 17);
+    assert.deepEqual([...authority.terminalCompositeRgb()], over(firstSource, 2, over(firstSource, 2, [40, 80, 120])));
+  } finally {
+    for (const handle of held.toReversed()) handle.free();
+    host.current = null;
+    attachment.dispose(true);
+    attachment.free();
+  }
+});
+
+test("alias output slots публикуются целиком с выбранным клиентом terminal binding", () => {
+  for (const slot of [17, 18]) {
+    const host = sink(), attachment = attachProgramWire(aliasGraph(), 12, {
+      emissions: [{ slot: 18, sinkOutput: 502 }, { slot: 17, sinkOutput: 501 }],
+      presentations: [{ slot, root: 9, occurrence: 8 }],
+    }, host.install), held = [];
+    const own = (handle) => (held.push(handle), handle);
+    try {
+      const initial = own(observe(attachment, 1n, [[101, [4, 8, 12]]]));
+      assert.equal(initial.state, "ready");
+      assert.equal(initial.outputCount(), 2);
+      assert.equal(initial.renderCount(), 1);
+      assert.equal(own(initial.renderAt(0)).outputSlot(), slot);
+      assert.equal(own(attachment.materializationAuthorityForBinding(9, 8)).outputSlot(), slot);
+      assert.deepEqual(host.current.scope, [501, 502]);
+      assert.deepEqual(host.current.points, [
+        { slot: 17, sinkOutput: 501, source: firstSource, opacity: .5 },
+        { slot: 18, sinkOutput: 502, source: firstSource, opacity: .5 },
+      ]);
+      assert.deepEqual(host.current.composites,
+        [{ root: 9, scenario: 101, source: over(firstSource, 2, [4, 8, 12]) }]);
+      const previous = structuredClone(host.current);
+      host.reject = true;
+      assert.throws(() => observe(attachment, 2n, [[102, [100, 120, 140]]]),
+        programError("program_attachment_host_rejected"));
+      assert.deepEqual(host.current, previous);
+      assert.equal(own(attachment.materializationAuthorityForBinding(9, 8)).revision(), 1n);
+      host.reject = false;
+      own(observe(attachment, 2n, [[102, [100, 120, 140]]]));
+      assert.deepEqual(host.current.points, previous.points);
+      assert.notDeepEqual(host.current.composites, previous.composites);
+      own(observe(attachment, 2n, [[102, [100, 120, 140]]]));
+      assert.equal(host.calls.at(-1).operation, "confirmExact");
+      const stale = own(attachment.updateUnknown(3n, 99));
+      assert.equal(stale.outputCount(), 0);
+      assert.equal(stale.renderCount(), 0);
+      assert.deepEqual(host.current, { scope: [501, 502], points: [], composites: [] });
+      assert.throws(() => attachment.materializationAuthorityForBinding(9, 8),
+        programError("program_materialization_not_ready"));
+    } finally {
+      for (const handle of held.toReversed()) handle.free();
+      host.current = null;
+      attachment.dispose(true);
+      attachment.free();
+    }
+  }
+});
+
+test("nonterminal, duplicate и другой Paint не дают ложного полного scope", () => {
+  let calls = 0;
+  const host = () => { calls += 1; return true; };
+  const emissions = [{ slot: 17, sinkOutput: 501 }, { slot: 18, sinkOutput: 502 }];
+  for (const presentations of [
+    [{ slot: 17, root: 9, occurrence: 8 }],
+    [{ slot: 17, root: 9, occurrence: 12 }, { slot: 17, root: 9, occurrence: 8 }],
+  ]) {
+    assert.throws(() => attachProgramWire(mixedTargetGraph(), 13, {
+      emissions: emissions.slice(0, 1), presentations,
+    }, host), programError("program_attachment_non_terminal_target"));
+  }
+  assert.throws(() => attachProgramWire(mixedTargetGraph(), 13, {
+    emissions: emissions.slice(0, 1), presentations: [],
+  }, host), programError("program_attachment_binding"));
+  assert.throws(() => attachProgramWire(aliasGraph(), 13, {
+    emissions, presentations: [{ slot: 17, root: 9, occurrence: 8 }, { slot: 18, root: 9, occurrence: 8 }],
+  }, host), programError("program_attachment_binding"));
+  assert.throws(() => attachProgramWire(aliasGraph(true), 13, {
+    emissions, presentations: [{ slot: 17, root: 9, occurrence: 8 }],
+  }, host), programError("program_attachment_binding"));
   assert.equal(calls, 0);
 });
 

@@ -1546,6 +1546,7 @@ where
     output_count: usize,
     assessment_cells_per_case: usize,
     presentation_count: usize,
+    evaluation_presentation_count: usize,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
     assessment_scratch: ProgramAssessmentReportScratchV1,
     composites_scratch: Vec<ProgramPresentationCompositeV1>,
@@ -1599,14 +1600,11 @@ impl CompiledProgramV1 {
             .evidence_cell_bounds(1)
             .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?
             .verified_cells();
-        let presentation_count = self.owner.point_presentation_count();
-        if emissions.len() != output_count || presentations.len() != presentation_count {
+        let evaluation_presentation_count = self.owner.point_presentation_count();
+        let presentation_count = self.owner.terminal_point_presentation_count();
+        if emissions.len() != output_count || presentations.len() > evaluation_presentation_count {
             return Err(ProgramAttachErrorV1::Binding);
         }
-        let mut authored_presentations = Vec::new();
-        authored_presentations
-            .try_reserve_exact(presentation_count)
-            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
         for binding in presentations {
             self.owner
                 .bind_terminal_point_output_presentation(
@@ -1615,6 +1613,15 @@ impl CompiledProgramV1 {
                     crate::program::OccurrenceIdV1::new(binding.occurrence),
                 )
                 .map_err(map_attachment_binding_error)?;
+        }
+        if presentations.len() != presentation_count {
+            return Err(ProgramAttachErrorV1::Binding);
+        }
+        let mut authored_presentations = Vec::new();
+        authored_presentations
+            .try_reserve_exact(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        for binding in presentations {
             authored_presentations.push(
                 crate::program::attachment::AuthoredPointPresentationBindingV1::new(
                     crate::program::OutputSlotIdV1::new(binding.slot),
@@ -1697,6 +1704,7 @@ impl CompiledProgramV1 {
             output_count,
             assessment_cells_per_case,
             presentation_count,
+            evaluation_presentation_count,
             outputs_scratch,
             assessment_scratch: ProgramAssessmentReportScratchV1::default(),
             composites_scratch: Vec::new(),
@@ -1868,6 +1876,7 @@ where
             output_count,
             assessment_cells_per_case,
             presentation_count,
+            evaluation_presentation_count,
             outputs_scratch,
             assessment_scratch,
             composites_scratch,
@@ -1888,8 +1897,12 @@ where
         assessment_scratch
             .reserve(cell_count, scenario_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
-        reserve_snapshot_composites(composites_scratch, *presentation_count, scenario_count)
-            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        reserve_snapshot_composites(
+            composites_scratch,
+            *evaluation_presentation_count,
+            scenario_count,
+        )
+        .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         outputs_scratch
             .try_reserve_exact(*output_count)
             .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
