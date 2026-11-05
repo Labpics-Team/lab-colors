@@ -258,7 +258,7 @@ def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200)
                             break
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
-                            if returncode is None:
+                            if returncode is None and not relay_failed:
                                 raise subprocess.TimeoutExpired(command, timeout)
                             return 125
                         progressed = False

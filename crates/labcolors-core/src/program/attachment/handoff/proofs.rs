@@ -124,7 +124,10 @@ fn any_writer() -> Option<(
             committed: HandoffCommittedPointStateV1 {
                 stamp,
                 revision,
-                points: point.into_iter().collect(),
+                points: match point {
+                    Some(point) => vec![point],
+                    None => Vec::new(),
+                },
                 composites: Vec::new(),
             },
             retired: None,

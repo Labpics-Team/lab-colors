@@ -612,17 +612,27 @@ class FormalReportTests(unittest.TestCase):
             self.assertEqual(signal.getsignal(signum), handler)
 
     def test_parent_log_read_failure_returns_125_and_cleans_command_group(self):
-        reader = mock.MagicMock()
-        reader.__enter__.return_value = reader
-        reader.read.side_effect = OSError("read failed")
-        with mock.patch("verify_core_formal._open_log_reader", return_value=reader), mock.patch(
-            "verify_core_formal.subprocess.Popen"
-        ) as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
-            launch.return_value.pid = 4249
-            launch.return_value.poll.return_value = 0
-            launch.return_value.wait.return_value = 0
-            self.assertEqual(_run_logged_command(["unused"], self.command_log), 125)
-            terminate.assert_called_once_with(4249, signal.SIGKILL)
+        for leader_done in (True, False):
+            reader = mock.MagicMock()
+            reader.__enter__.return_value = reader
+            reader.read.side_effect = OSError("read failed")
+            with self.subTest(leader_done=leader_done), mock.patch(
+                "verify_core_formal._open_log_reader", return_value=reader
+            ), mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
+                "verify_core_formal.os.killpg", create=True
+            ) as terminate, mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0.1, 1201]):
+                launch.return_value.pid = 4249
+                launch.return_value.poll.return_value = 0 if leader_done else None
+
+                def wait(*args, **kwargs):
+                    if "timeout" in kwargs:
+                        raise subprocess.TimeoutExpired("unused", kwargs["timeout"])
+                    return 0
+
+                launch.return_value.wait.side_effect = wait
+                self.assertEqual(_run_logged_command(["unused"], self.command_log), 125)
+                reader.read.assert_called_once_with(65536)
+                terminate.assert_called_once_with(4249, signal.SIGKILL)
 
     def test_target_failure_may_make_its_later_cover_unreachable(self):
         report = {"verification_results": {
@@ -1164,6 +1174,16 @@ class FormalRelayProcessTests(unittest.TestCase):
                 process.stdout.close()
                 self.assertEqual(process.wait(timeout=10), 125)
                 self.assertEqual(log.read_bytes(), b"begin\n" + b"x" * 65536 + b"\nend\n")
+            with self.driver(
+                directory,
+                "import time; print('ready', flush=True); time.sleep(0.1); "
+                "print('sink-failure', flush=True); time.sleep(2)",
+                timeout=0.4,
+            ) as (process, log, group):
+                self.assertEqual(process.stdout.readline(), b"ready\n")
+                process.stdout.close()
+                self.assertEqual(process.wait(timeout=10), 125)
+                self.assertEqual(log.read_bytes(), b"ready\nsink-failure\n")
 
     def test_leader_exit_cleans_descendant_that_inherits_stdout_without_waiting_for_eof(self):
         with tempfile.TemporaryDirectory() as temporary:
