@@ -73,6 +73,10 @@ jobs:
           cargo kani setup
       - name: verify assigned positive formal harnesses
         run: |
+          if [[ "${{ matrix.shard }}" == 3 ]]; then
+            source scripts/ci/observe_hosted_signals.sh
+            observe_hosted_signals
+          fi
           python3 scripts/verify_core_formal.py \
             --phase positive \
             --shard-index "${{ matrix.shard }}" \
