@@ -29,29 +29,6 @@ formal_failure_cleanup() {
     awk '/Checking harness |^Verification|^VERIFICATION|CBMC version|Generated C code written to|Demangled GotoC code written to|Starting Bounded Model Checking|size of program expression:|Generated .*VCC|Passing problem to propositional reduction|converting SSA|Solving with |variables.*clauses|^Runtime (Symex|Postprocess Equation|Convert SSA|Post-process|Solver|decision procedure):/' "$RUNNER_TEMP/core-formal/positive-3.log" |
       tail -n 30 || true
   fi
-  python3 - <<'PY' || printf 'FORMAL_C_SOURCE_UNAVAILABLE\n' >&2
-from pathlib import Path
-
-root = Path('target/kani')
-files = sorted(
-    (path for path in root.rglob('*.demangled.c') if path.is_file() and not path.is_symlink()),
-    key=lambda path: path.stat().st_mtime_ns,
-    reverse=True,
-)
-print(f'FORMAL_C_SOURCE files={len(files)}; bounded source view, not execution attribution')
-for path in files[:8]:
-    print(f'FORMAL_C_SOURCE path={path} bytes={path.stat().st_size}')
-    snippets = 0
-    line_number = 1
-    with path.open(encoding='utf-8', errors='replace') as stream:
-        while fragment := stream.readline(4096):
-            if any(name in fragment for name in ('Handoff', 'RawVec', 'collect', 'drop_in_place')):
-                print(f'{line_number}: {fragment.strip()[:240]}')
-                snippets += 1
-                if snippets == 20:
-                    break
-            line_number += fragment.endswith('\n')
-PY
   return "$formal_failure_status"
 }
 
@@ -63,11 +40,59 @@ import os
 import re
 import time
 
+source_log = Path(os.environ['RUNNER_TEMP']) / 'core-formal/positive-3.log'
+source_root = Path('target/kani').resolve()
+source_offset = 0
+seen_sources = set()
+
+def observe_generated_source():
+    global source_offset
+    try:
+        with source_log.open(encoding='utf-8', errors='replace') as stream:
+            stream.seek(source_offset)
+            for _ in range(32):
+                fragment_start = stream.tell()
+                fragment = stream.readline(8192)
+                if not fragment:
+                    break
+                if not fragment.endswith('\n') and len(fragment) < 8192:
+                    stream.seek(fragment_start)
+                    break
+                marker = 'Demangled GotoC code written to '
+                if fragment.endswith('\n') and marker in fragment:
+                    path = Path(fragment.split(marker, 1)[1].strip())
+                    if ('stale_prepared_command_never_reaches_the_host_revoke_all' in path.name
+                            and path not in seen_sources and not path.is_symlink()
+                            and path.is_file() and path.resolve().is_relative_to(source_root)):
+                        print(f'FORMAL_C_SOURCE path={path} bytes={path.stat().st_size}; '
+                              'source view reads at most 1048576 bytes, not execution attribution', flush=True)
+                        snippets = 0
+                        line_number = 1
+                        with path.open('rb') as source:
+                            for _ in range(256):
+                                chunk = source.readline(4096)
+                                if not chunk:
+                                    break
+                                if any(name in chunk for name in
+                                       (b'Handoff', b'RawVec', b'collect', b'drop_in_place')):
+                                    snippet = chunk.decode('utf-8', errors='replace').strip()[:240]
+                                    print(f'{line_number}: {snippet}', flush=True)
+                                    snippets += 1
+                                    if snippets == 20:
+                                        break
+                                line_number += chunk.endswith(b'\n')
+                        seen_sources.add(path)
+            source_offset = stream.tell()
+    except OSError as error:
+        if source_log.exists():
+            print(f'FORMAL_C_SOURCE_UNAVAILABLE {type(error).__name__}', flush=True)
+
 cgroup = next((line.split(':', 2)[2] for line in Path('/proc/self/cgroup').read_text().splitlines()
                if line.startswith('0::')), None)
 cgroup_root = Path('/sys/fs/cgroup') / cgroup.lstrip('/') if cgroup is not None else None
 page_kib = os.sysconf('SC_PAGE_SIZE') // 1024
 for sample in range(120):
+    observe_generated_source()
     memory = {}
     for line in Path('/proc/meminfo').read_text().splitlines():
         key, value = line.split(':', 1)

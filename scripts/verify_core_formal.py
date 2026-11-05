@@ -331,10 +331,6 @@ def run_kani(
             # instrumented model without changing CBMC checks or parameters.
             if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
                 command.append("--gen-c")
-    # CBMC 6.11.0 сохраняет повторные read-dereference terms через точные SSA
-    # присваивания; исходные checks и bounds остаются. См. diffblue/cbmc#5964.
-    # Kani передаёт весь хвост после --cbmc-args, поэтому добавляем его последним.
-    command.extend(["--cbmc-args", "--symex-cache-dereferences"])
     log = output.with_suffix(".log")
     returncode = _run_logged_command(command, log)
     return json.loads(output.read_text(encoding="utf-8")), returncode
