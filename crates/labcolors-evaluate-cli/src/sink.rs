@@ -91,14 +91,20 @@ mod tests {
         }
     }
     fn wire() -> Vec<u8> {
-        let value: Value =
-            serde_json::from_str(include_str!("../examples/declared-point.json")).unwrap();
+        let value: Value = serde_json::from_str(include_str!("../examples/declared-point.json"))
+            .expect("контрольный declared-point.json должен быть корректным JSON");
         value["programWireHex"]
             .as_str()
-            .unwrap()
+            .expect("контрольный programWireHex должен быть строкой")
             .as_bytes()
             .chunks_exact(2)
-            .map(|s| u8::from_str_radix(std::str::from_utf8(s).unwrap(), 16).unwrap())
+            .map(|s| {
+                u8::from_str_radix(
+                    std::str::from_utf8(s).expect("пара байтов контрольного hex должна быть UTF-8"),
+                    16,
+                )
+                .expect("контрольная hex-пара должна задавать байт")
+            })
             .collect()
     }
     fn snapshot(
@@ -122,18 +128,20 @@ mod tests {
         };
         assert!(
             compile_program_wire_v1(&wire())
-                .unwrap()
+                .expect("контрольный wire должен компилироваться до отказа неверной привязке")
                 .attach(7, 1000, 91, 9, 8, host())
                 .is_err()
         );
         assert_eq!(calls.get(), 0);
         assert_eq!(snapshot(&sink.borrow()), (None, None, None));
         let mut attachment = compile_program_wire_v1(&wire())
-            .unwrap()
+            .expect("контрольный wire должен компилироваться для проверки восстановления")
             .attach(7, 17, 91, 9, 8, host())
-            .unwrap();
+            .expect("точная привязка выхода должна создать attachment");
         let observed = [ProgramScenarioV1::new(1, vec![Srgb8::new([128, 128, 127])])];
-        attachment.update_observed(1, &observed).unwrap();
+        attachment
+            .update_observed(1, &observed)
+            .expect("первое допустимое наблюдение должно установиться");
         let old = snapshot(&sink.borrow());
         let render = attachment.current_render();
         let count = calls.get();
@@ -149,10 +157,14 @@ mod tests {
         assert_eq!(attachment.current_render(), render);
         assert_eq!(snapshot(&sink.borrow()), old);
         reject.set(false);
-        attachment.update_unknown(2, 1).unwrap();
+        attachment
+            .update_unknown(2, 1)
+            .expect("тот же отзыв после снятия отказа host должен установиться");
         assert!(sink.borrow().point.is_none());
         assert!(attachment.current_render().is_none());
-        attachment.update_observed(3, &observed).unwrap();
+        attachment
+            .update_observed(3, &observed)
+            .expect("допустимое наблюдение после отзыва должно восстановить выход");
         assert!(sink.borrow().point.is_some());
         assert_eq!(sink.borrow().revision, Some(3));
         assert_ne!(sink.borrow().stamp, old.0);
@@ -211,15 +223,22 @@ mod tests {
         };
         let observed = [ProgramScenarioV1::new(1, vec![Srgb8::new([128, 128, 127])])];
         let mut a = compile_program_wire_v1(&wire())
-            .unwrap()
+            .expect("контрольный wire первого attachment должен компилироваться")
             .attach(7, 17, 91, 9, 8, host(Rc::clone(&sink), None))
-            .unwrap();
-        a.update_observed(1, &observed).unwrap();
-        let epoch = sink.borrow().stamp.unwrap().binding_epoch();
-        a.update_observed(2, &observed).unwrap();
-        a.update_unknown(3, 1).unwrap();
+            .expect("точная привязка должна создать первый attachment");
+        a.update_observed(1, &observed)
+            .expect("первое наблюдение должно опубликоваться до проверки stale stamp");
+        let epoch = sink
+            .borrow()
+            .stamp
+            .expect("опубликованный sink должен иметь stamp для проверки чужого epoch")
+            .binding_epoch();
+        a.update_observed(2, &observed)
+            .expect("следующая ревизия того же attachment должна установиться");
+        a.update_unknown(3, 1)
+            .expect("допустимый отзыв первого attachment должен установиться");
         let mut b = compile_program_wire_v1(&wire())
-            .unwrap()
+            .expect("контрольный wire второго attachment должен компилироваться")
             .attach(
                 7,
                 17,
@@ -228,8 +247,9 @@ mod tests {
                 8,
                 host(Rc::new(RefCell::new(ModeledSink::new(91))), Some(epoch)),
             )
-            .unwrap();
-        b.update_observed(1, &observed).unwrap();
+            .expect("точная привязка должна создать второй attachment с новым epoch");
+        b.update_observed(1, &observed)
+            .expect("наблюдение второго attachment должно пройти до проверки чужого epoch");
         assert!(stale_checks.get() >= 2);
         assert_eq!(foreign_checks.get(), 1);
         assert!(wrong_output_checks.get() >= 3);

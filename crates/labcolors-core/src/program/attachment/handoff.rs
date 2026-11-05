@@ -1183,7 +1183,7 @@ mod tests {
                     };
                     attachment
                         .update(input(initial_revision, initial_unknown))
-                        .unwrap();
+                        .expect("начальное наблюдаемое или неизвестное состояние истории должно зафиксироваться");
                     let mut revision = initial_revision;
                     let mut unknown = initial_unknown;
                     let mut sequence = attachment.expected_sink_stamp.sequence();
@@ -1248,7 +1248,9 @@ mod tests {
                             }
                             attachment
                                 .update(input(next_revision, next_unknown))
-                                .unwrap();
+                                .expect(
+                                    "тот же запрос после отказа host должен успешно повториться",
+                                );
                         } else {
                             assert!(result.is_ok());
                         }
@@ -1266,7 +1268,11 @@ mod tests {
                         );
                         assert_eq!(attachment.sink.committed.revision, Some(revision));
                         assert_eq!(attachment.sink.committed.points.is_empty(), unknown);
-                        let published = probe.borrow().published.clone().unwrap();
+                        let published = probe
+                            .borrow()
+                            .published
+                            .clone()
+                            .expect("успешный шаг истории должен опубликовать intent host");
                         assert_eq!(published.revision(), revision);
                         assert_eq!(published.desired_sequence(), sequence);
                         assert_eq!(published.binding_epoch(), epoch);
@@ -1294,7 +1300,9 @@ mod tests {
                         );
                         // Повтор проходит весь Attachment и подтверждает живое evidence,
                         // не повышая исторические значения до текущего render output.
-                        let confirmed = attachment.update(input(revision, unknown)).unwrap();
+                        let confirmed = attachment
+                            .update(input(revision, unknown))
+                            .expect("повтор текущего запроса должен подтвердить живое evidence");
                         assert_eq!(confirmed.render_outputs().len(), usize::from(!unknown));
                         if let Some(output) = confirmed.render_outputs().next() {
                             assert_eq!(output.paint(), point_paint());
@@ -1325,9 +1333,12 @@ mod tests {
                 revision: 1,
                 scenarios: &scenarios,
             })
-            .unwrap();
+            .expect("начальное наблюдение должно зафиксироваться до проверки panic host");
         for unknown in [true, false] {
-            let next_revision = attachment.committed_revision.unwrap() + 1;
+            let next_revision = attachment
+                .committed_revision
+                .expect("успешное начальное обновление должно установить ревизию")
+                + 1;
             let input = || {
                 if unknown {
                     UpdateV1::Unknown {
@@ -1354,7 +1365,9 @@ mod tests {
                 assert_eq!(attachment.committed_revision, old.revision);
                 assert_eq!(probe.borrow().published, published);
             }
-            let commit = attachment.update(input()).unwrap();
+            let commit = attachment
+                .update(input())
+                .expect("после panic host тот же запрос должен зафиксироваться");
             assert_eq!(commit.render_outputs().len(), usize::from(!unknown));
             assert_eq!(attachment.committed_revision, Some(next_revision));
         }
@@ -1411,7 +1424,8 @@ mod tests {
             PointSinkPresentationCompositeV1::new(10, 8, Srgb8::new([40, 50, 60])),
             PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([10, 20, 30])),
         ];
-        let stamp = PointSinkMutationStampV1::new(initial).unwrap();
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
         let mut prepared = sink
             .prepare(PointSinkIntentV1::SetAll {
                 revision: 17,
@@ -1419,10 +1433,16 @@ mod tests {
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
             })
-            .unwrap();
-        prepared.try_install().unwrap();
+            .expect("полный patch с двумя выходами должен подготовиться");
+        prepared
+            .try_install()
+            .expect("полный patch должен установиться атомарно");
         prepared.finish_after_session();
-        let first = state.borrow().published.clone().unwrap();
+        let first = state
+            .borrow()
+            .published
+            .clone()
+            .expect("успешная установка должна опубликовать оба выхода");
         assert_eq!(first.scope, scope);
         assert_eq!(first.points.len(), 2);
         assert_eq!(first.points[0].paint.opacity_bits(), 0.25f64.to_bits());
@@ -1435,25 +1455,38 @@ mod tests {
                 revision: 17,
                 published_stamp: stamp.desired(),
             })
-            .unwrap();
-        replay.try_install().unwrap();
+            .expect("повтор полного patch должен подготовиться без новой ревизии");
+        replay
+            .try_install()
+            .expect("точный повтор полного patch должен установиться");
         replay.finish_after_session();
-        let replayed = state.borrow().published.clone().unwrap();
+        let replayed = state
+            .borrow()
+            .published
+            .clone()
+            .expect("точный повтор должен сохранить опубликованные значения и композиции");
         assert_eq!(replayed.operation, 3);
         assert_eq!(replayed.scope, first.scope);
         assert_eq!(replayed.points, first.points);
         assert_eq!(replayed.composites, first.composites);
         assert_eq!(replayed.desired_sequence, first.desired_sequence);
-        let revoke_stamp = PointSinkMutationStampV1::new(stamp.desired()).unwrap();
+        let revoke_stamp = PointSinkMutationStampV1::new(stamp.desired())
+            .expect("опубликованный stamp должен допускать отзыв");
         let mut revoke = sink
             .prepare(PointSinkIntentV1::RevokeAll {
                 revision: 18,
                 stamp: revoke_stamp,
             })
-            .unwrap();
-        revoke.try_install().unwrap();
+            .expect("отзыв полного patch должен подготовиться");
+        revoke
+            .try_install()
+            .expect("отзыв должен атомарно очистить все выходы");
         revoke.finish_after_session();
-        let revoked = state.borrow().published.clone().unwrap();
+        let revoked = state
+            .borrow()
+            .published
+            .clone()
+            .expect("успешный отзыв должен опубликовать пустое состояние");
         assert_eq!(revoked.operation, 2);
         assert_eq!(revoked.scope, scope);
         assert!(revoked.points.is_empty() && revoked.composites.is_empty());
@@ -1462,10 +1495,16 @@ mod tests {
                 revision: 18,
                 published_stamp: revoke_stamp.desired(),
             })
-            .unwrap();
-        replay.try_install().unwrap();
+            .expect("подтверждение пустого состояния должно подготовиться");
+        replay
+            .try_install()
+            .expect("подтверждение пустого состояния должно установиться");
         replay.finish_after_session();
-        let confirmed = state.borrow().published.clone().unwrap();
+        let confirmed = state
+            .borrow()
+            .published
+            .clone()
+            .expect("host должен подтвердить пустое состояние без смены stamp");
         assert_eq!(confirmed.operation, 3);
         assert_eq!(confirmed.scope, scope);
         assert!(confirmed.points.is_empty() && confirmed.composites.is_empty());
@@ -1481,7 +1520,8 @@ mod tests {
         let (host, state) = fake_host_scope(&scope);
         let (mut sink, initial) = admitted_scope(&scope, host);
         let patch = two_point_patch(&scope);
-        let first_stamp = PointSinkMutationStampV1::new(initial).unwrap();
+        let first_stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
         let mut first = sink
             .prepare(PointSinkIntentV1::SetAll {
                 revision: 1,
@@ -1489,12 +1529,15 @@ mod tests {
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
-            .unwrap();
-        first.try_install().unwrap();
+            .expect("полный начальный patch должен подготовиться до проверки отказов");
+        first
+            .try_install()
+            .expect("полный начальный patch должен установиться до проверки отказов");
         first.finish_after_session();
         let old = sink.committed.clone();
         let published = state.borrow().published.clone();
-        let next_stamp = PointSinkMutationStampV1::new(first_stamp.desired()).unwrap();
+        let next_stamp = PointSinkMutationStampV1::new(first_stamp.desired())
+            .expect("начальный опубликованный stamp должен допускать следующее обновление");
         let changed = [
             patch[0],
             point_patch_at(1, 11, scope[1], alpha_paint(4, [88, 99, 111], 0.75)),
@@ -1512,7 +1555,7 @@ mod tests {
                     patch: &changed,
                     presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
                 })
-                .unwrap();
+                .expect("полный новый patch должен подготовиться до проверки отказа host");
             assert_eq!(
                 next.try_install(),
                 Err(HandoffPointSinkErrorV1::Host(error))
@@ -1528,8 +1571,10 @@ mod tests {
                 patch: &changed,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
-            .unwrap();
-        recovery.try_install().unwrap();
+            .expect("тот же patch после отказов host должен повторно подготовиться");
+        recovery
+            .try_install()
+            .expect("тот же patch после отказов host должен успешно установиться");
         let calls = state.borrow().installs.len();
         assert_eq!(
             recovery.try_install(),
@@ -1580,7 +1625,8 @@ mod tests {
                 point_patch_at(1, 10, second, good[1].paint()),
             ],
         ];
-        let stamp = PointSinkMutationStampV1::new(initial).unwrap();
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
         for patch in &bad {
             assert!(matches!(
                 sink.prepare(PointSinkIntentV1::SetAll {
@@ -1600,10 +1646,21 @@ mod tests {
                 patch: &good,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
-            .unwrap();
-        legal.try_install().unwrap();
+            .expect("точный полный scope должен подготовить допустимый patch");
+        legal
+            .try_install()
+            .expect("допустимый patch должен установиться после отказов неверным scope");
         legal.finish_after_session();
-        assert_eq!(state.borrow().published.as_ref().unwrap().points.len(), 2);
+        assert_eq!(
+            state
+                .borrow()
+                .published
+                .as_ref()
+                .expect("успешная установка полного scope должна опубликовать оба выхода")
+                .points
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -1616,7 +1673,8 @@ mod tests {
         let (mut sink, initial) = admitted_scope(&scope, host);
         let patch = two_point_patch(&scope);
         let composites = [PointSinkPresentationCompositeV1::new(9, 7, VALUE)];
-        let first_stamp = PointSinkMutationStampV1::new(initial).unwrap();
+        let first_stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
         let mut first = sink
             .prepare(PointSinkIntentV1::SetAll {
                 revision: 1,
@@ -1624,10 +1682,13 @@ mod tests {
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
             })
-            .unwrap();
-        first.try_install().unwrap();
+            .expect("начальный patch с композициями должен подготовиться");
+        first
+            .try_install()
+            .expect("начальный patch с композициями должен установиться");
         first.finish_after_session();
-        let second_stamp = PointSinkMutationStampV1::new(first_stamp.desired()).unwrap();
+        let second_stamp = PointSinkMutationStampV1::new(first_stamp.desired())
+            .expect("первый опубликованный stamp должен допускать вторую установку");
         let mut next = sink
             .prepare(PointSinkIntentV1::SetAll {
                 revision: 2,
@@ -1635,7 +1696,7 @@ mod tests {
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
             })
-            .unwrap();
+            .expect("второй patch должен подготовиться до измерения выделений памяти");
         state.borrow_mut().checkpoint_terminal_tail = true;
         let (result, events) = crate::test_support::measured_allocator_events(|| {
             next.try_install()?;
@@ -1644,17 +1705,25 @@ mod tests {
         });
         assert!(result.is_ok());
         assert_eq!(events, crate::test_support::AllocatorEvents::default());
-        assert_eq!(sink.retired.as_ref().unwrap().points.len(), 2);
+        assert_eq!(
+            sink.retired
+                .as_ref()
+                .expect("после ACK старые буферы должны оставаться в retired")
+                .points
+                .len(),
+            2
+        );
         let published = state.borrow().published.clone();
         {
             let _cancelled = sink
                 .prepare(PointSinkIntentV1::SetAll {
                     revision: 3,
-                    stamp: PointSinkMutationStampV1::new(second_stamp.desired()).unwrap(),
+                    stamp: PointSinkMutationStampV1::new(second_stamp.desired())
+                        .expect("второй опубликованный stamp должен допускать третье обновление"),
                     patch: &patch,
                     presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
                 })
-                .unwrap();
+                .expect("допустимый третий patch должен подготовиться до отмены");
         }
         assert_eq!(sink.committed.stamp, second_stamp.desired());
         assert_eq!(state.borrow().published, published);
@@ -1662,12 +1731,16 @@ mod tests {
         let mut recovery = sink
             .prepare(PointSinkIntentV1::SetAll {
                 revision: 3,
-                stamp: PointSinkMutationStampV1::new(second_stamp.desired()).unwrap(),
+                stamp: PointSinkMutationStampV1::new(second_stamp.desired()).expect(
+                    "второй опубликованный stamp должен допускать повтор третьего обновления",
+                ),
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
             })
-            .unwrap();
-        recovery.try_install().unwrap();
+            .expect("тот же patch после отмены должен повторно подготовиться");
+        recovery
+            .try_install()
+            .expect("тот же patch после отмены должен успешно установиться");
         recovery.finish_after_session();
         assert_eq!(sink.committed.revision, Some(3));
     }
@@ -1681,7 +1754,8 @@ mod tests {
         let (host, state) = fake_host_scope(&scope);
         let (mut sink, initial) = admitted_scope(&scope, host);
         let patch = two_point_patch(&scope);
-        let stamp = PointSinkMutationStampV1::new(initial).unwrap();
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
         let first = PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([10, 20, 30]));
         let second = PointSinkPresentationCompositeV1::new(9, 8, Srgb8::new([40, 50, 60]));
         let conflict = PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([40, 50, 60]));
@@ -1702,11 +1776,18 @@ mod tests {
                 patch: &patch,
                 presentation: PointSinkPresentationEvidenceV1::Fixture(&[second, first, first]),
             })
-            .unwrap();
-        valid.try_install().unwrap();
+            .expect("согласованные композиции разных сценариев должны подготовиться");
+        valid
+            .try_install()
+            .expect("согласованные композиции разных сценариев должны установиться");
         valid.finish_after_session();
         assert_eq!(
-            state.borrow().published.as_ref().unwrap().composites,
+            state
+                .borrow()
+                .published
+                .as_ref()
+                .expect("успешная установка должна опубликовать обе композиции")
+                .composites,
             [first, second]
         );
     }
@@ -1734,7 +1815,8 @@ mod tests {
     }
 
     fn alpha_paint(id: u32, source: [u8; 3], alpha: f64) -> EncodedPointPaintV1 {
-        let opacity = crate::composition::AdmittedOpacityV1::new(alpha).unwrap();
+        let opacity = crate::composition::AdmittedOpacityV1::new(alpha)
+            .expect("opacity контрольного paint в диапазоне от нуля до единицы должна приниматься");
         EncodedPointPaintV1::from_value(
             PaintId::new(id),
             EncodedPointPaintValueV1::from_admitted(Srgb8::new(source), opacity),

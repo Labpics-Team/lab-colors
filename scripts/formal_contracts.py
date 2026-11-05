@@ -278,20 +278,24 @@ MUTANTS += (
     ("handoff-foreign-confirmation", "program/attachment/handoff.rs",
      "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect",
      "handoff preparation must reject exactly wrong stamp scope or revision",
-     "                if current.revision != Some(revision) {", "                if false {"),
+     "                if self.committed.revision != Some(revision) {", "                if false {"),
     ("handoff-swallowed-host-refusal", "program/attachment/handoff.rs",
      "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
      "handoff must propagate the exact host refusal",
-     "            .map_err(HandoffPointSinkErrorV1::Host)?;",
-     "            .map_err(HandoffPointSinkErrorV1::Host).unwrap_or(());"),
+     "        if let Err(error) = self.writer.host.try_install(intent) {\n"
+     "            self.staged = Some(staged);\n"
+     "            return Err(HandoffPointSinkErrorV1::Host(error));\n"
+     "        }",
+     "        let _ = self.writer.host.try_install(intent);"),
     ("handoff-repeated-install", "program/attachment/handoff.rs",
      "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
      "successful handoff must commit the complete acknowledged command exactly once",
-     "        self.staged = None;", "        self.staged = Some(staged);"),
+     "        let Some(staged) = self.staged.take() else {",
+     "        let Some(staged) = self.staged.clone() else {"),
     ("handoff-stale-install", "program/attachment/handoff.rs",
      "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host",
      "stale prepared handoff must fail before any host call or state mutation",
-     "        if self.writer.committed.stamp != staged.expected_stamp {", "        if false {"),
+     "        if self.writer.committed.stamp != staged.expected_stamp() {", "        if false {"),
 )
 SOURCES += ("program/attachment/handoff.rs",)
 
