@@ -1635,7 +1635,7 @@ impl CompiledProgramV1 {
             .try_reserve_exact(output_count)
             .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
         emission_order.extend_from_slice(emissions);
-        emission_order.sort_unstable_by_key(|binding| binding.slot);
+        crate::ordering::sort_by_key(&mut emission_order, |binding| binding.slot);
         let mut authored_emissions = Vec::new();
         authored_emissions
             .try_reserve_exact(output_count)

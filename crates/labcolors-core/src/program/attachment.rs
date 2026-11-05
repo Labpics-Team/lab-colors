@@ -1284,7 +1284,7 @@ where
             }
         }
         // Aliases разделяют Paint, но не создают дополнительные renderer targets.
-        presentations.sort_unstable_by_key(|binding| binding.compiled.paint());
+        crate::ordering::sort_by_key(&mut presentations, |binding| binding.compiled.paint());
         for (emission, (_, paint)) in emissions.iter().zip(owner.compiled.outputs()) {
             if presentations
                 .binary_search_by_key(&paint, |binding| binding.compiled.paint())

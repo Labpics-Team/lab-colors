@@ -598,7 +598,7 @@ fn copy_presentation_composites(
             output.extend_from_slice(composites)
         }
     }
-    output.sort_unstable_by_key(|entry| (entry.root(), entry.scenario()));
+    crate::ordering::sort_by_key(output, |entry| (entry.root(), entry.scenario()));
     if output.windows(2).any(|pair| {
         pair[0].root() == pair[1].root()
             && pair[0].scenario() == pair[1].scenario()
