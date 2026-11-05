@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 375,
+   "count": 367,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -967,14 +967,6 @@
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
     "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
-    "test_verify_core_formal.MiniSatExperimentTests.test_batch_requires_search_but_accepts_no_search_siblings_and_checks_every_log",
-    "test_verify_core_formal.MiniSatExperimentTests.test_every_unexpected_backend_and_fallback_are_rejected",
-    "test_verify_core_formal.MiniSatExperimentTests.test_exact_backend_and_individual_no_search_results_are_admissible",
-    "test_verify_core_formal.MiniSatExperimentTests.test_kani_native_solver_precedes_the_final_cbmc_tail_and_keeps_filters_and_budgets",
-    "test_verify_core_formal.MiniSatExperimentTests.test_mutant_fragment_qualifies_the_whole_current_batch_and_restores_sources",
-    "test_verify_core_formal.MiniSatExperimentTests.test_positive_fragment_requires_search_in_its_current_invocation",
-    "test_verify_core_formal.MiniSatExperimentTests.test_run_kani_rejects_fallback_even_when_json_and_exit_code_are_successful",
-    "test_verify_core_formal.MiniSatExperimentTests.test_solver_markers_cross_chunks_and_long_lines_without_unbounded_reads",
     "test_wcag22_source_binding.SourceBindingTests.test_cargo_metadata_rejects_redirected_crate_root",
     "test_wcag22_source_binding.SourceBindingTests.test_committed_proof_binds_the_exact_live_capsules",
     "test_wcag22_source_binding.SourceBindingTests.test_every_bound_route_mutation_is_rejected_fail_closed",
@@ -990,7 +982,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "762b98b933fe74bdffe08d543636bb3d6c90555a8381d8ca1ed42bb26f8251b0",
+ "record_sha256": "0dd4719b9b7cb203c7f6680bd0bff023c4a80e186a68ae2ec2a0c99aa9aee2f5",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
