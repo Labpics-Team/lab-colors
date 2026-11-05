@@ -48,7 +48,7 @@ signal_probe_cleanup() {
       printf 'SIGNAL_TRACE_OOM_LOG_UNAVAILABLE\n' >&2
     fi
     if [[ -f "$RUNNER_TEMP/core-formal/positive-3.log" ]]; then
-      awk '/Checking harness |^Verification|^VERIFICATION|CBMC version/' "$RUNNER_TEMP/core-formal/positive-3.log" |
+      awk '/Checking harness |^Verification|^VERIFICATION|CBMC version|Starting Bounded Model Checking|size of program expression:|Generated .*VCC|Passing problem to propositional reduction|converting SSA|Solving with |variables.*clauses|^Runtime (Symex|Postprocess Equation|Convert SSA|Post-process|Solver|decision procedure):/' "$RUNNER_TEMP/core-formal/positive-3.log" |
         tail -n 20 || true
     fi
   fi
