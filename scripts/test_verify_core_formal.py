@@ -23,6 +23,15 @@ from verify_core_formal import (
 
 from formal_contracts import MUTANTS, WCAG_INTERVAL_PARTITIONS
 
+HANDOFF_BASES = (
+    "preparation_is_exact_and_has_no_publication_effect",
+    "rejected_install_is_atomic_retryable_and_success_is_once_only",
+    "stale_prepared_command_never_reaches_the_host",
+)
+HANDOFF_PARTITIONS = ("set_all", "revoke_all", "confirm_exact")
+HANDOFF_HARNESSES = tuple(f"program::attachment::handoff::proofs::{base}_{partition}"
+    for base in HANDOFF_BASES for partition in HANDOFF_PARTITIONS)
+
 MUTANT = MUTANTS[0]
 MUTANT_HARNESS = MUTANT[2]
 MUTANT_ASSERTION = json.dumps(MUTANT[3])
@@ -370,6 +379,20 @@ class FormalReportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_report(report)
 
+        self.assertEqual(len(CONTRACTS), 47)
+        self.assertEqual(set(HANDOFF_HARNESSES),
+                         {name for name in CONTRACTS if "::handoff::proofs::" in name})
+        for harness in HANDOFF_HARNESSES:
+            with self.subTest(harness=harness):
+                report = valid_report()
+                verification = report["verification_results"]
+                verification["results"] = [r for r in verification["results"]
+                    if r["harness_id"] != harness]
+                for field in ("total_harnesses", "executed", "successful"):
+                    verification["summary"][field] -= 1
+                with self.assertRaises(ValueError):
+                    validate_report(report)
+
     def test_each_wcag_partition_is_mandatory_even_with_adjusted_summary(self):
         for partition in WCAG_INTERVAL_PARTITIONS:
             with self.subTest(partition=partition):
@@ -399,6 +422,26 @@ class FormalReportTests(unittest.TestCase):
             report = valid_report()
             checks = report["verification_results"]["results"][0]["checks"]
             checks.remove(next(check for check in checks if check["category"] == category))
+            with self.assertRaises(ValueError):
+                validate_report(report)
+
+        for harness in HANDOFF_HARNESSES:
+            for category, labels in zip(("assertion", "cover"), CONTRACTS[harness], strict=True):
+                for label in labels:
+                    with self.subTest(harness=harness, category=category, label=label):
+                        report = valid_report()
+                        result = next(r for r in report["verification_results"]["results"]
+                                      if r["harness_id"] == harness)
+                        description = json.dumps(label) if category == "assertion" else label
+                        result["checks"] = [c for c in result["checks"]
+                            if c["category"] != category or c["description"] != description]
+                        with self.assertRaises(ValueError):
+                            validate_report(report)
+            report = valid_report()
+            result = next(r for r in report["verification_results"]["results"]
+                          if r["harness_id"] == harness)
+            result["checks"].append({"category": "cover", "description": "foreign operation cover",
+                                     "status": "Satisfied"})
             with self.assertRaises(ValueError):
                 validate_report(report)
 
@@ -451,7 +494,7 @@ class FormalReportTests(unittest.TestCase):
                 launch.return_value.wait.side_effect = completed
                 self.assertEqual(run_kani(path), ({}, 1))
                 terminate.assert_called_once_with(4243, signal.SIGKILL)
-                self.assertIn("--jobs=4", launch.call_args.args[0])
+                self.assertIn("--jobs=1", launch.call_args.args[0])
 
     def test_positive_subset_uses_exact_multi_filter_without_concrete_playback(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -469,7 +512,7 @@ class FormalReportTests(unittest.TestCase):
                 launch.return_value.wait.side_effect = completed
                 run_kani(path, positive_harnesses=("proof::one", "proof::two"))
                 command = launch.call_args.args[0]
-                self.assertIn("--jobs=4", command)
+                self.assertIn("--jobs=1", command)
                 self.assertEqual(command.count("--harness"), 2)
                 self.assertIn("proof::one", command)
                 self.assertIn("proof::two", command)
@@ -492,7 +535,7 @@ class FormalReportTests(unittest.TestCase):
                 launch.return_value.wait.side_effect = completed
                 run_kani(path, harness="demo::proof")
                 command = launch.call_args.args[0]
-                self.assertNotIn("--jobs=4", command)
+                self.assertFalse(any(arg.startswith("--jobs") for arg in command))
                 self.assertIn("--concrete-playback", command)
 
     def test_target_failure_may_make_its_later_cover_unreachable(self):
@@ -523,6 +566,32 @@ class FormalReportTests(unittest.TestCase):
         report["verification_results"]["results"][0]["checks"][0]["description"] = "compiler error"
         with self.assertRaises(ValueError):
             validate_mutant(report, 1, MUTANT)
+
+        handoff_mutants = [mutant for mutant in MUTANTS if mutant[0].startswith("handoff-")]
+        expected = {("handoff-foreign-confirmation",
+                     f"program::attachment::handoff::proofs::{HANDOFF_BASES[0]}_confirm_exact")}
+        for mutant_name, base in (("handoff-swallowed-host-refusal", HANDOFF_BASES[1]),
+                                 ("handoff-repeated-install", HANDOFF_BASES[1]),
+                                 ("handoff-stale-install", HANDOFF_BASES[2])):
+            expected.update((f"{mutant_name}-{partition}",
+                             f"program::attachment::handoff::proofs::{base}_{partition}")
+                            for partition in HANDOFF_PARTITIONS)
+        self.assertEqual(len(MUTANTS), 30)
+        self.assertEqual(len(handoff_mutants), 10)
+        self.assertEqual({(mutant[0], mutant[2]) for mutant in handoff_mutants}, expected)
+        for mutant in handoff_mutants:
+            with self.subTest(mutant=mutant[0]):
+                report = valid_subset_report((mutant[2],))
+                verification = report["verification_results"]
+                verification["summary"].update({"successful": 0, "failed": 1})
+                result = verification["results"][0]
+                result["status"] = "Failure"
+                next(c for c in result["checks"]
+                     if c["description"] == json.dumps(mutant[3]))["status"] = "Failure"
+                validate_mutant(report, 1, mutant)
+                result["harness_id"] = next(h for h in HANDOFF_HARNESSES if h != mutant[2])
+                with self.assertRaises(ValueError):
+                    validate_mutant(report, 1, mutant)
 
 
     def test_mutant_shards_cover_each_mutant_exactly_once(self):
@@ -604,6 +673,21 @@ class FormalReportTests(unittest.TestCase):
             self.assertEqual(receipt["harnesses"], sorted(CONTRACTS))
             self.assertTrue(receipt["semantic_mutant_rejected"])
             validate_report(json.loads((root / "positive.json").read_text(encoding="utf-8")))
+
+            for mutant in MUTANTS:
+                if not mutant[0].startswith("handoff-"):
+                    continue
+                name = mutant[0]
+                index = next(i for i in range(5)
+                             if mutant in selected_mutants(i, 5))
+                fragment_path = root / f"fragment-mutants-{index}.json"
+                saved_fragment = fragment_path.read_bytes()
+                fragment = json.loads(saved_fragment)
+                del fragment["negative_sha256"][name]
+                fragment_path.write_text(json.dumps(fragment), encoding="utf-8")
+                with self.subTest(missing_mutant=name), self.assertRaises(ValueError):
+                    assemble_claimed_source()
+                fragment_path.write_bytes(saved_fragment)
 
             with mock.patch("verify_core_formal.checkout_snapshot", return_value=(common["verified_source_sha256"], common["checkout_commit"], False)):
                 with self.assertRaisesRegex(ValueError, "clean source state"):

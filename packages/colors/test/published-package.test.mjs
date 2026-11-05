@@ -1,22 +1,52 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { access, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
-  downloadPublishedPackage, waitForPublishedPackage,
+  downloadPublishedPackage, waitForPublishedPackage, verifyPublishedPackage,
 } from "../../../scripts/verify-published-package.mjs";
 
 const bytes = Buffer.from("independently verified archive");
 const sha = (algorithm, value, encoding = "hex") => createHash(algorithm).update(value).digest(encoding);
-const expected = { name: "@example/colors", version: "1.2.3", sha256: sha("sha256", bytes) };
+const expected = { name: "@example/colors", version: "1.2.3", sha256: sha("sha256", bytes), gitSha: "a".repeat(40) };
 const archiveUrl = "https://registry.npmjs.org/@example/colors/-/colors-1.2.3.tgz";
 const metadataUrl = "https://registry.npmjs.org/%40example%2Fcolors/1.2.3";
+const attestationUrl = "https://registry.npmjs.org/-/npm/v1/attestations/@example%2fcolors@1.2.3";
+const slsaType = "https://slsa.dev/provenance/v1";
+const repository = "https://github.com/Labpics-Team/lab-colors";
+const tag = "refs/tags/colors-v1.2.3";
+const provenance = () => ({
+  _type: "https://in-toto.io/Statement/v1",
+  subject: [{ name: "pkg:npm/%40example/colors@1.2.3", digest: { sha512: sha("sha512", bytes) } }],
+  predicateType: slsaType,
+  predicate: {
+    buildDefinition: {
+      buildType: "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+      externalParameters: { workflow: { ref: tag, repository, path: ".github/workflows/publish.yml" } },
+      internalParameters: { github: { event_name: "push" } },
+      resolvedDependencies: [{ uri: `git+${repository}@${tag}`, digest: { gitCommit: expected.gitSha } }],
+    },
+    runDetails: { builder: { id: "https://github.com/actions/runner/github-hosted" } },
+  },
+});
+const attestations = (statement = provenance()) => ({ attestations: [{
+  predicateType: slsaType,
+  bundle: { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", dsseEnvelope: {
+    payloadType: "application/vnd.in-toto+json",
+    payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
+    signatures: [{ sig: "fixture-signature" }],
+  } },
+}] });
 const metadata = () => ({ name: expected.name, version: expected.version, dist: {
   tarball: archiveUrl, integrity: `sha512-${sha("sha512", bytes, "base64")}`,
+  attestations: { url: attestationUrl, provenance: { predicateType: slsaType } },
 } });
 
-function registry(record = metadata(), archive = () => new Response(bytes)) {
+function registry(record = metadata(), archive = () => new Response(bytes), signed = attestations()) {
   const calls = [];
   const fetcher = async (url, options) => {
     calls.push(url);
@@ -24,6 +54,7 @@ function registry(record = metadata(), archive = () => new Response(bytes)) {
     assert.ok(options.signal instanceof AbortSignal);
     assert.equal(options.headers, undefined);
     if (url === metadataUrl) return Response.json(record);
+    if (url === attestationUrl) return Response.json(signed);
     assert.equal(url, archiveUrl);
     return archive();
   };
@@ -32,8 +63,138 @@ function registry(record = metadata(), archive = () => new Response(bytes)) {
 
 test("published bytes retain the independent preparation identity", async () => {
   const fixture = registry();
-  assert.deepEqual(await downloadPublishedPackage(expected, fixture.fetcher), bytes);
-  assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl]);
+  assert.deepEqual((await downloadPublishedPackage(expected, fixture.fetcher)).bytes, bytes);
+  assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+});
+
+test("one npm response owns the selected signed SLSA payload", async () => {
+  const signed = attestations();
+  signed.attestations.unshift({ predicateType: "https://github.com/npm/attestation/tree/main/specs/publish/v0.1", bundle: {} });
+  const fixture = registry(metadata(), () => new Response(bytes), signed);
+  const snapshot = await downloadPublishedPackage(expected, fixture.fetcher);
+  assert.deepEqual(snapshot.bundle, signed.attestations[1].bundle);
+  assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+});
+
+test("empty, non-SLSA and ambiguous attestations refuse without retries", async () => {
+  for (const signed of [{}, { attestations: [] }, { attestations: [{ predicateType: "other", bundle: {} }] },
+    { attestations: [...attestations().attestations, ...attestations().attestations] }]) {
+    const fixture = registry(metadata(), () => new Response(bytes), signed);
+    await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher, async () => assert.fail("semantic retry")), /SLSA/u);
+    assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+  }
+});
+
+test("attestation endpoint is restricted to this exact public package version", async () => {
+  for (const url of ["https://foreign.example/attestation", archiveUrl, attestationUrl.replace("1.2.3", "1.2.4"),
+    attestationUrl + "?redirect=other", attestationUrl + "#fragment", attestationUrl.replace("https:", "http:")]) {
+    const record = metadata(); record.dist.attestations.url = url;
+    const fixture = registry(record);
+    await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher), /attestation URL/u);
+    assert.deepEqual(fixture.calls, [metadataUrl]);
+  }
+});
+
+test("signed policy binds subject, archive, source, recipe and release tag", async () => {
+  const changes = [
+    [(row) => { row._type = "https://in-toto.io/Statement/v0.1"; }, /statement type/u],
+    [(row) => { row.predicateType = "other"; }, /predicate type/u],
+    [(row) => { row.subject = []; }, /subject/u],
+    [(row) => { row.subject.push(row.subject[0]); }, /subject/u],
+    [(row) => { row.subject[0].name = "pkg:npm/%40example/foreign@1.2.3"; }, /subject/u],
+    [(row) => { row.subject[0].digest.sha512 = "0".repeat(128); }, /digest/u],
+    [(row) => { row.predicate.buildDefinition.buildType = "other"; }, /build type/u],
+    [(row) => { row.predicate.buildDefinition.externalParameters.workflow.repository = "https://github.com/foreign/colors"; }, /workflow/u],
+    [(row) => { row.predicate.buildDefinition.externalParameters.workflow.ref = "refs/tags/colors-v1.2.4"; }, /workflow/u],
+    [(row) => { row.predicate.buildDefinition.externalParameters.workflow.path = ".github/workflows/foreign.yml"; }, /workflow/u],
+    [(row) => { row.predicate.buildDefinition.resolvedDependencies[0].uri = `git+${repository}@refs/heads/main`; }, /source/u],
+    [(row) => { row.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = "b".repeat(40); }, /source/u],
+    [(row) => { row.predicate.buildDefinition.resolvedDependencies = []; }, /source/u],
+    [(row) => { row.predicate.buildDefinition.internalParameters.github.event_name = "workflow_dispatch"; }, /trigger/u],
+  ];
+  for (const [edit, problem] of changes) {
+    const row = provenance(); edit(row);
+    const fixture = registry(metadata(), () => new Response(bytes), attestations(row));
+    await assert.rejects(downloadPublishedPackage(expected, fixture.fetcher, async () => assert.fail("semantic retry")), problem);
+    assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+  }
+});
+
+test("official verifier receives the same bounded bundle, exact signer and archive before the consumer", async () => {
+  const signed = attestations();
+  const fixture = registry(metadata(), () => new Response(bytes), signed);
+  const calls = [];
+  let temporaryRoot;
+  const cosignBin = join(tmpdir(), "pinned-release-cosign");
+  await verifyPublishedPackage(expected, {
+    fetcher: fixture.fetcher, cosignBin,
+    executeVerifier: async (command, args, options) => {
+      calls.push("verifier");
+      assert.equal(command, cosignBin);
+      assert.deepEqual(args.slice(0, 2), ["verify-blob-attestation", "--bundle"]);
+      temporaryRoot = dirname(args[2]);
+      assert.deepEqual(JSON.parse(await readFile(args[2], "utf8")), signed.attestations[0].bundle);
+      assert.deepEqual(args.slice(3, -1), [
+        "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+        "--certificate-identity", `${repository}/.github/workflows/publish-worker.yml@${tag}`,
+        "--type", slsaType,
+      ]);
+      assert.deepEqual(await readFile(args.at(-1)), bytes);
+      assert.equal(options.shell, false);
+      assert.equal(options.timeout, 180_000);
+      assert.ok(options.maxBuffer <= 1024 * 1024);
+    },
+    smoke: async (tarball) => {
+      calls.push("consumer");
+      assert.equal(dirname(tarball), temporaryRoot);
+      assert.deepEqual(await readFile(tarball), bytes);
+    },
+  });
+  assert.deepEqual(calls, ["verifier", "consumer"]);
+  assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+  await assert.rejects(access(temporaryRoot), { code: "ENOENT" });
+});
+
+test("verifier refusal, including wrong certificate identity, never invokes a consumer", async () => {
+  for (const reason of ["signature rejected", "certificate identity rejected"]) {
+    const fixture = registry();
+    let temporaryRoot;
+    let verifications = 0;
+    let consumers = 0;
+    await assert.rejects(verifyPublishedPackage(expected, {
+      fetcher: fixture.fetcher, cosignBin: join(tmpdir(), "pinned-release-cosign"),
+      executeVerifier: (command, args) => {
+        verifications += 1;
+        temporaryRoot = dirname(args[2]);
+        throw new Error(reason);
+      },
+      smoke: async () => { consumers += 1; },
+    }), new RegExp(reason, "u"));
+    assert.equal(verifications, 1);
+    assert.equal(consumers, 0);
+    assert.deepEqual(fixture.calls, [metadataUrl, archiveUrl, attestationUrl]);
+    await assert.rejects(access(temporaryRoot), { code: "ENOENT" });
+  }
+});
+
+test("invalid signed policy stops before verifier and consumer execution", async () => {
+  const row = provenance(); row.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = "b".repeat(40);
+  const fixture = registry(metadata(), () => new Response(bytes), attestations(row));
+  await assert.rejects(verifyPublishedPackage(expected, {
+    fetcher: fixture.fetcher, cosignBin: join(tmpdir(), "pinned-release-cosign"),
+    executeVerifier: () => assert.fail("invalid policy reached verifier"),
+    smoke: () => assert.fail("invalid policy reached consumer"),
+  }), /source differs/u);
+});
+
+test("readback refuses missing pinned verifier before registry IO", async () => {
+  for (const cosignBin of [undefined, "", "cosign"]) {
+    const fixture = registry();
+    await assert.rejects(verifyPublishedPackage(expected, {
+      fetcher: fixture.fetcher, cosignBin: cosignBin ?? "",
+    }), /COSIGN_BIN path is required/u);
+    assert.deepEqual(fixture.calls, []);
+  }
 });
 
 test("a self-consistent substituted archive cannot authorize itself", async () => {
@@ -101,6 +262,14 @@ test("publication readback consumes the publisher digest in its own credential-f
   assert.match(readback[1], /needs: \[prepare, publish\]/u);
   assert.match(readback[1], /EXPECTED_TARBALL_SHA256: \$\{\{ needs\.publish\.outputs\.tarball_sha256 \}\}/u);
   assert.match(readback[1], /node scripts\/verify-published-package\.mjs/u);
+  const install = readback[1].slice(readback[1].indexOf("- name: install pinned provenance verifier"),
+    readback[1].indexOf("- name: install the exact public archive"));
+  assert.match(install, /https:\/\/github\.com\/sigstore\/cosign\/releases\/download\/v3\.1\.4\/cosign-linux-amd64/u);
+  assert.match(install, /424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa/u);
+  assert.match(install, /sha256sum --check --strict/u);
+  assert.match(install, /COSIGN_BIN=%s/u);
+  assert.ok(install.indexOf("sha256sum --check --strict") < install.indexOf("chmod 700"));
+  assert.ok(install.indexOf("chmod 700") < install.indexOf("COSIGN_BIN=%s"));
   assert.match(readback[1], /timeout-minutes: 30/u);
   assert.doesNotMatch(readback[1], /secrets\.|environment:|NODE_AUTH_TOKEN/u);
 });
@@ -113,7 +282,7 @@ test("transient registry failures recover with a bounded retry budget", async ()
     if (url === metadataUrl && attempts++ < 2) return new Response(null, { status: attempts === 1 ? 404 : 503 });
     return healthy.fetcher(url, options);
   };
-  assert.deepEqual(await downloadPublishedPackage(expected, fetcher, async (ms) => { delays.push(ms); }), bytes);
+  assert.deepEqual((await downloadPublishedPackage(expected, fetcher, async (ms) => { delays.push(ms); })).bytes, bytes);
   assert.equal(attempts, 3);
   assert.deepEqual(delays, [1000, 2000]);
   let failures = 0;
@@ -210,7 +379,7 @@ test("npm scanning delay eventually admits only the verified public archive", as
     return healthy.fetcher(url, options);
   };
   const archive = await waitForPublishedPackage(expected, fetcher, async (ms) => { waits.push(ms); });
-  assert.deepEqual(archive, bytes);
+  assert.deepEqual(archive.bytes, bytes);
   assert.deepEqual(waits, [15_000, 15_000, 15_000]);
   assert.equal(calls.filter((url) => url === metadataUrl).length, 4);
   assert.equal(calls.filter((url) => url === archiveUrl).length, 1);

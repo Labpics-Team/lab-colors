@@ -32,12 +32,25 @@ signal_probe_cleanup() {
   if [[ -n "$signal_probe_instance" ]]; then
     sudo -n sh -c 'printf 0 > "$1/tracing_on"; printf 0 > "$1/events/signal/signal_generate/enable"' sh "$signal_probe_instance" || true
     sleep 0.1
+    sudo -n cat "$signal_probe_instance/trace" || printf 'SIGNAL_TRACE_SNAPSHOT_UNAVAILABLE\n' >&2
     sudo -n sh -c '
       for stats in "$1"/per_cpu/cpu*/stats; do
         printf "SIGNAL_TRACE_DRAIN %s\n" "$stats"
         cat "$stats" || exit
       done
     ' sh "$signal_probe_instance" || printf 'SIGNAL_TRACE_DRAIN_UNAVAILABLE\n' >&2
+    if ! (
+      set -o pipefail
+      sudo -n dmesg --notime |
+        awk '/oom-kill:|Out of memory: Killed process|Memory cgroup out of memory: Killed process|oom_reaper:|invoked oom-killer/' |
+        tail -n 12
+    ); then
+      printf 'SIGNAL_TRACE_OOM_LOG_UNAVAILABLE\n' >&2
+    fi
+    if [[ -f "$RUNNER_TEMP/core-formal/positive-3.log" ]]; then
+      awk '/Checking harness |^Verification|^VERIFICATION|CBMC version/' "$RUNNER_TEMP/core-formal/positive-3.log" |
+        tail -n 20 || true
+    fi
   fi
   if [[ -n "$signal_probe_reader" && -n "$signal_probe_reader_start" ]]; then
     sudo -n sh -c '

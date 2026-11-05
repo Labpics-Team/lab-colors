@@ -33,6 +33,8 @@ POSITIVE_SHARDS = (
         "composition::proofs::opacity_domain_preserves_all_boundaries",
         "authority::clean_convention::proofs::selection_admits_exactly_declared_modeled_point_release",
         "composition::proofs::opacity_admission_is_exact_and_canonical",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_set_all",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_set_all",
     ),
     (
         "authority::proofs::auth_admission_is_exact_atomic_and_lane_local",
@@ -46,14 +48,17 @@ POSITIVE_SHARDS = (
         "composition::proofs::identical_channels_are_fixed_for_every_opacity",
         "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap",
         "composition::proofs::multiply_preserves_the_entire_admitted_domain",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_revoke_all",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_set_all",
     ),
     (
         "wcag22::kernel::proofs::exact_points_are_total_symmetric_and_correct",
         "wcag22::kernel::proofs::interval_ui_component_is_sound_for_every_enclosed_point",
         "observation::proofs::equality_requires_the_same_observation_allocation",
-        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact",
         "srgb8::proofs::hex_admits_exactly_six_hex_digits",
-        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all",
         "field_effect::proofs::gaussian_sampling_clamps_without_coordinate_wrap",
         "certificate::proofs::reader_big_endian_and_length_prefix",
         "field_effect::proofs::rectangles_admit_exactly_nonempty_in_bounds_geometry",
@@ -65,7 +70,8 @@ POSITIVE_SHARDS = (
         "authority::proofs::auth_issue_admit_require_composes",
         "wcag22::kernel::proofs::interval_large_text_is_sound_for_every_enclosed_point",
         "authority::proofs::auth_require_iff_full_binding",
-        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_confirm_exact",
         "authority::proofs::auth_permit_iff_exact_current_proof",
         "joint::proofs::doubling_cardinality_cannot_wrap_into_empty_success",
         "field_effect::proofs::expanded_rectangles_preserve_exact_clipped_influence",
@@ -182,7 +188,9 @@ def run_kani(
     if harness is not None:
         command.extend(["--harness", harness, "--exact", "-Z", "concrete-playback", "--concrete-playback", "print"])
     else:
-        command.append("--jobs=4")
+        # Positive CBMC searches share one hosted VM. Bound peak memory by
+        # running one solver at a time; keep every harness and its time budget.
+        command.append("--jobs=1")
         if positive_harnesses is not None:
             if not positive_harnesses:
                 raise ValueError("empty positive harness shard")

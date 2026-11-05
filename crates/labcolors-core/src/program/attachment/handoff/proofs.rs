@@ -152,9 +152,9 @@ fn patch(
     }
 }
 
-#[kani::proof]
-#[kani::unwind(4)]
-fn preparation_is_exact_and_has_no_publication_effect() {
+// kind=0, kind=1 и остальные u8 различаются только операцией. Три
+// мономорфизации сохраняют полный домен остальных входов и все guards.
+fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
     let Some((mut writer, old)) = any_writer() else {
         return;
     };
@@ -172,7 +172,7 @@ fn preparation_is_exact_and_has_no_publication_effect() {
     let point = patch(HandoffPointSinkOutputIdV1::new(kani::any()), paint);
     let patches = [point, point];
     let length = usize::from(kani::any::<u8>() % 3);
-    let kind: u8 = kani::any();
+    let kind = KIND;
     let intent = match kind {
         0 => PointSinkIntentV1::SetAll {
             revision,
@@ -267,28 +267,52 @@ fn preparation_is_exact_and_has_no_publication_effect() {
         old.matches(&writer.committed) && writer.host.calls == 0 && writer.host.accepted.is_none(),
         "preparing or abandoning a handoff must never publish or advance state"
     );
-    kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
-    kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
-    kani::cover!(
-        actual.is_none() && kind > 1 && old.point.is_some(),
-        "published value confirmed"
-    );
-    kani::cover!(
-        actual.is_none() && kind > 1 && old.point.is_none(),
-        "empty value confirmed"
-    );
+    if KIND == 0 {
+        kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
+        kani::cover!(
+            actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
+            "foreign scope rejected"
+        );
+    }
+    if KIND == 1 {
+        kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
+    }
+    if KIND > 1 {
+        kani::cover!(
+            actual.is_none() && kind > 1 && old.point.is_some(),
+            "published value confirmed"
+        );
+        kani::cover!(
+            actual.is_none() && kind > 1 && old.point.is_none(),
+            "empty value confirmed"
+        );
+        kani::cover!(
+            actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
+            "foreign revision rejected"
+        );
+    }
     kani::cover!(
         actual == Some(HandoffPointSinkErrorV1::StampMismatch),
         "foreign stamp rejected"
     );
-    kani::cover!(
-        actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
-        "foreign scope rejected"
-    );
-    kani::cover!(
-        actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
-        "foreign revision rejected"
-    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_set_all() {
+    preparation_is_exact_and_has_no_publication_effect::<0>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_revoke_all() {
+    preparation_is_exact_and_has_no_publication_effect::<1>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_confirm_exact() {
+    preparation_is_exact_and_has_no_publication_effect::<2>();
 }
 
 fn valid_intent<'a>(
@@ -371,9 +395,7 @@ fn pending_matches(
     }
 }
 
-#[kani::proof]
-#[kani::unwind(4)]
-fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
+fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>() {
     let Some((mut writer, old)) = any_writer() else {
         return;
     };
@@ -381,7 +403,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
         return;
     };
     let points = [patch(writer.owned_scope[0], paint)];
-    let kind: u8 = kani::any();
+    let kind = KIND;
     let revision = kani::any();
     let Some(intent) = valid_intent(&old, &points, kind, revision) else {
         return;
@@ -455,12 +477,18 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
         expected.matches(&writer.committed) && writer.host.calls == 2,
         "finishing the handoff must preserve its acknowledged result"
     );
-    kani::cover!(kind == 0, "rejected set retried");
-    kani::cover!(kind == 1, "rejected revoke retried");
-    kani::cover!(
-        kind > 1 && old.stamp.sequence() == u64::MAX,
-        "exhausted stamp still permits confirmation"
-    );
+    if KIND == 0 {
+        kani::cover!(kind == 0, "rejected set retried");
+    }
+    if KIND == 1 {
+        kani::cover!(kind == 1, "rejected revoke retried");
+    }
+    if KIND > 1 {
+        kani::cover!(
+            kind > 1 && old.stamp.sequence() == u64::MAX,
+            "exhausted stamp still permits confirmation"
+        );
+    }
     kani::cover!(
         error == HandoffPointSinkHostErrorV1::Protocol,
         "protocol refusal is retryable"
@@ -469,7 +497,23 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only() {
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn stale_prepared_command_never_reaches_the_host() {
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_set_all() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<0>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<1>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<2>();
+}
+
+fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     let Some((mut writer, old)) = any_writer() else {
         return;
     };
@@ -477,7 +521,7 @@ fn stale_prepared_command_never_reaches_the_host() {
         return;
     };
     let points = [patch(writer.owned_scope[0], paint)];
-    let kind = kani::any();
+    let kind = KIND;
     let revision = kani::any();
     let Some(intent) = valid_intent(&old, &points, kind, revision) else {
         return;
@@ -522,4 +566,22 @@ fn stale_prepared_command_never_reaches_the_host() {
         changed.binding_epoch() == old.stamp.binding_epoch(),
         "same epoch foreign sequence rejected"
     );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_set_all() {
+    stale_prepared_command_never_reaches_the_host::<0>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_revoke_all() {
+    stale_prepared_command_never_reaches_the_host::<1>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_confirm_exact() {
+    stale_prepared_command_never_reaches_the_host::<2>();
 }
