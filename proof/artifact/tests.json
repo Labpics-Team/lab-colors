@@ -665,7 +665,7 @@
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_removing_explicit_binary_reproduces_the_admission_failure",
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_script_extraction_preserves_body_and_stops_at_next_step",
     "test_ci_peer_gate.BrowserBinaryAdmissionTest.test_script_read_errors_remain_assertions",
-    "test_ci_peer_gate.PeerGateTest.test_candidate_ci_caller_and_yaml_are_bound_to_the_reviewed_snapshot",
+    "test_ci_peer_gate.PeerGateTest.test_ci_caller_selects_the_worker_from_its_own_snapshot",
     "test_ci_peer_gate.PeerGateTest.test_empty_run_set_waits_and_can_never_turn_green",
     "test_ci_peer_gate.PeerGateTest.test_exact_required_successes_are_the_only_green_state",
     "test_ci_peer_gate.PeerGateTest.test_gate_run_is_ignored_without_counting_as_evidence",
@@ -966,7 +966,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "3e87879d5b7fcab00279cbd52433c5c2a69b90e0562d0141085cdb2156e1c8b2",
+ "record_sha256": "4c99dd8038da0e265c8857320b7ca8cec74b5fc1f528aecdf97cdffef7351f3a",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
