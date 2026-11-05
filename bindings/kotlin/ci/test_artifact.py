@@ -6,6 +6,8 @@ import re
 import subprocess
 import sys
 import importlib.util
+import io
+from contextlib import redirect_stderr
 from pathlib import Path
 import struct
 import shutil
@@ -98,7 +100,10 @@ class ArtifactTests(unittest.TestCase):
         first = PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "java.lang.NoClassDefFoundError: FIRST_CAUSE\n"
         noise = (PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: other.app, PID: 1234\n" + PREFIX + "LATER_CAUSE\n") * 300
         with tempfile.TemporaryDirectory() as directory:
-            capture = self.interval(Path(directory), first + noise, 0)
+            output = io.StringIO()
+            with redirect_stderr(output):
+                capture = self.interval(Path(directory), first + noise, 0)
+            self.assertEqual(output.getvalue(), "")
             self.assertIn("FIRST_CAUSE", capture.block.text)
             self.assertNotIn("LATER_CAUSE", capture.block.text)
             self.assertFalse(capture.block.truncated)
@@ -128,11 +133,24 @@ class ArtifactTests(unittest.TestCase):
     def test_connected_exception_is_preserved_and_reader_joined(self):
         with tempfile.TemporaryDirectory() as directory:
             failure = OSError("connected launch failed")
-            with self.assertRaises(OSError) as caught:
-                self.interval(Path(directory), "", failure)
+            first = PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "java.lang.NoClassDefFoundError: FIRST_CAUSE\n" + PREFIX + "x" * 16384 + "\n"
+            output = io.StringIO()
+            with redirect_stderr(output), self.assertRaises(OSError) as caught:
+                self.interval(Path(directory), first, failure)
             self.assertIs(caught.exception, failure)
-            receipt = json.loads((Path(directory) / "build/outputs/consumer-diagnostics/debug/connected-exit.json").read_text())
+            evidence = Path(directory) / "build/outputs/consumer-diagnostics/debug"
+            receipt = json.loads((evidence / "connected-exit.json").read_text())
             self.assertIn("exception", receipt)
+            self.assertTrue(output.getvalue().startswith("ANDROID_STARTUP_CAPTURE "))
+            emitted = json.loads(output.getvalue().removeprefix("ANDROID_STARTUP_CAPTURE "))
+            saved = json.loads((evidence / "startup-capture.json").read_text())
+            for key in ("status", "exceptionFound", "truncated", "overflow", "bytesObserved"):
+                self.assertEqual(emitted[key], saved[key])
+            saved_block = (evidence / "first-startup-exception.txt").read_bytes()
+            self.assertEqual(emitted["firstException"], saved_block[:4096].decode("utf-8", errors="replace"))
+            self.assertTrue(emitted["logTruncated"])
+            self.assertIn("FIRST_CAUSE", emitted["firstException"])
+            self.assertLess(len(output.getvalue().encode()), 25000)
 
     def test_inventory_missing_categories_fail_with_reports(self):
         for missing in ("app", "test", "mapping.txt", "configuration.txt", "usage.txt", "seeds.txt"):
@@ -184,7 +202,7 @@ class ArtifactTests(unittest.TestCase):
             root = Path(directory)
             command = ["gradle", "connectedDebugAndroidTest"]
             for result_code in (0, 17):
-                with self.subTest(result_code=result_code), patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
+                with self.subTest(result_code=result_code), redirect_stderr(io.StringIO()), patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
                     if result_code:
                         with self.assertRaises(subprocess.CalledProcessError) as failure:
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
@@ -195,6 +213,15 @@ class ArtifactTests(unittest.TestCase):
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
                     evidence = root / "build/outputs/consumer-diagnostics/debug"
                     self.assertEqual(json.loads((evidence / "connected-exit.json").read_text())["returncode"], result_code)
+            for diagnostic_fault in (
+                patch.object(Path, "read_text", side_effect=OSError("diagnostic read failed")),
+                patch.object(elf.sys, "stderr", unittest.mock.Mock(write=unittest.mock.Mock(side_effect=OSError("diagnostic output failed")))),
+            ):
+                with diagnostic_fault, patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close"), patch.object(elf.CrashCapture, "finish"), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, 17)):
+                    with self.assertRaises(subprocess.CalledProcessError) as failure:
+                        elf.connected_test(command, root, {}, Path("adb"), "debug")
+                    self.assertEqual(failure.exception.returncode, 17)
+                    self.assertIsNone(failure.exception.__cause__)
 
     def test_connected_capture_has_scoped_commands_and_no_false_exception(self):
         with tempfile.TemporaryDirectory() as directory:

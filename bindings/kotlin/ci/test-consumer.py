@@ -224,6 +224,17 @@ class CrashCapture:
             "error": repr(error) if error else None}) + "\n")
 
 
+def emit_startup_capture(evidence: Path) -> None:
+    saved = json.loads((evidence / "startup-capture.json").read_text())
+    summary = {key: saved[key] for key in ("status", "exceptionFound", "truncated", "overflow", "bytesObserved")}
+    # Retain the local full capture; CI needs only its first 4 KiB of cause.
+    with (evidence / "first-startup-exception.txt").open("rb") as source:
+        prefix = source.read(4097)
+    summary["firstException"] = prefix[:4096].decode("utf-8", errors="replace")
+    summary["logTruncated"] = len(prefix) > 4096
+    print("ANDROID_STARTUP_CAPTURE " + json.dumps(summary), file=sys.stderr, flush=True)
+
+
 def connected_test(command: list[str], consumer: Path, environment: dict, adb: Path, variant: str) -> None:
     evidence = consumer / "build/outputs/consumer-diagnostics" / variant
     evidence.mkdir(parents=True, exist_ok=True)
@@ -256,6 +267,12 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
             capture.save(evidence, capture_error)
         except BaseException as error:
             capture_error = error
+    if primary or capture_error:
+        try:
+            emit_startup_capture(evidence)
+        except BaseException:
+            # Supplementary logging must never replace the original failure.
+            pass
     if primary:
         if capture_error:
             raise primary from capture_error
