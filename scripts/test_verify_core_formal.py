@@ -33,10 +33,8 @@ HANDOFF_BASES = (
     "stale_prepared_command_never_reaches_the_host",
 )
 HANDOFF_PARTITIONS = ("set_all", "revoke_all", "confirm_exact")
-HANDOFF_STALE_PARTITIONS = ("set_all", "revoke_all_empty", "revoke_all_published", "confirm_exact")
 HANDOFF_HARNESSES = tuple(f"program::attachment::handoff::proofs::{base}_{partition}"
-    for base in HANDOFF_BASES
-    for partition in (HANDOFF_STALE_PARTITIONS if base == HANDOFF_BASES[2] else HANDOFF_PARTITIONS))
+    for base in HANDOFF_BASES for partition in HANDOFF_PARTITIONS)
 
 MUTANT = MUTANTS[0]
 MUTANT_HARNESS = MUTANT[2]
@@ -394,8 +392,7 @@ class FormalReportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_report(report)
 
-        self.assertEqual(len(CONTRACTS), 48)
-        self.assertEqual(len(HANDOFF_HARNESSES), 10)
+        self.assertEqual(len(CONTRACTS), 47)
         self.assertEqual(set(HANDOFF_HARNESSES),
                          {name for name in CONTRACTS if "::handoff::proofs::" in name})
         for harness in HANDOFF_HARNESSES:
@@ -420,16 +417,6 @@ class FormalReportTests(unittest.TestCase):
                     verification["summary"][field] -= 1
                 with self.assertRaises(ValueError):
                     validate_report(report)
-
-    def test_stale_revoke_partitions_keep_the_full_contract_and_shard(self):
-        for partition in ("revoke_all_empty", "revoke_all_published"):
-            harness = f"program::attachment::handoff::proofs::{HANDOFF_BASES[2]}_{partition}"
-            with self.subTest(partition=partition):
-                self.assertEqual(CONTRACTS[harness], (
-                    {"stale prepared handoff must fail before any host call or state mutation"},
-                    {"same sequence foreign epoch rejected", "same epoch foreign sequence rejected"},
-                ))
-                self.assertIn(harness, selected_positive_harnesses(3, 5))
 
     def test_non_successful_property_or_harness_is_rejected(self):
         for status in ("Failure", "Unknown", "Unreachable", "Unsatisfiable", "SolverError", ""):
@@ -547,25 +534,6 @@ class FormalReportTests(unittest.TestCase):
                 self.assertIn("proof::two", command)
                 self.assertIn("--exact", command)
                 self.assertNotIn("--concrete-playback", command)
-
-    def test_each_stale_revoke_partition_retains_generated_c(self):
-        for partition in ("revoke_all_empty", "revoke_all_published"):
-            harness = f"program::attachment::handoff::proofs::{HANDOFF_BASES[2]}_{partition}"
-            with self.subTest(partition=partition), tempfile.TemporaryDirectory() as temporary:
-                path = Path(temporary) / "result.json"
-                with mock.patch("verify_core_formal._run_logged_command") as run:
-                    def completed(*args):
-                        path.write_text("{}")
-                        return 0
-
-                    run.side_effect = completed
-                    self.assertEqual(run_kani(path, positive_harnesses=(harness,)), ({}, 0))
-                    command = run.call_args.args[0]
-                    self.assertEqual(command.count("--gen-c"), 1)
-                    self.assertIn("--jobs=1", command)
-                    self.assertIn("--exact", command)
-                    self.assertIn(harness, command)
-                    self.assertNotIn("--concrete-playback", command)
 
     def test_exact_mutant_harness_keeps_concrete_playback_single_threaded(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -704,10 +672,6 @@ class FormalReportTests(unittest.TestCase):
             expected.update((f"{mutant_name}-{partition}",
                              f"program::attachment::handoff::proofs::{base}_{partition}")
                             for partition in HANDOFF_PARTITIONS)
-        expected.remove(("handoff-stale-install-revoke_all",
-                         f"program::attachment::handoff::proofs::{HANDOFF_BASES[2]}_revoke_all"))
-        expected.add(("handoff-stale-install-revoke_all",
-                      f"program::attachment::handoff::proofs::{HANDOFF_BASES[2]}_revoke_all_published"))
         self.assertEqual(len(MUTANTS), 30)
         self.assertEqual(len(handoff_mutants), 10)
         self.assertEqual({(mutant[0], mutant[2]) for mutant in handoff_mutants}, expected)

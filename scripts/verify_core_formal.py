@@ -58,8 +58,7 @@ POSITIVE_SHARDS = (
         "observation::proofs::equality_requires_the_same_observation_allocation",
         "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact",
         "srgb8::proofs::hex_admits_exactly_six_hex_digits",
-        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_empty",
-        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_published",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all",
         "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all",
         "field_effect::proofs::gaussian_sampling_clamps_without_coordinate_wrap",
         "certificate::proofs::reader_big_endian_and_length_prefix",
@@ -330,10 +329,7 @@ def run_kani(
             command.append("--exact")
             # Temporary source attribution for the hosted runner shutdown; dump the same
             # instrumented model without changing CBMC checks or parameters.
-            if any(selected in {
-                "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_empty",
-                "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_published",
-            } for selected in positive_harnesses):
+            if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
                 command.append("--gen-c")
     log = output.with_suffix(".log")
     returncode = _run_logged_command(command, log)

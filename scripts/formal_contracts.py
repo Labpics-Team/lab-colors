@@ -282,13 +282,7 @@ HANDOFF_PARTITION_CONTRACTS = {
 # входов. Конъюнкция трёх частей обязательна; достижимость относится к операции.
 for base, (assertions, partition_covers) in HANDOFF_PARTITION_CONTRACTS.items():
     for partition, covers in zip(HANDOFF_OPERATION_PARTITIONS, partition_covers, strict=True):
-        # Stale revoke делится только по исходному наличию point. Обе части
-        # обязательны и сохраняют целое assertion и обе прежние достижимости.
-        partitions = ("revoke_all_empty", "revoke_all_published") if (
-            base == "stale_prepared_command_never_reaches_the_host" and partition == "revoke_all"
-        ) else (partition,)
-        for required_partition in partitions:
-            CONTRACTS[f"program::attachment::handoff::proofs::{base}_{required_partition}"] = (assertions, covers)
+        CONTRACTS[f"program::attachment::handoff::proofs::{base}_{partition}"] = (assertions, covers)
 
 MUTANTS += (
     ("handoff-foreign-confirmation", "program/attachment/handoff.rs",
@@ -297,7 +291,6 @@ MUTANTS += (
      "                if self.committed.revision != Some(revision) {", "                if false {"),
 )
 for partition in HANDOFF_OPERATION_PARTITIONS:
-    stale_partition = "revoke_all_published" if partition == "revoke_all" else partition
     MUTANTS += (
     (f"handoff-swallowed-host-refusal-{partition}", "program/attachment/handoff.rs",
      f"program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_{partition}",
@@ -313,7 +306,7 @@ for partition in HANDOFF_OPERATION_PARTITIONS:
      "        let Some(staged) = self.staged.take() else {",
      "        let Some(staged) = self.staged.clone() else {"),
     (f"handoff-stale-install-{partition}", "program/attachment/handoff.rs",
-     f"program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_{stale_partition}",
+     f"program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_{partition}",
      "stale prepared handoff must fail before any host call or state mutation",
      "        if self.writer.committed.stamp != staged.expected_stamp() {", "        if false {"),
     )
