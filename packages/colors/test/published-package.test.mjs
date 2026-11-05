@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import {
   downloadPublishedPackage, waitForPublishedPackage,
 } from "../../../scripts/verify-published-package.mjs";
@@ -97,14 +98,7 @@ test("publication readback consumes the publisher digest in its own credential-f
   const readback = workflow.split("\n  verify-publication:\n");
   assert.equal(readback.length, 2);
   assert.match(readback[0], /tarball_sha256: \$\{\{ steps\.verified-artifact\.outputs\.sha256 \}\}/u);
-  const needs = /^\s+needs: \[([^\]]+)\]$/mu.exec(readback[1]);
-  assert.ok(needs, "publication readback declares its job dependencies");
-  const dependencies = needs[1].split(",")
-    .map((dependency) => dependency.trim().replace(/^(["'])(.*?)\1$/u, "$2"));
-  for (const dependency of ["prepare", "publish", "source-admission"]) {
-    assert.ok(dependencies.includes(dependency), "publication readback needs " + dependency);
-  }
-  assert.match(readback[1], /ref: \$\{\{ needs\.source-admission\.outputs\.source_sha \}\}/u);
+  assert.match(readback[1], /needs: \[prepare, publish\]/u);
   assert.match(readback[1], /EXPECTED_TARBALL_SHA256: \$\{\{ needs\.publish\.outputs\.tarball_sha256 \}\}/u);
   assert.match(readback[1], /node scripts\/verify-published-package\.mjs/u);
   assert.match(readback[1], /timeout-minutes: 30/u);
@@ -144,7 +138,7 @@ test("trusted npm publishing grants OIDC only to the verified publisher", () => 
   const worker = readFileSync(new URL("../../../.github/workflows/publish-worker.yml", import.meta.url), "utf8");
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.match(caller, /name: publish\n/u);
-  assert.match(caller, /^    uses: Labpics-Team\/lab-colors\/\.github\/workflows\/publish-worker\.yml@main$/mu);
+  assert.match(caller, /uses: \.\/\.github\/workflows\/publish-worker\.yml/u);
   assert.match(caller, /id-token: write/u);
   assert.doesNotMatch(caller, /secrets:|NPM_TOKEN|secrets: inherit/u);
   const [top, afterPrepare] = worker.split("\n  prepare:\n");
@@ -164,6 +158,43 @@ test("trusted npm publishing grants OIDC only to the verified publisher", () => 
   assert.equal(pkg.repository.url, "https://github.com/Labpics-Team/lab-colors");
   assert.deepEqual(pkg.publishConfig, { access: "public" });
   assert.match(pkg.packageManager, /^npm@11\./u);
+});
+
+test("an ancestor release tag retains its own recipe after main advances", async () => {
+  const caller = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+  const worker = readFileSync(new URL("../../../.github/workflows/publish-worker.yml", import.meta.url), "utf8");
+  const localRecipe = /^    uses: \.\/\.github\/workflows\/publish-worker\.yml$/mu;
+  assert.match(caller, localRecipe);
+  for (const foreign of [
+    "Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main",
+    "foreign/colors/.github/workflows/publish-worker.yml@main",
+  ]) {
+    assert.doesNotMatch(caller.replace("./.github/workflows/publish-worker.yml", foreign), localRecipe);
+  }
+  const step = worker.split("- name: guard — exact tag SHA is in origin/main\n")[1].split("\n      - ")[0];
+  const script = step.split("node <<'NODE'\n")[1].split("\n          NODE")[0]
+    .split("\n").map((line) => line.slice(10)).join("\n");
+  const tag = "a".repeat(40), main = "b".repeat(40);
+  for (const [status, mergeBase, allowed] of [["ahead", tag, true], ["diverged", main, false]]) {
+    const process = { env: {
+      GITHUB_REPOSITORY: "Labpics-Team/lab-colors", GITHUB_SHA: tag,
+      GITHUB_API_URL: "https://github-api.example.invalid", GH_READ_TOKEN: "fixture-read-token",
+    } };
+    const errors = [];
+    await runInNewContext(script, {
+      process,
+      fetch: async (url) => {
+        assert.equal(url, process.env.GITHUB_API_URL + "/repos/Labpics-Team/lab-colors/compare/" + tag + "...main");
+        return { ok: true, json: async () => ({
+          status, base_commit: { sha: tag }, head_commit: { sha: main }, merge_base_commit: { sha: mergeBase },
+        }) };
+      },
+      console: { log() {}, error(value) { errors.push(String(value)); } },
+    }, { timeout: 1000, filename: "release-tag-ancestry.cjs" });
+    assert.equal(process.exitCode ?? 0, allowed ? 0 : 1);
+    assert.equal(errors.length, allowed ? 0 : 1);
+    if (!allowed) assert.match(errors[0], /outside main history/u);
+  }
 });
 
 test("npm scanning delay eventually admits only the verified public archive", async () => {

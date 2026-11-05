@@ -139,7 +139,7 @@ class PeerGateTest(unittest.TestCase):
     def test_unsupported_event_fails_closed(self) -> None:
         self.assertEqual(self.evaluate([], event="workflow_dispatch").state, "fail")
 
-    def test_candidate_ci_caller_and_yaml_are_bound_to_the_reviewed_snapshot(self) -> None:
+    def test_ci_caller_selects_the_worker_from_its_own_snapshot(self) -> None:
         verify_ci_binding(REPO, os.environ)
 
 
