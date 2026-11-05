@@ -318,13 +318,12 @@ fn preparation_is_exact_and_has_no_publication_effect_confirm_exact() {
     preparation_is_exact_and_has_no_publication_effect::<2>();
 }
 
-fn valid_intent<'a>(
+fn valid_intent<'a, const KIND: u8>(
     old: &ExpectedPointState,
     point: &'a [PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1>],
-    kind: u8,
     revision: u64,
 ) -> Option<PointSinkIntentV1<'a, HandoffPointSinkOutputIdV1>> {
-    Some(match kind {
+    Some(match KIND {
         0 => PointSinkIntentV1::SetAll {
             revision,
             stamp: PointSinkMutationStampV1::new(old.stamp)?,
@@ -408,7 +407,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
     let points = [patch(writer.owned_scope[0], paint)];
     let kind = KIND;
     let revision = kani::any();
-    let Some(intent) = valid_intent(&old, &points, kind, revision) else {
+    let Some(intent) = valid_intent::<KIND>(&old, &points, revision) else {
         return;
     };
     let expected = expected_after(old, points[0], kind, revision);
@@ -526,7 +525,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     let points = [patch(writer.owned_scope[0], paint)];
     let kind = KIND;
     let revision = kani::any();
-    let Some(intent) = valid_intent(&old, &points, kind, revision) else {
+    let Some(intent) = valid_intent::<KIND>(&old, &points, revision) else {
         return;
     };
     let expected = expected_after(old, points[0], kind, revision);
