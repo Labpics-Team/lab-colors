@@ -15,7 +15,7 @@
   ".github/workflows/native-conformance-worker.yml": "fda14193eb5607631eb935ede4d3c42feb7b8ac6",
   ".github/workflows/native-conformance.yml": "348b6d7dafc5fcec41607a459592879c04870c1e",
   ".github/workflows/package-worker.yml": "68ddb7de1280f0182c8fd3b3044b68d98061fc9f",
-  ".github/workflows/publish-worker.yml": "0b400da2b6b08dc0f3e7e7fe36e3182593ac2075",
+  ".github/workflows/publish-worker.yml": "2545e0c500cab1081122f3376205967e1b62708e",
   ".github/workflows/publish.yml": "d38836005638a20ff0c09314240e51ee05c9d1d1",
   ".github/workflows/verification-lanes.yml": "ae83870463f8ef5bc4e351e71a710c991cb2563b",
   "Cargo.lock": "d588353b59852e8809978cf857a58cb82308f052",
@@ -376,7 +376,7 @@
   "packages/colors/test/program-wire.test.mjs": "dbfa5ca5d1cce3e143480ad450e9a96633323dc1",
   "packages/colors/test/public-api-cleanup.test.mjs": "564cc3aa9b8c8c5c9fd18a49021d9641913071ce",
   "packages/colors/test/public-claims.test.mjs": "46642adb1658637240229364f8f628fa08135744",
-  "packages/colors/test/publish-ci-admission.test.mjs": "41f255f7687dc7c555f1b670ac1765d04d4f65c7",
+  "packages/colors/test/publish-ci-admission.test.mjs": "87a59f7b5a2ff040c5d3ae817ab4b9f0ae4bdff8",
   "packages/colors/test/published-package.test.mjs": "1b587742af3069d30d6c7ba29ba07cee49d644b4",
   "packages/colors/test/release-contract.test.mjs": "b0fbe3a13494097622d34d39722dda4cdfb9e487",
   "packages/colors/test/release-provenance.test.mjs": "90a22dbb5acd23fb295ff1cfb87f337b96f2d35e",
@@ -639,7 +639,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "c60f8db8ec2f204276ac338e32825a726f072aa1ce62be82e31e6ed2b7f4609f",
+ "record_sha256": "1d6eb9aaa1c38c580a3b55dad4fb36d30d729ba1e3183facc68644256bed275d",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
