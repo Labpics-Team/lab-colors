@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 367,
+   "count": 377,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -686,6 +686,16 @@
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
     "test_ci_storage.NativeStorageTests.test_only_sdk_transfer_survives",
     "test_ci_storage.NativeStorageTests.test_reintroduced_diagnostics_and_weakened_transfer_are_rejected",
+    "test_compare_program_performance.ProgramPerformanceTests.test_archive_substitution_and_unpacked_drift_are_rejected",
+    "test_compare_program_performance.ProgramPerformanceTests.test_extra_extracted_files_are_rejected",
+    "test_compare_program_performance.ProgramPerformanceTests.test_invalid_and_partial_measurements_are_not_completed_samples",
+    "test_compare_program_performance.ProgramPerformanceTests.test_packed_source_and_wasm_metadata_must_match",
+    "test_compare_program_performance.ProgramPerformanceTests.test_timeout_budget_and_errors_remain_visible_without_latency_claims",
+    "test_compare_program_performance.ProgramPerformanceTests.test_unsafe_link_and_duplicate_archive_members_are_rejected",
+    "test_compare_program_performance.ProgramPerformanceTests.test_v1_pair_preserves_speedup_and_rejects_changed_outputs",
+    "test_compare_program_performance.ProgramPerformanceTests.test_v3_has_no_baseline_or_speedup_even_if_unrelated_data_exist",
+    "test_compare_program_performance.ProgramPerformanceTests.test_verified_archive_and_extracted_package_are_one_input",
+    "test_compare_program_performance.ProgramPerformanceTests.test_wrong_binary_runtime_or_workload_identity_is_rejected",
     "test_document_bytes.DocumentBytesTests.test_c1_controls_are_rejected_through_the_document_check",
     "test_document_bytes.DocumentBytesTests.test_control_bytes_refuse_without_rejecting_normal_whitespace",
     "test_document_bytes.DocumentBytesTests.test_documented_domain_separator_matches_protocol_source",
@@ -982,7 +992,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "0dd4719b9b7cb203c7f6680bd0bff023c4a80e186a68ae2ec2a0c99aa9aee2f5",
+ "record_sha256": "ea6b55bdc2487948e2f403d20ff80a559c03edde12296de4e370c35c0545b200",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

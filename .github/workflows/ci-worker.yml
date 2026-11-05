@@ -639,6 +639,9 @@ jobs:
       - name: tracked documentation bytes and protocol domain parity
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_document_bytes.py
+      - name: packed Program performance identity and comparison checks
+        if: ${{ matrix.lane == 'proof-contracts' }}
+        run: python3 scripts/test_compare_program_performance.py
       - name: artifact matrix - pinned records reproduce
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/artifact_matrix.py check
