@@ -534,6 +534,7 @@ class FormalReportTests(unittest.TestCase):
                 self.assertIn("proof::two", command)
                 self.assertIn("--exact", command)
                 self.assertNotIn("--concrete-playback", command)
+                self.assertEqual(command[-2:], ["--cbmc-args", "--symex-cache-dereferences"])
 
     def test_exact_mutant_harness_keeps_concrete_playback_single_threaded(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -553,6 +554,7 @@ class FormalReportTests(unittest.TestCase):
                 command = launch.call_args.args[0]
                 self.assertFalse(any(arg.startswith("--jobs") for arg in command))
                 self.assertIn("--concrete-playback", command)
+                self.assertEqual(command[-2:], ["--cbmc-args", "--symex-cache-dereferences"])
 
     def test_direct_command_launch_preserves_argv_and_uses_regular_logfile(self):
         command = ["cargo", "kani", "space and 'quote", "$(not-a-shell-command)"]
