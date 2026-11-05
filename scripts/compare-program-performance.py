@@ -220,6 +220,7 @@ if candidate_only:
     scenarios[1] = candidate_only
     metadata["candidateOnlyPatterns"] = list(candidate_only)
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
+print(json.dumps({"environment": metadata}), flush=True)
 
 def variants(pattern):
     return ("candidate",) if pattern in candidate_only else tuple(roots)
@@ -264,9 +265,11 @@ for nodes, patterns in scenarios.items():
                 observations.append(record)
                 name = f"{pattern}-{nodes}-{round_index}-{label}.json"
                 (args.output / name).write_text(json.dumps(record, indent=2) + "\n")
-                print(json.dumps({key: record[key] for key in
-                                  ("variant", "pattern", "nodes", "round", "status", "elapsedSeconds")}),
-                      flush=True)
+                logged = {key: record[key] for key in
+                          ("variant", "pattern", "nodes", "round", "status", "elapsedSeconds")}
+                if "measurement" in record:
+                    logged["measurement"] = record["measurement"]
+                print(json.dumps(logged), flush=True)
 
 summary = []
 comparison_errors = []

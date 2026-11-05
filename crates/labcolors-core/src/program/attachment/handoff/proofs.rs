@@ -17,11 +17,21 @@ struct ExpectedPointState {
     point: Option<HandoffPublishedPointV1>,
 }
 
+fn points_match(
+    expected: Option<HandoffPublishedPointV1>,
+    actual: &[HandoffPublishedPointV1],
+) -> bool {
+    match expected {
+        None => actual.is_empty(),
+        Some(point) => actual.len() == 1 && actual.first() == Some(&point),
+    }
+}
+
 impl ExpectedPointState {
     fn matches(self, actual: &HandoffCommittedPointStateV1) -> bool {
         actual.stamp == self.stamp
             && actual.revision == self.revision
-            && actual.points.as_slice() == self.point.as_slice()
+            && points_match(self.point, &actual.points)
             && actual.composites.is_empty()
     }
 }
@@ -244,7 +254,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
                     && command.desired_sequence() == expected.stamp.sequence()
                     && command.binding_epoch() == query.binding_epoch()
                     && command.scope() == prepared.writer.owned_scope
-                    && command.points() == expected.point.as_slice()
+                    && points_match(expected.point, command.points())
                     && command.presentation_composites().is_empty(),
                 "handoff command must preserve every publication field"
             );

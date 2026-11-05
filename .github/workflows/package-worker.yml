@@ -498,7 +498,7 @@ jobs:
           test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
       - name: retain bounded Program measurements
-        if: ${{ always() && inputs.program-benchmark }}
+        if: ${{ failure() && inputs.program-benchmark }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: colors-program-${{ github.sha }}-attempt-${{ github.run_attempt }}
