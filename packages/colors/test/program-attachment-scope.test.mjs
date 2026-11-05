@@ -322,7 +322,13 @@ test("alias output slots публикуются целиком с выбранн
       own(observe(attachment, 2n, [[102, [100, 120, 140]]]));
       assert.equal(host.calls.at(-1).operation, "confirmExact");
       const stale = own(attachment.updateUnknown(3n, 99));
-      assert.equal(stale.outputCount(), 0);
+      assert.equal(stale.state, "stale");
+      assert.equal(stale.outputCount(), 2);
+      for (let index = 0; index < stale.outputCount(); index += 1) {
+        assert.equal(stale.outputSlot(index), 17 + index);
+        assert.deepEqual([...stale.outputRgb(index)], firstSource);
+        assert.equal(stale.outputOpacity(index), .5);
+      }
       assert.equal(stale.renderCount(), 0);
       assert.deepEqual(host.current, { scope: [501, 502], points: [], composites: [] });
       assert.throws(() => attachment.materializationAuthorityForBinding(9, 8),

@@ -363,7 +363,7 @@
   "packages/colors/test/program-assignment-builder.test.mjs": "e4421bab1eb5a000b507e9dfe2df3e73604c64b9",
   "packages/colors/test/program-assignment-runtime.test.mjs": "ff7bf5638b7d93fb48d128de9439cb50a499f195",
   "packages/colors/test/program-attachment-lifecycle.test.mjs": "e66995534a53c85e2971aa46773cf114ddecfb1d",
-  "packages/colors/test/program-attachment-scope.test.mjs": "7f2891aa511fe799b30003a56e2edf0cad4ca6ff",
+  "packages/colors/test/program-attachment-scope.test.mjs": "1281a7b52ec596d7b9f2016a339a29e0800ae908",
   "packages/colors/test/program-clean-set-wire.test.mjs": "656eb72d4e7428b0bce61d3e13fd6f838db1c74f",
   "packages/colors/test/program-composite-readout.test.mjs": "0ced400a8974acdef322246d013cace13fdb44cf",
   "packages/colors/test/program-composition-oracle.test.mjs": "c9b7dba3ecc744a2022d00a6bd6ac894a0c5c0bb",
@@ -642,7 +642,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "ccbcb3d3436fec6057754335768ed29ada1206bafaf62ed87643529a161fae11",
+ "record_sha256": "8c99623b3ca61e570116ef4a9669c1d2f1f4b0b177c5fce40634901dfabdd971",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
