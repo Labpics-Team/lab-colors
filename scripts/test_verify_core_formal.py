@@ -3,6 +3,7 @@
 
 import copy
 from contextlib import contextmanager
+import io
 import json
 import os
 import select
@@ -22,6 +23,7 @@ from verify_core_formal import (
     fragment_base,
     selected_mutants, selected_positive_harnesses,
     validate_report, validate_mutant, run_kani, _run_logged_command,
+    _validate_minisat_log, _require_minisat_search, run_positive_phase, run_mutant_phase,
 )
 
 
@@ -945,6 +947,195 @@ class FormalReportTests(unittest.TestCase):
                     git("config", "--unset", "core.trustctime")
                     source.write_bytes(b"trusted\n")
                     other.write_bytes(b"trusted other\n")
+
+
+class MiniSatExperimentTests(unittest.TestCase):
+    BANNER = b"Solving with MiniSAT 2.2.1 with simplifier"
+    NO_SEARCH = (b"SAT checker inconsistent: instance is UNSATISFIABLE\n"
+                 b"got FALSE as assumption: instance is UNSATISFIABLE\n")
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def log(self, name, content):
+        path = self.root / name
+        path.write_bytes(content)
+        return path
+
+    def test_exact_backend_and_individual_no_search_results_are_admissible(self):
+        for content, expected in ((self.BANNER + b"\n", True), (self.BANNER, True),
+                                  (self.NO_SEARCH, False), (b"", False)):
+            with self.subTest(content=content):
+                self.assertEqual(_validate_minisat_log(self.log("solver.log", content)), expected)
+
+    def test_every_unexpected_backend_and_fallback_are_rejected(self):
+        rejected = (
+            b"The default solver will be used instead\n",
+            b"Solving with CaDiCaL 3.0.0\n",
+            b"Solving with MiniSAT 2.2.1 without simplifier\n",
+            b"Solving with MiniSAT 2.2.0 with simplifier\n",
+            b"Solving with MiniSAT 2.2.1\n",
+            self.BANNER + b" extra text\n",
+        )
+        for content in rejected:
+            with self.subTest(content=content):
+                # A preceding accepted search must not hide a later failure.
+                path = self.log("solver.log", self.BANNER + b"\n" + content)
+                with self.assertRaises(ValueError):
+                    _validate_minisat_log(path)
+
+    def test_solver_markers_cross_chunks_and_long_lines_without_unbounded_reads(self):
+        for marker, accepted in ((self.BANNER, True),
+                                 (b"The default solver will be used instead", False),
+                                 (b"Solving with MiniSAT 2.2.1 without simplifier", False)):
+            for split in (1, 10, len(marker) - 1):
+                path = self.log("solver.log", b"x" * (65536 - split) + marker + b"\n")
+                with self.subTest(marker=marker, split=split):
+                    if accepted:
+                        self.assertTrue(_validate_minisat_log(path))
+                    else:
+                        with self.assertRaises(ValueError):
+                            _validate_minisat_log(path)
+        test = self
+
+        class BoundedReader(io.BytesIO):
+            def read(self, size=-1):
+                test.assertGreater(size, 0)
+                test.assertLessEqual(size, 65536)
+                return super().read(size)
+
+        content = b"generated-model-line" * 12000 + b"\n" + self.BANNER + b"\n"
+        with mock.patch.object(Path, "open", return_value=BoundedReader(content)):
+            self.assertTrue(_validate_minisat_log(Path("unused.log")))
+
+    def test_batch_requires_search_but_accepts_no_search_siblings_and_checks_every_log(self):
+        no_search = self.log("no-search.log", self.NO_SEARCH)
+        empty = self.log("empty.log", b"")
+        searched = self.log("searched.log", self.BANNER + b"\n")
+        wrong = self.log("wrong.log", b"Solving with CaDiCaL 3.0.0\n")
+        for batch in ([], [no_search], [no_search, empty]):
+            with self.subTest(batch=batch), self.assertRaisesRegex(ValueError, "no actual search banner"):
+                _require_minisat_search(batch)
+        _require_minisat_search([no_search, searched, empty])
+        with self.assertRaises(ValueError):
+            _require_minisat_search([searched, wrong])
+
+    def test_kani_native_solver_precedes_the_final_cbmc_tail_and_keeps_filters_and_budgets(self):
+        revoke = "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all"
+        cases = ({}, {"positive_harnesses": ("proof::one", "proof::two")},
+                 {"positive_harnesses": (revoke,)}, {"harness": "demo::proof"})
+        for filters in cases:
+            path = self.root / "result.json"
+
+            def completed(command, log):
+                path.write_text("{}")
+                log.write_bytes(self.NO_SEARCH)
+                return 1 if "harness" in filters else 0
+
+            with self.subTest(filters=filters), mock.patch(
+                "verify_core_formal._run_logged_command", side_effect=completed
+            ) as launch:
+                self.assertEqual(run_kani(path, **filters), ({}, 1 if "harness" in filters else 0))
+                command = launch.call_args.args[0]
+                tail = command.index("--cbmc-args")
+                self.assertEqual(command[tail:], ["--cbmc-args", "--sat-solver", "minisat2"])
+                self.assertEqual(command[tail - 2:tail], ["--solver", "minisat"])
+                self.assertEqual(command.count("--solver"), 1)
+                self.assertEqual(command.count("unstable-options"), 1)
+                self.assertEqual(command[command.index("--harness-timeout") + 1], "300s")
+                self.assertLess(command.index("--export-json"), tail)
+                self.assertEqual(command[command.index("--export-json") + 1], str(path))
+                self.assertEqual(command[command.index("--output-format") + 1], "regular")
+                if "harness" in filters:
+                    self.assertNotIn("--jobs=1", command)
+                    self.assertIn("--concrete-playback", command[:tail])
+                else:
+                    self.assertIn("--jobs=1", command[:tail])
+                wanted = filters.get("positive_harnesses", (filters["harness"],) if "harness" in filters else ())
+                actual = tuple(command[i + 1] for i, argument in enumerate(command[:tail]) if argument == "--harness")
+                self.assertEqual(actual, wanted)
+                self.assertEqual("--gen-c" in command[:tail], filters.get("positive_harnesses") == (revoke,))
+
+    def test_run_kani_rejects_fallback_even_when_json_and_exit_code_are_successful(self):
+        path = self.root / "result.json"
+
+        def completed(command, log):
+            path.write_text("{}")
+            log.write_bytes(self.BANNER + b"\nThe default solver will be used instead\n")
+            return 0
+
+        with mock.patch("verify_core_formal._run_logged_command", side_effect=completed):
+            with self.assertRaisesRegex(ValueError, "fell back"):
+                run_kani(path)
+
+    def test_positive_fragment_requires_search_in_its_current_invocation(self):
+        self.log("unrelated-old.log", self.BANNER + b"\n")
+        for count in (1, 5):
+            for searched in (False, True):
+                fragment = self.root / "fragment-positive-0.json"
+                fragment.write_text("stale-fragment")
+
+                def completed(path, **filters):
+                    report = valid_report() if count == 1 else valid_subset_report(filters["positive_harnesses"])
+                    path.write_text(json.dumps(report))
+                    path.with_suffix(".log").write_bytes(self.BANNER + b"\n" if searched else self.NO_SEARCH)
+                    return report, 0
+
+                with self.subTest(count=count, searched=searched), mock.patch(
+                    "verify_core_formal.checkout_snapshot", return_value=({}, "test-head", True)
+                ), mock.patch("verify_core_formal.assert_snapshot", return_value=True), mock.patch(
+                    "verify_core_formal.run_kani", side_effect=completed
+                ) as launch:
+                    if searched:
+                        run_positive_phase(self.root, 0, count)
+                        self.assertEqual(json.loads(fragment.read_text())["shard_count"], count)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "no actual search banner"):
+                            run_positive_phase(self.root, 0, count)
+                        self.assertFalse(fragment.exists())
+                    self.assertEqual(launch.call_count, 1)
+
+    def test_mutant_fragment_qualifies_the_whole_current_batch_and_restores_sources(self):
+        selected = (MUTANTS[0], MUTANTS[-1])
+        core = self.root / "core"
+        originals = {}
+        for mutant in selected:
+            source = core / mutant[1]
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(mutant[4].encode())
+            originals[source] = source.read_bytes()
+        self.log("unrelated-old.log", self.BANNER + b"\n")
+        for searched in (False, True):
+            fragment = self.root / "fragment-mutants-0.json"
+            fragment.write_text("stale-fragment")
+
+            def completed(path, *, harness):
+                mutant = next(item for item in selected if item[2] == harness)
+                report = valid_subset_report((harness,))
+                verification = report["verification_results"]
+                verification["summary"].update({"successful": 0, "failed": 1})
+                result = verification["results"][0]
+                result["status"] = "Failure"
+                next(check for check in result["checks"] if check["description"] == json.dumps(mutant[3]))["status"] = "Failure"
+                path.write_text(json.dumps(report))
+                path.with_suffix(".log").write_bytes(self.BANNER + b"\n" if searched and mutant == selected[-1] else self.NO_SEARCH)
+                return report, 1
+
+            with self.subTest(searched=searched), mock.patch("verify_core_formal.CORE", core), mock.patch(
+                "verify_core_formal.checkout_snapshot", return_value=({}, "test-head", True)
+            ), mock.patch("verify_core_formal.assert_snapshot", return_value=True), mock.patch(
+                "verify_core_formal.selected_mutants", return_value=selected
+            ), mock.patch("verify_core_formal.run_kani", side_effect=completed) as launch:
+                if searched:
+                    run_mutant_phase(self.root, 0, 5)
+                    self.assertEqual(set(json.loads(fragment.read_text())["negative_sha256"]), {item[0] for item in selected})
+                else:
+                    with self.assertRaisesRegex(ValueError, "no actual search banner"):
+                        run_mutant_phase(self.root, 0, 5)
+                    self.assertFalse(fragment.exists())
+                self.assertEqual(launch.call_count, 2)
+                for source, original in originals.items():
+                    self.assertEqual(source.read_bytes(), original)
 
 
 @unittest.skipUnless(sys.platform == "linux", "relay uses Linux process groups and proc descriptors")

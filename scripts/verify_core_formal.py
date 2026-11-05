@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import stat
 from pathlib import Path
@@ -19,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 KANI_VERSION = "0.68.0"
 CORE = ROOT / "crates/labcolors-core/src"
 FRAGMENT_SCHEMA = 1
+MINISAT_SEARCH_BANNER = b"Solving with MiniSAT 2.2.1 with simplifier"
+SOLVER_FALLBACK_WARNING = b"The default solver will be used instead"
 
 # Five shards are a measured scheduling hint, not a proof assumption. The partition
 # was balanced from the 2026-10-02 exact-head baseline; completeness below is
@@ -304,6 +307,43 @@ def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200)
             raise SystemExit(128 + requested_signal)
 
 
+def _validate_minisat_log(log: Path) -> bool:
+    """Reject another backend; a legitimate no-search result may have no banner."""
+    found = False
+    overlap = max(len(MINISAT_SEARCH_BANNER) + 1, len(SOLVER_FALLBACK_WARNING) - 1)
+    pending = b""
+
+    def inspect(data: bytes, *, final: bool) -> None:
+        nonlocal found
+        if SOLVER_FALLBACK_WARNING in data:
+            raise ValueError("MiniSAT experiment fell back to the default solver")
+        for match in re.finditer(rb"Solving with[^\r\n]*", data):
+            banner = match.group()
+            if match.end() == len(data) and not final:
+                if not MINISAT_SEARCH_BANNER.startswith(banner):
+                    raise ValueError("unexpected solver banner in MiniSAT experiment")
+            elif banner != MINISAT_SEARCH_BANNER:
+                raise ValueError("unexpected solver banner in MiniSAT experiment")
+            else:
+                found = True
+
+    with log.open("rb") as stream:
+        while chunk := stream.read(65536):
+            data = pending + chunk
+            inspect(data, final=False)
+            pending = data[-overlap:]
+    inspect(pending, final=True)
+    return found
+
+
+def _require_minisat_search(logs: list[Path]) -> None:
+    found = False
+    for log in logs:
+        found |= _validate_minisat_log(log)
+    if not found:
+        raise ValueError("MiniSAT experiment has no actual search banner in this batch")
+
+
 def run_kani(
     output: Path,
     *,
@@ -327,12 +367,16 @@ def run_kani(
             for selected in positive_harnesses:
                 command.extend(["--harness", selected])
             command.append("--exact")
-            # Temporary source attribution for the hosted OOM; dump the same
+            # Temporary source attribution for the hosted runner shutdown; dump the same
             # instrumented model without changing CBMC checks or parameters.
             if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
                 command.append("--gen-c")
+    # Native selection suppresses Kani's default backend; CBMC arguments consume
+    # the entire remaining tail and select its built-in simplifying MiniSAT2.
+    command.extend(["--solver", "minisat", "--cbmc-args", "--sat-solver", "minisat2"])
     log = output.with_suffix(".log")
     returncode = _run_logged_command(command, log)
+    _validate_minisat_log(log)
     return json.loads(output.read_text(encoding="utf-8")), returncode
 
 
@@ -539,11 +583,14 @@ def selected_positive_harnesses(index: int, count: int) -> tuple[str, ...]:
 
 
 def run_positive_phase(output: Path, index: int, count: int) -> None:
+    fragment_path = output / f"fragment-positive-{index}.json"
+    fragment_path.unlink(missing_ok=True)
     identities, commit, initially_clean = checkout_snapshot()
     fragment = fragment_base(identities, commit, initially_clean)
 
     if count == 1:
-        report, code = run_kani(output / "positive.json")
+        output_path = output / "positive.json"
+        report, code = run_kani(output_path)
         if code != 0:
             raise ValueError("positive verification returned failure")
         validate_report(report)
@@ -574,7 +621,8 @@ def run_positive_phase(output: Path, index: int, count: int) -> None:
             "working_tree_clean": initially_clean and finally_clean,
         })
 
-    (output / f"fragment-positive-{index}.json").write_text(
+    _require_minisat_search([output_path.with_suffix(".log")])
+    fragment_path.write_text(
         json.dumps(fragment, indent=2) + "\n", encoding="utf-8"
     )
 
@@ -589,6 +637,8 @@ def selected_mutants(index: int, count: int) -> tuple:
 
 
 def run_mutant_phase(output: Path, index: int, count: int) -> None:
+    fragment_path = output / f"fragment-mutants-{index}.json"
+    fragment_path.unlink(missing_ok=True)
     identities, commit, initially_clean = checkout_snapshot()
     negative_results = {}
     for mutant in selected_mutants(index, count):
@@ -605,6 +655,7 @@ def run_mutant_phase(output: Path, index: int, count: int) -> None:
         finally:
             source.write_bytes(original)
         negative_results[name] = digest(output_path)
+    _require_minisat_search([output / f"negative-{name}.log" for name in negative_results])
     finally_clean = assert_snapshot(identities, commit)
     fragment = fragment_base(identities, commit, initially_clean and finally_clean)
     fragment.update({
@@ -613,7 +664,7 @@ def run_mutant_phase(output: Path, index: int, count: int) -> None:
         "shard_count": count,
         "negative_sha256": negative_results,
     })
-    (output / f"fragment-mutants-{index}.json").write_text(
+    fragment_path.write_text(
         json.dumps(fragment, indent=2) + "\n", encoding="utf-8"
     )
 
