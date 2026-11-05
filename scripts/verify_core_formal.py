@@ -197,6 +197,10 @@ def run_kani(
             for selected in positive_harnesses:
                 command.extend(["--harness", selected])
             command.append("--exact")
+            # Temporary source attribution for the hosted OOM; dump the same
+            # instrumented model without changing CBMC checks or parameters.
+            if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
+                command.append("--gen-c")
     log = output.with_suffix(".log")
     with log.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
