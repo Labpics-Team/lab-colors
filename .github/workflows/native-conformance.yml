@@ -1,8 +1,9 @@
 name: Native conformance
 
-# PR проверяет продуктовый снимок процедурой из защищённого main.
-# Изменённые граф и toolchain-пины требуют квалификации этой редакции процедуры.
-# Source admission и объявленные OS/runner requirements обязательны.
+# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
+# из того же коммита, что и caller, независимо от checkout и squash-истории.
+# Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
+# на одноразовых эфемерных GitHub-hosted VM без секретов и общего состояния.
 # Ручное сравнение authoring не меняет обязательные проверки пакета.
 
 on:
@@ -36,6 +37,6 @@ jobs:
     name: Native conformance
     permissions:
       contents: read
-    uses: Labpics-Team/lab-colors/.github/workflows/native-conformance-worker.yml@main
+    uses: ./.github/workflows/native-conformance-worker.yml
     with:
       authoring_baseline: ${{ inputs.authoring_baseline || '' }}

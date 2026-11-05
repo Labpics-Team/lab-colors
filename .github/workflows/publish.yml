@@ -1,8 +1,6 @@
 name: publish
 
-# Тег и выбранный worker защищённого main должны обозначать один commit.
-# Продвижение main после выбора worker допустимо; тег на прежний commit
-# после выбора другой редакции worker требует нового проверенного релиза.
+# Публикация по тегу использует worker из того же Git-снимка.
 # Доверенная OIDC-идентичность существует только в job публикации,
 # а не у сборки, проверки архива или consumer readback.
 
@@ -25,4 +23,4 @@ jobs:
       contents: read
       actions: read
       id-token: write
-    uses: Labpics-Team/lab-colors/.github/workflows/publish-worker.yml@main
+    uses: ./.github/workflows/publish-worker.yml

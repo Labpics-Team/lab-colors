@@ -1,8 +1,9 @@
 name: CI
 
-# Тонкий caller: события, concurrency и права. Native main recipe принадлежит
-# защищённому worker; source/caller SHA PR сохраняются отдельно от recipe SHA.
-# Изменение предлагаемых YAML проверяется как часть candidate source.
+# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
+# из того же коммита, что и caller, независимо от checkout и squash-истории.
+# Граф заданий проверяется вместе с этим snapshot, а не считается заранее
+# одобренным. Задания исполняются на эфемерных GitHub-hosted VM без секретов.
 
 on:
   push:
@@ -31,5 +32,5 @@ jobs:
       contents: read
       id-token: write
       attestations: write
-    # GitHub выбирает защищённый main recipe; checkout остаётся source текущего PR.
-    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@main
+    # GitHub загружает локальный reusable workflow из snapshot самого caller'а.
+    uses: ./.github/workflows/ci-worker.yml

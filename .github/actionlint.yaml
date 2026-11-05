@@ -1,5 +1,5 @@
-# Тяжёлые Linux jobs используют стабильные метки self-hosted, Linux, X64.
-# Платформенные jobs и лёгкие publisher/attestation сохраняют свой OS/trust contract.
+# Self-hosted лейблы сняты миграцией на GitHub-hosted раннеры (публичное репо):
+# все jobs исполняются на эфемерных ubuntu-latest / macos-15.
 paths:
   .github/workflows/mutation.yml:
     # actionlint 1.7.12 отстаёт от текущей GitHub-схемы concurrency.queue;

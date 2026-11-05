@@ -25,10 +25,7 @@ ABIS = {
 
 
 def sdk_manager(sdk: Path) -> Path:
-    command = shutil.which("sdkmanager")
-    if command is None:
-        raise RuntimeError("Android SDK command-line tools must be available on PATH")
-    executable = Path(command).resolve(strict=True)
+    executable = (sdk / "cmdline-tools/latest/bin/sdkmanager").resolve(strict=True)
     root = (sdk / "cmdline-tools").resolve(strict=True)
     if (not root.is_relative_to(sdk.resolve(strict=True))
             or not executable.is_file() or not executable.is_relative_to(root)
