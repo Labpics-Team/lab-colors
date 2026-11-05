@@ -78,24 +78,26 @@ class ArbBuildRecipeTests(unittest.TestCase):
 
     def test_pr_gate_requires_a_disposable_exact_workflow_runner(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
-        runner_contracts = [
-            line.strip()
-            for line in source.splitlines()
-            if line.lstrip().startswith("runs-on:")
-        ]
+        def require_runner_contract(workflow):
+            runner_contracts = [
+                line.strip()
+                for line in workflow.splitlines()
+                if line.lstrip().startswith("runs-on:")
+            ]
+            # Root-equivalent Docker and host kernel changes belong to one
+            # disposable VM; native gates still prove the runtime boundary.
+            self.assertEqual(runner_contracts, ["runs-on: ubuntu-latest"])
 
-        # Размещение не доказывает изоляцию. Допуск источника и native gate
-        # сохраняют отдельные проверки до исполнения proof-нагрузки.
-        self.assertEqual(
-            runner_contracts,
-            ["runs-on: [self-hosted, Linux, X64]"] * 2,
-        )
-        self.assertIn("  source-admission:\n", source)
-        self.assertIn('    needs: ["source-admission"]\n', source)
-        self.assertIn("CI_NATIVE_JOB: ${{ toJSON(job) }}", source)
-        self.assertIn("ref: ${{ needs.source-admission.outputs.source_sha }}", source)
-        self.assertNotIn("sudo sysctl -w", source)
-        self.assertNotIn("tee /proc/sys/kernel/core_pattern", source)
+        require_runner_contract(source)
+        for runner in ("[self-hosted, Linux, X64]", "ubuntu-24.04"):
+            with self.subTest(runner=runner), self.assertRaises(AssertionError):
+                require_runner_contract(source.replace("runs-on: ubuntu-latest", f"runs-on: {runner}", 1))
+        self.assertIn('if [[ -f "$apparmor_userns" ]]; then', source)
+        self.assertIn('echo "LABCOLORS_APPARMOR_USERNS_V1=$original_userns" >> "$GITHUB_ENV"', source)
+        self.assertIn("sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0", source)
+        self.assertIn('"kernel.apparmor_restrict_unprivileged_userns=$LABCOLORS_APPARMOR_USERNS_V1"', source)
+        self.assertIn("echo core | sudo tee /proc/sys/kernel/core_pattern >/dev/null", source)
+        self.assertIn('test "$(cat /proc/sys/kernel/core_pattern)" = core', source)
         self.assertIn("proof/region/v1/arb/tests/gate.py", source)
         self.assertIn("proof/region/v1/arb/tests/native_gate.py", source)
         self.assertEqual(source.count("- .github/workflows/arb.yml"), 1)
@@ -123,7 +125,7 @@ class ArbBuildRecipeTests(unittest.TestCase):
             "printf '2' > \"$scope/proof/pids.max\"",
             'mkdir "$scope/proof/observer"',
             '"$scope/proof/cgroup.subtree_control"',
-            'scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB"',
+            'scope="/sys/fs/cgroup/labcolors-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
             'echo "LABCOLORS_CGROUP_SCOPE_V1=$scope"',
             'echo "LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"',
             '"$LABCOLORS_EXECUTOR_CGROUP_V1/observer/cgroup.procs"',
@@ -141,8 +143,8 @@ class ArbBuildRecipeTests(unittest.TestCase):
                 self.assertIn(required, source)
         self.assertNotIn("grep --ignore-case --quiet skipped", source)
         self.assertNotIn("python3 -m unittest", source)
-        # Требуемые namespace, dumpability и точное размещение observer
-        # проверяются executor/native gate; workflow не меняет общие sysctl.
+        # Required namespace, dumpability and exact observer placement remain
+        # executor/native gate obligations after ephemeral host preparation.
         self.assertLess(
             source.index("proof/region/v1/arb/tests/gate.py"),
             source.index("LABCOLORS_EXECUTOR_CGROUP_V1=$scope/proof"),
@@ -168,15 +170,42 @@ class ArbBuildRecipeTests(unittest.TestCase):
     def test_pr_gate_cannot_green_skip_a_fork_without_execution(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
 
-        admission, worker = re.split(r"(?m)^  (?=\S)", source.split("\njobs:\n", 1)[1], maxsplit=2)[1:]
-        self.assertIn("github.event.pull_request.head.repo.full_name", admission)
-        self.assertIn("github.event.pull_request.head.repo.id", admission)
-        self.assertIn('if head_repository != repository or head_id != repository_id:', admission)
-        self.assertIn('raise ValueError("REFUSED: foreign pull request head")', admission)
-        self.assertNotIn("actions/checkout@", admission)
-        self.assertIn('    needs: ["source-admission"]\n', worker)
-        self.assertIn("ref: ${{ needs.source-admission.outputs.source_sha }}", worker)
-        self.assertNotIn("continue-on-error:", admission)
+        def require_execution_contract(workflow):
+            jobs = workflow.split("\njobs:\n", 1)[1]
+            self.assertEqual(
+                re.findall(r"(?m)^  ([A-Za-z0-9_-]+):$", jobs),
+                ["diagnostic-build-runtime"],
+            )
+            self.assertNotRegex(jobs, r"(?m)^    (?:if|needs):")
+            self.assertNotIn("continue-on-error:", jobs)
+            self.assertEqual(jobs.count("uses: actions/checkout@"), 1)
+            self.assertIn("persist-credentials: false", jobs)
+            self.assertNotRegex(jobs, r"(?m)^          ref:")
+            for gate, count in (
+                ("proof/region/v1/arb/tests/gate.py", 2),
+                ("proof/region/v1/mpfi/tests/gate.py", 2),
+                ("proof/region/v1/arb/tests/native_gate.py receipt", 1),
+                ("proof/region/v1/mpfi/tests/native_gate.py receipt", 1),
+                ("proof/region/v1/arb/tests/native_gate.py executor", 1),
+            ):
+                self.assertEqual(jobs.count(gate), count, gate)
+
+        require_execution_contract(source)
+        for anchor, replacement in (
+            ("  diagnostic-build-runtime:\n", "  source-admission:\n"),
+            ("  diagnostic-build-runtime:\n", "  hidden-job:\n    runs-on: ubuntu-latest\n  diagnostic-build-runtime:\n"),
+            ("  diagnostic-build-runtime:\n", "  diagnostic-build-runtime:\n    if: false\n"),
+            ("  diagnostic-build-runtime:\n", "  diagnostic-build-runtime:\n    needs: source-admission\n"),
+            ("    steps:\n", "    continue-on-error: true\n    steps:\n"),
+            ("PYTHONOPTIMIZE=2 python3 proof/region/v1/arb/tests/gate.py", "true"),
+            ("PYTHONOPTIMIZE=2 python3 proof/region/v1/mpfi/tests/gate.py", "true"),
+            ("proof/region/v1/arb/tests/native_gate.py receipt", "true"),
+            ("proof/region/v1/mpfi/tests/native_gate.py receipt", "true"),
+            ("proof/region/v1/arb/tests/native_gate.py executor", "true"),
+        ):
+            self.assertEqual(source.count(anchor), 1)
+            with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
+                require_execution_contract(source.replace(anchor, replacement, 1))
 
     def test_privileged_workflow_has_no_automatic_pull_request_trigger(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")

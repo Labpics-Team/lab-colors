@@ -351,17 +351,14 @@ class ArtifactTests(unittest.TestCase):
 
         def require_aggregate_contract(block):
             conditions = re.findall(r"(?m)^    if: (.+)$", block)
-            self.assertEqual(len(conditions), 1, "aggregate requires one admission condition")
-            self.assertEqual(
-                conditions[0].replace("(always())", "always()"),
-                "${{ always() && needs.source-admission.result == 'success' }}",
-            )
+            self.assertEqual(len(conditions), 1, "aggregate requires one completion condition")
+            self.assertEqual(conditions[0], "always()")
             needs = re.findall(r"(?m)^    needs: (.+)$", block)
             self.assertEqual(len(needs), 1, "aggregate requires one dependency declaration")
-            dependencies = json.loads(needs[0])
-            self.assertIsInstance(dependencies, list)
-            self.assertEqual(len(dependencies), 3)
-            self.assertEqual(set(dependencies), {"android-build", "android-consumer", "source-admission"})
+            self.assertTrue(needs[0].startswith("[") and needs[0].endswith("]"))
+            dependencies = [name.strip() for name in needs[0][1:-1].split(",")]
+            self.assertEqual(len(dependencies), 2)
+            self.assertEqual(set(dependencies), {"android-build", "android-consumer"})
             self.assertNotIn("continue-on-error:", block)
             self.assertEqual(block.count("BUILD_RESULT: ${{ needs.android-build.result }}"), 1)
             self.assertEqual(block.count("CONSUMER_RESULT: ${{ needs.android-consumer.result }}"), 1)
@@ -369,16 +366,20 @@ class ArtifactTests(unittest.TestCase):
         require_aggregate_contract(aggregate)
         mutations = (
             (
-                '    needs: ["android-build", "android-consumer", "source-admission"]\n',
-                '    needs: ["android-build", "android-consumer"]\n',
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-build]\n",
             ),
             (
-                '    needs: ["android-build", "android-consumer", "source-admission"]\n',
-                '    needs: ["android-build", "android-consumer", "source-admission", "source-admission"]\n',
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-consumer]\n",
             ),
             (
-                "    if: ${{ (always()) && needs.source-admission.result == 'success' }}\n",
-                "    if: ${{ always() }}\n",
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-build, android-consumer, android-consumer]\n",
+            ),
+            (
+                "    if: always()\n",
+                "    if: success()\n",
             ),
         )
         for anchor, replacement in mutations:
@@ -386,8 +387,8 @@ class ArtifactTests(unittest.TestCase):
             with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
                 require_aggregate_contract(aggregate.replace(anchor, replacement, 1))
         for declaration in (
-            '    needs: ["android-build", "android-consumer", "source-admission"]\n',
-            "    if: ${{ always() }}\n",
+            "    needs: [android-build, android-consumer]\n",
+            "    if: always()\n",
             "    continue-on-error: true\n",
         ):
             with self.subTest(declaration=declaration), self.assertRaises(AssertionError):
