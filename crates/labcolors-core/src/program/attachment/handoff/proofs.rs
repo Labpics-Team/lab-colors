@@ -107,7 +107,10 @@ fn any_paint() -> Option<EncodedPointPaintV1> {
     ))
 }
 
-fn any_writer() -> Option<(
+// 0 сохраняет исходный символьный выбор; 1/2 делят его на empty/published.
+// Предикат сохраняет зависимость наличия point от revision, а каждая часть
+// выделяет старый Vec с конкретной длиной. Вместе части покрывают весь выбор.
+fn any_writer<const PRESENCE: u8>() -> Option<(
     AdmittedHandoffPointSinkWriterV1<AtomicHost>,
     ExpectedPointState,
 )> {
@@ -118,7 +121,16 @@ fn any_writer() -> Option<(
     } else {
         Some(kani::any())
     };
-    let point = if revision.is_some() && kani::any() {
+    let has_point = revision.is_some() && kani::any::<bool>();
+    if PRESENCE != 0 && has_point != (PRESENCE == 2) {
+        return None;
+    }
+    let build_point = if PRESENCE == 0 {
+        has_point
+    } else {
+        PRESENCE == 2
+    };
+    let point = if build_point {
         Some(HandoffPublishedPointV1 {
             output: OutputSlotIdV1::new(kani::any()),
             sink_output: owned,
@@ -134,9 +146,15 @@ fn any_writer() -> Option<(
             committed: HandoffCommittedPointStateV1 {
                 stamp,
                 revision,
-                points: match point {
-                    Some(point) => vec![point],
-                    None => Vec::new(),
+                points: if PRESENCE == 1 {
+                    Vec::new()
+                } else if PRESENCE == 2 {
+                    vec![point.expect("published partition has one initial point")]
+                } else {
+                    match point {
+                        Some(point) => vec![point],
+                        None => Vec::new(),
+                    }
                 },
                 composites: Vec::new(),
             },
@@ -168,7 +186,7 @@ fn patch(
 // kind=0, kind=1 и остальные u8 различаются только операцией. Три
 // мономорфизации сохраняют полный домен остальных входов и все guards.
 fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+    let Some((mut writer, old)) = any_writer::<0>() else {
         return;
     };
     let Some(query) = (if kani::any() {
@@ -408,7 +426,7 @@ fn pending_matches(
 }
 
 fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+    let Some((mut writer, old)) = any_writer::<0>() else {
         return;
     };
     let Some(paint) = any_paint() else {
@@ -525,8 +543,8 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact()
     rejected_install_is_atomic_retryable_and_success_is_once_only::<2>();
 }
 
-fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+fn stale_prepared_command_never_reaches_the_host<const KIND: u8, const PRESENCE: u8>() {
+    let Some((mut writer, old)) = any_writer::<PRESENCE>() else {
         return;
     };
     let Some(paint) = any_paint() else {
@@ -583,17 +601,23 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
 #[kani::proof]
 #[kani::unwind(4)]
 fn stale_prepared_command_never_reaches_the_host_set_all() {
-    stale_prepared_command_never_reaches_the_host::<0>();
+    stale_prepared_command_never_reaches_the_host::<0, 0>();
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn stale_prepared_command_never_reaches_the_host_revoke_all() {
-    stale_prepared_command_never_reaches_the_host::<1>();
+fn stale_prepared_command_never_reaches_the_host_revoke_all_empty() {
+    stale_prepared_command_never_reaches_the_host::<1, 1>();
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_revoke_all_published() {
+    stale_prepared_command_never_reaches_the_host::<1, 2>();
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
 fn stale_prepared_command_never_reaches_the_host_confirm_exact() {
-    stale_prepared_command_never_reaches_the_host::<2>();
+    stale_prepared_command_never_reaches_the_host::<2, 0>();
 }

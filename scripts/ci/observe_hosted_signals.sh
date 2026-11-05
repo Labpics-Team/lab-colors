@@ -50,11 +50,16 @@ def observe_generated_source():
     try:
         with source_log.open(encoding='utf-8', errors='replace') as stream:
             stream.seek(source_offset)
-            for _ in range(32):
+            # CBMC emits thousands of lines before this marker. Drain a bounded
+            # prefix per poll so attribution is not delayed until the VM exits.
+            remaining = 1048576
+            while remaining > 0:
                 fragment_start = stream.tell()
-                fragment = stream.readline(8192)
+                fragment_limit = min(8192, remaining)
+                fragment = stream.readline(fragment_limit)
                 if not fragment:
                     break
+                remaining -= len(fragment)
                 if not fragment.endswith('\n') and len(fragment) < 8192:
                     stream.seek(fragment_start)
                     break

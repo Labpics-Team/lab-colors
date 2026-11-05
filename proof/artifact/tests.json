@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 377,
+   "count": 379,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -961,6 +961,7 @@
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_direct_command_launch_preserves_argv_and_uses_regular_logfile",
+    "test_verify_core_formal.FormalReportTests.test_each_stale_revoke_partition_retains_generated_c",
     "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
     "test_verify_core_formal.FormalReportTests.test_exact_mutant_harness_keeps_concrete_playback_single_threaded",
     "test_verify_core_formal.FormalReportTests.test_fragment_assembly_requires_exact_complete_evidence",
@@ -974,6 +975,7 @@
     "test_verify_core_formal.FormalReportTests.test_positive_shards_cover_each_harness_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_positive_subset_uses_exact_multi_filter_without_concrete_playback",
     "test_verify_core_formal.FormalReportTests.test_spawn_failure_restores_signal_handlers",
+    "test_verify_core_formal.FormalReportTests.test_stale_revoke_partitions_keep_the_full_contract_and_shard",
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
     "test_verify_core_formal.FormalReportTests.test_unreachable_cover_is_not_success",
@@ -992,7 +994,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ea6b55bdc2487948e2f403d20ff80a559c03edde12296de4e370c35c0545b200",
+ "record_sha256": "75a818a0c29300bed3f4c6cff1a3402a41d9eced7950e4220105bf489aaf5a87",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
