@@ -175,52 +175,133 @@ def validate_mutant(report: dict, returncode: int, mutant: tuple) -> None:
             raise ValueError("mutant failed outside its declared semantic properties")
 
 
+def _open_regular_log(log: Path):
+    descriptor = os.open(log, os.O_CREAT | os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW, 0o666)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("formal logfile must be a regular file")
+        os.ftruncate(descriptor, 0)
+        os.set_blocking(descriptor, True)
+        return os.fdopen(descriptor, "wb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_log_reader(writer):
+    # Read the admitted inode at an independent offset, even if its path changes.
+    return open(f"/proc/self/fd/{writer.fileno()}", "rb")
+
+
+def _open_live_output_fd() -> int:
+    mode = os.fstat(1).st_mode
+    if stat.S_ISFIFO(mode) or stat.S_ISCHR(mode):
+        # dup shares status flags with the CI shell. Reopen a private description.
+        return os.open("/proc/self/fd/1", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    if stat.S_ISREG(mode):
+        return os.dup(1)
+    raise OSError("CI stdout must be a regular file, pipe, or terminal")
+
+
 def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200) -> int:
-    """Relay output without buffering it in Python; own the entire command group."""
+    """Follow the regular logfile; command completion belongs to its leader PID."""
     requested_signal = None
     previous_handlers = {}
     process = None
+    output_fd = None
+    cleaned = False
 
     def request_stop(signum, frame):
         nonlocal requested_signal
         if requested_signal is None:
             requested_signal = signum
 
+    def cleanup():
+        nonlocal cleaned
+        if process is not None and not cleaned:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                process.wait()
+            cleaned = True
+
     try:
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous_handlers[signum] = signal.signal(signum, request_stop)
-        environment = os.environ.copy()
-        environment.pop("BASH_ENV", None)
-        process = subprocess.Popen(
-            ["bash", "--noprofile", "--norc", str(ROOT / "scripts/ci/relay_formal_command.sh"),
-             str(log), *command],
-            cwd=ROOT, env=environment, stderr=subprocess.STDOUT, start_new_session=True,
-        )
-        deadline = time.monotonic() + timeout
-        while requested_signal is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(command, timeout)
+        try:
+            writer = _open_regular_log(log)
+        except OSError:
+            return 125
+        with writer:
             try:
-                returncode = process.wait(timeout=min(0.1, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                pass
+                reader = _open_log_reader(writer)
+            except OSError:
+                return 125
+            with reader:
+                relay_failed = False
+                try:
+                    output_fd = _open_live_output_fd()
+                except OSError:
+                    relay_failed = True
+                process = subprocess.Popen(command, cwd=ROOT, stdout=writer, stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+                deadline = time.monotonic() + timeout
+                pending, offset = b"", 0
+                try:
+                    while requested_signal is None:
+                        returncode = process.poll()
+                        if returncode is not None:
+                            cleanup()
+                        if requested_signal is not None:
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            if returncode is None:
+                                raise subprocess.TimeoutExpired(command, timeout)
+                            return 125
+                        progressed = False
+                        if not relay_failed:
+                            if offset == len(pending):
+                                try:
+                                    pending = reader.read(65536)
+                                    offset = 0
+                                except OSError:
+                                    relay_failed = True
+                            if not relay_failed and pending:
+                                try:
+                                    written = os.write(output_fd, memoryview(pending)[offset:])
+                                    if written == 0:
+                                        relay_failed = True
+                                    else:
+                                        offset += written
+                                        progressed = True
+                                except BlockingIOError:
+                                    pass
+                                except OSError:
+                                    relay_failed = True
+                        if cleaned and (relay_failed or not pending):
+                            return 125 if relay_failed else returncode
+                        if not progressed:
+                            if cleaned:
+                                time.sleep(min(0.1, remaining))
+                            else:
+                                try:
+                                    process.wait(timeout=min(0.1, remaining))
+                                except subprocess.TimeoutExpired:
+                                    pass
+                finally:
+                    cleanup()
     finally:
         try:
-            if process is not None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                finally:
-                    process.wait()
+            if output_fd is not None:
+                os.close(output_fd)
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
         if requested_signal is not None:
             raise SystemExit(128 + requested_signal)
-    return returncode
 
 
 def run_kani(
@@ -269,7 +350,6 @@ def formal_source_files() -> list[Path]:
         CORE / "program_wire.rs",
         Path(__file__),
         ROOT / "scripts/formal_contracts.py",
-        ROOT / "scripts/ci/relay_formal_command.sh",
     ]
     for source in SOURCES:
         files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])

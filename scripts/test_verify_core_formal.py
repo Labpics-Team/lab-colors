@@ -98,9 +98,13 @@ def valid_subset_report(harnesses):
 
 class FormalReportTests(unittest.TestCase):
     def setUp(self):
+        self.command_log = Path(self.enterContext(tempfile.TemporaryDirectory())) / "command.log"
+        self.enterContext(mock.patch("verify_core_formal._open_live_output_fd", side_effect=lambda: os.dup(1)))
         if not hasattr(signal, "SIGKILL"):
             # Windows only exercises the mocked Linux launcher contract.
             self.enterContext(mock.patch("verify_core_formal.signal.SIGKILL", 9, create=True))
+            self.enterContext(mock.patch("verify_core_formal._open_regular_log", side_effect=lambda log: log.open("wb")))
+            self.enterContext(mock.patch("verify_core_formal._open_log_reader", side_effect=lambda writer: Path(writer.name).open("rb")))
 
     def test_checkout_rejects_corrupt_blob_even_when_status_and_bytes_match(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -486,6 +490,7 @@ class FormalReportTests(unittest.TestCase):
                 "verify_core_formal.os.killpg", create=True
             ) as terminate, mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0, 1200]):
                 launch.return_value.pid = 4242
+                launch.return_value.poll.return_value = None
                 launch.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 0.1), -9]
                 with self.assertRaises(subprocess.TimeoutExpired):
                     run_kani(Path(temporary) / "result.json")
@@ -498,7 +503,7 @@ class FormalReportTests(unittest.TestCase):
             path = Path(temporary) / "result.json"
             with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
                 launch.return_value.pid = 4243
-                launch.return_value.returncode = 1
+                launch.return_value.poll.return_value = 1
                 def completed(*args, **kwargs):
                     path.write_text("{}")
                     return 1
@@ -514,7 +519,7 @@ class FormalReportTests(unittest.TestCase):
                 "verify_core_formal.os.killpg", create=True
             ):
                 launch.return_value.pid = 4244
-                launch.return_value.returncode = 0
+                launch.return_value.poll.return_value = 0
 
                 def completed(*args, **kwargs):
                     path.write_text("{}")
@@ -537,7 +542,7 @@ class FormalReportTests(unittest.TestCase):
                 "verify_core_formal.os.killpg", create=True
             ):
                 launch.return_value.pid = 4245
-                launch.return_value.returncode = 1
+                launch.return_value.poll.return_value = 1
 
                 def completed(*args, **kwargs):
                     path.write_text("{}")
@@ -549,24 +554,20 @@ class FormalReportTests(unittest.TestCase):
                 self.assertFalse(any(arg.startswith("--jobs") for arg in command))
                 self.assertIn("--concrete-playback", command)
 
-    def test_relay_launch_preserves_argv_and_excludes_bash_startup_environment(self):
-        root = Path(__file__).resolve().parents[1]
+    def test_direct_command_launch_preserves_argv_and_uses_regular_logfile(self):
         command = ["cargo", "kani", "space and 'quote", "$(not-a-shell-command)"]
-        log = root / "example.log"
-        with mock.patch.dict(os.environ, {"BASH_ENV": "foreign-startup.sh"}), mock.patch(
-            "verify_core_formal.subprocess.Popen"
-        ) as launch, mock.patch("verify_core_formal.os.killpg", create=True):
+        with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
+            "verify_core_formal.os.killpg", create=True
+        ):
             launch.return_value.pid = 4246
+            launch.return_value.poll.return_value = 0
             launch.return_value.wait.return_value = 0
-            self.assertEqual(_run_logged_command(command, log), 0)
-            self.assertEqual(launch.call_args.args[0], [
-                "bash", "--noprofile", "--norc", str(root / "scripts/ci/relay_formal_command.sh"),
-                str(log), *command,
-            ])
-            self.assertNotIn("BASH_ENV", launch.call_args.kwargs["env"])
-            self.assertNotIn("stdout", launch.call_args.kwargs)
+            self.assertEqual(_run_logged_command(command, self.command_log), 0)
+            self.assertEqual(launch.call_args.args[0], command)
+            self.assertTrue(launch.call_args.kwargs["stdout"].closed)
+            self.assertEqual(self.command_log.read_bytes(), b"")
+            self.assertEqual(launch.call_args.kwargs["stdout"].mode, "wb")
             self.assertEqual(launch.call_args.kwargs["stderr"], subprocess.STDOUT)
-        self.assertIn(root / "scripts/ci/relay_formal_command.sh", formal_source_files())
 
     def test_cancellation_during_spawn_still_cleans_group_and_restores_handlers(self):
         previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
@@ -583,7 +584,7 @@ class FormalReportTests(unittest.TestCase):
 
                 launch.side_effect = spawned
                 with self.assertRaises(SystemExit) as stopped:
-                    _run_logged_command(["unused"], Path("unused.log"))
+                    _run_logged_command(["unused"], self.command_log)
                 self.assertEqual(stopped.exception.code, 128 + signum)
                 terminate.assert_called_once_with(4247, signal.SIGKILL)
                 process.wait.assert_called_once_with()
@@ -595,19 +596,33 @@ class FormalReportTests(unittest.TestCase):
             "verify_core_formal.os.killpg", create=True
         ) as terminate:
             launch.return_value.pid = 4248
+            launch.return_value.poll.return_value = 0
             launch.return_value.wait.return_value = 0
             terminate.side_effect = lambda *args: signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
             with self.assertRaises(SystemExit) as stopped:
-                _run_logged_command(["unused"], Path("unused.log"))
+                _run_logged_command(["unused"], self.command_log)
             self.assertEqual(stopped.exception.code, 130)
 
     def test_spawn_failure_restores_signal_handlers(self):
         previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
         with mock.patch("verify_core_formal.subprocess.Popen", side_effect=OSError("spawn failed")):
             with self.assertRaisesRegex(OSError, "spawn failed"):
-                _run_logged_command(["unused"], Path("unused.log"))
+                _run_logged_command(["unused"], self.command_log)
         for signum, handler in previous.items():
             self.assertEqual(signal.getsignal(signum), handler)
+
+    def test_parent_log_read_failure_returns_125_and_cleans_command_group(self):
+        reader = mock.MagicMock()
+        reader.__enter__.return_value = reader
+        reader.read.side_effect = OSError("read failed")
+        with mock.patch("verify_core_formal._open_log_reader", return_value=reader), mock.patch(
+            "verify_core_formal.subprocess.Popen"
+        ) as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
+            launch.return_value.pid = 4249
+            launch.return_value.poll.return_value = 0
+            launch.return_value.wait.return_value = 0
+            self.assertEqual(_run_logged_command(["unused"], self.command_log), 125)
+            terminate.assert_called_once_with(4249, signal.SIGKILL)
 
     def test_target_failure_may_make_its_later_cover_unreachable(self):
         report = {"verification_results": {
@@ -922,12 +937,13 @@ class FormalReportTests(unittest.TestCase):
                     other.write_bytes(b"trusted other\n")
 
 
-@unittest.skipUnless(sys.platform == "linux", "relay uses Linux process groups and GNU tee")
+@unittest.skipUnless(sys.platform == "linux", "relay uses Linux process groups and proc descriptors")
 class FormalRelayProcessTests(unittest.TestCase):
     @contextmanager
-    def driver(self, directory, code, *, args=(), timeout=5, environment=None, log=None):
+    def driver(self, directory, code, *, args=(), timeout=5, log=None, stdout=subprocess.PIPE):
         log = log or directory / "command.log"
         group = directory / "group"
+        group.unlink(missing_ok=True)
         command = [sys.executable, "-u", "-c", (
             "import os; from pathlib import Path; "
             f"Path({str(group)!r}).write_text(str(os.getpgrp()))\n" + code
@@ -945,7 +961,7 @@ class FormalRelayProcessTests(unittest.TestCase):
         )
         process = subprocess.Popen(
             [sys.executable, "-u", "-c", launcher, json.dumps(command), str(log), str(timeout)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=environment, start_new_session=True,
+            stdout=stdout, stderr=subprocess.STDOUT, start_new_session=True,
         )
         try:
             yield process, log, group
@@ -957,40 +973,187 @@ class FormalRelayProcessTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
             process.wait(timeout=10)
-            process.stdout.close()
+            if process.stdout is not None:
+                process.stdout.close()
 
     def test_command_status_and_literal_arguments_survive_relay(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            startup = directory / "startup.sh"
-            marker = directory / "startup-executed"
-            startup.write_text(f"touch '{marker}'\n")
-            environment = dict(os.environ, BASH_ENV=str(startup))
             arguments = ["space and 'quote", "$(not-a-shell-command)", "semicolon;literal"]
             for status in (0, 1):
                 with self.subTest(status=status), self.driver(
                     directory,
                     f"import json, sys; print(json.dumps(sys.argv[1:])); sys.exit({status})",
-                    args=arguments, environment=environment,
+                    args=arguments,
                 ) as (process, log, group):
                     output, _ = process.communicate(timeout=10)
                     self.assertEqual(process.returncode, status)
                     self.assertEqual(json.loads(output), arguments)
                     self.assertEqual(log.read_bytes(), output)
-                    self.assertFalse(marker.exists())
 
-    def test_logfile_failure_is_not_command_success_or_semantic_failure(self):
+    def test_final_tail_larger_than_a_chunk_is_relayed_exactly(self):
+        payload = b"part" * 32769 + b"\nfinal-tail\x00"
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             for status in (0, 1):
                 with self.subTest(status=status), self.driver(
-                    directory, f"import sys; print('command-output'); sys.exit({status})",
-                    log=directory / "missing-directory" / "command.log",
+                    directory,
+                    "import sys; sys.stdout.buffer.write(b'part' * 32769 + b'\\nfinal-tail\\x00'); "
+                    f"sys.exit({status})",
+                ) as (process, log, group):
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, status)
+                    self.assertEqual(output, payload)
+                    self.assertEqual(log.read_bytes(), payload)
+
+    def test_regular_stdout_preserves_existing_position(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            destination = directory / "stdout"
+            with destination.open("wb") as sink:
+                sink.write(b"previous-output\n")
+                sink.flush()
+                with self.driver(directory, "print('command-output')", stdout=sink) as (process, log, group):
+                    self.assertEqual(process.wait(timeout=5), 0)
+                    self.assertEqual(destination.read_bytes(), b"previous-output\ncommand-output\n")
+                    self.assertEqual(log.read_bytes(), b"command-output\n")
+
+    def test_cancellation_during_final_drain_preserves_signal_status(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for signum in (signal.SIGTERM, signal.SIGINT):
+                read_fd, write_fd = os.pipe()
+                try:
+                    capacity = fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+                    os.write(write_fd, b"p" * capacity)
+                    with self.subTest(signum=signum), self.driver(
+                        directory, "print('final-tail')", stdout=write_fd,
+                    ) as (process, log, group):
+                        deadline = time.monotonic() + 3
+                        while not group.exists() or Path(f"/proc/{group.read_text()}/stat").exists():
+                            self.assertIsNone(process.poll())
+                            self.assertLess(time.monotonic(), deadline)
+                            time.sleep(0.01)
+                        self.assertEqual(log.read_bytes(), b"final-tail\n")
+                        self.assertIsNone(process.poll(), "relay should still be draining the full sink")
+                        process.send_signal(signum)
+                        self.assertEqual(process.wait(timeout=2), 128 + signum)
+                        self.assertEqual(log.read_bytes(), b"final-tail\n")
+                finally:
+                    os.close(write_fd)
+                    os.close(read_fd)
+
+    def test_full_sink_keeps_complete_log_and_deadline_without_mutating_inherited_flags(self):
+        import fcntl
+        payload = b"x" * 32768 + b"final-tail\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            read_fd, write_fd = os.pipe()
+            try:
+                capacity = fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+                os.write(write_fd, b"p" * capacity)
+                flags = fcntl.fcntl(write_fd, fcntl.F_GETFL)
+                with self.driver(
+                    directory,
+                    "import sys; sys.stdout.buffer.write(b'x' * 32768 + b'final-tail\\n')",
+                    stdout=write_fd, timeout=2,
+                ) as (process, log, group):
+                    started = time.monotonic()
+                    deadline = started + 2
+                    while not log.exists() or log.stat().st_size < len(payload):
+                        self.assertIsNone(process.poll())
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.01)
+                    self.assertIsNone(process.poll(), "full sink must still have an undrained tail")
+                    self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), flags)
+                    self.assertEqual(log.read_bytes(), payload)
+                    self.assertEqual(process.wait(timeout=4), 125)
+                    self.assertLess(time.monotonic() - started, 3)
+                    self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), flags)
+                    self.assertEqual(log.read_bytes(), payload)
+            finally:
+                os.close(write_fd)
+                os.close(read_fd)
+
+    def test_slow_sink_drains_final_tail_without_mutating_inherited_flags(self):
+        import array
+        import fcntl
+        import termios
+        payload = b"x" * 32768 + b"final-tail\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            read_fd, write_fd = os.pipe()
+            try:
+                capacity = fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+                flags = fcntl.fcntl(write_fd, fcntl.F_GETFL)
+                with self.driver(
+                    directory, "import sys; sys.stdout.buffer.write(b'x' * 32768 + b'final-tail\\n')",
+                    stdout=write_fd,
+                ) as (process, log, group):
+                    deadline = time.monotonic() + 5
+                    while True:
+                        available = array.array("i", [0])
+                        fcntl.ioctl(read_fd, termios.FIONREAD, available, True)
+                        if available[0] == capacity and log.exists() and log.stat().st_size == len(payload):
+                            break
+                        self.assertIsNone(process.poll())
+                        self.assertLess(time.monotonic(), deadline)
+                        time.sleep(0.01)
+                    self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), flags)
+                    output = bytearray()
+                    while len(output) < len(payload):
+                        self.assertLess(time.monotonic(), deadline)
+                        readable, _, _ = select.select([read_fd], [], [], 0.1)
+                        if readable:
+                            output.extend(os.read(read_fd, min(512, len(payload) - len(output))))
+                            time.sleep(0.005)
+                        self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), flags)
+                    self.assertEqual(process.wait(timeout=3), 0)
+                    self.assertEqual(output, payload)
+                    self.assertEqual(log.read_bytes(), payload)
+                    self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), flags)
+            finally:
+                os.close(write_fd)
+                os.close(read_fd)
+
+    def test_log_admission_rejects_unavailable_and_nonregular_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for destination in (directory / "missing-directory" / "command.log", Path("/dev/full")):
+                with self.subTest(destination=destination), self.driver(
+                    directory, "print('must-not-start')", log=destination,
                 ) as (process, log, group):
                     output, _ = process.communicate(timeout=10)
                     self.assertEqual(process.returncode, 125)
-                    self.assertIn(b"command-output\n", output)
-                    self.assertFalse(log.exists())
+                    self.assertEqual(output, b"")
+                    self.assertFalse(group.exists())
+
+    def test_log_admission_does_not_follow_symlinks_or_wait_for_fifo_readers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            target = directory / "target"
+            target.write_bytes(b"preserved-target\n")
+            link = directory / "symlink"
+            link.symlink_to(target)
+            fifo = directory / "fifo"
+            os.mkfifo(fifo)
+            for destination, existing_reader in ((link, False), (fifo, False), (fifo, True)):
+                reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK) if existing_reader else None
+                try:
+                    with self.subTest(destination=destination, reader=existing_reader), self.driver(
+                        directory, "print('must-not-start')", log=destination, timeout=2,
+                    ) as (process, log, group):
+                        started = time.monotonic()
+                        output, _ = process.communicate(timeout=2)
+                        self.assertEqual(process.returncode, 125)
+                        self.assertLess(time.monotonic() - started, 1)
+                        self.assertEqual(output, b"")
+                        self.assertFalse(group.exists())
+                        self.assertEqual(target.read_bytes(), b"preserved-target\n")
+                finally:
+                    if reader is not None:
+                        os.close(reader)
 
     def test_closed_stdout_retains_the_complete_log_and_reports_relay_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1001,6 +1164,28 @@ class FormalRelayProcessTests(unittest.TestCase):
                 process.stdout.close()
                 self.assertEqual(process.wait(timeout=10), 125)
                 self.assertEqual(log.read_bytes(), b"begin\n" + b"x" * 65536 + b"\nend\n")
+
+    def test_leader_exit_cleans_descendant_that_inherits_stdout_without_waiting_for_eof(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            descendant = directory / "descendant"
+            for status in (0, 1):
+                code = (
+                    "import subprocess, sys; from pathlib import Path; "
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                    f"Path({str(descendant)!r}).write_text(str(child.pid)); "
+                    f"print('leader-done', flush=True); sys.exit({status})"
+                )
+                with self.subTest(status=status), self.driver(directory, code, timeout=2) as (process, log, group):
+                    started = time.monotonic()
+                    output, _ = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, status)
+                    self.assertLess(time.monotonic() - started, 1.5)
+                    self.assertEqual(output, b"leader-done\n")
+                    self.assertEqual(log.read_bytes(), output)
+                    state = Path(f"/proc/{int(descendant.read_text())}/stat")
+                    if state.exists():
+                        self.assertEqual(state.read_text().split(") ", 1)[1].split()[0], "Z")
 
     def test_live_output_and_tree_cleanup_on_signals_and_timeout(self):
         with tempfile.TemporaryDirectory() as temporary:

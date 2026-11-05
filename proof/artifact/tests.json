@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 359,
+   "count": 367,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -928,10 +928,17 @@
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_valid_receipt_binds_committed_research_and_product_codec",
     "test_verify_clean_set_receipt.ReceiptHostileTests.test_wrong_research_commit_is_rejected_before_blob_lookup",
     "test_verify_clean_set_receipt.ReceiptRefreshLocaleTests.test_refresh_status_and_byte_bindings_do_not_depend_on_text_locale",
+    "test_verify_core_formal.FormalRelayProcessTests.test_cancellation_during_final_drain_preserves_signal_status",
     "test_verify_core_formal.FormalRelayProcessTests.test_closed_stdout_retains_the_complete_log_and_reports_relay_failure",
     "test_verify_core_formal.FormalRelayProcessTests.test_command_status_and_literal_arguments_survive_relay",
+    "test_verify_core_formal.FormalRelayProcessTests.test_final_tail_larger_than_a_chunk_is_relayed_exactly",
+    "test_verify_core_formal.FormalRelayProcessTests.test_full_sink_keeps_complete_log_and_deadline_without_mutating_inherited_flags",
+    "test_verify_core_formal.FormalRelayProcessTests.test_leader_exit_cleans_descendant_that_inherits_stdout_without_waiting_for_eof",
     "test_verify_core_formal.FormalRelayProcessTests.test_live_output_and_tree_cleanup_on_signals_and_timeout",
-    "test_verify_core_formal.FormalRelayProcessTests.test_logfile_failure_is_not_command_success_or_semantic_failure",
+    "test_verify_core_formal.FormalRelayProcessTests.test_log_admission_does_not_follow_symlinks_or_wait_for_fifo_readers",
+    "test_verify_core_formal.FormalRelayProcessTests.test_log_admission_rejects_unavailable_and_nonregular_paths",
+    "test_verify_core_formal.FormalRelayProcessTests.test_regular_stdout_preserves_existing_position",
+    "test_verify_core_formal.FormalRelayProcessTests.test_slow_sink_drains_final_tail_without_mutating_inherited_flags",
     "test_verify_core_formal.FormalReportTests.test_assembly_rejects_index_hidden_source_changes",
     "test_verify_core_formal.FormalReportTests.test_cancellation_during_cleanup_is_not_success",
     "test_verify_core_formal.FormalReportTests.test_cancellation_during_spawn_still_cleans_group_and_restores_handlers",
@@ -943,6 +950,7 @@
     "test_verify_core_formal.FormalReportTests.test_complete_result_passes",
     "test_verify_core_formal.FormalReportTests.test_completed_wrapper_still_cleans_its_solver_group",
     "test_verify_core_formal.FormalReportTests.test_deleted_semantic_assertion_or_cover_is_rejected",
+    "test_verify_core_formal.FormalReportTests.test_direct_command_launch_preserves_argv_and_uses_regular_logfile",
     "test_verify_core_formal.FormalReportTests.test_each_wcag_partition_is_mandatory_even_with_adjusted_summary",
     "test_verify_core_formal.FormalReportTests.test_exact_mutant_harness_keeps_concrete_playback_single_threaded",
     "test_verify_core_formal.FormalReportTests.test_fragment_assembly_requires_exact_complete_evidence",
@@ -952,9 +960,9 @@
     "test_verify_core_formal.FormalReportTests.test_mutant_shards_cover_each_mutant_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_non_successful_property_or_harness_is_rejected",
     "test_verify_core_formal.FormalReportTests.test_only_unnamed_generated_unreachable_checks_are_admissible",
+    "test_verify_core_formal.FormalReportTests.test_parent_log_read_failure_returns_125_and_cleans_command_group",
     "test_verify_core_formal.FormalReportTests.test_positive_shards_cover_each_harness_exactly_once",
     "test_verify_core_formal.FormalReportTests.test_positive_subset_uses_exact_multi_filter_without_concrete_playback",
-    "test_verify_core_formal.FormalReportTests.test_relay_launch_preserves_argv_and_excludes_bash_startup_environment",
     "test_verify_core_formal.FormalReportTests.test_spawn_failure_restores_signal_handlers",
     "test_verify_core_formal.FormalReportTests.test_target_failure_may_make_its_later_cover_unreachable",
     "test_verify_core_formal.FormalReportTests.test_timeout_terminates_the_solver_process_group",
@@ -974,7 +982,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ff8eb7a273f58135f6db8c9c6bb7faa1d411d9d7d897a3c8e71a39d1f72db254",
+ "record_sha256": "0dd4719b9b7cb203c7f6680bd0bff023c4a80e186a68ae2ec2a0c99aa9aee2f5",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
