@@ -107,7 +107,6 @@ jobs:
           import hashlib
           import importlib.util
           import json
-          import re
           import os
           from pathlib import Path
           import selectors
@@ -127,14 +126,13 @@ jobs:
           artifact_limit = 16 * 1024 * 1024
           # Both compressed corpora share this allowance, including gzip footers.
           # Reserve room for the manifest and the upload-artifact ZIP envelope.
-          observation_limit = 32 * 1024
-          observation_path = artifact / 'executor-observations.jsonl'
-          observation_size = 0
-          journal = None
-          journal_buffer = b''
-          journal_bytes = 0
-          observed_pids = set()
-          gzip_limit = artifact_limit - 64 * 1024 - observation_limit
+          metadata_child = None
+          phase_log_limit = 64 * 1024
+          phase_log_bytes = 0
+          phase_buffer = b''
+          # Preserve the original compression allowance; removing observations
+          # does not expand the artifact budget.
+          gzip_limit = artifact_limit - 96 * 1024
           json_limit = artifact_limit
           manifest_limit = 16 * 1024
           deadline = time.monotonic() + 600
@@ -144,7 +142,7 @@ jobs:
               'cargo', 'kani', '-p', 'labcolors-core', '--lib', '--harness',
               harness,
               '--exact', '-Z', 'unstable-options', '--output-format', 'regular',
-              '--jobs=1', '--harness-timeout', '300s', '--export-json', str(json_path),
+              '--jobs=1', '--harness-timeout', '300s', '--export-json', str(json_path), '--verbose',
           ]
           manifest = {
               'diagnostic_only': True,
@@ -162,6 +160,8 @@ jobs:
               'observation_target': 'complete isolated RevokeAll property results versus original runner cancellation',
               'stdout_capture': 'raw bytes streamed without a raw file; no filtering, no line or sample limit',
               'stderr_capture': 'runner log only',
+              'phase_log_complete': True,
+              'phase_log_limit': phase_log_limit,
               'limits': {
                   'gzip_bytes': gzip_limit,
                   'raw_json_bytes': json_limit,
@@ -200,101 +200,40 @@ jobs:
                   raise Refusal('diagnostic capture exceeded the overall 600 seconds')
               return seconds
 
+          def expire_capture(signum, frame):
+              raise Refusal('diagnostic capture exceeded the overall 600 seconds')
+
           def phase(name):
               manifest['phase'] = name
               print(f'Diagnostic phase: {name}', flush=True)
               remaining()
 
-          def observe(event, **fields):
-              global observation_size
-              payload = (json.dumps(dict(event=event, monotonic=time.monotonic(), **fields), sort_keys=True) + '\n').encode()
-              if observation_size + len(payload) > observation_limit:
-                  raise Refusal('executor observations exceed their reserved 32 KiB allowance')
-              with observation_path.open('ab') as output:
-                  output.write(payload)
-              observation_size += len(payload)
-              print('Executor observation: ' + payload.decode().rstrip(), flush=True)
-
-          def identity(pid, event):
-              try:
-                  fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
-                  values = dict(pid=pid, ppid=int(fields[1]), pgid=int(fields[2]), sid=int(fields[3]), start_ticks=int(fields[19]))
-                  cgroup = Path(f'/proc/{pid}/cgroup').read_text().strip().split(':', 2)[-1]
-                  values['cgroup_sha256'] = hashlib.sha256(cgroup.encode()).hexdigest()
-              except (OSError, ValueError, IndexError) as error:
-                  observe('identity_unavailable', pid=pid, error_type=type(error).__name__)
-                  return 0
-              # Only numeric identity and fingerprint; never comm, cmdline or environment.
-              observe(event, **values)
-              return values['ppid']
-
-          def descendants(pid):
-              pending = [pid]
-              visited = set()
-              while pending:
-                  current = pending.pop()
-                  if current in visited:
-                      continue
-                  visited.add(current)
-                  if len(visited) > 256:
-                      raise Refusal('executor process tree exceeds 256 identities')
-                  if current not in observed_pids:
-                      identity(current, 'proof_descendant')
-                      observed_pids.add(current)
-                  try:
-                      tasks = list(Path(f'/proc/{current}/task').iterdir())
-                  except OSError:
-                      continue
-                  if len(tasks) > 256:
-                      raise Refusal('executor process exceeds 256 task observations')
-                  for task in tasks:
-                      try:
-                          pending.extend(map(int, (task / 'children').read_text().split()))
-                      except (OSError, ValueError):
-                          # This live snapshot is best-effort; exited tasks can disappear.
-                          pass
-
-          def journal_record(raw):
-              try:
-                  record = json.loads(raw)
-              except (ValueError, UnicodeDecodeError):
-                  observe('journal_record_invalid')
-                  return
-              message = record.get('MESSAGE', '')
-              if not isinstance(message, str):
-                  return
-              victim = re.search(r'Killed process (\d+) \(([A-Za-z0-9_.-]{1,64})\)', message)
-              if record.get('_TRANSPORT') == 'kernel' and victim:
-                  observe('kernel_oom_victim', pid=int(victim[1]))
-              elif record.get('_SYSTEMD_UNIT') == 'systemd-oomd.service' and 'Killed ' in message:
-                  # Group path is fingerprinted, never publish arbitrary message text.
-                  group = re.search(r'Killed (\S+)', message)
-                  observe('oomd_group_kill', group_sha256=hashlib.sha256(group[1].encode()).hexdigest() if group else None)
-
-          def read_journal(selector):
-              global journal_buffer, journal_bytes
-              chunk = os.read(journal.stdout.fileno(), 64 * 1024)
-              if not chunk:
-                  selector.unregister(journal.stdout)
-                  observe('journal_exit', exit_code=journal.poll())
-                  return
-              journal_bytes += len(chunk)
-              if journal_bytes > artifact_limit:
-                  raise Refusal('executor journal input exceeds 16 MiB')
-              journal_buffer += chunk
-              while b'\n' in journal_buffer:
-                  raw, journal_buffer = journal_buffer.split(b'\n', 1)
-                  if len(raw) > 64 * 1024:
-                      raise Refusal('executor journal record exceeds 64 KiB')
-                  journal_record(raw)
-              if len(journal_buffer) > 64 * 1024:
-                  raise Refusal('executor journal record exceeds 64 KiB')
+          def relay_native_phases(chunk):
+              global phase_buffer, phase_log_bytes
+              for part in chunk.splitlines(keepends=True):
+                  if phase_buffer is not None:
+                      if len(phase_buffer) + len(part) > 4096:
+                          phase_buffer = None
+                      else:
+                          phase_buffer += part
+                  if part.endswith(b'\n'):
+                      if phase_buffer is not None and phase_buffer.startswith((b'[Kani] Running:', b'Finished ', b'CBMC version ')):
+                          if phase_log_bytes + len(phase_buffer) <= phase_log_limit:
+                              sys.stdout.buffer.write(phase_buffer)
+                              sys.stdout.buffer.flush()
+                              phase_log_bytes += len(phase_buffer)
+                          else:
+                              manifest['phase_log_complete'] = False
+                      elif phase_buffer is None:
+                          manifest['phase_log_complete'] = False
+                      phase_buffer = b''
 
           def metadata(args):
+              global metadata_child
               phase('metadata: ' + shlex.join(args))
               child = subprocess.Popen(args, stdout=subprocess.PIPE, text=True, start_new_session=True)
+              metadata_child = child
               try:
-                  identity(child.pid, 'metadata_launch')
                   output, _ = child.communicate(timeout=remaining())
                   if child.returncode:
                       raise subprocess.CalledProcessError(child.returncode, args, output=output)
@@ -304,6 +243,7 @@ jobs:
                   child.stdout.close()
                   if errors:
                       raise Refusal('metadata process group cleanup failed: ' + '; '.join(errors))
+                  metadata_child = None
 
           def git(*args):
               return metadata(['git', '-C', str(source), *args])
@@ -313,10 +253,6 @@ jobs:
               if process is None:
                   return errors
               try:
-                  try:
-                      observe('owned_killpg', pgid=process.pid, signal='SIGTERM')
-                  except Exception as error:
-                      errors.append(str(error))
                   os.killpg(process.pid, signal.SIGTERM)
               except ProcessLookupError:
                   pass
@@ -331,10 +267,6 @@ jobs:
               # The leader may have exited while a child ignores TERM. Always
               # kill the group after the bounded grace, including that case.
               try:
-                  try:
-                      observe('owned_killpg', pgid=process.pid, signal='SIGKILL')
-                  except Exception as error:
-                      errors.append(str(error))
                   os.killpg(process.pid, signal.SIGKILL)
               except ProcessLookupError:
                   pass
@@ -349,18 +281,9 @@ jobs:
           process = None
           raw_size = 0
           raw_digest = hashlib.sha256()
+          signal.signal(signal.SIGALRM, expire_capture)
           try:
-              ancestor = os.getpid()
-              for _ in range(8):
-                  if not ancestor:
-                      break
-                  ancestor = identity(ancestor, 'controller_ancestry')
-              journal = subprocess.Popen(
-                  ['journalctl', '--follow', '--since=@' + str(time.time()), '--output=json',
-                   '_TRANSPORT=kernel', '+', '_SYSTEMD_UNIT=systemd-oomd.service'],
-                  stdout=subprocess.PIPE, start_new_session=True,
-              )
-              identity(journal.pid, 'journal_launch')
+              signal.setitimer(signal.ITIMER_REAL, remaining())
               manifest['source_sha'] = git('rev-parse', 'HEAD')
               manifest['source_tree'] = git('rev-parse', 'HEAD^{tree}')
               if manifest['source_sha'] != manifest['base_sha'] or git('status', '--porcelain'):
@@ -378,19 +301,13 @@ jobs:
                   bounded = BoundedWriter(output)
                   with gzip.GzipFile(filename='', mode='wb', fileobj=bounded, mtime=0) as compressed:
                       process = subprocess.Popen(command, cwd=source, stdout=subprocess.PIPE, start_new_session=True)
-                      identity(process.pid, 'proof_launch')
                       with selectors.DefaultSelector() as selector:
                           selector.register(process.stdout, selectors.EVENT_READ)
-                          selector.register(journal.stdout, selectors.EVENT_READ)
                           while True:
                               seconds = remaining()
-                              descendants(process.pid)
                               if json_path.exists() and json_path.stat().st_size > json_limit:
                                   raise Refusal('raw canonical JSON exceeds its bounded allowance')
                               ready = selector.select(timeout=min(1, seconds))
-                              for key, _ in ready:
-                                  if key.fileobj is journal.stdout:
-                                      read_journal(selector)
                               if not any(key.fileobj is process.stdout for key, _ in ready):
                                   continue
                               chunk = os.read(process.stdout.fileno(), 64 * 1024)
@@ -398,6 +315,7 @@ jobs:
                                   break
                               raw_size += len(chunk)
                               raw_digest.update(chunk)
+                              relay_native_phases(chunk)
                               compressed.write(chunk)
                       manifest['command_exit_code'] = process.wait(timeout=remaining())
                       if manifest['command_exit_code'] not in (0, 1):
@@ -457,18 +375,12 @@ jobs:
                   'command_exit_code': None if process is None else process.returncode,
               })
           finally:
-              cleanup_errors = stop_group(process)
-              cleanup_errors.extend(stop_group(journal))
-              if journal is not None:
-                  with selectors.DefaultSelector() as selector:
-                      selector.register(journal.stdout, selectors.EVENT_READ)
-                      while selector.get_map() and selector.select(timeout=0):
-                          try:
-                              read_journal(selector)
-                          except Refusal as error:
-                              cleanup_errors.append(str(error))
-                              break
-                  journal.stdout.close()
+              # Capture is over; disarm before the existing bounded group cleanup.
+              signal.setitimer(signal.ITIMER_REAL, 0)
+              cleanup_errors = stop_group(metadata_child)
+              if metadata_child is not None:
+                  metadata_child.stdout.close()
+              cleanup_errors.extend(stop_group(process))
               if process is not None and process.stdout is not None:
                   try:
                       process.stdout.close()
@@ -521,7 +433,6 @@ jobs:
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/proof-stdout.gz
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/proof-json.gz
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/manifest.json
-            ${{ env.DIAGNOSTIC_ROOT }}/artifact/executor-observations.jsonl
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
