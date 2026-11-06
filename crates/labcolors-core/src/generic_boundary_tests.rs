@@ -441,18 +441,47 @@ fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
 }
 
 fn contains_forbidden_material_identifier(source: &str) -> bool {
-    let mut identifier = String::new();
-    for character in source.chars().chain(std::iter::once(' ')) {
-        if character == '_' || character.is_ascii_alphanumeric() {
-            identifier.push(character);
-            continue;
-        }
-        if identifier.contains("Material") && identifier != "MaterialisedSelectionV1" {
-            return true;
-        }
-        identifier.clear();
-    }
-    false
+    source
+        .split(|character: char| character != '_' && !character.is_ascii_alphanumeric())
+        .any(|identifier| {
+            let bytes = identifier.as_bytes();
+            identifier
+                .to_ascii_lowercase()
+                .match_indices("material")
+                .any(|(start, _)| {
+                    let end = start + "material".len();
+                    // Лексема роли отделяется snake_case, CamelCase или номером;
+                    // родовые слова Materialization/Materialised остаются целыми.
+                    let starts_lexeme = start == 0
+                        || bytes[start - 1] == b'_'
+                        || bytes[start - 1].is_ascii_digit()
+                        || (bytes[start].is_ascii_uppercase()
+                            && (bytes[start - 1].is_ascii_lowercase()
+                                || bytes[start + 1].is_ascii_lowercase()));
+                    let ends_lexeme = end == bytes.len()
+                        || bytes[end] == b'_'
+                        || bytes[end].is_ascii_digit()
+                        || (bytes[end].is_ascii_uppercase()
+                            && (bytes[end - 1].is_ascii_lowercase()
+                                || bytes.get(end + 1).is_some_and(u8::is_ascii_lowercase)));
+                    starts_lexeme && ends_lexeme
+                })
+        })
+}
+
+fn revision_bound_observation_has_sealed_storage(source: &str) -> bool {
+    normalized_source_scope(
+        source,
+        "pub(crate) struct RevisionBoundObservationV1 {",
+        "impl RevisionBoundObservationV1",
+    ) == concat!(
+        "pub(crate) struct RevisionBoundObservationV1 { ",
+        "stream: ObservationStreamId, ",
+        "revision: Revision, ",
+        "backing: Shared<ObservationBackingV1>, ",
+        "field: Option<Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>>, ",
+        "}",
+    )
 }
 
 fn normalized_production_code(source: &str) -> String {
@@ -820,7 +849,8 @@ fn private_fixture_is_one_feature_gated_production_caller_of_the_certified_hando
         "handoff_point_sink(",
         ".update(updatev1::observed",
         ".render_outputs()",
-        ".certificate()",
+        ".certificates()",
+        ".evidence()",
         ".content_identity()",
         "run_request_v1(",
         "update_request_v2(",
@@ -990,17 +1020,81 @@ fn staged_program_draft_wraps_the_single_canonical_core_graph() {
 }
 
 #[test]
-fn material_vocabulary_guard_rejects_substring_identifiers_but_allows_the_sealed_pair() {
-    assert!(contains_forbidden_material_identifier("struct MaterialV1;"));
-    assert!(contains_forbidden_material_identifier(
-        "struct PairMaterial;"
-    ));
-    assert!(contains_forbidden_material_identifier(
-        "struct MaterialLadder;"
-    ));
-    assert!(!contains_forbidden_material_identifier(
-        "struct MaterialisedSelectionV1;"
-    ));
+fn material_vocabulary_guard_distinguishes_legacy_lexemes_from_materialization() {
+    for identifier in [
+        "Material",
+        "MaterialV1",
+        "MaterialResolved",
+        "CompiledMaterialInvocationV1",
+        "Material3SchemeV1",
+        "PairMaterial",
+        "MaterialLadder",
+        "XMLMaterialV1",
+        "material",
+        "compiled_material_invocation_v1",
+        "MATERIAL_RESOLVED",
+        "CompiledMATERIALInvocationV1",
+    ] {
+        assert!(
+            contains_forbidden_material_identifier(&format!("struct {identifier};")),
+            "лексема удалённой роли должна оставаться запрещённой: {identifier}",
+        );
+    }
+    for identifier in [
+        "FinalRasterMaterializationV1",
+        "PointMaterializationV2",
+        "MaterialisedSelectionV1",
+        "MaterializedOutputV1",
+        "materialization",
+        "final_raster_materialization_v1",
+        "materialised_selection_v1",
+        "FINAL_RASTER_MATERIALIZATION_V1",
+        "MATERIALISED_SELECTION_V1",
+    ] {
+        assert!(
+            !contains_forbidden_material_identifier(&format!("struct {identifier};")),
+            "доменное слово не является лексемой клиентской роли: {identifier}",
+        );
+    }
+}
+
+#[test]
+fn observation_storage_guard_rejects_mutable_unowned_or_duplicate_backing() {
+    let declaration = source_scope(
+        OBSERVATION_SOURCE,
+        "pub(crate) struct RevisionBoundObservationV1 {",
+        "impl RevisionBoundObservationV1",
+    );
+    let source = format!("{declaration}impl RevisionBoundObservationV1 {{}}");
+    assert!(revision_bound_observation_has_sealed_storage(&source));
+    for (before, after) in [
+        (
+            "backing: Shared<ObservationBackingV1>,",
+            "backing: Box<ObservationBackingV1>,",
+        ),
+        (
+            "backing: Shared<ObservationBackingV1>,",
+            "backing: Shared<RefCell<ObservationBackingV1>>,",
+        ),
+        ("backing: Shared<ObservationBackingV1>,", ""),
+        ("field: Option<Shared<", "field: Option<Box<"),
+        ("field: Option<Shared<", "field: Option<RefCell<"),
+        (
+            "field: Option<Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>>",
+            "field: Option<&'static crate::field_effect::final_raster::FieldObservedPayloadV1>",
+        ),
+        ("\n}", "\n    duplicate: Shared<ObservationBackingV1>,\n}"),
+        ("\n}", "\n    unowned: &'static [u8],\n}"),
+    ] {
+        assert!(
+            source.contains(before),
+            "мутация потеряла исходную границу: {before}",
+        );
+        assert!(
+            !revision_bound_observation_has_sealed_storage(&source.replacen(before, after, 1)),
+            "guard должен обнаружить изменение владения: {before} → {after}",
+        );
+    }
 }
 
 #[test]
@@ -1009,9 +1103,9 @@ fn finite_target_intent_has_no_dead_source_axis() {
         normalized_source_scope(
             PROGRAM_SESSION_SOURCE,
             "pub enum TargetIntentV1 {",
-            "/// A Paint-addressable target",
+            "impl TargetIntentV1 {",
         ),
-        "pub enum TargetIntentV1 { FixedSource(SourceId), Finite(FinitePaintDomainV1), }",
+        "pub enum TargetIntentV1 { FixedSource(SourceId), Finite(FinitePaintDomainV1), Computed(ComputedTargetV1), }",
         "Target intent must remain a closed sum instead of a source × domain product",
     );
     assert_eq!(
@@ -1302,7 +1396,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     );
     for required in [
         "raw_head: &'session mut SessionObservationHeadV1,",
-        "state: &'session mut SessionState<Plan::Verified, Plan::Violation>,",
+        "state: &'session mut SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
         "deferred_retirement: &'session mut Option<DeferredSessionRetirement<Plan>>,",
         "guard: PendingSessionTransitionGuard<'session, Plan>,",
     ] {
@@ -1324,7 +1418,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     );
     for required in [
         "plan: &'session mut Plan,",
-        "pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,",
+        "pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>>,",
         "owner: Option<Plan::OwnerLease>,",
     ] {
         assert_eq!(
@@ -1335,7 +1429,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     }
     assert!(
         abort_guard
-            .find("pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,")
+            .find("pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>>,")
             .expect("abort guard must own pending evidence")
             < abort_guard
                 .find("owner: Option<Plan::OwnerLease>,")
@@ -1415,7 +1509,8 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
         "retired_raw_head: Option<SessionObservationHeadV1>,",
         "retired_verified: Option<Plan::Verified>,",
         "retired_violation: Option<Plan::Violation>,",
-        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,",
+        "retired_incomplete: Option<Plan::Incomplete>,",
+        "displaced_placeholder: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
     ] {
         assert!(
             deferred_retirement
@@ -1433,6 +1528,7 @@ fn staged_session_is_evidence_only_and_retired_operation_authority_cannot_return
     for required in [
         "plan.retire_verified(verified);",
         "plan.retire_violation(violation);",
+        "plan.retire_incomplete(incomplete);",
         "drop(self.retired_raw_head.take());",
     ] {
         assert!(
@@ -1566,20 +1662,9 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             && OBSERVATION_SOURCE.contains("pub(crate) use arena::ObservationArenaPoolV1;"),
         "compiler privacy must isolate backing construction inside the arena module",
     );
-    assert_eq!(
-        normalized_source_scope(
-            OBSERVATION_SOURCE,
-            "pub(crate) struct RevisionBoundObservationV1 {",
-            "impl RevisionBoundObservationV1",
-        ),
-        concat!(
-            "pub(crate) struct RevisionBoundObservationV1 { ",
-            "stream: ObservationStreamId, ",
-            "revision: Revision, ",
-            "backing: Shared<ObservationBackingV1>, ",
-            "}",
-        ),
-        "revision identity must wrap exactly one shared immutable backing",
+    assert!(
+        revision_bound_observation_has_sealed_storage(OBSERVATION_SOURCE),
+        "ревизия должна удерживать один pooled backing и только sealed immutable field payload",
     );
     assert_eq!(
         OBSERVATION_SOURCE
@@ -1630,15 +1715,16 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     assert_eq!(
         normalized_source_scope(
             SESSION_SOURCE,
-            "pub(crate) enum SessionState<Verified, Violation> {",
-            "impl<Verified, Violation> SessionState<Verified, Violation>",
+            "pub(crate) enum SessionState<Verified, Violation, Incomplete = Infallible> {",
+            "impl<Verified, Violation, Incomplete> SessionState<Verified, Violation, Incomplete>",
         ),
         concat!(
-            "pub(crate) enum SessionState<Verified, Violation> { ",
+            "pub(crate) enum SessionState<Verified, Violation, Incomplete = Infallible> { ",
             "Waiting, ",
             "Ready { current: Verified, }, ",
             "Stale { previous: Verified, }, ",
             "Failed { cause: Violation, previous: Option<Verified>, }, ",
+            "Incomplete { cause: Incomplete, previous: Option<Verified>, }, ",
             "}",
         ),
         "lifecycle state must not duplicate the current raw observation",
@@ -1666,7 +1752,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     for required in [
         "observation_arenas: ObservationArenaPoolV1,",
         "raw_head: SessionObservationHeadV1,",
-        "state: SessionState<Plan::Verified, Plan::Violation>,",
+        "state: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,",
         "deferred_retirement: Option<DeferredSessionRetirement<Plan>>,",
     ] {
         assert_eq!(
@@ -1716,6 +1802,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         "type OwnerLease;",
         "type Verified: SessionEvidenceV1;",
         "type Violation: SessionEvidenceV1;",
+        "type Incomplete: SessionEvidenceV1;",
         "fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;",
         "owner: &'a Self::OwnerLease,",
         "SessionUpdateError::OwnerExpired",
@@ -2135,7 +2222,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "fn compile_outputs(",
     );
     for required in [
-        "targets.sort_unstable(); targets.dedup();",
+        "ordering::sort(&mut targets); targets.dedup();",
         "CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => { targets.push(*occurrence); }",
         ".binary_search_by_key(occurrence, |binding| binding.occurrence)",
         "*occurrence_context_index = index;",

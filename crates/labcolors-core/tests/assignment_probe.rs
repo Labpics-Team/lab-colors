@@ -485,3 +485,205 @@ fn exhaustive_full_srgb_assignment_experiment() {
     assert_eq!(run.outcome, Outcome::Assigned(vec![[0, 90, 190]]));
     assert_eq!(run.examined, 1);
 }
+
+// Публичный потребитель Core исполняется этим же integration target без features.
+mod independent_computed_groups {
+    use labcolors_core::Srgb8;
+    use labcolors_core::program_wire::{
+        ProgramAssessmentVerdictV1, ProgramConstraintAssessmentV1, ProgramScenarioV1,
+        ProgramSnapshotStateV1, ProgramSnapshotV1, compile_program_wire,
+    };
+
+    // Канонические байты существующего JS ProgramWireBuilderV3: две opaque
+    // серые цели, отдельные WCAG hard и наблюдаемый фон для каждой.
+    // ID, области, опоры и maxDelta — декларация этого тестового потребителя.
+    const WIRE: &[u8] = &[
+        76, 67, 80, 87, 3, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 21, 0, 0, 0, 3, 2, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 240, 63, 22, 0, 0, 0, 3, 2, 96, 97, 96, 96, 96, 0, 0, 0, 0, 0, 0, 240,
+        63, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 2, 0, 0, 0, 21, 0, 0, 0, 22, 0, 0, 0, 2, 0, 0, 0, 31, 0,
+        0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 41, 0, 0, 0, 1, 21, 0, 0, 0, 42, 0, 0, 0, 1, 22,
+        0, 0, 0, 2, 0, 0, 0, 51, 0, 0, 0, 1, 31, 0, 0, 0, 52, 0, 0, 0, 1, 32, 0, 0, 0, 2, 0, 0, 0,
+        61, 0, 0, 0, 41, 0, 0, 0, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80, 64, 154, 153, 153, 153, 153,
+        153, 201, 63, 1, 62, 0, 0, 0, 42, 0, 0, 0, 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80, 64, 154, 153,
+        153, 153, 153, 153, 201, 63, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 81, 0, 0, 0, 9, 61, 0,
+        0, 0, 1, 82, 0, 0, 0, 9, 62, 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, 0, 91, 0, 0, 0, 41, 0, 0, 0,
+        92, 0, 0, 0, 42, 0, 0, 0,
+    ];
+
+    fn declaration(second: u8) -> Vec<u8> {
+        let mut bytes = WIRE.to_vec();
+        // Только lower/upper/anchor второй computed gray записи V3.
+        bytes[43] = second;
+        bytes[44] = second + 1;
+        bytes[45..48].fill(second);
+        bytes
+    }
+
+    fn observed(backdrops: &[[u8; 2]]) -> Vec<ProgramScenarioV1> {
+        backdrops
+            .iter()
+            .enumerate()
+            .map(|(index, grays)| {
+                ProgramScenarioV1::new(
+                    index as u32 + 1,
+                    grays.iter().map(|&gray| Srgb8::new([gray; 3])).collect(),
+                )
+            })
+            .collect()
+    }
+
+    // Независимый перебор четырёх tuple: WCAG 2.2 relative luminance и 4.5:1.
+    // https://www.w3.org/TR/2024/REC-WCAG22-20241212/#dfn-relative-luminance
+    // В этих случаях опоры либо допустимы, либо всё множество пусто. Допустимая
+    // tuple опор единственная имеет нулевой вектор расстояний прямого Oklab V3;
+    // любой другой RGB отличается хотя бы в одной цели и имеет больший score.
+    fn anchor_oracle(second: u8, backdrops: &[[u8; 2]]) -> Option<[u8; 2]> {
+        let linear = |gray: u8| {
+            let encoded = f64::from(gray) / 255.0;
+            if encoded <= 0.04045 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let mut feasible = Vec::new();
+        for first in 0..=1 {
+            for second_value in second..=second + 1 {
+                let tuple = [first, second_value];
+                if backdrops.iter().all(|backdrop| {
+                    tuple.iter().zip(backdrop).all(|(&gray, &background)| {
+                        let a = linear(gray);
+                        let b = linear(background);
+                        (a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5
+                    })
+                }) {
+                    feasible.push(tuple);
+                }
+            }
+        }
+        let anchors = [0, second];
+        if feasible.contains(&anchors) {
+            assert_eq!(feasible.len(), 4);
+            Some(anchors)
+        } else {
+            assert!(
+                feasible.is_empty(),
+                "этот свидетель допускает опоры либо пустое множество"
+            );
+            None
+        }
+    }
+
+    fn assert_ready(snapshot: &ProgramSnapshotV1, expected: [u8; 2]) {
+        assert_eq!(snapshot.snapshot_version(), 2);
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        let mut outputs: Vec<_> = snapshot
+            .outputs()
+            .iter()
+            .map(|output| (output.slot(), output.source(), output.opacity()))
+            .collect();
+        outputs.sort_by_key(|output| output.0);
+        assert_eq!(
+            outputs,
+            vec![
+                (91, Srgb8::new([expected[0]; 3]), 1.0),
+                (92, Srgb8::new([expected[1]; 3]), 1.0)
+            ]
+        );
+        let report = snapshot
+            .assessment_report()
+            .expect("Ready содержит финальные оценки");
+        assert_eq!(report.revision(), snapshot.revision());
+        let mut rows: Vec<_> = report
+            .cells()
+            .iter()
+            .map(|cell| {
+                (
+                    cell.constraint_id(),
+                    cell.case_index(),
+                    cell.hard(),
+                    cell.assessment(),
+                )
+            })
+            .collect();
+        rows.sort_by_key(|row| row.0);
+        let pass = ProgramConstraintAssessmentV1::Wcag22Srgb8 {
+            verdict: ProgramAssessmentVerdictV1::Pass,
+        };
+        assert_eq!(rows, vec![(81, 0, true, pass), (82, 0, true, pass)]);
+    }
+
+    fn assert_unsatisfied(snapshot: &ProgramSnapshotV1) {
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Unsatisfied);
+        assert!(snapshot.outputs().is_empty());
+        assert!(snapshot.assessment_report().is_none());
+    }
+
+    #[test]
+    fn independent_computed_groups_keep_global_anchors_and_lifecycle() {
+        let mut session = compile_program_wire(&declaration(96))
+            .expect("V3 допускает независимые группы с покрытием каждой цели")
+            .instantiate(8)
+            .expect("stream допустим");
+        let ready = session
+            .update_observed(1, &observed(&[[255, 255]]))
+            .expect("белый фон принят");
+        assert_ready(
+            &ready,
+            anchor_oracle(96, &[[255, 255]]).expect("опоры допустимы"),
+        );
+        assert_eq!(
+            session
+                .update_observed(1, &observed(&[[255, 255]]))
+                .expect("повтор принят"),
+            ready
+        );
+
+        let stale = session.update_unknown(2, 9).expect("неизвестность принята");
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert!(stale.outputs().is_empty());
+        assert!(stale.assessment_report().is_none());
+        assert_ready(&ready, [0, 96]);
+
+        assert_eq!(anchor_oracle(96, &[[0, 255]]), None);
+        let unsatisfied = session
+            .update_observed(3, &observed(&[[0, 255]]))
+            .expect("первый фон стал чёрным");
+        assert_unsatisfied(&unsatisfied);
+        assert_eq!(
+            session
+                .update_observed(3, &observed(&[[0, 255]]))
+                .expect("повтор принят"),
+            unsatisfied
+        );
+        assert_ready(
+            &session
+                .update_observed(4, &observed(&[[255, 255]]))
+                .expect("восстановление принято"),
+            [0, 96],
+        );
+
+        assert_eq!(anchor_oracle(96, &[[255, 255], [0, 255]]), None);
+        assert_unsatisfied(
+            &session
+                .update_observed(5, &observed(&[[255, 255], [0, 255]]))
+                .expect("оба сценария приняты"),
+        );
+    }
+
+    #[test]
+    fn independent_computed_groups_cannot_skip_the_second_hard_constraint() {
+        // Первая цель проходит WCAG на белом; только вторая делает tuple невозможной.
+        for (second, backdrop) in [(96, [255, 0]), (200, [255, 255])] {
+            assert_eq!(anchor_oracle(second, &[backdrop]), None);
+            let mut session = compile_program_wire(&declaration(second))
+                .expect("непустые области допускаются до оценки композиции")
+                .instantiate(8)
+                .expect("stream допустим");
+            let snapshot = session
+                .update_observed(1, &observed(&[backdrop]))
+                .expect("фон принят");
+            assert_unsatisfied(&snapshot);
+        }
+    }
+}

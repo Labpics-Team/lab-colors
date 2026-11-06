@@ -3077,6 +3077,31 @@ class AuthorityMutationShardContractTest(unittest.TestCase):
         self.assertCountEqual(selected, bounded)
         self.assertEqual(len(selected), len(set(selected)))
 
+        # Все мишени проверяются до дорогих Rust-проб, включая независимые point/raster ветви.
+        targets = [(name, gate.AUTH_SOURCE, before, after)
+                   for name, (before, after) in gate.AUTH_MUTANTS.items()]
+        targets.extend((name, source, before, after)
+                       for name, (source, _command, before, after) in bounded.items())
+        import check_science_mutations as science
+        import check_evaluation_mutations as cli
+        targets.extend((name, gate.ROOT / relative, before, after)
+                       for name, relative, before, after, _test in science.MUTANTS)
+        targets.extend((name, gate.ROOT / relative, before, after)
+                       for name, relative, _command, before, after, _test in cli.MUTANTS)
+        sources = {source: source.read_text(encoding="utf-8") for _, source, _, _ in targets}
+        for name, source, before, after in targets:
+            original = sources[source]
+            with self.subTest(mutant=name):
+                gate.validate_anchor(name, original, before, after)
+                for kind, altered in (
+                    ("missing", original.replace(before, "", 1)),
+                    ("duplicate", original + before),
+                ):
+                    with self.subTest(kind=kind), self.assertRaisesRegex(SystemExit, "expected 1"):
+                        gate.validate_anchor(name, altered, before, after)
+                with self.assertRaisesRegex(SystemExit, "replacement is identical"):
+                    gate.validate_anchor(name, original, before, before)
+
     def test_external_scopes_do_not_execute_core_mutants(self):
         from unittest.mock import patch
         import check_authority_mutations as gate

@@ -77,7 +77,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "8ab231b0a7fac8ebf78e04c3a2e70c1a7e477fdd3324ffa9d0eb100e89df1059"
+    "b7c96bf127f065a8d1c1e3a8eb235b23cb84842444f5655d0db468ebd9d4daa3"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -89,7 +89,7 @@ EXPECTED_PARSER_SHA256 = (
 )
 FACADE_ID = "wcag22-srgb8-public-facade-v1"
 EXPECTED_NORMALIZED_FACADE_SHA256 = (
-    "c2f252829577f1a5455b91afdccc1669ff0c964e10d8935db9e79b0c8ce251d6"
+    "dd537f633ab46105d0bcd09b64e54619b0345ebe1da2419178889b81f922be75"
 )
 DECLARED_OPERATION_LAW = (
     "final-srgb8-outward-q55-two-orientation-integer-threshold-v1"
@@ -398,7 +398,13 @@ def integer_tightness_cross_check(
 def parse_committed_artifact(
     path: Path,
 ) -> tuple[dict[str, int | str], list[tuple[int, int]]]:
-    source = path.read_text(encoding="utf-8-sig")
+    return parse_committed_artifact_source(path.read_text(encoding="utf-8-sig"), path)
+
+
+def parse_committed_artifact_source(
+    source: str, path: Path,
+) -> tuple[dict[str, int | str], list[tuple[int, int]]]:
+    """Строго разбирает 3 × 256 lower u64 и восстанавливает исходные пары."""
     metadata_patterns = {
         "q55_scale": r"Q55_SCALE: u64 = (\d+);",
         "profile_checksum": r'PROFILE_CHECKSUM: &str =\s*"([0-9a-f]{8})";',
@@ -410,21 +416,36 @@ def parse_committed_artifact(
     }
     metadata: dict[str, int | str] = {}
     for key, pattern in metadata_patterns.items():
-        match = re.search(pattern, source)
+        matches = list(re.finditer(pattern, source))
+        match = matches[0] if len(matches) == 1 else None
         if match is None:
             raise AssertionError(f"missing {key} metadata in {path}")
         metadata[key] = int(match.group(1)) if key == "q55_scale" else match.group(1)
-    table_match = re.search(
-        r"WEIGHTED_CONTRIBUTION_BOUNDS:.*?= \[(.*)\];\s*$",
-        source,
-        flags=re.DOTALL,
+    table_matches = list(re.finditer(
+        r"WEIGHTED_CONTRIBUTION_LOWER:\s*\[\[u64;\s*256\];\s*3\]\s*=\s*(\[.*\]);\s*$",
+        source, flags=re.DOTALL,
+    ))
+    assert len(table_matches) == 1, f"invalid lower-only table declaration in {path}"
+    body = re.sub(r"//[^\r\n]*", "", table_matches[0].group(1))
+    channels = re.fullmatch(
+        r"\[\s*\[([^\[\]]*)\]\s*,\s*\[([^\[\]]*)\]\s*,\s*\[([^\[\]]*)\]\s*,?\s*\]",
+        body,
     )
-    if table_match is None:
-        raise AssertionError(f"не удалось разобрать table из {path}")
-    rows = [
-        (int(lower), int(upper))
-        for lower, upper in re.findall(r"\[(\d+),\s*(\d+)\]", table_match.group(1))
-    ]
+    assert channels is not None, f"lower-only table must contain exactly 3 channels in {path}"
+    rows: list[tuple[int, int]] = []
+    for channel in channels.groups():
+        values = channel.strip().split(",")
+        if values[-1].strip() == "":
+            values.pop()
+        assert len(values) == CHANNEL_CODES, f"lower-only channel must contain 256 values in {path}"
+        for code, token in enumerate(values):
+            token = token.strip()
+            assert re.fullmatch(r"0|[1-9][0-9]*", token), f"non-canonical lower u64 token in {path}: {token!r}"
+            lower = int(token)
+            upper = lower + int(code != 0)
+            assert upper <= (1 << 64) - 1, f"lower-only reconstructed u64 overflow in {path}"
+            rows.append((lower, upper))
+    assert len(rows) == ROW_COUNT
     return metadata, rows
 
 
@@ -484,6 +505,9 @@ def verify_rows(
         )
         channel, code = divmod(index, CHANNEL_CODES)
         integer_tightness_cross_check(WEIGHT_FRACTIONS[channel], code, committed)
+        assert committed[1] - committed[0] == int(code != 0), (
+            f"lower-only reconstruction law failed at channel={channel}, code={code}"
+        )
 
     tables = [
         committed_rows[offset : offset + CHANNEL_CODES]
@@ -494,6 +518,7 @@ def verify_rows(
         "precision_schedule": list(DECIMAL_PRECISIONS),
         "maximum_precision_used": max(used_precisions),
         "integer_tightness_cross_checks": len(expected_rows),
+        "lower_only_reconstruction_checks": len(expected_rows),
     }
 
 
@@ -777,6 +802,73 @@ def verify_negative_controls(
     else:
         raise AssertionError("negative control: synthetic overlap was accepted")
     controls += 1
+    controls += verify_lower_only_negative_controls(metadata, committed_rows)
+    return controls
+
+
+def verify_lower_only_negative_controls(
+    metadata: dict[str, int | str], committed_rows: list[tuple[int, int]],
+) -> int:
+    """Контрпримеры проходят настоящий parser, row oracle и production source binding."""
+    controls = 0
+    for index, mutation in ((0, "upper-zero"), (1, "upper-nonzero"), (257, "lower-value")):
+        mutated = committed_rows.copy()
+        lower, upper = mutated[index]
+        if mutation == "upper-zero":
+            mutated[index] = (lower, lower + 1)
+        elif mutation == "upper-nonzero":
+            mutated[index] = (lower, lower)
+        else:
+            mutated[index] = (lower + 1, upper + 1)
+        mutated_metadata = metadata.copy()
+        mutated_metadata["artifact_sha256"] = canonical_digest(mutated)
+        try:
+            verify_rows(mutated_metadata, mutated, canonical_binary_artifact=canonical_bytes(mutated))
+        except AssertionError as error:
+            assert str(error).startswith(f"row {index} differs from adaptive Decimal oracle"), (
+                f"compression control missed independent row oracle: {mutation}: {error}"
+            )
+        else:
+            raise AssertionError(f"compression control accepted {mutation}")
+        controls += 1
+
+    source = RUST_ARTIFACT.read_text(encoding="utf-8-sig")
+    marker = "[ // exact weight "
+    assert source.count(marker) == 3
+    start = source.index("\n", source.index(marker)) + 1
+    first = re.search(r"\b0,", source[start:])
+    assert first is not None
+    zero = start + first.start()
+    for replacement in ("0 + 0,", "0, 0,", ""):
+        malformed = source[:zero] + replacement + source[zero + 2:]
+        try:
+            parse_committed_artifact_source(malformed, RUST_ARTIFACT)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"strict lower parser accepted malformed token/count {replacement!r}")
+        controls += 1
+
+    kernel_bytes = KERNEL_SOURCE.read_bytes()
+    kernel = kernel_bytes.decode("utf-8")
+    for expression in ("1", "0"):
+        old = "u64::from(rgb[0] != 0)"
+        assert kernel.count(old) == 1
+        mutant = kernel.replace(old, expression, 1)
+        try:
+            verify_production_kernel_semantics(mutant)
+        except AssertionError as error:
+            assert str(error) == "production lower-only reconstruction drift"
+        else:
+            raise AssertionError(f"source binding accepted wrong zero/nonzero upper {expression}")
+        controls += 1
+    try:
+        verify_production_kernel(kernel_bytes + b"\n// stale source hash control\n")
+    except AssertionError as error:
+        assert str(error).startswith("production kernel drifted:")
+    else:
+        raise AssertionError("source binding accepted stale kernel hash")
+    controls += 1
     return controls
 
 
@@ -841,23 +933,50 @@ def verify_source_routes() -> str:
     return hashlib.sha256(bytes(preimage)).hexdigest()
 
 
-def verify_production_kernel() -> str:
+EXPECTED_LUMINANCE_SOURCE = """pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 {
+    let red = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[0][usize::from(rgb[0])];
+    let green = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[1][usize::from(rgb[1])];
+    let blue = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[2][usize::from(rgb[2])];
+    let lower = red + green + blue;
+    Wcag22LuminanceBoundsQ55V1 {
+        lower,
+        upper: lower + u64::from(rgb[0] != 0) + u64::from(rgb[1] != 0) + u64::from(rgb[2] != 0),
+    }
+}"""
+
+
+def verify_production_kernel(source_bytes: bytes | None = None) -> str:
     """Bind the proof to the exact complete Rust evaluator kernel."""
-    source_bytes = KERNEL_SOURCE.read_bytes()
+    if source_bytes is None:
+        source_bytes = KERNEL_SOURCE.read_bytes()
     digest = hashlib.sha256(source_bytes).hexdigest()
     assert digest == EXPECTED_KERNEL_SHA256, (
         f"production kernel drifted: {digest} != {EXPECTED_KERNEL_SHA256}"
     )
-    source = source_bytes.decode("utf-8")
+    verify_production_kernel_semantics(source_bytes.decode("utf-8"))
+    return digest
+
+
+def verify_production_kernel_semantics(source: str) -> None:
+    """Требует ровно три lookup и доказанную reconstruction без добавочного пути."""
+    matches = list(re.finditer(
+        r"(?m)^pub\(super\) fn luminance_bounds\([^\n]*\n.*?^}\s*$",
+        source, flags=re.DOTALL,
+    ))
+    assert len(matches) == 1, "production luminance function must occur exactly once"
+    actual = re.sub(r"//[^\r\n]*", "", matches[0].group())
+    compact_luminance = re.sub(r"\s+", " ", actual).strip()
+    expected_luminance = re.sub(r"\s+", " ", EXPECTED_LUMINANCE_SOURCE).strip()
+    assert compact_luminance == expected_luminance, "production lower-only reconstruction drift"
     compact = re.sub(r"\s+", " ", source)
     required = (
         "Wcag22CriterionV1::Sc143TextDefault => ThresholdV1::FourAndHalf",
         "Wcag22CriterionV1::Sc143TextLargeScale | Wcag22CriterionV1::Sc1411UiComponentOrState | Wcag22CriterionV1::Sc1411GraphicalObject => ThresholdV1::Three",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])]",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])]",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])]",
-        "lower: red[0] + green[0] + blue[0]",
-        "upper: red[1] + green[1] + blue[1]",
+        "WEIGHTED_CONTRIBUTION_LOWER[0][usize::from(rgb[0])]",
+        "WEIGHTED_CONTRIBUTION_LOWER[1][usize::from(rgb[1])]",
+        "WEIGHTED_CONTRIBUTION_LOWER[2][usize::from(rgb[2])]",
+        "let lower = red + green + blue",
+        "upper: lower + u64::from(rgb[0] != 0) + u64::from(rgb[1] != 0) + u64::from(rgb[2] != 0)",
         "10 * light_lower >= 30 * dark_upper + scale",
         "10 * light_upper < 30 * dark_lower + scale",
         "40 * light_lower >= 180 * dark_upper + 7 * scale",
@@ -875,8 +994,6 @@ def verify_production_kernel() -> str:
         assert fragment in compact, f"production kernel semantic drift: {fragment}"
     for forbidden in ("f64", "powf", "epsilon"):
         assert forbidden not in source, f"forbidden {forbidden} in production kernel"
-    return digest
-
 
 def verify_terminal_evidence() -> str:
     """Bind registry validation and sealed terminal evidence to exact source."""
@@ -1492,6 +1609,13 @@ def main() -> int:
         "artifact_id": ARTIFACT_ID,
         "artifact_sha256": metadata["artifact_sha256"],
         "artifact_words": len(committed_rows) * 2,
+        "runtime_table": {
+            "encoding": "lower-plus-nonzero-channel-q55-v1",
+            "stored_words": len(committed_rows),
+            "stored_bytes": len(committed_rows) * 8,
+            "canonical_words": len(committed_rows) * 2,
+            "reconstruction_law": "upper = lower + int(code != 0)",
+        },
         "artifact_rust_source_sha256": rust_source_digest,
         "bound_id": BOUND_ID,
         "proof_id": PROOF_ID,

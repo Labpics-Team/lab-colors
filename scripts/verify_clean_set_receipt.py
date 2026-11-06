@@ -77,18 +77,26 @@ EXCLUDED_CLAIMS = (
     "independent human holdout validation of the fitted frontier",
 )
 
-# Первый точный product receipt намеренно связывает файлы целиком. После
-# разделения исходников схему надо выпустить заново, а не ослаблять замыкание
-# незаметно.
+# Точный product receipt связывает файлы целиком. После разделения исходников
+# новые зависимости добавляют в замыкание и выпускают квитанцию заново.
+# Ослаблять привязку до фрагментов исходников без новой схемы нельзя.
 PRODUCT_ARTIFACT_PATHS = {
     "appearance_executor_source": "crates/labcolors-core/src/appearance.rs",
     "classifier_source": "crates/labcolors-core/src/clean_set.rs",
     "classifier_tests": "crates/labcolors-core/src/clean_set_tests.rs",
+    "clean_convention_source": "crates/labcolors-core/src/authority/clean_convention.rs",
     "composition_executor_source": "crates/labcolors-core/src/composition.rs",
+    "computed_selection_source": "crates/labcolors-core/src/program_session/computed_assignment.rs",
     "content_digest_source": "crates/labcolors-core/src/sha256.rs",
+    "field_effect_executor_source": "crates/labcolors-core/src/field_effect.rs",
+    "final_raster_payload_source": "crates/labcolors-core/src/field_effect/final_raster.rs",
+    "final_raster_session_source": "crates/labcolors-core/src/program_session/finite_field.rs",
+    "final_raster_wire_source": "crates/labcolors-core/src/program_wire/finite_field.rs",
     "joint_selection_source": "crates/labcolors-core/src/joint.rs",
     "module_registration_source": "crates/labcolors-core/src/lib.rs",
     "observation_runtime_source": "crates/labcolors-core/src/observation.rs",
+    "oklab_geometry_source": "crates/labcolors-core/src/spaces/oklab.rs",
+    "ordering_source": "crates/labcolors-core/src/ordering.rs",
     "point_attachment_allocator_oracle": "crates/labcolors-core/src/test_support.rs",
     "point_attachment_source": "crates/labcolors-core/src/program/attachment.rs",
     "point_attachment_test_support": "crates/labcolors-core/src/program/attachment/support.rs",
@@ -100,11 +108,14 @@ PRODUCT_ARTIFACT_PATHS = {
     "runtime_codec": CODEC_PATH,
     "session_runtime_source": "crates/labcolors-core/src/session.rs",
     "signal_transport_source": "crates/labcolors-core/src/lcs_occurrence.rs",
+    "srgb8_source": "crates/labcolors-core/src/srgb8.rs",
     "srgb_decode_source": "crates/labcolors-core/src/spaces/srgb/gamma_data.rs",
     "srgb_matrix_source": "crates/labcolors-core/src/spaces/srgb.rs",
-    "srgb8_source": "crates/labcolors-core/src/srgb8.rs",
     "verifier_source": "scripts/verify_clean_set_receipt.py",
     "verifier_tests": "scripts/test_verify_clean_set_receipt.py",
+    "wcag22_kernel_source": "crates/labcolors-core/src/wcag22/kernel.rs",
+    "wcag22_luminance_source": "crates/labcolors-core/src/wcag22/q55_data.rs",
+    "wcag22_pruning_source": "crates/labcolors-core/src/wcag22.rs",
 }
 
 PRODUCT_ARTIFACT_LICENSES = {

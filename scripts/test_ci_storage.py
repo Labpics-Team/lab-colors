@@ -1,5 +1,9 @@
 """Локальные байты пакета и изоляция полномочий публикации."""
 from pathlib import Path
+import os
+import tempfile
+import subprocess
+import textwrap
 import re
 import unittest
 
@@ -11,6 +15,12 @@ def job(source, name):
     if not match:
         raise AssertionError("job absent: "+name)
     return match.group()
+
+
+def require_terminal_browser_environment(step):
+    values = re.findall(r"(?m)^          BASH_ENV: ([^\r\n]+)$", step)
+    if values not in (['""'], ["''"]):
+        raise AssertionError("terminal browser must clear inherited BASH_ENV")
 
 
 def validate(ci, package, release):
@@ -31,6 +41,23 @@ def validate(ci, package, release):
         matches=[block for block in blocks if command in block]
         if len(matches)!=1 or "\n        if:" in matches[0] or "continue-on-error:" in matches[0]:
             raise AssertionError("package verification missing or conditional: "+command)
+    browser_command = ('node scripts/test-program-runtime-browser.mjs '
+                       '"$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"')
+    browser_steps = [block for block in blocks if browser_command in block]
+    # Отдельный шаг с одной командой исключает ранний выход и маскировку её статуса.
+    if len(browser_steps) != 1:
+        raise AssertionError("terminal browser invocation changed")
+    # Явный Bash перекрывает наследуемые defaults.run.shell.
+    shells = re.findall(r"(?m)^        shell: ([^\r\n]+)$", browser_steps[0])
+    if shells not in (["bash"], ["\"bash\""], ["'bash'"]):
+        raise AssertionError("terminal browser shell does not execute the command")
+    require_terminal_browser_environment(browser_steps[0])
+    runs = re.findall(r"(?ms)^        run: (.*?)(?=^        \S|\Z)", browser_steps[0])
+    statements = [[line.strip() for line in run.splitlines()
+                   if line.strip() and not line.lstrip().startswith("#")]
+                  for run in runs]
+    if statements != [[browser_command]]:
+        raise AssertionError("terminal browser invocation is not executed")
     if "uses: actions/download-artifact@" in owner:
         raise AssertionError("local consumers depend on external storage")
     uploads=re.findall(r"(?ms)^      - name: upload verified npm tarball and manifest\n(.*?)(?=^      - name:|\Z)",owner)
@@ -296,6 +323,79 @@ class NativeStorageTests(unittest.TestCase):
                 self.assertIn(before, self.mutation_source)
                 with self.assertRaises(AssertionError):
                     validate_mutation_storage(self.mutation_source.replace(before, after, 1))
+
+
+keys = ('ALSA_PACKAGE', 'ATK_PACKAGE', 'ATK_BRIDGE_PACKAGE', 'ATSPI_PACKAGE', 'CUPS_PACKAGE', 'GLIB_PACKAGE')
+old = ('libasound2', 'libatk1.0-0', 'libatk-bridge2.0-0', 'libatspi2.0-0', 'libcups2', 'libglib2.0-0')
+time64 = tuple(value + 't64' for value in old)
+
+class ChromeDependencyReleaseTests(unittest.TestCase):
+    def evaluate(self, distro, release):
+        source = (ROOT / ".github/workflows/package-worker.yml").read_text()
+        match = re.search(r'(?ms)^\s*case "\$ID:\$VERSION_CODENAME" in\n.*?^\s*esac$', source)
+        self.assertIsNotNone(match, "Chrome ABI selector is missing")
+        selector = textwrap.dedent(match.group())
+        output = '\n'.join('printf "%s\\n" "$' + key + '"' for key in keys)
+        return subprocess.run(['bash', '-eu', '-c', selector + '\n' + output],
+                              env={'PATH': '/usr/bin:/bin', 'ID': distro, 'VERSION_CODENAME': release},
+                              text=True, capture_output=True, timeout=5)
+
+    def test_legacy_and_time64_supported_releases(self):
+        for distro, release, expected in (
+            ('debian', 'bookworm', old), ('ubuntu', 'jammy', old),
+            ('debian', 'trixie', time64), ('ubuntu', 'noble', time64),
+            ('ubuntu', 'resolute', time64),
+        ):
+            with self.subTest(distro=distro, release=release):
+                result = self.evaluate(distro, release)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(tuple(result.stdout.splitlines()), expected)
+
+    def test_unknown_release_cannot_select_a_plausible_abi(self):
+        for distro, release in (('ubuntu', 'future'), ('debian', 'resolute'), ('alpine', 'noble')):
+            with self.subTest(distro=distro, release=release):
+                result = self.evaluate(distro, release)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('unsupported Chrome dependency release: ' + distro + ':' + release, result.stderr)
+
+class BrowserStartupEnvironmentTests(unittest.TestCase):
+    def step(self):
+        source = (ROOT / ".github/workflows/package-worker.yml").read_text()
+        return next(block for block in re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "wasm"))
+                    if 'run: node scripts/test-program-runtime-browser.mjs ' in block)
+
+    def execute(self, step):
+        command = re.search(r"(?m)^        run: (.+)$", step).group(1)
+        with tempfile.TemporaryDirectory(prefix="browser-shell-control-") as name:
+            root = Path(name)
+            startup = root / "startup.sh"
+            startup.write_text("exit 0\n")
+            trace = root / "argv"
+            node = root / "node"
+            node.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$TRACE_FILE"\nexit 23\n')
+            node.chmod(0o700)
+            environment = dict(os.environ, PATH=str(root) + ":/usr/bin:/bin",
+                               BASH_ENV=str(startup), TRACE_FILE=str(trace),
+                               VERIFIED_TARBALL="exact-package.tgz", VERIFIED_TARBALL_SHA256="a" * 64)
+            if re.search(r"(?m)^          BASH_ENV: (?:\"\"|'')$", step):
+                environment["BASH_ENV"] = ""
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+                                    env=environment, text=True, capture_output=True, timeout=5)
+            return result.returncode, trace.read_text().splitlines() if trace.exists() else []
+
+    def test_inherited_startup_cannot_skip_browser_or_erase_failure(self):
+        code, arguments = self.execute(self.step())
+        self.assertEqual(code, 23)
+        self.assertEqual(arguments, ["scripts/test-program-runtime-browser.mjs", "exact-package.tgz", "a" * 64])
+
+    def test_removing_empty_environment_is_detected_and_reproduces_skip(self):
+        step = self.step()
+        require_terminal_browser_environment(step)
+        mutant = re.sub(r"(?m)^          BASH_ENV: .*\n", "", step)
+        with self.assertRaisesRegex(AssertionError, "BASH_ENV"):
+            require_terminal_browser_environment(mutant)
+        self.assertEqual(self.execute(mutant), (0, []))
 
 
 if __name__=="__main__":

@@ -5,11 +5,13 @@
 //! effects принадлежат npm-приложению, не WASM.
 
 mod error;
+mod program_report_projection;
 mod terminal_projection;
 
 use std::cell::{Cell, RefCell};
 
 use wasm_bindgen::prelude::*;
+mod finite_field;
 
 use crate::error::BindingError;
 
@@ -33,6 +35,46 @@ export interface NumericalCapabilityManifestV2 {
   readonly coverage: string;
   readonly sites: ReadonlyArray<NumericalCapabilitySiteV2>;
   readonly checksum: string;
+}
+
+
+export type ProgramAssessmentVerdictV1 = "pass" | "violation";
+export type ProgramConstraintAssessmentV1 =
+  | Readonly<{
+      kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
+      verdict: ProgramAssessmentVerdictV1;
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "pass";
+      visible: readonly [number, number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "violation"; reason: "rejected";
+      visible: readonly [number, number, number];
+      rejectedBlueInterval: readonly [number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "violation";
+      reason: "final-owned-domain-absent";
+    }>;
+export interface ProgramAssessmentCellV1 {
+  readonly constraintId: number;
+  readonly caseIndex: number;
+  readonly hard: boolean;
+  readonly assessment: ProgramConstraintAssessmentV1;
+}
+export interface ProgramScenarioProvenanceV1 {
+  readonly caseIndex: number;
+  readonly scenarioId: number;
+}
+/** Историческое свидетельство одного Ready-снимка; без права публикации. */
+export interface ProgramAssessmentReportV1 {
+  /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
+  readonly contentIdentity: Uint8Array;
+  readonly streamId: number;
+  readonly revision: bigint;
+  readonly scenarioProvenance: ReadonlyArray<ProgramScenarioProvenanceV1>;
+  readonly cells: ReadonlyArray<ProgramAssessmentCellV1>;
 }
 
 export type Wcag22CriterionV1 =
@@ -80,7 +122,8 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "Wcag22AssessmentV1")]
     pub type JsWcag22AssessmentV1;
 }
-// Приватные индексы JS: to_program_js_error — 0..7, to_attachment_error — 8..14; оба сопоставления Rust, таблица/граница и program_error_projection_distinguishes_every_runtime_failure_class меняются согласованно.
+// Приватные индексы JS: runtime — 0..7 и 15, attachment — 8..14.
+// Сопоставления, таблица, граница message и browser-тест меняются вместе.
 #[wasm_bindgen(inline_js = r#"
 export function programError(message, code, operation) {
   try {
@@ -109,11 +152,12 @@ const programFailureCodes = [
   "program_attachment_internal_invariant",
   "program_attachment_non_terminal_target",
   "program_attachment",
+  "program_unsupported",
 ];
 
 export function programFailure(kind, operation) {
   return programError(
-    kind < 8 ? "Program runtime operation failed" : "Program attachment admission failed",
+    kind < 8 || kind === 15 ? "Program runtime operation failed" : "Program attachment admission failed",
     programFailureCodes[kind],
     operation,
   );
@@ -125,6 +169,8 @@ const bindingFailures = [
   ["internal_error", "evaluateWcag22"],
   ["internal_error", "numericalCapabilityManifest"],
   ["invalid_output_index", "readProgramOutput"],
+  ["invalid_composite_id", "readPresentationComposite"],
+  ["presentation_composite_unavailable", "readPresentationComposite"],
 ];
 
 export function bindingFailure(kind, reason) {
@@ -189,8 +235,140 @@ export function certificateProjection(
     bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
+
+
+const reportFreeze = Object.freeze;
+const ReportBytes = Uint8Array;
+const reportPush = Array.prototype.push;
+const HostIds = Uint32Array;
+
+// Все allocation host-проекции исполняются под wasm-bindgen catch, до callback.
+export function pointSinkPoint(slot, sinkOutput, source, opacity) {
+  return reportFreeze({ slot, sinkOutput, source, opacity });
+}
+export function pointSinkComposite(root, scenario, source) {
+  return reportFreeze({ root, scenario, source });
+}
+export function pointSinkIntent(operation, revision, expectedSequence, desiredSequence, bindingEpoch, scope, points, presentationComposites) {
+  const point = points.length === 1 ? points[0] : null;
+  return reportFreeze({
+    operation, revision, expectedSequence, desiredSequence, bindingEpoch,
+    scope: new HostIds(scope),
+    points: reportFreeze(points), presentationComposites: reportFreeze(presentationComposites),
+    sinkOutput: scope.length === 1 ? scope[0] : null,
+    point: point === null ? null : reportFreeze({ slot: point.slot, source: point.source, opacity: point.opacity }),
+  });
+}
+
+export function reportArray() { return []; }
+export function reportArrayPush(array, value) { reportPush.call(array, value); }
+export function reportScenario(caseIndex, scenarioId) {
+  return reportFreeze({ caseIndex, scenarioId });
+}
+export function reportSummary(kind, verdict) { return reportFreeze({ kind, verdict }); }
+export function reportAccepted(red, green, blue) {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "pass",
+    visible: reportFreeze([red, green, blue]),
+  });
+}
+export function reportRejected(red, green, blue, lower, upper) {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+    visible: reportFreeze([red, green, blue]),
+    rejectedBlueInterval: reportFreeze([lower, upper]),
+  });
+}
+export function reportDomainAbsent() {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "violation",
+    reason: "final-owned-domain-absent",
+  });
+}
+export function reportCell(constraintId, caseIndex, hard, assessment) {
+  return reportFreeze({ constraintId, caseIndex, hard, assessment });
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells) {
+  return reportFreeze({
+    contentIdentity: new ReportBytes(contentIdentity),
+    streamId, revision,
+    scenarioProvenance: reportFreeze(scenarioProvenance),
+    cells: reportFreeze(cells),
+  });
+}
+export function reportFinalRasterViolation(pixelIndex, red, green, blue, lower, upper) {
+  return reportFreeze({ pixelIndex,
+    composite: reportFreeze([red, green, blue]),
+    rejectedBlueInterval: reportFreeze([lower, upper]),
+  });
+}
+export function reportFinalRasterCleanliness(mode, verdict, checkedPixelCount, violationCount, firstViolation, profile, release) {
+  return reportFreeze({ mode, verdict, profile,
+    profileRelease: profile === null ? null : new ReportBytes(release),
+    checkedPixelCount, violationCount, firstViolation,
+  });
+}
+export function consumeFinalRasterRgb(bytes, width, height, dpr, revision, slot, cleanliness, callback) {
+  const pixels = new ReportBytes(bytes);
+  return callback(reportFreeze({
+    scope: "ModeledFinalRasterV1", width, height, devicePixelRatio: dpr,
+    revision, outputSlot: slot, pixels, cleanliness,
+  })) === true;
+}
 "#)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = pointSinkPoint)]
+    fn point_sink_point(
+        slot: u32,
+        sink_output: u32,
+        source: &JsValue,
+        opacity: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = pointSinkComposite)]
+    fn point_sink_composite(root: u32, scenario: u32, source: &JsValue)
+    -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = pointSinkIntent)]
+    fn point_sink_intent(
+        operation: &str,
+        revision: u64,
+        expected_sequence: u64,
+        desired_sequence: u64,
+        binding_epoch: u64,
+        scope: &js_sys::Array,
+        points: &js_sys::Array,
+        composites: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = consumeFinalRasterRgb)]
+    fn consume_final_raster_rgb(
+        bytes: &[u8],
+        width: u32,
+        height: u32,
+        dpr: u8,
+        revision: u64,
+        slot: u32,
+        cleanliness: &JsValue,
+        callback: &js_sys::Function,
+    ) -> Result<bool, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFinalRasterViolation)]
+    fn report_final_raster_violation(
+        pixel_index: u32,
+        red: u8,
+        green: u8,
+        blue: u8,
+        lower: u8,
+        upper: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFinalRasterCleanliness)]
+    fn report_final_raster_cleanliness(
+        mode: &str,
+        verdict: &str,
+        checked: u32,
+        violations: u32,
+        first: &JsValue,
+        profile: &JsValue,
+        release: &[u8],
+    ) -> Result<JsValue, JsValue>;
+
     #[wasm_bindgen(js_name = programError)]
     fn program_error(message: &str, code: &str, operation: &str) -> js_sys::Error;
 
@@ -224,6 +402,42 @@ extern "C" {
         payload_sha256: &[u8],
         binding_sha256: &[u8],
     ) -> JsValue;
+
+    #[wasm_bindgen(catch, js_name = reportArray)]
+    fn report_array() -> Result<js_sys::Array, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportArrayPush)]
+    fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = reportScenario)]
+    fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSummary)]
+    fn report_summary(kind: &str, verdict: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportAccepted)]
+    fn report_accepted(red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportRejected)]
+    fn report_rejected(
+        red: u8,
+        green: u8,
+        blue: u8,
+        lower: u8,
+        upper: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportDomainAbsent)]
+    fn report_domain_absent() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportCell)]
+    fn report_cell(
+        constraint_id: u32,
+        case_index: usize,
+        hard: bool,
+        assessment: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportProjection)]
+    fn report_projection(
+        content_identity: &[u8],
+        stream_id: u32,
+        revision: u64,
+        scenario_provenance: &js_sys::Array,
+        cells: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
@@ -246,6 +460,8 @@ enum BindingFailure {
     Wcag22Internal,
     ManifestInternal,
     OutputIndex,
+    CompositeId,
+    CompositeUnavailable,
 }
 
 fn to_js_error(error: BindingError) -> JsValue {
@@ -279,6 +495,7 @@ enum ProgramOperation {
     AttachmentUpdateUnknown,
     AttachmentDispose,
     MaterializationAuthority,
+    AssessmentReport,
 }
 
 impl ProgramOperation {
@@ -292,6 +509,7 @@ impl ProgramOperation {
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
+            Self::AssessmentReport => "assessmentReport",
         }
     }
 }
@@ -311,6 +529,7 @@ fn to_program_js_error(
         E::Update => 4,
         E::ResourceExhausted => 5,
         E::InternalInvariant => 6,
+        E::Unsupported => 15,
         _ => 7,
     };
     program_failure_error(kind, operation.key()).into()
@@ -379,6 +598,7 @@ fn to_attachment_update_error(
         E::Sink(Sink::AlreadyInstalled) => "program_attachment_already_installed",
         E::Sink(Sink::Host(Host::Rejected)) => "program_attachment_host_rejected",
         E::Sink(Sink::Host(Host::Protocol)) => "program_attachment_host_protocol",
+        E::Sink(Sink::Host(Host::ResourceExhausted)) => "program_attachment_resource_exhausted",
         // Будущий non_exhaustive-вариант не должен маскироваться под
         // известный `Update`: package classifier обязан отказать ему.
         _ => "program_attachment_update_unknown",
@@ -400,6 +620,7 @@ fn to_authority_error(
         E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
         E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
         E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
+        E::AmbiguousBindings => "program_materialization_ambiguous_bindings",
         _ => "program_materialization_authority",
     };
     attachment_js_error(
@@ -530,6 +751,32 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
+    #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
+    pub fn assessment_report(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project(self.inner.assessment_report()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::AssessmentReport,
+            )
+        })
+    }
+
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
+
     /// Stable lifecycle key: waiting|ready|stale|failed.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
@@ -580,6 +827,30 @@ impl ProgramSnapshot {
             .get(index)
             .map(|output| output.opacity())
             .ok_or_else(output_index_error)
+    }
+
+    /// Нормальный итог root в точном scenario; отдельная копия данных без полномочий.
+    #[wasm_bindgen(js_name = presentationCompositeRgb)]
+    pub fn presentation_composite_rgb(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] root: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] scenario: JsValue,
+    ) -> Result<js_sys::Uint8Array, JsValue> {
+        let invalid =
+            || binding_failure_error(BindingFailure::CompositeId as u32, "IDs must be u32");
+        let root = checked_u32(root).ok_or_else(invalid)?;
+        let scenario = checked_u32(scenario).ok_or_else(invalid)?;
+        let rgb = self
+            .inner
+            .presentation_composite_rgb(root, scenario)
+            .ok_or_else(|| {
+                binding_failure_error(
+                    BindingFailure::CompositeUnavailable as u32,
+                    "ready snapshot has no composite for these IDs",
+                )
+            })?;
+        let [red, green, blue] = rgb.bytes();
+        copy_output_rgb(red, green, blue)
     }
 }
 
@@ -687,86 +958,61 @@ struct JsPointSinkHostV1 {
 impl labcolors_core::program_wire::ProgramPointSinkHostV1 for JsPointSinkHostV1 {
     fn try_install(
         &mut self,
-        intent: labcolors_core::program_wire::ProgramPointSinkIntentV1,
+        intent: labcolors_core::program_wire::ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), labcolors_core::program_wire::ProgramPointSinkHostErrorV1> {
-        let object = js_sys::Object::new();
-        let object_value: JsValue = object.clone().into();
+        use labcolors_core::program_wire::ProgramPointSinkHostErrorV1 as E;
+        let resource = |_| E::ResourceExhausted;
         let operation = match intent.operation() {
             labcolors_core::program_wire::ProgramPointSinkOperationV1::SetAll => "setAll",
             labcolors_core::program_wire::ProgramPointSinkOperationV1::RevokeAll => "revokeAll",
             labcolors_core::program_wire::ProgramPointSinkOperationV1::ConfirmExact => {
                 "confirmExact"
             }
-            _ => return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol),
+            _ => return Err(E::Protocol),
         };
-        let set = |key: &str, value: &JsValue| {
-            js_sys::Reflect::set(&object_value, &JsValue::from_str(key), value).is_ok()
-        };
-        let bigint = |value: u64| -> JsValue { js_sys::BigInt::from(value).into() };
-        if !set("operation", &JsValue::from_str(operation))
-            || !set("revision", &bigint(intent.revision()))
-            || !set(
-                "expectedSequence",
-                &bigint(intent.expected_stamp().sequence()),
-            )
-            || !set(
-                "desiredSequence",
-                &bigint(intent.desired_stamp().sequence()),
-            )
-            || !set(
-                "bindingEpoch",
-                &bigint(intent.expected_stamp().binding_epoch()),
-            )
-            || !set(
-                "sinkOutput",
-                &JsValue::from_f64(f64::from(intent.sink_output())),
-            )
-        {
-            return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol);
+        let points = report_array().map_err(resource)?;
+        for entry in intent.points() {
+            let point = entry.output();
+            let [red, green, blue] = point.source().bytes();
+            let source: JsValue = copy_output_rgb(red, green, blue).map_err(resource)?.into();
+            let record =
+                point_sink_point(point.slot(), entry.sink_output(), &source, point.opacity())
+                    .map_err(resource)?;
+            report_array_push(&points, &record).map_err(resource)?;
         }
-        let point = match intent.point() {
-            Some(point) => {
-                let point_object = js_sys::Object::new();
-                let point_value: JsValue = point_object.clone().into();
-                let rgb = point.source().bytes();
-                let rgb = js_sys::Uint8Array::from(&rgb[..]);
-                if js_sys::Reflect::set(
-                    &point_value,
-                    &JsValue::from_str("slot"),
-                    &JsValue::from_f64(f64::from(point.slot())),
-                )
-                .is_err()
-                    || js_sys::Reflect::set(&point_value, &JsValue::from_str("source"), &rgb.into())
-                        .is_err()
-                    || js_sys::Reflect::set(
-                        &point_value,
-                        &JsValue::from_str("opacity"),
-                        &JsValue::from_f64(point.opacity()),
-                    )
-                    .is_err()
-                {
-                    return Err(
-                        labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol,
-                    );
-                }
-                point_value
-            }
-            None => JsValue::NULL,
-        };
-        if !set("point", &point) {
-            return Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol);
+        let composites = report_array().map_err(resource)?;
+        for composite in intent.presentation_composites() {
+            let [red, green, blue] = composite.visible().bytes();
+            let source: JsValue = copy_output_rgb(red, green, blue).map_err(resource)?.into();
+            let record = point_sink_composite(composite.root(), composite.scenario(), &source)
+                .map_err(resource)?;
+            report_array_push(&composites, &record).map_err(resource)?;
         }
+        let scope = report_array().map_err(resource)?;
+        for output in intent.scope() {
+            report_array_push(&scope, &JsValue::from_f64(f64::from(output))).map_err(resource)?;
+        }
+        // Конструкторы JS могут бросить исключение. Catch сохраняет Rust Busy/lease
+        // и даёт typed отказ до внешнего эффекта вместо потери Drop через WASM.
+        let value = point_sink_intent(
+            operation,
+            intent.revision(),
+            intent.expected_stamp().sequence(),
+            intent.desired_stamp().sequence(),
+            intent.expected_stamp().binding_epoch(),
+            &scope,
+            &points,
+            &composites,
+        )
+        .map_err(resource)?;
         let status = self
             .callback
-            .call1(&JsValue::UNDEFINED, &object_value)
-            .map_err(|_| labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol)?;
-        let accepted = status
-            .as_bool()
-            .ok_or(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Protocol)?;
-        if !accepted {
-            Err(labcolors_core::program_wire::ProgramPointSinkHostErrorV1::Rejected)
-        } else {
-            Ok(())
+            .call1(&JsValue::UNDEFINED, &value)
+            .map_err(|_| E::Protocol)?;
+        match status.as_bool() {
+            Some(true) => Ok(()),
+            Some(false) => Err(E::Rejected),
+            None => Err(E::Protocol),
         }
     }
 }
@@ -838,10 +1084,8 @@ fn decode_attachment_scenarios(
 pub fn attach_program_wire(
     bytes: &[u8],
     #[wasm_bindgen(unchecked_param_type = "number")] stream_id: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] output_slot: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] sink_output: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] presentation_root: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "number")] occurrence: JsValue,
+    emission_bindings: &[u32],
+    presentation_bindings: &[u32],
     host: &js_sys::Function,
 ) -> Result<ProgramAttachment, JsValue> {
     let parse = |value: JsValue| {
@@ -854,19 +1098,48 @@ pub fn attach_program_wire(
         })
     };
     let stream_id = parse(stream_id)?;
-    let output_slot = parse(output_slot)?;
-    let sink_output = parse(sink_output)?;
-    let presentation_root = parse(presentation_root)?;
-    let occurrence = parse(occurrence)?;
+    let binding_error = || {
+        attachment_js_error(
+            "Program attachment binding shape is invalid",
+            "program_attachment_binding",
+            ProgramOperation::AttachProgramWire,
+        )
+    };
+    if emission_bindings.len() % 2 != 0 || presentation_bindings.len() % 3 != 0 {
+        return Err(binding_error());
+    }
+    let maximum = labcolors_core::program_wire::MAX_PROGRAM_POINT_BINDINGS_V1 as usize;
+    let resource = || {
+        attachment_js_error(
+            "Program attachment binding budget was exceeded",
+            "program_attachment_resource_exhausted",
+            ProgramOperation::AttachProgramWire,
+        )
+    };
+    if emission_bindings.len() / 2 > maximum || presentation_bindings.len() / 3 > maximum {
+        return Err(resource());
+    }
+    let mut emissions = Vec::new();
+    emissions
+        .try_reserve_exact(emission_bindings.len() / 2)
+        .map_err(|_| resource())?;
+    emissions.extend(emission_bindings.chunks_exact(2).map(|row| {
+        labcolors_core::program_wire::ProgramPointEmissionBindingV1::new(row[0], row[1])
+    }));
+    let mut presentations = Vec::new();
+    presentations
+        .try_reserve_exact(presentation_bindings.len() / 3)
+        .map_err(|_| resource())?;
+    presentations.extend(presentation_bindings.chunks_exact(3).map(|row| {
+        labcolors_core::program_wire::ProgramPointPresentationBindingV1::new(row[0], row[1], row[2])
+    }));
     let compiled = labcolors_core::program_wire::compile_program_wire(bytes)
         .map_err(|error| to_program_js_error(error, ProgramOperation::AttachProgramWire))?;
     let inner = compiled
-        .attach(
+        .attach_bindings(
             stream_id,
-            output_slot,
-            sink_output,
-            presentation_root,
-            occurrence,
+            &emissions,
+            &presentations,
             JsPointSinkHostV1 {
                 callback: host.clone(),
             },
@@ -974,6 +1247,28 @@ impl ProgramAttachment {
             .map_err(to_authority_error)
     }
 
+    /// Выбирает один terminal binding, не распространяя его authority на весь scope.
+    #[wasm_bindgen(js_name = materializationAuthorityForBinding)]
+    pub fn materialization_authority_for_binding(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] root: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] occurrence: JsValue,
+    ) -> Result<AttachedMaterializationAuthority, JsValue> {
+        let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
+        let mismatch = || {
+            to_authority_error(
+                labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch,
+            )
+        };
+        let root = checked_u32(root).ok_or_else(mismatch)?;
+        let occurrence = checked_u32(occurrence).ok_or_else(mismatch)?;
+        self.inner
+            .borrow()
+            .current_materialization_authority_for(root, occurrence)
+            .map(|inner| AttachedMaterializationAuthority { inner })
+            .map_err(to_authority_error)
+    }
+
     /// Проверяет переданные caller-ом revision, identity и epoch против current head.
     #[wasm_bindgen(js_name = materializationAuthorityFor)]
     pub fn materialization_authority_for(
@@ -983,11 +1278,15 @@ impl ProgramAttachment {
         #[wasm_bindgen(unchecked_param_type = "bigint")] binding_epoch: JsValue,
     ) -> Result<AttachedMaterializationAuthority, JsValue> {
         let _busy = Self::enter(&self.busy, ProgramOperation::MaterializationAuthority)?;
-        let render = self.inner.borrow().current_render().ok_or_else(|| {
-            to_authority_error(
-                labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1::NotReady,
-            )
-        })?;
+        let render = {
+            use labcolors_core::program_wire::ProgramMaterializationAuthorityErrorV1 as E;
+            let inner = self.inner.borrow();
+            match inner.current_renders() {
+                [render] => *render,
+                [] => return Err(to_authority_error(E::NotReady)),
+                _ => return Err(to_authority_error(E::AmbiguousBindings)),
+            }
+        };
         let content_identity: [u8; 32] = content_identity.try_into().map_err(|_| {
             attachment_js_error(
                 "Materialization content identity must contain 32 bytes",
@@ -1062,6 +1361,34 @@ pub struct ProgramAttachedSnapshot {
 
 #[wasm_bindgen]
 impl ProgramAttachedSnapshot {
+    /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
+    #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
+    pub fn assessment_report(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project(self.inner.snapshot().assessment_report()).map_err(
+            |_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::AssessmentReport,
+                )
+            },
+        )
+    }
+
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot().snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.snapshot().revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.snapshot().reason().map(str::to_owned)
+    }
+
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().to_string()
@@ -1116,7 +1443,27 @@ impl ProgramAttachedSnapshot {
 
     #[wasm_bindgen(js_name = hasRender)]
     pub fn has_render(&self) -> bool {
-        self.inner.render().is_some()
+        !self.inner.renders().is_empty()
+    }
+
+    #[wasm_bindgen(js_name = renderCount)]
+    pub fn render_count(&self) -> usize {
+        self.inner.renders().len()
+    }
+
+    /// Копирует один binding по индексу; его область остаётся точечной.
+    #[wasm_bindgen(js_name = renderAt)]
+    pub fn render_at(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "number")] index: JsValue,
+    ) -> Result<ProgramAttachedRender, JsValue> {
+        let index = checked_output_index(index)?;
+        self.inner
+            .renders()
+            .get(index)
+            .copied()
+            .map(|inner| ProgramAttachedRender { inner })
+            .ok_or_else(output_index_error)
     }
 
     #[wasm_bindgen]
@@ -1401,6 +1748,16 @@ mod browser_tests {
                 "program_compile",
             ),
             (
+                E::Unsupported,
+                ProgramOperation::CompileProgramWire,
+                "program_unsupported",
+            ),
+            (
+                E::Unsupported,
+                ProgramOperation::AttachProgramWire,
+                "program_unsupported",
+            ),
+            (
                 E::FamilyArtifactsRequired,
                 ProgramOperation::CompileProgramWire,
                 "program_family_artifacts_required",
@@ -1516,6 +1873,9 @@ mod browser_tests {
             .expect("observed update");
 
         assert_eq!(snapshot.state(), "ready");
+        assert_eq!(snapshot.snapshot_version(), 1);
+        assert_eq!(snapshot.revision(), 1);
+        assert_eq!(snapshot.reason(), None);
         assert_eq!(snapshot.output_count(), 1);
         assert_eq!(snapshot.output_slot(0.into()).unwrap(), 91);
         assert_eq!(
@@ -1523,6 +1883,16 @@ mod browser_tests {
             &[20, 20, 20]
         );
         assert_eq!(snapshot.output_opacity(0.into()).unwrap(), 1.0);
+
+        let stale = runtime
+            .update_unknown(2_u64.into(), 41.into())
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(stale.state(), "stale");
+        assert_eq!(stale.snapshot_version(), 1);
+        assert_eq!(stale.revision(), 2);
+        assert_eq!(stale.reason(), None);
+        assert_eq!(stale.output_count(), 1);
+        assert_eq!(snapshot.revision(), 1);
     }
 
     #[wasm_bindgen_test]

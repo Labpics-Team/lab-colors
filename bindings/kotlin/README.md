@@ -1,8 +1,8 @@
 # Lab Colors для Android
 
 Kotlin вызывает общий Rust Core через сгенерированный UniFFI API. Builder
-кодирует ProgramWire v1/v2 без JavaScript. Цветовая математика и выбор
-результата не дублируются.
+кодирует ProgramWire v1/v2/v3 без JavaScript; V4 вызывает генератор wire из Core.
+Цветовая математика и выбор результата не дублируются.
 
 ## Подключение
 
@@ -82,6 +82,31 @@ Builder принадлежит одному вызывающему контек�
 декларацию. Сессия допускает перенос между потоками, но одновременная запись
 и повторный вход получают явный отказ, не скрытую очередь.
 
+Для вычисляемых целей используйте `ProgramWireBuilderV3`. Приложение объявляет
+область, опору, допуск и порядок предпочтения; затем добавляет обычный граф
+поверхностей, opacity, occurrences, ограничений и outputs:
+
+```kotlin
+val builder = ProgramWireBuilderV3()
+    .computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), byteArrayOf(64, 64, 64), 1.0)
+    .assignment(listOf(21u))
+```
+
+`ProgramWireDomainV3.Gray` принимает `UByte`-границы множества `[g, g, g]`.
+`Box(lower, upper)` принимает два `ByteArray` по три encoded sRGB8-канала.
+Границы включены; смысл цели и опору задаёт клиент. `anchor` может лежать вне
+области. `maxDelta` конечен, неотрицателен и имеет конечный квадрат в
+[метрике V3](../../docs/contracts/program-assignment-v3.md).
+Каждая вычисляемая цель входит в `assignment` ровно один раз; порядок задаёт
+лексикографическое предпочтение. Core сохраняет допустимую авторскую композицию,
+а при нарушении ограничений вычисляет разрешённую замену. Фиксированные цели
+можно использовать вместе с вычисляемыми; смесь с конечным выбором пока
+возвращает `program_unsupported`.
+
+Снимки V3 возвращают цвета только для `ready`. Значения `snapshotVersion`,
+`revision` и `reason` описаны в
+[справочнике Kotlin](../../docs/contracts/native-adapters.md#kotlin-снимок-и-полный-растр).
+
 ## Привязка к интерфейсу и ресурсы
 
 `attachProgramWire` принимает `ProgramPointSinkHost`. `tryInstall` выполняется
@@ -89,11 +114,36 @@ Builder принадлежит одному вызывающему контек�
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
 внешними потребителями; подтверждение рендера не выводится из расчёта цвета.
+`CONFIRM_EXACT` подтверждает прежнее состояние и stamp без повторной установки.
+После отзыва `point == null` допустим, только если у host также нет paint и
+совпадают sequence/binding epoch.
+
+Attached snapshot предоставляет те же `snapshotVersion`, `revision` и `reason`.
+Новая принятая ревизия с `incomplete` или `unsatisfied` сначала отзывает прежний
+paint. Если host отклоняет команду, сохраняется прежний head. Attachment
+устанавливает один terminal point, а не транзакцию нескольких независимых UI-выходов.
 
 Объекты UniFFI освобождаются через `use`/`close`. Для attachment сначала отзовите
 внешнюю привязку и вызовите `dispose(true)`, затем `close()`. Освобождение памяти
 не означает отзыв внешнего UI. `dispose(false)` сохраняет живую привязку для
 повтора. После закрытия native handle использовать объект нельзя.
+
+## Полный растр V4
+
+Для проверки конечной композиции объявите порты, output и режим Cleanliness:
+
+```kotlin
+val wire = ProgramWireBuilderV4(
+    1uL, 2uL, 3uL, 17u,
+    ProgramFinalRasterCleanlinessRequirement.LINT_EXACT_NOMINAL_SRGB8_V2,
+).finish()
+```
+
+Передайте полный растр в runtime и примените полученные RGB8 через
+`consumeFinalRaster`.
+[Справочник Kotlin](../../docs/contracts/native-adapters.md#kotlin-снимок-и-полный-растр)
+описывает методы, владение массивами и ошибки;
+[контракт растра](../../docs/contracts/final-raster-v1.md) — физическую модель и область.
 
 ## Проверки
 

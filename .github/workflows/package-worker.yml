@@ -186,11 +186,7 @@ jobs:
           if [[ "$PROGRAM_BENCHMARK" == true ]]; then
             [[ "$PROGRAM_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$PROGRAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-            results="$RUNNER_TEMP/program-performance"
             baseline="$RUNNER_TEMP/program-baseline-$GITHUB_JOB"
-            candidate="$RUNNER_TEMP/program-candidate-$GITHUB_JOB"
-            mkdir -p "$results" "$candidate"
-            cp -a packages/colors/. "$candidate/"
             git fetch --no-tags origin "$PROGRAM_BASE_SHA"
             git worktree add --detach "$baseline" "$PROGRAM_BASE_SHA"
             (
@@ -198,16 +194,6 @@ jobs:
               export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$baseline=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
               build_runtime
             )
-            node packages/colors/bench/wire-construction.mjs compare "$baseline/packages/colors" "$candidate"
-            python3 scripts/compare-program-performance.py \
-              --harness packages/colors/bench/program.mjs \
-              --baseline "$baseline/packages/colors" \
-              --candidate "$candidate" \
-              --baseline-revision "$PROGRAM_BASE_SHA" \
-              --candidate-revision "$GITHUB_SHA" \
-              --head-revision "$PROGRAM_HEAD_SHA" \
-              --profile \
-              --output "$results"
           fi
       - name: retain source-bound point-support evidence
         if: ${{ always() && inputs.program-benchmark }}
@@ -245,6 +231,35 @@ jobs:
             exit 1
           fi
           printf 'sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
+      - name: measure Program through the verified packed consumer
+        if: inputs.program-benchmark
+        env:
+          PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
+          results="$RUNNER_TEMP/program-performance"
+          baseline="$RUNNER_TEMP/program-baseline-$GITHUB_JOB"
+          candidate="$RUNNER_TEMP/program-candidate-$GITHUB_JOB"
+          mkdir -p "$results"
+          mkdir "$candidate"
+          tar --extract --gzip --file "$VERIFIED_TARBALL" \
+            --directory "$candidate" --strip-components=1
+          node packages/colors/bench/wire-construction.mjs compare "$baseline/packages/colors" "$candidate"
+          python3 scripts/compare-program-performance.py \
+            --harness packages/colors/bench/program.mjs \
+            --baseline "$baseline/packages/colors" \
+            --candidate "$candidate" \
+            --candidate-tarball "$VERIFIED_TARBALL" \
+            --candidate-tarball-sha256 "$VERIFIED_TARBALL_SHA256" \
+            --baseline-revision "$PROGRAM_BASE_SHA" \
+            --candidate-revision "$GITHUB_SHA" \
+            --head-revision "$PROGRAM_HEAD_SHA" \
+            --profile \
+            --output "$results"
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
         # GitHub-hosted образ не содержит нужный CfT-браузер; установка целиком
         # userspace (sudo на раннере доступен, но не используется — гейт остаётся
@@ -311,7 +326,7 @@ jobs:
               CUPS_PACKAGE=libcups2
               GLIB_PACKAGE=libglib2.0-0
               ;;
-            debian:trixie|ubuntu:noble)
+            debian:trixie|ubuntu:noble|ubuntu:resolute)
               ALSA_PACKAGE=libasound2t64
               ATK_PACKAGE=libatk1.0-0t64
               ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64
@@ -428,13 +443,7 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
-      - name: terminal Program in real browser
-        # Сначала проверяет crate-boundary, затем устанавливает exact verified
-        # tarball и исполняет тот же Program path через публичный package root.
-        env:
-          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
-          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
-          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+      - name: test WASM crate in real browser
         run: |
           set -euo pipefail
           : "${CHROME_PATH:?}" "${CHROMEDRIVER_PATH:?}" "${RUNNER_TEMP:?}"
@@ -459,7 +468,16 @@ jobs:
           writeFileSync(process.env.WASM_BINDGEN_TEST_WEBDRIVER_JSON, `${JSON.stringify(capabilities)}\n`);
           NODE
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
-          node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
+
+      - name: terminal Program in real browser
+        # Единственная команда связывает конечный Program с проверенным архивом.
+        env:
+          BASH_ENV: ""
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        shell: bash
+        run: node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
       - name: retain packer identity for the isolated publisher
         id: packer
         run: |
@@ -479,6 +497,18 @@ jobs:
           test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"
           test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
+      - name: retain bounded Program measurements
+        if: ${{ failure() && inputs.program-benchmark }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: colors-program-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/program-performance/*.json
+            ${{ runner.temp }}/program-performance/profiles/index.json
+            ${{ runner.temp }}/program-performance/profiles/*.cpuprofile
+          if-no-files-found: warn
+          compression-level: 9
+          retention-days: 1
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

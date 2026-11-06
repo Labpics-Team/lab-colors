@@ -53,6 +53,7 @@ pub mod lcs;
 pub(crate) mod lcs_occurrence;
 pub(crate) mod lpc;
 pub mod neutral;
+mod ordering;
 #[expect(
     dead_code,
     reason = "the output-profile firewall is intentionally internal to registered profiles"

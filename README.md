@@ -12,8 +12,11 @@ Lab Colors выбирает подходящие значения с учёто�
 ## Установка
 
 ```sh
-npm install @labpics/colors@^1
+npm install @labpics/colors@^2
 ```
+
+Примеру требуется API 2.x. Если этой версии ещё нет в npm, установите
+проверенный архив выпуска: `npm install /путь/к/labpics-colors-2.0.0.tgz`.
 
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
 [Настройка для браузера и Node.js](packages/colors/README.md#первый-запуск).

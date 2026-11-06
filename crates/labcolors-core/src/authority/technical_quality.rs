@@ -79,6 +79,10 @@ impl From<AuthorityAdmissionErrorV1> for TechnicalQualityAdmissionErrorV1 {
 enum TechnicalQualityProofV1<'proof> {
     ModeledPointV1(ModeledPointProofV1),
     ExactReferenceFieldV1(FieldExactReferenceReplayV1<'proof>),
+    ProgramFinalRasterV1 {
+        replay: FieldExactReferenceReplayV1<'proof>,
+        subject: [u8; 32],
+    },
 }
 
 struct ModeledPointProofV1 {
@@ -103,6 +107,11 @@ impl TechnicalQualityProofV1<'_> {
     fn hash_identity_material(&self, hasher: &mut Hasher) {
         match self {
             Self::ModeledPointV1(proof) => proof.hash_identity_material(hasher),
+            Self::ProgramFinalRasterV1 { replay, subject } => {
+                hasher.update(b"program-final-opaque-raster-v1\0");
+                hasher.update(subject);
+                replay.hash_tq_identity_material(hasher);
+            }
             Self::ExactReferenceFieldV1(proof) => {
                 hasher.update(b"exact-reference-field-v1\0");
                 proof.hash_tq_identity_material(hasher);
@@ -208,3 +217,29 @@ impl AuthorityStateV1 {
 #[cfg(test)]
 #[path = "technical_quality_tests.rs"]
 mod tests;
+
+impl AuthorityStateV1 {
+    /// Exact-reference proof дополняется binding того же Program/output owner.
+    pub(crate) fn admit_program_final_raster_technical_quality(
+        &mut self,
+        materialization: &crate::program_session::finite_field::FinalRasterMaterializationV1,
+        current: &crate::observation::RevisionBoundObservationV1,
+        expected: AuthorityExpectedCurrentV1,
+    ) -> Result<AuthorityAdmissionOutcomeV1, TechnicalQualityAdmissionErrorV1> {
+        if !materialization.observation().is_same_binding_as(current) {
+            return Err(TechnicalQualityAdmissionErrorV1::CurrentFieldSceneUnavailable);
+        }
+        let request = materialization
+            .request()
+            .map_err(|_| TechnicalQualityAdmissionErrorV1::UnsupportedPhysicalIdentity)?;
+        let replay =
+            verify_exact_reference_for_tq(materialization.certificate(), &request, current)?;
+        self.admit_technical_quality_proof(
+            TechnicalQualityProofV1::ProgramFinalRasterV1 {
+                replay,
+                subject: materialization.subject(),
+            },
+            expected,
+        )
+    }
+}
