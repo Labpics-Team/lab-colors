@@ -19,7 +19,7 @@ on:
         type: string
         default: ''
       formal_model_diagnostic:
-        description: One-shot pre-symex GOTO diagnostic of failed formal run 42140643837
+        description: One-shot isolated exact proof diagnostic of canceled formal run 42140643837
         required: false
         type: boolean
         default: false
@@ -47,10 +47,10 @@ jobs:
     with:
       authoring_baseline: ${{ inputs.authoring_baseline || '' }}
 
-  # Только разовая диагностическая ветка: не сливать в main. Это сбор GOTO
-  # до symex и solver, а не замена обязательного formal core (Kani) и не proof PASS.
+  # Только разовая диагностическая ветка: не сливать в main. Это изолированный
+  # запуск одного proof, а не замена обязательного formal core (Kani).
   formal-model-diagnostic:
-    name: Formal model diagnostic (GOTO listing)
+    name: Formal model diagnostic (isolated exact proof)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.formal_model_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -98,7 +98,7 @@ jobs:
           test "$(python3 scripts/verify_core_formal.py --kani-version)" = '0.68.0'
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
-      - name: collect complete bounded GOTO stdout
+      - name: collect complete bounded exact proof stdout
         id: capture
         shell: bash
         run: |
@@ -118,7 +118,7 @@ jobs:
           source = root / 'source'
           artifact = root / 'artifact'
           artifact.mkdir()
-          stdout_path = artifact / 'goto-stdout.gz'
+          stdout_path = artifact / 'proof-stdout.gz'
           artifact_limit = 16 * 1024 * 1024
           # Reserve room for the manifest and the upload-artifact ZIP envelope.
           gzip_limit = artifact_limit - 64 * 1024
@@ -127,12 +127,12 @@ jobs:
               'cargo', 'kani', '-p', 'labcolors-core', '--lib', '--harness',
               'program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all',
               '--exact', '-Z', 'unstable-options', '--output-format', 'old',
-              '--jobs=1', '--cbmc-args', '--show-goto-functions',
+              '--jobs=1', '--harness-timeout', '300s',
           ]
           manifest = {
               'diagnostic_only': True,
-              'representation': 'processed GOTO function listing before symex',
-              'proof_result': 'not_run',
+              'representation': 'isolated exact proof verification stdout',
+              'proof_result': 'unvalidated',
               'failed_required_run': os.environ['FORMAL_FAILED_RUN'],
               'source_repository': 'https://github.com/Labpics-Team/lab-colors.git',
               'base_sha': os.environ['FORMAL_SOURCE_SHA'],
@@ -142,7 +142,7 @@ jobs:
               'command': command,
               'command_shell': shlex.join(command),
               'command_sha256': hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest(),
-              'observation_target': 'valid_intent::<1> -> prepare -> SetAll -> Verified guards and discriminant',
+              'observation_target': 'complete isolated RevokeAll property results versus original runner cancellation',
               'stdout_capture': 'raw bytes streamed without a raw file; no filtering, no line or sample limit',
               'stderr_capture': 'runner log only',
               'limits': {
@@ -150,6 +150,7 @@ jobs:
                   'manifest_bytes': manifest_limit,
                   'artifact_bytes': artifact_limit,
                   'command_seconds': 600,
+                  'harness_seconds': 300,
               },
               'status': 'refused',
               'complete': False,
@@ -231,7 +232,7 @@ jobs:
                           selector.register(process.stdout, selectors.EVENT_READ)
                           while True:
                               if time.monotonic() >= deadline:
-                                  raise Refusal('GOTO listing command exceeded 600 seconds')
+                                  raise Refusal('exact proof command exceeded 600 seconds')
                               if not selector.select(timeout=1):
                                   continue
                               chunk = os.read(process.stdout.fileno(), 64 * 1024)
@@ -241,10 +242,10 @@ jobs:
                               raw_digest.update(chunk)
                               compressed.write(chunk)
                       manifest['command_exit_code'] = process.wait(timeout=max(1, deadline - time.monotonic()))
-                      if manifest['command_exit_code'] != 0:
-                          raise Refusal('GOTO listing command failed; corpus is not complete')
+                      if manifest['command_exit_code'] not in (0, 1):
+                          raise Refusal('exact proof command failed outside verification result; corpus is not complete')
               if not raw_size:
-                  raise Refusal('GOTO listing command returned empty stdout')
+                  raise Refusal('exact proof command returned empty stdout')
               if git('diff', '--name-only', manifest['base_sha'], '--'):
                   raise Refusal('tracked source bytes changed during collection')
               manifest.update({
@@ -298,7 +299,7 @@ jobs:
               raise RuntimeError('partial stdout could not be discarded; refusing upload')
           with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
               output.write('artifact_ready=true\n')
-          print(f"Diagnostic status: {manifest['status']}; proof result: not_run")
+          print(f"Diagnostic status: {manifest['status']}; proof result: {manifest['proof_result']}")
           if not manifest['complete']:
               print(f"Refusal: {manifest['reason']}; no partial stdout artifact retained")
           PY
@@ -308,7 +309,7 @@ jobs:
         with:
           name: formal-model-${{ env.FORMAL_FAILED_RUN }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ env.DIAGNOSTIC_ROOT }}/artifact/goto-stdout.gz
+            ${{ env.DIAGNOSTIC_ROOT }}/artifact/proof-stdout.gz
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/manifest.json
           retention-days: 1
           compression-level: 0
