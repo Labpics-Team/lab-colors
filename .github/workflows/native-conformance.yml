@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      formal_projection_feasibility:
+        description: Separate standalone projected RevokeAll feasibility, not an A/B comparison
+        required: false
+        type: boolean
+        default: false
 
 # Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
 # run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
@@ -40,7 +45,7 @@ jobs:
   # эти имена буквально.
   worker:
     name: Native conformance
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.formal_model_diagnostic }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !(inputs.formal_model_diagnostic || inputs.formal_projection_feasibility) }}
     permissions:
       contents: read
     uses: ./.github/workflows/native-conformance-worker.yml
@@ -51,7 +56,7 @@ jobs:
   # запуск одного proof, а не замена обязательного formal core (Kani).
   formal-model-diagnostic:
     name: Formal model diagnostic (isolated exact proof)
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.formal_model_diagnostic }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.formal_model_diagnostic || inputs.formal_projection_feasibility) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     permissions:
@@ -64,6 +69,12 @@ jobs:
       CARGO_TERM_COLOR: never
       WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
+      - name: require one diagnostic protocol
+        if: ${{ inputs.formal_model_diagnostic && inputs.formal_projection_feasibility }}
+        shell: bash
+        run: |
+          echo 'Choose adaptive A/B or standalone feasibility, not both.' >&2
+          exit 1
       - name: create owned source and toolchain paths
         id: isolate
         shell: bash
@@ -103,11 +114,17 @@ jobs:
           test "$(python3 scripts/verify_core_formal.py --kani-version)" = '0.68.0'
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
-      - name: collect adaptive bounded canonical A/B proof
+      - name: collect selected bounded canonical proof experiment
         id: capture
         shell: bash
+        env:
+          FORMAL_PROJECTION_FEASIBILITY: ${{ inputs.formal_projection_feasibility }}
         run: |
-          python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-ab-run.py"
+          if [ "$FORMAL_PROJECTION_FEASIBILITY" = 'true' ]; then
+            python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-b-run.py"
+          else
+            python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-ab-run.py"
+          fi
       - name: retain stdout and manifest for one day
         if: ${{ always() && steps.capture.outputs.artifact_ready == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
