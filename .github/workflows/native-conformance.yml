@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: ''
+      formal_model_diagnostic:
+        description: One-shot program-only SSA diagnostic of failed formal run 42140643837
+        required: false
+        type: boolean
+        default: false
 
 # Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
 # run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
@@ -35,8 +40,305 @@ jobs:
   # эти имена буквально.
   worker:
     name: Native conformance
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.formal_model_diagnostic }}
     permissions:
       contents: read
     uses: ./.github/workflows/native-conformance-worker.yml
     with:
       authoring_baseline: ${{ inputs.authoring_baseline || '' }}
+
+  # Только разовая диагностическая ветка: не сливать в main. Это сбор исходного
+  # SSA без solver, а не замена обязательного formal core (Kani) и не proof PASS.
+  formal-model-diagnostic:
+    name: Formal model diagnostic (program only)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.formal_model_diagnostic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      FORMAL_SOURCE_SHA: fa8409d6e563ab560ccd037b41f5e8b6a7775539
+      FORMAL_FAILED_RUN: '42140643837'
+      RUST_TOOLCHAIN: 1.96.0
+      CARGO_BUILD_JOBS: 2
+      CARGO_TERM_COLOR: never
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: create owned source and toolchain paths
+        id: isolate
+        shell: bash
+        run: |
+          export DIAGNOSTIC_ROOT="$RUNNER_TEMP/formal-model-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$DIAGNOSTIC_ROOT"
+          echo 'owned=true' >> "$GITHUB_OUTPUT"
+          {
+            echo "DIAGNOSTIC_ROOT=$DIAGNOSTIC_ROOT"
+            echo "RUSTUP_HOME=$DIAGNOSTIC_ROOT/rustup"
+            echo "CARGO_HOME=$DIAGNOSTIC_ROOT/cargo"
+            echo "KANI_HOME=$DIAGNOSTIC_ROOT/kani"
+            echo "TMPDIR=$DIAGNOSTIC_ROOT/tmp"
+            echo "CARGO_TARGET_DIR=$DIAGNOSTIC_ROOT/target"
+          } >> "$GITHUB_ENV"
+          mkdir "$DIAGNOSTIC_ROOT/tmp" "$DIAGNOSTIC_ROOT/kani"
+          echo "$DIAGNOSTIC_ROOT/cargo/bin" >> "$GITHUB_PATH"
+          git init "$DIAGNOSTIC_ROOT/source"
+          git -C "$DIAGNOSTIC_ROOT/source" -c credential.helper= fetch --depth=1 \
+            https://github.com/Labpics-Team/lab-colors.git "$FORMAL_SOURCE_SHA"
+          git -C "$DIAGNOSTIC_ROOT/source" checkout --detach FETCH_HEAD
+          test "$(git -C "$DIAGNOSTIC_ROOT/source" rev-parse HEAD)" = "$FORMAL_SOURCE_SHA"
+          git -C "$DIAGNOSTIC_ROOT/source" diff --exit-code "$FORMAL_SOURCE_SHA" --
+      # Пины и setup взяты из ci-worker.yml именно FORMAL_SOURCE_SHA.
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: install pinned Kani
+        shell: bash
+        working-directory: ${{ env.DIAGNOSTIC_ROOT }}/source
+        run: |
+          test "$(python3 scripts/verify_core_formal.py --kani-version)" = '0.68.0'
+          cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
+          cargo kani setup
+      - name: collect complete bounded SSA stdout
+        id: capture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import gzip
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import selectors
+          import shlex
+          import signal
+          import subprocess
+          import time
+
+          root = Path(os.environ['DIAGNOSTIC_ROOT'])
+          source = root / 'source'
+          artifact = root / 'artifact'
+          artifact.mkdir()
+          stdout_path = artifact / 'ssa-stdout.gz'
+          raw_limit = 512 * 1024 * 1024
+          artifact_limit = 16 * 1024 * 1024
+          # Reserve room for the manifest and the upload-artifact ZIP envelope.
+          gzip_limit = artifact_limit - 64 * 1024
+          manifest_limit = 16 * 1024
+          command = [
+              'cargo', 'kani', '-p', 'labcolors-core', '--lib', '--harness',
+              'program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all',
+              '--exact', '-Z', 'unstable-options', '--output-format', 'old',
+              '--jobs=1', '--cbmc-args', '--program-only',
+          ]
+          manifest = {
+              'diagnostic_only': True,
+              'proof_result': 'not_run',
+              'failed_required_run': os.environ['FORMAL_FAILED_RUN'],
+              'source_repository': 'https://github.com/Labpics-Team/lab-colors.git',
+              'base_sha': os.environ['FORMAL_SOURCE_SHA'],
+              'workflow_sha': os.environ['WORKFLOW_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'command': command,
+              'command_shell': shlex.join(command),
+              'command_sha256': hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest(),
+              'observation_target': 'valid_intent::<1> -> prepare -> SetAll -> Verified guards and discriminant',
+              'stdout_capture': 'raw bytes, no filtering, no line or sample limit',
+              'stderr_capture': 'runner log only',
+              'limits': {
+                  'raw_stdout_bytes': raw_limit,
+                  'gzip_bytes': gzip_limit,
+                  'manifest_bytes': manifest_limit,
+                  'artifact_bytes': artifact_limit,
+                  'command_seconds': 600,
+              },
+              'status': 'refused',
+              'complete': False,
+          }
+
+          class Refusal(Exception):
+              pass
+
+          class BoundedWriter:
+              def __init__(self, stream):
+                  self.stream = stream
+                  self.size = 0
+
+              def write(self, data):
+                  if self.size + len(data) > gzip_limit:
+                      raise Refusal('compressed stdout exceeds the artifact budget')
+                  written = self.stream.write(data)
+                  self.size += written
+                  return written
+
+              def flush(self):
+                  self.stream.flush()
+
+          def git(*args):
+              return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
+
+          def stop_group(process):
+              errors = []
+              if process is None:
+                  return errors
+              try:
+                  os.killpg(process.pid, signal.SIGTERM)
+              except ProcessLookupError:
+                  pass
+              except OSError as error:
+                  errors.append(str(error))
+              try:
+                  process.wait(timeout=5)
+              except subprocess.TimeoutExpired:
+                  pass
+              except Exception as error:
+                  errors.append(str(error))
+              # The leader may have exited while a child ignores TERM. Always
+              # kill the group after the bounded grace, including that case.
+              try:
+                  os.killpg(process.pid, signal.SIGKILL)
+              except ProcessLookupError:
+                  pass
+              except OSError as error:
+                  errors.append(str(error))
+              try:
+                  process.wait(timeout=5)
+              except Exception as error:
+                  errors.append(str(error))
+              return errors
+
+          process = None
+          raw_size = 0
+          raw_digest = hashlib.sha256()
+          try:
+              manifest['source_sha'] = git('rev-parse', 'HEAD')
+              manifest['source_tree'] = git('rev-parse', 'HEAD^{tree}')
+              if manifest['source_sha'] != manifest['base_sha'] or git('status', '--porcelain'):
+                  raise Refusal('source checkout does not match the frozen clean snapshot')
+              manifest['source_file_sha256'] = {
+                  name: hashlib.sha256((source / name).read_bytes()).hexdigest()
+                  for name in ['Cargo.lock', '.github/workflows/ci-worker.yml', 'scripts/verify_core_formal.py']
+              }
+              manifest['rustc_version'] = subprocess.check_output(['rustc', '--version'], text=True).strip()
+              manifest['kani_version'] = subprocess.check_output(['cargo', 'kani', '--version'], text=True).strip()
+              if manifest['kani_version'] != 'cargo-kani 0.68.0':
+                  raise Refusal('installed Kani version is not the frozen 0.68.0')
+              deadline = time.monotonic() + 600
+              with stdout_path.open('xb') as output:
+                  bounded = BoundedWriter(output)
+                  with gzip.GzipFile(filename='', mode='wb', fileobj=bounded, mtime=0) as compressed:
+                      process = subprocess.Popen(command, cwd=source, stdout=subprocess.PIPE, start_new_session=True)
+                      with selectors.DefaultSelector() as selector:
+                          selector.register(process.stdout, selectors.EVENT_READ)
+                          while True:
+                              if time.monotonic() >= deadline:
+                                  raise Refusal('program-only command exceeded 600 seconds')
+                              if not selector.select(timeout=1):
+                                  continue
+                              chunk = os.read(process.stdout.fileno(), 64 * 1024)
+                              if not chunk:
+                                  break
+                              if raw_size + len(chunk) > raw_limit:
+                                  raise Refusal('raw stdout exceeds 512 MiB')
+                              raw_size += len(chunk)
+                              raw_digest.update(chunk)
+                              compressed.write(chunk)
+                      manifest['command_exit_code'] = process.wait(timeout=max(1, deadline - time.monotonic()))
+                      if manifest['command_exit_code'] != 0:
+                          raise Refusal('program-only command failed; corpus is not complete')
+              if not raw_size:
+                  raise Refusal('program-only command returned empty stdout')
+              if git('diff', '--name-only', manifest['base_sha'], '--'):
+                  raise Refusal('tracked source bytes changed during collection')
+              manifest.update({
+                  'status': 'complete',
+                  'complete': True,
+                  'stdout_file': stdout_path.name,
+                  'raw_stdout_bytes': raw_size,
+                  'raw_stdout_sha256': raw_digest.hexdigest(),
+                  'gzip_bytes': stdout_path.stat().st_size,
+                  'gzip_sha256': hashlib.sha256(stdout_path.read_bytes()).hexdigest(),
+              })
+          except Exception as error:
+              manifest.update({
+                  'status': 'refused', 'complete': False,
+                  'reason': str(error), 'observed_raw_stdout_bytes': raw_size,
+                  'command_exit_code': None if process is None else process.returncode,
+              })
+          finally:
+              cleanup_errors = stop_group(process)
+              if process is not None and process.stdout is not None:
+                  try:
+                      process.stdout.close()
+                  except OSError as error:
+                      cleanup_errors.append(str(error))
+              if cleanup_errors:
+                  manifest.update({
+                      'status': 'refused', 'complete': False,
+                      'reason': manifest.get('reason', 'command group cleanup failed'),
+                      'cleanup_errors': cleanup_errors,
+                  })
+              if not manifest['complete']:
+                  try:
+                      stdout_path.unlink(missing_ok=True)
+                  except OSError as error:
+                      manifest['discard_error'] = str(error)
+                  manifest['partial_corpus_discarded'] = not stdout_path.exists()
+          payload = (json.dumps(manifest, indent=2, sort_keys=True) + '\n').encode()
+          if len(payload) > manifest_limit:
+              raise RuntimeError('diagnostic manifest exceeds 16 KiB; refusing upload')
+          manifest_path = artifact / 'manifest.json'
+          manifest_path.write_bytes(payload)
+          # Publish readiness only after both files are closed and bounded.
+          if manifest_path.read_bytes() != payload:
+              raise RuntimeError('diagnostic manifest readback failed; refusing upload')
+          if manifest['complete']:
+              if not stdout_path.is_file() or stdout_path.stat().st_size != manifest['gzip_bytes']:
+                  raise RuntimeError('complete stdout file readback failed; refusing upload')
+              if manifest['gzip_bytes'] > gzip_limit or manifest['gzip_bytes'] + len(payload) > artifact_limit:
+                  raise RuntimeError('closed diagnostic files exceed the artifact budget; refusing upload')
+          elif stdout_path.exists():
+              raise RuntimeError('partial stdout could not be discarded; refusing upload')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('artifact_ready=true\n')
+          print(f"Diagnostic status: {manifest['status']}; proof result: not_run")
+          if not manifest['complete']:
+              print(f"Refusal: {manifest['reason']}; no partial stdout artifact retained")
+          PY
+      - name: retain stdout and manifest for one day
+        if: ${{ always() && steps.capture.outputs.artifact_ready == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: formal-model-${{ env.FORMAL_FAILED_RUN }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.DIAGNOSTIC_ROOT }}/artifact/ssa-stdout.gz
+            ${{ env.DIAGNOSTIC_ROOT }}/artifact/manifest.json
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: require a complete diagnostic corpus
+        if: ${{ always() && steps.capture.outputs.artifact_ready == 'true' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = json.loads((Path(os.environ['DIAGNOSTIC_ROOT']) / 'artifact/manifest.json').read_text())
+          if manifest['status'] != 'complete' or not manifest['complete']:
+              raise SystemExit('Diagnostic refused: ' + manifest['reason'])
+          PY
+      - name: remove owned source toolchains and output
+        if: ${{ always() && steps.isolate.outputs.owned == 'true' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          root = Path(os.environ['DIAGNOSTIC_ROOT']).resolve()
+          temporary = Path(os.environ['RUNNER_TEMP']).resolve()
+          if root.parent != temporary or not root.name.startswith('formal-model-'):
+              raise SystemExit('Refusing cleanup outside the owned RUNNER_TEMP child')
+          shutil.rmtree(root)
+          PY
