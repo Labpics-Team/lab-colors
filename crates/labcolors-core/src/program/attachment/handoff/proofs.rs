@@ -529,16 +529,34 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     let Some((mut writer, old)) = any_writer() else {
         return;
     };
-    let Some(paint) = any_paint() else {
-        return;
-    };
-    let points = [patch(writer.owned_scope[0], paint)];
     let kind = KIND;
-    let revision = kani::any();
-    let Some(intent) = valid_intent::<KIND>(&old, &points, revision) else {
-        return;
-    };
-    let expected = expected_after(old, points[0], kind, revision);
+    let revision;
+    let intent;
+    let expected;
+    let points;
+    if KIND == 1 {
+        revision = kani::any();
+        let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
+            return;
+        };
+        intent = PointSinkIntentV1::RevokeAll { revision, stamp };
+        expected = ExpectedPointState {
+            stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
+            revision: Some(revision),
+            point: None,
+        };
+    } else {
+        let Some(paint) = any_paint() else {
+            return;
+        };
+        points = [patch(writer.owned_scope[0], paint)];
+        revision = kani::any();
+        let Some(valid) = valid_intent::<KIND>(&old, &points, revision) else {
+            return;
+        };
+        intent = valid;
+        expected = expected_after(old, points[0], kind, revision);
+    }
     let installed_revision = expected
         .revision
         .expect("valid exact intent has a revision");
