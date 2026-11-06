@@ -327,10 +327,6 @@ def run_kani(
             for selected in positive_harnesses:
                 command.extend(["--harness", selected])
             command.append("--exact")
-            # Temporary source attribution for the hosted runner shutdown; dump the same
-            # instrumented model without changing CBMC checks or parameters.
-            if "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all" in positive_harnesses:
-                command.append("--gen-c")
     log = output.with_suffix(".log")
     returncode = _run_logged_command(command, log)
     return json.loads(output.read_text(encoding="utf-8")), returncode
