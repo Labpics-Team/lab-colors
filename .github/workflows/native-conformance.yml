@@ -107,6 +107,7 @@ jobs:
           import hashlib
           import importlib.util
           import json
+          import re
           import os
           from pathlib import Path
           import selectors
@@ -126,7 +127,14 @@ jobs:
           artifact_limit = 16 * 1024 * 1024
           # Both compressed corpora share this allowance, including gzip footers.
           # Reserve room for the manifest and the upload-artifact ZIP envelope.
-          gzip_limit = artifact_limit - 64 * 1024
+          observation_limit = 32 * 1024
+          observation_path = artifact / 'executor-observations.jsonl'
+          observation_size = 0
+          journal = None
+          journal_buffer = b''
+          journal_bytes = 0
+          observed_pids = set()
+          gzip_limit = artifact_limit - 64 * 1024 - observation_limit
           json_limit = artifact_limit
           manifest_limit = 16 * 1024
           deadline = time.monotonic() + 600
@@ -197,10 +205,96 @@ jobs:
               print(f'Diagnostic phase: {name}', flush=True)
               remaining()
 
+          def observe(event, **fields):
+              global observation_size
+              payload = (json.dumps(dict(event=event, monotonic=time.monotonic(), **fields), sort_keys=True) + '\n').encode()
+              if observation_size + len(payload) > observation_limit:
+                  raise Refusal('executor observations exceed their reserved 32 KiB allowance')
+              with observation_path.open('ab') as output:
+                  output.write(payload)
+              observation_size += len(payload)
+              print('Executor observation: ' + payload.decode().rstrip(), flush=True)
+
+          def identity(pid, event):
+              try:
+                  fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+                  values = dict(pid=pid, ppid=int(fields[1]), pgid=int(fields[2]), sid=int(fields[3]), start_ticks=int(fields[19]))
+                  cgroup = Path(f'/proc/{pid}/cgroup').read_text().strip().split(':', 2)[-1]
+                  values['cgroup_sha256'] = hashlib.sha256(cgroup.encode()).hexdigest()
+              except (OSError, ValueError, IndexError) as error:
+                  observe('identity_unavailable', pid=pid, error_type=type(error).__name__)
+                  return 0
+              # Only numeric identity and fingerprint; never comm, cmdline or environment.
+              observe(event, **values)
+              return values['ppid']
+
+          def descendants(pid):
+              pending = [pid]
+              visited = set()
+              while pending:
+                  current = pending.pop()
+                  if current in visited:
+                      continue
+                  visited.add(current)
+                  if len(visited) > 256:
+                      raise Refusal('executor process tree exceeds 256 identities')
+                  if current not in observed_pids:
+                      identity(current, 'proof_descendant')
+                      observed_pids.add(current)
+                  try:
+                      tasks = list(Path(f'/proc/{current}/task').iterdir())
+                  except OSError:
+                      continue
+                  if len(tasks) > 256:
+                      raise Refusal('executor process exceeds 256 task observations')
+                  for task in tasks:
+                      try:
+                          pending.extend(map(int, (task / 'children').read_text().split()))
+                      except (OSError, ValueError):
+                          # This live snapshot is best-effort; exited tasks can disappear.
+                          pass
+
+          def journal_record(raw):
+              try:
+                  record = json.loads(raw)
+              except (ValueError, UnicodeDecodeError):
+                  observe('journal_record_invalid')
+                  return
+              message = record.get('MESSAGE', '')
+              if not isinstance(message, str):
+                  return
+              victim = re.search(r'Killed process (\d+) \(([A-Za-z0-9_.-]{1,64})\)', message)
+              if record.get('_TRANSPORT') == 'kernel' and victim:
+                  observe('kernel_oom_victim', pid=int(victim[1]))
+              elif record.get('_SYSTEMD_UNIT') == 'systemd-oomd.service' and 'Killed ' in message:
+                  # Group path is fingerprinted, never publish arbitrary message text.
+                  group = re.search(r'Killed (\S+)', message)
+                  observe('oomd_group_kill', group_sha256=hashlib.sha256(group[1].encode()).hexdigest() if group else None)
+
+          def read_journal(selector):
+              global journal_buffer, journal_bytes
+              chunk = os.read(journal.stdout.fileno(), 64 * 1024)
+              if not chunk:
+                  selector.unregister(journal.stdout)
+                  observe('journal_exit', exit_code=journal.poll())
+                  return
+              journal_bytes += len(chunk)
+              if journal_bytes > artifact_limit:
+                  raise Refusal('executor journal input exceeds 16 MiB')
+              journal_buffer += chunk
+              while b'\n' in journal_buffer:
+                  raw, journal_buffer = journal_buffer.split(b'\n', 1)
+                  if len(raw) > 64 * 1024:
+                      raise Refusal('executor journal record exceeds 64 KiB')
+                  journal_record(raw)
+              if len(journal_buffer) > 64 * 1024:
+                  raise Refusal('executor journal record exceeds 64 KiB')
+
           def metadata(args):
               phase('metadata: ' + shlex.join(args))
               child = subprocess.Popen(args, stdout=subprocess.PIPE, text=True, start_new_session=True)
               try:
+                  identity(child.pid, 'metadata_launch')
                   output, _ = child.communicate(timeout=remaining())
                   if child.returncode:
                       raise subprocess.CalledProcessError(child.returncode, args, output=output)
@@ -219,6 +313,10 @@ jobs:
               if process is None:
                   return errors
               try:
+                  try:
+                      observe('owned_killpg', pgid=process.pid, signal='SIGTERM')
+                  except Exception as error:
+                      errors.append(str(error))
                   os.killpg(process.pid, signal.SIGTERM)
               except ProcessLookupError:
                   pass
@@ -233,6 +331,10 @@ jobs:
               # The leader may have exited while a child ignores TERM. Always
               # kill the group after the bounded grace, including that case.
               try:
+                  try:
+                      observe('owned_killpg', pgid=process.pid, signal='SIGKILL')
+                  except Exception as error:
+                      errors.append(str(error))
                   os.killpg(process.pid, signal.SIGKILL)
               except ProcessLookupError:
                   pass
@@ -248,6 +350,17 @@ jobs:
           raw_size = 0
           raw_digest = hashlib.sha256()
           try:
+              ancestor = os.getpid()
+              for _ in range(8):
+                  if not ancestor:
+                      break
+                  ancestor = identity(ancestor, 'controller_ancestry')
+              journal = subprocess.Popen(
+                  ['journalctl', '--follow', '--since=@' + str(time.time()), '--output=json',
+                   '_TRANSPORT=kernel', '+', '_SYSTEMD_UNIT=systemd-oomd.service'],
+                  stdout=subprocess.PIPE, start_new_session=True,
+              )
+              identity(journal.pid, 'journal_launch')
               manifest['source_sha'] = git('rev-parse', 'HEAD')
               manifest['source_tree'] = git('rev-parse', 'HEAD^{tree}')
               if manifest['source_sha'] != manifest['base_sha'] or git('status', '--porcelain'):
@@ -265,13 +378,20 @@ jobs:
                   bounded = BoundedWriter(output)
                   with gzip.GzipFile(filename='', mode='wb', fileobj=bounded, mtime=0) as compressed:
                       process = subprocess.Popen(command, cwd=source, stdout=subprocess.PIPE, start_new_session=True)
+                      identity(process.pid, 'proof_launch')
                       with selectors.DefaultSelector() as selector:
                           selector.register(process.stdout, selectors.EVENT_READ)
+                          selector.register(journal.stdout, selectors.EVENT_READ)
                           while True:
                               seconds = remaining()
+                              descendants(process.pid)
                               if json_path.exists() and json_path.stat().st_size > json_limit:
                                   raise Refusal('raw canonical JSON exceeds its bounded allowance')
-                              if not selector.select(timeout=min(1, seconds)):
+                              ready = selector.select(timeout=min(1, seconds))
+                              for key, _ in ready:
+                                  if key.fileobj is journal.stdout:
+                                      read_journal(selector)
+                              if not any(key.fileobj is process.stdout for key, _ in ready):
                                   continue
                               chunk = os.read(process.stdout.fileno(), 64 * 1024)
                               if not chunk:
@@ -338,6 +458,17 @@ jobs:
               })
           finally:
               cleanup_errors = stop_group(process)
+              cleanup_errors.extend(stop_group(journal))
+              if journal is not None:
+                  with selectors.DefaultSelector() as selector:
+                      selector.register(journal.stdout, selectors.EVENT_READ)
+                      while selector.get_map() and selector.select(timeout=0):
+                          try:
+                              read_journal(selector)
+                          except Refusal as error:
+                              cleanup_errors.append(str(error))
+                              break
+                  journal.stdout.close()
               if process is not None and process.stdout is not None:
                   try:
                       process.stdout.close()
@@ -390,6 +521,7 @@ jobs:
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/proof-stdout.gz
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/proof-json.gz
             ${{ env.DIAGNOSTIC_ROOT }}/artifact/manifest.json
+            ${{ env.DIAGNOSTIC_ROOT }}/artifact/executor-observations.jsonl
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
