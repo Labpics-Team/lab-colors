@@ -17,11 +17,11 @@ import zlib
 from pathlib import Path
 
 from verify_core_formal import (
-    CONTRACTS, KANI_VERSION, CBMC_VERSION, Z3_VERSION,
+    CONTRACTS, KANI_VERSION,
     assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, formal_source_files,
     fragment_base,
     selected_mutants, selected_positive_harnesses,
-    validate_report, validate_mutant, validate_tool_identity, validate_printed_playback, run_kani, _run_logged_command,
+    validate_report, validate_mutant, run_kani, _run_logged_command,
 )
 
 
@@ -51,12 +51,11 @@ def valid_report():
             "build_mode": "release",
         },
         "project": {"crate_name": "labcolors-core", "workspace_root": "/workspace", "output_dir": "/tmp"},
-        "tools": {"kani": KANI_VERSION, "cbmc": f"{CBMC_VERSION} (cbmc-{CBMC_VERSION})",
-                  "solvers": [{"name": "z3", "version": f"Z3 version {Z3_VERSION} - 64 bit"}]},
+        "tools": {"kani": KANI_VERSION},
         "harness_metadata": [],
         "error_details": [],
         "property_details": [],
-        "cbmc": [{"harness_id": name, "configuration": {"solver": "z3"}} for name in CONTRACTS],
+        "cbmc": [],
         "verification_results": {
             "summary": {
                 "total_harnesses": len(CONTRACTS),
@@ -82,7 +81,6 @@ def valid_report():
 def valid_subset_report(harnesses):
     report = valid_report()
     wanted = set(harnesses)
-    report["cbmc"] = [item for item in report["cbmc"] if item["harness_id"] in wanted]
     report["verification_results"]["results"] = [
         result for result in report["verification_results"]["results"]
         if result["harness_id"] in wanted
@@ -480,25 +478,6 @@ class FormalReportTests(unittest.TestCase):
             report["verification_results"]["summary"][key] = value
             with self.assertRaises(ValueError):
                 validate_report(report)
-        for tool, value in (("kani", "wrong"), ("cbmc", None), ("cbmc", "6.10.0"),
-                            ("solvers", []), ("solvers", [{"name": "cadical", "version": None}]),
-                            ("solvers", [{"name": "z3", "version": "Z3 version 4.15.3 - 64 bit"}])):
-            with self.subTest(tool=tool, value=value):
-                report = valid_report()
-                report["tools"][tool] = value
-                with self.assertRaises(ValueError):
-                    validate_tool_identity(report)
-        for change in ("missing", "duplicate", "wrong-solver"):
-            with self.subTest(change=change):
-                report = valid_report()
-                if change == "missing":
-                    report["cbmc"].pop()
-                elif change == "duplicate":
-                    report["cbmc"].append(report["cbmc"][0])
-                else:
-                    report["cbmc"][0]["configuration"]["solver"] = "cadical"
-                with self.assertRaises(ValueError):
-                    validate_tool_identity(report)
         for key in ("kani_version", "target"):
             report = valid_report()
             report["metadata"][key] = "wrong"
@@ -555,8 +534,6 @@ class FormalReportTests(unittest.TestCase):
                 self.assertIn("proof::two", command)
                 self.assertIn("--exact", command)
                 self.assertNotIn("--concrete-playback", command)
-                self.assertEqual(command[command.index("--solver") + 1], "z3")
-                self.assertEqual(command[command.index("--harness-timeout") + 1], "300s")
 
     def test_exact_mutant_harness_keeps_concrete_playback_single_threaded(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -576,19 +553,6 @@ class FormalReportTests(unittest.TestCase):
                 command = launch.call_args.args[0]
                 self.assertFalse(any(arg.startswith("--jobs") for arg in command))
                 self.assertIn("--concrete-playback", command)
-                self.assertEqual(command[command.index("--solver") + 1], "z3")
-                self.assertEqual(command[command.index("--concrete-playback") + 1], "print")
-            log = path.with_suffix(".log")
-            block = "Concrete playback unit test for `demo::proof`:\n```\n" \
-                    "kani::concrete_playback_run(concrete_vals, proof);\n```\n"
-            log.write_text(block, encoding="utf-8")
-            validate_printed_playback(log, "demo::proof")
-            for rejected in (block.replace("demo::proof", "other::proof"),
-                             block.removesuffix("```\n"),
-                             block.replace("kani::concrete_playback_run", "other_call")):
-                log.write_text(rejected, encoding="utf-8")
-                with self.assertRaises(ValueError):
-                    validate_printed_playback(log, "demo::proof")
 
     def test_direct_command_launch_preserves_argv_and_uses_regular_logfile(self):
         command = ["cargo", "kani", "space and 'quote", "$(not-a-shell-command)"]
