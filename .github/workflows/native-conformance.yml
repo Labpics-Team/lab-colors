@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      formal_total_paint_feasibility:
+        description: Sequential candidate retry SetAll then RevokeAll feasibility only
+        required: false
+        type: boolean
+        default: false
       formal_projection_feasibility:
         description: Separate standalone projected RevokeAll feasibility, not an A/B comparison
         required: false
@@ -45,7 +50,7 @@ jobs:
   # эти имена буквально.
   worker:
     name: Native conformance
-    if: ${{ github.event_name != 'workflow_dispatch' || !(inputs.formal_model_diagnostic || inputs.formal_projection_feasibility) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !(inputs.formal_model_diagnostic || inputs.formal_projection_feasibility || inputs.formal_total_paint_feasibility) }}
     permissions:
       contents: read
     uses: ./.github/workflows/native-conformance-worker.yml
@@ -56,13 +61,13 @@ jobs:
   # запуск одного proof, а не замена обязательного formal core (Kani).
   formal-model-diagnostic:
     name: Formal model diagnostic (isolated exact proof)
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.formal_model_diagnostic || inputs.formal_projection_feasibility) }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.formal_model_diagnostic || inputs.formal_projection_feasibility || inputs.formal_total_paint_feasibility) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     permissions:
       contents: read
     env:
-      FORMAL_SOURCE_SHA: fa8409d6e563ab560ccd037b41f5e8b6a7775539
+      FORMAL_SOURCE_SHA: ${{ inputs.formal_total_paint_feasibility && '7cca74e85cd125c53cdf26a15cd8d4e0f66d645d' || 'fa8409d6e563ab560ccd037b41f5e8b6a7775539' }}
       FORMAL_FAILED_RUN: '42140643837'
       RUST_TOOLCHAIN: 1.96.0
       CARGO_BUILD_JOBS: 2
@@ -70,7 +75,7 @@ jobs:
       WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - name: require one diagnostic protocol
-        if: ${{ inputs.formal_model_diagnostic && inputs.formal_projection_feasibility }}
+        if: ${{ (inputs.formal_model_diagnostic && inputs.formal_projection_feasibility) || (inputs.formal_total_paint_feasibility && (inputs.formal_model_diagnostic || inputs.formal_projection_feasibility)) }}
         shell: bash
         run: |
           echo 'Choose adaptive A/B or standalone feasibility, not both.' >&2
@@ -119,8 +124,11 @@ jobs:
         shell: bash
         env:
           FORMAL_PROJECTION_FEASIBILITY: ${{ inputs.formal_projection_feasibility }}
+          FORMAL_TOTAL_PAINT_FEASIBILITY: ${{ inputs.formal_total_paint_feasibility }}
         run: |
-          if [ "$FORMAL_PROJECTION_FEASIBILITY" = 'true' ]; then
+          if [ "$FORMAL_TOTAL_PAINT_FEASIBILITY" = 'true' ]; then
+            python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-total-run.py"
+          elif [ "$FORMAL_PROJECTION_FEASIBILITY" = 'true' ]; then
             python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-b-run.py"
           else
             python3 "$DIAGNOSTIC_ROOT/experiment/scripts/formal-ab-run.py"

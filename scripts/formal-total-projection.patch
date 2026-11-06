@@ -1,0 +1,176 @@
+--- a/crates/labcolors-core/src/program/attachment/handoff/proofs.rs
++++ b/crates/labcolors-core/src/program/attachment/handoff/proofs.rs
+@@ -95,16 +95,13 @@
+     Some(PointSinkStampV1::new(kani::any(), epoch))
+ }
+ 
+-fn any_paint() -> Option<EncodedPointPaintV1> {
+-    let bits: u64 = kani::any();
+-    if bits > 1.0_f64.to_bits() {
+-        return None;
+-    }
++fn any_paint() -> EncodedPointPaintV1 {
++    let bits = kani::any_where::<u64, _>(|bits| *bits <= 1.0_f64.to_bits());
+     let opacity = AdmittedOpacityV1::new(f64::from_bits(bits)).expect("canonical opacity admits");
+-    Some(EncodedPointPaintV1::from_value(
++    EncodedPointPaintV1::from_value(
+         PaintId::new(kani::any()),
+         EncodedPointPaintValueV1::from_admitted(Srgb8::new(kani::any()), opacity),
+-    ))
++    )
+ }
+ 
+ fn any_writer() -> Option<(
+@@ -122,7 +119,7 @@
+         Some(HandoffPublishedPointV1 {
+             output: OutputSlotIdV1::new(kani::any()),
+             sink_output: owned,
+-            paint: any_paint()?,
++            paint: any_paint(),
+         })
+     } else {
+         None
+@@ -179,11 +176,12 @@
+         return;
+     };
+     let revision: u64 = kani::any();
+-    let Some(paint) = any_paint() else {
+-        return;
+-    };
+-    let point = patch(HandoffPointSinkOutputIdV1::new(kani::any()), paint);
+-    let patches = [point, point];
++    let patches = if KIND == 0 {
++        let point = patch(HandoffPointSinkOutputIdV1::new(kani::any()), any_paint());
++        Some([point, point])
++    } else {
++        None
++    };
+     let length = usize::from(kani::any::<u8>() % 3);
+     let kind = KIND;
+     let intent = match kind {
+@@ -193,7 +191,7 @@
+                 Some(stamp) => stamp,
+                 None => return,
+             },
+-            patch: &patches[..length],
++            patch: &patches.as_ref().expect("set has patches")[..length],
+             presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+         },
+         1 => PointSinkIntentV1::RevokeAll {
+@@ -210,7 +208,10 @@
+     };
+     let expected_error = if query != old.stamp {
+         Some(HandoffPointSinkErrorV1::StampMismatch)
+-    } else if kind == 0 && (length != 1 || point.sink_output() != writer.owned_scope[0]) {
++    } else if kind == 0
++        && (length != 1
++            || patches.as_ref().expect("set has patches")[0].sink_output() != writer.owned_scope[0])
++    {
+         Some(HandoffPointSinkErrorV1::PatchScopeMismatch)
+     } else if kind > 1 && old.revision != Some(revision) {
+         Some(HandoffPointSinkErrorV1::RevisionMismatch)
+@@ -223,9 +224,9 @@
+             revision: Some(revision),
+             point: if kind == 0 {
+                 Some(HandoffPublishedPointV1 {
+-                    output: point.output(),
+-                    sink_output: point.sink_output(),
+-                    paint,
++                    output: patches.as_ref().expect("set has patches")[0].output(),
++                    sink_output: patches.as_ref().expect("set has patches")[0].sink_output(),
++                    paint: patches.as_ref().expect("set has patches")[0].paint(),
+                 })
+             } else {
+                 None
+@@ -411,16 +412,33 @@
+     let Some((mut writer, old)) = any_writer() else {
+         return;
+     };
+-    let Some(paint) = any_paint() else {
+-        return;
+-    };
+-    let points = [patch(writer.owned_scope[0], paint)];
+     let kind = KIND;
+     let revision = kani::any();
+-    let Some(intent) = valid_intent::<KIND>(&old, &points, revision) else {
+-        return;
+-    };
+-    let expected = expected_after(old, points[0], kind, revision);
++    let intent;
++    let expected;
++    let points;
++    if KIND == 0 {
++        points = [patch(writer.owned_scope[0], any_paint())];
++        let Some(valid) = valid_intent::<KIND>(&old, &points, revision) else {
++            return;
++        };
++        intent = valid;
++        expected = expected_after(old, points[0], kind, revision);
++    } else {
++        let Some(valid) = valid_intent::<KIND>(&old, &[], revision) else {
++            return;
++        };
++        intent = valid;
++        expected = if KIND == 1 {
++            ExpectedPointState {
++                stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
++                revision: Some(revision),
++                point: None,
++            }
++        } else {
++            old
++        };
++    }
+     let installed_revision = expected
+         .revision
+         .expect("valid exact intent has a revision");
+@@ -530,32 +548,31 @@
+         return;
+     };
+     let kind = KIND;
+-    let revision;
++    let revision = kani::any();
+     let intent;
+     let expected;
+     let points;
+-    if KIND == 1 {
+-        revision = kani::any();
+-        let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
+-            return;
+-        };
+-        intent = PointSinkIntentV1::RevokeAll { revision, stamp };
+-        expected = ExpectedPointState {
+-            stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
+-            revision: Some(revision),
+-            point: None,
+-        };
+-    } else {
+-        let Some(paint) = any_paint() else {
+-            return;
+-        };
+-        points = [patch(writer.owned_scope[0], paint)];
+-        revision = kani::any();
++    if KIND == 0 {
++        points = [patch(writer.owned_scope[0], any_paint())];
+         let Some(valid) = valid_intent::<KIND>(&old, &points, revision) else {
+             return;
+         };
+         intent = valid;
+         expected = expected_after(old, points[0], kind, revision);
++    } else {
++        let Some(valid) = valid_intent::<KIND>(&old, &[], revision) else {
++            return;
++        };
++        intent = valid;
++        expected = if KIND == 1 {
++            ExpectedPointState {
++                stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
++                revision: Some(revision),
++                point: None,
++            }
++        } else {
++            old
++        };
+     }
+     let installed_revision = expected
+         .revision

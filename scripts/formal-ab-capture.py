@@ -30,7 +30,7 @@ json_limit = artifact_limit
 manifest_limit = 16 * 1024
 deadline = time.monotonic() + 600
 compressed_size = int(os.environ.get('FORMAL_PRIOR_BYTES', '0'))
-harness = 'program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all'
+harness = os.environ.get('FORMAL_HARNESS', 'program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all')
 command = [sys.executable, os.environ['FORMAL_OWNER_ADAPTER'], str(source), str(json_path), harness]
 manifest = {
     'diagnostic_only': True,
@@ -45,7 +45,7 @@ manifest = {
     'command': command,
     'command_shell': shlex.join(command),
     'command_sha256': hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest(),
-    'observation_target': 'complete isolated RevokeAll property results versus original runner cancellation',
+    'observation_target': 'complete isolated property results for ' + harness,
     'stdout_capture': 'raw bytes streamed without a raw file; no filtering, no line or sample limit',
     'stderr_capture': 'merged byte-exact native regular output',
     'arm': os.environ['FORMAL_ARM'],
