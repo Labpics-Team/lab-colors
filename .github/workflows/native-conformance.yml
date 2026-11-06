@@ -52,7 +52,7 @@ jobs:
   formal-model-diagnostic:
     name: Formal model diagnostic (isolated exact proof)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.formal_model_diagnostic }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     permissions:
       contents: read
