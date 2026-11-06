@@ -221,7 +221,7 @@ jobs:
               }
               manifest['rustc_version'] = subprocess.check_output(['rustc', '--version'], text=True).strip()
               manifest['kani_version'] = subprocess.check_output(['cargo', 'kani', '--version'], text=True).strip()
-              if manifest['kani_version'] != 'cargo-kani 0.68.0':
+              if manifest['kani_version'].splitlines() != ['Kani Rust Verifier 0.68.0 (cargo plugin)', 'CBMC 6.11.0']:
                   raise Refusal('installed Kani version is not the frozen 0.68.0')
               deadline = time.monotonic() + 600
               with stdout_path.open('xb') as output:
