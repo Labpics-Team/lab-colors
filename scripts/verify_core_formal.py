@@ -17,6 +17,10 @@ from formal_contracts import CONTRACTS, MUTANTS, SOURCES
 
 ROOT = Path(__file__).resolve().parents[1]
 KANI_VERSION = "0.68.0"
+CBMC_VERSION = "6.11.0"
+Z3_VERSION = "4.15.4"
+Z3_URL = f"https://github.com/Z3Prover/z3/releases/download/z3-{Z3_VERSION}/z3-{Z3_VERSION}-x64-glibc-2.39.zip"
+Z3_SHA256 = "a41b690e89c343931471506cdc6d957b6044a200fd2d240cc017432afdff7d3e"
 CORE = ROOT / "crates/labcolors-core/src"
 FRAGMENT_SCHEMA = 1
 
@@ -109,12 +113,30 @@ def validate_result(result: dict) -> None:
         raise ValueError("missing or unexpected reachability witness")
 
 
+def validate_tool_identity(report: dict) -> None:
+    if (report["metadata"]["kani_version"] != KANI_VERSION
+            or report["metadata"]["target"] != "x86_64-unknown-linux-gnu"
+            or report["tools"]["kani"] != KANI_VERSION):
+        raise ValueError("unexpected Kani tool identity")
+    cbmc_version = report["tools"].get("cbmc")
+    if not isinstance(cbmc_version, str) or cbmc_version.split()[:1] != [CBMC_VERSION]:
+        raise ValueError("unexpected CBMC tool identity")
+    solvers = report["tools"].get("solvers", [])
+    if (not isinstance(solvers, list) or len(solvers) != 1 or solvers[0].get("name") != "z3"
+            or not isinstance(solvers[0].get("version"), str)
+            or not solvers[0]["version"].startswith(f"Z3 version {Z3_VERSION} - ")):
+        raise ValueError("unexpected Z3 tool identity")
+    harnesses = {result["harness_id"] for result in report["verification_results"]["results"]}
+    cbmc = report["cbmc"]
+    if (len(cbmc) != len(harnesses)
+            or {item["harness_id"] for item in cbmc} != harnesses
+            or any(item["configuration"]["solver"] != "z3" for item in cbmc)):
+        raise ValueError("harness did not use the required SMT backend")
+
+
 def validate_report(report: dict) -> None:
     """Неполный, пустой, недостижимый или чужой результат не означает успех."""
-    if report["metadata"]["kani_version"] != KANI_VERSION:
-        raise ValueError("unexpected Kani version")
-    if report["metadata"]["target"] != "x86_64-unknown-linux-gnu":
-        raise ValueError("unexpected verification target")
+    validate_tool_identity(report)
     verification = report["verification_results"]
     summary = verification["summary"]
     count = len(CONTRACTS)
@@ -131,10 +153,7 @@ def validate_report(report: dict) -> None:
 
 
 def validate_positive_subset(report: dict, harnesses: tuple[str, ...]) -> None:
-    if report["metadata"]["kani_version"] != KANI_VERSION:
-        raise ValueError("unexpected Kani version")
-    if report["metadata"]["target"] != "x86_64-unknown-linux-gnu":
-        raise ValueError("unexpected verification target")
+    validate_tool_identity(report)
     verification = report["verification_results"]
     summary = verification["summary"]
     count = len(harnesses)
@@ -173,6 +192,32 @@ def validate_mutant(report: dict, returncode: int, mutant: tuple) -> None:
         if not (check["status"] == "Failure" and check["category"] == "assertion"
                 and check["description"] in allowed_assertions):
             raise ValueError("mutant failed outside its declared semantic properties")
+
+
+def validate_printed_playback(log: Path, harness: str) -> None:
+    """Подтверждает штатную генерацию witness; выполнение теста здесь не заявляется."""
+    heading = f"Concrete playback unit test for `{harness}`:"
+    waiting_for_fence = False
+    in_block = False
+    has_playback_call = False
+    with log.open(encoding="utf-8", errors="replace") as source:
+        for line in source:
+            text = line.rstrip("\r\n")
+            if text == heading:
+                waiting_for_fence = True
+                in_block = False
+                has_playback_call = False
+            elif waiting_for_fence:
+                waiting_for_fence = False
+                in_block = text == "```"
+            elif in_block:
+                if text == "```":
+                    if has_playback_call:
+                        return
+                    in_block = False
+                elif "kani::concrete_playback_run(" in text:
+                    has_playback_call = True
+    raise ValueError("mutant did not produce a complete concrete playback witness")
 
 
 def _open_regular_log(log: Path):
@@ -314,7 +359,7 @@ def run_kani(
     if harness is not None and positive_harnesses is not None:
         raise ValueError("mutant and positive harness filters are mutually exclusive")
     command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--output-format", "regular",
-               "-Z", "unstable-options", "--harness-timeout", "300s", "--export-json", str(output)]
+               "-Z", "unstable-options", "--solver", "z3", "--harness-timeout", "300s", "--export-json", str(output)]
     if harness is not None:
         command.extend(["--harness", harness, "--exact", "-Z", "concrete-playback", "--concrete-playback", "print"])
     else:
@@ -597,7 +642,9 @@ def run_mutant_phase(output: Path, index: int, count: int) -> None:
         try:
             source.write_bytes(original.replace(before.encode(), after.encode()))
             report, code = run_kani(output_path, harness=harness)
+            validate_tool_identity(report)
             validate_mutant(report, code, mutant)
+            validate_printed_playback(output_path.with_suffix(".log"), harness)
         finally:
             source.write_bytes(original)
         negative_results[name] = digest(output_path)
@@ -790,6 +837,8 @@ def assemble_fragments(output: Path, input_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kani-version", action="store_true")
+    parser.add_argument("--z3-url", action="store_true")
+    parser.add_argument("--z3-sha256", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--phase", choices=("all", "positive", "mutants", "assemble"), default="all")
     parser.add_argument("--shard-index", type=int, default=0)
@@ -798,6 +847,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.kani_version:
         print(KANI_VERSION)
+        return
+    if args.z3_url:
+        print(Z3_URL)
+        return
+    if args.z3_sha256:
+        print(Z3_SHA256)
         return
     if args.output_dir is None:
         parser.error("--output-dir is required")

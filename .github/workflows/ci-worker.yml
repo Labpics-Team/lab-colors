@@ -71,6 +71,21 @@ jobs:
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
+      - name: install pinned Z3
+        run: |
+          set -euo pipefail
+          z3_url="$(python3 scripts/verify_core_formal.py --z3-url)"
+          z3_sha256="$(python3 scripts/verify_core_formal.py --z3-sha256)"
+          z3_name="${z3_url##*/}"
+          z3_archive="$RUNNER_TEMP/z3-$GITHUB_JOB.zip"
+          z3_root="$RUNNER_TEMP/z3-$GITHUB_JOB"
+          curl --fail --location --silent --show-error "$z3_url" --output "$z3_archive"
+          printf '%s  %s\n' "$z3_sha256" "$z3_archive" | sha256sum --check --strict
+          unzip -q "$z3_archive" -d "$z3_root"
+          z3_bin="$z3_root/${z3_name%.zip}/bin"
+          test -x "$z3_bin/z3"
+          "$z3_bin/z3" --version
+          echo "$z3_bin" >> "$GITHUB_PATH"
       - name: verify assigned positive formal harnesses
         run: |
           python3 scripts/verify_core_formal.py \
@@ -121,6 +136,21 @@ jobs:
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
+      - name: install pinned Z3
+        run: |
+          set -euo pipefail
+          z3_url="$(python3 scripts/verify_core_formal.py --z3-url)"
+          z3_sha256="$(python3 scripts/verify_core_formal.py --z3-sha256)"
+          z3_name="${z3_url##*/}"
+          z3_archive="$RUNNER_TEMP/z3-$GITHUB_JOB.zip"
+          z3_root="$RUNNER_TEMP/z3-$GITHUB_JOB"
+          curl --fail --location --silent --show-error "$z3_url" --output "$z3_archive"
+          printf '%s  %s\n' "$z3_sha256" "$z3_archive" | sha256sum --check --strict
+          unzip -q "$z3_archive" -d "$z3_root"
+          z3_bin="$z3_root/${z3_name%.zip}/bin"
+          test -x "$z3_bin/z3"
+          "$z3_bin/z3" --version
+          echo "$z3_bin" >> "$GITHUB_PATH"
       - name: reject assigned semantic mutants
         run: |
           python3 scripts/verify_core_formal.py \

@@ -4,7 +4,7 @@
  "files": {
   ".github/workflows/arb.yml": "6da125a5c6cd894a067bd995ae4fb011a45c060b",
   ".github/workflows/ci-gate.yml": "31b2c17ea287efbb219306abe8317fc48e8125a4",
-  ".github/workflows/ci-worker.yml": "5e62d967bd47054fcd3ff5475a2f239d9533b68a",
+  ".github/workflows/ci-worker.yml": "98fa247232086bfd3ba8a5e14b0af73d229640c4",
   ".github/workflows/ci.yml": "08479546b95db37492c384729bc2e0a844238461",
   ".github/workflows/code-admission-public.yml": "0aaa5efb36f40a77a1a5fec2b75238c55f4e2890",
   ".github/workflows/dual-proof.yml": "17a7d914737a29420be3e39342ad8a47e7eb57d9",
@@ -626,7 +626,7 @@
   "scripts/test_swift_surface.mjs": "ef6d52ecf9e74bec8dab126b2192405604c7dcca",
   "scripts/test_transport_distribution.mjs": "483eff5cdcdedd9507ef7ed6d1444e8ee6ffb2f1",
   "scripts/test_verify_clean_set_receipt.py": "54b4fbe7c5b4edfc2c91f3f66c872aa4640c2a45",
-  "scripts/test_verify_core_formal.py": "858d103283eb0d4f6a90cef70b10cb89646d30c9",
+  "scripts/test_verify_core_formal.py": "7f24f3a16d0d2c14e5ba842a7fd40e4c24920374",
   "scripts/test_wcag22_source_binding.py": "381b2c5685cb4022367f0465d02b044f100ea7f8",
   "scripts/transport-distribution.mjs": "0ffdd393185b048db61bc56bfe1ae64c2408ee0d",
   "scripts/verify-package-release.mjs": "82182eaa21d6085250563f1f00bf6362d4d4372e",
@@ -634,13 +634,13 @@
   "scripts/verify-published-package.mjs": "3bd1be49ab18be509e24ed5cc13433281c197fd1",
   "scripts/verify-swift-surface.mjs": "5218e5478fe3920c635239cbacdf4c4ce65f4a61",
   "scripts/verify_clean_set_receipt.py": "5424963ff5a57016cb0a7db9e223621725b07d49",
-  "scripts/verify_core_formal.py": "eef65db02f22bf054f7ca76f255e802b14a0d693",
+  "scripts/verify_core_formal.py": "b57ab2c5d85e95387c57c898602f442dca24f565",
   "scripts/verify_point_support_surplus.py": "cc7f40b635de6d6655600cbd740181ab521c92d2",
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "cfa8532e0a50cf62e13c6ee9e11c36db6221432fc17b39a8e2b005bf95095da1",
+ "record_sha256": "d3130a32e8bda3a276a53a260c79c676cc0f26969d7167b32e6ea306bd7f6004",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
