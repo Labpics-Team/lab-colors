@@ -1,8 +1,15 @@
 name: package worker
 
 # Проверка пакета и обоих consumer runtime использует одни локальные байты.
-# Только выпуск версии передаёт их отдельному заданию с правом публикации.
+# Выпуск и явная consumer-квалификация передают только проверенный архив.
 on:
+  workflow_dispatch:
+    inputs:
+      export-package:
+        description: Передать проверенный архив реальному потребителю на один день
+        type: boolean
+        required: false
+        default: false
   workflow_call:
     inputs:
       program-benchmark:
@@ -510,7 +517,7 @@ jobs:
           compression-level: 9
           retention-days: 1
       - name: upload verified npm tarball and manifest
-        if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
+        if: (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')) || (github.event_name == 'workflow_dispatch' && inputs.export-package)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
