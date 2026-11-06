@@ -119,7 +119,6 @@ jobs:
           artifact = root / 'artifact'
           artifact.mkdir()
           stdout_path = artifact / 'ssa-stdout.gz'
-          raw_limit = 512 * 1024 * 1024
           artifact_limit = 16 * 1024 * 1024
           # Reserve room for the manifest and the upload-artifact ZIP envelope.
           gzip_limit = artifact_limit - 64 * 1024
@@ -143,10 +142,9 @@ jobs:
               'command_shell': shlex.join(command),
               'command_sha256': hashlib.sha256(json.dumps(command, separators=(',', ':')).encode()).hexdigest(),
               'observation_target': 'valid_intent::<1> -> prepare -> SetAll -> Verified guards and discriminant',
-              'stdout_capture': 'raw bytes, no filtering, no line or sample limit',
+              'stdout_capture': 'raw bytes streamed without a raw file; no filtering, no line or sample limit',
               'stderr_capture': 'runner log only',
               'limits': {
-                  'raw_stdout_bytes': raw_limit,
                   'gzip_bytes': gzip_limit,
                   'manifest_bytes': manifest_limit,
                   'artifact_bytes': artifact_limit,
@@ -238,8 +236,6 @@ jobs:
                               chunk = os.read(process.stdout.fileno(), 64 * 1024)
                               if not chunk:
                                   break
-                              if raw_size + len(chunk) > raw_limit:
-                                  raise Refusal('raw stdout exceeds 512 MiB')
                               raw_size += len(chunk)
                               raw_digest.update(chunk)
                               compressed.write(chunk)
