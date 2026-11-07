@@ -583,6 +583,67 @@ impl ProgramScenarioV1 {
     }
 }
 
+/// Заимствованная матрица наблюдений: строки сценариев и RGB8 в порядке входов Program.
+///
+/// Создание проверяет форму без выделения памяти. Session копирует принятые
+/// значения в собственное хранилище; ссылки не сохраняются после update.
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramObservationV1<'a> {
+    ids: &'a [u32],
+    rgb8: &'a [u8],
+    surface_count: usize,
+}
+
+/// Некорректная форма заимствованной матрицы наблюдений.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramObservationShapeErrorV1;
+
+impl<'a> ProgramObservationV1<'a> {
+    /// Принимает ровно ids.len() × surface_count × 3 байта, без копирования.
+    ///
+    /// # Errors
+    /// Возвращает отказ при переполнении размера либо несовпадении длины.
+    /// Непустота, уникальность ID и схема проверяются обычным update.
+    pub fn from_rgb8(
+        ids: &'a [u32],
+        rgb8: &'a [u8],
+        surface_count: usize,
+    ) -> Result<Self, ProgramObservationShapeErrorV1> {
+        let expected = surface_count
+            .checked_mul(3)
+            .and_then(|row| ids.len().checked_mul(row))
+            .ok_or(ProgramObservationShapeErrorV1)?;
+        if rgb8.len() != expected {
+            return Err(ProgramObservationShapeErrorV1);
+        }
+        Ok(Self {
+            ids,
+            rgb8,
+            surface_count,
+        })
+    }
+}
+
+impl SchemaOrderedScenarioSourceV1 for ProgramObservationV1<'_> {
+    fn scenario_count(&self) -> usize {
+        self.ids.len()
+    }
+    fn scenario_id(&self, index: usize) -> ScenarioId {
+        ScenarioId::new(self.ids[index])
+    }
+    fn value_count(&self, _index: usize) -> usize {
+        self.surface_count
+    }
+    fn value(&self, row: usize, column: usize) -> Srgb8 {
+        let offset = (row * self.surface_count + column) * 3;
+        Srgb8::new([
+            self.rgb8[offset],
+            self.rgb8[offset + 1],
+            self.rgb8[offset + 2],
+        ])
+    }
+}
+
 /// Lifecycle-класс одного опубликованного snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -625,7 +686,25 @@ impl ProgramPaintOutputV1 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
     state: ProgramSnapshotStateV1,
-    outputs: Vec<ProgramPaintOutputV1>,
+    outputs: ProgramSnapshotOutputsV1,
+}
+
+// Point attachment всегда возвращает один output. Он принадлежит самому
+// snapshot; только общий многоцветный результат требует отдельного буфера.
+#[derive(Debug, Clone, PartialEq)]
+enum ProgramSnapshotOutputsV1 {
+    One(ProgramPaintOutputV1),
+    Many(Vec<ProgramPaintOutputV1>),
+}
+
+fn reserve_snapshot_outputs(
+    storage: &mut Vec<ProgramPaintOutputV1>,
+    count: usize,
+) -> Result<(), ()> {
+    if count > 1 {
+        storage.try_reserve_exact(count).map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 impl ProgramSnapshotV1 {
@@ -636,7 +715,10 @@ impl ProgramSnapshotV1 {
 
     #[must_use]
     pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
-        &self.outputs
+        match &self.outputs {
+            ProgramSnapshotOutputsV1::One(output) => std::slice::from_ref(output),
+            ProgramSnapshotOutputsV1::Many(outputs) => outputs,
+        }
     }
 }
 
@@ -1269,8 +1351,6 @@ where
     H: ProgramPointSinkHostV1,
 {
     inner: Option<ProgramInnerAttachmentV1<H>>,
-    output_count: usize,
-    outputs_scratch: Vec<ProgramPaintOutputV1>,
     current_render: Option<ProgramAttachedRenderV1>,
 }
 
@@ -1302,11 +1382,6 @@ impl CompiledProgramV1 {
                 crate::program::OccurrenceIdV1::new(occurrence),
             )
             .map_err(map_attachment_binding_error)?;
-        let mut outputs_scratch = Vec::new();
-        outputs_scratch
-            .try_reserve_exact(output_count)
-            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
-
         let sink_output_id =
             crate::program::attachment::handoff::HandoffPointSinkOutputIdV1::new(sink_output);
         let sink = crate::program::attachment::handoff::handoff_point_sink(
@@ -1357,8 +1432,6 @@ impl CompiledProgramV1 {
             })?;
         Ok(ProgramAttachmentV1 {
             inner: Some(inner),
-            output_count,
-            outputs_scratch,
             current_render: None,
         })
     }
@@ -1388,19 +1461,21 @@ where
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
-        let mut core_scenarios = Vec::new();
-        core_scenarios
-            .try_reserve_exact(scenarios.len())
-            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
-        for scenario in scenarios {
-            core_scenarios.push(crate::program::ScenarioV1::new(
-                scenario.id,
-                &scenario.surfaces,
-            ));
-        }
-        self.apply(crate::program::UpdateV1::Observed {
+        self.apply(crate::program::UpdateV1::ObservedSource {
             revision,
-            scenarios: &core_scenarios,
+            source: &ProgramScenarioSourceV1(scenarios),
+        })
+    }
+
+    /// Применяет заимствованную RGB8-матрицу через ту же атомарную sink-транзакцию.
+    pub fn update_observed_view(
+        &mut self,
+        revision: u64,
+        observation: ProgramObservationV1<'_>,
+    ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
+        self.apply(crate::program::UpdateV1::ObservedSource {
+            revision,
+            source: &observation,
         })
     }
 
@@ -1478,20 +1553,15 @@ where
     ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
         let Self {
             inner,
-            output_count,
-            outputs_scratch,
             current_render,
         } = self;
-        outputs_scratch
-            .try_reserve_exact(*output_count)
-            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         let attachment = inner
             .as_mut()
             .ok_or(ProgramAttachmentUpdateErrorV1::AlreadyDisposed)?;
         let commit = attachment
             .update(update)
             .map_err(map_attachment_update_error)?;
-        let snapshot = attachment_snapshot_from_commit(commit, outputs_scratch)?;
+        let snapshot = attachment_snapshot_from_commit(commit)?;
         *current_render = snapshot.render();
         Ok(snapshot)
     }
@@ -1547,9 +1617,9 @@ fn attachment_snapshot_from_commit(
         '_,
         crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
     >,
-    outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
 ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
-    let snapshot = snapshot_from_evidence_into(commit.evidence(), outputs_scratch)
+    // attach допускает ровно один output; snapshot хранит его inline.
+    let snapshot = snapshot_from_evidence_into(commit.evidence(), &mut Vec::new())
         .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
     let render = commit.render_outputs().next().map(|render| {
         let mut terminal_composite = None;
@@ -1710,13 +1780,28 @@ impl ProgramSessionV1 {
         revision: u64,
         scenarios: &[ProgramScenarioV1],
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
-        self.outputs_scratch
-            .try_reserve_exact(self.owner.output_slots().count())
+        self.update_observed_source(revision, &ProgramScenarioSourceV1(scenarios))
+    }
+
+    /// Применяет заимствованную RGB8-матрицу без временных массивов сценариев.
+    pub fn update_observed_view(
+        &mut self,
+        revision: u64,
+        observation: ProgramObservationV1<'_>,
+    ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        self.update_observed_source(revision, &observation)
+    }
+
+    fn update_observed_source(
+        &mut self,
+        revision: u64,
+        source: &dyn SchemaOrderedScenarioSourceV1,
+    ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
-        let source = ProgramScenarioSourceV1(scenarios);
         let transition = self
             .owner
-            .prepare_schema_ordered_update(&mut self.session, revision, &source)
+            .prepare_schema_ordered_update(&mut self.session, revision, source)
             .map_err(map_runtime_update_error)?;
         let evidence = transition.commit();
         snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
@@ -1729,8 +1814,7 @@ impl ProgramSessionV1 {
         revision: u64,
         reason_id: u32,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
-        self.outputs_scratch
-            .try_reserve_exact(self.owner.output_slots().count())
+        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let transition = self
             .owner
@@ -1798,18 +1882,27 @@ fn snapshot_from_evidence_into(
             CertificateV1::Conflict(_) => None,
         })
     {
-        outputs_scratch
-            .try_reserve_exact(verified.outputs().len())
-            .map_err(|_| ())?;
-        outputs_scratch.extend(verified.outputs().map(|output| ProgramPaintOutputV1 {
+        let mut outputs = verified.outputs().map(|output| ProgramPaintOutputV1 {
             slot: output.output_slot().value(),
             source: output.source(),
             opacity: output.opacity(),
-        }));
+        });
+        if outputs.len() == 1 {
+            if let Some(output) = outputs.next() {
+                return Ok(ProgramSnapshotV1 {
+                    state,
+                    outputs: ProgramSnapshotOutputsV1::One(output),
+                });
+            }
+        }
+        outputs_scratch
+            .try_reserve_exact(outputs.len())
+            .map_err(|_| ())?;
+        outputs_scratch.extend(outputs);
     }
     Ok(ProgramSnapshotV1 {
         state,
-        outputs: std::mem::take(outputs_scratch),
+        outputs: ProgramSnapshotOutputsV1::Many(std::mem::take(outputs_scratch)),
     })
 }
 
