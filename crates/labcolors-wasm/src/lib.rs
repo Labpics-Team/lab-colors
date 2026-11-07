@@ -125,15 +125,18 @@ extern "C" {
 // Приватные индексы JS: runtime — 0..7 и 15, attachment — 8..14.
 // Сопоставления, таблица, граница message и browser-тест меняются вместе.
 #[wasm_bindgen(inline_js = r#"
+const ProgramError = Error;
+const programDefineProperty = Object.defineProperty;
+
 export function programError(message, code, operation) {
-  try {
-    const error = new Error(message);
-    error.code = code;
-    error.operation = operation;
-    return error;
-  } catch {
-    return new Error("Program error projection failed");
-  }
+  const error = new ProgramError(message);
+  programDefineProperty(error, "code", {
+    __proto__: null, value: code, writable: true, enumerable: true, configurable: true,
+  });
+  programDefineProperty(error, "operation", {
+    __proto__: null, value: operation, writable: true, enumerable: true, configurable: true,
+  });
+  return error;
 }
 
 const programFailureCodes = [

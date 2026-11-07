@@ -89,6 +89,51 @@ test("projection ignores hostile inherited setters and restores prototypes", () 
     assert.equal(assessment.calls, 0);
     checkAssessment(assessment.result, "#000000", "#FFFFFF", criterion, "pass");
   }
+
+  const traps = ["get", "set", "code", "operation"].map((key) => ({
+    key, previous: Object.getOwnPropertyDescriptor(Object.prototype, key),
+  }));
+  let installed = 0, calls = 0;
+  let manifestResult, assessmentResult, colorError, wireError, unexpectedRuntime;
+  const trap = () => { calls += 1; throw new Error("inherited projection metadata accessor"); };
+  try {
+    for (const { key } of traps) {
+      const descriptor = { __proto__: null, configurable: true };
+      if (key === "get" || key === "set") descriptor.get = trap;
+      else descriptor.set = trap;
+      Object.defineProperty(Object.prototype, key, descriptor);
+      installed += 1;
+    }
+    manifestResult = api.numericalCapabilityManifest();
+    assessmentResult = api.evaluateWcag22("#000000", "#FFFFFF", criteria[0]);
+    try { api.evaluateWcag22("invalid", "#FFFFFF", criteria[0]); }
+    catch (error) { colorError = error; }
+    try { unexpectedRuntime = api.compileProgramWire(new Uint8Array(), 1); }
+    catch (error) { wireError = error; }
+  } finally {
+    for (let index = installed - 1; index >= 0; index -= 1) {
+      const { key, previous } = traps[index];
+      if (previous) Object.defineProperty(Object.prototype, key, { __proto__: null, ...previous });
+      else delete Object.prototype[key];
+    }
+    unexpectedRuntime?.free?.();
+  }
+  assert.equal(calls, 0);
+  checkManifest(manifestResult);
+  checkAssessment(assessmentResult, "#000000", "#FFFFFF", criteria[0], "pass");
+  assert.equal(api.isBindingError(colorError), true);
+  assert.equal(api.isProgramError(wireError), true);
+  for (const [error, code, operation] of [
+    [colorError, "invalid_color", "evaluateWcag22"],
+    [wireError, "program_wire", "compileProgramWire"],
+  ]) {
+    assert.equal(Object.getPrototypeOf(error), Error.prototype);
+    for (const [key, value] of [["code", code], ["operation", operation]]) {
+      assert.deepEqual(Object.getOwnPropertyDescriptor(error, key), {
+        value, writable: true, enumerable: true, configurable: true,
+      });
+    }
+  }
 });
 
 test("all nested manifest and WCAG containers belong to each caller result", () => {
