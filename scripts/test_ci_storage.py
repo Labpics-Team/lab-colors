@@ -161,7 +161,7 @@ class CiStorageTests(unittest.TestCase):
             ("node scripts/test-program-runtime-browser.mjs", browser_environment, ""),
             ("node scripts/verify-package-release.mjs --package-smoke", "        env:\n",
              "        env:\n" + browser_environment),
-            ("run: bash labui-consumer/.github/scripts/colors-same-job.sh", "        env:\n",
+            ("bash labui-consumer/.github/scripts/colors-same-job.sh", "        env:\n",
              "        env:\n" + browser_environment),
         ):
             with self.subTest(chrome_consumer=command):

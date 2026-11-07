@@ -510,7 +510,11 @@ jobs:
           CORE_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
           CORE_MANIFEST_SHA256: ${{ steps.consumer-package.outputs.manifest_sha256 }}
           CORE_VERIFIED_RELEASE_OUTCOME: ${{ steps.verified-release.outcome }}
-        run: bash labui-consumer/.github/scripts/colors-same-job.sh
+        run: |
+          set -euo pipefail
+          bash labui-consumer/.github/scripts/colors-same-job.sh
+          test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$CORE_TARBALL_SHA256"
+          test "$(sha256sum --binary -- "$VERIFIED_MANIFEST" | cut --delimiter=' ' --fields=1)" = "$CORE_MANIFEST_SHA256"
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
