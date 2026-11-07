@@ -482,3 +482,6 @@ mod shared {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) use std::sync::{Arc as Shared, Weak};
 }
+
+#[cfg(test)]
+mod program_allocation_tests;

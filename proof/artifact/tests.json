@@ -962,7 +962,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "f676b43e1472fee411c8c2b37d4a0f1040a8b6e7dc38230164716b6a94e7e8a7",
+ "record_sha256": "906b4538f1b4370ea7e1ae2d6958d6128f659db05808f916ac7467bffc65ff9c",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1069,6 +1069,7 @@
    "appearance_replay_tests::replay_preflights_capacity_and_returns_only_its_appended_range: test",
    "appearance_replay_tests::replay_rejects_foreign_evaluation_before_touching_the_replay_buffer: test",
    "assignable_primary_anchor_survives_secondary_repair: test",
+   "attachment_counts_its_owned_callback_rgb_separately_from_the_result: test",
    "authority::clean_convention::tests::accepted_source_does_not_admit_rejected_terminal_composite: test",
    "authority::clean_convention::tests::admission_is_allocation_free_and_does_not_change_the_attachment: test",
    "authority::clean_convention::tests::current_revision_exact_cas_and_independent_authority_lanes_are_preserved: test",
@@ -1287,6 +1288,7 @@
    "crates/labcolors-core/src/lib.rs - NoRawFloatSrgbSerializer (line 464): test",
    "crates/labcolors-core/src/lib.rs - NoRawFloatSrgbSerializer (line 468): test",
    "crates/labcolors-core/src/lib.rs - ReadmeDoctests (line 295): test",
+   "crates/labcolors-core/src/lib.rs - ReadmeDoctests (line 383): test",
    "crates/labcolors-core/src/solve.rs - solve::Gamut (line 85): test",
    "crates/labcolors-core/src/solve.rs - solve::Gamut (line 92): test",
    "crates/labcolors-core/src/solve.rs - solve::Gamut (line 96): test",
@@ -1630,6 +1632,7 @@
    "observation_tests::schema_ordered_value_reads_scale_linearly_with_width_and_n_log_n_with_count: test",
    "observation_tests::stream_precedes_full_scenario_admission_which_precedes_revision_checks: test",
    "observation_tests::two_streams_have_independent_watermarks_and_same_physics: test",
+   "observed_native_call_has_no_per_scenario_allocations: test",
    "oklab_white_is_l1_c0: test",
    "oklch_core_vectors_fixture_is_fresh: test",
    "oklch_primary_hues: test",
@@ -1770,6 +1773,13 @@
    "program::wire::tests::joint_selection_on_wire_is_refused: test",
    "program::wire::tests::non_finite_candidate_opacity_is_a_declaration_refusal: test",
    "program::wire::tests::semantic_defects_belong_to_the_compiler_layer: test",
+   "program_allocation_tests::attachment_snapshot_is_inline_and_independent: test",
+   "program_allocation_tests::borrowed_and_owned_inputs_share_admission_and_lifecycle: test",
+   "program_allocation_tests::borrowed_resource_failure_does_not_publish_or_consume_the_revision: test",
+   "program_allocation_tests::multiple_outputs_use_one_exact_owned_buffer_without_reallocation: test",
+   "program_allocation_tests::observation_shape_is_checked_without_allocating_or_reading_missing_values: test",
+   "program_allocation_tests::ready_failed_recovery_and_unknown_keep_the_warmed_allocation_budget: test",
+   "program_allocation_tests::warmed_single_output_update_needs_no_heap: test",
    "program_api_tests::admitted_finite_paint_value_round_trips_source_and_unit_opacity: test",
    "program_api_tests::every_nonempty_finite_paint_domain_is_admitted: test",
    "program_api_tests::finite_paint_domain_is_nonempty_before_it_can_enter_a_draft: test",
@@ -2285,7 +2295,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1319,
+  "enabled_count": 1329,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",
