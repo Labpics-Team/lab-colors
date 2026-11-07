@@ -60,8 +60,24 @@ PR, версии инструментов, SHA-256 обоих WASM, исходн
 размером 8, 64 и 256. Сравнивайте его отдельно: это проверка времени и результатов
 общего пути, а равенство канонических байтов защищают дифференциальные тесты ядра.
 
-Для локального исследования добавьте `--profile` к ручному запуску скрипта сравнения.
-Он отдельно снимет CPU-профили обеих версий для `repeated/1024`, `distinct/1024`
+Для локального исследования соберите обе версии в отдельных checkout
+`../baseline` и `../candidate`, затем запустите
+`scripts/compare-program-performance.py` из корня репозитория:
+
+```sh
+python3 scripts/compare-program-performance.py \
+  --harness packages/colors/bench/program.mjs \
+  --baseline ../baseline/packages/colors \
+  --candidate ../candidate/packages/colors \
+  --baseline-revision "$(git -C ../baseline rev-parse HEAD)" \
+  --candidate-revision "$(git -C ../candidate rev-parse HEAD)" \
+  --head-revision "$(git rev-parse HEAD)" \
+  --output ../benchmark-results --profile
+```
+
+Ревизии — полные 40-символьные SHA в нижнем регистре; `git rev-parse HEAD`
+возвращает их для указанных checkout. Каталог `profiles` создаётся внутри `--output`.
+Скрипт отдельно снимет CPU-профили обеих версий для `repeated/1024`, `distinct/1024`
 и `ring/256`. Используется тот же сценарий со всеми проверками
 результатов. Эти запуски не входят в `summary.json` и отношения скоростей:
 профилировщик влияет на время исполнения. Профиль охватывает весь процесс,

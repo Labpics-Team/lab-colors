@@ -59,24 +59,34 @@ def run_adapter(*arguments, environment=None):
 class FormalOutputTests(unittest.TestCase):
     def test_large_report_publishes_artifact_id_instead_of_raw_data(self):
         rng = random.Random(42356199601)
-        report = json.dumps({"trace": rng.randbytes(200_000).hex()}, indent=2).encode() + b"\n"
+        report = json.dumps({"trace": rng.randbytes(2_500_000).hex()}, indent=2).encode() + b"\n"
+        smaller = json.dumps({"trace": rng.randbytes(1_200_000).hex()}).encode() + b"\n"
+        for kind, reports in [
+            ("mutants", {"negative-example-2.json": report}),
+            ("positive", {"positive-2.json": report}),
+            ("mutants", {"negative-first.json": smaller, "negative-second.json": smaller}),
+        ]:
+            with self.subTest(kind=kind, reports=len(reports)):
+                self.assert_artifact_roundtrip(kind, reports)
+
+    def assert_artifact_roundtrip(self, case_kind, reports):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "producer"
-            original = report_part(source, "mutants", 2, 5, {"negative-example-2.json": report})
+            original = report_part(source, case_kind, 2, 5, reports)
             artifacts = root / "artifacts"
-            staged = artifacts / "core-formal-mutants-2-2"
+            staged = artifacts / f"core-formal-{case_kind}-2-2"
             prepared = run_adapter("prepare", source, "--output-dir", staged)
             self.assertEqual(prepared.returncode, 0, prepared.stderr)
             output = root / "job-output"
             published = run_adapter("publish", staged, environment={"GITHUB_OUTPUT": str(output),
                                     "CI_FORMAL_ARTIFACT_ID": "13469449244"})
             self.assertEqual(published.returncode, 0, published.stderr)
-            self.assertEqual(output.read_text(), "mutants_2=13469449244\n")
+            self.assertEqual(output.read_text(), f"{case_kind}_2=13469449244\n")
             all_files = dict(original)
             for kind in ("positive", "mutants"):
                 for index in range(5):
-                    if (kind, index) != ("mutants", 2):
+                    if (kind, index) != (case_kind, 2):
                         _, files = artifact_part(artifacts, kind, index, 5)
                         all_files.update(files)
             ids = root / "ids-output"
@@ -90,8 +100,9 @@ class FormalOutputTests(unittest.TestCase):
             restored = run_adapter("restore", destination, "--input-dir", artifacts, "--parts", 10)
             self.assertEqual(restored.returncode, 0, restored.stderr)
             self.assertEqual({name: (destination / name).read_bytes() for name in all_files}, all_files)
-            self.assertEqual(hashlib.sha256((destination / "negative-example-2.json").read_bytes()).hexdigest(),
-                             json.loads(original["fragment-mutants-2.json"])["negative_sha256"]["example-2"])
+            for name in reports:
+                self.assertEqual(hashlib.sha256((destination / name).read_bytes()).hexdigest(),
+                                 hashlib.sha256(original[name]).hexdigest())
             shutil.rmtree(artifacts / "core-formal-positive-4-1")
             incomplete = root / "incomplete"
             failed = run_adapter("restore", incomplete, "--input-dir", artifacts, "--parts", 10)
@@ -121,14 +132,21 @@ class FormalOutputTests(unittest.TestCase):
                      {"kind": "positive", "shard_index": 0, "shard_count": False},
                      {"kind": "positive", "shard_index": 1, "shard_count": 1},
                      {"kind": "positive", "shard_index": 0, "shard_count": 1, "file": "../outside.json"},
-                     {"kind": "positive", "shard_index": 0, "shard_count": 1, "file": {}},
-                     {"kind": "mutants", "shard_index": 0, "shard_count": 1, "negative_sha256": []},
-                     {"kind": "mutants", "shard_index": 0, "shard_count": 1, "negative_sha256": {}}]
+                     {"kind": "positive", "shard_index": 0, "shard_count": 1, "file": {}}]
         for fragment in fragments:
             with self.subTest(fragment=fragment), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / "fragment-positive-0.json").write_text(json.dumps(fragment))
                 with self.assertRaises(ValueError):
+                    OUTPUTS.collect(root)
+        for negative, reason in [([], "нет списка отрицательных отчётов"),
+                                 ({}, "нет ограниченного набора файлов части")]:
+            with self.subTest(negative=negative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fragment = {"kind": "mutants", "shard_index": 0, "shard_count": 1,
+                            "negative_sha256": negative}
+                (root / "fragment-mutants-0.json").write_text(json.dumps(fragment))
+                with self.assertRaisesRegex(ValueError, reason):
                     OUTPUTS.collect(root)
         for data in [b"not JSON", b'{"a":1,"a":2}', b"\xff"]:
             with self.subTest(data=data), tempfile.TemporaryDirectory() as temporary:
@@ -192,25 +210,36 @@ class FormalOutputTests(unittest.TestCase):
                                      environment={"GITHUB_OUTPUT": str(output), **parts})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(output.exists())
-        for reports in [{"positive-0.json": json.dumps("x" * OUTPUTS.MAX_REPORT_BYTES).encode()},
-                        {f"negative-example-{index}.json": json.dumps("x" * (OUTPUTS.MAX_REPORT_BYTES // 2)).encode()
-                         for index in range(2)},
-                        {f"negative-example-{index}.json": b"{}" for index in range(OUTPUTS.MAX_FILES)}]:
-            with self.subTest(count=len(reports)), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                source = root / "producer"
-                report_part(source, "positive" if len(reports) == 1 else "mutants", reports=reports)
-                destination = root / "staged"
-                with self.assertRaises(ValueError):
-                    OUTPUTS.prepare(source, destination)
-                self.assertFalse(destination.exists())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "producer"
+            reports = {f"negative-example-{index}.json": b"{}" for index in range(OUTPUTS.MAX_FILES)}
+            report_part(source, "mutants", reports=reports)
+            destination = root / "staged"
+            with self.assertRaises(ValueError):
+                OUTPUTS.prepare(source, destination)
+            self.assertFalse(destination.exists())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "producer"
+            report_part(source)
+            fragment = source / "fragment-positive-0.json"
+            metadata = json.loads(fragment.read_bytes())
+            metadata["padding"] = "x" * OUTPUTS.MAX_FRAGMENT_BYTES
+            fragment.write_text(json.dumps(metadata))
+            destination = root / "staged"
+            with self.assertRaises(ValueError):
+                OUTPUTS.prepare(source, destination)
+            self.assertFalse(destination.exists())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             artifacts = root / "artifacts"
+            reports_per_part = OUTPUTS.MAX_FILES // 2
             for index in range(2):
-                artifact_part(artifacts, "mutants", index, 2, reports={
-                    f"negative-example-{index}-{number}.json": b"{}" for number in range(64)})
-            with self.assertRaises(ValueError):
+                part, _ = artifact_part(artifacts, "mutants", index, 2, reports={
+                    f"negative-example-{index}-{number}.json": b"{}" for number in range(reports_per_part)})
+                self.assertEqual(len(OUTPUTS.collect(part)), reports_per_part + 1)
+            with self.assertRaisesRegex(ValueError, "слишком много формальных файлов"):
                 OUTPUTS.restore(root / "restored", artifacts, 2)
             self.assertFalse((root / "restored").exists())
 

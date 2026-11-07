@@ -10,7 +10,7 @@ import re
 import stat
 import sys
 
-MAX_REPORT_BYTES = 4 * 1024 * 1024
+MAX_FRAGMENT_BYTES = 4 * 1024 * 1024
 MAX_FILES = 128
 MAX_PARTS = 16
 # download-artifact читает IDs как JavaScript Number; округлённый ID недопустим.
@@ -42,16 +42,16 @@ def directory_reader(directory: Path | str, *, parent: int | None = None):
         os.close(fd)
 
 
-def read_report(directory: int, name: str, budget: int) -> bytes:
+def read_report(directory: int, name: str, budget: int | None) -> bytes:
     if not isinstance(name, str) or NAME.fullmatch(name) is None:
         raise ValueError("путь отчёта выходит из каталога")
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     with os.fdopen(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("ожидался обычный файл отчёта")
-        data = stream.read(budget + 1)
-    if len(data) > budget:
-        raise ValueError("отчёты части превышают размер сообщения")
+        data = stream.read() if budget is None else stream.read(budget + 1)
+    if budget is not None and len(data) > budget:
+        raise ValueError("описание части превышает допустимый размер")
     parse_report(data)
     return data
 
@@ -71,7 +71,7 @@ def collect_from_fd(directory: int, *, strict: bool = False) -> dict[str, bytes]
     if len(fragments) != 1:
         raise ValueError("job должен передавать ровно одну часть проверки")
     fragment_name = fragments[0]
-    fragment_data = read_report(directory, fragment_name, MAX_REPORT_BYTES)
+    fragment_data = read_report(directory, fragment_name, MAX_FRAGMENT_BYTES)
     fragment = parse_report(fragment_data)
     kind, index, _ = fragment_identity(fragment)
     if fragment_name != f"fragment-{kind}-{index}.json":
@@ -92,11 +92,9 @@ def collect_from_fd(directory: int, *, strict: bool = False) -> dict[str, bytes]
     if strict and set(entries) != {fragment_name, *names}:
         raise ValueError("artifact содержит лишние или отсутствующие файлы")
     files = {fragment_name: fragment_data}
-    remaining = MAX_REPORT_BYTES - len(fragment_data)
     for name in names:
-        data = read_report(directory, name, remaining)
+        data = read_report(directory, name, None)
         files[name] = data
-        remaining -= len(data)
     return files
 
 

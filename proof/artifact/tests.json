@@ -684,7 +684,7 @@
     "test_ci_storage.ChromeDependencyReleaseTests.test_unknown_release_cannot_select_a_plausible_abi",
     "test_ci_storage.CiStorageTests.test_current_package_graph_retains_only_the_release_handoff",
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
-    "test_ci_storage.NativeStorageTests.test_android_emulator_uses_shared_software_and_targeted_boot_logs",
+    "test_ci_storage.NativeStorageTests.test_android_emulator_uses_one_shared_headless_configuration",
     "test_ci_storage.NativeStorageTests.test_only_sdk_transfer_survives",
     "test_ci_storage.NativeStorageTests.test_reintroduced_diagnostics_and_weakened_transfer_are_rejected",
     "test_compare_program_performance.ProgramPerformanceTests.test_archive_substitution_and_unpacked_drift_are_rejected",
@@ -994,7 +994,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "5b4facc85ef512ff8ad48fb0fb28a8acbf7f05ed4139a861dad485486df811cf",
+ "record_sha256": "0465d61d5c0a7472b0fcd345ff1f63189f54eef6588a1aead45fa5c89b30cb23",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
