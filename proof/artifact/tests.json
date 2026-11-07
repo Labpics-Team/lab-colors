@@ -605,7 +605,7 @@
    "start": "proof/region/v1/tests"
   },
   {
-   "count": 377,
+   "count": 379,
    "load_errors": [],
    "names": [
     "ci_workflow_binding.TestCiWorkflowBinding.test_accepts_exact_local_call_at_workflow_sha",
@@ -684,6 +684,7 @@
     "test_ci_storage.ChromeDependencyReleaseTests.test_unknown_release_cannot_select_a_plausible_abi",
     "test_ci_storage.CiStorageTests.test_current_package_graph_retains_only_the_release_handoff",
     "test_ci_storage.CiStorageTests.test_skipped_floor_external_input_and_changed_permissions_are_rejected",
+    "test_ci_storage.NativeStorageTests.test_android_emulator_uses_shared_software_and_targeted_boot_logs",
     "test_ci_storage.NativeStorageTests.test_only_sdk_transfer_survives",
     "test_ci_storage.NativeStorageTests.test_reintroduced_diagnostics_and_weakened_transfer_are_rejected",
     "test_compare_program_performance.ProgramPerformanceTests.test_archive_substitution_and_unpacked_drift_are_rejected",
@@ -799,8 +800,9 @@
     "test_formal_outputs.FormalOutputTests.test_colliding_parts_leave_no_destination",
     "test_formal_outputs.FormalOutputTests.test_empty_malformed_duplicate_and_external_names_refuse",
     "test_formal_outputs.FormalOutputTests.test_json_report_bytes_survive_generated_messages",
+    "test_formal_outputs.FormalOutputTests.test_large_report_publishes_artifact_id_instead_of_raw_data",
     "test_formal_outputs.FormalOutputTests.test_mutant_manifest_selects_every_named_negative_report",
-    "test_formal_outputs.FormalOutputTests.test_output_and_expansion_limits_do_not_allow_partial_results",
+    "test_formal_outputs.FormalOutputTests.test_output_and_read_limits_do_not_allow_partial_results",
     "test_formal_outputs.FormalOutputTests.test_truncation_corruption_and_trailing_streams_refuse",
     "test_mutation.AuthorityMutationShardContractTest.test_external_scopes_do_not_execute_core_mutants",
     "test_mutation.AuthorityMutationShardContractTest.test_required_scopes_partition_every_semantic_mutant_once",
@@ -992,7 +994,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "65349deb4104c36b6341c415972cdd99ba95478df74671af94e052870f103660",
+ "record_sha256": "5b4facc85ef512ff8ad48fb0fb28a8acbf7f05ed4139a861dad485486df811cf",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",

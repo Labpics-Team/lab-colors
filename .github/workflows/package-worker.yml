@@ -218,7 +218,6 @@ jobs:
             --baseline-revision "$PROGRAM_BASE_SHA" \
             --candidate-revision "$GITHUB_SHA" \
             --head-revision "$PROGRAM_HEAD_SHA" \
-            --profile \
             --output "$results"
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
         # Проверенные CfT + distro .so загружаются в job; ldd проверяет closure до browser test.
