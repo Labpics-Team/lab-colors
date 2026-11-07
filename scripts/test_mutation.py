@@ -1932,17 +1932,54 @@ class MutationTruthTest(unittest.TestCase):
         self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
         self.assertIn("--phase assemble", formal)
         self.assertIn("formal_outputs.py restore", formal)
+        self.assertIn('--input-dir "$RUNNER_TEMP/core-formal-artifacts"', formal)
         self.assertIn("--parts 10", formal)
         self.assertIn("python3 scripts/test_verify_core_formal.py", formal)
         self.assertIn("python3 scripts/test_formal_outputs.py", formal)
         self.assertIn('cat "$RUNNER_TEMP/core-formal/receipt.json"', formal)
         self.assertNotIn("actions/upload-artifact", formal)
-        self.assertNotIn("actions/download-artifact", formal)
+        self.assertEqual(formal.count("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"), 1)
+        self.assertIn("artifact-ids: ${{ steps.artifacts.outputs.artifact-ids }}", formal)
+        self.assertIn("merge-multiple: false", formal)
+        self.assertIn("digest-mismatch: error", formal)
+        self.assertNotIn("overwrite:", formal)
+        for setting in ("github-token:", "repository:", "run-id:", "pattern:"):
+            self.assertNotIn(setting, formal)
+        for command in (
+            "run: python3 scripts/ci/formal_outputs.py ids --parts 10",
+            'run: python3 scripts/ci/formal_outputs.py restore "$RUNNER_TEMP/core-formal" '
+            '--input-dir "$RUNNER_TEMP/core-formal-artifacts" --parts 10',
+            "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        ):
+            steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", formal)
+            matches = [step for step in steps if command in step]
+            self.assertEqual(len(matches), 1, command)
+            self.assertNotIn("\n        if:", matches[0])
+            self.assertNotIn("continue-on-error:", matches[0])
         for kind in ("positive", "mutants"):
-            self.assertIn("formal_outputs.py publish", jobs["formal-" + kind])
-            self.assertNotIn("actions/upload-artifact", jobs["formal-" + kind])
+            producer = jobs["formal-" + kind]
+            self.assertIn("formal_outputs.py publish", producer)
+            self.assertEqual(producer.count("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"), 1)
+            self.assertIn("name: core-formal-" + kind + "-${{ matrix.shard }}-${{ github.run_attempt }}", producer)
+            self.assertIn("path: ${{ runner.temp }}/core-formal-upload", producer)
+            self.assertIn("if-no-files-found: error", producer)
+            self.assertIn("retention-days: 1\n", producer)
+            self.assertIn("CI_FORMAL_ARTIFACT_ID: ${{ steps.reports.outputs.artifact-id }}", producer)
+            self.assertNotIn("overwrite:", producer)
+            for command in (
+                'run: python3 scripts/ci/formal_outputs.py prepare "$RUNNER_TEMP/core-formal" '
+                '--output-dir "$RUNNER_TEMP/core-formal-upload"',
+                'run: python3 scripts/ci/formal_outputs.py publish "$RUNNER_TEMP/core-formal-upload"',
+                "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            ):
+                steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", producer)
+                matches = [step for step in steps if command in step]
+                self.assertEqual(len(matches), 1, command)
+                self.assertNotIn("\n        if:", matches[0])
+                self.assertNotIn("continue-on-error:", matches[0])
             for index in range(5):
                 self.assertIn("needs.formal-" + kind + ".outputs." + kind + "_" + str(index), formal)
+                self.assertIn(kind + "_" + str(index) + ": ${{ steps.handoff.outputs." + kind + "_" + str(index) + " }}", producer)
 
         aggregate = jobs["test"]
         self.assertIn("    name: test\n", aggregate)
