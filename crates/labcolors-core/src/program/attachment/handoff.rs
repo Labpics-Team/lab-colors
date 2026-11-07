@@ -558,44 +558,14 @@ fn copy_presentation_composites(
     presentation: PointSinkPresentationEvidenceV1<'_>,
     output: &mut Vec<PointSinkPresentationCompositeV1>,
 ) -> Result<(), HandoffPointSinkErrorV1> {
-    let count = match presentation {
-        PointSinkPresentationEvidenceV1::Verified(verified) => {
-            let mut count = 0usize;
-            for composite in verified.presentation_composites() {
-                let composite =
-                    composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
-                count = count
-                    .checked_add(composite.scenarios.len())
-                    .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
-            }
-            count
-        }
-        #[cfg(any(test, kani))]
-        PointSinkPresentationEvidenceV1::Fixture(composites) => composites.len(),
-    };
-    count
-        .checked_mul(mem::size_of::<PointSinkPresentationCompositeV1>())
-        .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
-    output
-        .try_reserve_exact(count)
-        .map_err(|_| HandoffPointSinkErrorV1::ResourceExhausted)?;
     match presentation {
         PointSinkPresentationEvidenceV1::Verified(verified) => {
-            for composite in verified.presentation_composites() {
-                let composite =
-                    composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
-                for scenario in composite.scenarios {
-                    output.push(PointSinkPresentationCompositeV1::new(
-                        composite.root,
-                        scenario.value(),
-                        crate::Srgb8::new(composite.rgb),
-                    ));
-                }
-            }
+            copy_verified_presentation_composites(verified, output)?;
         }
         #[cfg(any(test, kani))]
         PointSinkPresentationEvidenceV1::Fixture(composites) => {
-            output.extend_from_slice(composites)
+            reserve_presentation_composites(composites.len(), output)?;
+            output.extend_from_slice(composites);
         }
     }
     crate::ordering::sort_by_key(output, |entry| (entry.root(), entry.scenario()));
@@ -607,6 +577,43 @@ fn copy_presentation_composites(
         return Err(HandoffPointSinkErrorV1::PresentationEvidenceMismatch);
     }
     output.dedup_by_key(|entry| (entry.root(), entry.scenario()));
+    Ok(())
+}
+
+fn reserve_presentation_composites(
+    count: usize,
+    output: &mut Vec<PointSinkPresentationCompositeV1>,
+) -> Result<(), HandoffPointSinkErrorV1> {
+    count
+        .checked_mul(mem::size_of::<PointSinkPresentationCompositeV1>())
+        .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| HandoffPointSinkErrorV1::ResourceExhausted)
+}
+
+fn copy_verified_presentation_composites(
+    verified: super::super::VerifiedOutputV1<'_>,
+    output: &mut Vec<PointSinkPresentationCompositeV1>,
+) -> Result<(), HandoffPointSinkErrorV1> {
+    let mut count = 0usize;
+    for composite in verified.presentation_composites() {
+        let composite = composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
+        count = count
+            .checked_add(composite.scenarios.len())
+            .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
+    }
+    reserve_presentation_composites(count, output)?;
+    for composite in verified.presentation_composites() {
+        let composite = composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
+        for scenario in composite.scenarios {
+            output.push(PointSinkPresentationCompositeV1::new(
+                composite.root,
+                scenario.value(),
+                crate::Srgb8::new(composite.rgb),
+            ));
+        }
+    }
     Ok(())
 }
 
