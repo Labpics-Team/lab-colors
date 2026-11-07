@@ -18,20 +18,20 @@ struct ExpectedPointState {
 }
 
 fn points_match(
-    expected: Option<HandoffPublishedPointV1>,
+    expected: Option<&HandoffPublishedPointV1>,
     actual: &[HandoffPublishedPointV1],
 ) -> bool {
     match expected {
         None => actual.is_empty(),
-        Some(point) => actual.len() == 1 && actual.first() == Some(&point),
+        Some(point) => actual.len() == 1 && actual.first() == Some(point),
     }
 }
 
 impl ExpectedPointState {
-    fn matches(self, actual: &HandoffCommittedPointStateV1) -> bool {
+    fn matches(&self, actual: &HandoffCommittedPointStateV1) -> bool {
         actual.stamp == self.stamp
             && actual.revision == self.revision
-            && points_match(self.point, &actual.points)
+            && points_match(self.point.as_ref(), &actual.points)
             && actual.composites.is_empty()
     }
 }
@@ -261,7 +261,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
                     && command.desired_sequence() == expected.stamp.sequence()
                     && command.binding_epoch() == query.binding_epoch()
                     && command.scope() == prepared.writer.owned_scope
-                    && points_match(expected.point, command.points())
+                    && points_match(expected.point.as_ref(), command.points())
                     && command.presentation_composites().is_empty(),
                 "handoff command must preserve every publication field"
             );
@@ -350,7 +350,7 @@ fn pending_matches(
     old_stamp: PointSinkStampV1,
     kind: u8,
     revision: u64,
-    expected: ExpectedPointState,
+    expected: &ExpectedPointState,
 ) -> bool {
     match pending {
         Some(HandoffStagedPointStateV1::SetAll {
@@ -475,7 +475,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
                 old.stamp,
                 kind,
                 installed_revision,
-                expected,
+                &expected,
             )
             && prepared.writer.host.calls == 1
             && prepared.writer.host.accepted.is_none(),
@@ -490,7 +490,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         expected.matches(&prepared.writer.committed)
             && prepared.staged.is_none()
             && prepared.writer.host.calls == 2
-            && prepared.writer.host.accepted == Some(expected_command),
+            && prepared.writer.host.accepted.as_ref() == Some(&expected_command),
         "successful handoff must commit the complete acknowledged command exactly once"
     );
     assert!(
@@ -618,7 +618,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
                 old.stamp,
                 kind,
                 installed_revision,
-                expected,
+                &expected,
             ),
         "stale prepared handoff must fail before any host call or state mutation"
     );
