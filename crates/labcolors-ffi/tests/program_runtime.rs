@@ -351,3 +351,50 @@ fn observed_native_call_has_no_per_scenario_allocations() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn attachment_counts_its_owned_callback_rgb_separately_from_the_result() -> TestResult {
+    struct Accept;
+    impl ProgramPointSinkHost for Accept {
+        fn try_install(
+            &self,
+            intent: ProgramPointSinkIntent,
+        ) -> Result<bool, ProgramPointSinkCallbackError> {
+            if let Some(point) = intent.point {
+                assert_eq!(point.source.len(), 3);
+            }
+            Ok(true)
+        }
+    }
+    let attachment = attach_program_wire(wire("adaptive"), 1, 91, 501, 71, 61, Box::new(Accept))?;
+    for revision in 1..=6 {
+        attachment.update_observed(
+            revision,
+            vec![1],
+            vec![if revision % 2 == 0 { 0 } else { 255 }; 3],
+            1,
+        )?;
+    }
+    for revision in 7..=10 {
+        let ids = vec![1];
+        let rgb = vec![if revision % 2 == 0 { 0 } else { 255 }; 3];
+        let (result, events) = test_support::measured_allocator_events(|| {
+            attachment.update_observed(revision, ids, rgb, 1)
+        });
+        let snapshot = result?;
+        // Arc snapshot и owned RGB команды; callback сам не выделяет память.
+        assert_eq!(
+            events,
+            test_support::AllocatorEvents {
+                alloc: 2,
+                realloc: 0,
+                dealloc: 3
+            }
+        );
+        assert_eq!(
+            snapshot.output_rgb(0)?,
+            if revision % 2 == 0 { [255; 3] } else { [0; 3] }
+        );
+    }
+    Ok(())
+}

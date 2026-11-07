@@ -28,7 +28,9 @@ fn wire_with_outputs(count: u32) -> Vec<u8> {
     for slot in 17..17 + count {
         builder.output(slot, 4);
     }
-    builder.finish().unwrap()
+    builder
+        .finish()
+        .expect("the fixture must encode a valid Program")
 }
 
 const RESULT_ALLOCATION: AllocatorEvents = AllocatorEvents {
@@ -84,9 +86,9 @@ fn observation_shape_is_checked_without_allocating_or_reading_missing_values() {
 fn warmed_single_output_update_needs_no_heap() {
     for count in [1, 8, 32] {
         let mut session = compile_program_wire_v1(&wire())
-            .unwrap()
+            .expect("the fixture Program must compile")
             .instantiate(100)
-            .unwrap();
+            .expect("the fixture Session must instantiate");
         let mut ids: Vec<u32> = (0..count).rev().collect();
         let mut rgb = vec![0x80; count as usize * 3];
         let mut saved = Vec::with_capacity(8);
@@ -95,14 +97,18 @@ fn warmed_single_output_update_needs_no_heap() {
             session
                 .update_observed_view(
                     revision,
-                    ProgramObservationV1::from_rgb8(&ids, &rgb, 1).unwrap(),
+                    ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                        .expect("the RGB8 fixture must have its declared rectangular shape"),
                 )
-                .unwrap();
+                .expect("the valid update must return an owned snapshot");
         }
         for revision in [5, 5, 6, 7, 8, 9, 10, 11] {
             let (snapshot, events) = measured_allocator_events(|| {
-                let input = ProgramObservationV1::from_rgb8(&ids, &rgb, 1).unwrap();
-                session.update_observed_view(revision, input).unwrap()
+                let input = ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                    .expect("the RGB8 fixture must have its declared rectangular shape");
+                session
+                    .update_observed_view(revision, input)
+                    .expect("the valid update must return an owned snapshot")
             });
             assert_eq!(
                 events, RESULT_ALLOCATION,
@@ -128,14 +134,16 @@ fn warmed_single_output_update_needs_no_heap() {
 fn attachment_snapshot_is_inline_and_independent() {
     for borrowed in [false, true] {
         let mut attachment = compile_program_wire_v1(&wire())
-            .unwrap()
+            .expect("the fixture Program must compile")
             .attach(100, 17, 91, 9, 8, Host::default())
-            .unwrap();
+            .expect("the fixture sink binding must attach");
         let input = [ProgramScenarioV1::new(7, vec![Srgb8::new([0x80; 3])])];
         let ids = [7];
         let rgb = [0x80; 3];
         for revision in 1..=4 {
-            attachment.update_observed(revision, &input).unwrap();
+            attachment
+                .update_observed(revision, &input)
+                .expect("the valid update must return an owned snapshot");
         }
         let mut previous = None;
         for revision in [5, 5, 6, 7] {
@@ -143,16 +151,20 @@ fn attachment_snapshot_is_inline_and_independent() {
                 if borrowed {
                     attachment.update_observed_view(
                         revision,
-                        ProgramObservationV1::from_rgb8(&ids, &rgb, 1).unwrap(),
+                        ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                            .expect("the RGB8 fixture must have its declared rectangular shape"),
                     )
                 } else {
                     attachment.update_observed(revision, &input)
                 }
-                .unwrap()
+                .expect("the valid update must return an owned snapshot")
             });
             assert_eq!(snapshot.snapshot().state(), ProgramSnapshotStateV1::Ready);
             assert_eq!(
-                snapshot.render().unwrap().terminal_composite(),
+                snapshot
+                    .render()
+                    .expect("a ready attachment must publish its render")
+                    .terminal_composite(),
                 Some(Srgb8::new([0x60; 3]))
             );
             assert_eq!(
@@ -170,13 +182,13 @@ fn attachment_snapshot_is_inline_and_independent() {
 #[test]
 fn borrowed_and_owned_inputs_share_admission_and_lifecycle() {
     let mut owned = compile_program_wire_v1(&wire())
-        .unwrap()
+        .expect("the fixture Program must compile")
         .instantiate(101)
-        .unwrap();
+        .expect("the fixture Session must instantiate");
     let mut borrowed = compile_program_wire_v1(&wire())
-        .unwrap()
+        .expect("the fixture Program must compile")
         .instantiate(101)
-        .unwrap();
+        .expect("the fixture Session must instantiate");
     let cases: &[(u64, &[u32], &[u8], usize)] = &[
         (1, &[9, 3], &[0x80; 6], 1),
         (1, &[3, 9], &[0x80; 6], 1),
@@ -201,7 +213,8 @@ fn borrowed_and_owned_inputs_share_admission_and_lifecycle() {
                 ProgramScenarioV1::new(*id, surfaces)
             })
             .collect();
-        let input = ProgramObservationV1::from_rgb8(ids, rgb, columns).unwrap();
+        let input = ProgramObservationV1::from_rgb8(ids, rgb, columns)
+            .expect("the RGB8 fixture must have its declared rectangular shape");
         assert_eq!(
             owned.update_observed(revision, &rows),
             borrowed.update_observed_view(revision, input)
@@ -212,7 +225,8 @@ fn borrowed_and_owned_inputs_share_admission_and_lifecycle() {
         owned.update_observed(7, &[ProgramScenarioV1::new(3, vec![Srgb8::new([0x80; 3])])]),
         borrowed.update_observed_view(
             7,
-            ProgramObservationV1::from_rgb8(&[3], &[0x80; 3], 1).unwrap()
+            ProgramObservationV1::from_rgb8(&[3], &[0x80; 3], 1)
+                .expect("the RGB8 fixture must have its declared rectangular shape")
         )
     );
 }
@@ -220,10 +234,11 @@ fn borrowed_and_owned_inputs_share_admission_and_lifecycle() {
 #[test]
 fn borrowed_resource_failure_does_not_publish_or_consume_the_revision() {
     let mut session = compile_program_wire_v1(&wire())
-        .unwrap()
+        .expect("the fixture Program must compile")
         .instantiate(100)
-        .unwrap();
-    let input = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1).unwrap();
+        .expect("the fixture Session must instantiate");
+    let input = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1)
+        .expect("the RGB8 fixture must have its declared rectangular shape");
     {
         let _failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
         assert_eq!(
@@ -232,13 +247,16 @@ fn borrowed_resource_failure_does_not_publish_or_consume_the_revision() {
         );
     }
     assert_eq!(
-        session.update_observed_view(1, input).unwrap().state(),
+        session
+            .update_observed_view(1, input)
+            .expect("the valid update must return an owned snapshot")
+            .state(),
         ProgramSnapshotStateV1::Ready
     );
     let mut attachment = compile_program_wire_v1(&wire())
-        .unwrap()
+        .expect("the fixture Program must compile")
         .attach(100, 17, 91, 9, 8, Host::default())
-        .unwrap();
+        .expect("the fixture sink binding must attach");
     {
         let _failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
         assert_eq!(
@@ -250,9 +268,9 @@ fn borrowed_resource_failure_does_not_publish_or_consume_the_revision() {
     assert_eq!(
         attachment
             .update_observed_view(1, input)
-            .unwrap()
+            .expect("the valid update must return an owned snapshot")
             .render()
-            .unwrap()
+            .expect("a ready attachment must publish its render")
             .revision(),
         1
     );
@@ -261,15 +279,17 @@ fn borrowed_resource_failure_does_not_publish_or_consume_the_revision() {
 #[test]
 fn ready_failed_recovery_and_unknown_keep_the_warmed_allocation_budget() {
     let mut session = compile_program_wire_v1(&wire())
-        .unwrap()
+        .expect("the fixture Program must compile")
         .instantiate(100)
-        .unwrap();
-    let good = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1).unwrap();
-    let bad = ProgramObservationV1::from_rgb8(&[7], &[0; 3], 1).unwrap();
+        .expect("the fixture Session must instantiate");
+    let good = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1)
+        .expect("the RGB8 fixture must have its declared rectangular shape");
+    let bad = ProgramObservationV1::from_rgb8(&[7], &[0; 3], 1)
+        .expect("the RGB8 fixture must have its declared rectangular shape");
     for revision in 1..=9 {
         session
             .update_observed_view(revision, if revision % 2 == 0 { bad } else { good })
-            .unwrap();
+            .expect("the valid update must return an owned snapshot");
     }
     for revision in 10..=20 {
         let (snapshot, events) = measured_allocator_events(|| {
@@ -278,7 +298,7 @@ fn ready_failed_recovery_and_unknown_keep_the_warmed_allocation_budget() {
             } else {
                 session.update_observed_view(revision, if revision % 3 == 1 { good } else { bad })
             }
-            .unwrap()
+            .expect("the valid update must return an owned snapshot")
         });
         assert_eq!(events.alloc, 0, "revision={revision}");
         assert_eq!(events.realloc, 0, "revision={revision}");
@@ -297,15 +317,21 @@ fn ready_failed_recovery_and_unknown_keep_the_warmed_allocation_budget() {
 fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
     for count in [2, 8, 64] {
         let mut session = compile_program_wire_v1(&wire_with_outputs(count))
-            .unwrap()
+            .expect("the fixture Program must compile")
             .instantiate(100)
-            .unwrap();
-        let input = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1).unwrap();
+            .expect("the fixture Session must instantiate");
+        let input = ProgramObservationV1::from_rgb8(&[7], &[0x80; 3], 1)
+            .expect("the RGB8 fixture must have its declared rectangular shape");
         for revision in 1..=4 {
-            session.update_observed_view(revision, input).unwrap();
+            session
+                .update_observed_view(revision, input)
+                .expect("the valid update must return an owned snapshot");
         }
-        let (snapshot, events) =
-            measured_allocator_events(|| session.update_observed_view(5, input).unwrap());
+        let (snapshot, events) = measured_allocator_events(|| {
+            session
+                .update_observed_view(5, input)
+                .expect("the valid update must return an owned snapshot")
+        });
         assert_eq!(
             events,
             AllocatorEvents {
@@ -315,7 +341,9 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
             }
         );
         assert_eq!(snapshot.outputs().len(), count as usize);
-        let second = session.update_observed_view(6, input).unwrap();
+        let second = session
+            .update_observed_view(6, input)
+            .expect("the valid update must return an owned snapshot");
         assert_eq!(snapshot, second);
         drop(session);
         for (index, output) in snapshot.outputs().iter().enumerate() {
