@@ -304,7 +304,6 @@ for partition in (f"{operation}_{state}" for operation in HANDOFF_OPERATION_PART
      f"program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_{partition}",
      "handoff must propagate the exact host refusal",
      "        if let Err(error) = self.writer.host.try_install(intent) {\n"
-     "            self.staged = Some(staged);\n"
      "            return Err(HandoffPointSinkErrorV1::Host(error));\n"
      "        }",
      "        let _ = self.writer.host.try_install(intent);"),

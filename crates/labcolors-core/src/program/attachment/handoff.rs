@@ -617,19 +617,22 @@ where
     type Error = HandoffPointSinkErrorV1;
 
     fn try_install(&mut self) -> Result<(), Self::Error> {
-        let Some(staged) = self.staged.take() else {
+        let Some(staged) = self.staged.as_ref() else {
             return Err(HandoffPointSinkErrorV1::AlreadyInstalled);
         };
         if self.writer.committed.stamp != staged.expected_stamp() {
-            self.staged = Some(staged);
             return Err(HandoffPointSinkErrorV1::StampMismatch);
         }
         let intent = staged.host_intent(&self.writer.owned_scope, &self.writer.committed);
         if let Err(error) = self.writer.host.try_install(intent) {
-            self.staged = Some(staged);
             return Err(HandoffPointSinkErrorV1::Host(error));
         }
 
+        // До ACK команда остаётся на месте, включая все пути отказа.
+        // Host заимствует intent и не получает владение prepared-состоянием.
+        let Some(staged) = self.staged.take() else {
+            return Err(HandoffPointSinkErrorV1::AlreadyInstalled);
+        };
         // После host ACK только moves: прежние Vec остаются в retirement-слоте.
         match staged {
             HandoffStagedPointStateV1::SetAll { desired, .. }
