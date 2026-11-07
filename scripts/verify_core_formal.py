@@ -344,8 +344,7 @@ def run_kani(
     if harness is not None and positive_harnesses is not None:
         raise ValueError("mutant and positive harness filters are mutually exclusive")
     command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--output-format", "regular",
-               "-Z", "unstable-options", "--harness-timeout", "300s", "--solver", "kissat",
-               "--export-json", str(output)]
+               "-Z", "unstable-options", "--harness-timeout", "300s", "--export-json", str(output)]
     if harness is not None:
         command.extend(["--harness", harness, "--exact", "-Z", "concrete-playback", "--concrete-playback", "print"])
     else:
