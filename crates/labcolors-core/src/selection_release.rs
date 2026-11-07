@@ -152,7 +152,7 @@ pub(crate) fn admit_selection_release_v1(
             .iter()
             .map(|key| key.as_bytes().to_vec())
             .collect::<Vec<_>>();
-        keys.sort_unstable();
+        crate::ordering::sort(&mut keys);
         hasher.update(&length_field_v1(keys.len())?);
         for key in keys {
             if key.is_empty() {
@@ -163,7 +163,7 @@ pub(crate) fn admit_selection_release_v1(
             hasher.update(&key);
         }
     }
-    ranks.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    crate::ordering::sort_by(&mut ranks, |left, right| left.0.cmp(&right.0));
     if ranks.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(SelectionReleaseErrorV1::DuplicateCandidateKey);
     }
@@ -228,8 +228,9 @@ impl AdmittedSelectionReleaseV1 {
         if candidates.len() != self.ranks.len() {
             return Err(SelectionReleaseErrorV1::MissingCandidateBinding);
         }
-        ranked
-            .sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)));
+        crate::ordering::sort_by(&mut ranked, |left, right| {
+            left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1))
+        });
         Ok(ranked
             .into_iter()
             .map(|(_, _, payload)| payload.clone())

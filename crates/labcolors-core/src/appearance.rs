@@ -367,22 +367,22 @@ impl AppearanceGraphSpec {
             mut occurrences,
         } = self;
 
-        paint_inputs.sort_unstable();
+        crate::ordering::sort(&mut paint_inputs);
         if let Some(duplicate) = adjacent_duplicate(&paint_inputs) {
             return Err(CompileError::DuplicatePaintInput { input: duplicate });
         }
 
-        surface_input_ports.sort_unstable();
+        crate::ordering::sort(&mut surface_input_ports);
         if let Some(duplicate) = adjacent_duplicate(&surface_input_ports) {
             return Err(CompileError::DuplicateSurfaceInputPort { input: duplicate });
         }
 
-        opacity_inputs.sort_unstable();
+        crate::ordering::sort(&mut opacity_inputs);
         if let Some(duplicate) = adjacent_duplicate(&opacity_inputs) {
             return Err(CompileError::DuplicateOpacityInput { input: duplicate });
         }
 
-        paints.sort_unstable_by_key(PaintSpec::id);
+        crate::ordering::sort_by_key(&mut paints, PaintSpec::id);
         if let Some(duplicate) = paints
             .windows(2)
             .find(|window| window[0].id() == window[1].id())
@@ -392,7 +392,7 @@ impl AppearanceGraphSpec {
             });
         }
 
-        surfaces.sort_unstable_by_key(SurfaceSpec::id);
+        crate::ordering::sort_by_key(&mut surfaces, SurfaceSpec::id);
         if let Some(duplicate) = surfaces
             .windows(2)
             .find(|window| window[0].id() == window[1].id())
@@ -402,7 +402,7 @@ impl AppearanceGraphSpec {
             });
         }
 
-        occurrences.sort_unstable_by_key(|occurrence| occurrence.id);
+        crate::ordering::sort_by_key(&mut occurrences, |occurrence| occurrence.id);
         if let Some(duplicate) = occurrences
             .windows(2)
             .find(|window| window[0].id == window[1].id)
@@ -536,8 +536,8 @@ impl AppearanceGraphSpec {
                         cyclic_occurrences.push(occurrences[index - surface_count].id);
                     }
                 }
-                cyclic_surfaces.sort_unstable();
-                cyclic_occurrences.sort_unstable();
+                crate::ordering::sort(&mut cyclic_surfaces);
+                crate::ordering::sort(&mut cyclic_occurrences);
                 CompileError::RenderCycle {
                     surfaces: cyclic_surfaces,
                     occurrences: cyclic_occurrences,
@@ -731,7 +731,7 @@ fn functional_cycle_members(dependencies: &[Option<usize>]) -> Vec<usize> {
             position[node] = usize::MAX;
         }
     }
-    cycles.sort_unstable();
+    crate::ordering::sort(&mut cycles);
     cycles.dedup();
     cycles
 }
@@ -2119,6 +2119,11 @@ impl CompiledAppearanceGraph {
     }
 
     /// Allocation-free steady-state execution over already admitted bindings.
+    ///
+    /// При неизменных opacities покомпонентный порядок RGB-входов сохраняется:
+    /// Input копирует значение; Opacity меняет только alpha; FromOccurrence
+    /// копирует результат; exact source-over с alpha в [0,1] и округление
+    /// монотонны по обоим цветам. Поэтому два endpoint-вызова охватывают box.
     pub(crate) fn evaluate_admitted_into<'workspace>(
         &self,
         bindings: &AdmittedAppearanceBindings,
@@ -2126,6 +2131,20 @@ impl CompiledAppearanceGraph {
     ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
         self.program()
             .evaluate_admitted_into(&self.instance, bindings, workspace)
+    }
+
+    pub(crate) fn supports_rgb_box_endpoints(&self) -> bool {
+        let program = self.program();
+        program.paints.iter().all(|paint| match paint {
+            CompiledPaintSpec::Input { .. } | CompiledPaintSpec::Opacity { .. } => true,
+        }) && program.surfaces.iter().all(|surface| match surface {
+            CompiledSurfaceSpec::Input { .. } | CompiledSurfaceSpec::FromOccurrence { .. } => true,
+        }) && program
+            .occurrences
+            .iter()
+            .all(|occurrence| match occurrence.profile {
+                CompositionProfileV1::EncodedSrgb8SourceOverV1 => true,
+            })
     }
 
     /// Cold convenience внутри Core для callers, которым нужен owned result.

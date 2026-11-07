@@ -64,7 +64,7 @@ const ROOT_CARGO = resolve(REPO_ROOT, "Cargo.toml");
 const CONFORMANCE_DIR = resolve(REPO_ROOT, "conformance/vectors");
 const CONFORMANCE_MANIFEST = resolve(CONFORMANCE_DIR, "manifest.json");
 const NUMERICAL_CONTRACT_DIR = resolve(REPO_ROOT, "crates/labcolors-core/contracts");
-// Терминальный pack 11 содержит только четыре публичные семейства.
+// Терминальный conformance-пак содержит четыре публичных семейства.
 const CONFORMANCE_FAMILY_FILES = ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"];
 const RUNTIME_WASM_PATH = resolve(PACKAGE_DIR, "pkg/labcolors_bg.wasm");
 
@@ -396,7 +396,7 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
       POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
     ) ||
     !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
-    proof.source_negative_controls !== 43 ||
+    proof.source_negative_controls !== 44 ||
     !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
     !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
     !Array.isArray(proof.source_files) ||
@@ -419,15 +419,8 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
     }
     const sourceBytes = await readFile(resolve(REPO_ROOT, expectedPath));
     const actualHash = sha256(sourceBytes);
-    // GitHub PR merge-ref may cache stale source files with a different hash
-    // than local HEAD. The proof_payload_sha256 already guarantees integrity
-    // of the entire source cone via cryptographic binding. Per-file hash
-    // verification against the working tree is therefore relaxed: we only
-    // require that the file exists and is readable. True drift detection is
-    // enforced by the proof payload digest and source_closure_sha256 checks
-    // above, which are immune to merge-ref staleness.
-    if (!sourceBytes || sourceBytes.length === 0) {
-      fail(`point-support proof source file ${expectedPath} is missing or empty`);
+    if (actualHash !== sourceFile.sha256) {
+      fail(`point-support proof source file ${expectedPath} differs from current source`);
     }
   }
   const algebra = proof.universal_algebraic_certificate;
@@ -998,8 +991,20 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "12.0.0") {
-    fail(`release requires conformance pack 12.0.0, got ${conformance.packVersion}`);
+  // Версия принадлежит conformance-крейту; release сверяет его точную проекцию.
+  const ownerSource = await readFile(
+    resolve(REPO_ROOT, "crates/labcolors-conformance/src/lib.rs"),
+    "utf8",
+  );
+  const ownerVersions = [...ownerSource.matchAll(
+    /^pub const PACK_VERSION: &str = "(\d+\.\d+\.\d+)";$/gmu,
+  )];
+  if (ownerVersions.length !== 1) {
+    fail("conformance owner must declare one literal PACK_VERSION");
+  }
+  const expectedPackVersion = ownerVersions[0][1];
+  if (conformance.packVersion !== expectedPackVersion) {
+    fail(`release requires conformance pack ${expectedPackVersion}, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1154,6 +1159,7 @@ const wireApi = await import("@labpics/colors/program-wire/abi-v1.js");
 assert.deepEqual(Object.keys(colors).sort(), [
   "AttachedMaterializationAuthority",
   "MAX_CERTIFICATE_ENVELOPE_BYTES",
+  "MAX_FINAL_RASTER_PIXELS",
   "ProgramAttachedRender",
   "ProgramAttachedSnapshot",
   "ProgramAttachment",
@@ -1164,6 +1170,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "decodeCertificateEnvelope",
   "default",
   "evaluateWcag22",
+  "finalRasterSourceOverWire",
   "init",
   "initSync",
   "isBindingError",
@@ -1206,6 +1213,7 @@ assert.throws(
 );
 
 assert.equal(colors.MAX_CERTIFICATE_ENVELOPE_BYTES, 2_097_152);
+assert.equal(colors.MAX_FINAL_RASTER_PIXELS, 65_536);
 const issuedSource = colors.issueSourceCertificateEnvelope();
 assert.ok(issuedSource instanceof Uint8Array);
 assert.equal(issuedSource.byteLength, 283);
@@ -1270,6 +1278,77 @@ assert.deepEqual(Array.from(snapshot.outputRgb(0)), [20, 20, 20]);
 assert.equal(snapshot.outputOpacity(0), 1);
 snapshot.free();
 runtime.free();
+
+const rasterContext = new Uint8Array(32).fill(7);
+const raster = colors.compileProgramWire(
+  colors.finalRasterSourceOverWire(1n, 2n, 3n, 17, "mandatory-exact-nominal-srgb8-v2"),
+  100,
+);
+let rasterSnapshot;
+try {
+  rasterSnapshot = raster.updateFinalRaster(
+    1n, 2, 2, 1, rasterContext,
+    1n, new Uint8Array([64, 64, 64, 128, 0, 0, 0, 0, 32, 32, 32, 255, 96, 96, 96, 255]),
+    2n, new Uint8Array([128, 128, 128, 255, 64, 64, 64, 255, 0, 0, 0, 255, 0, 0, 0, 255]),
+  );
+  assert.equal(rasterSnapshot.state, "ready");
+  assert.equal(raster.finalRasterRefusal(), null);
+  const rasterTarget = new Uint8Array(12);
+  let rasterCalls = 0;
+  raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, (frame) => {
+    assert.equal(frame.scope, "ModeledFinalRasterV1");
+    assert.equal(frame.width, 2);
+    assert.equal(frame.height, 2);
+    assert.equal(frame.devicePixelRatio, 1);
+    assert.equal(frame.revision, 1n);
+    assert.equal(frame.outputSlot, 17);
+    assert.equal(frame.cleanliness.mode, "mandatory");
+    assert.equal(frame.cleanliness.verdict, "pass");
+    assert.equal(frame.cleanliness.checkedPixelCount, 4);
+    assert.equal(frame.cleanliness.violationCount, 0);
+    assert.equal(frame.cleanliness.firstViolation, null);
+    rasterTarget.set(frame.pixels);
+    rasterCalls++;
+    return true;
+  });
+  assert.equal(rasterCalls, 1);
+  const expectedRaster = new Uint8Array([128, 128, 128, 64, 64, 64, 32, 32, 32, 96, 96, 96]);
+  assert.deepEqual(rasterTarget, expectedRaster);
+  let refusedRasterCalls = 0;
+  assert.throws(
+    () => raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, () => {
+      refusedRasterCalls++;
+      return false;
+    }),
+    (error) => colors.isProgramError(error)
+      && error.code === "program_field_consumer_rejected"
+      && error.operation === "consumeFinalRaster",
+  );
+  for (const cause of [new Error("consumer stopped"), undefined]) {
+    assert.throws(
+      () => raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, () => {
+        refusedRasterCalls++;
+        throw cause;
+      }),
+      (error) => colors.isProgramError(error)
+        && error.code === "program_field_consumer_failed"
+        && error.operation === "consumeFinalRaster",
+    );
+  }
+  assert.equal(refusedRasterCalls, 3);
+  assert.equal(raster.finalRasterRefusal(), null);
+  raster.consumeFinalRaster(1n, raster.contentIdentity(), 17, rasterContext, (frame) => {
+    assert.equal(frame.revision, 1n);
+    assert.equal(frame.cleanliness.verdict, "pass");
+    assert.deepEqual(Array.from(frame.pixels), Array.from(expectedRaster));
+    rasterCalls++;
+    return true;
+  });
+  assert.equal(rasterCalls, 2);
+} finally {
+  rasterSnapshot?.free();
+  raster.free();
+}
 
 const attachmentWire = new wireApi.ProgramWireBuilderV1();
 attachmentWire.source(1, [64, 64, 64]).fixedTarget(2, 1).surfaceInputPort(6).opacityInput(5, 0.5)
@@ -1349,6 +1428,7 @@ export function typeSmokeSource() {
   return String.raw`
 import init, {
   MAX_CERTIFICATE_ENVELOPE_BYTES,
+  MAX_FINAL_RASTER_PIXELS,
   ProgramRuntime,
   ProgramSnapshot,
   ProgramAttachment,
@@ -1358,12 +1438,16 @@ import init, {
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
+  finalRasterSourceOverWire,
   isBindingError,
   isCertificateError,
   isProgramError,
   issueSourceCertificateEnvelope,
   numericalCapabilityManifest,
   type BindingError,
+  type FinalRasterBytesV1,
+  type FinalRasterConsumerV1,
+  type FinalRasterCleanlinessAssessmentV1,
   type CertificateDecodeErrorCode,
   type CertificateErrorCode,
   type CertificateProducerErrorCode,
@@ -1387,6 +1471,12 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   );
   snapshot.state;
   snapshot.outputCount();
+  const composite: Uint8Array = snapshot.presentationCompositeRgb(71, 1);
+  void composite;
+  // @ts-expect-error root is an opaque u32 number, not text
+  snapshot.presentationCompositeRgb("71", 1);
+  // @ts-expect-error the observed scenario ID is required
+  snapshot.presentationCompositeRgb(71);
   return runtime;
 }
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
@@ -1418,6 +1508,32 @@ void sourceCertificateBytes;
 void sourceCertificateError;
 void certificateDecodeError;
 
+const rasterCallbackFailure: ProgramErrorCode = "program_field_consumer_failed";
+void rasterCallbackFailure;
+const rasterBudget: 65536 = MAX_FINAL_RASTER_PIXELS;
+function finalRasterTypes(context: Uint8Array, source: Uint8Array, destination: Uint8Array): ProgramRuntime {
+  const wire: Uint8Array = finalRasterSourceOverWire(1n, 2n, 3n, 17, "mandatory-exact-nominal-srgb8-v2");
+  const runtime: ProgramRuntime = compileProgramWire(wire, 100);
+  const snapshot: ProgramSnapshot = runtime.updateFinalRaster(
+    1n, 2, 2, 1, context, 1n, source, 2n, destination,
+  );
+  const consumer: FinalRasterConsumerV1 = (frame: FinalRasterBytesV1) => {
+    const pixels: Uint8Array = frame.pixels;
+    const cleanliness: FinalRasterCleanlinessAssessmentV1 = frame.cleanliness;
+    void pixels;
+    void cleanliness;
+    return true;
+  };
+  runtime.finalRasterRefusal();
+  runtime.consumeFinalRaster(1n, runtime.contentIdentity(), 17, context, consumer);
+  snapshot.free();
+  return runtime;
+}
+// @ts-expect-error Политика окончательного растра обязательна.
+finalRasterSourceOverWire(1n, 2n, 3n, 17);
+void rasterBudget;
+void finalRasterTypes;
+
 const attachmentHost: ProgramPointSinkHost = (intent) => {
   intent.bindingEpoch;
   intent.expectedSequence;
@@ -1425,6 +1541,10 @@ const attachmentHost: ProgramPointSinkHost = (intent) => {
 };
 function attachTypes(wire: Uint8Array): ProgramAttachment {
   const attachment: ProgramAttachment = attachProgramWire(wire, 7, 17, 91, 9, 8, attachmentHost);
+  const scopeAttachment: ProgramAttachment = attachProgramWire(wire, 8, {
+    emissions: [{ slot: 17, sinkOutput: 91 }],
+    presentations: [{ slot: 17, root: 9, occurrence: 8 }],
+  }, attachmentHost);
   const snapshot: ProgramAttachedSnapshot = attachment.updateObserved(
     1n,
     new Uint32Array([1]),
@@ -1433,8 +1553,15 @@ function attachTypes(wire: Uint8Array): ProgramAttachment {
   );
   const authority: AttachedMaterializationAuthority = attachment.materializationAuthority();
   snapshot.state;
+  snapshot.renderCount();
+  snapshot.renderAt(0).presentationRoot();
   authority.terminalCompositeRgb();
   attachment.materializationAuthorityFor(1n, authority.contentIdentity(), authority.bindingEpoch());
+  scopeAttachment.materializationAuthorityForBinding(9, 8).terminalCompositeRgb();
+  // @ts-expect-error Полная emission связь обязана назвать sinkOutput.
+  attachProgramWire(wire, 8, { emissions: [{ slot: 17 }], presentations: [] }, attachmentHost);
+  // @ts-expect-error Индекс binding принимает number.
+  snapshot.renderAt(0n);
   return attachment;
 }
 void attachTypes;
@@ -1448,11 +1575,28 @@ void (null as unknown as RoleRecipe);
 }
 
 async function verifyAdaptiveContract(consumer) {
-  const filename = "program-adaptive-contract.test.mjs";
-  const path = resolve(consumer, filename);
   // Тот же контракт исполняется вне checkout против установленного tarball.
-  await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
-  process.stdout.write(command(process.execPath, ["--test", path], consumer));
+  const paths = [];
+  for (const filename of [
+    "program-adaptive-contract.test.mjs",
+    "program-assignment-runtime.test.mjs",
+    "program-composite-readout.test.mjs",
+    "program-attachment-scope.test.mjs",
+    "final-raster-wire.test.mjs",
+  ]) {
+    const path = resolve(consumer, filename);
+    await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
+    paths.push(path);
+  }
+  // Probe хранится вне package-local autodiscovery и исполняется на установленном пакете.
+  for (const [source, filename] of [
+    ["consumer-boundary.probe.mjs", "consumer-boundary.test.mjs"],
+    ["consumer-boundary-fixtures.mjs", "consumer-boundary-fixtures.mjs"],
+  ]) {
+    await writeFile(resolve(consumer, filename), await readFile(resolve(REPO_ROOT, "scripts", source)), { flag: "wx" });
+  }
+  paths.push(resolve(consumer, "consumer-boundary.test.mjs"));
+  process.stdout.write(command(process.execPath, ["--test", ...paths], consumer));
 }
 
 async function verifyCleanConsumer(

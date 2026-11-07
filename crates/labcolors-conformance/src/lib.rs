@@ -45,9 +45,9 @@ use labcolors_core::{
     solve,
 };
 
-/// Семантическая версия conformance-пака. Меняется при изменении СХЕМЫ или
-/// состава векторов; значения векторов при этом диктует канон ядра.
-pub const PACK_VERSION: &str = "12.0.0";
+/// Версия неизменяемого conformance-пака. Схема, состав или байты семейства,
+/// включая привязки доказательств, требуют новой версии; значения задаёт ядро.
+pub const PACK_VERSION: &str = "13.0.0";
 
 /// Версия ядра, к которой привязан пак. Все крейты воркспейса делят одну версию
 /// (`version.workspace = true`), поэтому собственная `CARGO_PKG_VERSION` этого
@@ -942,10 +942,10 @@ mod tests {
     }
 
     #[test]
-    fn pack_v12_is_the_terminal_program_conformance_shape() {
+    fn pack_v13_is_the_terminal_program_conformance_shape() {
         let pack = Pack::generate().expect("canonical pack generation");
         let manifest = pack.manifest();
-        assert_eq!(PACK_VERSION, "12.0.0");
+        assert_eq!(PACK_VERSION, "13.0.0");
         assert_eq!(manifest.pack_version, PACK_VERSION);
         assert_eq!(manifest.core_version, "0.3.0");
         // Recipe-ladder family и floorOverride удалены атомарным C7c.

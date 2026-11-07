@@ -6,8 +6,8 @@ import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 
 const errorWith = (code, operation) => Object.assign(new Error("candidate"), { code, operation });
 const infrastructureCodes = ["program_resource_exhausted", "program_internal_invariant"];
-const compileCodes = ["program_wire", "program_compile", "program_family_artifacts_required", "program_instantiate", ...infrastructureCodes];
-const updateCodes = ["program_update", ...infrastructureCodes];
+const compileCodes = ["program_wire", "program_compile", "program_unsupported", "program_family_artifacts_required", "program_instantiate", ...infrastructureCodes];
+const updateCodes = ["program_update", "program_unsupported", ...infrastructureCodes];
 const attachmentCodes = [
   ...compileCodes,
   "program_attachment_binding",

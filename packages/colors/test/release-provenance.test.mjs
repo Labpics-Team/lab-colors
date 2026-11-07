@@ -939,8 +939,9 @@ test("canonical package inventory includes legal materials and one exact snippet
     packageJson,
     'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
   );
-  assert.equal(inventory.length, 24);
-  for (const path of ["program-wire/encoding.js", "program-wire/abi-v2.js", "program-wire/abi-v2.d.ts"]) {
+  assert.equal(inventory.length, 26);
+  for (const path of ["program-wire/encoding.js", "program-wire/abi-v2.js", "program-wire/abi-v2.d.ts",
+    "program-wire/abi-v3.js", "program-wire/abi-v3.d.ts"]) {
     assert.ok(inventory.includes(path));
   }
   assert.deepEqual(

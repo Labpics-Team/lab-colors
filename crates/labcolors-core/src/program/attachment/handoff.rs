@@ -1,4 +1,5 @@
 use core::{
+    mem,
     num::NonZeroU64,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -8,13 +9,14 @@ use crate::program::OutputSlotIdV1;
 
 use super::{
     BoundPointSinkScopePermitV1, ExternallyManagedAttachmentV1, PointSinkAdmissionFailureV1,
-    PointSinkBindingEpochV1, PointSinkIntentV1, PointSinkStampV1, PointSinkWriterAdmissionV1,
+    PointSinkBindingEpochV1, PointSinkIntentV1, PointSinkPresentationCompositeV1,
+    PointSinkPresentationEvidenceV1, PointSinkStampV1, PointSinkWriterAdmissionV1,
     PointSinkWriterV1, PreparedPointSinkWriteV1, UnboundPointSinkWriterV1, sink_private,
 };
 
 static NEXT_HANDOFF_POINT_SINK_EPOCH_V1: AtomicU64 = AtomicU64::new(1);
 
-/// Opaque identifier for the private fixture's single terminal output.
+/// Непрозрачный ID одного элемента полного принадлежащего host scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HandoffPointSinkOutputIdV1(u32);
 
@@ -28,37 +30,58 @@ impl HandoffPointSinkOutputIdV1 {
     }
 }
 
-/// One complete, typed command for the host-owned atomic output lease.
+/// Один source Paint; композиции остаются отдельной проекцией Core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HandoffPointSinkHostIntentV1 {
+pub(crate) struct HandoffPublishedPointV1 {
+    output: OutputSlotIdV1,
+    sink_output: HandoffPointSinkOutputIdV1,
+    paint: EncodedPointPaintV1,
+}
+
+impl HandoffPublishedPointV1 {
+    pub(crate) const fn output(self) -> OutputSlotIdV1 {
+        self.output
+    }
+
+    pub(crate) const fn sink_output(self) -> HandoffPointSinkOutputIdV1 {
+        self.sink_output
+    }
+
+    pub(crate) const fn paint(self) -> EncodedPointPaintV1 {
+        self.paint
+    }
+}
+
+/// Полная синхронная команда; ссылки действуют только внутри host callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HandoffPointSinkHostIntentV1<'a> {
     SetAll {
         revision: u64,
         expected_sequence: u64,
         desired_sequence: u64,
         binding_epoch: PointSinkBindingEpochV1,
-        output: OutputSlotIdV1,
-        sink_output: HandoffPointSinkOutputIdV1,
-        paint: EncodedPointPaintV1,
+        scope: &'a [HandoffPointSinkOutputIdV1],
+        points: &'a [HandoffPublishedPointV1],
+        composites: &'a [PointSinkPresentationCompositeV1],
     },
     RevokeAll {
         revision: u64,
         expected_sequence: u64,
         desired_sequence: u64,
         binding_epoch: PointSinkBindingEpochV1,
+        scope: &'a [HandoffPointSinkOutputIdV1],
     },
     ConfirmExact {
         revision: u64,
         published_sequence: u64,
         binding_epoch: PointSinkBindingEpochV1,
-        point: Option<(
-            OutputSlotIdV1,
-            HandoffPointSinkOutputIdV1,
-            EncodedPointPaintV1,
-        )>,
+        scope: &'a [HandoffPointSinkOutputIdV1],
+        points: &'a [HandoffPublishedPointV1],
+        composites: &'a [PointSinkPresentationCompositeV1],
     },
 }
 
-impl HandoffPointSinkHostIntentV1 {
+impl<'a> HandoffPointSinkHostIntentV1<'a> {
     pub(crate) const fn operation(self) -> u32 {
         match self {
             Self::SetAll { .. } => 1,
@@ -111,78 +134,86 @@ impl HandoffPointSinkHostIntentV1 {
         }
     }
 
-    pub(crate) const fn point(
+    pub(crate) const fn scope(self) -> &'a [HandoffPointSinkOutputIdV1] {
+        match self {
+            Self::SetAll { scope, .. }
+            | Self::RevokeAll { scope, .. }
+            | Self::ConfirmExact { scope, .. } => scope,
+        }
+    }
+
+    pub(crate) const fn points(self) -> &'a [HandoffPublishedPointV1] {
+        match self {
+            Self::SetAll { points, .. } | Self::ConfirmExact { points, .. } => points,
+            Self::RevokeAll { .. } => &[],
+        }
+    }
+
+    pub(crate) const fn presentation_composites(self) -> &'a [PointSinkPresentationCompositeV1] {
+        match self {
+            Self::SetAll { composites, .. } | Self::ConfirmExact { composites, .. } => composites,
+            Self::RevokeAll { .. } => &[],
+        }
+    }
+
+    /// Узкая scalar-проекция не выбирает первый элемент полного scope.
+    pub(crate) fn point(
         self,
     ) -> Option<(
         OutputSlotIdV1,
         HandoffPointSinkOutputIdV1,
         EncodedPointPaintV1,
     )> {
-        match self {
-            Self::SetAll {
-                output,
-                sink_output,
-                paint,
-                ..
-            } => Some((output, sink_output, paint)),
-            Self::ConfirmExact { point, .. } => point,
-            Self::RevokeAll { .. } => None,
-        }
+        let [point] = self.points() else {
+            return None;
+        };
+        Some((point.output, point.sink_output, point.paint))
     }
 }
 
-/// Typed status returned by the synchronous host install boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandoffPointSinkHostErrorV1 {
     Rejected,
     Protocol,
+    ResourceExhausted,
 }
 
-/// The only effectful boundary of the private fixture's terminal sink.
-///
-/// `try_install` must publish the whole command atomically or leave the host
-/// lease unchanged. Lifecycle disposal is confirmed by the enclosing private
-/// ABI before it drops the Attachment; Handoff Drop itself has no host effect.
+/// Host применяет команду целиком либо сохраняет прежнее наблюдаемое состояние.
+/// Отзыв при disposal подтверждает внешний владелец; Drop не имеет host-эффекта.
 pub(crate) trait HandoffPointSinkHostV1 {
     fn try_install(
         &mut self,
-        intent: HandoffPointSinkHostIntentV1,
+        intent: HandoffPointSinkHostIntentV1<'_>,
     ) -> Result<(), HandoffPointSinkHostErrorV1>;
 }
 
-/// Creates the single-slot host-backed sink used only by the private fixture.
+/// Принимает уже выделенный полный scope; допуск сверяет его с compiled bindings.
 pub(crate) fn handoff_point_sink<H>(
-    output: HandoffPointSinkOutputIdV1,
+    owned_scope: Vec<HandoffPointSinkOutputIdV1>,
     host: H,
 ) -> HandoffPointSinkWriterV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
-    HandoffPointSinkWriterV1::new(output, host)
+    HandoffPointSinkWriterV1 { owned_scope, host }
 }
 
 pub(crate) type HandoffAttachmentV1<H> =
     ExternallyManagedAttachmentV1<AdmittedHandoffPointSinkWriterV1<H>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HandoffPublishedPointV1 {
-    output: OutputSlotIdV1,
-    sink_output: HandoffPointSinkOutputIdV1,
-    paint: EncodedPointPaintV1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct HandoffCommittedPointStateV1 {
     stamp: PointSinkStampV1,
     revision: Option<u64>,
-    point: Option<HandoffPublishedPointV1>,
+    points: Vec<HandoffPublishedPointV1>,
+    composites: Vec<PointSinkPresentationCompositeV1>,
 }
 
 pub(crate) struct HandoffPointSinkWriterV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
-    owned_scope: [HandoffPointSinkOutputIdV1; 1],
+    owned_scope: Vec<HandoffPointSinkOutputIdV1>,
     host: H,
 }
 
@@ -190,17 +221,23 @@ impl<H> HandoffPointSinkWriterV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
-    const fn new(output: HandoffPointSinkOutputIdV1, host: H) -> Self {
-        Self {
-            owned_scope: [output],
-            host,
-        }
+    fn scope_matches(
+        &self,
+        actual_scope: impl Iterator<Item = HandoffPointSinkOutputIdV1>,
+    ) -> bool {
+        !self.owned_scope.is_empty()
+            && self
+                .owned_scope
+                .iter()
+                .enumerate()
+                .all(|(index, owned)| !self.owned_scope[..index].contains(owned))
+            && self.owned_scope.iter().copied().eq(actual_scope)
     }
 
     #[cfg(test)]
     fn try_admit_exact<I>(
         self,
-        mut actual_scope: I,
+        actual_scope: I,
     ) -> Result<
         PointSinkWriterAdmissionV1<AdmittedHandoffPointSinkWriterV1<H>>,
         PointSinkAdmissionFailureV1<Self>,
@@ -208,8 +245,7 @@ where
     where
         I: Iterator<Item = HandoffPointSinkOutputIdV1>,
     {
-        if actual_scope.next() != self.owned_scope.first().copied() || actual_scope.next().is_some()
-        {
+        if !self.scope_matches(actual_scope) {
             return Err(PointSinkAdmissionFailureV1::new(
                 HandoffPointSinkAdmissionErrorV1::ScopeChanged,
                 self,
@@ -239,8 +275,10 @@ where
                 committed: HandoffCommittedPointStateV1 {
                     stamp,
                     revision: None,
-                    point: None,
+                    points: Vec::new(),
+                    composites: Vec::new(),
                 },
+                retired: None,
                 host,
             },
         ))
@@ -251,9 +289,11 @@ pub(crate) struct AdmittedHandoffPointSinkWriterV1<H>
 where
     H: HandoffPointSinkHostV1,
 {
-    owned_scope: [HandoffPointSinkOutputIdV1; 1],
+    owned_scope: Vec<HandoffPointSinkOutputIdV1>,
     binding_epoch: PointSinkBindingEpochV1,
     committed: HandoffCommittedPointStateV1,
+    // Предыдущее состояние не освобождается между host ACK и Session commit.
+    retired: Option<HandoffCommittedPointStateV1>,
     host: H,
 }
 
@@ -266,17 +306,95 @@ pub(crate) enum HandoffPointSinkAdmissionErrorV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandoffPointSinkErrorV1 {
     PatchScopeMismatch,
+    PresentationEvidenceMismatch,
     StampMismatch,
     RevisionMismatch,
     AlreadyInstalled,
+    ResourceExhausted,
     Host(HandoffPointSinkHostErrorV1),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HandoffStagedPointStateV1 {
-    expected_stamp: PointSinkStampV1,
-    desired: HandoffCommittedPointStateV1,
-    host_intent: HandoffPointSinkHostIntentV1,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HandoffStagedPointStateV1 {
+    SetAll {
+        revision: u64,
+        expected_stamp: PointSinkStampV1,
+        desired: HandoffCommittedPointStateV1,
+    },
+    RevokeAll {
+        revision: u64,
+        expected_stamp: PointSinkStampV1,
+        desired: HandoffCommittedPointStateV1,
+    },
+    ConfirmExact {
+        expected_stamp: PointSinkStampV1,
+        revision: u64,
+    },
+}
+
+impl HandoffStagedPointStateV1 {
+    const fn expected_stamp(&self) -> PointSinkStampV1 {
+        match self {
+            Self::SetAll { expected_stamp, .. }
+            | Self::RevokeAll { expected_stamp, .. }
+            | Self::ConfirmExact { expected_stamp, .. } => *expected_stamp,
+        }
+    }
+
+    #[cfg(any(test, kani))]
+    fn desired<'a>(
+        &'a self,
+        current: &'a HandoffCommittedPointStateV1,
+    ) -> &'a HandoffCommittedPointStateV1 {
+        match self {
+            Self::SetAll { desired, .. } | Self::RevokeAll { desired, .. } => desired,
+            Self::ConfirmExact { .. } => current,
+        }
+    }
+
+    fn host_intent<'a>(
+        &'a self,
+        scope: &'a [HandoffPointSinkOutputIdV1],
+        current: &'a HandoffCommittedPointStateV1,
+    ) -> HandoffPointSinkHostIntentV1<'a> {
+        match self {
+            Self::SetAll {
+                revision,
+                expected_stamp,
+                desired,
+            } => HandoffPointSinkHostIntentV1::SetAll {
+                revision: *revision,
+                expected_sequence: expected_stamp.sequence(),
+                desired_sequence: desired.stamp.sequence(),
+                binding_epoch: expected_stamp.binding_epoch(),
+                scope,
+                points: &desired.points,
+                composites: &desired.composites,
+            },
+            Self::RevokeAll {
+                revision,
+                expected_stamp,
+                desired,
+            } => HandoffPointSinkHostIntentV1::RevokeAll {
+                revision: *revision,
+                expected_sequence: expected_stamp.sequence(),
+                desired_sequence: desired.stamp.sequence(),
+                binding_epoch: expected_stamp.binding_epoch(),
+                scope,
+            },
+            Self::ConfirmExact {
+                expected_stamp,
+                revision,
+            } => HandoffPointSinkHostIntentV1::ConfirmExact {
+                revision: *revision,
+                published_sequence: expected_stamp.sequence(),
+                binding_epoch: expected_stamp.binding_epoch(),
+                scope,
+                points: &current.points,
+                composites: &current.composites,
+            },
+        }
+    }
 }
 
 pub(crate) struct HandoffPreparedPointSinkWriteV1<'lease, H>
@@ -306,15 +424,33 @@ where
         self,
         scope: BoundPointSinkScopePermitV1<'_, Self::OutputId>,
     ) -> Result<PointSinkWriterAdmissionV1<Self::Writer>, PointSinkAdmissionFailureV1<Self>> {
-        let mut actual_scope = scope.output_scope();
-        if actual_scope.next() != self.owned_scope.first().copied() || actual_scope.next().is_some()
-        {
+        if !self.scope_matches(scope.output_scope()) {
             return Err(PointSinkAdmissionFailureV1::new(
                 HandoffPointSinkAdmissionErrorV1::ScopeChanged,
                 self,
             ));
         }
         self.finish_admission()
+    }
+}
+
+impl<H> AdmittedHandoffPointSinkWriterV1<H>
+where
+    H: HandoffPointSinkHostV1,
+{
+    fn reusable_buffers(
+        &mut self,
+    ) -> (
+        Vec<HandoffPublishedPointV1>,
+        Vec<PointSinkPresentationCompositeV1>,
+    ) {
+        let (mut points, mut composites) = match self.retired.take() {
+            Some(retired) => (retired.points, retired.composites),
+            None => (Vec::new(), Vec::new()),
+        };
+        points.clear();
+        composites.clear();
+        (points, composites)
     }
 }
 
@@ -337,95 +473,141 @@ where
         &'lease mut self,
         intent: PointSinkIntentV1<'_, Self::OutputId>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
-        let current = self.committed;
-        let (desired, host_intent) = match intent {
+        let current_stamp = self.committed.stamp;
+        let staged = match intent {
             PointSinkIntentV1::SetAll {
                 revision,
                 stamp,
                 patch,
+                presentation,
             } => {
-                if stamp.expected() != current.stamp {
+                if stamp.expected() != current_stamp {
                     return Err(HandoffPointSinkErrorV1::StampMismatch);
                 }
-                let [point] = patch else {
-                    return Err(HandoffPointSinkErrorV1::PatchScopeMismatch);
-                };
-                if point.sink_output() != self.owned_scope[0] {
+                if patch.len() != self.owned_scope.len()
+                    || !patch
+                        .iter()
+                        .zip(&self.owned_scope)
+                        .all(|(point, owned)| point.sink_output() == *owned)
+                    // Компилятор упорядочивает полные bindings по output ID.
+                    || patch.windows(2).any(|pair| pair[0].output() >= pair[1].output())
+                {
                     return Err(HandoffPointSinkErrorV1::PatchScopeMismatch);
                 }
-                let published = HandoffPublishedPointV1 {
+                let (mut points, mut composites) = self.reusable_buffers();
+                points
+                    .try_reserve_exact(patch.len())
+                    .map_err(|_| HandoffPointSinkErrorV1::ResourceExhausted)?;
+                points.extend(patch.iter().map(|point| HandoffPublishedPointV1 {
                     output: point.output(),
                     sink_output: point.sink_output(),
                     paint: point.paint(),
-                };
-                (
-                    HandoffCommittedPointStateV1 {
+                }));
+                copy_presentation_composites(presentation, &mut composites)?;
+                HandoffStagedPointStateV1::SetAll {
+                    revision,
+                    expected_stamp: current_stamp,
+                    desired: HandoffCommittedPointStateV1 {
                         stamp: stamp.desired(),
                         revision: Some(revision),
-                        point: Some(published),
+                        points,
+                        composites,
                     },
-                    HandoffPointSinkHostIntentV1::SetAll {
-                        revision,
-                        expected_sequence: stamp.expected().sequence(),
-                        desired_sequence: stamp.desired().sequence(),
-                        binding_epoch: stamp.expected().binding_epoch(),
-                        output: published.output,
-                        sink_output: published.sink_output,
-                        paint: published.paint,
-                    },
-                )
+                }
             }
             PointSinkIntentV1::RevokeAll { revision, stamp } => {
-                if stamp.expected() != current.stamp {
+                if stamp.expected() != current_stamp {
                     return Err(HandoffPointSinkErrorV1::StampMismatch);
                 }
-                (
-                    HandoffCommittedPointStateV1 {
+                let (points, composites) = self.reusable_buffers();
+                HandoffStagedPointStateV1::RevokeAll {
+                    revision,
+                    expected_stamp: current_stamp,
+                    desired: HandoffCommittedPointStateV1 {
                         stamp: stamp.desired(),
                         revision: Some(revision),
-                        point: None,
+                        points,
+                        composites,
                     },
-                    HandoffPointSinkHostIntentV1::RevokeAll {
-                        revision,
-                        expected_sequence: stamp.expected().sequence(),
-                        desired_sequence: stamp.desired().sequence(),
-                        binding_epoch: stamp.expected().binding_epoch(),
-                    },
-                )
+                }
             }
             PointSinkIntentV1::ConfirmExact {
                 revision,
                 published_stamp,
             } => {
-                if published_stamp != current.stamp {
+                if published_stamp != current_stamp {
                     return Err(HandoffPointSinkErrorV1::StampMismatch);
                 }
-                if current.revision != Some(revision) {
+                if self.committed.revision != Some(revision) {
                     return Err(HandoffPointSinkErrorV1::RevisionMismatch);
                 }
-                (
-                    current,
-                    HandoffPointSinkHostIntentV1::ConfirmExact {
-                        revision,
-                        published_sequence: published_stamp.sequence(),
-                        binding_epoch: published_stamp.binding_epoch(),
-                        point: current
-                            .point
-                            .map(|point| (point.output, point.sink_output, point.paint)),
-                    },
-                )
+                HandoffStagedPointStateV1::ConfirmExact {
+                    expected_stamp: current_stamp,
+                    revision,
+                }
             }
         };
-
         Ok(HandoffPreparedPointSinkWriteV1 {
             writer: self,
-            staged: Some(HandoffStagedPointStateV1 {
-                expected_stamp: current.stamp,
-                desired,
-                host_intent,
-            }),
+            staged: Some(staged),
         })
     }
+}
+
+fn copy_presentation_composites(
+    presentation: PointSinkPresentationEvidenceV1<'_>,
+    output: &mut Vec<PointSinkPresentationCompositeV1>,
+) -> Result<(), HandoffPointSinkErrorV1> {
+    let count = match presentation {
+        PointSinkPresentationEvidenceV1::Verified(verified) => {
+            let mut count = 0usize;
+            for composite in verified.presentation_composites() {
+                let composite =
+                    composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
+                count = count
+                    .checked_add(composite.scenarios.len())
+                    .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
+            }
+            count
+        }
+        #[cfg(any(test, kani))]
+        PointSinkPresentationEvidenceV1::Fixture(composites) => composites.len(),
+    };
+    count
+        .checked_mul(mem::size_of::<PointSinkPresentationCompositeV1>())
+        .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| HandoffPointSinkErrorV1::ResourceExhausted)?;
+    match presentation {
+        PointSinkPresentationEvidenceV1::Verified(verified) => {
+            for composite in verified.presentation_composites() {
+                let composite =
+                    composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
+                for scenario in composite.scenarios {
+                    output.push(PointSinkPresentationCompositeV1::new(
+                        composite.root,
+                        scenario.value(),
+                        crate::Srgb8::new(composite.rgb),
+                    ));
+                }
+            }
+        }
+        #[cfg(any(test, kani))]
+        PointSinkPresentationEvidenceV1::Fixture(composites) => {
+            output.extend_from_slice(composites)
+        }
+    }
+    crate::ordering::sort_by_key(output, |entry| (entry.root(), entry.scenario()));
+    if output.windows(2).any(|pair| {
+        pair[0].root() == pair[1].root()
+            && pair[0].scenario() == pair[1].scenario()
+            && pair[0].visible() != pair[1].visible()
+    }) {
+        return Err(HandoffPointSinkErrorV1::PresentationEvidenceMismatch);
+    }
+    output.dedup_by_key(|entry| (entry.root(), entry.scenario()));
+    Ok(())
 }
 
 impl<H> PreparedPointSinkWriteV1 for HandoffPreparedPointSinkWriteV1<'_, H>
@@ -435,31 +617,93 @@ where
     type Error = HandoffPointSinkErrorV1;
 
     fn try_install(&mut self) -> Result<(), Self::Error> {
-        let Some(staged) = self.staged else {
+        let Some(staged) = self.staged.take() else {
             return Err(HandoffPointSinkErrorV1::AlreadyInstalled);
         };
-        if self.writer.committed.stamp != staged.expected_stamp {
+        if self.writer.committed.stamp != staged.expected_stamp() {
+            self.staged = Some(staged);
             return Err(HandoffPointSinkErrorV1::StampMismatch);
         }
-        self.writer
-            .host
-            .try_install(staged.host_intent)
-            .map_err(HandoffPointSinkErrorV1::Host)?;
+        let intent = staged.host_intent(&self.writer.owned_scope, &self.writer.committed);
+        if let Err(error) = self.writer.host.try_install(intent) {
+            self.staged = Some(staged);
+            return Err(HandoffPointSinkErrorV1::Host(error));
+        }
 
-        // The synchronous host publication above is the only fallible effect.
-        // From here through Session commit, only Copy writes and moves occur.
-        self.writer.committed = staged.desired;
-        self.staged = None;
+        // После host ACK только moves: прежние Vec остаются в retirement-слоте.
+        match staged {
+            HandoffStagedPointStateV1::SetAll { desired, .. }
+            | HandoffStagedPointStateV1::RevokeAll { desired, .. } => {
+                let retired = mem::replace(&mut self.writer.committed, desired);
+                self.writer.retired = Some(retired);
+            }
+            HandoffStagedPointStateV1::ConfirmExact { .. } => {}
+        }
         Ok(())
     }
 
     fn finish_after_session(self) {}
 }
 
-// `Relaxed` load/store suffices: the epoch is used only as a unique token that
-// is handed to the caller by value, so no synchronization edge with any other
-// datum is required — uniqueness of the returned value is the only invariant,
-// and `fetch_update` makes the increment atomic regardless of ordering.
+/// Собственный snapshot callback для unit/formal проверки; не production-порт.
+#[cfg(any(test, kani))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HandoffRecordedHostIntentV1 {
+    operation: u32,
+    revision: u64,
+    expected_sequence: u64,
+    desired_sequence: u64,
+    binding_epoch: PointSinkBindingEpochV1,
+    scope: Vec<HandoffPointSinkOutputIdV1>,
+    points: Vec<HandoffPublishedPointV1>,
+    composites: Vec<PointSinkPresentationCompositeV1>,
+}
+
+#[cfg(any(test, kani))]
+impl HandoffRecordedHostIntentV1 {
+    pub(crate) fn from_intent(intent: HandoffPointSinkHostIntentV1<'_>) -> Self {
+        Self {
+            operation: intent.operation(),
+            revision: intent.revision(),
+            expected_sequence: intent.expected_sequence(),
+            desired_sequence: intent.desired_sequence(),
+            binding_epoch: intent.binding_epoch(),
+            scope: intent.scope().to_vec(),
+            points: intent.points().to_vec(),
+            composites: intent.presentation_composites().to_vec(),
+        }
+    }
+
+    pub(crate) const fn operation(&self) -> u32 {
+        self.operation
+    }
+    pub(crate) const fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) const fn expected_sequence(&self) -> u64 {
+        self.expected_sequence
+    }
+    pub(crate) const fn desired_sequence(&self) -> u64 {
+        self.desired_sequence
+    }
+    pub(crate) const fn binding_epoch(&self) -> PointSinkBindingEpochV1 {
+        self.binding_epoch
+    }
+    pub(crate) fn point(
+        &self,
+    ) -> Option<(
+        OutputSlotIdV1,
+        HandoffPointSinkOutputIdV1,
+        EncodedPointPaintV1,
+    )> {
+        let [point] = self.points.as_slice() else {
+            return None;
+        };
+        Some((point.output, point.sink_output, point.paint))
+    }
+}
+
+// Эпоха — уникальный токен, не synchronization edge с другими данными.
 fn next_handoff_point_sink_epoch_v1() -> Option<PointSinkBindingEpochV1> {
     NEXT_HANDOFF_POINT_SINK_EPOCH_V1
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -505,11 +749,11 @@ mod tests {
     #[derive(Debug)]
     struct FakeHostStateV1 {
         generation: u32,
-        owned_scope: [HandoffPointSinkOutputIdV1; 1],
+        owned_scope: Vec<HandoffPointSinkOutputIdV1>,
         active: bool,
         dispose_count: usize,
-        installs: Vec<HandoffPointSinkHostIntentV1>,
-        published: Option<HandoffPointSinkHostIntentV1>,
+        installs: Vec<HandoffRecordedHostIntentV1>,
+        published: Option<HandoffRecordedHostIntentV1>,
         next_error: Option<HandoffPointSinkHostErrorV1>,
         checkpoint_terminal_tail: bool,
         panic_before_install: bool,
@@ -517,9 +761,13 @@ mod tests {
 
     impl FakeHostStateV1 {
         fn new(owned: HandoffPointSinkOutputIdV1) -> Self {
+            Self::new_scope(vec![owned])
+        }
+
+        fn new_scope(owned_scope: Vec<HandoffPointSinkOutputIdV1>) -> Self {
             Self {
                 generation: HOST_GENERATION,
-                owned_scope: [owned],
+                owned_scope,
                 active: true,
                 dispose_count: 0,
                 installs: Vec::new(),
@@ -535,7 +783,7 @@ mod tests {
             generation: u32,
             owned_scope: [HandoffPointSinkOutputIdV1; 1],
         ) -> bool {
-            if !self.active || generation != self.generation || owned_scope != self.owned_scope {
+            if !self.active || generation != self.generation || self.owned_scope != owned_scope {
                 return false;
             }
             self.active = false;
@@ -550,17 +798,22 @@ mod tests {
     impl HandoffPointSinkHostV1 for FakeHostV1 {
         fn try_install(
             &mut self,
-            intent: HandoffPointSinkHostIntentV1,
+            intent: HandoffPointSinkHostIntentV1<'_>,
         ) -> Result<(), HandoffPointSinkHostErrorV1> {
             let mut state = self.0.borrow_mut();
             if core::mem::take(&mut state.panic_before_install) {
                 panic!("test host panics before publication");
             }
-            state.installs.push(intent);
+            if !state.active || intent.scope() != state.owned_scope {
+                return Err(HandoffPointSinkHostErrorV1::Protocol);
+            }
+            state
+                .installs
+                .push(HandoffRecordedHostIntentV1::from_intent(intent));
             if let Some(error) = state.next_error.take() {
                 return Err(error);
             }
-            state.published = Some(intent);
+            state.published = Some(HandoffRecordedHostIntentV1::from_intent(intent));
             let checkpoint_terminal_tail = core::mem::take(&mut state.checkpoint_terminal_tail);
             drop(state);
             if checkpoint_terminal_tail {
@@ -575,22 +828,30 @@ mod tests {
         (FakeHostV1(Rc::clone(&state)), state)
     }
 
+    fn fake_host_scope(
+        scope: &[HandoffPointSinkOutputIdV1],
+    ) -> (FakeHostV1, Rc<RefCell<FakeHostStateV1>>) {
+        let state = Rc::new(RefCell::new(FakeHostStateV1::new_scope(scope.to_vec())));
+        (FakeHostV1(Rc::clone(&state)), state)
+    }
+
     #[test]
     fn admission_is_exact_and_unbound_drop_has_no_host_effect() {
         let owned = HandoffPointSinkOutputIdV1::new(900);
         let foreign = HandoffPointSinkOutputIdV1::new(901);
         let (host, state) = fake_host(owned);
-        let factory_lease = handoff_point_sink(owned, host);
+        let factory_lease = handoff_point_sink(vec![owned], host);
         assert_eq!(factory_lease.owned_output_scope(), &[owned]);
         drop(factory_lease);
         assert!(state.borrow().installs.is_empty());
 
         let (host, state) = fake_host(owned);
-        let failure =
-            match handoff_point_sink(owned, host).try_admit_exact([owned, foreign].into_iter()) {
-                Ok(_) => panic!("an overbroad scope must not be admitted"),
-                Err(failure) => failure,
-            };
+        let failure = match handoff_point_sink(vec![owned], host)
+            .try_admit_exact([owned, foreign].into_iter())
+        {
+            Ok(_) => panic!("an overbroad scope must not be admitted"),
+            Err(failure) => failure,
+        };
         let (cause, retry) = failure.into_parts();
         assert_eq!(cause, HandoffPointSinkAdmissionErrorV1::ScopeChanged);
         drop(retry);
@@ -656,26 +917,17 @@ mod tests {
         };
         let state_after_publish = state.borrow();
         assert_eq!(state_after_publish.installs.len(), 1);
-        match state_after_publish.published {
-            Some(HandoffPointSinkHostIntentV1::SetAll {
-                revision,
-                expected_sequence,
-                desired_sequence,
-                binding_epoch,
-                output,
-                sink_output,
-                paint,
-            }) => {
-                assert_eq!(revision, 1);
-                assert_eq!(expected_sequence, 0);
-                assert_eq!(desired_sequence, 1);
-                assert_ne!(binding_epoch.value().get(), 0);
-                assert_eq!(output, rendered.0);
-                assert_eq!(sink_output, rendered.1);
-                assert_eq!(paint, rendered.2);
-            }
-            other => panic!("unexpected host intent: {other:?}"),
-        }
+        let published = state_after_publish
+            .published
+            .as_ref()
+            .expect("host intent is published");
+        assert_eq!(published.operation, 1);
+        assert_eq!(published.revision, 1);
+        assert_eq!(published.expected_sequence, 0);
+        assert_eq!(published.desired_sequence, 1);
+        assert_ne!(published.binding_epoch.value().get(), 0);
+        assert_eq!(published.scope, [owned]);
+        assert_eq!(published.point(), Some(rendered));
         drop(state_after_publish);
 
         drop(attachment);
@@ -712,6 +964,7 @@ mod tests {
                 revision: 17,
                 stamp: first_mutation,
                 patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
             .unwrap_or_else(|_| panic!("the exact initial patch must prepare"));
         set.try_install()
@@ -749,6 +1002,7 @@ mod tests {
                 revision: 19,
                 stamp: third_mutation,
                 patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
             .unwrap_or_else(|_| panic!("the same lease must accept a later set"));
         reset
@@ -758,25 +1012,17 @@ mod tests {
 
         let installs = &state.borrow().installs;
         assert_eq!(installs.len(), 4);
-        assert!(matches!(
-            installs[0],
-            HandoffPointSinkHostIntentV1::SetAll { .. }
-        ));
-        assert!(matches!(
-            installs[1],
-            HandoffPointSinkHostIntentV1::RevokeAll { .. }
-        ));
-        assert!(matches!(
-            installs[2],
-            HandoffPointSinkHostIntentV1::ConfirmExact { point: None, .. }
-        ));
-        assert!(matches!(
-            installs[3],
-            HandoffPointSinkHostIntentV1::SetAll { .. }
-        ));
+        assert_eq!(
+            installs
+                .iter()
+                .map(|intent| intent.operation)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 1]
+        );
+        assert!(installs[2].points.is_empty());
         assert_eq!(sink.owned_scope, [owned]);
         assert_eq!(sink.committed.revision, Some(19));
-        assert!(sink.committed.point.is_some());
+        assert!(!sink.committed.points.is_empty());
     }
 
     #[test]
@@ -818,6 +1064,7 @@ mod tests {
                 revision: 17,
                 stamp: foreign_mutation,
                 patch: &owned_patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             }),
             Err(HandoffPointSinkErrorV1::StampMismatch)
         ));
@@ -828,6 +1075,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &foreign_patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             }),
             Err(HandoffPointSinkErrorV1::PatchScopeMismatch)
         ));
@@ -839,6 +1087,7 @@ mod tests {
                     revision: 17,
                     stamp: mutation,
                     patch: &owned_patch,
+                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
                 })
                 .unwrap_or_else(|_| panic!("the exact patch must prepare"));
             prepared.writer.committed.stamp = mutation.desired();
@@ -855,6 +1104,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &owned_patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
             .unwrap_or_else(|_| panic!("the exact patch must prepare"));
         installed
@@ -885,6 +1135,7 @@ mod tests {
                     revision: 17,
                     stamp: mutation,
                     patch: &patch,
+                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
                 })
                 .unwrap_or_else(|_| panic!("the exact patch must prepare"));
         }
@@ -894,6 +1145,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
             })
             .unwrap_or_else(|_| panic!("the lease must remain retryable"));
         retry
@@ -931,7 +1183,7 @@ mod tests {
                     };
                     attachment
                         .update(input(initial_revision, initial_unknown))
-                        .unwrap();
+                        .expect("начальное наблюдаемое или неизвестное состояние истории должно зафиксироваться");
                     let mut revision = initial_revision;
                     let mut unknown = initial_unknown;
                     let mut sequence = attachment.expected_sink_stamp.sequence();
@@ -940,8 +1192,8 @@ mod tests {
                     for step in 0..3 {
                         let action = remaining % 7;
                         remaining /= 7;
-                        let old_sink = attachment.sink.committed;
-                        let old_published = probe.borrow().published;
+                        let old_sink = attachment.sink.committed.clone();
+                        let old_published = probe.borrow().published.clone();
                         let old_calls = probe.borrow().installs.len();
                         let old_kind = attachment.session.evidence().kind();
                         let repeated = action == 2 || action == 6;
@@ -996,7 +1248,9 @@ mod tests {
                             }
                             attachment
                                 .update(input(next_revision, next_unknown))
-                                .unwrap();
+                                .expect(
+                                    "тот же запрос после отказа host должен успешно повториться",
+                                );
                         } else {
                             assert!(result.is_ok());
                         }
@@ -1013,8 +1267,12 @@ mod tests {
                             attachment.expected_sink_stamp
                         );
                         assert_eq!(attachment.sink.committed.revision, Some(revision));
-                        assert_eq!(attachment.sink.committed.point.is_none(), unknown);
-                        let published = probe.borrow().published.unwrap();
+                        assert_eq!(attachment.sink.committed.points.is_empty(), unknown);
+                        let published = probe
+                            .borrow()
+                            .published
+                            .clone()
+                            .expect("успешный шаг истории должен опубликовать intent host");
                         assert_eq!(published.revision(), revision);
                         assert_eq!(published.desired_sequence(), sequence);
                         assert_eq!(published.binding_epoch(), epoch);
@@ -1042,7 +1300,9 @@ mod tests {
                         );
                         // Повтор проходит весь Attachment и подтверждает живое evidence,
                         // не повышая исторические значения до текущего render output.
-                        let confirmed = attachment.update(input(revision, unknown)).unwrap();
+                        let confirmed = attachment
+                            .update(input(revision, unknown))
+                            .expect("повтор текущего запроса должен подтвердить живое evidence");
                         assert_eq!(confirmed.render_outputs().len(), usize::from(!unknown));
                         if let Some(output) = confirmed.render_outputs().next() {
                             assert_eq!(output.paint(), point_paint());
@@ -1073,9 +1333,12 @@ mod tests {
                 revision: 1,
                 scenarios: &scenarios,
             })
-            .unwrap();
+            .expect("начальное наблюдение должно зафиксироваться до проверки panic host");
         for unknown in [true, false] {
-            let next_revision = attachment.committed_revision.unwrap() + 1;
+            let next_revision = attachment
+                .committed_revision
+                .expect("успешное начальное обновление должно установить ревизию")
+                + 1;
             let input = || {
                 if unknown {
                     UpdateV1::Unknown {
@@ -1089,8 +1352,8 @@ mod tests {
                     }
                 }
             };
-            let old = attachment.sink.committed;
-            let published = probe.borrow().published;
+            let old = attachment.sink.committed.clone();
+            let published = probe.borrow().published.clone();
             for _ in 0..4 {
                 probe.borrow_mut().panic_before_install = true;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1102,7 +1365,9 @@ mod tests {
                 assert_eq!(attachment.committed_revision, old.revision);
                 assert_eq!(probe.borrow().published, published);
             }
-            let commit = attachment.update(input()).unwrap();
+            let commit = attachment
+                .update(input())
+                .expect("после panic host тот же запрос должен зафиксироваться");
             assert_eq!(commit.render_outputs().len(), usize::from(!unknown));
             assert_eq!(attachment.committed_revision, Some(next_revision));
         }
@@ -1141,9 +1406,437 @@ mod tests {
                 &emissions,
                 &presentations,
                 FamilyArtifactBundleV2::empty(),
-                handoff_point_sink(owned, host),
+                handoff_point_sink(vec![owned], host),
             )
             .unwrap_or_else(|_| panic!("the exact fixture attachment must be admitted"))
+    }
+
+    #[test]
+    fn complete_scope_preserves_alpha_composites_replay_and_revoke() {
+        let scope = [
+            HandoffPointSinkOutputIdV1::new(900),
+            HandoffPointSinkOutputIdV1::new(901),
+        ];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let patch = two_point_patch(&scope);
+        let composites = [
+            PointSinkPresentationCompositeV1::new(10, 8, Srgb8::new([40, 50, 60])),
+            PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([10, 20, 30])),
+        ];
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
+        let mut prepared = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 17,
+                stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+            })
+            .expect("полный patch с двумя выходами должен подготовиться");
+        prepared
+            .try_install()
+            .expect("полный patch должен установиться атомарно");
+        prepared.finish_after_session();
+        let first = state
+            .borrow()
+            .published
+            .clone()
+            .expect("успешная установка должна опубликовать оба выхода");
+        assert_eq!(first.scope, scope);
+        assert_eq!(first.points.len(), 2);
+        assert_eq!(first.points[0].paint.opacity_bits(), 0.25f64.to_bits());
+        assert_eq!(first.points[1].paint.opacity_bits(), 0.75f64.to_bits());
+        assert_eq!(first.points[0].paint.source(), Srgb8::new([12, 34, 56]));
+        assert_eq!(first.points[1].paint.source(), Srgb8::new([22, 44, 66]));
+        assert_eq!(first.composites, [composites[1], composites[0]]);
+        let mut replay = sink
+            .prepare(PointSinkIntentV1::ConfirmExact {
+                revision: 17,
+                published_stamp: stamp.desired(),
+            })
+            .expect("повтор полного patch должен подготовиться без новой ревизии");
+        replay
+            .try_install()
+            .expect("точный повтор полного patch должен установиться");
+        replay.finish_after_session();
+        let replayed = state
+            .borrow()
+            .published
+            .clone()
+            .expect("точный повтор должен сохранить опубликованные значения и композиции");
+        assert_eq!(replayed.operation, 3);
+        assert_eq!(replayed.scope, first.scope);
+        assert_eq!(replayed.points, first.points);
+        assert_eq!(replayed.composites, first.composites);
+        assert_eq!(replayed.desired_sequence, first.desired_sequence);
+        let revoke_stamp = PointSinkMutationStampV1::new(stamp.desired())
+            .expect("опубликованный stamp должен допускать отзыв");
+        let mut revoke = sink
+            .prepare(PointSinkIntentV1::RevokeAll {
+                revision: 18,
+                stamp: revoke_stamp,
+            })
+            .expect("отзыв полного patch должен подготовиться");
+        revoke
+            .try_install()
+            .expect("отзыв должен атомарно очистить все выходы");
+        revoke.finish_after_session();
+        let revoked = state
+            .borrow()
+            .published
+            .clone()
+            .expect("успешный отзыв должен опубликовать пустое состояние");
+        assert_eq!(revoked.operation, 2);
+        assert_eq!(revoked.scope, scope);
+        assert!(revoked.points.is_empty() && revoked.composites.is_empty());
+        let mut replay = sink
+            .prepare(PointSinkIntentV1::ConfirmExact {
+                revision: 18,
+                published_stamp: revoke_stamp.desired(),
+            })
+            .expect("подтверждение пустого состояния должно подготовиться");
+        replay
+            .try_install()
+            .expect("подтверждение пустого состояния должно установиться");
+        replay.finish_after_session();
+        let confirmed = state
+            .borrow()
+            .published
+            .clone()
+            .expect("host должен подтвердить пустое состояние без смены stamp");
+        assert_eq!(confirmed.operation, 3);
+        assert_eq!(confirmed.scope, scope);
+        assert!(confirmed.points.is_empty() && confirmed.composites.is_empty());
+        assert_eq!(confirmed.desired_sequence, revoked.desired_sequence);
+    }
+
+    #[test]
+    fn complete_scope_refusal_retains_every_old_value_and_retry_is_once_only() {
+        let scope = [
+            HandoffPointSinkOutputIdV1::new(900),
+            HandoffPointSinkOutputIdV1::new(901),
+        ];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let patch = two_point_patch(&scope);
+        let first_stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
+        let mut first = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp: first_stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+            })
+            .expect("полный начальный patch должен подготовиться до проверки отказов");
+        first
+            .try_install()
+            .expect("полный начальный patch должен установиться до проверки отказов");
+        first.finish_after_session();
+        let old = sink.committed.clone();
+        let published = state.borrow().published.clone();
+        let next_stamp = PointSinkMutationStampV1::new(first_stamp.desired())
+            .expect("начальный опубликованный stamp должен допускать следующее обновление");
+        let changed = [
+            patch[0],
+            point_patch_at(1, 11, scope[1], alpha_paint(4, [88, 99, 111], 0.75)),
+        ];
+        for error in [
+            HandoffPointSinkHostErrorV1::Rejected,
+            HandoffPointSinkHostErrorV1::Protocol,
+            HandoffPointSinkHostErrorV1::ResourceExhausted,
+        ] {
+            state.borrow_mut().next_error = Some(error);
+            let mut next = sink
+                .prepare(PointSinkIntentV1::SetAll {
+                    revision: 2,
+                    stamp: next_stamp,
+                    patch: &changed,
+                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                })
+                .expect("полный новый patch должен подготовиться до проверки отказа host");
+            assert_eq!(
+                next.try_install(),
+                Err(HandoffPointSinkErrorV1::Host(error))
+            );
+            assert_eq!(next.writer.committed, old);
+            assert_eq!(state.borrow().published, published);
+            assert!(next.staged.is_some());
+        }
+        let mut recovery = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 2,
+                stamp: next_stamp,
+                patch: &changed,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+            })
+            .expect("тот же patch после отказов host должен повторно подготовиться");
+        recovery
+            .try_install()
+            .expect("тот же patch после отказов host должен успешно установиться");
+        let calls = state.borrow().installs.len();
+        assert_eq!(
+            recovery.try_install(),
+            Err(HandoffPointSinkErrorV1::AlreadyInstalled)
+        );
+        assert_eq!(state.borrow().installs.len(), calls);
+        recovery.finish_after_session();
+        assert_eq!(sink.committed.stamp, next_stamp.desired());
+        assert_eq!(sink.committed.revision, Some(2));
+        assert_eq!(sink.committed.points[0].paint, old.points[0].paint);
+        assert_eq!(sink.committed.points[1].paint, changed[1].paint());
+    }
+
+    #[test]
+    fn complete_scope_admission_and_patch_reject_missing_aliased_foreign_entries() {
+        let first = HandoffPointSinkOutputIdV1::new(900);
+        let second = HandoffPointSinkOutputIdV1::new(901);
+        let foreign = HandoffPointSinkOutputIdV1::new(902);
+        for (owned, actual) in [
+            (vec![first, second], vec![first]),
+            (vec![first, second], vec![first, foreign]),
+            (vec![first, first], vec![first, first]),
+            (vec![], vec![]),
+        ] {
+            let (host, state) = fake_host_scope(&owned);
+            let failure = match handoff_point_sink(owned, host).try_admit_exact(actual.into_iter())
+            {
+                Ok(_) => panic!("неполный, чужой или повторяющийся scope нельзя допустить"),
+                Err(failure) => failure,
+            };
+            assert_eq!(
+                failure.into_parts().0,
+                HandoffPointSinkAdmissionErrorV1::ScopeChanged
+            );
+            assert!(state.borrow().installs.is_empty());
+        }
+        let scope = [first, second];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let good = two_point_patch(&scope);
+        let bad = [
+            vec![good[0]],
+            vec![good[0], point_patch_at(1, 11, foreign, good[1].paint())],
+            vec![good[0], point_patch_at(1, 10, second, good[1].paint())],
+            vec![good[1], good[0]],
+            vec![
+                point_patch_at(0, 11, first, good[0].paint()),
+                point_patch_at(1, 10, second, good[1].paint()),
+            ],
+        ];
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
+        for patch in &bad {
+            assert!(matches!(
+                sink.prepare(PointSinkIntentV1::SetAll {
+                    revision: 1,
+                    stamp,
+                    patch,
+                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                }),
+                Err(HandoffPointSinkErrorV1::PatchScopeMismatch)
+            ));
+        }
+        assert!(state.borrow().installs.is_empty());
+        let mut legal = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp,
+                patch: &good,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+            })
+            .expect("точный полный scope должен подготовить допустимый patch");
+        legal
+            .try_install()
+            .expect("допустимый patch должен установиться после отказов неверным scope");
+        legal.finish_after_session();
+        assert_eq!(
+            state
+                .borrow()
+                .published
+                .as_ref()
+                .expect("успешная установка полного scope должна опубликовать оба выхода")
+                .points
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn complete_scope_install_retains_old_buffers_without_post_ack_allocator_events() {
+        let scope = [
+            HandoffPointSinkOutputIdV1::new(900),
+            HandoffPointSinkOutputIdV1::new(901),
+        ];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let patch = two_point_patch(&scope);
+        let composites = [PointSinkPresentationCompositeV1::new(9, 7, VALUE)];
+        let first_stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
+        let mut first = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp: first_stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+            })
+            .expect("начальный patch с композициями должен подготовиться");
+        first
+            .try_install()
+            .expect("начальный patch с композициями должен установиться");
+        first.finish_after_session();
+        let second_stamp = PointSinkMutationStampV1::new(first_stamp.desired())
+            .expect("первый опубликованный stamp должен допускать вторую установку");
+        let mut next = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 2,
+                stamp: second_stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+            })
+            .expect("второй patch должен подготовиться до измерения выделений памяти");
+        state.borrow_mut().checkpoint_terminal_tail = true;
+        let (result, events) = crate::test_support::measured_allocator_events(|| {
+            next.try_install()?;
+            next.finish_after_session();
+            Ok::<_, HandoffPointSinkErrorV1>(())
+        });
+        assert!(result.is_ok());
+        assert_eq!(events, crate::test_support::AllocatorEvents::default());
+        assert_eq!(
+            sink.retired
+                .as_ref()
+                .expect("после ACK старые буферы должны оставаться в retired")
+                .points
+                .len(),
+            2
+        );
+        let published = state.borrow().published.clone();
+        {
+            let _cancelled = sink
+                .prepare(PointSinkIntentV1::SetAll {
+                    revision: 3,
+                    stamp: PointSinkMutationStampV1::new(second_stamp.desired())
+                        .expect("второй опубликованный stamp должен допускать третье обновление"),
+                    patch: &patch,
+                    presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                })
+                .expect("допустимый третий patch должен подготовиться до отмены");
+        }
+        assert_eq!(sink.committed.stamp, second_stamp.desired());
+        assert_eq!(state.borrow().published, published);
+        assert!(sink.retired.is_none());
+        let mut recovery = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 3,
+                stamp: PointSinkMutationStampV1::new(second_stamp.desired()).expect(
+                    "второй опубликованный stamp должен допускать повтор третьего обновления",
+                ),
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+            })
+            .expect("тот же patch после отмены должен повторно подготовиться");
+        recovery
+            .try_install()
+            .expect("тот же patch после отмены должен успешно установиться");
+        recovery.finish_after_session();
+        assert_eq!(sink.committed.revision, Some(3));
+    }
+
+    #[test]
+    fn presentation_fanout_keeps_scenarios_distinct_and_rejects_conflicting_evidence() {
+        let scope = [
+            HandoffPointSinkOutputIdV1::new(900),
+            HandoffPointSinkOutputIdV1::new(901),
+        ];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let patch = two_point_patch(&scope);
+        let stamp = PointSinkMutationStampV1::new(initial)
+            .expect("начальный stamp должен иметь допустимого преемника");
+        let first = PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([10, 20, 30]));
+        let second = PointSinkPresentationCompositeV1::new(9, 8, Srgb8::new([40, 50, 60]));
+        let conflict = PointSinkPresentationCompositeV1::new(9, 7, Srgb8::new([40, 50, 60]));
+        assert!(matches!(
+            sink.prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[first, conflict]),
+            }),
+            Err(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)
+        ));
+        assert!(state.borrow().published.is_none());
+        let mut valid = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp,
+                patch: &patch,
+                presentation: PointSinkPresentationEvidenceV1::Fixture(&[second, first, first]),
+            })
+            .expect("согласованные композиции разных сценариев должны подготовиться");
+        valid
+            .try_install()
+            .expect("согласованные композиции разных сценариев должны установиться");
+        valid.finish_after_session();
+        assert_eq!(
+            state
+                .borrow()
+                .published
+                .as_ref()
+                .expect("успешная установка должна опубликовать обе композиции")
+                .composites,
+            [first, second]
+        );
+    }
+
+    fn admitted_scope(
+        scope: &[HandoffPointSinkOutputIdV1],
+        host: FakeHostV1,
+    ) -> (
+        AdmittedHandoffPointSinkWriterV1<FakeHostV1>,
+        PointSinkStampV1,
+    ) {
+        handoff_point_sink(scope.to_vec(), host)
+            .try_admit_exact(scope.iter().copied())
+            .unwrap_or_else(|_| panic!("полный scope должен пройти допуск"))
+            .into_parts()
+    }
+
+    fn two_point_patch(
+        scope: &[HandoffPointSinkOutputIdV1; 2],
+    ) -> [PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1>; 2] {
+        [
+            point_patch_at(0, 10, scope[0], alpha_paint(3, [12, 34, 56], 0.25)),
+            point_patch_at(1, 11, scope[1], alpha_paint(4, [22, 44, 66], 0.75)),
+        ]
+    }
+
+    fn alpha_paint(id: u32, source: [u8; 3], alpha: f64) -> EncodedPointPaintV1 {
+        let opacity = crate::composition::AdmittedOpacityV1::new(alpha)
+            .expect("opacity контрольного paint в диапазоне от нуля до единицы должна приниматься");
+        EncodedPointPaintV1::from_value(
+            PaintId::new(id),
+            EncodedPointPaintValueV1::from_admitted(Srgb8::new(source), opacity),
+        )
+    }
+
+    fn point_patch_at(
+        ordinal: usize,
+        output: u32,
+        sink_output: HandoffPointSinkOutputIdV1,
+        paint: EncodedPointPaintV1,
+    ) -> PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1> {
+        PointSinkPatchEntryV1 {
+            emission: AttachedPointEmissionV1 {
+                output_ordinal: ordinal,
+                output: OutputSlotIdV1::new(output),
+                sink_output,
+            },
+            paint,
+        }
     }
 
     fn admitted_sink(
@@ -1153,7 +1846,7 @@ mod tests {
         AdmittedHandoffPointSinkWriterV1<FakeHostV1>,
         PointSinkStampV1,
     ) {
-        handoff_point_sink(owned, host)
+        handoff_point_sink(vec![owned], host)
             .try_admit_exact([owned].into_iter())
             .unwrap_or_else(|_| panic!("the exact scope must be admitted"))
             .into_parts()

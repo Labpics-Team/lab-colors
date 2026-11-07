@@ -20,7 +20,11 @@ use crate::session::{
 /// Characterization tests spell an immediate commit explicitly through this
 /// test-only trait while production retains no such authority.
 type CommittedSessionStateResult<'session, Plan> = Result<
-    &'session SessionState<<Plan as SessionPlanV1>::Verified, <Plan as SessionPlanV1>::Violation>,
+    &'session SessionState<
+        <Plan as SessionPlanV1>::Verified,
+        <Plan as SessionPlanV1>::Violation,
+        <Plan as SessionPlanV1>::Incomplete,
+    >,
     SessionUpdateError<<Plan as SessionPlanV1>::Error>,
 >;
 
@@ -122,6 +126,7 @@ impl SessionPlanV1 for SentinelPlan {
     type OwnerLease = ();
     type Verified = SentinelVerified;
     type Violation = SentinelViolation;
+    type Incomplete = std::convert::Infallible;
     type Error = SentinelError;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
@@ -191,6 +196,7 @@ impl SessionPlanV1 for ReplacingOwnerPlan {
     type OwnerLease = Rc<ReplacingOwnerGeneration>;
     type Verified = SentinelVerified;
     type Violation = SentinelViolation;
+    type Incomplete = std::convert::Infallible;
     type Error = SentinelError;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
@@ -309,6 +315,7 @@ impl SessionPlanV1 for RetirementPlan {
     type OwnerLease = ();
     type Verified = RetirementEvidence;
     type Violation = RetirementEvidence;
+    type Incomplete = std::convert::Infallible;
     type Error = SentinelError;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
@@ -363,6 +370,7 @@ impl SessionPlanV1 for DropOrderPlan {
     type OwnerLease = Rc<DropOrderOwnerGeneration>;
     type Verified = DropOrderEvidence;
     type Violation = DropOrderEvidence;
+    type Incomplete = std::convert::Infallible;
     type Error = SentinelError;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {

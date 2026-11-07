@@ -19,6 +19,7 @@ fn equality_requires_the_same_observation_allocation() {
         stream: ObservationStreamId::new(first_stream),
         revision: Revision::new(first_revision),
         backing: first_backing.clone(),
+        field: None,
     };
     let second = RevisionBoundObservationV1 {
         stream: ObservationStreamId::new(second_stream),
@@ -28,6 +29,7 @@ fn equality_requires_the_same_observation_allocation() {
         } else {
             other_backing
         },
+        field: None,
     };
     let coordinates_match = first_stream == second_stream && first_revision == second_revision;
     let expected = same_allocation && coordinates_match;

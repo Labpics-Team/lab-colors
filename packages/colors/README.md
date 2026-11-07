@@ -12,7 +12,7 @@ Lab Colors выбирает подходящие значения с учёто�
 ## Установка
 
 ```sh
-npm install @labpics/colors@^1
+npm install @labpics/colors@^2
 ```
 
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
@@ -118,8 +118,7 @@ try {
 Здесь `82` — ID ограничения, `71` — presentation root, `61` — occurrence.
 Проверяется финальный encoded-sRGB8 результат этой точки с учётом композиции,
 а не только исходный цвет. `true` задаёт обязательное ограничение; `false`
-не ограничивает выдачу outputs. Результаты отдельных report-only ограничений
-публичный `ProgramSnapshot` не раскрывает.
+сохраняет оценку в отчёте и не ограничивает выдачу outputs.
 
 Это явно выбранная, закреплённая версией пакета конвенция. Она не включается
 автоматически и не подтверждает человеческое восприятие, фактическую отрисовку
@@ -132,6 +131,41 @@ try {
 человеческого восприятия. При обновлении пакета сохранённый wire следует заново
 компилировать и оценивать: семантическая идентичность Program включает выпуск
 конвенции, поэтому старые сертификаты не удостоверяют новый набор.
+
+## Чтение оценок ограничений
+
+`assessmentReport()` у `ProgramSnapshot` и `ProgramAttachedSnapshot`
+возвращает `ProgramAssessmentReportV1 | null`. Отчёт копирует финальные оценки
+Core только из проверенного сертификата `ready`-снимка, совпадающего с Program
+и наблюдением по `contentIdentity`, `streamId` и `revision`.
+
+Для `waiting`, `stale`, `failed` и неизвестного наблюдения метод возвращает
+`null`, даже если снимок сохранил прежние outputs. Point-программа должна
+объявлять наблюдаемые поверхности, occurrences и ограничения, покрывающие outputs;
+неполную декларацию отклоняет компилятор. Если конвенция cleanliness не объявлена,
+отчёт содержит оценки остальных объявленных ограничений.
+
+В блоке `try` для снимка из первого примера:
+
+```ts
+const report = snapshot.assessmentReport();
+if (report !== null) {
+  for (const cell of report.cells) {
+    console.log(cell.constraintId, cell.caseIndex, cell.hard, cell.assessment);
+  }
+}
+```
+
+`cells` содержит оценки обязательных и необязательных ограничений;
+`constraintId` ссылается на декларацию того же Program. `scenarioProvenance`
+связывает `caseIndex` с исходными `scenarioId`.
+
+Сохранённый `ready`-снимок сохраняет отчёт своей ревизии после обновлений.
+Этот отчёт не подтверждает актуальное состояние и не выдаёт полномочий
+на публикацию или материализацию. Читайте снимок последнего обновления,
+чтобы проверить актуальную ревизию. Каждый вызов возвращает отдельную копию;
+изменение её `contentIdentity` не меняет Core. Остальные объекты и массивы
+отчёта заморожены.
 
 ## Подключение к внешнему sink
 
@@ -147,9 +181,12 @@ try {
 ```ts
 import { attachProgramWire } from "@labpics/colors";
 
-const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
-  // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
-  // затем одним действием обновляет собственный renderer-surface.
+const attachment = attachProgramWire(programBytes, 1, {
+  emissions: [{ slot: 91, sinkOutput: 501 }],
+  presentations: [{ slot: 91, root: 71, occurrence: 61 }],
+}, (intent) => {
+  // Приложение проверяет scope, expectedSequence и bindingEpoch,
+  // затем одним действием обновляет весь собственный renderer-surface.
   return applyOwnedPointIntent(intent);
 });
 try {
@@ -161,7 +198,7 @@ try {
   );
   try {
     if (snapshot.state === "ready") {
-      const authority = attachment.materializationAuthority();
+      const authority = attachment.materializationAuthorityForBinding(71, 61);
       try {
         console.log(authority.terminalCompositeRgb());
       } finally {
@@ -177,6 +214,35 @@ try {
   attachment.free();
 }
 ```
+
+Один attachment охватывает все outputs Program. `emissions` связывает каждый
+output slot с принадлежащим приложению sink ID; `presentations` перечисляет
+все объявленные terminal bindings. Один Paint может участвовать в нескольких
+привязках. Неполное или повторное покрытие отвергается до вызова host.
+Ancestor targets участвуют в вычислениях и не требуют terminal binding.
+Output slots одного Paint публикуются все вместе и могут использовать одну
+presentation; её slot приложение выбирает явно.
+
+Host получает весь `scope`, массив `points` с исходными RGB и straight alpha и
+отдельный `presentationComposites` с конечными RGB по `(root, scenario)`.
+Композиции вычисляет Core до вызова host. При `revokeAll` оба массива пусты,
+а `scope` по-прежнему перечисляет всё, что необходимо отозвать. `confirmExact`
+требует сверить весь установленный набор. Совместимые поля `point` и `sinkOutput`
+доступны только для одного элемента; для нескольких элементов они равны `null`.
+Прежняя сигнатура с семью аргументами переводится в тот же binding-контракт.
+
+При изменении фона приложение передаёт новую ревизию в `updateObserved` того же
+attachment. Core повторно решает ограничения и передаёт host полный результат.
+Отказ host сохраняет предыдущий committed head и допускает повтор той же ревизии.
+Принятый `updateUnknown` или неудовлетворимые ограничения отзывают весь scope;
+следующее допустимое наблюдение позволяет восстановить его.
+
+`renderCount()` и `renderAt(index)` читают все bindings снимка; `render()`
+возвращает значение только для единственной привязки. Для нескольких bindings
+`materializationAuthority()` и `materializationAuthorityFor()` возвращают
+`program_materialization_ambiguous_bindings`. Используйте
+`materializationAuthorityForBinding(root, occurrence)` для конкретной привязки.
+Доказательство каждой привязки сохраняет свою точечную область применимости.
 
 `materializationAuthority()` читает только успешно установленный
 attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —
@@ -347,7 +413,37 @@ Core проверяет каждое состояние на всех наблю
 V2 допускает один выпуск выбора, до 4096 состояний и 4096 назначений суммарно.
 V1 сохраняет прежние байты и отказывается от конечного графа без доступного ему
 выпуска выбора. Нативные функции с суффиксом `_v1` остаются строго V1; функции
-`check_program_wire` и `compile_program_wire` распознают обе поддерживаемые версии.
+`check_program_wire` и `compile_program_wire` распознают поддерживаемые версии.
+
+## Вычисляемое назначение цветов
+
+`ProgramWireBuilderV3` из `@labpics/colors/program-wire/abi-v3.js` позволяет задать
+область допустимых RGB, авторскую опору и предел отклонения без списка готовых
+вариантов. Метод `assignment()` задаёт порядок предпочтений. Цвета вычисляет Core
+через те же `compileProgramWire` и `attachProgramWire`.
+
+Если вся авторская композиция удовлетворяет ограничениям, её цвета сохраняются
+побайтово. Иначе Core ищет ближайшее допустимое назначение в объявленном порядке.
+Контраст ограничивает выбор; больший контраст сам по себе не делает цвет лучше.
+Имена и смысл токенов остаются у приложения.
+
+У V3 `snapshotVersion === 2`: только `ready` содержит текущие outputs.
+`unsatisfied` означает доказанное отсутствие решения, `incomplete` с причиной
+`limit` — остановку до завершения поиска. Оба исхода отзывают установленный
+результат через attachment; старый цвет не возвращается как новый.
+V1/V2 сохраняют снимки версии 1 и прежние исторические outputs.
+
+`snapshot.presentationCompositeRgb(rootId, scenarioId)` возвращает отдельный
+`Uint8Array` из трёх байтов нормального encoded-sRGB8 итога presentation root.
+Нужен root с объявленным `presentationTarget` и исходный ID observed-сценария,
+а не output slot или индекс сценария. Каждый сценарий читается отдельно, даже
+если его входы совпадают с другим. Значение доступно только в `ready` для всех
+версий wire; старый ready snapshot сохраняет результат своей ревизии.
+Нулевая opacity и совпадение source с background сохраняют нормальный итог.
+Эти данные не являются materialization authority и не подтверждают renderer.
+
+[Договор V3 и пример](https://github.com/Labpics-Team/lab-colors/blob/main/docs/contracts/program-assignment-v3.md)
+описывают domains, порядок выбора, состояния и ограничения численного профиля.
 
 
 ### Ошибки оценки и чтения результата
@@ -357,7 +453,39 @@ V1 сохраняет прежние байты и отказывается от
 `internal_error`. Для `numericalCapabilityManifest` доступен `internal_error`.
 Неверный индекс в `outputSlot`, `outputRgb` или `outputOpacity` возвращает
 `invalid_output_index` с операцией `readProgramOutput`; snapshot сохраняется.
+Для `presentationCompositeRgb` операция — `readPresentationComposite`:
+`invalid_composite_id` означает ID вне `u32`, а `presentation_composite_unavailable` —
+отсутствующий root/scenario либо неготовый snapshot. Входы не преобразуются;
+причину неготовности показывает `state`.
 
 Текст `message` служит диагностикой. Проверка читает каждое поле один раз,
 не преобразует значения и возвращает `false` для неизвестной пары или ошибки
 чтения. Контракт принадлежит также прямым WASM-входам.
+
+### Окончательный конечный растр
+
+`finalRasterSourceOverWire(sourcePort, destinationPort, operator, outputSlot,
+cleanliness)` объявляет один source-over двух полных premultiplied RGBA8 растров.
+Финальный результат должен быть opaque. Пятый аргумент задаёт политику:
+
+- `"off"`: Cleanliness не применяется; проверяется техническая корректность композиции.
+- `"lint-exact-nominal-srgb8-v2"`: проверяются все финальные пиксели; результат сохраняется
+  при нарушениях технической конвенции. Отчёт содержит число проверенных пикселей,
+  число нарушений и первый точный witness с RGB и rejected blue interval.
+- `"mandatory-exact-nominal-srgb8-v2"`: допускается только результат, все пиксели которого
+  соответствуют опубликованной конвенции; иначе получается явный отказ.
+
+Потребление полных текущих RGB8 bytes проходит `consumeFinalRaster`; callback
+получает геометрию, scope `ModeledFinalRasterV1` и `frame.cleanliness`.
+`assessmentReport()` здесь возвращает null: point-отчёт не подменяет оценку всего растра.
+`finalRasterRefusal()` описывает технический отказ или нарушение обязательной политики;
+нарушения lint доступны в `frame.cleanliness`. Копия старого frame остаётся диагностикой,
+а для нового потребления Core заново проверяет текущую ревизию и контекст.
+
+Все три политики сохраняют входы и физическую композицию. При явно выбранном
+`mandatory-exact-nominal-srgb8-v2` Core автоматически допускает единственный
+результат source-over, когда технические требования и конвенция выполнены,
+либо отказывает. Для подбора цветов в заданных областях используйте
+[вычисляемое назначение V3](#вычисляемое-назначение-цветов).
+Человеческое восприятие этот технический профиль не оценивает.
+Контракт, схема отчёта и пределы: [final-raster-v1](https://github.com/Labpics-Team/lab-colors/blob/main/docs/contracts/final-raster-v1.md).

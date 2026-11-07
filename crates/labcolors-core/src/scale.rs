@@ -155,15 +155,12 @@ impl AccentCurve {
 /// Полуокно поиска оптимального оттенка рампы акцента (градусы): 30° покрывает
 /// типичную ширину гребня гамута sRGB вокруг канонического оттенка.
 ///
-/// Терминал **(c) INTERVAL-INSENSITIVE** (в отличие от
-/// прежнее фиксированное окно вокруг cusp, которое ДОКАЗАННО клипует):
-/// лок `chord_derived_slope_rejected_degenerates_to_window_edge` показывает
-/// интерьерный оптимум (0 прижатий к ребру ±30°) на ВСЕХ 43 хроматических
-/// якорях 49-якорного паспорта labui при продакшн-наклоне; окно — нежёсткая
-/// нижняя граница, не связывающий кап. Экспозиция (доля (l,hue)-сетки, где
-/// точное окно меняет выбранный оттенок при свипе [25°, 45°]) — **0.93%**
-/// (`exposure_hue_search_window`). Значение не меняется.
-// SSOT-TRACKED — hue search half-window (degrees), терминал (c) interval-insensitive (exposure 0.93%, 0/43 якорей у ребра), см. docs/empirical-inventory.md.
+/// Терминал **(e) DESIGN-CHOICE**: явная политика автономного генератора кривых,
+/// не универсальный перцептивный закон. На сохранённых 43 хроматических входах
+/// `chord_derived_slope_rejected_degenerates_to_window_edge` не находит прижатий
+/// к ребру. Ненулевая экспозиция **0.93%** при свипе окна [25°, 45°]
+/// (`exposure_hue_search_window`) не доказывает нечувствительность всего домена.
+// SSOT-TRACKED — hue search half-window (degrees), терминал (e) design-choice, см. docs/empirical-inventory.md.
 const HUE_SEARCH_HALF_WINDOW: f64 = 30.0;
 
 /// The hue (degrees) maximising `max_chroma(l_ok, h) − penalty·|h − h_canonical|`
@@ -181,7 +178,7 @@ fn find_optimal_hue_core(l_ok: f64, h_canonical: f64, slope: f64) -> f64 {
     }
 
     let penalty_scale = slope / HUE_SEARCH_HALF_WINDOW;
-    // 1° step: coarser than Oklab JND but sufficient for the broad chroma ridge.
+    // Deterministic 1° grid within the declared hue window.
     let steps = (HUE_SEARCH_HALF_WINDOW * 2.0) as i32;
 
     // Score of the flat-scan index `i` ∈ [0, steps], built through the SAME

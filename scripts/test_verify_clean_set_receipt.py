@@ -37,13 +37,24 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CANONICAL_CODEC = (REPO_ROOT / CODEC_PATH).read_bytes()
 TRANSITIVE_EXECUTOR_ROLES = (
     "appearance_executor_source",
+    "clean_convention_source",
     "composition_executor_source",
+    "computed_selection_source",
     "content_digest_source",
+    "field_effect_executor_source",
+    "final_raster_payload_source",
+    "final_raster_session_source",
+    "final_raster_wire_source",
     "joint_selection_source",
     "observation_runtime_source",
+    "oklab_geometry_source",
+    "ordering_source",
     "point_attachment_source",
     "session_runtime_source",
     "signal_transport_source",
+    "wcag22_kernel_source",
+    "wcag22_luminance_source",
+    "wcag22_pruning_source",
 )
 ATTACHMENT_PROOF_ROLES = (
     "point_attachment_allocator_oracle",

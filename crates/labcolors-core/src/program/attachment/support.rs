@@ -563,6 +563,7 @@ impl PointSinkWriterV1 for ClosedAllocatorPointSinkLeaseV1 {
                 revision,
                 stamp,
                 patch,
+                ..
             } => {
                 if stamp.expected() != base_stamp {
                     self.shared.busy.set(false);
@@ -828,6 +829,7 @@ impl PointSinkWriterV1 for ClosedInMemoryPointSinkLeaseV1 {
                 revision,
                 stamp,
                 patch,
+                ..
             } => {
                 if stamp.expected() != base_stamp {
                     return Err(InMemoryPointSinkErrorV1::StampMismatch);
