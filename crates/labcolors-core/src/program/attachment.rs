@@ -27,6 +27,10 @@ pub(crate) mod sink_private {
     pub(crate) trait Sealed {}
 }
 
+mod presentation_private {
+    pub(crate) trait Sealed {}
+}
+
 /// Одна authored и ещё не доверенная корреляция output→sink для emission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AuthoredPointEmissionBindingV1<SinkOutputId> {
@@ -258,21 +262,54 @@ impl PointSinkPresentationCompositeV1 {
     }
 }
 
-/// Уже вычисленные point-композиции prospective перехода; это ещё не authority.
-#[derive(Clone, Copy)]
-pub(crate) enum PointSinkPresentationEvidenceV1<'a> {
-    Verified(super::VerifiedOutputV1<'a>),
-    #[cfg(any(test, kani))]
-    Fixture(&'a [PointSinkPresentationCompositeV1]),
+/// Повторяемые immutable группы prospective-композиций; это ещё не authority.
+/// Размер группы известен без обхода сценариев. Оба прохода читают те же
+/// заимствованные данные; отсутствие группы обозначает неполное evidence.
+pub(crate) trait PointSinkPresentationSourceV1: presentation_private::Sealed + Copy {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>;
+}
+
+impl presentation_private::Sealed for &[PointSinkPresentationCompositeV1] {}
+
+impl PointSinkPresentationSourceV1 for &[PointSinkPresentationCompositeV1] {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>
+    {
+        core::iter::once(Some(self.iter().copied()))
+    }
+}
+
+impl presentation_private::Sealed for VerifiedOutputV1<'_> {}
+
+impl PointSinkPresentationSourceV1 for VerifiedOutputV1<'_> {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>
+    {
+        self.presentation_composites().map(|composite| {
+            composite.map(|composite| {
+                composite.scenarios.iter().map(move |scenario| {
+                    PointSinkPresentationCompositeV1::new(
+                        composite.root,
+                        scenario.value(),
+                        crate::Srgb8::new(composite.rgb),
+                    )
+                })
+            })
+        })
+    }
 }
 
 /// Единственные три intent, принимаемые терминальным point sink.
-pub(crate) enum PointSinkIntentV1<'a, SinkOutputId> {
+pub(crate) enum PointSinkIntentV1<'a, SinkOutputId, Presentation> {
     SetAll {
         revision: u64,
         stamp: PointSinkMutationStampV1,
         patch: &'a [PointSinkPatchEntryV1<SinkOutputId>],
-        presentation: PointSinkPresentationEvidenceV1<'a>,
+        presentation: Presentation,
     },
     RevokeAll {
         revision: u64,
@@ -323,9 +360,9 @@ pub(crate) trait PointSinkWriterV1: sink_private::Sealed {
 
     fn binding_epoch(&self) -> PointSinkBindingEpochV1;
 
-    fn prepare<'writer>(
+    fn prepare<'writer, P: PointSinkPresentationSourceV1>(
         &'writer mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
+        intent: PointSinkIntentV1<'_, Self::OutputId, P>,
     ) -> Result<Self::Prepared<'writer>, Self::Error>;
 }
 
@@ -1416,7 +1453,7 @@ where
                         revision,
                         stamp,
                         patch: &self.scratch_sink_patch,
-                        presentation: PointSinkPresentationEvidenceV1::Verified(presentation),
+                        presentation,
                     },
                     stamp.desired(),
                     PreparedPatchActionV1::SetAll { revision },

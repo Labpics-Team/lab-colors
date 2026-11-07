@@ -10,8 +10,8 @@ use crate::program::OutputSlotIdV1;
 use super::{
     BoundPointSinkScopePermitV1, ExternallyManagedAttachmentV1, PointSinkAdmissionFailureV1,
     PointSinkBindingEpochV1, PointSinkIntentV1, PointSinkPresentationCompositeV1,
-    PointSinkPresentationEvidenceV1, PointSinkStampV1, PointSinkWriterAdmissionV1,
-    PointSinkWriterV1, PreparedPointSinkWriteV1, UnboundPointSinkWriterV1, sink_private,
+    PointSinkPresentationSourceV1, PointSinkStampV1, PointSinkWriterAdmissionV1, PointSinkWriterV1,
+    PreparedPointSinkWriteV1, UnboundPointSinkWriterV1, sink_private,
 };
 
 static NEXT_HANDOFF_POINT_SINK_EPOCH_V1: AtomicU64 = AtomicU64::new(1);
@@ -469,9 +469,9 @@ where
         self.binding_epoch
     }
 
-    fn prepare<'lease>(
+    fn prepare<'lease, P: PointSinkPresentationSourceV1>(
         &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
+        intent: PointSinkIntentV1<'_, Self::OutputId, P>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
         let current_stamp = self.committed.stamp;
         let staged = match intent {
@@ -554,19 +554,20 @@ where
     }
 }
 
-fn copy_presentation_composites(
-    presentation: PointSinkPresentationEvidenceV1<'_>,
+fn copy_presentation_composites<P: PointSinkPresentationSourceV1>(
+    presentation: P,
     output: &mut Vec<PointSinkPresentationCompositeV1>,
 ) -> Result<(), HandoffPointSinkErrorV1> {
-    match presentation {
-        PointSinkPresentationEvidenceV1::Verified(verified) => {
-            copy_verified_presentation_composites(verified, output)?;
-        }
-        #[cfg(any(test, kani))]
-        PointSinkPresentationEvidenceV1::Fixture(composites) => {
-            reserve_presentation_composites(composites.len(), output)?;
-            output.extend_from_slice(composites);
-        }
+    let mut count = 0usize;
+    for batch in presentation.batches() {
+        let batch = batch.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
+        count = count
+            .checked_add(batch.len())
+            .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
+    }
+    reserve_presentation_composites(count, output)?;
+    for batch in presentation.batches() {
+        output.extend(batch.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?);
     }
     crate::ordering::sort_by_key(output, |entry| (entry.root(), entry.scenario()));
     if output.windows(2).any(|pair| {
@@ -590,31 +591,6 @@ fn reserve_presentation_composites(
     output
         .try_reserve_exact(count)
         .map_err(|_| HandoffPointSinkErrorV1::ResourceExhausted)
-}
-
-fn copy_verified_presentation_composites(
-    verified: super::super::VerifiedOutputV1<'_>,
-    output: &mut Vec<PointSinkPresentationCompositeV1>,
-) -> Result<(), HandoffPointSinkErrorV1> {
-    let mut count = 0usize;
-    for composite in verified.presentation_composites() {
-        let composite = composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
-        count = count
-            .checked_add(composite.scenarios.len())
-            .ok_or(HandoffPointSinkErrorV1::ResourceExhausted)?;
-    }
-    reserve_presentation_composites(count, output)?;
-    for composite in verified.presentation_composites() {
-        let composite = composite.ok_or(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)?;
-        for scenario in composite.scenarios {
-            output.push(PointSinkPresentationCompositeV1::new(
-                composite.root,
-                scenario.value(),
-                crate::Srgb8::new(composite.rgb),
-            ));
-        }
-    }
-    Ok(())
 }
 
 impl<H> PreparedPointSinkWriteV1 for HandoffPreparedPointSinkWriteV1<'_, H>
@@ -974,7 +950,7 @@ mod tests {
                 revision: 17,
                 stamp: first_mutation,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .unwrap_or_else(|_| panic!("the exact initial patch must prepare"));
         set.try_install()
@@ -984,7 +960,7 @@ mod tests {
         let second_mutation = PointSinkMutationStampV1::new(first_mutation.desired())
             .unwrap_or_else(|| panic!("the published stamp has a successor"));
         let mut revoke = sink
-            .prepare(PointSinkIntentV1::RevokeAll {
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::RevokeAll {
                 revision: 18,
                 stamp: second_mutation,
             })
@@ -995,7 +971,7 @@ mod tests {
         revoke.finish_after_session();
 
         let mut confirm_empty = sink
-            .prepare(PointSinkIntentV1::ConfirmExact {
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
                 revision: 18,
                 published_stamp: second_mutation.desired(),
             })
@@ -1012,7 +988,7 @@ mod tests {
                 revision: 19,
                 stamp: third_mutation,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .unwrap_or_else(|_| panic!("the same lease must accept a later set"));
         reset
@@ -1074,7 +1050,7 @@ mod tests {
                 revision: 17,
                 stamp: foreign_mutation,
                 patch: &owned_patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             }),
             Err(HandoffPointSinkErrorV1::StampMismatch)
         ));
@@ -1085,7 +1061,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &foreign_patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             }),
             Err(HandoffPointSinkErrorV1::PatchScopeMismatch)
         ));
@@ -1097,7 +1073,7 @@ mod tests {
                     revision: 17,
                     stamp: mutation,
                     patch: &owned_patch,
-                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                    presentation: &[][..],
                 })
                 .unwrap_or_else(|_| panic!("the exact patch must prepare"));
             prepared.writer.committed.stamp = mutation.desired();
@@ -1114,7 +1090,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &owned_patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .unwrap_or_else(|_| panic!("the exact patch must prepare"));
         installed
@@ -1122,7 +1098,7 @@ mod tests {
             .unwrap_or_else(|_| panic!("the exact patch must install"));
         installed.finish_after_session();
         assert!(matches!(
-            sink.prepare(PointSinkIntentV1::ConfirmExact {
+            sink.prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
                 revision: 18,
                 published_stamp: mutation.desired(),
             }),
@@ -1145,7 +1121,7 @@ mod tests {
                     revision: 17,
                     stamp: mutation,
                     patch: &patch,
-                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                    presentation: &[][..],
                 })
                 .unwrap_or_else(|_| panic!("the exact patch must prepare"));
         }
@@ -1155,7 +1131,7 @@ mod tests {
                 revision: 17,
                 stamp: mutation,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .unwrap_or_else(|_| panic!("the lease must remain retryable"));
         retry
@@ -1441,7 +1417,7 @@ mod tests {
                 revision: 17,
                 stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                presentation: &composites[..],
             })
             .expect("полный patch с двумя выходами должен подготовиться");
         prepared
@@ -1461,7 +1437,7 @@ mod tests {
         assert_eq!(first.points[1].paint.source(), Srgb8::new([22, 44, 66]));
         assert_eq!(first.composites, [composites[1], composites[0]]);
         let mut replay = sink
-            .prepare(PointSinkIntentV1::ConfirmExact {
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
                 revision: 17,
                 published_stamp: stamp.desired(),
             })
@@ -1483,7 +1459,7 @@ mod tests {
         let revoke_stamp = PointSinkMutationStampV1::new(stamp.desired())
             .expect("опубликованный stamp должен допускать отзыв");
         let mut revoke = sink
-            .prepare(PointSinkIntentV1::RevokeAll {
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::RevokeAll {
                 revision: 18,
                 stamp: revoke_stamp,
             })
@@ -1501,7 +1477,7 @@ mod tests {
         assert_eq!(revoked.scope, scope);
         assert!(revoked.points.is_empty() && revoked.composites.is_empty());
         let mut replay = sink
-            .prepare(PointSinkIntentV1::ConfirmExact {
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
                 revision: 18,
                 published_stamp: revoke_stamp.desired(),
             })
@@ -1537,7 +1513,7 @@ mod tests {
                 revision: 1,
                 stamp: first_stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .expect("полный начальный patch должен подготовиться до проверки отказов");
         first
@@ -1563,7 +1539,7 @@ mod tests {
                     revision: 2,
                     stamp: next_stamp,
                     patch: &changed,
-                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                    presentation: &[][..],
                 })
                 .expect("полный новый patch должен подготовиться до проверки отказа host");
             assert_eq!(
@@ -1579,7 +1555,7 @@ mod tests {
                 revision: 2,
                 stamp: next_stamp,
                 patch: &changed,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .expect("тот же patch после отказов host должен повторно подготовиться");
         recovery
@@ -1643,7 +1619,7 @@ mod tests {
                     revision: 1,
                     stamp,
                     patch,
-                    presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                    presentation: &[][..],
                 }),
                 Err(HandoffPointSinkErrorV1::PatchScopeMismatch)
             ));
@@ -1654,7 +1630,7 @@ mod tests {
                 revision: 1,
                 stamp,
                 patch: &good,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+                presentation: &[][..],
             })
             .expect("точный полный scope должен подготовить допустимый patch");
         legal
@@ -1690,7 +1666,7 @@ mod tests {
                 revision: 1,
                 stamp: first_stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                presentation: &composites[..],
             })
             .expect("начальный patch с композициями должен подготовиться");
         first
@@ -1704,7 +1680,7 @@ mod tests {
                 revision: 2,
                 stamp: second_stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                presentation: &composites[..],
             })
             .expect("второй patch должен подготовиться до измерения выделений памяти");
         state.borrow_mut().checkpoint_terminal_tail = true;
@@ -1731,7 +1707,7 @@ mod tests {
                     stamp: PointSinkMutationStampV1::new(second_stamp.desired())
                         .expect("второй опубликованный stamp должен допускать третье обновление"),
                     patch: &patch,
-                    presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                    presentation: &composites[..],
                 })
                 .expect("допустимый третий patch должен подготовиться до отмены");
         }
@@ -1745,7 +1721,7 @@ mod tests {
                     "второй опубликованный stamp должен допускать повтор третьего обновления",
                 ),
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&composites),
+                presentation: &composites[..],
             })
             .expect("тот же patch после отмены должен повторно подготовиться");
         recovery
@@ -1753,6 +1729,89 @@ mod tests {
             .expect("тот же patch после отмены должен успешно установиться");
         recovery.finish_after_session();
         assert_eq!(sink.committed.revision, Some(3));
+    }
+
+    #[test]
+    fn presentation_preflight_rejects_missing_and_oversized_batches_before_reading_values() {
+        #[derive(Clone, Copy)]
+        enum InvalidSource {
+            Missing,
+            CountOverflow,
+            StorageOverflow,
+        }
+        impl super::super::presentation_private::Sealed for InvalidSource {}
+        impl PointSinkPresentationSourceV1 for InvalidSource {
+            fn batches(
+                self,
+            ) -> impl Iterator<
+                Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>,
+            > {
+                let sizes = match self {
+                    Self::Missing => [None, None],
+                    Self::CountOverflow => [Some(usize::MAX), Some(1)],
+                    Self::StorageOverflow => [Some(usize::MAX), Some(0)],
+                };
+                sizes.into_iter().map(|size| {
+                    size.map(|size| {
+                        (0..size).map(|_| -> PointSinkPresentationCompositeV1 {
+                            panic!("invalid batch sizes must fail before reading values")
+                        })
+                    })
+                })
+            }
+        }
+
+        let scope = [
+            HandoffPointSinkOutputIdV1::new(900),
+            HandoffPointSinkOutputIdV1::new(901),
+        ];
+        let (host, state) = fake_host_scope(&scope);
+        let (mut sink, initial) = admitted_scope(&scope, host);
+        let patch = two_point_patch(&scope);
+        let stamp = PointSinkMutationStampV1::new(initial).expect("initial stamp can advance");
+        for (presentation, expected) in [
+            (
+                InvalidSource::Missing,
+                HandoffPointSinkErrorV1::PresentationEvidenceMismatch,
+            ),
+            (
+                InvalidSource::CountOverflow,
+                HandoffPointSinkErrorV1::ResourceExhausted,
+            ),
+            (
+                InvalidSource::StorageOverflow,
+                HandoffPointSinkErrorV1::ResourceExhausted,
+            ),
+        ] {
+            let error = match sink.prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp,
+                patch: &patch,
+                presentation,
+            }) {
+                Err(error) => error,
+                Ok(_) => panic!("invalid presentation must not prepare"),
+            };
+            assert_eq!(error, expected);
+            assert_eq!(sink.committed.stamp, initial);
+            assert!(sink.committed.points.is_empty());
+            assert!(state.borrow().installs.is_empty());
+        }
+
+        let composites = [PointSinkPresentationCompositeV1::new(9, 7, VALUE)];
+        let mut valid = sink
+            .prepare(PointSinkIntentV1::SetAll {
+                revision: 1,
+                stamp,
+                patch: &patch,
+                presentation: &composites[..],
+            })
+            .expect("preflight failures leave the same command usable");
+        valid
+            .try_install()
+            .expect("valid command can still publish");
+        valid.finish_after_session();
+        assert_eq!(sink.committed.composites, composites);
     }
 
     #[test]
@@ -1774,7 +1833,7 @@ mod tests {
                 revision: 1,
                 stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[first, conflict]),
+                presentation: &[first, conflict][..],
             }),
             Err(HandoffPointSinkErrorV1::PresentationEvidenceMismatch)
         ));
@@ -1784,7 +1843,7 @@ mod tests {
                 revision: 1,
                 stamp,
                 patch: &patch,
-                presentation: PointSinkPresentationEvidenceV1::Fixture(&[second, first, first]),
+                presentation: &[second, first, first][..],
             })
             .expect("согласованные композиции разных сценариев должны подготовиться");
         valid

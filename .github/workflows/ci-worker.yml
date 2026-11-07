@@ -44,24 +44,6 @@ jobs:
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
-      - name: verify isolated presentation transfer lemma
-        if: ${{ matrix.shard == 1 }}
-        continue-on-error: true
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          import sys
-          sys.path.insert(0, "scripts")
-          from verify_core_formal import run_kani
-          print("DIAGNOSTIC extra harness; this does not qualify the formal registry", flush=True)
-          harness = "program::attachment::handoff::proofs::concrete_empty_presentation_survives_intent_transfer"
-          report, code = run_kani(Path(os.environ["RUNNER_TEMP"]) / "presentation-transfer-lemma.json",
-                                  positive_harnesses=(harness,))
-          print(json.dumps(report["verification_results"]["summary"]), flush=True)
-          raise SystemExit(code)
-          PY
       - name: verify assigned positive formal harnesses
         run: |
           python3 scripts/verify_core_formal.py \
@@ -570,6 +552,49 @@ jobs:
       - name: artifact matrix - gate anti-vacuum mutants
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_artifact_matrix.py
+      - name: temporary Linux test inventory export
+        id: inventory
+        if: ${{ always() && !cancelled() && matrix.lane == 'proof-contracts' }}
+        env:
+          CI_INVENTORY_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          sys.path.insert(0, "scripts")
+          import artifact_matrix
+
+          record = artifact_matrix.extract_tests()
+          if any(suite["load_errors"] for suite in record["python"]):
+              raise SystemExit("refusing inventory with Python import failures")
+          output = Path(os.environ["RUNNER_TEMP"]) / "linux-test-inventory"
+          output.mkdir()
+          (output / "tests.json").write_bytes(
+              json.dumps(record, sort_keys=True, indent=1, ensure_ascii=False).encode() + b"\n"
+          )
+          source = {
+              "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "github_sha": os.environ["GITHUB_SHA"],
+              "workflow_sha": os.environ["CI_INVENTORY_WORKFLOW_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "record_sha256": record["record_sha256"],
+          }
+          (output / "source.json").write_text(json.dumps(source, sort_keys=True, indent=2) + "\n")
+          print(json.dumps(source, sort_keys=True))
+          PY
+      - name: upload temporary Linux test inventory
+        if: ${{ always() && !cancelled() && steps.inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-test-inventory-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-test-inventory
+          if-no-files-found: error
+          retention-days: 1
 
   core-tests:
     name: core tests and artifact contracts

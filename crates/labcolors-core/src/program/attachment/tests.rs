@@ -92,10 +92,12 @@ fn a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch() {
     second.update(unknown).unwrap();
     assert_ne!(second_probe.stamp(), stale);
     assert!(matches!(
-        second.sink.prepare(PointSinkIntentV1::ConfirmExact {
-            revision: 1,
-            published_stamp: stale,
-        }),
+        second.sink.prepare::<&[PointSinkPresentationCompositeV1]>(
+            PointSinkIntentV1::ConfirmExact {
+                revision: 1,
+                published_stamp: stale,
+            }
+        ),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
 }
@@ -648,22 +650,26 @@ fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
             revision: 1,
             stamp: foreign_transition,
             patch: &[],
-            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+            presentation: &[][..],
         }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert!(matches!(
-        attachment.sink.prepare(PointSinkIntentV1::RevokeAll {
-            revision: 1,
-            stamp: foreign_transition,
-        }),
+        attachment
+            .sink
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::RevokeAll {
+                revision: 1,
+                stamp: foreign_transition,
+            }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert!(matches!(
-        attachment.sink.prepare(PointSinkIntentV1::ConfirmExact {
-            revision: 1,
-            published_stamp: foreign_stamp,
-        }),
+        attachment
+            .sink
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
+                revision: 1,
+                published_stamp: foreign_stamp,
+            }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert_eq!(probe.stamp(), baseline_stamp);
@@ -2356,7 +2362,7 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .next()
         .expect("writer implementation must precede closed-lease release");
     let sink_prepare = in_memory_sink
-        .split("fn prepare<'lease>(")
+        .split("fn prepare<")
         .nth(1)
         .expect("in-memory test sink must implement prepare");
     assert!(
