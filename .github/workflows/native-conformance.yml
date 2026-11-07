@@ -1,11 +1,5 @@
 name: Native conformance
 
-# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
-# из того же коммита, что и caller, независимо от checkout и squash-истории.
-# Граф заданий и toolchain-пины проверяются вместе с этим snapshot. Задания идут
-# на одноразовых эфемерных GitHub-hosted VM без секретов и общего состояния.
-# Ручное сравнение authoring не меняет обязательные проверки пакета.
-
 on:
   push:
     branches: [main]
@@ -19,9 +13,6 @@ on:
         type: string
         default: ''
 
-# Первый запуск PR делит типизированную pr-группу. Re-run получает собственную
-# run-группу, выполняет conformance и не отменяет новый SHA. Push evidence и
-# ручной reference остаются независимыми exact-run.
 concurrency:
   group: native-conformance-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
@@ -30,9 +21,7 @@ permissions:
   contents: read
 
 jobs:
-  # ИМЯ JOB'А НЕ МЕНЯТЬ БЕЗ ПРАВКИ publish.yml: GitHub публикует job'ы reusable-
-  # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
-  # эти имена буквально.
+  # Имя `Native conformance / <worker job>` входит в publish gate и меняется вместе с ним.
   worker:
     name: Native conformance
     permissions:

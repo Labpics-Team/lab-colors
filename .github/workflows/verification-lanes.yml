@@ -1,8 +1,6 @@
 name: Verification lane replay
 
-# One lane is one run, so a full-domain cover is 512 of them and the dual
-# proof needs their ids.  Naming the run after its coordinates makes that list
-# a query instead of a guess about creation times.
+# Run-name связывает evidence с координатами окна.
 run-name: >-
   lane ${{ inputs.evidence_artifact }}
   ${{ inputs.window_start }}+${{ inputs.window_points }}
@@ -27,14 +25,7 @@ on:
         description: shard window width (multiple of the packing alignment)
         required: false
         default: "16384"
-      # The coordinator's own safety flags live in the coordinator, so a
-      # checkout older than the flag carries the older contract whole: this
-      # project has twice dispatched a campaign while reading the newer rules
-      # (133 runs, then 69).  No guard added to the client can protect a
-      # client that is stale.  This input is the same invariant asserted
-      # where it is always current — a dispatch that omits it never starts a
-      # runner, and one that carries an incoherent campaign size stops in the
-      # first second rather than after an hour of replay.
+      # Обязательный expect-lanes отклоняет устаревший coordinator до создания run.
       expect_lanes:
         description: lanes in the full-domain campaign this lane belongs to (2^24 / window_points)
         required: true
@@ -49,15 +40,10 @@ concurrency:
 jobs:
   verification-lane:
     name: replay one verification window under the engine comparator
-    # Dispatch-only: each lane replays one packing-aligned window of the
-    # verified transcript's domain through the sharded corpus runner under
-    # the engine's own comparator bundle, downloaded from the evidence run.
     runs-on: ubuntu-latest
     timeout-minutes: 480
     permissions:
       contents: read
-      # Required by `gh run download` when fetching the engine evidence from
-      # another run.
       actions: read
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -186,12 +172,7 @@ jobs:
             --out lane-out
 
       - name: upload the verification lane wire evidence
-        # The engine belongs in the name because both engines replay the same
-        # window plan: without it every Arb lane and its MPFI twin claim one
-        # artifact name, and a cover gathered from many runs would overwrite
-        # itself down to one engine.  The name is only for keeping the files
-        # apart — which engine a lane actually serves is decided by the
-        # comparator source identity inside its manifest.
+        # Engine в имени исключает перезапись Arb/MPFI evidence; доверие задаёт comparator identity.
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: verification-lane-${{ inputs.evidence_artifact }}-${{ inputs.window_start }}-${{ inputs.window_points }}

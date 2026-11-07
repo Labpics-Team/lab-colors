@@ -1,10 +1,5 @@
 name: Native conformance worker
 
-# Потребители проверяют ту же исходную ревизию через сгенерированный UniFFI.
-# Linux получает готовую библиотеку в закреплённом Swift-контейнере.
-# Apple получает самостоятельный SwiftPM-архив с XCFramework и проверяет его
-# вне checkout на macOS, iOS Simulator и сборкой для устройства.
-
 on:
   workflow_call:
     inputs:
@@ -19,9 +14,7 @@ permissions:
 env:
   RUST_TOOLCHAIN: 1.96.0
   SWIFT_TOOLCHAIN: 6.1.3
-  # swift:6.1.3-noble (multi-arch index, linux amd64/arm64), закреплён
-  # content-addressed digest'ом; точное соответствие версии fail-closed
-  # доказывает проверка `swift --version` внутри run-conformance.sh.
+  # Версию Swift проверяет run-conformance.sh; digest задаёт образ.
   SWIFT_IMAGE_V1: swift@sha256:fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec
 
 jobs:
