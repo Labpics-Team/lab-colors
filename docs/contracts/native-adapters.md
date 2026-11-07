@@ -26,6 +26,23 @@ WASM и UniFFI вызывают её, не создавая отдельного
 потребителями. Адаптер UI не пересчитывает цвет и не объявляет неизвестный
 renderer подтверждённым. Приложение сохраняет владение внешним scope и его отзывом.
 
+## Point и binding-scope
+
+UniFFI сохраняет два представления callback. `attachProgramWire` передаёт
+`ProgramPointSinkHost` прежний `ProgramPointSinkIntent`: stamps, ревизию,
+`sinkOutput` и optional paint. `attachProgramWireWithBindings` передаёт
+`ProgramScopeSinkHost` полный `ProgramScopeSinkIntent`: все sink outputs,
+points и presentation composites с собственными RGB8-байтами. Полный scope
+сохраняется и при отзыве. Оба входа используют один Program owner, solver,
+обновления и полные Core snapshots. Представление скалярного callback
+не ограничивает результаты Core и не требует копировать полные списки scope.
+
+`ProgramAttachedSnapshot.renderCount` и `renderAt` перечисляют renders.
+`render` и вызовы authority без выбранного binding требуют однозначности:
+`render` возвращает отсутствие при нескольких renders, authority возвращает
+`program_materialization_ambiguous_bindings`. Выбранный binding проверяется
+через `materializationAuthorityForBinding(root, occurrence)`.
+
 ## Условие поддержки
 
 Для новой платформы необходимы готовый устанавливаемый пакет, полный публичный

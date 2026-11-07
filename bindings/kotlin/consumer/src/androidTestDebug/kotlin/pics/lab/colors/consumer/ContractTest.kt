@@ -341,6 +341,71 @@ class ContractTest {
         assertArrayEquals(full, bounded.finish())
     }
 
+    @Test fun fullBindingScopeKeepsAllPointsAndScenarioComposites() {
+        val host = object : ProgramScopeSinkHost {
+            private val commands = mutableListOf<ProgramScopeSinkIntent>()
+            @Synchronized override fun tryInstall(intent: ProgramScopeSinkIntent): Boolean {
+                commands.add(intent)
+                return true
+            }
+            @Synchronized fun saved(): List<ProgramScopeSinkIntent> = commands.toList()
+        }
+        val wire = hex(
+            "4c435057010003010000020000000b0000004040400c000000a0a0a00200000015000000010b00000016000000010c000000" +
+            "0000000000000000010000001f00000000000000020000002900000001150000002a00000001160000000100000033000000011f000000" +
+            "020000003d000000290000003300000000000000000050409a9999999999c93f013e0000002a0000003300000000000000000050409a9999999999c93f01" +
+            "02000000470000003d000000480000003e00000002000000470000003d000000480000003e0000000200000051000000013d00000040404052000000013e000000a0a0a000000000020000005b000000290000005c0000002a000000"
+        )
+        val bindings = ProgramAttachmentBindings(
+            listOf(ProgramPointEmissionBinding(91u, 501u), ProgramPointEmissionBinding(92u, 502u)),
+            listOf(ProgramPointPresentationBinding(91u, 71u, 61u), ProgramPointPresentationBinding(92u, 72u, 62u)),
+        )
+        attachProgramWireWithBindings(wire, 17u, bindings, host).use { attachment ->
+            attachment.updateObserved(1uL, listOf(101u, 301u), rgb(128, 128, 128, 128, 128, 128), 1u).use { ready ->
+                assertEquals(2uL, ready.renderCount())
+                assertTrue(ready.hasRender()); assertNull(ready.render())
+                ready.renderAt(0u).use { assertArrayEquals(rgb(64, 64, 64), it.outputRgb()) }
+                ready.renderAt(1u).use { assertArrayEquals(rgb(160, 160, 160), it.outputRgb()) }
+                val installed = host.saved().last()
+                assertEquals(ProgramPointSinkOperation.SET_ALL, installed.operation)
+                assertEquals(listOf(501u, 502u), installed.scope)
+                assertNull(installed.sinkOutput); assertNull(installed.point)
+                assertEquals(listOf(501u, 502u), installed.points.map { it.sinkOutput })
+                assertEquals(listOf(91u, 92u), installed.points.map { it.paint.slot })
+                assertArrayEquals(rgb(64, 64, 64), installed.points[0].paint.source)
+                assertArrayEquals(rgb(160, 160, 160), installed.points[1].paint.source)
+                assertEquals(listOf(1.0, 1.0), installed.points.map { it.paint.opacity })
+                assertEquals(4, installed.presentationComposites.size)
+                assertEquals(setOf(71u to 101u, 71u to 301u, 72u to 101u, 72u to 301u),
+                    installed.presentationComposites.map { it.root to it.scenario }.toSet())
+                for (composite in installed.presentationComposites) {
+                    assertArrayEquals(if (composite.root == 71u) rgb(64, 64, 64) else rgb(160, 160, 160), composite.source)
+                }
+                expectCode("program_materialization_ambiguous_bindings") { attachment.materializationAuthority().close() }
+                ready.renderAt(1u).use { second ->
+                    expectCode("program_materialization_ambiguous_bindings") {
+                        attachment.materializationAuthorityFor(1uL, second.contentIdentity(), second.bindingEpoch()).close()
+                    }
+                }
+                attachment.materializationAuthorityForBinding(72u, 62u).use {
+                    assertEquals(92u, it.outputSlot()); assertArrayEquals(rgb(160, 160, 160), it.outputRgb())
+                }
+
+                attachment.updateUnknown(2uL, 41u).use { assertEquals(0uL, it.renderCount()) }
+                val revoked = host.saved().last()
+                assertEquals(ProgramPointSinkOperation.REVOKE_ALL, revoked.operation)
+                assertEquals(listOf(501u, 502u), revoked.scope)
+                assertNull(revoked.sinkOutput); assertNull(revoked.point)
+                assertTrue(revoked.points.isEmpty()); assertTrue(revoked.presentationComposites.isEmpty())
+                assertEquals(2uL, ready.renderCount())
+                assertArrayEquals(rgb(64, 64, 64), installed.points[0].paint.source)
+                assertEquals(4, installed.presentationComposites.size)
+                expectCode("program_materialization_not_ready") { attachment.materializationAuthorityForBinding(72u, 62u).close() }
+                attachment.dispose(true)
+            }
+        }
+    }
+
     @Test fun hostFailureReentryRevocationAndRecovery() {
         val host = Host()
         attachProgramWire(hex(fixture().getString("adaptive")), 1u, 91u, 501u, 71u, 61u, host).use { attachment ->

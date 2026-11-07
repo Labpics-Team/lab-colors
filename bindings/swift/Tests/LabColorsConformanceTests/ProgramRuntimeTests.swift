@@ -285,6 +285,79 @@ final class ProgramRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try runtime.updateUnknown(revision: 1, reasonId: 7)) { assertCode($0, "program_update") }
     }
 
+    func testFullBindingScopeKeepsAllPointsAndScenarioComposites() throws {
+        final class ScopeHost: ProgramScopeSinkHost, @unchecked Sendable {
+            private let lock = NSLock()
+            private var commands: [ProgramScopeSinkIntent] = []
+            func tryInstall(intent: ProgramScopeSinkIntent) throws -> Bool {
+                lock.lock(); defer { lock.unlock() }
+                commands.append(intent)
+                return true
+            }
+            func saved() -> [ProgramScopeSinkIntent] {
+                lock.lock(); defer { lock.unlock() }
+                return commands
+            }
+        }
+        let wire = try bytes(
+            "4c435057010003010000020000000b0000004040400c000000a0a0a00200000015000000010b00000016000000010c000000" +
+            "0000000000000000010000001f00000000000000020000002900000001150000002a00000001160000000100000033000000011f000000" +
+            "020000003d000000290000003300000000000000000050409a9999999999c93f013e0000002a0000003300000000000000000050409a9999999999c93f01" +
+            "02000000470000003d000000480000003e00000002000000470000003d000000480000003e0000000200000051000000013d00000040404052000000013e000000a0a0a000000000020000005b000000290000005c0000002a000000"
+        )
+        let host = ScopeHost()
+        let attachment = try attachProgramWireWithBindings(bytes: wire, streamId: 17,
+            bindings: ProgramAttachmentBindings(
+                emissions: [ProgramPointEmissionBinding(slot: 91, sinkOutput: 501), ProgramPointEmissionBinding(slot: 92, sinkOutput: 502)],
+                presentations: [ProgramPointPresentationBinding(slot: 91, root: 71, occurrence: 61), ProgramPointPresentationBinding(slot: 92, root: 72, occurrence: 62)]),
+            host: host)
+        let ready = try attachment.updateObserved(revision: 1, scenarioIds: [101, 301],
+            surfaces: Data([128, 128, 128, 128, 128, 128]), surfaceCount: 1)
+        XCTAssertEqual(ready.renderCount(), 2)
+        XCTAssertTrue(ready.hasRender())
+        XCTAssertNil(ready.render())
+        XCTAssertEqual(try ready.renderAt(index: 0).outputRgb(), Data([64, 64, 64]))
+        XCTAssertEqual(try ready.renderAt(index: 1).outputRgb(), Data([160, 160, 160]))
+        let installed = try XCTUnwrap(host.saved().last)
+        XCTAssertEqual(installed.operation, .setAll)
+        XCTAssertEqual(installed.scope, [501, 502])
+        XCTAssertNil(installed.sinkOutput)
+        XCTAssertNil(installed.point)
+        XCTAssertEqual(installed.points.map { $0.sinkOutput }, [501, 502])
+        XCTAssertEqual(installed.points.map { $0.paint.slot }, [91, 92])
+        XCTAssertEqual(installed.points[0].paint.source, Data([64, 64, 64]))
+        XCTAssertEqual(installed.points[1].paint.source, Data([160, 160, 160]))
+        XCTAssertEqual(installed.points.map { $0.paint.opacity }, [1, 1])
+        XCTAssertEqual(installed.presentationComposites.count, 4)
+        XCTAssertEqual(Set(installed.presentationComposites.map { "\($0.root):\($0.scenario)" }),
+            Set(["71:101", "71:301", "72:101", "72:301"]))
+        for composite in installed.presentationComposites {
+            XCTAssertEqual(composite.source, composite.root == 71 ? Data([64, 64, 64]) : Data([160, 160, 160]))
+        }
+        XCTAssertThrowsError(try attachment.materializationAuthority()) { assertCode($0, "program_materialization_ambiguous_bindings") }
+        let second = try ready.renderAt(index: 1)
+        XCTAssertThrowsError(try attachment.materializationAuthorityFor(revision: 1,
+            contentIdentity: second.contentIdentity(), bindingEpoch: second.bindingEpoch())) { assertCode($0, "program_materialization_ambiguous_bindings") }
+        let authority = try attachment.materializationAuthorityForBinding(root: 72, occurrence: 62)
+        XCTAssertEqual(authority.outputSlot(), 92)
+        XCTAssertEqual(authority.outputRgb(), Data([160, 160, 160]))
+
+        let stale = try attachment.updateUnknown(revision: 2, reasonId: 41)
+        XCTAssertEqual(stale.renderCount(), 0)
+        let revoked = try XCTUnwrap(host.saved().last)
+        XCTAssertEqual(revoked.operation, .revokeAll)
+        XCTAssertEqual(revoked.scope, [501, 502])
+        XCTAssertNil(revoked.sinkOutput)
+        XCTAssertNil(revoked.point)
+        XCTAssertTrue(revoked.points.isEmpty)
+        XCTAssertTrue(revoked.presentationComposites.isEmpty)
+        XCTAssertEqual(ready.renderCount(), 2)
+        XCTAssertEqual(installed.points[0].paint.source, Data([64, 64, 64]))
+        XCTAssertEqual(installed.presentationComposites.count, 4)
+        XCTAssertThrowsError(try attachment.materializationAuthorityForBinding(root: 72, occurrence: 62)) { assertCode($0, "program_materialization_not_ready") }
+        try attachment.dispose(confirmed: true)
+    }
+
     func testAttachmentUsesOneCommittedHeadAndRequiresExplicitRevoke() throws {
         let host = RuntimeHost()
         let attachment = try attachProgramWire(bytes: bytes(fixture().adaptive), streamId: 1,

@@ -109,7 +109,10 @@ val builder = ProgramWireBuilderV3()
 
 ## Привязка к интерфейсу и ресурсы
 
-`attachProgramWire` принимает `ProgramPointSinkHost`. `tryInstall` выполняется
+`attachProgramWire` связывает один terminal point с `ProgramPointSinkHost`.
+`ProgramPointSinkIntent` содержит операцию, ревизию, stamps, `sinkOutput: UInt`
+и `point: ProgramPointPaint?` с slot, owned RGB8 `source` и opacity.
+`tryInstall` выполняется
 синхронно на вызывающем потоке и подтверждает целиком установленную команду.
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
@@ -118,10 +121,23 @@ val builder = ProgramWireBuilderV3()
 После отзыва `point == null` допустим, только если у host также нет paint и
 совпадают sequence/binding epoch.
 
+`attachProgramWireWithBindings` принимает `ProgramAttachmentBindings` и
+`ProgramScopeSinkHost`. Emission bindings задают slot и sink output, presentation
+bindings — slot, root и occurrence. `ProgramScopeSinkIntent` содержит stamps,
+ревизию, полный `scope`, `points` с sink output и paint и `presentationComposites`
+с root, scenario и owned RGB8 `source`. `sinkOutput` и `point` — optional
+скалярные проекции. Host атомарно устанавливает всю команду. При отзыве полный
+scope сохраняется, points и composites пусты. Оба входа возвращают
+`ProgramAttachment` и используют общий Core owner.
+
 Attached snapshot предоставляет те же `snapshotVersion`, `revision` и `reason`.
+`renderCount()` и `renderAt(index)` перечисляют renders, `render()` возвращает
+значение при единственном render, `hasRender()` сообщает наличие хотя бы одного.
+`materializationAuthority()` и `materializationAuthorityFor(...)` требуют
+однозначный binding; несколько bindings дают `program_materialization_ambiguous_bindings`.
+Для выбранных root и occurrence используйте `materializationAuthorityForBinding(root, occurrence)`.
 Новая принятая ревизия с `incomplete` или `unsatisfied` сначала отзывает прежний
-paint. Если host отклоняет команду, сохраняется прежний head. Attachment
-устанавливает один terminal point, а не транзакцию нескольких независимых UI-выходов.
+paint. Если host отклоняет команду, сохраняется прежний head.
 
 Объекты UniFFI освобождаются через `use`/`close`. Для attachment сначала отзовите
 внешнюю привязку и вызовите `dispose(true)`, затем `close()`. Освобождение памяти

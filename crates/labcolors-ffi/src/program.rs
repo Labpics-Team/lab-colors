@@ -447,6 +447,17 @@ pub struct ProgramPointSinkIntent {
     pub expected_sequence: u64,
     pub desired_sequence: u64,
     pub binding_epoch: u64,
+    pub sink_output: u32,
+    pub point: Option<ProgramPointPaint>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramScopeSinkIntent {
+    pub operation: ProgramPointSinkOperation,
+    pub revision: u64,
+    pub expected_sequence: u64,
+    pub desired_sequence: u64,
+    pub binding_epoch: u64,
     pub sink_output: Option<u32>,
     pub point: Option<ProgramPointPaint>,
     pub scope: Vec<u32>,
@@ -470,8 +481,19 @@ pub trait ProgramPointSinkHost: Send + Sync {
     ) -> Result<bool, ProgramPointSinkCallbackError>;
 }
 
-struct NativeHost {
-    callback: Box<dyn ProgramPointSinkHost>,
+/// Подтверждает всю команду scope атомарно, включая все paints и composites.
+/// false и ошибка сохраняют прежний внешний scope; callback синхронный.
+#[uniffi::export(callback_interface)]
+pub trait ProgramScopeSinkHost: Send + Sync {
+    fn try_install(
+        &self,
+        intent: ProgramScopeSinkIntent,
+    ) -> Result<bool, ProgramPointSinkCallbackError>;
+}
+
+enum NativeHost {
+    Point(Box<dyn ProgramPointSinkHost>),
+    Scope(Box<dyn ProgramScopeSinkHost>),
 }
 
 impl core::ProgramPointSinkHostV1 for NativeHost {
@@ -500,54 +522,72 @@ impl core::ProgramPointSinkHostV1 for NativeHost {
                 opacity: point.opacity(),
             })
         };
-        let point = intent.point().map(paint).transpose()?;
-        let scope_values = intent.scope();
-        let mut scope = Vec::new();
-        scope
-            .try_reserve_exact(scope_values.len())
-            .map_err(|_| E::ResourceExhausted)?;
-        scope.extend(scope_values);
-        let point_values = intent.points();
-        let mut points = Vec::new();
-        points
-            .try_reserve_exact(point_values.len())
-            .map_err(|_| E::ResourceExhausted)?;
-        for entry in point_values {
-            points.push(ProgramPointSinkPoint {
-                sink_output: entry.sink_output(),
-                paint: paint(entry.output())?,
-            });
-        }
-        let composites = intent.presentation_composites();
-        let mut presentation_composites = Vec::new();
-        presentation_composites
-            .try_reserve_exact(composites.len())
-            .map_err(|_| E::ResourceExhausted)?;
-        for composite in composites {
-            let mut source = Vec::new();
-            source
-                .try_reserve_exact(3)
-                .map_err(|_| E::ResourceExhausted)?;
-            source.extend_from_slice(&composite.visible().bytes());
-            presentation_composites.push(ProgramPointPresentationComposite {
-                root: composite.root(),
-                scenario: composite.scenario(),
-                source,
-            });
-        }
-        let projected = ProgramPointSinkIntent {
-            operation,
-            revision: intent.revision(),
-            expected_sequence: intent.expected_stamp().sequence(),
-            desired_sequence: intent.desired_stamp().sequence(),
-            binding_epoch: intent.expected_stamp().binding_epoch(),
-            sink_output: intent.sink_output(),
-            point,
-            scope,
-            points,
-            presentation_composites,
+        let installed = match self {
+            Self::Point(callback) => {
+                let sink_output = intent.sink_output().ok_or(E::Protocol)?;
+                let projected = ProgramPointSinkIntent {
+                    operation,
+                    revision: intent.revision(),
+                    expected_sequence: intent.expected_stamp().sequence(),
+                    desired_sequence: intent.desired_stamp().sequence(),
+                    binding_epoch: intent.expected_stamp().binding_epoch(),
+                    sink_output,
+                    point: intent.point().map(paint).transpose()?,
+                };
+                callback.try_install(projected)
+            }
+            Self::Scope(callback) => {
+                let point = intent.point().map(paint).transpose()?;
+                let scope_values = intent.scope();
+                let mut scope = Vec::new();
+                scope
+                    .try_reserve_exact(scope_values.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                scope.extend(scope_values);
+                let point_values = intent.points();
+                let mut points = Vec::new();
+                points
+                    .try_reserve_exact(point_values.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                for entry in point_values {
+                    points.push(ProgramPointSinkPoint {
+                        sink_output: entry.sink_output(),
+                        paint: paint(entry.output())?,
+                    });
+                }
+                let composites = intent.presentation_composites();
+                let mut presentation_composites = Vec::new();
+                presentation_composites
+                    .try_reserve_exact(composites.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                for composite in composites {
+                    let mut source = Vec::new();
+                    source
+                        .try_reserve_exact(3)
+                        .map_err(|_| E::ResourceExhausted)?;
+                    source.extend_from_slice(&composite.visible().bytes());
+                    presentation_composites.push(ProgramPointPresentationComposite {
+                        root: composite.root(),
+                        scenario: composite.scenario(),
+                        source,
+                    });
+                }
+                let projected = ProgramScopeSinkIntent {
+                    operation,
+                    revision: intent.revision(),
+                    expected_sequence: intent.expected_stamp().sequence(),
+                    desired_sequence: intent.desired_stamp().sequence(),
+                    binding_epoch: intent.expected_stamp().binding_epoch(),
+                    sink_output: intent.sink_output(),
+                    point,
+                    scope,
+                    points,
+                    presentation_composites,
+                };
+                callback.try_install(projected)
+            }
         };
-        match self.callback.try_install(projected) {
+        match installed {
             Ok(true) => Ok(()),
             Ok(false) => Err(E::Rejected),
             Err(_) => Err(E::Protocol),
@@ -579,7 +619,7 @@ pub fn attach_program_wire(
             sink_output,
             presentation_root,
             occurrence,
-            NativeHost { callback: host },
+            NativeHost::Point(host),
         )
         .map_err(|e| attach_error(e, operation))?;
     Ok(Arc::new(ProgramAttachment {
@@ -587,13 +627,13 @@ pub fn attach_program_wire(
     }))
 }
 
-/// Общий binding-контракт для языков без overload; scalar facade использует тот же Core owner.
+/// Полный binding-scope с собственным callback-контрактом и общим Core owner.
 #[uniffi::export]
 pub fn attach_program_wire_with_bindings(
     bytes: Vec<u8>,
     stream_id: u32,
     bindings: ProgramAttachmentBindings,
-    host: Box<dyn ProgramPointSinkHost>,
+    host: Box<dyn ProgramScopeSinkHost>,
 ) -> Result<Arc<ProgramAttachment>, LabColorsError> {
     let operation = "attachProgramWire";
     let resource = || LabColorsError::new("program_attachment_resource_exhausted", operation);
@@ -625,7 +665,7 @@ pub fn attach_program_wire_with_bindings(
             stream_id,
             &emissions,
             &presentations,
-            NativeHost { callback: host },
+            NativeHost::Scope(host),
         )
         .map_err(|error| attach_error(error, operation))?;
     Ok(Arc::new(ProgramAttachment {
@@ -959,12 +999,12 @@ mod tests {
 
     #[test]
     fn full_attachment_enumerates_renders_and_requires_explicit_binding_authority() {
-        struct CaptureHost(Arc<Mutex<Vec<ProgramPointSinkIntent>>>);
+        struct CaptureHost(Arc<Mutex<Vec<ProgramScopeSinkIntent>>>);
 
-        impl ProgramPointSinkHost for CaptureHost {
+        impl ProgramScopeSinkHost for CaptureHost {
             fn try_install(
                 &self,
-                intent: ProgramPointSinkIntent,
+                intent: ProgramScopeSinkIntent,
             ) -> Result<bool, ProgramPointSinkCallbackError> {
                 self.0
                     .lock()

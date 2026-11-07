@@ -97,25 +97,41 @@ violationCount, firstViolation, profile и owned profileRelease. Off не вып
 
 ## Связь с отображением
 
-`attachProgramWire` связывает программу с `ProgramPointSinkHost`.
+`attachProgramWire` связывает один terminal point с `ProgramPointSinkHost`.
 `tryInstall` получает типизированный `ProgramPointSinkIntent` с операцией,
-ревизией, старой и новой последовательностью, binding epoch и целевым выходом.
+ревизией, старой и новой последовательностью, binding epoch,
+`sinkOutput: UInt32` и `point: ProgramPointPaint?`. Paint содержит slot,
+owned RGB8 `source` и opacity.
 Host подтверждает всю команду или сохраняет прежнее внешнее состояние.
 `confirmExact` подтверждает прежнее состояние и stamp без повторной установки:
 после отзыва `point` равен `nil`. Такое подтверждение допустимо, только если
 host также хранит отозванное состояние и совпадающие sequence/binding epoch.
 Callback исполняется синхронно на вызывающем потоке; поток UI выбирает приложение.
 
-Attachment предоставляет обновления, `ProgramAttachedSnapshot`, render и
-`materializationAuthority`. `materializationAuthorityFor` проверяет ожидаемые
-revision, content identity и binding epoch; старое свидетельство не становится
-текущим. Render и authority раскрывают контекст, терминальный композит и
+`attachProgramWireWithBindings` принимает `ProgramAttachmentBindings` и
+`ProgramScopeSinkHost`. `emissions` связывает slot с sink output, а `presentations`
+задаёт slot, root и occurrence. `ProgramScopeSinkIntent` передаёт полный `scope`,
+`points` с sink output и paint и `presentationComposites` с root, scenario и
+owned RGB8 `source`, вместе с операцией, ревизией и stamps. `sinkOutput` и `point`
+предоставляют optional скалярные проекции. Host атомарно устанавливает весь scope;
+отзыв сохраняет полный список sink outputs и передаёт пустые points и composites.
+Оба входа используют один Core owner и возвращают `ProgramAttachment`.
+
+Attachment предоставляет обновления, `ProgramAttachedSnapshot` и authority.
+`renderCount()` и `renderAt(index:)` перечисляют все присоединённые renders;
+`render()` возвращает значение при единственном render, `hasRender()` сообщает
+наличие хотя бы одного. `materializationAuthority` и `materializationAuthorityFor`
+требуют однозначный binding; несколько bindings дают
+`program_materialization_ambiguous_bindings`. Для выбранных root и occurrence
+используйте `materializationAuthorityForBinding(root:occurrence:)`.
+`materializationAuthorityFor` проверяет ожидаемые revision, content identity и
+binding epoch; старое свидетельство не становится текущим.
+Render и authority раскрывают контекст, терминальный композит и
 `rendererProvenance`. Значение `unverified` не удостоверяет физический экран.
 `ProgramAttachedSnapshot` предоставляет те же version, revision и reason.
 Новая принятая ревизия с `incomplete` или `unsatisfied` отзывает прежний paint;
 ошибка host оставляет предыдущий head. Сохранённый ready snapshot описывает
-свою ревизию и не даёт права повторно устанавливать старый paint. Attachment
-работает с одним terminal point; несколько outputs не означают общей транзакции UI.
+свою ревизию и не даёт права повторно устанавливать старый paint.
 
 Приложение сначала отзывает весь внешний scope, затем вызывает
 `dispose(confirmed: true)`. Неподтверждённый отзыв отклоняется. После завершения
