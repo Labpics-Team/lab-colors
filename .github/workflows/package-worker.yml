@@ -443,18 +443,6 @@ jobs:
           test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"
           test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
-      - name: retain bounded Program measurements
-        if: ${{ failure() && inputs.program-benchmark }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: colors-program-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/program-performance/*.json
-            ${{ runner.temp }}/program-performance/profiles/index.json
-            ${{ runner.temp }}/program-performance/profiles/*.cpuprofile
-          if-no-files-found: warn
-          compression-level: 9
-          retention-days: 1
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
