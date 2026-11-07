@@ -250,6 +250,7 @@ SOURCES += ("field_effect.rs",)
 
 
 HANDOFF_OPERATION_PARTITIONS = ("set_all", "revoke_all", "confirm_exact")
+HANDOFF_STATE_PARTITIONS = ("empty", "published")
 HANDOFF_PARTITION_CONTRACTS = {
     "preparation_is_exact_and_has_no_publication_effect": (
         {"handoff preparation must retain the exact previous and desired state",
@@ -278,19 +279,26 @@ HANDOFF_PARTITION_CONTRACTS = {
         ({"same sequence foreign epoch rejected", "same epoch foreign sequence rejected"},) * 3,
     ),
 }
-# Каждая операция доказывает прежние assertions на полном домене остальных
-# входов. Конъюнкция трёх частей обязательна; достижимость относится к операции.
+# Две формы прежнего Option-state проверяются отдельными harnesses, без общей
+# символической ветви heap. Конъюнкция всех операций и форм обязательна.
 for base, (assertions, partition_covers) in HANDOFF_PARTITION_CONTRACTS.items():
     for partition, covers in zip(HANDOFF_OPERATION_PARTITIONS, partition_covers, strict=True):
-        CONTRACTS[f"program::attachment::handoff::proofs::{base}_{partition}"] = (assertions, covers)
+        for state in HANDOFF_STATE_PARTITIONS:
+            state_covers = covers | {f"{state} prior state"}
+            if base == "preparation_is_exact_and_has_no_publication_effect" and partition == "confirm_exact":
+                other = "published" if state == "empty" else "empty"
+                state_covers -= {f"{other} value confirmed"}
+            CONTRACTS[f"program::attachment::handoff::proofs::{base}_{partition}_{state}"] = (assertions, state_covers)
 
-MUTANTS += (
-    ("handoff-foreign-confirmation", "program/attachment/handoff.rs",
-     "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact",
+for state in HANDOFF_STATE_PARTITIONS:
+    MUTANTS += (
+    (f"handoff-foreign-confirmation-{state}", "program/attachment/handoff.rs",
+     f"program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact_{state}",
      "handoff preparation must reject exactly wrong stamp scope or revision",
      "                if self.committed.revision != Some(revision) {", "                if false {"),
-)
-for partition in HANDOFF_OPERATION_PARTITIONS:
+    )
+for partition in (f"{operation}_{state}" for operation in HANDOFF_OPERATION_PARTITIONS
+                  for state in HANDOFF_STATE_PARTITIONS):
     MUTANTS += (
     (f"handoff-swallowed-host-refusal-{partition}", "program/attachment/handoff.rs",
      f"program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_{partition}",

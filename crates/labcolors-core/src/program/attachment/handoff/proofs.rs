@@ -107,7 +107,10 @@ fn any_paint() -> Option<EncodedPointPaintV1> {
     ))
 }
 
-fn any_state() -> Option<(HandoffPointSinkOutputIdV1, ExpectedPointState)> {
+// Две отдельные proof-мономорфизации образуют прежний полный домен Option:
+// empty включает sequence=0 и все непустые revision, published требует revision.
+// В каждой формуле форма Vec фиксирована; поля point остаются произвольными.
+fn any_state<const HAS_POINT: bool>() -> Option<(HandoffPointSinkOutputIdV1, ExpectedPointState)> {
     let owned = HandoffPointSinkOutputIdV1::new(kani::any());
     let stamp = any_stamp()?;
     let revision = if stamp.sequence() == 0 {
@@ -115,7 +118,8 @@ fn any_state() -> Option<(HandoffPointSinkOutputIdV1, ExpectedPointState)> {
     } else {
         Some(kani::any())
     };
-    let point = if revision.is_some() && kani::any() {
+    let point = if HAS_POINT {
+        revision?;
         Some(HandoffPublishedPointV1 {
             output: OutputSlotIdV1::new(kani::any()),
             sink_output: owned,
@@ -175,10 +179,10 @@ fn patch(
 // мономорфизации сохраняют полный домен остальных входов и все guards.
 // Wrapper передаёт свои свидетели отдельным типом замыкания: Kani включает
 // даже недостижимые cover-ветки общего тела в отчёт.
-fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
+fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8, const HAS_POINT: bool>(
     operation_witness: impl FnOnce(u8, Option<HandoffPointSinkErrorV1>, bool),
 ) {
-    let Some((owned, old)) = any_state() else {
+    let Some((owned, old)) = any_state::<HAS_POINT>() else {
         return;
     };
     let Some(query) = (if kani::any() {
@@ -296,8 +300,24 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn preparation_is_exact_and_has_no_publication_effect_set_all() {
-    preparation_is_exact_and_has_no_publication_effect::<0>(|kind, actual, _| {
+fn preparation_is_exact_and_has_no_publication_effect_set_all_empty() {
+    preparation_is_exact_and_has_no_publication_effect::<0, false>(
+        |kind, actual, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
+            kani::cover!(
+                actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
+                "foreign scope rejected"
+            );
+        },
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_set_all_published() {
+    preparation_is_exact_and_has_no_publication_effect::<0, true>(|kind, actual, point_present| {
+        kani::cover!(point_present, "published prior state");
         kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
         kani::cover!(
             actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
@@ -308,23 +328,50 @@ fn preparation_is_exact_and_has_no_publication_effect_set_all() {
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn preparation_is_exact_and_has_no_publication_effect_revoke_all() {
-    preparation_is_exact_and_has_no_publication_effect::<1>(|kind, actual, _| {
+fn preparation_is_exact_and_has_no_publication_effect_revoke_all_empty() {
+    preparation_is_exact_and_has_no_publication_effect::<1, false>(
+        |kind, actual, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
+        },
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_revoke_all_published() {
+    preparation_is_exact_and_has_no_publication_effect::<1, true>(|kind, actual, point_present| {
+        kani::cover!(point_present, "published prior state");
         kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
     });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn preparation_is_exact_and_has_no_publication_effect_confirm_exact() {
-    preparation_is_exact_and_has_no_publication_effect::<2>(|kind, actual, point_present| {
+fn preparation_is_exact_and_has_no_publication_effect_confirm_exact_empty() {
+    preparation_is_exact_and_has_no_publication_effect::<2, false>(
+        |kind, actual, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(
+                actual.is_none() && kind > 1 && !point_present,
+                "empty value confirmed"
+            );
+            kani::cover!(
+                actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
+                "foreign revision rejected"
+            );
+        },
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn preparation_is_exact_and_has_no_publication_effect_confirm_exact_published() {
+    preparation_is_exact_and_has_no_publication_effect::<2, true>(|kind, actual, point_present| {
+        kani::cover!(point_present, "published prior state");
         kani::cover!(
             actual.is_none() && kind > 1 && point_present,
             "published value confirmed"
-        );
-        kani::cover!(
-            actual.is_none() && kind > 1 && !point_present,
-            "empty value confirmed"
         );
         kani::cover!(
             actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
@@ -381,10 +428,13 @@ fn pending_matches(
     }
 }
 
-fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>(
-    operation_witness: impl FnOnce(u8, u64),
+fn rejected_install_is_atomic_retryable_and_success_is_once_only<
+    const KIND: u8,
+    const HAS_POINT: bool,
+>(
+    operation_witness: impl FnOnce(u8, u64, bool),
 ) {
-    let Some((owned, old)) = any_state() else {
+    let Some((owned, old)) = any_state::<HAS_POINT>() else {
         return;
     };
     let kind = KIND;
@@ -504,7 +554,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         expected.matches(&writer.committed) && writer.host.calls == 2,
         "finishing the handoff must preserve its acknowledged result"
     );
-    operation_witness(kind, old.stamp.sequence());
+    operation_witness(kind, old.stamp.sequence(), old.point.is_some());
     kani::cover!(
         error == HandoffPointSinkHostErrorV1::Protocol,
         "protocol refusal is retryable"
@@ -513,33 +563,80 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn rejected_install_is_atomic_retryable_and_success_is_once_only_set_all() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<0>(|kind, _| {
-        kani::cover!(kind == 0, "rejected set retried");
-    });
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_set_all_empty() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<0, false>(
+        |kind, _, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(kind == 0, "rejected set retried");
+        },
+    );
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<1>(|kind, _| {
-        kani::cover!(kind == 1, "rejected revoke retried");
-    });
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_set_all_published() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<0, true>(
+        |kind, _, point_present| {
+            kani::cover!(point_present, "published prior state");
+            kani::cover!(kind == 0, "rejected set retried");
+        },
+    );
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<2>(|kind, sequence| {
-        kani::cover!(
-            kind > 1 && sequence == u64::MAX,
-            "exhausted stamp still permits confirmation"
-        );
-    });
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all_empty() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<1, false>(
+        |kind, _, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(kind == 1, "rejected revoke retried");
+        },
+    );
 }
 
-fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
-    let Some((owned, old)) = any_state() else {
+#[kani::proof]
+#[kani::unwind(4)]
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all_published() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<1, true>(
+        |kind, _, point_present| {
+            kani::cover!(point_present, "published prior state");
+            kani::cover!(kind == 1, "rejected revoke retried");
+        },
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact_empty() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<2, false>(
+        |kind, sequence, point_present| {
+            kani::cover!(!point_present, "empty prior state");
+            kani::cover!(
+                kind > 1 && sequence == u64::MAX,
+                "exhausted stamp still permits confirmation"
+            );
+        },
+    );
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact_published() {
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<2, true>(
+        |kind, sequence, point_present| {
+            kani::cover!(point_present, "published prior state");
+            kani::cover!(
+                kind > 1 && sequence == u64::MAX,
+                "exhausted stamp still permits confirmation"
+            );
+        },
+    );
+}
+
+fn stale_prepared_command_never_reaches_the_host<const KIND: u8, const HAS_POINT: bool>(
+    state_witness: impl FnOnce(bool),
+) {
+    let Some((owned, old)) = any_state::<HAS_POINT>() else {
         return;
     };
     let Some(changed) = any_stamp() else {
@@ -622,6 +719,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
             ),
         "stale prepared handoff must fail before any host call or state mutation"
     );
+    state_witness(old.point.is_some());
     kani::cover!(
         changed.sequence() == old.stamp.sequence(),
         "same sequence foreign epoch rejected"
@@ -634,18 +732,48 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn stale_prepared_command_never_reaches_the_host_set_all() {
-    stale_prepared_command_never_reaches_the_host::<0>();
+fn stale_prepared_command_never_reaches_the_host_set_all_empty() {
+    stale_prepared_command_never_reaches_the_host::<0, false>(|point_present| {
+        kani::cover!(!point_present, "empty prior state");
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn stale_prepared_command_never_reaches_the_host_revoke_all() {
-    stale_prepared_command_never_reaches_the_host::<1>();
+fn stale_prepared_command_never_reaches_the_host_set_all_published() {
+    stale_prepared_command_never_reaches_the_host::<0, true>(|point_present| {
+        kani::cover!(point_present, "published prior state");
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn stale_prepared_command_never_reaches_the_host_confirm_exact() {
-    stale_prepared_command_never_reaches_the_host::<2>();
+fn stale_prepared_command_never_reaches_the_host_revoke_all_empty() {
+    stale_prepared_command_never_reaches_the_host::<1, false>(|point_present| {
+        kani::cover!(!point_present, "empty prior state");
+    });
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_revoke_all_published() {
+    stale_prepared_command_never_reaches_the_host::<1, true>(|point_present| {
+        kani::cover!(point_present, "published prior state");
+    });
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_confirm_exact_empty() {
+    stale_prepared_command_never_reaches_the_host::<2, false>(|point_present| {
+        kani::cover!(!point_present, "empty prior state");
+    });
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn stale_prepared_command_never_reaches_the_host_confirm_exact_published() {
+    stale_prepared_command_never_reaches_the_host::<2, true>(|point_present| {
+        kani::cover!(point_present, "published prior state");
+    });
 }

@@ -34,8 +34,9 @@ HANDOFF_BASES = (
     "stale_prepared_command_never_reaches_the_host",
 )
 HANDOFF_PARTITIONS = ("set_all", "revoke_all", "confirm_exact")
-HANDOFF_HARNESSES = tuple(f"program::attachment::handoff::proofs::{base}_{partition}"
-    for base in HANDOFF_BASES for partition in HANDOFF_PARTITIONS)
+HANDOFF_STATES = ("empty", "published")
+HANDOFF_HARNESSES = tuple(f"program::attachment::handoff::proofs::{base}_{partition}_{state}"
+    for base in HANDOFF_BASES for partition in HANDOFF_PARTITIONS for state in HANDOFF_STATES)
 
 MUTANT = MUTANTS[0]
 MUTANT_HARNESS = MUTANT[2]
@@ -393,7 +394,7 @@ class FormalReportTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_report(report)
 
-        self.assertEqual(len(CONTRACTS), 47)
+        self.assertEqual(len(CONTRACTS), 56)
         self.assertEqual(set(HANDOFF_HARNESSES),
                          {name for name in CONTRACTS if "::handoff::proofs::" in name})
         for harness in HANDOFF_HARNESSES:
@@ -418,6 +419,28 @@ class FormalReportTests(unittest.TestCase):
                     verification["summary"][field] -= 1
                 with self.assertRaises(ValueError):
                     validate_report(report)
+
+    def test_handoff_state_partitions_retain_obligations_and_distinguish_shapes(self):
+        for base in HANDOFF_BASES:
+            for operation in HANDOFF_PARTITIONS:
+                prefix = f"program::attachment::handoff::proofs::{base}_{operation}"
+                empty, published = (CONTRACTS[f"{prefix}_{state}"] for state in HANDOFF_STATES)
+                self.assertEqual(empty[0], published[0])
+                self.assertIn("empty prior state", empty[1])
+                self.assertNotIn("published prior state", empty[1])
+                self.assertIn("published prior state", published[1])
+                self.assertNotIn("empty prior state", published[1])
+                if base == HANDOFF_BASES[0] and operation == "confirm_exact":
+                    self.assertEqual(empty[1] | published[1], {
+                        "empty prior state", "published prior state",
+                        "empty value confirmed", "published value confirmed",
+                        "foreign stamp rejected", "foreign revision rejected",
+                    })
+                    self.assertNotIn("published value confirmed", empty[1])
+                    self.assertNotIn("empty value confirmed", published[1])
+                else:
+                    self.assertEqual(empty[1] - {"empty prior state"},
+                                     published[1] - {"published prior state"})
 
     def test_non_successful_property_or_harness_is_rejected(self):
         for status in ("Failure", "Unknown", "Unreachable", "Unsatisfiable", "SolverError", ""):
@@ -707,16 +730,17 @@ class FormalReportTests(unittest.TestCase):
             validate_mutant(report, 1, MUTANT)
 
         handoff_mutants = [mutant for mutant in MUTANTS if mutant[0].startswith("handoff-")]
-        expected = {("handoff-foreign-confirmation",
-                     f"program::attachment::handoff::proofs::{HANDOFF_BASES[0]}_confirm_exact")}
+        expected = {(f"handoff-foreign-confirmation-{state}",
+                     f"program::attachment::handoff::proofs::{HANDOFF_BASES[0]}_confirm_exact_{state}")
+                    for state in HANDOFF_STATES}
         for mutant_name, base in (("handoff-swallowed-host-refusal", HANDOFF_BASES[1]),
                                  ("handoff-repeated-install", HANDOFF_BASES[1]),
                                  ("handoff-stale-install", HANDOFF_BASES[2])):
-            expected.update((f"{mutant_name}-{partition}",
-                             f"program::attachment::handoff::proofs::{base}_{partition}")
-                            for partition in HANDOFF_PARTITIONS)
-        self.assertEqual(len(MUTANTS), 30)
-        self.assertEqual(len(handoff_mutants), 10)
+            expected.update((f"{mutant_name}-{partition}_{state}",
+                             f"program::attachment::handoff::proofs::{base}_{partition}_{state}")
+                            for partition in HANDOFF_PARTITIONS for state in HANDOFF_STATES)
+        self.assertEqual(len(MUTANTS), 40)
+        self.assertEqual(len(handoff_mutants), 20)
         self.assertEqual({(mutant[0], mutant[2]) for mutant in handoff_mutants}, expected)
         for mutant in handoff_mutants:
             with self.subTest(mutant=mutant[0]):
