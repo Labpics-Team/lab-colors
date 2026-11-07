@@ -462,6 +462,7 @@ jobs:
         id: consumer-package
         if: inputs.labui-sha != ''
         env:
+          UI_SOURCE_COMMIT: ${{ inputs.labui-sha }}
           VERIFIED_MANIFEST: ${{ steps.verified-release.outputs.manifest }}
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
@@ -473,6 +474,7 @@ jobs:
           import { createHash } from 'node:crypto';
           const env = process.env;
           const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+          assert.match(env.UI_SOURCE_COMMIT, /^[0-9a-f]{40}$/);
           assert.equal(env.VERIFIED_RELEASE_OUTCOME, 'success');
           const bytes = readFileSync(env.VERIFIED_MANIFEST);
           const manifest = JSON.parse(bytes);
