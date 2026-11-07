@@ -208,7 +208,7 @@
   "crates/labcolors-core/src/program.rs": "8d162f57aace852c7314907a8cce2441d1e66d85",
   "crates/labcolors-core/src/program/attachment.rs": "1e4b198a4069757dadb9567536f16ff494e79f7a",
   "crates/labcolors-core/src/program/attachment/handoff.rs": "9a6a1a650e62470f6c89312bdebe5a173517a8ba",
-  "crates/labcolors-core/src/program/attachment/handoff/proofs.rs": "2454310e7a29445043d18fc5e5069b633449c34d",
+  "crates/labcolors-core/src/program/attachment/handoff/proofs.rs": "9cb352be41f5720e67dc7df3f98ba6bf8d8a36b1",
   "crates/labcolors-core/src/program/attachment/proofs.rs": "24ef891f704e6f4f148ad9cf17fbfa100c2ca550",
   "crates/labcolors-core/src/program/attachment/support.rs": "f05eefa8850ee9dceb96e231e338d4de7450431f",
   "crates/labcolors-core/src/program/attachment/tests.rs": "52b72c40849d1f09725edaa15aaff4ae556c90ab",
@@ -641,7 +641,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "272ccdb1f8cb6a8423972db1432e78db31b615cfb38911ad52ccd80c2632eb41",
+ "record_sha256": "e30714316672cc13c2f2af0e31023878c6dac76e92b90b5ed02fc8404879848d",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

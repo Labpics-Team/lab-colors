@@ -2,11 +2,6 @@
  "class": "tests",
  "node_skip_sites": [
   {
-   "line": 14,
-   "path": "packages/colors/test/wcag22.test.mjs",
-   "text": "t.skip(\"pkg/ not built — run `npm run build` first\");"
-  },
-  {
    "line": 22,
    "path": "packages/colors/test/capability-manifest.test.mjs",
    "text": "t.skip(\"pkg/ not built — run `npm run build` first (CI builds before `npm test`)\");"
@@ -30,6 +25,11 @@
    "line": 422,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"directory symlink setup is privilege-dependent on Windows\");"
+  },
+  {
+   "line": 14,
+   "path": "packages/colors/test/wcag22.test.mjs",
+   "text": "t.skip(\"pkg/ not built — run `npm run build` first\");"
   },
   {
    "line": 76,
@@ -992,7 +992,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "6486a182230a380e82b1885069b78a657290acc12ebd1baed30e9dc10502a1c5",
+ "record_sha256": "65349deb4104c36b6341c415972cdd99ba95478df74671af94e052870f103660",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
