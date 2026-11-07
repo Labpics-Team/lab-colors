@@ -10,7 +10,7 @@ concurrency:
 jobs:
   admission:
     name: code-admission-public
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - name: Checkout immutable carrier root

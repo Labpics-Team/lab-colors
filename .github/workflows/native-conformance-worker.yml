@@ -27,21 +27,14 @@ env:
 jobs:
   swift-conformance-linux:
     name: swift package (Linux)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Производитель владеет своим Rust toolchain; Swift входит только в consumer image.
-      - name: prepare isolated Rust toolchain
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-      - name: install rustup into the isolated homes
+      - name: install pinned Rust toolchain
         run: |
           set -euo pipefail
           # rustup-init закреплён sha256 официального дистрибутива (см.
@@ -55,14 +48,11 @@ jobs:
           chmod +x /tmp/rustup-init
           /tmp/rustup-init -y --no-modify-path \
             --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
-        env:
-          RUSTUP_HOME: ${{ runner.temp }}/rustup-${{ github.job }}
-          CARGO_HOME: ${{ runner.temp }}/cargo-${{ github.job }}
       - name: verify the pinned toolchain is live
         run: |
           set -euo pipefail
-          "$CARGO_HOME/bin/rustc" +"$RUST_TOOLCHAIN" --version
-          "$CARGO_HOME/bin/cargo" +"$RUST_TOOLCHAIN" --version
+          rustc +"$RUST_TOOLCHAIN" --version
+          cargo +"$RUST_TOOLCHAIN" --version
       - name: acquire the exact pinned Swift toolchain image
         run: |
           set -euo pipefail
@@ -120,7 +110,7 @@ jobs:
         run: python3 bindings/swift/ci/benchmark-authoring.py "$RUNNER_TEMP/swift-consumer" "$BASELINE_COMMIT"
   android-build:
     name: build Android SDK
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -162,7 +152,7 @@ jobs:
   android-consumer:
     name: android consumer (${{ matrix.name }})
     needs: android-build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -210,7 +200,7 @@ jobs:
     name: android package
     needs: [android-build, android-consumer]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: require the artifact and every Android consumer
