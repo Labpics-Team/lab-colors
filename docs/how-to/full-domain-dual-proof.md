@@ -25,8 +25,8 @@ gh run list --workflow full-domain-run.yml --limit 5 \
 `completed`+`success` и `head_sha` — и отказывается до первого диспатча.
 Чужой прогон не доедет до полос.
 
-Один прогон — две задачи, конверт каждой 480 мин. Замер прогона
-`31116022208`: Arb 63 мин, MPFI 43 мин.
+Один прогон — две задачи. [Лимит GitHub-hosted](https://docs.github.com/en/actions/reference/limits)
+— 6 часов на задачу. Замер прогона `31116022208`: Arb 63 мин, MPFI 43 мин.
 
 Выгружает по артефакту на движок из `evidence-out/`:
 `verification-evidence-arb` и `verification-evidence-mpfi`. Идентификатор
@@ -103,7 +103,7 @@ python3 proof/region/v1/corpus_dispatch.py --mode verification-dispatch \
 `evidence-out/`, проходит проверки имени и умирал бы во всех 256 полосах на
 первом `test -f`.
 
-Полоса (`verification-lanes.yml`, конверт 480 мин) скачивает названный
+Полоса (`verification-lanes.yml`) скачивает названный
 артефакт из `EVIDENCE_RUN_ID`, проигрывает своё окно через `corpus_lane.py`
 под компаратором движка и выгружает
 `verification-lane-<evidence_artifact>-<window_start>-<window_points>`.

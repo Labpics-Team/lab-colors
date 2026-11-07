@@ -41,7 +41,6 @@ jobs:
   verification-lane:
     name: replay one verification window under the engine comparator
     runs-on: ubuntu-latest
-    timeout-minutes: 480
     permissions:
       contents: read
       actions: read
