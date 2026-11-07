@@ -1,8 +1,18 @@
 name: package worker
 
 on:
+  workflow_dispatch:
+    inputs:
+      labui-sha:
+        description: Exact LabUI source to qualify against this verified package
+        type: string
+        required: true
   workflow_call:
     inputs:
+      labui-sha:
+        description: Optional exact LabUI source qualification
+        type: string
+        default: ''
       program-benchmark:
         description: Compare the public Program consumer with the exact PR base
         type: boolean
@@ -442,6 +452,57 @@ jobs:
           test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"
           test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
+      - name: Bind verified package for optional consumer
+        id: consumer-package
+        if: inputs.labui-sha != ''
+        env:
+          VERIFIED_MANIFEST: ${{ steps.verified-release.outputs.manifest }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+          VERIFIED_RELEASE_OUTCOME: ${{ steps.verified-release.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const env = process.env;
+          const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+          assert.equal(env.VERIFIED_RELEASE_OUTCOME, 'success');
+          const bytes = readFileSync(env.VERIFIED_MANIFEST);
+          const manifest = JSON.parse(bytes);
+          assert.equal(manifest.sourceSha, env.GITHUB_SHA);
+          assert.match(manifest.sourceSha, /^[0-9a-f]{40}$/);
+          assert.equal(manifest.artifacts.tarball.sha256, env.VERIFIED_TARBALL_SHA256);
+          assert.equal(sha256(readFileSync(env.VERIFIED_TARBALL)), env.VERIFIED_TARBALL_SHA256);
+          appendFileSync(env.GITHUB_OUTPUT, `source=${manifest.sourceSha}\nmanifest_sha256=${sha256(bytes)}\n`);
+          NODE
+      - name: Checkout exact optional consumer
+        id: consumer-checkout
+        if: inputs.labui-sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Labpics-Team/labui
+          ref: ${{ inputs.labui-sha }}
+          path: labui-consumer
+          persist-credentials: false
+      - name: Select consumer build runtime
+        if: inputs.labui-sha != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: Qualify verified package through consumer owner
+        if: inputs.labui-sha != ''
+        env:
+          BASH_ENV: ''
+          UI_SOURCE_COMMIT: ${{ inputs.labui-sha }}
+          VERIFIED_MANIFEST: ${{ steps.verified-release.outputs.manifest }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          CORE_SOURCE_SHA: ${{ steps.consumer-package.outputs.source }}
+          CORE_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+          CORE_MANIFEST_SHA256: ${{ steps.consumer-package.outputs.manifest_sha256 }}
+          CORE_VERIFIED_RELEASE_OUTCOME: ${{ steps.verified-release.outcome }}
+        run: bash labui-consumer/.github/scripts/colors-same-job.sh
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
