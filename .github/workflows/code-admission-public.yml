@@ -46,7 +46,7 @@ jobs:
           repo: .code-subject.public01
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           candidate: ${{ github.sha }}
-      # Синтаксис carrier проверяется для всех diff; Trivy запускается для исполняемых путей.
+      # Дополнительный проход включает файлы, которые Trivy исключает по умолчанию.
       - name: Scan secrets omitted by Trivy defaults
         shell: bash
         env:
