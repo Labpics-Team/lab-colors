@@ -19,7 +19,7 @@ def require_sdk_setup(source, name):
     if not match:
         raise AssertionError("Android job missing")
     block = match.group()
-    if "    runs-on: ubuntu-24.04\n" not in block or "setup-android@" in block:
+    if "    runs-on: ubuntu-latest\n" not in block or "setup-android@" in block:
         raise AssertionError("Android consumer must use the declared hosted SDK")
     target = "bindings/kotlin/ci/build.py" if name == "android-build" else "bindings/kotlin/ci/test-consumer.py"
     if target not in block:
@@ -95,7 +95,7 @@ class AndroidSdkSetupTests(unittest.TestCase):
         for name in ("android-build", "android-consumer"):
             with self.subTest(job=name):
                 require_sdk_setup(source, name)
-                mutant = source.replace("runs-on: ubuntu-24.04", "runs-on: [self-hosted, Linux, X64]")
+                mutant = source.replace("runs-on: ubuntu-latest", "runs-on: [self-hosted, Linux, X64]")
                 with self.assertRaises(AssertionError):
                     require_sdk_setup(mutant, name)
 
