@@ -192,6 +192,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
     let kind = KIND;
     let patches;
     let expected;
+    let mut writer;
     let mut expected_error = (query != old.stamp).then_some(HandoffPointSinkErrorV1::StampMismatch);
     let intent = if KIND == 0 {
         let Some(stamp) = PointSinkMutationStampV1::new(query) else {
@@ -215,6 +216,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
                 paint,
             }),
         );
+        writer = writer_from_state(owned, old);
         PointSinkIntentV1::SetAll {
             revision,
             stamp,
@@ -226,18 +228,19 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
             return;
         };
         expected = expected_mutation(query, revision, None);
+        writer = writer_from_state(owned, old);
         PointSinkIntentV1::RevokeAll { revision, stamp }
     } else {
         if expected_error.is_none() && old.revision != Some(revision) {
             expected_error = Some(HandoffPointSinkErrorV1::RevisionMismatch);
         }
         expected = old;
+        writer = writer_from_state(owned, old);
         PointSinkIntentV1::ConfirmExact {
             revision,
             published_stamp: query,
         }
     };
-    let mut writer = writer_from_state(owned, old);
     let actual = match writer.prepare(intent) {
         Err(error) => Some(error),
         Ok(prepared) => {
@@ -388,6 +391,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
     let points;
     let expected;
     let intent;
+    let mut writer;
     if KIND == 0 {
         let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
             return;
@@ -397,6 +401,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         };
         points = [patch(owned, paint)];
         let revision = kani::any();
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::SetAll {
             revision,
             stamp,
@@ -417,12 +422,14 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
             return;
         };
         let revision = kani::any();
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::RevokeAll { revision, stamp };
         expected = expected_mutation(old.stamp, revision, None);
     } else {
         let Some(revision) = old.revision else {
             return;
         };
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::ConfirmExact {
             revision,
             published_stamp: old.stamp,
@@ -455,7 +462,6 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         1 => HandoffPointSinkHostErrorV1::Protocol,
         _ => HandoffPointSinkHostErrorV1::ResourceExhausted,
     };
-    let mut writer = writer_from_state(owned, old);
     writer.host.failure = Some(error);
     let mut prepared = writer.prepare(intent).expect("valid exact intent prepares");
     assert!(
@@ -536,10 +542,17 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     let Some((owned, old)) = any_state() else {
         return;
     };
+    let Some(changed) = any_stamp() else {
+        return;
+    };
+    if changed == old.stamp {
+        return;
+    }
     let kind = KIND;
     let intent;
     let expected;
     let points;
+    let mut writer;
     if KIND == 0 {
         let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
             return;
@@ -549,6 +562,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
         };
         points = [patch(owned, paint)];
         let revision = kani::any();
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::SetAll {
             revision,
             stamp,
@@ -569,12 +583,14 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
             return;
         };
         let revision = kani::any();
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::RevokeAll { revision, stamp };
         expected = expected_mutation(old.stamp, revision, None);
     } else {
         let Some(revision) = old.revision else {
             return;
         };
+        writer = writer_from_state(owned, old);
         intent = PointSinkIntentV1::ConfirmExact {
             revision,
             published_stamp: old.stamp,
@@ -584,13 +600,6 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     let installed_revision = expected
         .revision
         .expect("valid exact intent has a revision");
-    let Some(changed) = any_stamp() else {
-        return;
-    };
-    if changed == old.stamp {
-        return;
-    }
-    let mut writer = writer_from_state(owned, old);
     let mut prepared = writer.prepare(intent).expect("valid exact intent prepares");
     // Hostile внутренний drift: обычное эксклюзивное Rust-заимствование его
     // запрещает, но install обязан самостоятельно проверить ожидаемый stamp.
