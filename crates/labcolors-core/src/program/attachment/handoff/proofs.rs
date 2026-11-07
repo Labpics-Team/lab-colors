@@ -107,10 +107,7 @@ fn any_paint() -> Option<EncodedPointPaintV1> {
     ))
 }
 
-fn any_writer() -> Option<(
-    AdmittedHandoffPointSinkWriterV1<AtomicHost>,
-    ExpectedPointState,
-)> {
+fn any_state() -> Option<(HandoffPointSinkOutputIdV1, ExpectedPointState)> {
     let owned = HandoffPointSinkOutputIdV1::new(kani::any());
     let stamp = any_stamp()?;
     let revision = if stamp.sequence() == 0 {
@@ -128,27 +125,36 @@ fn any_writer() -> Option<(
         None
     };
     Some((
-        AdmittedHandoffPointSinkWriterV1 {
-            owned_scope: vec![owned],
-            binding_epoch: stamp.binding_epoch(),
-            committed: HandoffCommittedPointStateV1 {
-                stamp,
-                revision,
-                points: match point {
-                    Some(point) => vec![point],
-                    None => Vec::new(),
-                },
-                composites: Vec::new(),
-            },
-            retired: None,
-            host: AtomicHost::default(),
-        },
+        owned,
         ExpectedPointState {
             stamp,
             revision,
             point,
         },
     ))
+}
+
+// Недопустимые входы отсекаются до создания writer: Drop его Vec относится
+// к проверяемому prepare/install/finish, а не к генератору.
+fn writer_from_state(
+    owned: HandoffPointSinkOutputIdV1,
+    state: ExpectedPointState,
+) -> AdmittedHandoffPointSinkWriterV1<AtomicHost> {
+    AdmittedHandoffPointSinkWriterV1 {
+        owned_scope: vec![owned],
+        binding_epoch: state.stamp.binding_epoch(),
+        committed: HandoffCommittedPointStateV1 {
+            stamp: state.stamp,
+            revision: state.revision,
+            points: match state.point {
+                Some(point) => vec![point],
+                None => Vec::new(),
+            },
+            composites: Vec::new(),
+        },
+        retired: None,
+        host: AtomicHost::default(),
+    }
 }
 
 fn patch(
@@ -168,7 +174,7 @@ fn patch(
 // kind=0, kind=1 и остальные u8 различаются только операцией. Три
 // мономорфизации сохраняют полный домен остальных входов и все guards.
 fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+    let Some((owned, old)) = any_state() else {
         return;
     };
     let Some(query) = (if kani::any() {
@@ -179,61 +185,55 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
         return;
     };
     let revision: u64 = kani::any();
-    let Some(paint) = any_paint() else {
-        return;
-    };
-    let point = patch(HandoffPointSinkOutputIdV1::new(kani::any()), paint);
-    let patches = [point, point];
-    let length = usize::from(kani::any::<u8>() % 3);
     let kind = KIND;
-    let intent = match kind {
-        0 => PointSinkIntentV1::SetAll {
+    let patches;
+    let expected;
+    let mut expected_error = (query != old.stamp).then_some(HandoffPointSinkErrorV1::StampMismatch);
+    let intent = if KIND == 0 {
+        let Some(stamp) = PointSinkMutationStampV1::new(query) else {
+            return;
+        };
+        let Some(paint) = any_paint() else {
+            return;
+        };
+        let point = patch(HandoffPointSinkOutputIdV1::new(kani::any()), paint);
+        patches = [point, point];
+        let length = usize::from(kani::any::<u8>() % 3);
+        if expected_error.is_none() && (length != 1 || point.sink_output() != owned) {
+            expected_error = Some(HandoffPointSinkErrorV1::PatchScopeMismatch);
+        }
+        expected = expected_mutation(
+            query,
             revision,
-            stamp: match PointSinkMutationStampV1::new(query) {
-                Some(stamp) => stamp,
-                None => return,
-            },
+            Some(HandoffPublishedPointV1 {
+                output: point.output(),
+                sink_output: point.sink_output(),
+                paint,
+            }),
+        );
+        PointSinkIntentV1::SetAll {
+            revision,
+            stamp,
             patch: &patches[..length],
             presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
-        },
-        1 => PointSinkIntentV1::RevokeAll {
-            revision,
-            stamp: match PointSinkMutationStampV1::new(query) {
-                Some(stamp) => stamp,
-                None => return,
-            },
-        },
-        _ => PointSinkIntentV1::ConfirmExact {
+        }
+    } else if KIND == 1 {
+        let Some(stamp) = PointSinkMutationStampV1::new(query) else {
+            return;
+        };
+        expected = expected_mutation(query, revision, None);
+        PointSinkIntentV1::RevokeAll { revision, stamp }
+    } else {
+        if expected_error.is_none() && old.revision != Some(revision) {
+            expected_error = Some(HandoffPointSinkErrorV1::RevisionMismatch);
+        }
+        expected = old;
+        PointSinkIntentV1::ConfirmExact {
             revision,
             published_stamp: query,
-        },
-    };
-    let expected_error = if query != old.stamp {
-        Some(HandoffPointSinkErrorV1::StampMismatch)
-    } else if kind == 0 && (length != 1 || point.sink_output() != writer.owned_scope[0]) {
-        Some(HandoffPointSinkErrorV1::PatchScopeMismatch)
-    } else if kind > 1 && old.revision != Some(revision) {
-        Some(HandoffPointSinkErrorV1::RevisionMismatch)
-    } else {
-        None
-    };
-    let expected = if kind < 2 {
-        ExpectedPointState {
-            stamp: PointSinkStampV1::new(query.sequence() + 1, query.binding_epoch()),
-            revision: Some(revision),
-            point: if kind == 0 {
-                Some(HandoffPublishedPointV1 {
-                    output: point.output(),
-                    sink_output: point.sink_output(),
-                    paint,
-                })
-            } else {
-                None
-            },
         }
-    } else {
-        old
     };
+    let mut writer = writer_from_state(owned, old);
     let actual = match writer.prepare(intent) {
         Err(error) => Some(error),
         Ok(prepared) => {
@@ -328,46 +328,15 @@ fn preparation_is_exact_and_has_no_publication_effect_confirm_exact() {
     preparation_is_exact_and_has_no_publication_effect::<2>();
 }
 
-fn valid_intent<'a, const KIND: u8>(
-    old: &ExpectedPointState,
-    point: &'a [PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1>],
+fn expected_mutation(
+    stamp: PointSinkStampV1,
     revision: u64,
-) -> Option<PointSinkIntentV1<'a, HandoffPointSinkOutputIdV1>> {
-    Some(match KIND {
-        0 => PointSinkIntentV1::SetAll {
-            revision,
-            stamp: PointSinkMutationStampV1::new(old.stamp)?,
-            patch: point,
-            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
-        },
-        1 => PointSinkIntentV1::RevokeAll {
-            revision,
-            stamp: PointSinkMutationStampV1::new(old.stamp)?,
-        },
-        _ => PointSinkIntentV1::ConfirmExact {
-            revision: old.revision?,
-            published_stamp: old.stamp,
-        },
-    })
-}
-
-fn expected_after(
-    old: ExpectedPointState,
-    point: PointSinkPatchEntryV1<HandoffPointSinkOutputIdV1>,
-    kind: u8,
-    revision: u64,
+    point: Option<HandoffPublishedPointV1>,
 ) -> ExpectedPointState {
-    if kind > 1 {
-        return old;
-    }
     ExpectedPointState {
-        stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
+        stamp: PointSinkStampV1::new(stamp.sequence() + 1, stamp.binding_epoch()),
         revision: Some(revision),
-        point: (kind == 0).then_some(HandoffPublishedPointV1 {
-            output: point.output(),
-            sink_output: point.sink_output(),
-            paint: point.paint(),
-        }),
+        point,
     }
 }
 
@@ -408,19 +377,54 @@ fn pending_matches(
 }
 
 fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+    let Some((owned, old)) = any_state() else {
         return;
     };
-    let Some(paint) = any_paint() else {
-        return;
-    };
-    let points = [patch(writer.owned_scope[0], paint)];
     let kind = KIND;
-    let revision = kani::any();
-    let Some(intent) = valid_intent::<KIND>(&old, &points, revision) else {
-        return;
-    };
-    let expected = expected_after(old, points[0], kind, revision);
+    let points;
+    let expected;
+    let intent;
+    if KIND == 0 {
+        let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
+            return;
+        };
+        let Some(paint) = any_paint() else {
+            return;
+        };
+        points = [patch(owned, paint)];
+        let revision = kani::any();
+        intent = PointSinkIntentV1::SetAll {
+            revision,
+            stamp,
+            patch: &points,
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+        };
+        expected = expected_mutation(
+            old.stamp,
+            revision,
+            Some(HandoffPublishedPointV1 {
+                output: points[0].output(),
+                sink_output: points[0].sink_output(),
+                paint,
+            }),
+        );
+    } else if KIND == 1 {
+        let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
+            return;
+        };
+        let revision = kani::any();
+        intent = PointSinkIntentV1::RevokeAll { revision, stamp };
+        expected = expected_mutation(old.stamp, revision, None);
+    } else {
+        let Some(revision) = old.revision else {
+            return;
+        };
+        intent = PointSinkIntentV1::ConfirmExact {
+            revision,
+            published_stamp: old.stamp,
+        };
+        expected = old;
+    }
     let installed_revision = expected
         .revision
         .expect("valid exact intent has a revision");
@@ -437,7 +441,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         desired_sequence: expected.stamp.sequence(),
         binding_epoch: old.stamp.binding_epoch(),
         scope_length: 1,
-        scope: Some(writer.owned_scope[0]),
+        scope: Some(owned),
         points_length: usize::from(expected.point.is_some()),
         point: expected.point,
         composites_length: 0,
@@ -447,6 +451,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         1 => HandoffPointSinkHostErrorV1::Protocol,
         _ => HandoffPointSinkHostErrorV1::ResourceExhausted,
     };
+    let mut writer = writer_from_state(owned, old);
     writer.host.failure = Some(error);
     let mut prepared = writer.prepare(intent).expect("valid exact intent prepares");
     assert!(
@@ -526,36 +531,53 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact()
 }
 
 fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
-    let Some((mut writer, old)) = any_writer() else {
+    let Some((owned, old)) = any_state() else {
         return;
     };
     let kind = KIND;
-    let revision;
     let intent;
     let expected;
     let points;
-    if KIND == 1 {
-        revision = kani::any();
+    if KIND == 0 {
         let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
             return;
         };
-        intent = PointSinkIntentV1::RevokeAll { revision, stamp };
-        expected = ExpectedPointState {
-            stamp: PointSinkStampV1::new(old.stamp.sequence() + 1, old.stamp.binding_epoch()),
-            revision: Some(revision),
-            point: None,
-        };
-    } else {
         let Some(paint) = any_paint() else {
             return;
         };
-        points = [patch(writer.owned_scope[0], paint)];
-        revision = kani::any();
-        let Some(valid) = valid_intent::<KIND>(&old, &points, revision) else {
+        points = [patch(owned, paint)];
+        let revision = kani::any();
+        intent = PointSinkIntentV1::SetAll {
+            revision,
+            stamp,
+            patch: &points,
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+        };
+        expected = expected_mutation(
+            old.stamp,
+            revision,
+            Some(HandoffPublishedPointV1 {
+                output: points[0].output(),
+                sink_output: points[0].sink_output(),
+                paint,
+            }),
+        );
+    } else if KIND == 1 {
+        let Some(stamp) = PointSinkMutationStampV1::new(old.stamp) else {
             return;
         };
-        intent = valid;
-        expected = expected_after(old, points[0], kind, revision);
+        let revision = kani::any();
+        intent = PointSinkIntentV1::RevokeAll { revision, stamp };
+        expected = expected_mutation(old.stamp, revision, None);
+    } else {
+        let Some(revision) = old.revision else {
+            return;
+        };
+        intent = PointSinkIntentV1::ConfirmExact {
+            revision,
+            published_stamp: old.stamp,
+        };
+        expected = old;
     }
     let installed_revision = expected
         .revision
@@ -566,6 +588,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
     if changed == old.stamp {
         return;
     }
+    let mut writer = writer_from_state(owned, old);
     let mut prepared = writer.prepare(intent).expect("valid exact intent prepares");
     // Hostile внутренний drift: обычное эксклюзивное Rust-заимствование его
     // запрещает, но install обязан самостоятельно проверить ожидаемый stamp.
