@@ -108,13 +108,13 @@ fn authority_error(error: core::ProgramMaterializationAuthorityErrorV1) -> LabCo
     )
 }
 
-fn scenarios(
-    ids: &[u32],
-    surfaces: &[u8],
+fn observation<'a>(
+    ids: &'a [u32],
+    surfaces: &'a [u8],
     count: u32,
     operation: &str,
-) -> Result<Vec<core::ProgramScenarioV1>, LabColorsError> {
-    let malformed = || {
+) -> Result<core::ProgramObservationV1<'a>, LabColorsError> {
+    core::ProgramObservationV1::from_rgb8(ids, surfaces, count as usize).map_err(|_| {
         LabColorsError::new(
             if operation == "attachmentUpdateObserved" {
                 "program_attachment_update"
@@ -123,35 +123,7 @@ fn scenarios(
             },
             operation,
         )
-    };
-    let exhausted = |_| {
-        LabColorsError::new(
-            if operation == "attachmentUpdateObserved" {
-                "program_attachment_resource_exhausted"
-            } else {
-                "program_resource_exhausted"
-            },
-            operation,
-        )
-    };
-    let row = (count as usize).checked_mul(3).ok_or_else(malformed)?;
-    let expected = ids.len().checked_mul(row).ok_or_else(malformed)?;
-    if surfaces.len() != expected {
-        return Err(malformed());
-    }
-    let mut result = Vec::new();
-    result.try_reserve_exact(ids.len()).map_err(exhausted)?;
-    for (index, id) in ids.iter().copied().enumerate() {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(count as usize)
-            .map_err(exhausted)?;
-        for rgb in surfaces[index * row..(index + 1) * row].chunks_exact(3) {
-            values.push(labcolors_core::Srgb8::new([rgb[0], rgb[1], rgb[2]]));
-        }
-        result.push(core::ProgramScenarioV1::new(id, values));
-    }
-    Ok(result)
+    })
 }
 
 #[derive(uniffi::Object)]
@@ -185,9 +157,9 @@ impl ProgramRuntime {
     ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateObserved";
         let mut inner = enter(&self.inner, operation)?;
-        let values = scenarios(&scenario_ids, &surfaces, surface_count, operation)?;
+        let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
         inner
-            .update_observed(revision, &values)
+            .update_observed_view(revision, values)
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
     }
@@ -672,9 +644,9 @@ impl ProgramAttachment {
     ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateObserved";
         let mut inner = enter(&self.inner, operation)?;
-        let values = scenarios(&scenario_ids, &surfaces, surface_count, operation)?;
+        let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
         inner
-            .update_observed(revision, &values)
+            .update_observed_view(revision, values)
             .map(|inner| Arc::new(ProgramAttachedSnapshot { inner }))
             .map_err(|e| update_error(e, operation))
     }

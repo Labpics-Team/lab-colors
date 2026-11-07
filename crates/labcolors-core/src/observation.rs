@@ -122,7 +122,7 @@ pub(crate) struct ObservationUpdateInput {
 
 /// Borrowed schema-ordered point-sRGB8 source for the package hot path.
 ///
-/// The trait is crate-private and statically dispatched. Callers provide one
+/// The trait is crate-private. Callers provide one
 /// value per compiled schema ordinal; no port IDs, transport words, or
 /// intermediate keyed binding collections enter Core admission.
 pub(crate) trait SchemaOrderedScenarioSourceV1 {
@@ -448,7 +448,7 @@ impl RevisionBoundObservationV1 {
             && canonical_input_matches_set(self.backing.set(), scenarios)
     }
 
-    fn has_schema_ordered_input<Source: SchemaOrderedScenarioSourceV1>(
+    fn has_schema_ordered_input<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
         &self,
         schema: &CanonicalObservationSchemaV1,
         source: &Source,
@@ -791,7 +791,7 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
 pub(crate) fn prepare_schema_ordered_observation<
     'owner,
     Owner: ObservationOwnerV1,
-    Source: SchemaOrderedScenarioSourceV1,
+    Source: SchemaOrderedScenarioSourceV1 + ?Sized,
 >(
     owner: &'owner mut Owner,
     arenas: &mut ObservationArenaPoolV1,
@@ -885,7 +885,7 @@ pub(crate) fn prepare_schema_ordered_observation<
     }))
 }
 
-fn compare_schema_ordered_scenarios<Source: SchemaOrderedScenarioSourceV1>(
+fn compare_schema_ordered_scenarios<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
     source: &Source,
     left: usize,
     right: usize,
@@ -1008,7 +1008,7 @@ fn canonical_input_matches_set(set: &ObservedScenarioSet, scenarios: &[ScenarioI
     case_index == set.cases.len()
 }
 
-fn schema_ordered_input_matches_set<Source: SchemaOrderedScenarioSourceV1>(
+fn schema_ordered_input_matches_set<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
     set: &ObservedScenarioSet,
     source: &Source,
     order: &[usize],
@@ -1057,7 +1057,7 @@ fn schema_ordered_input_matches_set<Source: SchemaOrderedScenarioSourceV1>(
     case_index == set.cases.len()
 }
 
-fn schema_ordered_scenarios_equal<Source: SchemaOrderedScenarioSourceV1>(
+fn schema_ordered_scenarios_equal<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
     source: &Source,
     left: usize,
     right: usize,
@@ -1068,7 +1068,7 @@ fn schema_ordered_scenarios_equal<Source: SchemaOrderedScenarioSourceV1>(
     })
 }
 
-fn materialize_schema_ordered_scenarios_into<Source: SchemaOrderedScenarioSourceV1>(
+fn materialize_schema_ordered_scenarios_into<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
     set: &mut ObservedScenarioSet,
     schema: &[SurfaceInputPortId],
     source: &Source,

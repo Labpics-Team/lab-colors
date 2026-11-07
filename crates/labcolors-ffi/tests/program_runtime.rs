@@ -1277,3 +1277,112 @@ fn native_final_raster_off_and_lint_never_publish_transparent_final_domain() -> 
     }
     Ok(())
 }
+
+// Один allocator-observer для Core и внешнего native consumer; в библиотеку он не входит.
+#[path = "../../labcolors-core/src/test_support.rs"]
+mod test_support;
+
+#[test]
+fn observed_native_call_has_no_per_scenario_allocations() -> TestResult {
+    use test_support::{AllocatorEvents, measured_allocations, measured_allocator_events};
+    // Положительный контроль: наблюдатель видит настоящий heap, а не только realloc.
+    let (control, count) = measured_allocations(|| Vec::<u8>::with_capacity(64));
+    assert_eq!(count, 1);
+    drop(control);
+    for rows in [1_u32, 8, 32] {
+        let runtime = compile_program_wire(wire("adaptive"), 1)?;
+        for revision in 1..=4 {
+            runtime.update_observed(
+                revision,
+                (1..=rows).collect(),
+                vec![255; rows as usize * 3],
+                1,
+            )?;
+        }
+        let mut snapshots = Vec::with_capacity(4);
+        for revision in [5, 5, 6, 7] {
+            let ids = (1..=rows).collect();
+            let bytes = vec![255; rows as usize * 3];
+            let (result, events) =
+                measured_allocator_events(|| runtime.update_observed(revision, ids, bytes, 1));
+            let snapshot = result?;
+            // Один UniFFI Arc содержит output inline. Оба входных Vec освобождаются при возврате.
+            assert_eq!(
+                events,
+                AllocatorEvents {
+                    alloc: 1,
+                    realloc: 0,
+                    dealloc: 2
+                },
+                "rows={rows}"
+            );
+            assert_eq!(snapshot.output_rgb(0)?, [0; 3]);
+            snapshots.push(snapshot);
+        }
+        let (result, events) = measured_allocator_events(|| {
+            runtime.update_observed(8, (1..=rows).collect(), vec![255; rows as usize * 3], 1)
+        });
+        snapshots.push(result?);
+        // Полная Rust-сторона, включая создание двух входов: 3, а не 1.
+        assert_eq!(
+            events,
+            AllocatorEvents {
+                alloc: 3,
+                realloc: 0,
+                dealloc: 2
+            }
+        );
+        drop(runtime);
+        for snapshot in snapshots {
+            assert_eq!(snapshot.output_rgb(0)?, [0; 3]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn attachment_counts_its_owned_callback_rgb_separately_from_the_result() -> TestResult {
+    struct Accept;
+    impl ProgramPointSinkHost for Accept {
+        fn try_install(
+            &self,
+            intent: ProgramPointSinkIntent,
+        ) -> Result<bool, ProgramPointSinkCallbackError> {
+            if let Some(point) = intent.point {
+                assert_eq!(point.source.len(), 3);
+            }
+            Ok(true)
+        }
+    }
+    let attachment = attach_program_wire(wire("adaptive"), 1, 91, 501, 71, 61, Box::new(Accept))?;
+    for revision in 1..=6 {
+        attachment.update_observed(
+            revision,
+            vec![1],
+            vec![if revision % 2 == 0 { 0 } else { 255 }; 3],
+            1,
+        )?;
+    }
+    for revision in 7..=10 {
+        let ids = vec![1];
+        let rgb = vec![if revision % 2 == 0 { 0 } else { 255 }; 3];
+        let (result, events) = test_support::measured_allocator_events(|| {
+            attachment.update_observed(revision, ids, rgb, 1)
+        });
+        let snapshot = result?;
+        // Arc snapshot и owned RGB команды; callback сам не выделяет память.
+        assert_eq!(
+            events,
+            test_support::AllocatorEvents {
+                alloc: 2,
+                realloc: 0,
+                dealloc: 3
+            }
+        );
+        assert_eq!(
+            snapshot.output_rgb(0)?,
+            if revision % 2 == 0 { [255; 3] } else { [0; 3] }
+        );
+    }
+    Ok(())
+}

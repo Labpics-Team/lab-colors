@@ -15,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -960,15 +961,15 @@ def validate_execution_layout(source_root: Path, external_paths: dict[str, Path]
 
 def _tool_external_paths() -> dict[str, Path]:
     paths: dict[str, Path] = {}
-    for variable, label in (
-        ("CARGO_HOME", "Cargo home"),
-        ("RUSTUP_HOME", "Rustup home"),
-        ("TMPDIR", "temporary directory"),
+    for variable, label, default in (
+        ("CARGO_HOME", "Cargo home", Path.home() / ".cargo"),
+        ("RUSTUP_HOME", "Rustup home", Path.home() / ".rustup"),
+        ("TMPDIR", "temporary directory", Path(tempfile.gettempdir())),
     ):
         value = os.environ.get(variable)
-        if not value:
-            raise ContractError(f"{variable} must be explicitly isolated for mutation execution")
-        paths[label] = Path(value)
+        if value == "":
+            raise ContractError(f"{variable} must not be empty")
+        paths[label] = Path(value) if value is not None else default
     executable = shutil.which("cargo-mutants")
     if not executable:
         raise ContractError("cargo-mutants executable is unavailable for layout verification")

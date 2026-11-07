@@ -1,5 +1,6 @@
 //! Owned-проекция финальных оценок Program. Вычисление остаётся у Core evaluator.
 
+use super::ProgramPresentationCompositeV1;
 use crate::Srgb8;
 use crate::program::VerifiedOutputV1;
 use crate::program_session::{
@@ -7,6 +8,7 @@ use crate::program_session::{
     DeclaredSrgb8CleanSetViolationV1, ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1,
     ProgramConstraintViolationEvidenceV1,
 };
+use crate::shared::Shared;
 
 /// Сохранённый исход ограничения, без нового вычисления на стороне потребителя.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,8 +100,69 @@ pub struct ProgramAssessmentReportV1 {
     content_identity: [u8; 32],
     stream_id: u32,
     revision: u64,
+    projection: ProgramReadyProjectionV1,
+}
+
+// Revision-bound envelope не входит в immutable body. Повторный Ready с теми
+// же данными разделяет body, не удерживая observation-lease или Session arena.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProgramReadyProjectionV1 {
+    Inline {
+        scenario: Option<ProgramScenarioProvenanceV1>,
+        cell: Option<ProgramAssessmentCellV1>,
+        composite: Option<ProgramPresentationCompositeV1>,
+    },
+    Shared(Shared<ProgramReadyProjectionBodyV1>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProgramReadyProjectionBodyV1 {
     scenario_provenance: Vec<ProgramScenarioProvenanceV1>,
     cells: Vec<ProgramAssessmentCellV1>,
+    composites: Vec<ProgramPresentationCompositeV1>,
+}
+
+impl ProgramReadyProjectionV1 {
+    pub(super) fn scenario_provenance(&self) -> &[ProgramScenarioProvenanceV1] {
+        match self {
+            Self::Inline { scenario, .. } => scenario.as_slice(),
+            Self::Shared(body) => &body.scenario_provenance,
+        }
+    }
+
+    pub(super) fn cells(&self) -> &[ProgramAssessmentCellV1] {
+        match self {
+            Self::Inline { cell, .. } => cell.as_slice(),
+            Self::Shared(body) => &body.cells,
+        }
+    }
+
+    pub(super) fn composites(&self) -> &[ProgramPresentationCompositeV1] {
+        match self {
+            Self::Inline { composite, .. } => composite.as_slice(),
+            Self::Shared(body) => &body.composites,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn composites_mut_for_test(&mut self) -> &mut Vec<ProgramPresentationCompositeV1> {
+        if let Self::Inline {
+            scenario,
+            cell,
+            composite,
+        } = self
+        {
+            *self = Self::Shared(Shared::new(ProgramReadyProjectionBodyV1 {
+                scenario_provenance: scenario.as_slice().to_vec(),
+                cells: cell.as_slice().to_vec(),
+                composites: composite.as_slice().to_vec(),
+            }));
+        }
+        let Self::Shared(body) = self else {
+            unreachable!("the inline projection was converted to an owned test body");
+        };
+        &mut Shared::make_mut(body).composites
+    }
 }
 
 impl ProgramAssessmentReportV1 {
@@ -120,12 +183,25 @@ impl ProgramAssessmentReportV1 {
 
     #[must_use]
     pub fn scenario_provenance(&self) -> &[ProgramScenarioProvenanceV1] {
-        &self.scenario_provenance
+        self.projection.scenario_provenance()
     }
 
     #[must_use]
     pub fn cells(&self) -> &[ProgramAssessmentCellV1] {
-        &self.cells
+        self.projection.cells()
+    }
+
+    pub(super) fn from_projection(
+        verified: VerifiedOutputV1<'_>,
+        projection: ProgramReadyProjectionV1,
+    ) -> Self {
+        let observation = verified.observation();
+        Self {
+            content_identity: *verified.content_identity().as_bytes(),
+            stream_id: observation.stream().value(),
+            revision: observation.revision(),
+            projection,
+        }
     }
 }
 
@@ -150,13 +226,28 @@ impl ProgramAssessmentReportScratchV1 {
             .map_err(|_| ())
     }
 
-    /// Ёмкости ограничены prospective bound владельца и числом входных сценариев.
-    /// Копирование не аллоцирует, не переоценивает и не меняет выбранные Paint.
-    pub(super) fn copy_verified(
+    /// Подготовка выполняется на validated prospective evidence до commit.
+    /// Scratch сохраняет capacity; только новое неодиночное body требует owned memory.
+    pub(super) fn project_verified(
         &mut self,
         verified: VerifiedOutputV1<'_>,
-    ) -> ProgramAssessmentReportV1 {
+        composites: &[ProgramPresentationCompositeV1],
+        cached: Option<&ProgramReadyProjectionV1>,
+    ) -> Result<ProgramReadyProjectionV1, ()> {
+        self.clear();
         let observation = verified.observation();
+        let mut provenance_count = 0_usize;
+        for case in observation.physical_cases() {
+            provenance_count = provenance_count
+                .checked_add(case.provenance().count())
+                .ok_or(())?;
+        }
+        self.scenario_provenance
+            .try_reserve_exact(provenance_count)
+            .map_err(|_| ())?;
+        self.cells
+            .try_reserve_exact(verified.cells().len())
+            .map_err(|_| ())?;
         for (case_index, case) in observation.physical_cases().enumerate() {
             self.scenario_provenance
                 .extend(
@@ -174,14 +265,36 @@ impl ProgramAssessmentReportScratchV1 {
                 hard: cell.is_hard(),
                 assessment: copy_assessment(cell.result()),
             }));
-        ProgramAssessmentReportV1 {
-            content_identity: *verified.content_identity().as_bytes(),
-            stream_id: observation.stream().value(),
-            revision: observation.revision(),
-            scenario_provenance: std::mem::take(&mut self.scenario_provenance),
-            cells: std::mem::take(&mut self.cells),
+        if let Some(cached) = cached {
+            if cached.scenario_provenance() == self.scenario_provenance
+                && cached.cells() == self.cells
+                && cached.composites() == composites
+            {
+                return Ok(cached.clone());
+            }
         }
+        if self.scenario_provenance.len() <= 1 && self.cells.len() <= 1 && composites.len() <= 1 {
+            return Ok(ProgramReadyProjectionV1::Inline {
+                scenario: self.scenario_provenance.first().copied(),
+                cell: self.cells.first().copied(),
+                composite: composites.first().copied(),
+            });
+        }
+        Ok(ProgramReadyProjectionV1::Shared(Shared::new(
+            ProgramReadyProjectionBodyV1 {
+                scenario_provenance: try_copy(&self.scenario_provenance)?,
+                cells: try_copy(&self.cells)?,
+                composites: try_copy(composites)?,
+            },
+        )))
     }
+}
+
+fn try_copy<T: Copy>(values: &[T]) -> Result<Vec<T>, ()> {
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(values.len()).map_err(|_| ())?;
+    owned.extend_from_slice(values);
+    Ok(owned)
 }
 
 fn copy_assessment(

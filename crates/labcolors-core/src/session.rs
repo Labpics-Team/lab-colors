@@ -672,7 +672,7 @@ impl<Plan: SessionPlanV1> Session<Plan> {
     /// Package hot path for already schema-ordered point-sRGB8 scenarios.
     /// It shares the exact prepared lifecycle transition below without
     /// constructing keyed surface bindings or a second raw observation owner.
-    pub(crate) fn prepare_schema_ordered<Source: SchemaOrderedScenarioSourceV1>(
+    pub(crate) fn prepare_schema_ordered<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
         &mut self,
         revision: Revision,
         source: &Source,

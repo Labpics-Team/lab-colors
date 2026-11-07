@@ -1361,6 +1361,14 @@ where
 {
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
+        self.update_with_projection(update, |_| Ok(()))
+    }
+
+    fn update_with_projection(
+        &mut self,
+        update: UpdateV1<'_>,
+        project: impl FnOnce(VerifiedOutputV1<'_>) -> Result<(), UpdateErrorV1>,
+    ) -> AttachmentUpdateResultV1<'_, W> {
         let transition = self
             .session
             .prepare_update(update)
@@ -1437,6 +1445,12 @@ where
                 PreparedPatchActionV1::ConfirmExact { revision },
             ),
         };
+        // Disposition, published revision и полный patch уже проверены.
+        // Только prospective Ready допускает projection; отказ или unwind
+        // завершается до sink prepare/install и не публикует Session head.
+        if let Some(verified) = super::prepared_current_verified(&transition) {
+            project(verified).map_err(AttachmentUpdateErrorV1::Update)?;
+        }
         let sink_prepared = self
             .sink
             .prepare(intent)
@@ -1525,6 +1539,16 @@ where
 
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
         self.state.update(update)
+    }
+
+    /// Package-private shell готовит owned readout из текущего prospective
+    /// evidence. Callback не получает Session, sink или capability публикации.
+    pub(crate) fn update_with_projection(
+        &mut self,
+        update: UpdateV1<'_>,
+        project: impl FnOnce(VerifiedOutputV1<'_>) -> Result<(), UpdateErrorV1>,
+    ) -> AttachmentUpdateResultV1<'_, W> {
+        self.state.update_with_projection(update, project)
     }
 
     /// Confirms and consumes one externally managed attachment as one

@@ -1,6 +1,5 @@
 name: CI worker
 
-# Worker для эфемерных GitHub-hosted раннеров публичного репозитория.
 # Локальный uses в ci.yml выбирает определение из snapshot caller'а, не checkout.
 # Изменения графа и пинов проверяются в том же коммите; это не отдельный заранее
 # одобренный граф. Собственных inputs нет. Тесты связывают байты обоих файлов
@@ -54,16 +53,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: isolate verifier toolchains
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
-          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -104,16 +93,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: isolate verifier toolchains
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "KANI_HOME=$RUNNER_TEMP/kani-$GITHUB_JOB"
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/kani-$GITHUB_JOB"
-          echo "$RUNNER_TEMP/cargo-$GITHUB_JOB/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -198,14 +177,6 @@ jobs:
         run: |
           python3 scripts/test_verify_clean_set_receipt.py
           python3 -O scripts/test_verify_clean_set_receipt.py
-      - name: toolchain env (runner.temp)
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.MSRV_TOOLCHAIN }}
@@ -219,7 +190,6 @@ jobs:
     name: clippy + rustfmt
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # Каждый job использует собственные toolchain-каталоги в runner.temp.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -227,21 +197,6 @@ jobs:
       # dtolnay/rust-toolchain has no semver tags; the action is pinned by commit SHA.
       # The toolchain VERSION is pinned via the explicit input below, not @stable,
       # so a new stable release cannot silently change CI behavior.
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -260,21 +215,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -410,21 +350,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -462,21 +387,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -703,14 +613,6 @@ jobs:
           # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
           # evidence must bind the reviewed source, not a synthetic merge commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: toolchain env (runner.temp)
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -841,14 +743,6 @@ jobs:
           # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
           # evidence must bind the reviewed source, not a synthetic merge commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: toolchain env (runner.temp)
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -971,21 +865,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -994,13 +873,8 @@ jobs:
         # Version pinned for reproducibility; --locked respects the tool's own lockfile.
         # Must be >=0.22; older versions cannot parse RUSTSEC entries that use
         # CVSS v4.0 and fail to load the advisory database entirely.
-        # Add $CARGO_HOME/bin to PATH explicitly: with a custom CARGO_HOME the
-        # toolchain action does not add it, and standalone `cargo install`
-        # binaries become unreachable (`wasm-pack` died with exit 127 on de-02;
-        # `cargo audit` only survived by resolving as a cargo subcommand).
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
-          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       # Hard-fail on actively-exploitable advisories AND on yanked crates.
       # Rationale: a known-vulnerable or yanked dependency is a supply-chain
       # liability we will not knowingly merge. cargo-audit exits non-zero on any

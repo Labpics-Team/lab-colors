@@ -214,8 +214,7 @@ impl ProgramSessionV1 {
         self.assessment_scratch
             .reserve(0, 0)
             .map_err(|_| ProgramFinalRasterErrorV1::ResourceExhausted)?;
-        self.outputs_scratch
-            .try_reserve_exact(self.owner.output_slots().count())
+        reserve_snapshot_items(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramFinalRasterErrorV1::ResourceExhausted)?;
         let transition = self
             .owner
@@ -225,8 +224,7 @@ impl ProgramSessionV1 {
         snapshot_from_evidence_into(
             evidence,
             &mut self.outputs_scratch,
-            &mut self.assessment_scratch,
-            &mut self.composites_scratch,
+            None,
             self.owner.snapshot_version(),
             revision,
         )

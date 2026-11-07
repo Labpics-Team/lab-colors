@@ -2038,10 +2038,6 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        # Эфемерные раннеры (GitHub-hosted или self-hosted без секретов)
-        # не несят ни секретов, ни состояния, поэтому fork-PR — штатный
-        # режим опенсорс-гейта: workers не держат fork-гейтов, а каждая
-        # job закреплена на одной одноразовой метке.
         ci_ephemeral = {
             name: block
             for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
@@ -2204,8 +2200,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(native_env.count("SWIFT_TOOLCHAIN: 6.1.3"), 1)
         # Swift больше не capability образа раннера: он закреплён content-
         # addressed digest'ом официального OCI-образа (мутабельные теги в
-        # позиции образа запрещены), TMPDIR создаётся до первого вызова
-        # драйвера, а fail-closed проверка версии остаётся в скрипте.
+        # позиции образа запрещены), а проверка версии остаётся в скрипте.
         self.assertRegex(
             native_env,
             r"(?m)^\s+SWIFT_IMAGE_V1: swift@sha256:"
@@ -2213,7 +2208,7 @@ class MutationTruthTest(unittest.TestCase):
         )
         # Производитель проверяет Rust отдельно; потребитель получает только
         # скомпилированную библиотеку и публичный Swift-контракт.
-        self.assertIn("name: install rustup into the isolated homes", swift_job)
+        self.assertIn("name: install pinned Rust toolchain", swift_job)
         self.assertIn(
             "rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
             swift_job,
@@ -2992,9 +2987,6 @@ jobs:
         self.assertEqual(manifest_step.count('cd "$source_root"'), 1)
         self.assertEqual(shard_step.count('cd "$source_root"'), 1)
         for job in (manifest_job, shard_job):
-            self.assertIn('RUSTUP_HOME=$RUNNER_TEMP/', job)
-            self.assertIn('CARGO_HOME=$RUNNER_TEMP/', job)
-            self.assertIn('TMPDIR=$RUNNER_TEMP/', job)
             self.assertEqual(
                 job.count(
                     '"$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants --version'

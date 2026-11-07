@@ -91,3 +91,58 @@ Core не читает исходники, Cargo-манифесты или CI-к
 Файловый аудит выполняют `labcolors-audit` и отдельные Python-инструменты;
 [руководство](../../docs/how-to/source-audit.md) описывает их область.
 Build-script отдельно формирует descriptor исходного дерева для сертификата.
+
+## Обновление Program без временных входных массивов
+
+`program_wire::ProgramObservationV1::from_rgb8` принимает заимствованные ID
+сценариев и плоскую RGB8-матрицу в порядке входов скомпилированной программы.
+Проверка формы не выделяет память. `ProgramSessionV1::update_observed_view`
+и `ProgramAttachmentV1::update_observed_view` используют тот же admission,
+выбор результата и атомарную транзакцию, что методы с owned-сценариями.
+WASM и native-адаптеры передают свои входы через этот тип.
+
+```rust
+use labcolors_core::program_wire::{
+    ProgramObservationV1, ProgramRuntimeErrorV1, ProgramSessionV1, ProgramSnapshotV1,
+};
+
+fn update(
+    session: &mut ProgramSessionV1,
+    revision: u64,
+    ids: &[u32],
+    rgb8: &[u8],
+    surface_count: usize,
+) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+    let observation = ProgramObservationV1::from_rgb8(ids, rgb8, surface_count)
+        .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+    session.update_observed_view(revision, observation)
+}
+```
+
+Принятые значения копируются в хранилище Session до возврата. Входы можно
+изменять или освобождать после вызова; ранее возвращённый snapshot остаётся
+независимым даже после уничтожения runtime.
+
+Snapshot сохраняет собственную revision, включая revision отчёта. Повтор той
+же revision возвращает равный снимок; новая revision с прежними Paint остаётся
+другим историческим снимком. Все клетки, provenance и presentation composites
+сохраняются после следующих updates и уничтожения Session.
+
+Один output и один render хранятся inline. Неизменившееся тело Ready-отчёта
+разделяется между snapshots; сравнение учитывает все клетки, provenance и
+composites. Оно не удерживает рабочие слоты Session. Одноэлементное тело также
+хранится inline; новое неодиночное тело получает отдельную owned-память до commit.
+
+В проверяемом прогретом пути с достаточными ёмкостями рабочих буферов и прежним
+телом отчёта один output не требует heap; несколько outputs требуют одного
+точно зарезервированного буфера без реаллокаций. Native
+`ProgramRuntime::update_observed` с одним output, готовыми входными `Vec`
+и такими же данными отчёта выделяет только `Arc` результата.
+Native attachment дополнительно создаёт RGB-буфер команды для callback;
+это отдельная аллокация адаптера, не пользовательского кода.
+Компиляция, создание Session, заполнение ещё не использованных рабочих
+слотов, рост кардинальности и новое неодиночное тело отчёта учитываются отдельно.
+Защитные JS-копии,
+сгенерированный транспорт и native `Arc` результата не входят в эту цифру.
+[Измерение границ](../../docs/how-to/benchmark-program.md#выделения-памяти)
+проверяет также стоимость адаптера, не скрывая её за показателем Core.

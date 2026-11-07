@@ -229,6 +229,117 @@ fn attach(
     (attachment, state)
 }
 
+#[test]
+fn prepared_projection_failure_unwind_and_stale_input_never_reach_the_host() {
+    use crate::program::attachment::AttachmentUpdateErrorV1;
+    use crate::program::{UpdateErrorV1, UpdatePhaseV1, UpdateV1};
+    let (mut public, state) = attach(37, false, false);
+    let mut attachment = public
+        .inner
+        .take()
+        .expect("the declared attachment owns its private Session");
+    state.borrow_mut().backgrounds = Some(BACKGROUNDS);
+    let rows = observed(BACKGROUNDS);
+    let source = ProgramScenarioSourceV1(&rows);
+    let mut calls = 0;
+    let error = match attachment.update_with_projection(
+        UpdateV1::ObservedSource {
+            revision: 1,
+            source: &source,
+        },
+        |verified| {
+            calls += 1;
+            assert_eq!(verified.observation().revision(), 1);
+            Err(UpdateErrorV1::ResourceExhausted {
+                phase: UpdatePhaseV1::ProgramEvaluation,
+            })
+        },
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("projection resource failure cannot publish"),
+    };
+    assert!(matches!(
+        error,
+        AttachmentUpdateErrorV1::Update(UpdateErrorV1::ResourceExhausted { .. })
+    ));
+    assert_eq!(calls, 1);
+    assert!(state.borrow().attempts.is_empty());
+    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        attachment
+            .update_with_projection(
+                UpdateV1::ObservedSource {
+                    revision: 1,
+                    source: &source,
+                },
+                |verified| {
+                    calls += 1;
+                    assert_eq!(verified.observation().revision(), 1);
+                    panic!("controlled projection unwind before host prepare");
+                },
+            )
+            .map(|_| ())
+    }));
+    assert!(unwind.is_err());
+    assert_eq!(calls, 2);
+    assert!(state.borrow().attempts.is_empty());
+    let commit = attachment
+        .update(UpdateV1::ObservedSource {
+            revision: 1,
+            source: &source,
+        })
+        .expect("the same revision remains available after both projection failures");
+    assert_eq!(commit.evidence().kind(), crate::program::StateKindV1::Ready);
+    assert_eq!(state.borrow().attempts.len(), 1);
+    attachment
+        .update_with_projection(
+            UpdateV1::ObservedSource {
+                revision: 1,
+                source: &source,
+            },
+            |verified| {
+                calls += 1;
+                assert_eq!(verified.observation().revision(), 1);
+                Ok(())
+            },
+        )
+        .expect("idempotent Ready projects once and confirms the existing head");
+    assert_eq!(calls, 3);
+    assert_eq!(state.borrow().attempts.len(), 2);
+    let stale = attachment.update_with_projection(
+        UpdateV1::ObservedSource {
+            revision: 0,
+            source: &source,
+        },
+        |_| {
+            calls += 1;
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        stale,
+        Err(AttachmentUpdateErrorV1::Update(
+            UpdateErrorV1::RevisionOutOfOrder { .. }
+        ))
+    ));
+    assert_eq!(calls, 3);
+    assert_eq!(state.borrow().attempts.len(), 2);
+    attachment
+        .update_with_projection(
+            UpdateV1::Unknown {
+                revision: 2,
+                reason_id: 7,
+            },
+            |_| {
+                calls += 1;
+                Ok(())
+            },
+        )
+        .expect("Unknown revokes without projecting historical Ready evidence");
+    assert_eq!(calls, 3);
+    assert_eq!(state.borrow().attempts.len(), 3);
+    assert!(state.borrow().installed.is_none());
+}
+
 fn assert_renders(
     attachment: &ProgramAttachmentV1<Host>,
     snapshot: &ProgramAttachedSnapshotV1,
@@ -566,7 +677,16 @@ fn ancestor_evaluation_targets_do_not_require_terminal_renderer_bindings() {
     assert_eq!(snapshot.renders().len(), 1);
     assert_eq!(snapshot.renders()[0].occurrence(), 12);
     // Evaluation сохраняет обе цели; renderer authority есть только у terminal.
-    assert_eq!(snapshot.snapshot().composites.len(), 4);
+    assert_eq!(
+        snapshot
+            .snapshot()
+            .projection
+            .as_ref()
+            .expect("Ready retains its complete projection")
+            .composites()
+            .len(),
+        4,
+    );
     for (scenario, background) in [SCENARIO, SCENARIO + 1].into_iter().zip(BACKGROUNDS) {
         let expected = composite(SOURCE_A, composite(SOURCE_A, background, 2), 2);
         assert_eq!(

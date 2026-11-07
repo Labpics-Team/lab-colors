@@ -2,6 +2,11 @@
  "class": "tests",
  "node_skip_sites": [
   {
+   "line": 14,
+   "path": "packages/colors/test/wcag22.test.mjs",
+   "text": "t.skip(\"pkg/ not built — run `npm run build` first\");"
+  },
+  {
    "line": 22,
    "path": "packages/colors/test/capability-manifest.test.mjs",
    "text": "t.skip(\"pkg/ not built — run `npm run build` first (CI builds before `npm test`)\");"
@@ -25,11 +30,6 @@
    "line": 422,
    "path": "packages/colors/test/release-provenance.test.mjs",
    "text": "context.skip(\"directory symlink setup is privilege-dependent on Windows\");"
-  },
-  {
-   "line": 14,
-   "path": "packages/colors/test/wcag22.test.mjs",
-   "text": "t.skip(\"pkg/ not built — run `npm run build` first\");"
   },
   {
    "line": 76,
@@ -992,7 +992,7 @@
    "start": "scripts"
   }
  ],
- "record_sha256": "ea6b55bdc2487948e2f403d20ff80a559c03edde12296de4e370c35c0545b200",
+ "record_sha256": "12d18e95aef0d70c81a12a7e52d042514393663c627a8ea5b036546260b84c9d",
  "rust": {
   "enabled": [
    "actual_process_cannot_succeed_when_stdout_refuses_bytes: test",
@@ -1099,6 +1099,7 @@
    "appearance_replay_tests::replay_preflights_capacity_and_returns_only_its_appended_range: test",
    "appearance_replay_tests::replay_rejects_foreign_evaluation_before_touching_the_replay_buffer: test",
    "assignable_primary_anchor_survives_secondary_repair: test",
+   "attachment_counts_its_owned_callback_rgb_separately_from_the_result: test",
    "attachment_coverage_accepts_typed_record_projection_without_rewriting_inventory: test",
    "attachment_coverage_rejects_divergent_portable_shapes: test",
    "attachment_coverage_rejects_malformed_binding_records: test",
@@ -1685,6 +1686,7 @@
    "observation_tests::schema_ordered_value_reads_scale_linearly_with_width_and_n_log_n_with_count: test",
    "observation_tests::stream_precedes_full_scenario_admission_which_precedes_revision_checks: test",
    "observation_tests::two_streams_have_independent_watermarks_and_same_physics: test",
+   "observed_native_call_has_no_per_scenario_allocations: test",
    "oklab_white_is_l1_c0: test",
    "oklch_core_vectors_fixture_is_fresh: test",
    "oklch_primary_hues: test",
@@ -1843,6 +1845,15 @@
    "program::wire::tests::joint_selection_on_wire_is_refused: test",
    "program::wire::tests::non_finite_candidate_opacity_is_a_declaration_refusal: test",
    "program::wire::tests::semantic_defects_belong_to_the_compiler_layer: test",
+   "program_allocation_tests::attachment_snapshot_is_inline_and_independent: test",
+   "program_allocation_tests::borrowed_and_owned_inputs_share_admission_and_lifecycle: test",
+   "program_allocation_tests::borrowed_resource_failure_does_not_publish_or_consume_the_revision: test",
+   "program_allocation_tests::changed_ready_projection_owns_all_cells_composites_and_provenance: test",
+   "program_allocation_tests::identical_ready_projection_reuses_owned_body_beyond_small_scenario_counts: test",
+   "program_allocation_tests::multiple_outputs_use_one_exact_owned_buffer_without_reallocation: test",
+   "program_allocation_tests::observation_shape_is_checked_without_allocating_or_reading_missing_values: test",
+   "program_allocation_tests::ready_failed_recovery_and_unknown_keep_the_warmed_allocation_budget: test",
+   "program_allocation_tests::warmed_single_output_update_needs_no_heap: test",
    "program_api_tests::admitted_finite_paint_value_round_trips_source_and_unit_opacity: test",
    "program_api_tests::every_nonempty_finite_paint_domain_is_admitted: test",
    "program_api_tests::finite_paint_domain_is_nonempty_before_it_can_enter_a_draft: test",
@@ -2176,6 +2187,7 @@
    "program_wire::scope_tests::ancestor_evaluation_targets_do_not_require_terminal_renderer_bindings: test",
    "program_wire::scope_tests::authority_selects_one_presentation_and_refuses_foreign_or_stale_bindings: test",
    "program_wire::scope_tests::complete_scope_is_observed_before_ack_and_keeps_alpha_under_permutations: test",
+   "program_wire::scope_tests::prepared_projection_failure_unwind_and_stale_input_never_reach_the_host: test",
    "program_wire::scope_tests::rejection_replay_and_unknown_preserve_or_revoke_the_whole_scope: test",
    "program_wire::scope_tests::terminal_coverage_and_paint_identity_are_checked_before_host_effects: test",
    "program_wire::snapshot_state_contract::wire_state_projection_preserves_every_lifecycle_state: test",
@@ -2422,7 +2434,7 @@
    "wcag_ratio_literals_do_not_create_policy_module_exemptions: test",
    "zero_anchor_tolerance_rejects_an_otherwise_acceptable_replacement: test"
   ],
-  "enabled_count": 1426,
+  "enabled_count": 1438,
   "ignored": [
    "emit_oklch_core_vectors_fixture: test",
    "exhaustive_full_srgb_assignment_experiment: test",

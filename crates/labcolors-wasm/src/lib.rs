@@ -535,13 +535,6 @@ fn to_program_js_error(
     program_failure_error(kind, operation.key()).into()
 }
 
-fn program_observation_reservation_error(_: std::collections::TryReserveError) -> JsValue {
-    to_program_js_error(
-        labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
-        ProgramOperation::UpdateObserved,
-    )
-}
-
 fn attachment_js_error(message: &str, code: &str, operation: ProgramOperation) -> JsValue {
     program_error(message, code, operation.key()).into()
 }
@@ -889,44 +882,14 @@ impl ProgramRuntime {
         let surface_count = checked_u32(surface_count)
             .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?
             as usize;
-        let row_bytes = surface_count
-            .checked_mul(3)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        let expected = scenario_ids
-            .len()
-            .checked_mul(row_bytes)
-            .ok_or_else(|| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
-        if expected != surfaces.len() {
-            return Err(to_program_js_error(
-                E::Update,
-                ProgramOperation::UpdateObserved,
-            ));
-        }
-        let mut scenarios = Vec::new();
-        scenarios
-            .try_reserve_exact(scenario_ids.len())
-            .map_err(program_observation_reservation_error)?;
-        for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-            let start = row * row_bytes;
-            let mut values = Vec::new();
-            values
-                .try_reserve_exact(surface_count)
-                .map_err(program_observation_reservation_error)?;
-            for offset in 0..surface_count {
-                let byte = start + offset * 3;
-                values.push(labcolors_core::Srgb8::new([
-                    surfaces[byte],
-                    surfaces[byte + 1],
-                    surfaces[byte + 2],
-                ]));
-            }
-            scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
-                scenario_id,
-                values,
-            ));
-        }
+        let observation = labcolors_core::program_wire::ProgramObservationV1::from_rgb8(
+            scenario_ids,
+            surfaces,
+            surface_count,
+        )
+        .map_err(|_| to_program_js_error(E::Update, ProgramOperation::UpdateObserved))?;
         self.inner
-            .update_observed(revision, &scenarios)
+            .update_observed_view(revision, observation)
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateObserved))
     }
@@ -1025,58 +988,20 @@ fn attachment_snapshot_error(operation: ProgramOperation) -> JsValue {
     )
 }
 
-fn decode_attachment_scenarios(
-    scenario_ids: &[u32],
-    surfaces: &[u8],
+fn attachment_observation<'a>(
+    scenario_ids: &'a [u32],
+    surfaces: &'a [u8],
     surface_count: JsValue,
     operation: ProgramOperation,
-) -> Result<Vec<labcolors_core::program_wire::ProgramScenarioV1>, JsValue> {
+) -> Result<labcolors_core::program_wire::ProgramObservationV1<'a>, JsValue> {
     let surface_count =
         checked_u32(surface_count).ok_or_else(|| attachment_snapshot_error(operation))? as usize;
-    let row_bytes = surface_count
-        .checked_mul(3)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
-    let expected = scenario_ids
-        .len()
-        .checked_mul(row_bytes)
-        .ok_or_else(|| attachment_snapshot_error(operation))?;
-    if expected != surfaces.len() {
-        return Err(attachment_snapshot_error(operation));
-    }
-    let mut scenarios = Vec::new();
-    scenarios
-        .try_reserve_exact(scenario_ids.len())
-        .map_err(|_| {
-            attachment_js_error(
-                "Program attachment scenario allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
-    for (row, scenario_id) in scenario_ids.iter().copied().enumerate() {
-        let start = row * row_bytes;
-        let mut values = Vec::new();
-        values.try_reserve_exact(surface_count).map_err(|_| {
-            attachment_js_error(
-                "Program attachment surface allocation failed",
-                "program_attachment_resource_exhausted",
-                operation,
-            )
-        })?;
-        for offset in 0..surface_count {
-            let byte = start + offset * 3;
-            values.push(labcolors_core::Srgb8::new([
-                surfaces[byte],
-                surfaces[byte + 1],
-                surfaces[byte + 2],
-            ]));
-        }
-        scenarios.push(labcolors_core::program_wire::ProgramScenarioV1::new(
-            scenario_id,
-            values,
-        ));
-    }
-    Ok(scenarios)
+    labcolors_core::program_wire::ProgramObservationV1::from_rgb8(
+        scenario_ids,
+        surfaces,
+        surface_count,
+    )
+    .map_err(|_| attachment_snapshot_error(operation))
 }
 
 /// Создаёт один публичный attachment и передаёт все внешние эффекты в `host`.
@@ -1200,7 +1125,7 @@ impl ProgramAttachment {
         let _busy = Self::enter(&self.busy, ProgramOperation::AttachmentUpdateObserved)?;
         let revision = u64::try_from(revision)
             .map_err(|_| attachment_snapshot_error(ProgramOperation::AttachmentUpdateObserved))?;
-        let scenarios = decode_attachment_scenarios(
+        let observation = attachment_observation(
             scenario_ids,
             surfaces,
             surface_count,
@@ -1209,7 +1134,7 @@ impl ProgramAttachment {
         let result = self
             .inner
             .borrow_mut()
-            .update_observed(revision, &scenarios);
+            .update_observed_view(revision, observation);
         result
             .map(|inner| ProgramAttachedSnapshot { inner })
             .map_err(|error| {
@@ -1720,21 +1645,6 @@ mod browser_tests {
     #[wasm_bindgen_test]
     fn program_error_projection_distinguishes_every_runtime_failure_class() {
         use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
-
-        for reservation_error in [
-            Vec::<labcolors_core::program_wire::ProgramScenarioV1>::new()
-                .try_reserve_exact(usize::MAX)
-                .unwrap_err(),
-            Vec::<labcolors_core::Srgb8>::new()
-                .try_reserve_exact(usize::MAX)
-                .unwrap_err(),
-        ] {
-            assert_program_error(
-                program_observation_reservation_error(reservation_error),
-                "program_resource_exhausted",
-                "updateObserved",
-            );
-        }
 
         for (error, operation, code) in [
             (

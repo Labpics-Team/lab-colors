@@ -2131,7 +2131,7 @@ impl OwnerV1 {
         source: &Source,
     ) -> Result<PreparedSessionTransitionV1<'session>, UpdateErrorV1>
     where
-        Source: SchemaOrderedScenarioSourceV1,
+        Source: SchemaOrderedScenarioSourceV1 + ?Sized,
     {
         if !self.compiled.owns_session(&session.session) {
             return Err(UpdateErrorV1::OwnerMismatch);
@@ -2285,7 +2285,7 @@ impl<'a> ScenarioV1<'a> {
 }
 
 /// Одно revision-bound обновление; stream принадлежит Session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(crate) enum UpdateV1<'a> {
     /// Согласованные физические сценарии в порядке скомпилированной схемы.
     Observed {
@@ -2293,6 +2293,11 @@ pub(crate) enum UpdateV1<'a> {
         revision: u64,
         /// Одновременные сценарии физического контекста.
         scenarios: &'a [ScenarioV1<'a>],
+    },
+    /// Заимствованный закрытый источник без промежуточного списка сценариев.
+    ObservedSource {
+        revision: u64,
+        source: &'a dyn SchemaOrderedScenarioSourceV1,
     },
     /// Наблюдение явно недоступно; Core не изобретает фон.
     Unknown {
@@ -2335,6 +2340,9 @@ impl SessionV1 {
                     )
                     .map_err(map_session_update_error)
             }
+            UpdateV1::ObservedSource { revision, source } => {
+                self.prepare_schema_ordered_observed(revision, source)
+            }
             UpdateV1::Unknown {
                 revision,
                 reason_id,
@@ -2350,15 +2358,15 @@ impl SessionV1 {
     /// Публичный runtime передаёт клиентские сценарии через
     /// `SchemaOrderedScenarioSourceV1` напрямую; scratch для канонического
     /// порядка переиспользуется внутри Session. Метод приватен: внешний
-    /// вызов проходит только через `OwnerV1::prepare_schema_ordered_update`,
-    /// который проверяет owner-match до admission.
+    /// вызов проходит через проверяющий owner-match `OwnerV1` либо
+    /// через уже связанный Attachment и его транзакцию.
     fn prepare_schema_ordered_observed<Source>(
         &mut self,
         revision: u64,
         source: &Source,
     ) -> Result<CorePreparedSessionTransitionV1<'_>, UpdateErrorV1>
     where
-        Source: SchemaOrderedScenarioSourceV1,
+        Source: SchemaOrderedScenarioSourceV1 + ?Sized,
     {
         self.session
             .prepare_schema_ordered(
@@ -2536,6 +2544,11 @@ pub(crate) struct PreparedSessionTransitionV1<'session> {
 }
 
 impl<'session> PreparedSessionTransitionV1<'session> {
+    /// Только validated prospective Ready; historical evidence не допускается.
+    pub(crate) fn current_verified(&self) -> Option<VerifiedOutputV1<'_>> {
+        prepared_current_verified(&self.transition)
+    }
+
     /// Публикует только уже подготовленные raw head и lifecycle Session и
     /// возвращает exact evidence-only snapshot без sink-authority.
     pub(crate) fn commit(self) -> EvidenceViewV1<'session> {
@@ -2543,6 +2556,20 @@ impl<'session> PreparedSessionTransitionV1<'session> {
             session: self.transition.commit(),
         }
     }
+}
+
+fn prepared_current_verified<'prepared>(
+    transition: &'prepared CorePreparedSessionTransitionV1<'_>,
+) -> Option<VerifiedOutputV1<'prepared>> {
+    use crate::session::PreparedSessionDispositionV1;
+    let verified = match transition.disposition() {
+        PreparedSessionDispositionV1::Verified(verified) => Some(verified),
+        PreparedSessionDispositionV1::Idempotent { state, .. } => state.current_verified(),
+        PreparedSessionDispositionV1::Unknown(_)
+        | PreparedSessionDispositionV1::Violation(_)
+        | PreparedSessionDispositionV1::Incomplete(_) => None,
+    }?;
+    Some(VerifiedOutputV1 { inner: verified })
 }
 
 /// Collision-resistant адрес канонического физического содержания Program.
