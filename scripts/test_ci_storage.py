@@ -233,7 +233,7 @@ class NativeStorageTests(unittest.TestCase):
         options = re.findall(r"(?m)^          emulator-options: ([^\n]+)$", consumer)
         self.assertEqual(len(options), 1)
         arguments = shlex.split(options[0])
-        self.assertEqual(arguments, ["-no-window", "-gpu", "software", "-no-snapshot",
+        self.assertEqual(arguments, ["-no-window", "-gpu", "swiftshader", "-no-snapshot",
                                      "-noaudio", "-no-boot-anim", "-camera-back", "none"])
 
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
