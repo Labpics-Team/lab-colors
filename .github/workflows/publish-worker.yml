@@ -35,9 +35,6 @@ jobs:
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
       startsWith(github.ref_name, 'colors-v')
-    # 15 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
-    # 10-минутный конверт поднят: history-replay на новом железе ещё невозможен);
-    # перекалибровать по фактическим publish-прогонам.
     timeout-minutes: 15
     environment: npm-publish
     permissions:
@@ -51,11 +48,6 @@ jobs:
           # без сохранения workflow credential в git config.
           fetch-depth: 1
           persist-credentials: false
-      - name: isolated publish env (runner.temp)
-        run: |
-          echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB" >> "$GITHUB_ENV"
-          echo "NPM_CONFIG_CACHE=$RUNNER_TEMP/npm-$GITHUB_JOB" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/npm-$GITHUB_JOB"
       - name: guard — exact tag SHA is in origin/main
         env:
           GH_READ_TOKEN: ${{ github.token }}

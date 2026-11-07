@@ -22,9 +22,6 @@ jobs:
     # GitHub-hosted VM that is discarded after this single run.
     # EXT-09: disposable runner invariant — proof test requires ubuntu-latest
     runs-on: ubuntu-latest
-    # 480 = запас сверху при переходе с DE-02 на GitHub-hosted раннеры (старый
-    # 360-минутный конверт поднят: history-replay на новом железе ещё невозможен);
-    # перекалибровать по фактическим прогонам.
     timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"

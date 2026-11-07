@@ -36,10 +36,6 @@ jobs:
     name: wasm build + headless test + size
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Native Binaryen 117 не завершил wasm-opt внутри systrap до bounded timeout
-    # (run 30773180841). Официальный Node transport того же release дал byte-exact
-    # результат native oracle на post-bindgen input в exact production cell.
-    # Менять release/transport только новым differential receipt.
     env:
       BINARYEN_RELEASE: version_117
       BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
@@ -52,22 +48,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: toolchain env (runner.temp)
-        # runner-контекст недоступен в job-level env — только в шагах; поэтому
-        # RUSTUP_HOME/CARGO_HOME назначаются здесь через GITHUB_ENV. Смысл тот
-        # же: изоляция per job под runner.temp, который раннер вайпит между
-        # джобами (класс утечки /tmp закрыт, см. историю #143).
-        run: |
-          {
-            echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-$GITHUB_JOB"
-            echo "CARGO_HOME=$RUNNER_TEMP/cargo-$GITHUB_JOB"
-            echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
-            # TMPDIR тоже изолирован под runner.temp: /tmp на de-02 — 8ГБ tmpfs;
-            # при исчерпании места (4КБ свободно) все
-            # джобы умирали «abnormal exit»/cc без stderr, 2026-07-03 18:34Z.
-            echo "TMPDIR=$RUNNER_TEMP/tmp-$GITHUB_JOB"
-          } >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/tmp-$GITHUB_JOB" "$RUNNER_TEMP/wasm-pack-$GITHUB_JOB"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -85,12 +65,9 @@ jobs:
         # Pinned for reproducibility; --locked respects the tool's own lockfile.
         # Build uses --no-opt below: Binaryen is installed and verified separately,
         # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
-        # $CARGO_HOME/bin в†’ PATH explicitly: with a custom CARGO_HOME the
-        # toolchain action does not add it, so the installed `wasm-pack` binary
-        # was unreachable (exit 127 "command not found" на прежнем пуле de-02).
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
-          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack" >> "$GITHUB_ENV"
       - name: install byte-bound wasm-bindgen CLI
         # wasm-pack's fallback install is dependency- and host-toolchain-sensitive.
         # Materialize the release binary in its completed non-dot cache layout so
@@ -176,7 +153,7 @@ jobs:
           fi
 
           wasm=packages/colors/pkg/labcolors_bg.wasm
-          for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "$RUSTUP_HOME"; do
+          for root in "$GITHUB_WORKSPACE" "$CARGO_HOME" "${RUSTUP_HOME:-$HOME/.rustup}"; do
             if LC_ALL=C grep -a -F -q -- "$root/" "$wasm"; then
               echo "unmapped build path $root in $wasm" >&2
               exit 1
@@ -254,9 +231,7 @@ jobs:
         #     Тест обязан использовать только проверенную пару CfT, а не Chrome
         #     или ChromeDriver из изменяемого окружения раннера.
         #  2. Extract required shared libs (.so) from the runner's configured
-        #     Debian/Ubuntu repository without sudo. Refresh package metadata in
-        #     runner.temp first: образ ячейки может нести устаревшие списки,
-        #     чьи package URL уже отдают 404. The root set below owns every
+        #     Debian/Ubuntu repository without sudo. The root set below owns every
         #     direct DT_NEEDED name of the pinned Chrome and ChromeDriver ELF
         #     files; APT resolves its transitive closure and `dpkg --extract`
         #     unpacks it without root. `ldd` then rejects an incomplete closure
