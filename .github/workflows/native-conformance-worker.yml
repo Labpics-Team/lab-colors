@@ -155,10 +155,12 @@ jobs:
             api: 23
             target: default
             page: 4096
+            boot_diagnostics: ''
           - name: 16 KB
             api: 35
             target: google_apis_ps16k
             page: 16384
+            boot_diagnostics: -show-kernel -logcat '*:w SystemServer:i ActivityManager:i lmkd:i'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -184,7 +186,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: x86_64
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu software -no-snapshot -noaudio -no-boot-anim -camera-back none ${{ matrix.boot_diagnostics }}
           script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
       - name: verify staged failure artifact inventory
         if: failure()
