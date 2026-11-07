@@ -223,6 +223,34 @@ class ArtifactTests(unittest.TestCase):
                     self.assertEqual(failure.exception.returncode, 17)
                     self.assertIsNone(failure.exception.__cause__)
 
+    def test_device_failure_distinguishes_missing_probes_and_bounds_output(self):
+        def execute(command, **kwargs):
+            if "pidof" in command:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            if "logcat" in command:
+                kwargs["stdout"].write(b"crash" * 14000)
+            return subprocess.CompletedProcess(command, 0)
+        output = io.StringIO()
+        with redirect_stderr(output), patch.object(elf.subprocess, "run", side_effect=execute):
+            elf.emit_device_failure(Path("adb"))
+        records = [json.loads(line.removeprefix("ANDROID_DEVICE_FAILURE "))
+                   for line in output.getvalue().splitlines()]
+        self.assertEqual(len(records), 4)
+        self.assertEqual(records[0]["status"], "completed")
+        self.assertEqual(records[0]["output"], "")
+        self.assertEqual(records[1], {"probe": "system_server", "status": "probe-error", "error": "TimeoutExpired"})
+        self.assertTrue(records[-1]["truncated"])
+        self.assertEqual(len(records[-1]["output"]), 65536)
+        output = io.StringIO()
+        with redirect_stderr(output), patch.object(elf.subprocess, "run", side_effect=OSError("adb unavailable")):
+            elf.emit_device_failure(Path("adb"))
+        self.assertEqual(len(output.getvalue().splitlines()), 4)
+        with patch.object(elf.subprocess, "run", side_effect=execute) as probe, patch.object(
+            elf.sys, "stderr", unittest.mock.Mock(write=unittest.mock.Mock(side_effect=OSError("closed")))
+        ):
+            elf.emit_device_failure(Path("adb"))
+        self.assertEqual(probe.call_count, 1)
+
     def test_connected_capture_has_scoped_commands_and_no_false_exception(self):
         with tempfile.TemporaryDirectory() as directory:
             capture = elf.CrashCapture(Path("adb"))

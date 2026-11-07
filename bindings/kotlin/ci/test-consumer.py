@@ -246,20 +246,26 @@ def emit_device_failure(adb: Path) -> None:
         ("system_crash", ["logcat", "-d", "-b", "crash", "-v", "threadtime", "-t", "200"]),
     )
     for label, arguments in commands:
+        record = {"probe": label}
         try:
             with TemporaryFile() as output:
                 result = subprocess.run([str(adb), *arguments], stdout=output,
                                         stderr=subprocess.STDOUT, timeout=10, check=False)
                 output.seek(0)
                 content = output.read(65537)
-            print("ANDROID_DEVICE_FAILURE " + json.dumps({
-                "probe": label, "returncode": result.returncode,
+            record.update({
+                "status": "completed", "returncode": result.returncode,
                 "truncated": len(content) > 65536,
                 "output": content[:65536].decode("utf-8", errors="replace"),
-            }), file=sys.stderr, flush=True)
-        except BaseException:
-            # This diagnostic must never replace the failed consumer result.
-            pass
+            })
+        except (OSError, subprocess.SubprocessError) as error:
+            record.update({"status": "probe-error", "error": type(error).__name__})
+        try:
+            print("ANDROID_DEVICE_FAILURE " + json.dumps(record), file=sys.stderr, flush=True)
+        except OSError:
+            # A failed output sink cannot report further probes. Preserve the
+            # consumer failure instead of replacing it with a logging error.
+            return
 
 
 def connected_test(command: list[str], consumer: Path, environment: dict, adb: Path, variant: str) -> None:

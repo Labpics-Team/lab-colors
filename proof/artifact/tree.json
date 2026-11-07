@@ -27,8 +27,8 @@
   "bindings/kotlin/ci/desugar-linkage.py": "0f2f30e07079eeeee97da9155299628dd8a32bf5",
   "bindings/kotlin/ci/kotlin-linkage.py": "bc906e8e6880a5b79d06a332d58d1aeda5aba70a",
   "bindings/kotlin/ci/prepare-consumer.py": "75144965223a4da6872a26cabbe191f7eb703529",
-  "bindings/kotlin/ci/test-consumer.py": "bee431234762c65de3ee99f2c9230160355e496d",
-  "bindings/kotlin/ci/test_artifact.py": "381489d46c64bbeeb52a9ee1112716418964930c",
+  "bindings/kotlin/ci/test-consumer.py": "9555fa6aa4a609c0b01dd4106e531af0ea15dcc1",
+  "bindings/kotlin/ci/test_artifact.py": "b34cf3d395cbe28b876f28ec52e39ea6cd62945a",
   "bindings/kotlin/ci/test_desugar_linkage.py": "3e04a803395a758ba497ffbc5908f7c0e3eb71b6",
   "bindings/kotlin/ci/test_kotlin_linkage.py": "3e858d174aebc28c43f8ff586246c7e25386e094",
   "bindings/kotlin/ci/test_sdk_setup.py": "d6f3dc9dade6f936b7fb988aa361579f862e26c6",
@@ -642,7 +642,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "b6139851943a45b40409fd27fab93b2c98f6a21187e4d60d4e9d199981845ec8",
+ "record_sha256": "cc909f02351e6865aa44adc848bdc682cdd308f2ed286534a43b6bfc8b9916d7",
  "roots": [
   ".github/workflows",
   "Cargo.toml",
