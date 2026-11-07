@@ -124,7 +124,8 @@ extern "C" {
 }
 // Приватные индексы JS: runtime — 0..7 и 15, attachment — 8..14.
 // Сопоставления, таблица, граница message и browser-тест меняются вместе.
-#[wasm_bindgen(inline_js = r#"
+// Все host-проекции разделяют один замкнутый JS-модуль runtime-пакета.
+#[wasm_bindgen(inline_js = r##"
 const ProgramError = Error;
 const programDefineProperty = Object.defineProperty;
 
@@ -318,8 +319,101 @@ export function consumeFinalRasterRgb(bytes, width, height, dpr, revision, slot,
     revision, outputSlot: slot, pixels, cleanliness,
   })) === true;
 }
-"#)]
+
+const projectionDefineProperty = Object.defineProperty;
+const projectionString = String;
+const projectionHex = "0123456789ABCDEF";
+
+// Own data properties сохраняют обычную мутабельность без inherited setters.
+export function appendProjectionArray(array, value) {
+  projectionDefineProperty(array, array.length, {
+    __proto__: null, value, writable: true, enumerable: true, configurable: true,
+  });
+}
+
+export function capabilitySiteProjection(siteId, stableOutcomes, compatibilityReleases, evidenceClasses, artifactIds, boundIds, proofIds, runtimeAttestations) {
+  return { siteId, stableOutcomes, compatibilityReleases, evidenceClasses,
+    artifactIds, boundIds, proofIds, runtimeAttestations };
+}
+
+export function capabilityManifestProjection(schemaVersion, coverage, sites, checksum) {
+  return { schemaVersion, coverage, sites, checksum };
+}
+
+function rgbHex(rgb) {
+  return "#" + projectionHex[rgb[0] >>> 4] + projectionHex[rgb[0] & 15]
+    + projectionHex[rgb[1] >>> 4] + projectionHex[rgb[1] & 15]
+    + projectionHex[rgb[2] >>> 4] + projectionHex[rgb[2] & 15];
+}
+
+export function wcag22EvidenceProjection(artifactId, artifactSha256, boundId, proofId, proofSha256, proofPayloadSha256, generatorSha256, verifierSha256, profileChecksum, profileSha256) {
+  return { kind: "canonical-finite-bounded", artifactId, artifactSha256,
+    boundId, proofId, proofSha256, proofPayloadSha256, generatorSha256,
+    verifierSha256, profileChecksum, profileSha256 };
+}
+
+export function wcag22AssessmentProjection(profileId, criterion, foreground, background, foregroundLower, foregroundUpper, backgroundLower, backgroundUpper, q55Scale, decision, evidence) {
+  return { kind: "evaluated", profileId, criterion,
+    foreground: rgbHex(foreground), background: rgbHex(background),
+    foregroundLuminanceQ55: {
+      lower: projectionString(foregroundLower), upper: projectionString(foregroundUpper),
+    },
+    backgroundLuminanceQ55: {
+      lower: projectionString(backgroundLower), upper: projectionString(backgroundUpper),
+    },
+    q55Scale: projectionString(q55Scale), decision, evidence };
+}
+"##)]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = appendProjectionArray)]
+    fn append_projection_key(array: &js_sys::Array, value: &str) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = appendProjectionArray)]
+    fn append_projection_value(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = capabilitySiteProjection)]
+    fn project_capability_site(
+        site_id: &str,
+        stable_outcomes: &js_sys::Array,
+        compatibility_releases: &js_sys::Array,
+        evidence_classes: &js_sys::Array,
+        artifact_ids: &js_sys::Array,
+        bound_ids: &js_sys::Array,
+        proof_ids: &js_sys::Array,
+        runtime_attestations: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = capabilityManifestProjection)]
+    fn project_capability_manifest(
+        schema_version: u32,
+        coverage: &str,
+        sites: &js_sys::Array,
+        checksum: &str,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = wcag22EvidenceProjection)]
+    fn project_wcag22_evidence(
+        artifact_id: &str,
+        artifact_sha256: &str,
+        bound_id: &str,
+        proof_id: &str,
+        proof_sha256: &str,
+        proof_payload_sha256: &str,
+        generator_sha256: &str,
+        verifier_sha256: &str,
+        profile_checksum: &str,
+        profile_sha256: &str,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = wcag22AssessmentProjection)]
+    fn project_wcag22_assessment(
+        profile_id: &str,
+        criterion: &str,
+        foreground: &[u8],
+        background: &[u8],
+        foreground_lower: u64,
+        foreground_upper: u64,
+        background_lower: u64,
+        background_upper: u64,
+        q55_scale: u64,
+        decision: &str,
+        evidence: &JsValue,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = pointSinkPoint)]
     fn point_sink_point(
         slot: u32,

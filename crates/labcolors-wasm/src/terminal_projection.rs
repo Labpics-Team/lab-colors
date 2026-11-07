@@ -1,106 +1,12 @@
 //! Структурная JS-проекция постоянных численных возможностей и WCAG-оценки Core.
 
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
 
-use super::report_array;
+use super::{
+    append_projection_key, append_projection_value, project_capability_manifest,
+    project_capability_site, project_wcag22_assessment, project_wcag22_evidence, report_array,
+};
 use crate::error::BindingError;
-
-#[wasm_bindgen(inline_js = r##"
-const projectionDefineProperty = Object.defineProperty;
-const projectionString = String;
-const projectionHex = "0123456789ABCDEF";
-
-// Own data properties сохраняют обычную мутабельность без inherited setters.
-export function appendProjectionArray(array, value) {
-  projectionDefineProperty(array, array.length, {
-    __proto__: null, value, writable: true, enumerable: true, configurable: true,
-  });
-}
-
-export function capabilitySiteProjection(siteId, stableOutcomes, compatibilityReleases, evidenceClasses, artifactIds, boundIds, proofIds, runtimeAttestations) {
-  return { siteId, stableOutcomes, compatibilityReleases, evidenceClasses,
-    artifactIds, boundIds, proofIds, runtimeAttestations };
-}
-
-export function capabilityManifestProjection(schemaVersion, coverage, sites, checksum) {
-  return { schemaVersion, coverage, sites, checksum };
-}
-
-function rgbHex(rgb) {
-  return "#" + projectionHex[rgb[0] >>> 4] + projectionHex[rgb[0] & 15]
-    + projectionHex[rgb[1] >>> 4] + projectionHex[rgb[1] & 15]
-    + projectionHex[rgb[2] >>> 4] + projectionHex[rgb[2] & 15];
-}
-
-export function wcag22EvidenceProjection(artifactId, artifactSha256, boundId, proofId, proofSha256, proofPayloadSha256, generatorSha256, verifierSha256, profileChecksum, profileSha256) {
-  return { kind: "canonical-finite-bounded", artifactId, artifactSha256,
-    boundId, proofId, proofSha256, proofPayloadSha256, generatorSha256,
-    verifierSha256, profileChecksum, profileSha256 };
-}
-
-export function wcag22AssessmentProjection(profileId, criterion, foreground, background, foregroundLower, foregroundUpper, backgroundLower, backgroundUpper, q55Scale, decision, evidence) {
-  return { kind: "evaluated", profileId, criterion,
-    foreground: rgbHex(foreground), background: rgbHex(background),
-    foregroundLuminanceQ55: {
-      lower: projectionString(foregroundLower), upper: projectionString(foregroundUpper),
-    },
-    backgroundLuminanceQ55: {
-      lower: projectionString(backgroundLower), upper: projectionString(backgroundUpper),
-    },
-    q55Scale: projectionString(q55Scale), decision, evidence };
-}
-"##)]
-extern "C" {
-    #[wasm_bindgen(catch, js_name = appendProjectionArray)]
-    fn append_projection_key(array: &js_sys::Array, value: &str) -> Result<(), JsValue>;
-    #[wasm_bindgen(catch, js_name = appendProjectionArray)]
-    fn append_projection_value(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
-    #[wasm_bindgen(catch, js_name = capabilitySiteProjection)]
-    fn project_capability_site(
-        site_id: &str,
-        stable_outcomes: &js_sys::Array,
-        compatibility_releases: &js_sys::Array,
-        evidence_classes: &js_sys::Array,
-        artifact_ids: &js_sys::Array,
-        bound_ids: &js_sys::Array,
-        proof_ids: &js_sys::Array,
-        runtime_attestations: &js_sys::Array,
-    ) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(catch, js_name = capabilityManifestProjection)]
-    fn project_capability_manifest(
-        schema_version: u32,
-        coverage: &str,
-        sites: &js_sys::Array,
-        checksum: &str,
-    ) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(catch, js_name = wcag22EvidenceProjection)]
-    fn project_wcag22_evidence(
-        artifact_id: &str,
-        artifact_sha256: &str,
-        bound_id: &str,
-        proof_id: &str,
-        proof_sha256: &str,
-        proof_payload_sha256: &str,
-        generator_sha256: &str,
-        verifier_sha256: &str,
-        profile_checksum: &str,
-        profile_sha256: &str,
-    ) -> Result<JsValue, JsValue>;
-    #[wasm_bindgen(catch, js_name = wcag22AssessmentProjection)]
-    fn project_wcag22_assessment(
-        profile_id: &str,
-        criterion: &str,
-        foreground: &[u8],
-        background: &[u8],
-        foreground_lower: u64,
-        foreground_upper: u64,
-        background_lower: u64,
-        background_upper: u64,
-        q55_scale: u64,
-        decision: &str,
-        evidence: &JsValue,
-    ) -> Result<JsValue, JsValue>;
-}
 
 fn key_array<'a>(keys: impl Iterator<Item = &'a str>) -> Result<js_sys::Array, JsValue> {
     let array = report_array()?;
