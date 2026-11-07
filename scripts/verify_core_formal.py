@@ -14,6 +14,7 @@ import subprocess
 import time
 
 from formal_contracts import CONTRACTS, MUTANTS, SOURCES
+from formal_resources import FormalResources
 
 ROOT = Path(__file__).resolve().parents[1]
 KANI_VERSION = "0.68.0"
@@ -203,13 +204,16 @@ def _open_live_output_fd() -> int:
     raise OSError("CI stdout must be a regular file, pipe, or terminal")
 
 
-def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200) -> int:
+def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200,
+                        observe_resources: bool = False) -> int:
     """Follow the regular logfile; command completion belongs to its leader PID."""
     requested_signal = None
     previous_handlers = {}
     process = None
     output_fd = None
     cleaned = False
+    stop_reason = "error"
+    resources = FormalResources() if observe_resources else None
 
     def request_stop(signum, frame):
         nonlocal requested_signal
@@ -219,6 +223,10 @@ def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200)
     def cleanup():
         nonlocal cleaned
         if process is not None and not cleaned:
+            if resources is not None:
+                resources.sample("stopping", process.pid, requested_signal=requested_signal,
+                                 returncode=process.returncode,
+                                 reason="signal" if requested_signal is not None else stop_reason)
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -245,22 +253,33 @@ def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200)
                     output_fd = _open_live_output_fd()
                 except OSError:
                     relay_failed = True
+                if resources is not None:
+                    resources.sample("baseline")
                 process = subprocess.Popen(command, cwd=ROOT, stdout=writer, stderr=subprocess.STDOUT,
                                            start_new_session=True)
-                deadline = time.monotonic() + timeout
+                started = time.monotonic()
+                deadline, next_sample = started + timeout, started + 10
                 pending, offset = b"", 0
                 try:
+                    if resources is not None:
+                        resources.sample("started", process.pid)
                     while requested_signal is None:
                         returncode = process.poll()
                         if returncode is not None:
+                            stop_reason = "exited"
                             cleanup()
                         if requested_signal is not None:
                             break
-                        remaining = deadline - time.monotonic()
+                        now = time.monotonic()
+                        remaining = deadline - now
                         if remaining <= 0:
+                            stop_reason = "timeout"
                             if returncode is None and not relay_failed:
                                 raise subprocess.TimeoutExpired(command, timeout)
                             return 125
+                        if resources is not None and not cleaned and now >= next_sample:
+                            resources.sample("running", process.pid)
+                            next_sample = now + 10
                         progressed = False
                         if not relay_failed:
                             if offset == len(pending):
@@ -295,6 +314,8 @@ def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200)
                     cleanup()
     finally:
         try:
+            if resources is not None:
+                resources.close()
             if output_fd is not None:
                 os.close(output_fd)
         finally:
@@ -329,7 +350,7 @@ def run_kani(
             command.append("--exact")
     command.extend(["--cbmc-args", "--symex-cache-dereferences"])
     log = output.with_suffix(".log")
-    returncode = _run_logged_command(command, log)
+    returncode = _run_logged_command(command, log, observe_resources=True)
     return json.loads(output.read_text(encoding="utf-8")), returncode
 
 
@@ -347,6 +368,7 @@ def formal_source_files() -> list[Path]:
         CORE / "program_wire.rs",
         Path(__file__),
         ROOT / "scripts/formal_contracts.py",
+        ROOT / "scripts/formal_resources.py",
     ]
     for source in SOURCES:
         files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])

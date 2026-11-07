@@ -16,6 +16,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
+import formal_resources
 from verify_core_formal import (
     CONTRACTS, KANI_VERSION,
     assemble_fragments, assert_snapshot, checkout_is_clean, checkout_snapshot, digest, formal_source_files,
@@ -488,7 +489,8 @@ class FormalReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch("verify_core_formal.subprocess.Popen") as launch, mock.patch(
                 "verify_core_formal.os.killpg", create=True
-            ) as terminate, mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0, 1200]):
+            ) as terminate, mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0, 1200]), \
+                 mock.patch("verify_core_formal.FormalResources") as observer:
                 launch.return_value.pid = 4242
                 launch.return_value.poll.return_value = None
                 launch.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 0.1), -9]
@@ -497,6 +499,8 @@ class FormalReportTests(unittest.TestCase):
                 terminate.assert_called_once_with(4242, signal.SIGKILL)
                 launch.return_value.wait.assert_has_calls([mock.call(timeout=0.1), mock.call()])
                 self.assertTrue(launch.call_args.kwargs["start_new_session"])
+                self.assertEqual(observer.return_value.sample.call_args.kwargs["reason"], "timeout")
+                observer.return_value.close.assert_called_once_with()
 
     def test_completed_wrapper_still_cleans_its_solver_group(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -511,6 +515,41 @@ class FormalReportTests(unittest.TestCase):
                 self.assertEqual(run_kani(path), ({}, 1))
                 terminate.assert_called_once_with(4243, signal.SIGKILL)
                 self.assertIn("--jobs=1", launch.call_args.args[0])
+
+    def test_blocked_diagnostics_and_parser_failure_preserve_primary_outcome(self):
+        for outcome in ("failure", "timeout", "signal"):
+            observer = formal_resources.FormalResources.__new__(formal_resources.FormalResources)
+            observer.fd, observer.sequence, observer.dropped = 999999, 0, 0
+            with self.subTest(outcome=outcome), \
+                 mock.patch("verify_core_formal.FormalResources", return_value=observer), \
+                 mock.patch("formal_resources._process", side_effect=ValueError("malformed stat")), \
+                 mock.patch("formal_resources.os.write", side_effect=BlockingIOError), \
+                 mock.patch("verify_core_formal.subprocess.Popen") as launch, \
+                 mock.patch("verify_core_formal.os.killpg", create=True) as terminate, \
+                 mock.patch("verify_core_formal.time.monotonic", side_effect=[0, 0, 1200]):
+                process = launch.return_value
+                process.pid, process.returncode = 4243, 1 if outcome == "failure" else None
+                process.poll.return_value = process.returncode
+                process.wait.return_value = 1
+                if outcome == "timeout":
+                    process.wait.side_effect = [subprocess.TimeoutExpired("unused", 0.1), -9]
+                if outcome == "signal":
+                    def spawned(*args, **kwargs):
+                        signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                        return process
+                    launch.side_effect = spawned
+                if outcome == "failure":
+                    self.assertEqual(_run_logged_command(["unused"], self.command_log, observe_resources=True), 1)
+                elif outcome == "timeout":
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        _run_logged_command(["unused"], self.command_log, observe_resources=True)
+                else:
+                    with self.assertRaises(SystemExit) as stopped:
+                        _run_logged_command(["unused"], self.command_log, observe_resources=True)
+                    self.assertEqual(stopped.exception.code, 143)
+                terminate.assert_called_once_with(4243, signal.SIGKILL)
+                self.assertIsNone(observer.fd)
+                self.assertGreater(observer.dropped, 0)
 
     def test_positive_subset_uses_exact_multi_filter_without_concrete_playback(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -574,7 +613,8 @@ class FormalReportTests(unittest.TestCase):
         for signum in previous:
             with self.subTest(signum=signum), mock.patch(
                 "verify_core_formal.subprocess.Popen"
-            ) as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate:
+            ) as launch, mock.patch("verify_core_formal.os.killpg", create=True) as terminate, \
+                 mock.patch("verify_core_formal.FormalResources") as observer:
                 process = mock.Mock(pid=4247)
                 process.wait.return_value = 0
 
@@ -584,10 +624,13 @@ class FormalReportTests(unittest.TestCase):
 
                 launch.side_effect = spawned
                 with self.assertRaises(SystemExit) as stopped:
-                    _run_logged_command(["unused"], self.command_log)
+                    _run_logged_command(["unused"], self.command_log, observe_resources=True)
                 self.assertEqual(stopped.exception.code, 128 + signum)
                 terminate.assert_called_once_with(4247, signal.SIGKILL)
                 process.wait.assert_called_once_with()
+                self.assertEqual(observer.return_value.sample.call_args.kwargs["requested_signal"], signum)
+                self.assertEqual(observer.return_value.sample.call_args.kwargs["reason"], "signal")
+                observer.return_value.close.assert_called_once_with()
                 for restored, handler in previous.items():
                     self.assertEqual(signal.getsignal(restored), handler)
 
@@ -947,10 +990,144 @@ class FormalReportTests(unittest.TestCase):
                     other.write_bytes(b"trusted other\n")
 
 
+class FormalResourceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def write(self, name, content):
+        path = self.directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content.encode())
+        return path
+
+    def process(self, pid, group, start, rss):
+        # Fields follow proc_pid_stat(5); comm deliberately contains ')' and spaces.
+        fields = ["S", "1", str(group)] + ["0"] * 16 + [str(start), "4096", str(rss)]
+        self.write(f"{pid}/stat", f"{pid} (private ) command) " + " ".join(fields))
+        return self.directory / str(pid)
+
+    def observer(self):
+        observer = formal_resources.FormalResources.__new__(formal_resources.FormalResources)
+        observer.fd, observer.sequence, observer.dropped = 99, 0, 0
+        return observer
+
+    def test_process_identity_and_rss_do_not_expose_comm(self):
+        path = self.process(42, 40, 1234, 9)
+        self.assertEqual(formal_resources._process(path),
+                         {"pid": 42, "pgrp": 40, "start_ticks": 1234, "rss_pages": 9})
+        self.process(42, 40, 5678, 0)
+        self.assertEqual(formal_resources._process(path)["start_ticks"], 5678)
+        self.assertEqual(formal_resources._process(path)["rss_pages"], 0)
+        self.write("42/stat", "43 (other) " + "0 " * 22)
+        self.assertIn("unavailable", formal_resources._observe(lambda: formal_resources._process(path)))
+
+    def test_missing_malformed_and_oversized_are_distinct_from_zero(self):
+        counter = self.write("memory.current", "0\n")
+        self.assertEqual(formal_resources._observe(lambda: formal_resources._counter(counter)), {"value": 0})
+        counter.unlink()
+        self.assertEqual(formal_resources._observe(lambda: formal_resources._counter(counter)), {"unavailable": "missing"})
+        for value in ("-1", "１２", "bad", "1" * 4097):
+            counter.write_text(value, encoding="utf-8")
+            self.assertEqual(formal_resources._observe(lambda: formal_resources._counter(counter)),
+                             {"unavailable": "malformed_or_oversized"})
+        maximum = self.write("memory.max", "max\n")
+        self.assertEqual(formal_resources._counter(maximum), "max")
+        with mock.patch.object(Path, "open", side_effect=PermissionError):
+            self.assertEqual(formal_resources._observe(lambda: formal_resources._counter(counter)),
+                             {"unavailable": "denied"})
+
+    def test_actual_cgroup_uses_mount_root_and_escaped_mount_point(self):
+        self.write("cgroup", "0::/scope/job\n")
+        self.write("mountinfo", "31 1 0:28 /scope /mounted\\040groups rw - cgroup2 cgroup rw\n")
+        self.assertEqual(formal_resources._cgroup(self.directory),
+                         ("/scope/job", Path("/mounted groups/job")))
+        for group in ("/scope-other/job", "/scope/../other", "relative"):
+            self.write("cgroup", "0::" + group + "\n")
+            self.assertIn("unavailable", formal_resources._observe(lambda: formal_resources._cgroup(self.directory)))
+        self.write("cgroup", "0::/scope/job\n")
+        with (self.directory / "mountinfo").open("a") as source:
+            source.write("32 1 0:28 / /another rw - cgroup2 cgroup rw\n")
+        self.assertIn("unavailable", formal_resources._observe(lambda: formal_resources._cgroup(self.directory)))
+
+    def test_event_and_pressure_counters_preserve_zero_and_missing_fields(self):
+        events = self.write("memory.events", "oom 0\noom_kill 2\nfuture_field 10\n")
+        self.assertEqual(formal_resources._events(events), {"oom": 0, "oom_kill": 2})
+        for value in ("oom 0\n", "oom 0\noom 1\noom_kill 0\n", "oom -1\noom_kill 0\n"):
+            events.write_text(value)
+            self.assertIn("unavailable", formal_resources._observe(lambda: formal_resources._events(events)))
+        pressure = self.write("memory.pressure", "some avg10=0.00 total=0\nfull avg10=0.00 total=123\n")
+        self.assertEqual(formal_resources._pressure(pressure), {"some_us": 0, "full_us": 123})
+        with pressure.open("a") as source:
+            source.write("some total=99\n")
+        self.assertIn("unavailable", formal_resources._observe(lambda: formal_resources._pressure(pressure)))
+
+    def test_group_scan_reports_only_matching_pid_identities_and_failed_reads(self):
+        self.process(42, 40, 123, 9)
+        self.process(43, 40, 124, 10)
+        self.write("42/cgroup", "0::/executor\n")
+        self.write("43/cgroup", "0::/moved-child\n")
+        self.process(44, 41, 125, 99)
+        self.write("45/stat", "malformed")
+        observer = self.observer()
+        with os.scandir(self.directory) as entries, \
+             mock.patch("formal_resources.os.scandir", return_value=entries), \
+             mock.patch.object(observer, "_emit") as emit:
+            observer._sample_group("running", 40)
+        identities = [call.args[2]["value"] for call in emit.call_args_list if call.args[1] == "process"]
+        self.assertEqual({item["pid"] for item in identities}, {42, 43})
+        memberships = [call.args[2]["cgroup"]["value"] for call in emit.call_args_list if call.args[1] == "process"]
+        self.assertEqual(set(memberships), {"/executor", "/moved-child"})
+        self.assertEqual(emit.call_args.args[2],
+                         {"pgrp": 40, "scanned": 4, "matched": 2, "unavailable": 1, "complete": True})
+
+    def test_pid_reuse_does_not_bind_new_membership_to_old_process(self):
+        self.process(42, 40, 123, 9)
+        observer = self.observer()
+        def replaced(path):
+            self.process(42, 40, 999, 1)
+            return "/replacement"
+        with os.scandir(self.directory) as entries, \
+             mock.patch("formal_resources.os.scandir", return_value=entries), \
+             mock.patch("formal_resources._membership", side_effect=replaced), \
+             mock.patch.object(observer, "_emit") as emit:
+            observer._sample_group("running", 40)
+        record = next(call.args[2] for call in emit.call_args_list if call.args[1] == "process")
+        self.assertEqual(record["value"]["start_ticks"], 123)
+        self.assertEqual(record["cgroup"], {"unavailable": "process_identity_changed"})
+
+    def test_output_is_bounded_and_a_blocked_sink_is_not_retried(self):
+        observer = self.observer()
+        with mock.patch("formal_resources.os.write", side_effect=BlockingIOError) as write:
+            observer._emit("running", "test", {"value": 0})
+            write.assert_called_once()
+        self.assertEqual(observer.dropped, 1)
+        records = []
+        def accept(fd, data):
+            records.append(data)
+            return len(data)
+        with mock.patch("formal_resources.os.write", side_effect=accept):
+            observer._emit("stopping", "test", {"value": 0})
+            observer._emit("stopping", "test", {"value": "x" * 4096})
+        self.assertEqual(len(records), 1)
+        self.assertLessEqual(len(records[0]), 4096)
+        self.assertEqual(json.loads(records[0].removeprefix(b"formal-resource "))["dropped"], 1)
+        self.assertEqual(observer.dropped, 2)
+
+    def test_failed_sampling_does_not_raise_or_publish_exception_text(self):
+        observer = self.observer()
+        records = []
+        with mock.patch("formal_resources._process", side_effect=RuntimeError("private error")), \
+             mock.patch("formal_resources.os.write", side_effect=lambda fd, data: records.append(data) or len(data)):
+            observer.sample("stopping", 40)
+        self.assertNotIn(b"private", b"".join(records))
+        self.assertEqual(json.loads(records[0].removeprefix(b"formal-resource "))["unavailable"], "observation_error")
+
+
 @unittest.skipUnless(sys.platform == "linux", "relay uses Linux process groups and proc descriptors")
 class FormalRelayProcessTests(unittest.TestCase):
     @contextmanager
-    def driver(self, directory, code, *, args=(), timeout=5, log=None, stdout=subprocess.PIPE):
+    def driver(self, directory, code, *, args=(), timeout=5, log=None, stdout=subprocess.PIPE,
+               stderr=subprocess.STDOUT, resources=False):
         log = log or directory / "command.log"
         group = directory / "group"
         group.unlink(missing_ok=True)
@@ -964,14 +1141,14 @@ class FormalRelayProcessTests(unittest.TestCase):
             "from verify_core_formal import _run_logged_command\n"
             "try:\n"
             "    result = _run_logged_command(json.loads(sys.argv[1]), Path(sys.argv[2]), "
-            "timeout=float(sys.argv[3]))\n"
+            "timeout=float(sys.argv[3]), observe_resources=json.loads(sys.argv[4]))\n"
             "except subprocess.TimeoutExpired:\n"
             "    sys.exit(124)\n"
             "sys.exit(result)\n"
         )
         process = subprocess.Popen(
-            [sys.executable, "-u", "-c", launcher, json.dumps(command), str(log), str(timeout)],
-            stdout=stdout, stderr=subprocess.STDOUT, start_new_session=True,
+            [sys.executable, "-u", "-c", launcher, json.dumps(command), str(log), str(timeout), json.dumps(resources)],
+            stdout=stdout, stderr=stderr, start_new_session=True,
         )
         try:
             yield process, log, group
@@ -985,6 +1162,25 @@ class FormalRelayProcessTests(unittest.TestCase):
             process.wait(timeout=10)
             if process.stdout is not None:
                 process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+
+    def test_resource_records_preserve_command_bytes_and_failure_exit(self):
+        payload = b"child-output\x00\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with self.driver(directory, "import sys; sys.stdout.buffer.write(b'child-output\\x00\\n'); sys.exit(1)",
+                             resources=True, stderr=subprocess.PIPE) as (process, log, group):
+                output, diagnostics = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 1)
+                self.assertEqual(output, payload)
+                self.assertEqual(log.read_bytes(), payload)
+                records = [json.loads(line.removeprefix(b"formal-resource ")) for line in diagnostics.splitlines()]
+                self.assertEqual({record["event"] for record in records}, {"baseline", "started", "stopping"})
+                terminal = next(record for record in records if record["event"] == "stopping" and record["kind"] == "executor")
+                self.assertEqual(terminal["returncode"], 1)
+                self.assertEqual(terminal["reason"], "exited")
+                self.assertEqual(terminal["process"]["value"]["pid"], process.pid)
 
     def test_command_status_and_literal_arguments_survive_relay(self):
         with tempfile.TemporaryDirectory() as temporary:
