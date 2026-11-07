@@ -13,7 +13,7 @@ const projectionHex = "0123456789ABCDEF";
 // Own data properties сохраняют обычную мутабельность без inherited setters.
 export function appendProjectionArray(array, value) {
   projectionDefineProperty(array, array.length, {
-    value, writable: true, enumerable: true, configurable: true,
+    __proto__: null, value, writable: true, enumerable: true, configurable: true,
   });
 }
 
