@@ -1263,7 +1263,7 @@ class FormalRelayProcessTests(unittest.TestCase):
                 with self.driver(
                     directory,
                     "import sys; sys.stdout.buffer.write(b'x' * 32768 + b'final-tail\\n')",
-                    stdout=write_fd, timeout=2,
+                    stdout=write_fd, stderr=write_fd, resources=True, timeout=2,
                 ) as (process, log, group):
                     started = time.monotonic()
                     deadline = started + 2
