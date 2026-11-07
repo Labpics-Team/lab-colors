@@ -645,13 +645,12 @@ fn checked_output_index(value: JsValue) -> Result<usize, JsValue> {
 /// Единственный публичный манифест численных возможностей.
 #[wasm_bindgen(js_name = numericalCapabilityManifest)]
 pub fn numerical_capability_manifest() -> Result<JsNumericalCapabilityManifestV2, JsValue> {
-    let json = terminal_projection::capability_manifest_json();
-    js_sys::JSON::parse(&json)
+    terminal_projection::capability_manifest()
         .map(JsValue::unchecked_into)
         .map_err(|_| {
             binding_failure_error(
                 BindingFailure::ManifestInternal as u32,
-                "capability manifest не распарсился как JSON",
+                "capability manifest JS projection failed",
             )
             .into()
         })
@@ -684,14 +683,9 @@ pub fn evaluate_wcag22(
                     },
                 })
             })?;
-    let json = terminal_projection::wcag22_json(&assessment).map_err(project)?;
-    js_sys::JSON::parse(&json)
+    terminal_projection::wcag22(&assessment)
         .map(JsValue::unchecked_into)
-        .map_err(|_| {
-            project(BindingError::Internal {
-                reason: "WCAG22 projection не распарсился как JSON".to_string(),
-            })
-        })
+        .map_err(project)
 }
 
 /// Выдаёт собственную копию байтов сертификата встроенного дескриптора исходников Core.
