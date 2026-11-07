@@ -18,9 +18,7 @@ concurrency:
 jobs:
   diagnostic-build-runtime:
     name: two offline builds and runtime tests (no artifact)
-    # Docker is root-equivalent, so the job runs on a fresh ephemeral
-    # GitHub-hosted VM that is discarded after this single run.
-    # EXT-09: disposable runner invariant — proof test requires ubuntu-latest
+    # Docker имеет права root; одноразовая VM удаляется после run.
     runs-on: ubuntu-latest
     timeout-minutes: 480
     env:
@@ -266,8 +264,7 @@ jobs:
             "$LABCOLORS_EXECUTOR_CGROUP_V1/observer/cgroup.procs" >/dev/null
           exec python3 proof/region/v1/arb/tests/native_gate.py executor
 
-      # No upload step: the static binary is an ephemeral observation until a
-      # linker/member inventory plus notices/source/relink distribution gate exists.
+      # Бинарник остаётся локальным до проверки состава, лицензий и воспроизводимой перелинковки.
 
       - name: remove disposable inputs and cgroup
         if: always()

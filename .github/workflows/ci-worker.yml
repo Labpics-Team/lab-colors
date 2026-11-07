@@ -1,34 +1,18 @@
 name: CI worker
 
-# Локальный uses в ci.yml выбирает определение из snapshot caller'а, не checkout.
-# Изменения графа и пинов проверяются в том же коммите; это не отдельный заранее
-# одобренный граф. Собственных inputs нет. Тесты связывают байты обоих файлов
-# с github.workflow_sha, который не следует подменять SHA исходников задания.
-
 on:
   workflow_call:
 
-# Least privilege: CI only reads the repo. Override per-job if a job needs more.
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  # Deterministic toolchain. Bump in lockstep with the team's supported Rust.
-  # To update: pick the new stable from https://forge.rust-lang.org/ and change
-  # this value; each job consumes it through the `toolchain` input.
   RUST_TOOLCHAIN: 1.96.0
-  # Public minimum, tested independently from the development toolchain.
   MSRV_TOOLCHAIN: 1.85.0
-  # Pins npm 11.9.0 as part of the official Node distribution. npm tar format
-  # is release input, so a floating runner-provided npm is not reproducible.
+  # Формат архива npm входит в контракт выпуска, поэтому Node закреплён.
   NODE_TOOLCHAIN: 24.14.0
-  # Offline proof codecs are executable release tooling too. The image is pinned
-  # to the linux/amd64 manifest because setup-python does not publish Debian 13
-  # builds and образ ячейки не должен задавать семантику интерпретатора.
-  # Декларированный минимум интерпретатора для proof-кода — Python 3.11:
-  # stdlib-only пакеты используют StrEnum и datetime.UTC; пин образа ниже
-  # обязан оставаться не ниже этого флора.
+  # Proof требует Python 3.11+; OCI manifest закреплён для linux/amd64.
   PYTHON_PROOF_IMAGE: python:3.14.6-slim@sha256:d4fea6e20c09820028eea3f5c17f5b8ebd2ecb9c2bf28e561681a74a96090e4f
 
 jobs:
@@ -71,7 +55,6 @@ jobs:
         id: handoff
         run: python3 scripts/ci/formal_outputs.py publish "$RUNNER_TEMP/core-formal"
 
-
   formal-mutants:
     name: formal core mutants (${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -110,7 +93,6 @@ jobs:
       - name: pass verified JSON reports to the assembler
         id: handoff
         run: python3 scripts/ci/formal_outputs.py publish "$RUNNER_TEMP/core-formal"
-
 
   formal-core:
     name: formal core (Kani)
@@ -167,7 +149,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # PR receipts bind the proposed head; push and merge queue bind their event SHA.
+          # PR receipt привязан к head, push и merge queue — к SHA события.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: verify exact clean-set product receipt
         run: python3 scripts/verify_clean_set_receipt.py product --product-root "$GITHUB_WORKSPACE"
@@ -194,9 +176,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # dtolnay/rust-toolchain has no semver tags; the action is pinned by commit SHA.
-      # The toolchain VERSION is pinned via the explicit input below, not @stable,
-      # so a new stable release cannot silently change CI behavior.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -220,11 +199,6 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
-        # Intra-doc links are a hard gate: a broken [`link`] in any doc comment
-        # (link to a private/renamed/removed item, or bare brackets rustdoc reads
-        # as a link) fails the build. RUSTDOCFLAGS="-D warnings" promotes every
-        # rustdoc warning, including broken_intra_doc_links, to an error;
-        # --no-deps limits documentation checks to workspace crates.
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: staged Program is absent from the resolved public API
         run: |
@@ -248,8 +222,6 @@ jobs:
             --package-root "$crate_dir"
           cargo test --doc --manifest-path "$crate_dir/Cargo.toml" --locked
 
-  # Независимые доказательства не образуют последовательную очередь.
-  # Каждый job получает отдельную VM; обязательный test ниже соединяет результаты.
   region-proof-worker:
     name: region proof protocol (${{ matrix.mode }}-${{ matrix.shard }})
     runs-on: ubuntu-latest
@@ -415,12 +387,7 @@ jobs:
       - name: cargo test
         if: ${{ matrix.lane == 'default' }}
         run: cargo test --workspace --locked
-      # The private-fixture lifecycle/dispose tests in private_fixture.rs are
-      # feature-gated (`#[cfg(feature = "private-fixture")]`), so the default
-      # `cargo test --workspace` step above never compiles them. They must run
-      # on their own required step or CI silently drops the resource-ownership
-      # and two-phase-dispose proofs. `--locked` keeps the same lockfile
-      # contract as every other cargo command in this workflow.
+      # Обычный cargo test не включает private-fixture; эти проверки запускаются отдельно.
       - name: cargo test private-fixture feature
         if: ${{ matrix.lane == 'private-fixture' }}
         run: cargo test -p labcolors-core --lib --features private-fixture --locked
@@ -535,13 +502,7 @@ jobs:
       - name: prove point-support retained reference surplus over Q55 bounds
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/verify_point_support_surplus.py
-      # Исполняемая матрица артефактов (ARTIFACT-01). Две закреплённые записи в
-      # proof/artifact/: tree.json (path -> blob id объявленных корней) и tests.json
-      # (инвентарь тестов, разрешённый cargo/unittest, включая #[ignore]). CI только
-      # пересчитывает и сравнивает; drift — red с названием файла/теста. Тавтология
-      # extract | verify в одном шаге удалена. Sabotage-suites extractors и
-      # anti-vacuum мутанты гейта исполняются здесь же, иначе их существование в
-      # дереве не является гейтом.
+      # Матрица фиксирует состав артефактов и тестов; CI сравнивает её без refresh.
       - name: tracked documentation bytes and protocol domain parity
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_document_bytes.py
@@ -574,7 +535,6 @@ jobs:
           test "$CORE_SHARDS" = success
           echo 'all required core test shards succeeded'
 
-  # Сохраняет прежнее имя для publish-gate и требует все три независимых результата.
   test:
     name: test
     if: ${{ always() }}
@@ -610,8 +570,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
-          # evidence must bind the reviewed source, not a synthetic merge commit.
+          # Distribution evidence привязано к PR head.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
@@ -740,8 +699,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          # Pull-request `github.sha` names GitHub's ephemeral merge ref. Distribution
-          # evidence must bind the reviewed source, not a synthetic merge commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
@@ -870,28 +827,15 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
-        # Version pinned for reproducibility; --locked respects the tool's own lockfile.
-        # Must be >=0.22; older versions cannot parse RUSTSEC entries that use
-        # CVSS v4.0 and fail to load the advisory database entirely.
+        # cargo-audit 0.22+ понимает RUSTSEC с CVSS v4.
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
-      # Hard-fail on actively-exploitable advisories AND on yanked crates.
-      # Rationale: a known-vulnerable or yanked dependency is a supply-chain
-      # liability we will not knowingly merge. cargo-audit exits non-zero on any
-      # advisory; --deny warnings additionally promotes yanked/unmaintained
-      # warnings to failures. continue-on-error is intentionally absent (false)
-      # so the gate actually blocks. If a finding is a false positive or accepted
-      # risk, ignore it explicitly per-advisory via `--ignore RUSTSEC-XXXX-NNNN`
-      # with a comment, never by disabling the whole check.
       - name: cargo audit
         run: cargo audit --deny warnings
 
   wasm:
     uses: ./.github/workflows/package-worker.yml
     with:
-      # Метка выбирает измерение при следующем обычном запуске CI для PR.
-      # Отдельное событие labeled требует согласования с жизненным циклом
-      # обязательного ci-gate: прежний зелёный запуск на том же SHA недостаточен.
       program-benchmark: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'performance') }}
     permissions:
       contents: read

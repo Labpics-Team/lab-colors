@@ -1,9 +1,5 @@
 name: publish
 
-# Публикация по тегу использует worker из того же Git-снимка.
-# Доверенная OIDC-идентичность существует только в job публикации,
-# а не у сборки, проверки архива или consumer readback.
-
 concurrency:
   group: npm-publish
   cancel-in-progress: false

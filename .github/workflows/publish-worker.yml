@@ -1,8 +1,6 @@
 name: publish worker
 
-# Публикует проверенный архив без повторной сборки.
-# npm проверяет OIDC вызывающего publish.yml и environment npm-publish.
-# Подготовка и публичная проверка не получают OIDC permission или секреты.
+# Публикуется проверенный архив без повторной сборки; OIDC доступен только publisher job.
 
 on:
   workflow_call:
@@ -28,8 +26,6 @@ jobs:
       NODE_TOOLCHAIN: ${{ needs.prepare.outputs.node }}
       NPM_TOOLCHAIN: ${{ needs.prepare.outputs.npm }}
     runs-on: ubuntu-latest
-    # OIDC publisher remains scoped to this job; untrusted refs are rejected
-    # before npm can obtain a short-lived publishing identity.
     if: >-
       github.repository == 'Labpics-Team/lab-colors' &&
       github.event_name == 'push' &&
@@ -44,8 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Нужен только exact tag commit; ancestry доказывается read-only API
-          # без сохранения workflow credential в git config.
+          # Ancestry проверяется через API без сохранения Git credential.
           fetch-depth: 1
           persist-credentials: false
       - name: guard — exact tag SHA is in origin/main
@@ -280,13 +275,10 @@ jobs:
           path: ${{ runner.temp }}/colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
-          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
-          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          # `cache: false` не поддерживается; npm-autocache выключен отдельно.
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
-          # No registry-url: setup-node would insert an authToken placeholder
-          # that suppresses npm OIDC authentication when no token is provided.
+          # registry-url создаёт authToken placeholder и мешает npm OIDC без токена.
       - name: validate manifest identity and byte-exact tarball
         id: verified-artifact
         env:
@@ -1246,8 +1238,7 @@ jobs:
             process.exitCode = 1;
           });
           NODE
-      # The snapshot is tamper-evident, not immutable against same-UID code. Keep
-      # the pre-publish hash recheck adjacent to the sole npm publish command.
+      # Snapshot доступен тому же UID; хеш перепроверяется непосредственно перед npm publish.
       - name: npm publish verified CI tarball (trusted OIDC, no rebuild/repack)
         env:
           TARBALL_PATH: ${{ steps.verified-artifact.outputs.tarball }}

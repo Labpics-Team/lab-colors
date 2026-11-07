@@ -1,36 +1,24 @@
 name: CI
 
-# Тонкий caller: триггеры, concurrency и права. Локальный uses выбирает worker
-# из того же коммита, что и caller, независимо от checkout и squash-истории.
-# Граф заданий проверяется вместе с этим snapshot, а не считается заранее
-# одобренным. Задания исполняются на эфемерных GitHub-hosted VM без секретов.
-
 on:
   push:
     branches: [main]
   pull_request:
   merge_group:
 
-# Первый запуск PR делит типизированную pr-группу: новый SHA освобождает раннеры
-# от предшественника. Re-run получает собственную run-группу и выполняет полный
-# набор проверок, не отменяя новый SHA. Push evidence тоже остаётся exact-run.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.run_attempt == 1 }}
 
-# Least privilege: CI only reads the repo.
 permissions:
   contents: read
 
 jobs:
-  # ИМЯ JOB'А НЕ МЕНЯТЬ БЕЗ ПРАВКИ publish.yml: GitHub публикует job'ы reusable-
-  # воркфлоу как «<имя этого job'а> / <имя job'а worker'а>», а publish-гейт сверяет
-  # эти имена буквально.
+  # Имя `CI / <worker job>` входит в publish gate и меняется вместе с ним.
   worker:
     name: CI
     permissions:
       contents: read
       id-token: write
       attestations: write
-    # GitHub загружает локальный reusable workflow из snapshot самого caller'а.
     uses: ./.github/workflows/ci-worker.yml
