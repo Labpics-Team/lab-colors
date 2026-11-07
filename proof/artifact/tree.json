@@ -635,13 +635,13 @@
   "scripts/verify-published-package.mjs": "3bd1be49ab18be509e24ed5cc13433281c197fd1",
   "scripts/verify-swift-surface.mjs": "5218e5478fe3920c635239cbacdf4c4ce65f4a61",
   "scripts/verify_clean_set_receipt.py": "5424963ff5a57016cb0a7db9e223621725b07d49",
-  "scripts/verify_core_formal.py": "eef65db02f22bf054f7ca76f255e802b14a0d693",
+  "scripts/verify_core_formal.py": "495d3837791c4427a9cf5f10fd8d884a9a236c63",
   "scripts/verify_point_support_surplus.py": "cc7f40b635de6d6655600cbd740181ab521c92d2",
   "scripts/verify_program_public_surface.py": "613740af9951edf658817a530e216a3ddec739e5",
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "57d0677bb56882fbd7e4c3f195c884ae8c0b2a9238833518df57a342c9c25a7f",
+ "record_sha256": "ad776576da671bda637002c3be495dc6d8ac485c84d45e9942fc9926fc76fe6f",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

@@ -327,6 +327,7 @@ def run_kani(
             for selected in positive_harnesses:
                 command.extend(["--harness", selected])
             command.append("--exact")
+    command.extend(["--cbmc-args", "--symex-cache-dereferences"])
     log = output.with_suffix(".log")
     returncode = _run_logged_command(command, log)
     return json.loads(output.read_text(encoding="utf-8")), returncode
