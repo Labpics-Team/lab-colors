@@ -42,7 +42,8 @@ env:
 jobs:
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    # Версия Ubuntu поддерживается browser toolchain Core и потребителя LabUI.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       BINARYEN_RELEASE: version_117
@@ -230,6 +231,7 @@ jobs:
             --head-revision "$PROGRAM_HEAD_SHA" \
             --output "$results"
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
+        id: chrome-runtime
         # Проверенные CfT + distro .so загружаются в job; ldd проверяет closure до browser test.
         run: |
           set -euo pipefail
@@ -379,7 +381,8 @@ jobs:
             dpkg --extract "$deb" "$DEPS_DIR"
           done
           DEPS_LIB="$(find "$DEPS_DIR/usr/lib" -maxdepth 2 -type d | tr '\n' ':' | sed 's/:$//')"
-          echo "LD_LIBRARY_PATH=${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          # Runtime библиотек CfT ограничен двумя Core browser steps.
+          printf 'ld_library_path=%s\n' "${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_OUTPUT"
           echo "Chrome deps: $DEPS_LIB"
           assert_elf_closure() {
             local executable="$1"
@@ -399,6 +402,8 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
       - name: test WASM crate in real browser
+        env:
+          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}
         run: |
           set -euo pipefail
           : "${CHROME_PATH:?}" "${CHROMEDRIVER_PATH:?}" "${RUNNER_TEMP:?}"
@@ -428,6 +433,7 @@ jobs:
         # Единственная команда связывает конечный Program с проверенным архивом.
         env:
           BASH_ENV: ""
+          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
           VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}

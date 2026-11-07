@@ -33,12 +33,32 @@ def validate(ci, package, release):
     if "environment:" in package or "secrets." in package:
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
+    if re.findall(r"(?m)^    runs-on: ([^\r\n]+)$", owner) != ["ubuntu-24.04"]:
+        raise AssertionError("package browsers require the supported Ubuntu 24.04 image")
+    blocks=re.findall(r"(?ms)^      - .*?(?=^      - |\Z)",owner)
+    chrome_setup = [block for block in blocks
+                    if re.search(r"(?m)^        id: chrome-runtime$", block)]
+    if len(chrome_setup) != 1 or not re.search(
+            r'(?m)^          (?:echo|printf) [^\r\n]*ld_library_path=[^\r\n]*>> "\$GITHUB_OUTPUT"$',
+            chrome_setup[0]):
+        raise AssertionError("Chrome library path must be a setup step output")
+    if any("LD_LIBRARY_PATH" in line and "GITHUB_ENV" in line
+           for line in package.splitlines() if not line.lstrip().startswith("#")):
+        raise AssertionError("Chrome library path must not enter the shared job environment")
+    chrome_library_path = "${{ steps.chrome-runtime.outputs.ld_library_path }}"
+    for block in blocks:
+        browser = ("wasm-pack test --headless --chrome" in block
+                   or "node scripts/test-program-runtime-browser.mjs" in block)
+        values = re.findall(r"(?m)^          LD_LIBRARY_PATH: ([^\r\n]+)$", block)
+        if values != ([chrome_library_path] if browser else []):
+            raise AssertionError("only Core browser steps may consume the Chrome library path")
+    if len(re.findall(r"(?m)^[ \t]*LD_LIBRARY_PATH:", package)) != 2:
+        raise AssertionError("Chrome library path must not be workflow or job scoped")
     for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
                     "npm run typecheck", "npm test", "npm run release:verify",
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
                     'test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"',
                     'node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"']:
-        blocks=re.findall(r"(?ms)^      - .*?(?=^      - |\Z)",owner)
         matches=[block for block in blocks if command in block]
         if len(matches)!=1 or "\n        if:" in matches[0] or "continue-on-error:" in matches[0]:
             raise AssertionError("package verification missing or conditional: "+command)
@@ -109,6 +129,51 @@ class CiStorageTests(unittest.TestCase):
         values[1]+='\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000\n'
         with self.assertRaises(AssertionError):
             validate(*values)
+        package = self.sources[1]
+        output = ('          printf \'ld_library_path=%s\\n\' '
+                  '"${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_OUTPUT"')
+        browser_environment = (
+            "          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}\n")
+        for before, after in (
+            ("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
+            ("runs-on: ubuntu-24.04", "runs-on: ubuntu-26.04"),
+            ("id: chrome-runtime", "id: other-runtime"),
+            (output, output.replace("ld_library_path=%s", "LD_LIBRARY_PATH=%s")
+                           .replace("$GITHUB_OUTPUT", "$GITHUB_ENV")),
+            (output, output + '\n          echo "LD_LIBRARY_PATH=$DEPS_LIB" >> "$GITHUB_ENV"'),
+            (output, output.replace("ld_library_path=%s", "wrong_output=%s")),
+            (browser_environment, ""),
+            (browser_environment, browser_environment.replace("chrome-runtime", "other-runtime")),
+            (browser_environment, browser_environment.replace("ld_library_path", "wrong_output")),
+            ("      BINARYEN_RELEASE: version_117\n",
+             "      BINARYEN_RELEASE: version_117\n      LD_LIBRARY_PATH: /shared/chrome-libs\n"),
+            ('  CARGO_TERM_COLOR: "always"\n',
+             '  CARGO_TERM_COLOR: "always"\n  LD_LIBRARY_PATH: /shared/chrome-libs\n'),
+        ):
+            with self.subTest(chrome_environment=before):
+                self.assertIn(before, package)
+                values = list(self.sources)
+                values[1] = package.replace(before, after, 1)
+                with self.assertRaises(AssertionError):
+                    validate(*values)
+        blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(package, "wasm"))
+        for command, before, after in (
+            ("node scripts/test-program-runtime-browser.mjs", browser_environment, ""),
+            ("node scripts/verify-package-release.mjs --package-smoke", "        env:\n",
+             "        env:\n" + browser_environment),
+            ("run: bash labui-consumer/.github/scripts/colors-same-job.sh", "        env:\n",
+             "        env:\n" + browser_environment),
+        ):
+            with self.subTest(chrome_consumer=command):
+                matching = [block for block in blocks if command in block]
+                self.assertEqual(len(matching), 1)
+                block = matching[0]
+                self.assertIn(before, block)
+                values = list(self.sources)
+                values[1] = package.replace(block, block.replace(before, after, 1), 1)
+                self.assertNotEqual(values[1], package)
+                with self.assertRaises(AssertionError):
+                    validate(*values)
 
 
 def job_level_optional(source, name):
