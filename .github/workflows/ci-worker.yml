@@ -532,7 +532,6 @@ jobs:
           test "$CORE_SHARDS" = success
           echo 'all required core test shards succeeded'
 
-  # Composite action использует тот же snapshot, что и worker.
   test:
     name: test
     if: ${{ always() }}

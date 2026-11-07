@@ -29,7 +29,6 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: install verified cargo-mutants release asset
-        # Composite action, manifest и shard используют snapshot caller.
         run: |
           mkdir -p "$RUNNER_TEMP/mutants-bin"
           curl --fail --location --silent --show-error \
