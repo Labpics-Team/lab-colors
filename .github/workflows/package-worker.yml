@@ -1,7 +1,5 @@
 name: package worker
 
-# Проверка пакета и обоих consumer runtime использует одни локальные байты.
-# Только выпуск версии передаёт их отдельному заданию с правом публикации.
 on:
   workflow_call:
     inputs:
@@ -51,27 +49,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          # The WASM compile target; the bindings are built and tested against it.
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          # Одноразовый слот: GitHub-кэш не нужен. У setup-node вход `cache` — это
-          # перечисление пакетных менеджеров, поэтому кэш выключается ОТСУТСТВИЕМ
-          # `cache` плюс явным гашением автокэша npm (`cache: false` там падает).
+          # `cache: false` не поддерживается; npm-autocache выключен отдельно.
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
       - name: install wasm-pack
-        # Pinned for reproducibility; --locked respects the tool's own lockfile.
-        # Build uses --no-opt below: Binaryen is installed and verified separately,
-        # while wasm-pack still owns cargo/wasm-bindgen and the browser harness.
+        # Binaryen закреплён отдельно; --no-opt выключает внутренний optimizer wasm-pack.
         run: |
           cargo install wasm-pack --version 0.13.1 --locked
           echo "WASM_PACK_CACHE=$RUNNER_TEMP/wasm-pack" >> "$GITHUB_ENV"
       - name: install byte-bound wasm-bindgen CLI
-        # wasm-pack's fallback install is dependency- and host-toolchain-sensitive.
-        # Materialize the release binary in its completed non-dot cache layout so
-        # both the fallback and its disposable dot-prefixed staging are bypassed.
+        # Release binary в готовом cache исключает fallback install wasm-pack.
         run: |
           set -euo pipefail
           version=0.2.126
@@ -116,11 +107,7 @@ jobs:
           PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
           PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        # Rust error locations otherwise embed the slot's mutable
-        # workspace/CARGO_HOME roots and make identical source hash differently.
-        # The second build follows `cargo clean`; equality checks repeatability
-        # for this source inside this toolchain-pinned job, not cross-run or
-        # cross-host identity.
+        # Remap убирает пути workspace/CARGO_HOME из WASM; повторимость проверяется внутри этого job.
         run: |
           set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
@@ -193,13 +180,9 @@ jobs:
           python3 scripts/verify_point_support_surplus.py --emit \
             > "$RUNNER_TEMP/program-performance/point-support-reference-surplus-q55-bps-proof-v1.json"
       - name: enforce measured WASM runtime budget
-        # Exact Linux x64 zero-headroom ratchet. gzip remains transport
-        # diagnostics only.
+        # Размер WASM — zero-headroom ratchet; gzip только транспортная метрика.
         run: node scripts/check-wasm-size-budget.mjs
       - name: "@labpics/colors: typecheck + runtime tests"
-        # pkg/ уже собран выше, поэтому TypeScript видит реальные wasm-bindgen
-        # declarations; node --test покрывает builder, init и публичный контракт.
-        # Браузерный terminal Program-путь проверяется wasm-pack test ниже.
         working-directory: packages/colors
         run: |
           npm ci
@@ -223,19 +206,7 @@ jobs:
           fi
           printf 'sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
-        # GitHub-hosted образ не содержит нужный CfT-браузер; установка целиком
-        # userspace (sudo на раннере доступен, но не используется — гейт остаётся
-        # герметичным и не трогает системное состояние образа).
-        # Strategy:
-        #  1. Download exact CfT chrome + chromedriver archives and verify SHA-256.
-        #     Тест обязан использовать только проверенную пару CfT, а не Chrome
-        #     или ChromeDriver из изменяемого окружения раннера.
-        #  2. Extract required shared libs (.so) from the runner's configured
-        #     Debian/Ubuntu repository without sudo. The root set below owns every
-        #     direct DT_NEEDED name of the pinned Chrome and ChromeDriver ELF
-        #     files; APT resolves its transitive closure and `dpkg --extract`
-        #     unpacks it without root. `ldd` then rejects an incomplete closure
-        #     before wasm-pack can misreport it as a driver timeout.
+        # Проверенные CfT + distro .so загружаются в job; ldd проверяет closure до browser test.
         run: |
           set -euo pipefail
           # -- CfT chrome + chromedriver --
@@ -404,8 +375,6 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
       - name: terminal Program in real browser
-        # Сначала проверяет crate-boundary, затем устанавливает exact verified
-        # tarball и исполняет тот же Program path через публичный package root.
         env:
           LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
           VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
