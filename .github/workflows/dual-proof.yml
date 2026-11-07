@@ -18,16 +18,8 @@ concurrency:
 jobs:
   dual-proof:
     name: seal one full-domain dual proof from two live source-bound receipts
-    # Both engines run in ONE job because `join_dual_proof_v1` needs their
-    # source-bound receipts, and those have no wire form by design: only the
-    # process that minted them can hold them.  Measured on run 31116022208 the
-    # native RUNs took 63 min (Arb) and 43 min (MPFI), so the sequential pair
-    # plus both builds fits the envelope below with room to spare.
-    #
-    # The lane covers come from an earlier run's artifacts.  They admit against
-    # these fresh receipts because a lane binds the comparator's *source*
-    # identity, which reproduces across runners; the full identity folds build
-    # observation and does not.
+    # Оба движка работают в одном job: source-bound receipts нельзя передать по wire.
+    # Comparator source identity позволяет сверять lanes из других runs.
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
@@ -35,9 +27,6 @@ jobs:
       PYTHONHASHSEED: "0"
     steps:
       - name: refuse a malformed lane run list before checkout
-        # Read-only admission: некорректный список run id отклоняется до checkout,
-        # загрузки source closures и OCI-образов. Проверка внутри download-шага
-        # остаётся как вторая линия для того же инварианта.
         shell: bash
         env:
           LANE_RUN_IDS: ${{ inputs.lane_run_ids }}
@@ -173,17 +162,7 @@ jobs:
           PY
 
       - name: download both engines' verification lane covers
-        # Every lane is dispatched as its own run, so the cover spans many
-        # run ids — the same shape `full-domain-corpus.yml` already uses to
-        # assemble lane evidence.  Both engines land in one flat directory:
-        # lane artifact names carry the engine only to keep the files apart,
-        # while which engine a lane serves is decided by the comparator
-        # source identity inside its manifest.
-        #
-        # Each run lands in its own directory first.  Downloading straight
-        # into one would let a re-run of the same window overwrite the
-        # evidence already there — the cover would still look exact while
-        # quietly having used one of two answers.
+        # Отдельный каталог каждого run не позволяет повтору окна перезаписать evidence.
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

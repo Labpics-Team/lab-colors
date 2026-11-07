@@ -1,13 +1,6 @@
 name: mutation worker
 
-# PR1 сертифицирует полноту измерения, но не mutation score. Missed, timeout,
-# unviable и unattributed failure остаются видимыми данными, пока полный
-# baseline не обоснует отдельный явный ratchet.
-#
-# Неизменяемый worker для эфемерных GitHub-hosted раннеров (репо публичное):
-# расписание живёт в тонком caller'е (mutation.yml), который закрепляет этот
-# файл полным commit SHA и не может изменить ни job graph, ни пины. Своих
-# inputs у worker нет by design.
+# Результаты мутаций остаются report-only до закрепления baseline и ratchet.
 
 on:
   workflow_call:
@@ -36,9 +29,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: install verified cargo-mutants release asset
-        # Блок намеренно повторён в manifest и shard: локальный composite action
-        # пришёл бы из checkout недоверенной revision и обошёл immutable worker.
-        # Оба экземпляра меняются атомарно вместе с digest/version env выше.
+        # Composite action, manifest и shard используют snapshot caller.
         run: |
           mkdir -p "$RUNNER_TEMP/mutants-bin"
           curl --fail --location --silent --show-error \
@@ -92,9 +83,6 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      # Fair-share: report-only работа берёт не более восьми слотов из двадцати
-      # одновременных jobs публичного репозитория, оставляя ёмкость release- и
-      # infra-CI. Остаток GitHub ставит в очередь, а не роняет.
       max-parallel: 8
       matrix:
         shard:

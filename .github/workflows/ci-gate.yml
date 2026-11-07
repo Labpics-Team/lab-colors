@@ -1,9 +1,6 @@
 name: CI
 
-# Единственный required check орги Labpics-Team. Имя джоба "CI" не менять.
-# Ждёт другие Actions runs на этом SHA: pull_request, pull_request_target,
-# merge_group. Новый тест стопорит merge тогда и только тогда, когда его
-# workflow запущен этими событиями. schedule / workflow_dispatch — нет.
+# Имя job `CI` закреплено как required check организации.
 
 on:
   pull_request:

@@ -46,8 +46,7 @@ jobs:
           repo: .code-subject.public01
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           candidate: ${{ github.sha }}
-      # Исторический carrier использует встроенные Trivy-исключения для test/example/md.
-      # Дополнительный проход ужесточает только секреты того же кандидата и не меняет carrier.
+      # Синтаксис carrier проверяется для всех diff; Trivy запускается для исполняемых путей.
       - name: Scan secrets omitted by Trivy defaults
         shell: bash
         env:

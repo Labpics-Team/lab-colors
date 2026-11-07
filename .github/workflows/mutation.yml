@@ -1,10 +1,5 @@
 name: mutation (scheduled, report-only)
 
-# Тонкий caller: только расписание, concurrency и права. Job graph, шардирование и
-# пины принадлежат worker того же коммита, что и caller —
-# каждый job исполняется на одноразовой эфемерной GitHub-hosted VM без секретов
-# и общего состояния. Своих inputs у worker нет by design.
-
 on:
   schedule:
     - cron: "0 4 * * 1"
@@ -13,9 +8,7 @@ on:
 permissions:
   contents: read
 
-# Report-only прогоны не отменяют выполняющийся запуск. GitHub Actions держит
-# не более одного pending запуска в группе и заменяет его более новым; это
-# намеренная latest-pending семантика, а не несуществующий FIFO-параметр.
+# Concurrency сохраняет последний pending run; FIFO не гарантируется.
 concurrency:
   group: mutation
 
