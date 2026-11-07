@@ -5,6 +5,7 @@ import tempfile
 import subprocess
 import textwrap
 import re
+import shlex
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -226,6 +227,28 @@ class NativeStorageTests(unittest.TestCase):
     def test_only_sdk_transfer_survives(self):
         validate_native_storage(self.source)
         validate_mutation_storage(self.mutation_source)
+
+    def test_android_emulator_uses_shared_software_and_targeted_boot_logs(self):
+        consumer = job(self.source, "android-consumer")
+        options = re.findall(r"(?m)^          emulator-options: ([^\n]+)$", consumer)
+        self.assertEqual(len(options), 1)
+        substitution = "$" + "{{ matrix.boot_diagnostics }}"
+        shared = options[0].removesuffix(" " + substitution)
+        arguments = shlex.split(shared)
+        self.assertEqual(arguments, ["-no-window", "-gpu", "software", "-no-snapshot",
+                                     "-noaudio", "-no-boot-anim", "-camera-back", "none"])
+        self.assertTrue(options[0].endswith(" " + substitution))
+        rows = re.findall(r"(?ms)^          - name: ([^\n]+)\n(.*?)(?=^          - name:|^    steps:)", consumer)
+        self.assertEqual([name for name, _ in rows], ["minimum API", "16 KB"])
+        for name, row in rows:
+            with self.subTest(row=name):
+                values = re.findall(r"(?m)^            boot_diagnostics: ([^\n]+)$", row)
+                self.assertEqual(len(values), 1)
+                diagnostics = "" if values[0] in ("''", '""') else values[0]
+                actual = shlex.split(options[0].replace(substitution, diagnostics))
+                expected = arguments if name == "minimum API" else arguments + [
+                    "-show-kernel", "-logcat", "*:w SystemServer:i ActivityManager:i lmkd:i"]
+                self.assertEqual(actual, expected)
 
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
