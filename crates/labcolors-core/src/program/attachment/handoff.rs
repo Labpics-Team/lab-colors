@@ -474,7 +474,7 @@ where
         intent: PointSinkIntentV1<'_, Self::OutputId>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
         let current_stamp = self.committed.stamp;
-        let staged = match intent {
+        let staged = match &intent {
             PointSinkIntentV1::SetAll {
                 revision,
                 stamp,
@@ -505,11 +505,11 @@ where
                 }));
                 copy_presentation_composites(presentation, &mut composites)?;
                 HandoffStagedPointStateV1::SetAll {
-                    revision,
+                    revision: *revision,
                     expected_stamp: current_stamp,
                     desired: HandoffCommittedPointStateV1 {
                         stamp: stamp.desired(),
-                        revision: Some(revision),
+                        revision: Some(*revision),
                         points,
                         composites,
                     },
@@ -521,11 +521,11 @@ where
                 }
                 let (points, composites) = self.reusable_buffers();
                 HandoffStagedPointStateV1::RevokeAll {
-                    revision,
+                    revision: *revision,
                     expected_stamp: current_stamp,
                     desired: HandoffCommittedPointStateV1 {
                         stamp: stamp.desired(),
-                        revision: Some(revision),
+                        revision: Some(*revision),
                         points,
                         composites,
                     },
@@ -535,15 +535,15 @@ where
                 revision,
                 published_stamp,
             } => {
-                if published_stamp != current_stamp {
+                if *published_stamp != current_stamp {
                     return Err(HandoffPointSinkErrorV1::StampMismatch);
                 }
-                if self.committed.revision != Some(revision) {
+                if self.committed.revision != Some(*revision) {
                     return Err(HandoffPointSinkErrorV1::RevisionMismatch);
                 }
                 HandoffStagedPointStateV1::ConfirmExact {
                     expected_stamp: current_stamp,
-                    revision,
+                    revision: *revision,
                 }
             }
         };
@@ -555,12 +555,12 @@ where
 }
 
 fn copy_presentation_composites(
-    presentation: PointSinkPresentationEvidenceV1<'_>,
+    presentation: &PointSinkPresentationEvidenceV1<'_>,
     output: &mut Vec<PointSinkPresentationCompositeV1>,
 ) -> Result<(), HandoffPointSinkErrorV1> {
     match presentation {
         PointSinkPresentationEvidenceV1::Verified(verified) => {
-            copy_verified_presentation_composites(verified, output)?;
+            copy_verified_presentation_composites(*verified, output)?;
         }
         #[cfg(any(test, kani))]
         PointSinkPresentationEvidenceV1::Fixture(composites) => {

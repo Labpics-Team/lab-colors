@@ -7,18 +7,6 @@ use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintValueV1, PaintId};
 use crate::composition::AdmittedOpacityV1;
 
-fn empty_presentation_fixture() -> PointSinkPresentationEvidenceV1<'static> {
-    // Срез остаётся пустым; реальная allocation даёт явный non-null pointer
-    // для niche-discriminant enum. Адрес источника sink не наблюдает.
-    static BACKING: [PointSinkPresentationCompositeV1; 1] =
-        [PointSinkPresentationCompositeV1::new(
-            0,
-            0,
-            Srgb8::new([0; 3]),
-        )];
-    PointSinkPresentationEvidenceV1::Fixture(&BACKING[..0])
-}
-
 // Область доказательства: один принадлежащий output, ноль или один
 // опубликованный point, без composites. Ожидание хранится без heap-копии,
 // но сравнивается с целым реальным slice, включая его длину.
@@ -237,7 +225,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8, const HAS_
             revision,
             stamp,
             patch: &patches[..length],
-            presentation: empty_presentation_fixture(),
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         }
     } else if KIND == 1 {
         let Some(stamp) = PointSinkMutationStampV1::new(query) else {
@@ -468,7 +456,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<
             revision,
             stamp,
             patch: &points,
-            presentation: empty_presentation_fixture(),
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         };
         expected = expected_mutation(
             old.stamp,
@@ -676,7 +664,7 @@ fn stale_prepared_command_never_reaches_the_host<const KIND: u8, const HAS_POINT
             revision,
             stamp,
             patch: &points,
-            presentation: empty_presentation_fixture(),
+            presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
         };
         expected = expected_mutation(
             old.stamp,
