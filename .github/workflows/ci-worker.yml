@@ -100,7 +100,8 @@ jobs:
                          "rejected_install_is_atomic_retryable_and_success_is_once_only")
               name_map = model.with_suffix(".pretty_name_map.json")
               replacements = {name.removeprefix("tag-"): pretty for name, pretty in json.loads(name_map.read_text()).items()
-                              if any(needle in pretty for needle in (*needles, "AdmittedHandoffPointSinkWriterV1"))}
+                              if isinstance(pretty, str)
+                              and any(needle in pretty for needle in (*needles, "AdmittedHandoffPointSinkWriterV1"))}
               if not replacements:
                   raise RuntimeError("compiled model has no expected presentation or handoff names")
               pattern = re.compile("|".join(re.escape(name) for name in sorted(replacements, key=len, reverse=True)))
