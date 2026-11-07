@@ -173,7 +173,11 @@ fn patch(
 
 // kind=0, kind=1 и остальные u8 различаются только операцией. Три
 // мономорфизации сохраняют полный домен остальных входов и все guards.
-fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
+// Wrapper передаёт свои свидетели отдельным типом замыкания: Kani включает
+// даже недостижимые cover-ветки общего тела в отчёт.
+fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>(
+    operation_witness: impl FnOnce(u8, Option<HandoffPointSinkErrorV1>, bool),
+) {
     let Some((owned, old)) = any_state() else {
         return;
     };
@@ -280,30 +284,7 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
         old.matches(&writer.committed) && writer.host.calls == 0 && writer.host.accepted.is_none(),
         "preparing or abandoning a handoff must never publish or advance state"
     );
-    if KIND == 0 {
-        kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
-        kani::cover!(
-            actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
-            "foreign scope rejected"
-        );
-    }
-    if KIND == 1 {
-        kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
-    }
-    if KIND > 1 {
-        kani::cover!(
-            actual.is_none() && kind > 1 && old.point.is_some(),
-            "published value confirmed"
-        );
-        kani::cover!(
-            actual.is_none() && kind > 1 && old.point.is_none(),
-            "empty value confirmed"
-        );
-        kani::cover!(
-            actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
-            "foreign revision rejected"
-        );
-    }
+    operation_witness(kind, actual, old.point.is_some());
     kani::cover!(
         actual == Some(HandoffPointSinkErrorV1::StampMismatch),
         "foreign stamp rejected"
@@ -313,19 +294,40 @@ fn preparation_is_exact_and_has_no_publication_effect<const KIND: u8>() {
 #[kani::proof]
 #[kani::unwind(4)]
 fn preparation_is_exact_and_has_no_publication_effect_set_all() {
-    preparation_is_exact_and_has_no_publication_effect::<0>();
+    preparation_is_exact_and_has_no_publication_effect::<0>(|kind, actual, _| {
+        kani::cover!(actual.is_none() && kind == 0, "valid set prepared");
+        kani::cover!(
+            actual == Some(HandoffPointSinkErrorV1::PatchScopeMismatch),
+            "foreign scope rejected"
+        );
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
 fn preparation_is_exact_and_has_no_publication_effect_revoke_all() {
-    preparation_is_exact_and_has_no_publication_effect::<1>();
+    preparation_is_exact_and_has_no_publication_effect::<1>(|kind, actual, _| {
+        kani::cover!(actual.is_none() && kind == 1, "valid revoke prepared");
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
 fn preparation_is_exact_and_has_no_publication_effect_confirm_exact() {
-    preparation_is_exact_and_has_no_publication_effect::<2>();
+    preparation_is_exact_and_has_no_publication_effect::<2>(|kind, actual, point_present| {
+        kani::cover!(
+            actual.is_none() && kind > 1 && point_present,
+            "published value confirmed"
+        );
+        kani::cover!(
+            actual.is_none() && kind > 1 && !point_present,
+            "empty value confirmed"
+        );
+        kani::cover!(
+            actual == Some(HandoffPointSinkErrorV1::RevisionMismatch),
+            "foreign revision rejected"
+        );
+    });
 }
 
 fn expected_mutation(
@@ -376,7 +378,9 @@ fn pending_matches(
     }
 }
 
-fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>() {
+fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>(
+    operation_witness: impl FnOnce(u8, u64),
+) {
     let Some((owned, old)) = any_state() else {
         return;
     };
@@ -494,18 +498,7 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
         expected.matches(&writer.committed) && writer.host.calls == 2,
         "finishing the handoff must preserve its acknowledged result"
     );
-    if KIND == 0 {
-        kani::cover!(kind == 0, "rejected set retried");
-    }
-    if KIND == 1 {
-        kani::cover!(kind == 1, "rejected revoke retried");
-    }
-    if KIND > 1 {
-        kani::cover!(
-            kind > 1 && old.stamp.sequence() == u64::MAX,
-            "exhausted stamp still permits confirmation"
-        );
-    }
+    operation_witness(kind, old.stamp.sequence());
     kani::cover!(
         error == HandoffPointSinkHostErrorV1::Protocol,
         "protocol refusal is retryable"
@@ -515,19 +508,28 @@ fn rejected_install_is_atomic_retryable_and_success_is_once_only<const KIND: u8>
 #[kani::proof]
 #[kani::unwind(4)]
 fn rejected_install_is_atomic_retryable_and_success_is_once_only_set_all() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<0>();
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<0>(|kind, _| {
+        kani::cover!(kind == 0, "rejected set retried");
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
 fn rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<1>();
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<1>(|kind, _| {
+        kani::cover!(kind == 1, "rejected revoke retried");
+    });
 }
 
 #[kani::proof]
 #[kani::unwind(4)]
 fn rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact() {
-    rejected_install_is_atomic_retryable_and_success_is_once_only::<2>();
+    rejected_install_is_atomic_retryable_and_success_is_once_only::<2>(|kind, sequence| {
+        kani::cover!(
+            kind > 1 && sequence == u64::MAX,
+            "exhausted stamp still permits confirmation"
+        );
+    });
 }
 
 fn stale_prepared_command_never_reaches_the_host<const KIND: u8>() {
