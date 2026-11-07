@@ -1610,6 +1610,13 @@ impl ProgramRuntime {
                 operation,
             ));
         }
+        // Locked V1 DPR admission precedes flat-buffer shape checks, as in Core.
+        if !matches!(dpr, 1..=4) {
+            return Err(final_raster_error(
+                core::ProgramFinalRasterErrorV1::InvalidDevicePixelRatio,
+                operation,
+            ));
+        }
         let context = final_raster_fixed(&context, operation)?;
         let source = final_raster_rgba(&source, count, operation)?;
         let destination = final_raster_rgba(&destination, count, operation)?;
