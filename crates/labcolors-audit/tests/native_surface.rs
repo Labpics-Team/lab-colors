@@ -144,6 +144,25 @@ fn declaration<'a>(items: &'a [Item], name: &str) -> Result<&'a Item, String> {
     }
 }
 
+fn source_function_mut<'a>(items: &'a mut [Item], name: &str) -> Option<&'a mut syn::ItemFn> {
+    for item in items {
+        match item {
+            Item::Fn(function) if function.sig.ident == name && !test_only(&function.attrs) => {
+                return Some(function);
+            }
+            Item::Mod(module) if !test_only(&module.attrs) => {
+                if let Some((_, items)) = &mut module.content {
+                    if let Some(function) = source_function_mut(items, name) {
+                        return Some(function);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn projection_signature<'a>(
     items: &'a [Item],
     binding: &syn::Path,
@@ -221,6 +240,22 @@ fn coverage_surfaces(
             ) -> Result<ProgramAttachment, JsValue>
         },
     )?;
+    // Нормализация полного scope не заменяет настоящий scalar export и его ABI.
+    projection_signature(
+        native_items,
+        &syn::parse_quote!(uniffi::export),
+        &syn::parse_quote! {
+            fn attach_program_wire(
+                bytes: Vec<u8>,
+                stream_id: u32,
+                output_slot: u32,
+                sink_output: u32,
+                presentation_root: u32,
+                occurrence: u32,
+                host: Box<dyn ProgramPointSinkHost>,
+            ) -> Result<Arc<ProgramAttachment>, LabColorsError>
+        },
+    )?;
     let native_signature = projection_signature(
         native_items,
         &syn::parse_quote!(uniffi::export),
@@ -229,7 +264,7 @@ fn coverage_surfaces(
                 bytes: Vec<u8>,
                 stream_id: u32,
                 bindings: ProgramAttachmentBindings,
-                host: Box<dyn ProgramPointSinkHost>,
+                host: Box<dyn ProgramScopeSinkHost>,
             ) -> Result<Arc<ProgramAttachment>, LabColorsError>
         },
     )?;
@@ -314,6 +349,40 @@ fn native_surface_covers_every_exported_wasm_operation() {
         "native adapter has missing operations or divergent arity: {missing:?}"
     );
 
+    // Мутации реального source различают scalar ABI и полный binding-scope.
+    let mutations: [(&str, Option<FnArg>); 3] = [
+        ("attach_program_wire", None),
+        (
+            "attach_program_wire",
+            Some(syn::parse_quote!(host: Box<dyn ProgramScopeSinkHost>)),
+        ),
+        (
+            "attach_program_wire_with_bindings",
+            Some(syn::parse_quote!(host: Box<dyn ProgramPointSinkHost>)),
+        ),
+    ];
+    for (operation, host) in mutations {
+        let mut changed_items = native_items.clone();
+        let function = source_function_mut(&mut changed_items, operation)
+            .expect("actual native attachment operation must exist");
+        if let Some(host) = host {
+            *function.sig.inputs.last_mut().expect("host argument") = host;
+        } else {
+            function.attrs.clear();
+        }
+        let mut changed_surface = Surface::new();
+        exported_items(&changed_items, "export", &mut changed_surface);
+        let Err(error) =
+            coverage_surfaces(&portable, &changed_surface, &portable_items, &changed_items)
+        else {
+            panic!("attachment projection accepted invalid native operation: {operation}");
+        };
+        assert_eq!(
+            error,
+            format!("missing export or divergent projected signature: {operation}")
+        );
+    }
+
     // Не условие запуска теста: сравнение выше выполняется всегда. Apple CI
     // дополнительно сверяет этот вывод с символами реально собранного SDK.
     if let Some(path) = std::env::var_os("LABCOLORS_NATIVE_SURFACE_OUTPUT") {
@@ -360,7 +429,7 @@ const NATIVE_ATTACHMENT: &str = r#"
         bytes: Vec<u8>,
         stream_id: u32,
         bindings: ProgramAttachmentBindings,
-        host: Box<dyn ProgramPointSinkHost>,
+        host: Box<dyn ProgramScopeSinkHost>,
     ) -> Result<Arc<ProgramAttachment>, LabColorsError> { unimplemented!() }
 "#;
 
