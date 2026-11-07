@@ -7,6 +7,41 @@ use crate::Srgb8;
 use crate::appearance::{EncodedPointPaintValueV1, PaintId};
 use crate::composition::AdmittedOpacityV1;
 
+fn inspect_transferred_presentation(presentation: PointSinkPresentationEvidenceV1<'_>) {
+    assert!(
+        matches!(presentation, PointSinkPresentationEvidenceV1::Fixture(composites) if composites.is_empty()),
+        "constructed empty presentation survives owned intent transfer"
+    );
+    kani::cover!(true, "empty presentation transfer is reachable");
+}
+
+fn inspect_transferred_intent(intent: PointSinkIntentV1<'_, HandoffPointSinkOutputIdV1>) {
+    match intent {
+        PointSinkIntentV1::SetAll { presentation, .. } => {
+            inspect_transferred_presentation(presentation);
+        }
+        _ => panic!("constructed set-all intent retains its variant"),
+    }
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn concrete_empty_presentation_survives_intent_transfer() {
+    let Some(stamp) = any_stamp().and_then(PointSinkMutationStampV1::new) else {
+        return;
+    };
+    let Some(paint) = any_paint() else {
+        return;
+    };
+    let points = [patch(HandoffPointSinkOutputIdV1::new(kani::any()), paint)];
+    inspect_transferred_intent(PointSinkIntentV1::SetAll {
+        revision: kani::any(),
+        stamp,
+        patch: &points,
+        presentation: PointSinkPresentationEvidenceV1::Fixture(&[]),
+    });
+}
+
 // Область доказательства: один принадлежащий output, ноль или один
 // опубликованный point, без composites. Ожидание хранится без heap-копии,
 // но сравнивается с целым реальным slice, включая его длину.
