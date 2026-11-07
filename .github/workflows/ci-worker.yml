@@ -44,6 +44,93 @@ jobs:
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
           cargo kani setup
+      - name: inspect compiled presentation dispatch
+        if: ${{ matrix.shard == 1 }}
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import resource
+          import subprocess
+          import sys
+          import tempfile
+
+          sys.path.insert(0, "scripts")
+          from verify_core_formal import ROOT, _run_logged_command, formal_source_files
+
+          harness = "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_set_all_published"
+          command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--only-codegen",
+                     "--jobs=1", "--harness", harness, "--exact", "--verbose"]
+          print("DIAGNOSTIC ONLY; proof_result=not_run", flush=True)
+          print(json.dumps(command), flush=True)
+          def digest(path):
+              with path.open("rb") as source:
+                  return hashlib.file_digest(source, "sha256").hexdigest()
+          print(json.dumps({"git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                            "input_sha256": {str(path.relative_to(ROOT)): digest(path) for path in formal_source_files()}}), flush=True)
+          with tempfile.TemporaryDirectory(prefix="formal-dispatch-", dir=os.environ["RUNNER_TEMP"]) as tmp:
+              root = Path(tmp)
+              code = _run_logged_command(command, root / "codegen.log", timeout=120)
+              if code:
+                  raise SystemExit(code)
+              models = []
+              for metadata in Path("target").rglob("*.kani-metadata.json"):
+                  for item in json.loads(metadata.read_text())["proof_harnesses"]:
+                      if item["pretty_name"] == harness:
+                          models.append(Path(item["goto_file"]).with_suffix("").with_suffix(".out"))
+              if len(models) != 1:
+                  raise RuntimeError(f"expected one exact model, found {models}")
+              model = models[0]
+              binary = Path.home() / ".kani/kani-0.68.0/bin/goto-instrument"
+              dump = root / "model.c"
+              print(f"model={model}; command={[str(binary), '--dump-c', str(model)]}", flush=True)
+              def limit_dump():
+                  resource.setrlimit(resource.RLIMIT_FSIZE, (32 * 1024 * 1024, 32 * 1024 * 1024))
+              with dump.open("wb") as output:
+                  subprocess.run([str(binary), "--dump-c", str(model)], stdout=output,
+                                 check=True, timeout=60, preexec_fn=limit_dump)
+              print(json.dumps({"model_sha256": digest(model), "dump_sha256": digest(dump),
+                                "compiled_c_bytes": dump.stat().st_size}), flush=True)
+              needles = ("PointSinkPresentationEvidenceV1", "PointSinkIntentV1",
+                         "copy_presentation_composites",
+                         "rejected_install_is_atomic_retryable_and_success_is_once_only")
+              name_map = model.with_suffix(".pretty_name_map.json")
+              replacements = {name.removeprefix("tag-"): pretty for name, pretty in json.loads(name_map.read_text()).items()
+                              if any(needle in pretty for needle in (*needles, "AdmittedHandoffPointSinkWriterV1"))}
+              if not replacements:
+                  raise RuntimeError("compiled model has no expected presentation or handoff names")
+              pattern = re.compile("|".join(re.escape(name) for name in sorted(replacements, key=len, reverse=True)))
+              emitted = 0
+              block = []
+              depth = 0
+              selected = False
+              with dump.open(errors="replace") as source:
+                  for number, line in enumerate(source, 1):
+                      line = pattern.sub(lambda match: replacements[match.group()], line)
+                      if depth == 0 and any(needle in line for needle in needles):
+                          selected = True
+                      if depth == 0 and "AdmittedHandoffPointSinkWriterV1" in line and "prepare" in line:
+                          selected = True
+                      block.append(f"{number}: {line}")
+                      depth += line.count("{") - line.count("}")
+                      if depth == 0 and (line.strip().endswith((";", "}")) or not line.strip()):
+                          if selected:
+                              fragment = "".join(block).encode()
+                              remaining = 512 * 1024 - emitted
+                              sys.stdout.buffer.write(fragment[:remaining])
+                              sys.stdout.buffer.flush()
+                              emitted += min(len(fragment), remaining)
+                              if len(fragment) > remaining:
+                                  print("DIAGNOSTIC fragment limit reached", flush=True)
+                                  break
+                          block = []
+                          selected = False
+              print(f"DIAGNOSTIC complete; emitted_bytes={emitted}; proof_result=not_run", flush=True)
+          PY
       - name: verify assigned positive formal harnesses
         run: |
           python3 scripts/verify_core_formal.py \
