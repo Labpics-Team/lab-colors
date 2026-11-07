@@ -31,7 +31,7 @@
   "bindings/kotlin/ci/test_artifact.py": "381489d46c64bbeeb52a9ee1112716418964930c",
   "bindings/kotlin/ci/test_desugar_linkage.py": "3e04a803395a758ba497ffbc5908f7c0e3eb71b6",
   "bindings/kotlin/ci/test_kotlin_linkage.py": "3e858d174aebc28c43f8ff586246c7e25386e094",
-  "bindings/kotlin/ci/test_sdk_setup.py": "3d3bcc29394ea1bc56304324c83b637e10e17435",
+  "bindings/kotlin/ci/test_sdk_setup.py": "d6f3dc9dade6f936b7fb988aa361579f862e26c6",
   "bindings/kotlin/consumer-rules.pro": "a5d12593942576d3019806a048c5b97fbc7a0c6f",
   "bindings/kotlin/consumer/build.gradle.kts": "9e2f715af44fb1085a96a9b7c2bd5d642bd5697d",
   "bindings/kotlin/consumer/gradle.properties": "45b05d65e8012d83d4f8cd05602b97747c44aebc",
@@ -84,7 +84,7 @@
   "crates/labcolors-audit/tests/api_manifest_test.rs": "e78228111e0328d6ee237704c1515e222cf4348e",
   "crates/labcolors-audit/tests/completeness.rs": "ff96b4aa0733962020d214fe121c2a307f913360",
   "crates/labcolors-audit/tests/dependencies_audit.rs": "56f3a2a9bccde012fc678e7c8bab9825d5603941",
-  "crates/labcolors-audit/tests/native_surface.rs": "fed29d58e5cd994dc41041520c0e0143de78323d",
+  "crates/labcolors-audit/tests/native_surface.rs": "40308e3024ac13410531479d0335ad5092e80aa0",
   "crates/labcolors-audit/tests/operations_audit.rs": "6a31a33739ab8c0552a4c2c88f019634356f4b00",
   "crates/labcolors-audit/tests/reference_audit.rs": "db590073fb870c31be6a0e0e18c64ef193c06bcc",
   "crates/labcolors-audit/tests/scanner_red_proof.rs": "2fa7a5d9e9ccc7ba998da8ab2f363220f736e716",
@@ -641,7 +641,7 @@
   "scripts/verify_wcag22_neutral_axis.py": "13e7a1aa7621ff96435849d2f340ab128377a867",
   "scripts/verify_wcag22_q55.py": "f54f3d217f35e27ddd57c6ff235750dcbbad22db"
  },
- "record_sha256": "f4f2f814c789928ab123958d2a8d95b1424222d201f094d0ac05ec868d537170",
+ "record_sha256": "bfd9d830107d2ef681c34de8be88915da230a6f649340e40c2a4642ffb2bb5e7",
  "roots": [
   ".github/workflows",
   "Cargo.toml",

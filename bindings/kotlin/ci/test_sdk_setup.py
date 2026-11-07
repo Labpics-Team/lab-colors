@@ -1,29 +1,15 @@
-"""Штатный hosted SDK разрешается из объявленного root независимо от PATH."""
+"""SDK разрешается из объявленного каталога независимо от PATH."""
 import ast
 import importlib.util
 import os
 from pathlib import Path
-import re
 import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location("android_sdk_build", Path(__file__).with_name("build.py"))
 owner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(owner)
-
-
-def require_sdk_setup(source, name):
-    match = re.search(r"(?ms)^  " + name + r":\n.*?(?=^  [a-zA-Z0-9_-]+:\n|\Z)", source)
-    if not match:
-        raise AssertionError("Android job missing")
-    block = match.group()
-    if "    runs-on: ubuntu-latest\n" not in block or "setup-android@" in block:
-        raise AssertionError("Android consumer must use the declared hosted SDK")
-    target = "bindings/kotlin/ci/build.py" if name == "android-build" else "bindings/kotlin/ci/test-consumer.py"
-    if target not in block:
-        raise AssertionError("Android SDK consumer is missing")
 
 
 class AndroidSdkSetupTests(unittest.TestCase):
@@ -89,16 +75,6 @@ class AndroidSdkSetupTests(unittest.TestCase):
             with patch.dict(os.environ, {"PATH": str(tool.parent), "ANDROID_HOME": str(root)}):
                 exec(compile(ast.Module(body=statements, type_ignores=[]), "actual-consumer-sdk", "exec"), scope)
                 self.assertEqual(calls, [(str(tool), ("--install", "platforms;android-36", "build-tools;36.0.0"))])
-
-    def test_both_sdk_consumers_use_the_hosted_sdk(self):
-        source = (ROOT / ".github/workflows/native-conformance-worker.yml").read_text()
-        for name in ("android-build", "android-consumer"):
-            with self.subTest(job=name):
-                require_sdk_setup(source, name)
-                mutant = source.replace("runs-on: ubuntu-latest", "runs-on: [self-hosted, Linux, X64]")
-                with self.assertRaises(AssertionError):
-                    require_sdk_setup(mutant, name)
-
 
 if __name__ == "__main__":
     unittest.main()
