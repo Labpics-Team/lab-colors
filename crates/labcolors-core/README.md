@@ -91,3 +91,44 @@ Core не читает исходники, Cargo-манифесты или CI-к
 Файловый аудит выполняют `labcolors-audit` и отдельные Python-инструменты;
 [руководство](../../docs/how-to/source-audit.md) описывает их область.
 Build-script отдельно формирует descriptor исходного дерева для сертификата.
+
+## Обновление Program без временных входных массивов
+
+`program_wire::ProgramObservationV1::from_rgb8` принимает заимствованные ID
+сценариев и плоскую RGB8-матрицу в порядке входов скомпилированной программы.
+Проверка формы не выделяет память. `ProgramSessionV1::update_observed_view`
+и `ProgramAttachmentV1::update_observed_view` используют тот же admission,
+выбор результата и атомарную транзакцию, что методы с owned-сценариями.
+WASM и native-адаптеры передают свои входы через этот тип.
+
+```rust
+use labcolors_core::program_wire::{
+    ProgramObservationV1, ProgramRuntimeErrorV1, ProgramSessionV1, ProgramSnapshotV1,
+};
+
+fn update(
+    session: &mut ProgramSessionV1,
+    revision: u64,
+    ids: &[u32],
+    rgb8: &[u8],
+    surface_count: usize,
+) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+    let observation = ProgramObservationV1::from_rgb8(ids, rgb8, surface_count)
+        .map_err(|_| ProgramRuntimeErrorV1::Update)?;
+    session.update_observed_view(revision, observation)
+}
+```
+
+Принятые значения копируются в хранилище Session до возврата. Входы можно
+изменять или освобождать после вызова; ранее возвращённый snapshot остаётся
+независимым даже после уничтожения runtime.
+
+В проверяемом прогретом пути с достаточными ёмкостями рабочих буферов
+один output хранится прямо в snapshot без аллокаций; несколько outputs
+требуют одного точно зарезервированного буфера. Реаллокаций в обоих случаях
+нет. Native-вызов с одним output выделяет только `Arc` результата.
+Компиляция, создание Session, заполнение ещё не использованных рабочих
+слотов и рост кардинальности учитываются отдельно. Защитные JS-копии,
+сгенерированный транспорт и native `Arc` результата не входят в эту цифру.
+[Измерение границ](../../docs/how-to/benchmark-program.md#выделения-памяти)
+проверяет также стоимость адаптера, не скрывая её за показателем Core.
