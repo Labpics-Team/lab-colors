@@ -15,7 +15,6 @@ jobs:
     name: one source-bound full-domain Arb BUILD to RUN receipt
     # Полный RUN остаётся непрерывным и должен уложиться в 6 часов GitHub-hosted.
     runs-on: ubuntu-latest
-    timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
@@ -216,7 +215,6 @@ jobs:
   full-domain-mpfi-receipt:
     name: one source-bound full-domain MPFI BUILD to RUN receipt
     runs-on: ubuntu-latest
-    timeout-minutes: 480
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONHASHSEED: "0"
