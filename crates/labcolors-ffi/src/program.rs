@@ -36,6 +36,7 @@ fn runtime_error(error: core::ProgramRuntimeErrorV1, operation: &str) -> LabColo
         match error {
             E::Wire => "program_wire",
             E::Compile => "program_compile",
+            E::Unsupported => "program_unsupported",
             E::FamilyArtifactsRequired => "program_family_artifacts_required",
             E::Instantiate => "program_instantiate",
             E::Update => "program_update",
@@ -80,6 +81,7 @@ fn update_error(error: core::ProgramAttachmentUpdateErrorV1, operation: &str) ->
             E::Sink(S::AlreadyInstalled) => "program_attachment_already_installed",
             E::Sink(S::Host(H::Rejected)) => "program_attachment_host_rejected",
             E::Sink(S::Host(H::Protocol)) => "program_attachment_host_protocol",
+            E::Sink(S::Host(H::ResourceExhausted)) => "program_attachment_resource_exhausted",
             _ => "program_attachment_update_unknown",
         },
         operation,
@@ -99,6 +101,7 @@ fn authority_error(error: core::ProgramMaterializationAuthorityErrorV1) -> LabCo
             E::TerminalBindingMismatch => "program_materialization_terminal_binding_mismatch",
             E::MissingPointAbsenceProof => "program_materialization_missing_point_absence_proof",
             E::AmbiguousObservationCases => "program_materialization_ambiguous_observation_cases",
+            E::AmbiguousBindings => "program_materialization_ambiguous_bindings",
             _ => "program_materialization_authority",
         },
         "materializationAuthority",
@@ -190,8 +193,175 @@ fn output(
         .ok_or_else(|| LabColorsError::new("invalid_output_index", "readProgramOutput"))
 }
 
+/// Сохранённый Core-вердикт ограничения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramAssessmentVerdict {
+    Pass,
+    Violation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramAssessmentSrgb8 {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramAssessmentBlueInterval {
+    pub lower: u8,
+    pub upper: u8,
+}
+
+/// Проекция закрытого семейства Core, без повторной классификации.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramConstraintAssessment {
+    ExactSrgb8 {
+        verdict: ProgramAssessmentVerdict,
+    },
+    Wcag22Srgb8 {
+        verdict: ProgramAssessmentVerdict,
+    },
+    IntrinsicUnary {
+        verdict: ProgramAssessmentVerdict,
+    },
+    Relation {
+        verdict: ProgramAssessmentVerdict,
+    },
+    DeclaredSrgb8CleanSetPass {
+        visible: ProgramAssessmentSrgb8,
+    },
+    DeclaredSrgb8CleanSetRejected {
+        visible: ProgramAssessmentSrgb8,
+        rejected_blue_interval: ProgramAssessmentBlueInterval,
+    },
+    DeclaredSrgb8CleanSetFinalOwnedDomainAbsent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramAssessmentCell {
+    pub constraint_id: u32,
+    pub case_index: u64,
+    pub hard: bool,
+    pub assessment: ProgramConstraintAssessment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramScenarioProvenance {
+    pub case_index: u64,
+    pub scenario_id: u32,
+}
+
+/// Owned-копия исторического Ready-отчёта. Изменение копии клиентом не
+/// меняет Core snapshot и не создаёт capability публикации.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramAssessmentReport {
+    pub content_identity: Vec<u8>,
+    pub stream_id: u32,
+    pub revision: u64,
+    pub scenario_provenance: Vec<ProgramScenarioProvenance>,
+    pub cells: Vec<ProgramAssessmentCell>,
+}
+
+fn project_assessment(
+    assessment: core::ProgramConstraintAssessmentV1,
+) -> ProgramConstraintAssessment {
+    use core::ProgramConstraintAssessmentV1 as Core;
+    let verdict = |value| match value {
+        core::ProgramAssessmentVerdictV1::Pass => ProgramAssessmentVerdict::Pass,
+        core::ProgramAssessmentVerdictV1::Violation => ProgramAssessmentVerdict::Violation,
+    };
+    let visible = |value: labcolors_core::Srgb8| {
+        let [red, green, blue] = value.bytes();
+        ProgramAssessmentSrgb8 { red, green, blue }
+    };
+    match assessment {
+        Core::ExactSrgb8 { verdict: value } => ProgramConstraintAssessment::ExactSrgb8 {
+            verdict: verdict(value),
+        },
+        Core::Wcag22Srgb8 { verdict: value } => ProgramConstraintAssessment::Wcag22Srgb8 {
+            verdict: verdict(value),
+        },
+        Core::IntrinsicUnary { verdict: value } => ProgramConstraintAssessment::IntrinsicUnary {
+            verdict: verdict(value),
+        },
+        Core::Relation { verdict: value } => ProgramConstraintAssessment::Relation {
+            verdict: verdict(value),
+        },
+        Core::DeclaredSrgb8CleanSetPass { visible: value } => {
+            ProgramConstraintAssessment::DeclaredSrgb8CleanSetPass {
+                visible: visible(value),
+            }
+        }
+        Core::DeclaredSrgb8CleanSetRejected {
+            visible: value,
+            rejected_blue_interval: [lower, upper],
+        } => ProgramConstraintAssessment::DeclaredSrgb8CleanSetRejected {
+            visible: visible(value),
+            rejected_blue_interval: ProgramAssessmentBlueInterval { lower, upper },
+        },
+        Core::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent => {
+            ProgramConstraintAssessment::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent
+        }
+    }
+}
+
+/// Отказ ресурса при чтении оставляет snapshot и внешний sink неизменными.
+fn project_assessment_report(
+    report: Option<&core::ProgramAssessmentReportV1>,
+) -> Result<Option<ProgramAssessmentReport>, LabColorsError> {
+    let Some(report) = report else {
+        return Ok(None);
+    };
+    let exhausted = || LabColorsError::new("program_resource_exhausted", "assessmentReport");
+    let mut content_identity = Vec::new();
+    content_identity
+        .try_reserve_exact(32)
+        .map_err(|_| exhausted())?;
+    content_identity.extend_from_slice(&report.content_identity());
+    let mut scenario_provenance = Vec::new();
+    scenario_provenance
+        .try_reserve_exact(report.scenario_provenance().len())
+        .map_err(|_| exhausted())?;
+    scenario_provenance.extend(report.scenario_provenance().iter().map(|scenario| {
+        ProgramScenarioProvenance {
+            case_index: scenario.case_index() as u64,
+            scenario_id: scenario.scenario_id(),
+        }
+    }));
+    let mut cells = Vec::new();
+    cells
+        .try_reserve_exact(report.cells().len())
+        .map_err(|_| exhausted())?;
+    cells.extend(report.cells().iter().map(|cell| ProgramAssessmentCell {
+        constraint_id: cell.constraint_id(),
+        case_index: cell.case_index() as u64,
+        hard: cell.hard(),
+        assessment: project_assessment(cell.assessment()),
+    }));
+    Ok(Some(ProgramAssessmentReport {
+        content_identity,
+        stream_id: report.stream_id(),
+        revision: report.revision(),
+        scenario_provenance,
+        cells,
+    }))
+}
+
 #[uniffi::export]
 impl ProgramSnapshot {
+    pub fn assessment_report(&self) -> Result<Option<ProgramAssessmentReport>, LabColorsError> {
+        project_assessment_report(self.inner.assessment_report())
+    }
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
     pub fn state(&self) -> String {
         self.inner.state().key().into()
     }
@@ -206,6 +376,21 @@ impl ProgramSnapshot {
     }
     pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> {
         Ok(output(&self.inner, index)?.opacity())
+    }
+    pub fn presentation_composite_rgb(
+        &self,
+        root: u32,
+        scenario: u32,
+    ) -> Result<Vec<u8>, LabColorsError> {
+        self.inner
+            .presentation_composite_rgb(root, scenario)
+            .map(|rgb| rgb.bytes().to_vec())
+            .ok_or_else(|| {
+                LabColorsError::new(
+                    "presentation_composite_unavailable",
+                    "readPresentationComposite",
+                )
+            })
     }
 }
 
@@ -224,6 +409,38 @@ pub struct ProgramPointPaint {
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointSinkPoint {
+    pub sink_output: u32,
+    pub paint: ProgramPointPaint,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointPresentationComposite {
+    pub root: u32,
+    pub scenario: u32,
+    pub source: Vec<u8>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointEmissionBinding {
+    pub slot: u32,
+    pub sink_output: u32,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramPointPresentationBinding {
+    pub slot: u32,
+    pub root: u32,
+    pub occurrence: u32,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramAttachmentBindings {
+    pub emissions: Vec<ProgramPointEmissionBinding>,
+    pub presentations: Vec<ProgramPointPresentationBinding>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct ProgramPointSinkIntent {
     pub operation: ProgramPointSinkOperation,
     pub revision: u64,
@@ -232,6 +449,20 @@ pub struct ProgramPointSinkIntent {
     pub binding_epoch: u64,
     pub sink_output: u32,
     pub point: Option<ProgramPointPaint>,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ProgramScopeSinkIntent {
+    pub operation: ProgramPointSinkOperation,
+    pub revision: u64,
+    pub expected_sequence: u64,
+    pub desired_sequence: u64,
+    pub binding_epoch: u64,
+    pub sink_output: Option<u32>,
+    pub point: Option<ProgramPointPaint>,
+    pub scope: Vec<u32>,
+    pub points: Vec<ProgramPointSinkPoint>,
+    pub presentation_composites: Vec<ProgramPointPresentationComposite>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -250,14 +481,25 @@ pub trait ProgramPointSinkHost: Send + Sync {
     ) -> Result<bool, ProgramPointSinkCallbackError>;
 }
 
-struct NativeHost {
-    callback: Box<dyn ProgramPointSinkHost>,
+/// Подтверждает всю команду scope атомарно, включая все paints и composites.
+/// false и ошибка сохраняют прежний внешний scope; callback синхронный.
+#[uniffi::export(callback_interface)]
+pub trait ProgramScopeSinkHost: Send + Sync {
+    fn try_install(
+        &self,
+        intent: ProgramScopeSinkIntent,
+    ) -> Result<bool, ProgramPointSinkCallbackError>;
+}
+
+enum NativeHost {
+    Point(Box<dyn ProgramPointSinkHost>),
+    Scope(Box<dyn ProgramScopeSinkHost>),
 }
 
 impl core::ProgramPointSinkHostV1 for NativeHost {
     fn try_install(
         &mut self,
-        intent: core::ProgramPointSinkIntentV1,
+        intent: core::ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), core::ProgramPointSinkHostErrorV1> {
         use core::ProgramPointSinkHostErrorV1 as E;
         let operation = match intent.operation() {
@@ -268,21 +510,84 @@ impl core::ProgramPointSinkHostV1 for NativeHost {
             }
             _ => return Err(E::Protocol),
         };
-        let point = intent.point().map(|point| ProgramPointPaint {
-            slot: point.slot(),
-            source: point.source().bytes().to_vec(),
-            opacity: point.opacity(),
-        });
-        let projected = ProgramPointSinkIntent {
-            operation,
-            revision: intent.revision(),
-            expected_sequence: intent.expected_stamp().sequence(),
-            desired_sequence: intent.desired_stamp().sequence(),
-            binding_epoch: intent.expected_stamp().binding_epoch(),
-            sink_output: intent.sink_output(),
-            point,
+        let paint = |point: core::ProgramPaintOutputV1| -> Result<ProgramPointPaint, E> {
+            let mut source = Vec::new();
+            source
+                .try_reserve_exact(3)
+                .map_err(|_| E::ResourceExhausted)?;
+            source.extend_from_slice(&point.source().bytes());
+            Ok(ProgramPointPaint {
+                slot: point.slot(),
+                source,
+                opacity: point.opacity(),
+            })
         };
-        match self.callback.try_install(projected) {
+        let installed = match self {
+            Self::Point(callback) => {
+                let sink_output = intent.sink_output().ok_or(E::Protocol)?;
+                let projected = ProgramPointSinkIntent {
+                    operation,
+                    revision: intent.revision(),
+                    expected_sequence: intent.expected_stamp().sequence(),
+                    desired_sequence: intent.desired_stamp().sequence(),
+                    binding_epoch: intent.expected_stamp().binding_epoch(),
+                    sink_output,
+                    point: intent.point().map(paint).transpose()?,
+                };
+                callback.try_install(projected)
+            }
+            Self::Scope(callback) => {
+                let point = intent.point().map(paint).transpose()?;
+                let scope_values = intent.scope();
+                let mut scope = Vec::new();
+                scope
+                    .try_reserve_exact(scope_values.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                scope.extend(scope_values);
+                let point_values = intent.points();
+                let mut points = Vec::new();
+                points
+                    .try_reserve_exact(point_values.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                for entry in point_values {
+                    points.push(ProgramPointSinkPoint {
+                        sink_output: entry.sink_output(),
+                        paint: paint(entry.output())?,
+                    });
+                }
+                let composites = intent.presentation_composites();
+                let mut presentation_composites = Vec::new();
+                presentation_composites
+                    .try_reserve_exact(composites.len())
+                    .map_err(|_| E::ResourceExhausted)?;
+                for composite in composites {
+                    let mut source = Vec::new();
+                    source
+                        .try_reserve_exact(3)
+                        .map_err(|_| E::ResourceExhausted)?;
+                    source.extend_from_slice(&composite.visible().bytes());
+                    presentation_composites.push(ProgramPointPresentationComposite {
+                        root: composite.root(),
+                        scenario: composite.scenario(),
+                        source,
+                    });
+                }
+                let projected = ProgramScopeSinkIntent {
+                    operation,
+                    revision: intent.revision(),
+                    expected_sequence: intent.expected_stamp().sequence(),
+                    desired_sequence: intent.desired_stamp().sequence(),
+                    binding_epoch: intent.expected_stamp().binding_epoch(),
+                    sink_output: intent.sink_output(),
+                    point,
+                    scope,
+                    points,
+                    presentation_composites,
+                };
+                callback.try_install(projected)
+            }
+        };
+        match installed {
             Ok(true) => Ok(()),
             Ok(false) => Err(E::Rejected),
             Err(_) => Err(E::Protocol),
@@ -314,9 +619,55 @@ pub fn attach_program_wire(
             sink_output,
             presentation_root,
             occurrence,
-            NativeHost { callback: host },
+            NativeHost::Point(host),
         )
         .map_err(|e| attach_error(e, operation))?;
+    Ok(Arc::new(ProgramAttachment {
+        inner: Mutex::new(inner),
+    }))
+}
+
+/// Полный binding-scope с собственным callback-контрактом и общим Core owner.
+#[uniffi::export]
+pub fn attach_program_wire_with_bindings(
+    bytes: Vec<u8>,
+    stream_id: u32,
+    bindings: ProgramAttachmentBindings,
+    host: Box<dyn ProgramScopeSinkHost>,
+) -> Result<Arc<ProgramAttachment>, LabColorsError> {
+    let operation = "attachProgramWire";
+    let resource = || LabColorsError::new("program_attachment_resource_exhausted", operation);
+    let maximum = core::MAX_PROGRAM_POINT_BINDINGS_V1 as usize;
+    if bindings.emissions.len() > maximum || bindings.presentations.len() > maximum {
+        return Err(resource());
+    }
+    let mut emissions = Vec::new();
+    emissions
+        .try_reserve_exact(bindings.emissions.len())
+        .map_err(|_| resource())?;
+    emissions.extend(
+        bindings
+            .emissions
+            .iter()
+            .map(|row| core::ProgramPointEmissionBindingV1::new(row.slot, row.sink_output)),
+    );
+    let mut presentations = Vec::new();
+    presentations
+        .try_reserve_exact(bindings.presentations.len())
+        .map_err(|_| resource())?;
+    presentations.extend(bindings.presentations.iter().map(|row| {
+        core::ProgramPointPresentationBindingV1::new(row.slot, row.root, row.occurrence)
+    }));
+    let owner =
+        core::compile_program_wire(&bytes).map_err(|error| runtime_error(error, operation))?;
+    let inner = owner
+        .attach_bindings(
+            stream_id,
+            &emissions,
+            &presentations,
+            NativeHost::Scope(host),
+        )
+        .map_err(|error| attach_error(error, operation))?;
     Ok(Arc::new(ProgramAttachment {
         inner: Mutex::new(inner),
     }))
@@ -368,9 +719,19 @@ impl ProgramAttachment {
         binding_epoch: u64,
     ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
         let inner = enter(&self.inner, "materializationAuthority")?;
-        let render = inner.current_render().ok_or_else(|| {
-            authority_error(core::ProgramMaterializationAuthorityErrorV1::NotReady)
-        })?;
+        let render = match inner.current_renders() {
+            [render] => *render,
+            [] => {
+                return Err(authority_error(
+                    core::ProgramMaterializationAuthorityErrorV1::NotReady,
+                ));
+            }
+            _ => {
+                return Err(authority_error(
+                    core::ProgramMaterializationAuthorityErrorV1::AmbiguousBindings,
+                ));
+            }
+        };
         let identity: [u8; 32] = content_identity.as_slice().try_into().map_err(|_| {
             authority_error(core::ProgramMaterializationAuthorityErrorV1::StaleIdentity)
         })?;
@@ -384,6 +745,17 @@ impl ProgramAttachment {
                 core::ProgramMaterializationCandidateV1::AttachedCommit,
                 expected,
             )
+            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
+            .map_err(authority_error)
+    }
+
+    pub fn materialization_authority_for_binding(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
+        enter(&self.inner, "materializationAuthority")?
+            .current_materialization_authority_for(root, occurrence)
             .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
             .map_err(authority_error)
     }
@@ -418,6 +790,18 @@ pub struct ProgramAttachedSnapshot {
 
 #[uniffi::export]
 impl ProgramAttachedSnapshot {
+    pub fn assessment_report(&self) -> Result<Option<ProgramAssessmentReport>, LabColorsError> {
+        project_assessment_report(self.inner.snapshot().assessment_report())
+    }
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot().snapshot_version()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.snapshot().revision()
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.inner.snapshot().reason().map(str::to_owned)
+    }
     pub fn state(&self) -> String {
         self.inner.snapshot().state().key().into()
     }
@@ -437,7 +821,19 @@ impl ProgramAttachedSnapshot {
         Ok(output(self.inner.snapshot(), index)?.opacity())
     }
     pub fn has_render(&self) -> bool {
-        self.inner.render().is_some()
+        !self.inner.renders().is_empty()
+    }
+    pub fn render_count(&self) -> u64 {
+        self.inner.renders().len() as u64
+    }
+    pub fn render_at(&self, index: u32) -> Result<Arc<ProgramAttachedRender>, LabColorsError> {
+        let inner = self
+            .inner
+            .renders()
+            .get(index as usize)
+            .copied()
+            .ok_or_else(|| LabColorsError::new("invalid_output_index", "readProgramOutput"))?;
+        Ok(Arc::new(ProgramAttachedRender { inner }))
     }
     pub fn render(&self) -> Option<Arc<ProgramAttachedRender>> {
         self.inner
@@ -562,5 +958,745 @@ impl AttachedMaterializationAuthority {
     }
     pub fn terminal_composite_rgb(&self) -> Vec<u8> {
         self.inner.terminal_composite().bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bytes(hex: &str) -> Vec<u8> {
+        assert_eq!(hex.len() % 2, 0);
+        (0..hex.len())
+            .step_by(2)
+            .map(|offset| {
+                u8::from_str_radix(&hex[offset..offset + 2], 16)
+                    .expect("fixture содержит hex-байты")
+            })
+            .collect()
+    }
+
+    struct AcceptHost;
+
+    impl ProgramPointSinkHost for AcceptHost {
+        fn try_install(
+            &self,
+            _intent: ProgramPointSinkIntent,
+        ) -> Result<bool, ProgramPointSinkCallbackError> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn unsupported_assignment_preserves_its_error_class() {
+        for expected_operation in ["compileProgramWire", "attachProgramWire"] {
+            let LabColorsError::Refused { code, operation } =
+                runtime_error(core::ProgramRuntimeErrorV1::Unsupported, expected_operation);
+            assert_eq!(code, "program_unsupported");
+            assert_eq!(operation, expected_operation);
+        }
+    }
+
+    #[test]
+    fn full_attachment_enumerates_renders_and_requires_explicit_binding_authority() {
+        struct CaptureHost(Arc<Mutex<Vec<ProgramScopeSinkIntent>>>);
+
+        impl ProgramScopeSinkHost for CaptureHost {
+            fn try_install(
+                &self,
+                intent: ProgramScopeSinkIntent,
+            ) -> Result<bool, ProgramPointSinkCallbackError> {
+                self.0
+                    .lock()
+                    .expect("host хранит собственные команды")
+                    .push(intent);
+                Ok(true)
+            }
+        }
+
+        fn authority_refusal(
+            result: Result<Arc<AttachedMaterializationAuthority>, LabColorsError>,
+            expected: &str,
+        ) {
+            match result {
+                Err(LabColorsError::Refused { code, operation }) => {
+                    assert_eq!(code, expected);
+                    assert_eq!(operation, "materializationAuthority");
+                }
+                Ok(_) => panic!("отказ не должен выдавать authority"),
+            }
+        }
+
+        // Wire из публичного ProgramWireBuilderV1: два terminal bindings с точными ограничениями.
+        let wire = bytes(concat!(
+            "4c435057010003010000020000000b0000004040400c000000a0a0a00200000015000000010b00000016000000010c000000",
+            "0000000000000000010000001f00000000000000020000002900000001150000002a00000001160000000100000033000000011f000000",
+            "020000003d000000290000003300000000000000000050409a9999999999c93f013e0000002a0000003300000000000000000050409a9999999999c93f01",
+            "02000000470000003d000000480000003e00000002000000470000003d000000480000003e0000000200000051000000013d00000040404052000000013e000000a0a0a000000000020000005b000000290000005c0000002a000000",
+        ));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let attachment = attach_program_wire_with_bindings(
+            wire,
+            17,
+            ProgramAttachmentBindings {
+                emissions: vec![
+                    ProgramPointEmissionBinding {
+                        slot: 91,
+                        sink_output: 501,
+                    },
+                    ProgramPointEmissionBinding {
+                        slot: 92,
+                        sink_output: 502,
+                    },
+                ],
+                presentations: vec![
+                    ProgramPointPresentationBinding {
+                        slot: 91,
+                        root: 71,
+                        occurrence: 61,
+                    },
+                    ProgramPointPresentationBinding {
+                        slot: 92,
+                        root: 72,
+                        occurrence: 62,
+                    },
+                ],
+            },
+            Box::new(CaptureHost(Arc::clone(&calls))),
+        )
+        .expect("полный scope присоединяется через публичный native порт");
+
+        let ready = attachment
+            .update_observed(1, vec![1], vec![128; 3], 1)
+            .expect("полный scope атомарно публикуется");
+        assert_eq!(ready.render_count(), 2);
+        assert!(ready.has_render());
+        assert!(ready.render().is_none());
+        assert!(matches!(
+            ready.render_at(2),
+            Err(LabColorsError::Refused { code, operation })
+                if code == "invalid_output_index" && operation == "readProgramOutput"
+        ));
+        let first = ready
+            .render_at(0)
+            .expect("первый render доступен по индексу");
+        let second = ready
+            .render_at(1)
+            .expect("второй render доступен по индексу");
+        assert_eq!(
+            (
+                first.output_slot(),
+                first.sink_output(),
+                first.presentation_root(),
+                first.occurrence()
+            ),
+            (91, 501, 71, 61)
+        );
+        assert_eq!(
+            (
+                second.output_slot(),
+                second.sink_output(),
+                second.presentation_root(),
+                second.occurrence()
+            ),
+            (92, 502, 72, 62)
+        );
+        assert_eq!(first.output_rgb(), [64; 3]);
+        assert_eq!(second.output_rgb(), [160; 3]);
+        {
+            let calls = calls
+                .lock()
+                .expect("host команды сохранены независимо от borrow");
+            let installed = &calls[0];
+            assert_eq!(installed.scope, [501, 502]);
+            assert_eq!(installed.sink_output, None);
+            assert!(installed.point.is_none());
+            assert_eq!(installed.points.len(), 2);
+            assert_eq!(installed.points[0].sink_output, 501);
+            assert_eq!(installed.points[0].paint.slot, 91);
+            assert_eq!(installed.points[0].paint.source, [64; 3]);
+            assert_eq!(installed.points[1].sink_output, 502);
+            assert_eq!(installed.points[1].paint.source, [160; 3]);
+            assert_eq!(installed.presentation_composites.len(), 2);
+            assert_eq!(installed.presentation_composites[0].root, 71);
+            assert_eq!(installed.presentation_composites[0].scenario, 1);
+            assert_eq!(installed.presentation_composites[0].source, [64; 3]);
+            assert_eq!(installed.presentation_composites[1].root, 72);
+            assert_eq!(installed.presentation_composites[1].source, [160; 3]);
+        }
+        authority_refusal(
+            attachment.materialization_authority(),
+            "program_materialization_ambiguous_bindings",
+        );
+        authority_refusal(
+            attachment.materialization_authority_for(
+                1,
+                first.content_identity(),
+                first.binding_epoch(),
+            ),
+            "program_materialization_ambiguous_bindings",
+        );
+        let authority = attachment
+            .materialization_authority_for_binding(72, 62)
+            .expect("Core допускает authority выбранного current binding");
+        assert_eq!(authority.output_slot(), 92);
+        assert_eq!(authority.presentation_root(), 72);
+        assert_eq!(authority.occurrence(), 62);
+        assert_eq!(authority.output_rgb(), [160; 3]);
+        assert_eq!(authority.revision(), second.revision());
+        assert_eq!(authority.binding_epoch(), second.binding_epoch());
+        authority_refusal(
+            attachment.materialization_authority_for_binding(71, 62),
+            "program_materialization_terminal_binding_mismatch",
+        );
+
+        let stale = attachment
+            .update_unknown(2, 41)
+            .expect("полный scope отзывается");
+        assert_eq!(stale.render_count(), 0);
+        assert_eq!(ready.render_count(), 2);
+        assert_eq!(
+            ready
+                .render_at(0)
+                .expect("исторический render сохранён")
+                .output_rgb(),
+            [64; 3]
+        );
+        authority_refusal(
+            attachment.materialization_authority_for_binding(72, 62),
+            "program_materialization_not_ready",
+        );
+        {
+            let calls = calls.lock().expect("отзыв сохраняет полный scope");
+            let revoked = calls.last().expect("host получил отзыв");
+            assert!(matches!(
+                revoked.operation,
+                ProgramPointSinkOperation::RevokeAll
+            ));
+            assert_eq!(revoked.scope, [501, 502]);
+            assert_eq!(revoked.sink_output, None);
+            assert!(revoked.points.is_empty());
+            assert!(revoked.presentation_composites.is_empty());
+        }
+        attachment
+            .dispose(true)
+            .expect("владелец подтвердил полный отзыв");
+    }
+
+    #[test]
+    fn computed_snapshot_metadata_is_shared_by_standalone_and_attached_ffi() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
+                .expect("встроенный fixture содержит корректный JSON");
+        for (name, state, reason) in [
+            ("gray", "unsatisfied", None),
+            ("box", "unsatisfied", None),
+            ("relation", "incomplete", Some("limit")),
+        ] {
+            let wire = bytes(
+                fixtures["computed"][name]
+                    .as_str()
+                    .expect("общий wire fixture представлен строкой"),
+            );
+            let runtime =
+                compile_program_wire(wire.clone(), 100).expect("допустимый Program компилируется");
+            let ready = runtime
+                .update_observed(1, vec![1], vec![128; 3], 1)
+                .expect("наблюдение принимается");
+            assert_eq!(ready.snapshot_version(), 2);
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(ready.reason(), None);
+            assert_eq!(
+                ready
+                    .output_rgb(0)
+                    .expect("существующий output содержит RGB"),
+                [64; 3]
+            );
+            let stopped = runtime
+                .update_observed(2, vec![1], vec![255; 3], 1)
+                .expect("наблюдение принимается");
+            assert_eq!(stopped.snapshot_version(), 2);
+            assert_eq!(stopped.revision(), 2);
+            assert_eq!(stopped.reason().as_deref(), reason);
+            assert_eq!(stopped.state(), state);
+            assert_eq!(stopped.output_count(), 0);
+            assert!(stopped.output_rgb(0).is_err());
+            let stale = runtime
+                .update_unknown(3, 41)
+                .expect("неизвестное наблюдение принимается");
+            assert_eq!(stale.state(), "stale");
+            assert_eq!(stale.reason(), None);
+            assert_eq!(stale.output_count(), 0);
+            drop(runtime);
+            let held = std::thread::spawn(move || {
+                (
+                    ready.snapshot_version(),
+                    ready.revision(),
+                    ready.reason(),
+                    ready
+                        .output_rgb(0)
+                        .expect("существующий output содержит RGB"),
+                )
+            })
+            .join()
+            .expect("потребитель снимка завершается без panic");
+            assert_eq!(held, (2, 1, None, vec![64; 3]));
+
+            let attached = attach_program_wire(wire, 100, 91, 501, 71, 61, Box::new(AcceptHost))
+                .expect("Program присоединяется к тестовому host");
+            let ready = attached
+                .update_observed(1, vec![1], vec![128; 3], 1)
+                .expect("наблюдение принимается");
+            assert_eq!(ready.snapshot_version(), 2);
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(ready.reason(), None);
+            assert!(ready.has_render());
+            let stopped = attached
+                .update_observed(2, vec![1], vec![255; 3], 1)
+                .expect("наблюдение принимается");
+            assert_eq!(stopped.snapshot_version(), 2);
+            assert_eq!(stopped.revision(), 2);
+            assert_eq!(stopped.reason().as_deref(), reason);
+            assert_eq!(stopped.state(), state);
+            assert_eq!(stopped.output_count(), 0);
+            assert!(!stopped.has_render());
+            assert!(attached.materialization_authority().is_err());
+            assert_eq!(ready.revision(), 1);
+            assert_eq!(
+                ready
+                    .output_rgb(0)
+                    .expect("существующий output содержит RGB"),
+                [64; 3]
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_ffi_metadata_preserves_historical_outputs() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../../../conformance/program-runtime-v1.json"))
+                .expect("встроенный fixture содержит корректный JSON");
+        let wire = bytes(
+            fixtures["adaptive"]
+                .as_str()
+                .expect("wire fixture представлен строкой"),
+        );
+        let runtime =
+            compile_program_wire(wire.clone(), 1).expect("допустимый Program компилируется");
+        let first = runtime
+            .update_observed(1, vec![1], vec![255; 3], 1)
+            .expect("наблюдение принимается");
+        let historical = runtime
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(
+            historical
+                .output_rgb(0)
+                .expect("существующий output содержит RGB"),
+            first
+                .output_rgb(0)
+                .expect("существующий output содержит RGB")
+        );
+
+        let attached = attach_program_wire(wire, 1, 91, 501, 71, 61, Box::new(AcceptHost))
+            .expect("Program присоединяется к тестовому host");
+        let first = attached
+            .update_observed(1, vec![1], vec![255; 3], 1)
+            .expect("наблюдение принимается");
+        let historical = attached
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(
+            historical
+                .output_rgb(0)
+                .expect("существующий output содержит RGB"),
+            first
+                .output_rgb(0)
+                .expect("существующий output содержит RGB")
+        );
+        assert!(!historical.has_render());
+    }
+}
+
+fn final_raster_error(error: core::ProgramFinalRasterErrorV1, operation: &str) -> LabColorsError {
+    LabColorsError::new(error.code(), operation)
+}
+
+/// Требование переносится в Core без собственной классификации или смены policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramFinalRasterCleanlinessRequirement {
+    Off,
+    LintExactNominalSrgb8V2,
+    MandatoryExactNominalSrgb8V2,
+}
+
+impl ProgramFinalRasterCleanlinessRequirement {
+    fn core(self) -> core::FinalRasterCleanlinessRequirementV1 {
+        match self {
+            Self::Off => core::FinalRasterCleanlinessRequirementV1::Off,
+            Self::LintExactNominalSrgb8V2 => {
+                core::FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2
+            }
+            Self::MandatoryExactNominalSrgb8V2 => {
+                core::FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramFinalRasterAssessmentVerdict {
+    NotApplied,
+    Pass,
+    Violation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFinalRasterViolation {
+    pub pixel_index: u64,
+    pub composite: ProgramAssessmentSrgb8,
+    pub rejected_blue_interval: ProgramAssessmentBlueInterval,
+}
+
+/// Историческая owned-диагностика; копия не даёт current authority.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFinalRasterCleanlinessAssessment {
+    pub requirement: ProgramFinalRasterCleanlinessRequirement,
+    pub verdict: ProgramFinalRasterAssessmentVerdict,
+    pub checked_pixel_count: u64,
+    pub violation_count: u64,
+    pub first_violation: Option<ProgramFinalRasterViolation>,
+    pub profile: Option<String>,
+    pub profile_release: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFinalRasterBytes {
+    pub scope: String,
+    pub width: u32,
+    pub height: u32,
+    pub device_pixel_ratio: u8,
+    pub revision: u64,
+    pub output_slot: u32,
+    pub pixels: Vec<u8>,
+    pub cleanliness: ProgramFinalRasterCleanlinessAssessment,
+}
+
+/// Сохранённый Core-отказ с первым witness; поля не вычисляются адаптером.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFinalRasterRefusal {
+    pub code: String,
+    pub pixel_index: Option<u64>,
+    pub composite: Option<ProgramAssessmentSrgb8>,
+    pub rejected_blue_interval: Option<ProgramAssessmentBlueInterval>,
+}
+
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum ProgramFinalRasterCallbackError {
+    #[error("final raster callback failed")]
+    InvocationFailed,
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for ProgramFinalRasterCallbackError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::InvocationFailed
+    }
+}
+
+/// Callback синхронный. true подтверждает приём bytes, не renderer conformance.
+/// Runtime не хранит callback после возврата; reentry отвергается owner guard.
+#[uniffi::export(callback_interface)]
+pub trait ProgramFinalRasterConsumer: Send + Sync {
+    fn consume(
+        &self,
+        raster: ProgramFinalRasterBytes,
+    ) -> Result<bool, ProgramFinalRasterCallbackError>;
+}
+
+/// Канонический LCPW v4 создаёт единственный владелец формата — Core.
+#[uniffi::export]
+pub fn final_raster_wire(
+    source: u64,
+    destination: u64,
+    operator: u64,
+    output: u32,
+    cleanliness: ProgramFinalRasterCleanlinessRequirement,
+) -> Vec<u8> {
+    core::final_raster_source_over_wire_v1(
+        source,
+        destination,
+        operator,
+        output,
+        cleanliness.core(),
+    )
+    .to_vec()
+}
+
+fn final_raster_fixed<const N: usize>(
+    bytes: &[u8],
+    operation: &str,
+) -> Result<[u8; N], LabColorsError> {
+    bytes
+        .try_into()
+        .map_err(|_| final_raster_error(core::ProgramFinalRasterErrorV1::InvalidLength, operation))
+}
+
+fn final_raster_rgba(
+    bytes: &[u8],
+    count: usize,
+    operation: &str,
+) -> Result<Vec<[u8; 4]>, LabColorsError> {
+    let expected = count.checked_mul(4).ok_or_else(|| {
+        final_raster_error(core::ProgramFinalRasterErrorV1::InvalidLength, operation)
+    })?;
+    if bytes.len() != expected {
+        return Err(final_raster_error(
+            core::ProgramFinalRasterErrorV1::InvalidLength,
+            operation,
+        ));
+    }
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(count).map_err(|_| {
+        final_raster_error(
+            core::ProgramFinalRasterErrorV1::ResourceExhausted,
+            operation,
+        )
+    })?;
+    for pixel in bytes.chunks_exact(4) {
+        pixels.push([pixel[0], pixel[1], pixel[2], pixel[3]]);
+    }
+    Ok(pixels)
+}
+
+fn final_raster_rgb([red, green, blue]: [u8; 3]) -> ProgramAssessmentSrgb8 {
+    ProgramAssessmentSrgb8 { red, green, blue }
+}
+
+fn final_raster_interval([lower, upper]: [u8; 2]) -> ProgramAssessmentBlueInterval {
+    ProgramAssessmentBlueInterval { lower, upper }
+}
+
+fn project_final_raster_cleanliness(
+    assessment: core::FinalRasterCleanlinessAssessmentV1,
+) -> Result<ProgramFinalRasterCleanlinessAssessment, LabColorsError> {
+    let exhausted = || {
+        final_raster_error(
+            core::ProgramFinalRasterErrorV1::ResourceExhausted,
+            "consumeFinalRaster",
+        )
+    };
+    let requirement = match assessment.requirement() {
+        core::FinalRasterCleanlinessRequirementV1::Off => {
+            ProgramFinalRasterCleanlinessRequirement::Off
+        }
+        core::FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2 => {
+            ProgramFinalRasterCleanlinessRequirement::LintExactNominalSrgb8V2
+        }
+        core::FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2 => {
+            ProgramFinalRasterCleanlinessRequirement::MandatoryExactNominalSrgb8V2
+        }
+    };
+    let verdict = match assessment.verdict() {
+        core::FinalRasterAssessmentVerdictV1::NotApplied => {
+            ProgramFinalRasterAssessmentVerdict::NotApplied
+        }
+        core::FinalRasterAssessmentVerdictV1::Pass => ProgramFinalRasterAssessmentVerdict::Pass,
+        core::FinalRasterAssessmentVerdictV1::Violation => {
+            ProgramFinalRasterAssessmentVerdict::Violation
+        }
+    };
+    let first_violation = assessment
+        .first_violation()
+        .map(|first| {
+            Ok::<_, LabColorsError>(ProgramFinalRasterViolation {
+                pixel_index: u64::try_from(first.pixel_index()).map_err(|_| exhausted())?,
+                composite: final_raster_rgb(first.composite()),
+                rejected_blue_interval: final_raster_interval(first.rejected_blue_interval()),
+            })
+        })
+        .transpose()?;
+    let profile_release = assessment.profile_release().map(|bytes| bytes.to_vec());
+    Ok(ProgramFinalRasterCleanlinessAssessment {
+        requirement,
+        verdict,
+        checked_pixel_count: u64::try_from(assessment.checked_pixels()).map_err(|_| exhausted())?,
+        violation_count: u64::try_from(assessment.violation_count()).map_err(|_| exhausted())?,
+        first_violation,
+        profile: profile_release
+            .as_ref()
+            .map(|_| "ExactNominalSrgb8CleanSetV2".into()),
+        profile_release,
+    })
+}
+
+fn project_final_raster_refusal(
+    error: core::ProgramFinalRasterErrorV1,
+) -> Result<ProgramFinalRasterRefusal, LabColorsError> {
+    let mut refusal = ProgramFinalRasterRefusal {
+        code: error.code().into(),
+        pixel_index: None,
+        composite: None,
+        rejected_blue_interval: None,
+    };
+    match error {
+        core::ProgramFinalRasterErrorV1::TransparentFinalPixel { pixel_index } => {
+            refusal.pixel_index = Some(u64::try_from(pixel_index).map_err(|_| {
+                final_raster_error(
+                    core::ProgramFinalRasterErrorV1::ResourceExhausted,
+                    "finalRasterRefusal",
+                )
+            })?);
+        }
+        core::ProgramFinalRasterErrorV1::ConventionRejected {
+            pixel_index,
+            composite,
+            rejected_blue_interval,
+        } => {
+            refusal.pixel_index = Some(u64::try_from(pixel_index).map_err(|_| {
+                final_raster_error(
+                    core::ProgramFinalRasterErrorV1::ResourceExhausted,
+                    "finalRasterRefusal",
+                )
+            })?);
+            refusal.composite = Some(final_raster_rgb(composite));
+            refusal.rejected_blue_interval = Some(final_raster_interval(rejected_blue_interval));
+        }
+        _ => {}
+    }
+    Ok(refusal)
+}
+
+#[uniffi::export]
+impl ProgramRuntime {
+    pub fn final_raster_content_identity(&self) -> Result<Vec<u8>, LabColorsError> {
+        Ok(enter(&self.inner, "contentIdentity")?
+            .content_identity()
+            .to_vec())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_final_raster(
+        &self,
+        revision: u64,
+        width: u32,
+        height: u32,
+        dpr: u8,
+        context: Vec<u8>,
+        source_port: u64,
+        source: Vec<u8>,
+        destination_port: u64,
+        destination: Vec<u8>,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+        let operation = "updateFinalRaster";
+        let mut inner = enter(&self.inner, operation)?;
+        let count = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| {
+            final_raster_error(core::ProgramFinalRasterErrorV1::InvalidExtent, operation)
+        })?;
+        if count == 0 {
+            return Err(final_raster_error(
+                core::ProgramFinalRasterErrorV1::InvalidExtent,
+                operation,
+            ));
+        }
+        if count > core::MAX_FINAL_RASTER_PIXELS_V1 {
+            return Err(final_raster_error(
+                core::ProgramFinalRasterErrorV1::ResourceExhausted,
+                operation,
+            ));
+        }
+        // Locked V1 DPR admission precedes flat-buffer shape checks, as in Core.
+        if !matches!(dpr, 1..=4) {
+            return Err(final_raster_error(
+                core::ProgramFinalRasterErrorV1::InvalidDevicePixelRatio,
+                operation,
+            ));
+        }
+        let context = final_raster_fixed(&context, operation)?;
+        let source = final_raster_rgba(&source, count, operation)?;
+        let destination = final_raster_rgba(&destination, count, operation)?;
+        let input = core::ProgramFinalRasterInputV1::try_new(
+            width,
+            height,
+            dpr,
+            context,
+            source_port,
+            &source,
+            destination_port,
+            &destination,
+        )
+        .map_err(|cause| final_raster_error(cause, operation))?;
+        inner
+            .update_final_raster(revision, &input)
+            .map(|inner| Arc::new(ProgramSnapshot { inner }))
+            .map_err(|cause| final_raster_error(cause, operation))
+    }
+
+    pub fn final_raster_refusal(
+        &self,
+    ) -> Result<Option<ProgramFinalRasterRefusal>, LabColorsError> {
+        enter(&self.inner, "finalRasterRefusal")?
+            .final_raster_refusal()
+            .map(project_final_raster_refusal)
+            .transpose()
+    }
+
+    /// Current Core admission предшествует выделению owned bytes и вызову host.
+    /// Guard удерживает тот же head до окончания синхронного callback.
+    pub fn consume_final_raster(
+        &self,
+        revision: u64,
+        content: Vec<u8>,
+        output: u32,
+        context: Vec<u8>,
+        consumer: Box<dyn ProgramFinalRasterConsumer>,
+    ) -> Result<(), LabColorsError> {
+        let operation = "consumeFinalRaster";
+        let inner = enter(&self.inner, operation)?;
+        let content = final_raster_fixed(&content, operation)?;
+        let context = final_raster_fixed(&context, operation)?;
+        let raster = inner
+            .current_final_raster(content, output, revision, context)
+            .map_err(|cause| final_raster_error(cause, operation))?;
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(raster.pixel_count() * 3)
+            .map_err(|_| {
+                final_raster_error(
+                    core::ProgramFinalRasterErrorV1::ResourceExhausted,
+                    operation,
+                )
+            })?;
+        for pixel in raster.pixels() {
+            pixels.extend_from_slice(&pixel);
+        }
+        let projected = ProgramFinalRasterBytes {
+            scope: "ModeledFinalRasterV1".into(),
+            width: raster.width(),
+            height: raster.height(),
+            device_pixel_ratio: raster.device_pixel_ratio(),
+            revision: raster.revision(),
+            output_slot: raster.output_slot(),
+            pixels,
+            cleanliness: project_final_raster_cleanliness(raster.cleanliness_assessment())?,
+        };
+        let result = match consumer.consume(projected) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(LabColorsError::new(
+                "program_field_consumer_rejected",
+                operation,
+            )),
+            Err(_) => Err(LabColorsError::new(
+                "program_field_consumer_failed",
+                operation,
+            )),
+        };
+        drop(inner);
+        result
     }
 }

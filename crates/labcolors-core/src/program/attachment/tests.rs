@@ -92,10 +92,12 @@ fn a_stale_copy_stamp_cannot_cross_a_sequential_sink_epoch() {
     second.update(unknown).unwrap();
     assert_ne!(second_probe.stamp(), stale);
     assert!(matches!(
-        second.sink.prepare(PointSinkIntentV1::ConfirmExact {
-            revision: 1,
-            published_stamp: stale,
-        }),
+        second.sink.prepare::<&[PointSinkPresentationCompositeV1]>(
+            PointSinkIntentV1::ConfirmExact {
+                revision: 1,
+                published_stamp: stale,
+            }
+        ),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
 }
@@ -648,21 +650,26 @@ fn every_sink_intent_cas_checks_the_same_current_binding_stamp() {
             revision: 1,
             stamp: foreign_transition,
             patch: &[],
+            presentation: &[][..],
         }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert!(matches!(
-        attachment.sink.prepare(PointSinkIntentV1::RevokeAll {
-            revision: 1,
-            stamp: foreign_transition,
-        }),
+        attachment
+            .sink
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::RevokeAll {
+                revision: 1,
+                stamp: foreign_transition,
+            }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert!(matches!(
-        attachment.sink.prepare(PointSinkIntentV1::ConfirmExact {
-            revision: 1,
-            published_stamp: foreign_stamp,
-        }),
+        attachment
+            .sink
+            .prepare::<&[PointSinkPresentationCompositeV1]>(PointSinkIntentV1::ConfirmExact {
+                revision: 1,
+                published_stamp: foreign_stamp,
+            }),
         Err(InMemoryPointSinkErrorV1::StampMismatch)
     ));
     assert_eq!(probe.stamp(), baseline_stamp);
@@ -1601,7 +1608,7 @@ fn attach_rejects_missing_extra_duplicate_and_accepts_reordered_sink_scope() {
 }
 
 #[test]
-fn attach_requires_exact_bijection_over_compiled_presentations() {
+fn attach_requires_every_compiled_terminal_presentation() {
     let owner = owner_with_terminal_presentation(
         Srgb8::new([0, 0, 0]),
         Srgb8::new([0, 0, 0]),
@@ -1626,9 +1633,8 @@ fn attach_requires_exact_bijection_over_compiled_presentations() {
             FamilyArtifactBundleV2::empty(),
             sink
         )),
-        AttachmentCreateErrorV1::PresentationCount {
-            expected: 3,
-            actual: 2
+        AttachmentCreateErrorV1::MissingCompiledPresentation {
+            presentation_ordinal: 1
         }
     ));
     assert_eq!(probe.revoke_count(), 0);
@@ -1670,33 +1676,111 @@ fn alias_outputs_cannot_claim_the_same_compiled_presentation() {
 }
 
 #[test]
-fn every_emission_requires_at_least_one_distinct_compiled_presentation() {
-    let owner = owner(
+fn alias_emissions_share_an_explicit_terminal_presentation() {
+    let owner = owner_with_terminal_presentation(
         Srgb8::new([0, 0, 0]),
         Srgb8::new([0, 0, 0]),
         false,
         &[OUTPUT_A, OUTPUT_B],
+        true,
     );
     let emissions = [
         authored_emission(OUTPUT_A.value(), 900),
         authored_emission(OUTPUT_B.value(), 901),
     ];
-    let only_output_a = [
-        authored_presentation(OUTPUT_A.value(), ROOT.value(), INNER.value()),
-        authored_presentation(OUTPUT_A.value(), ROOT.value(), MIDDLE.value()),
+    let only_output_b = [authored_presentation(
+        OUTPUT_B.value(),
+        ROOT.value(),
+        TERMINAL.value(),
+    )];
+    let (sink, probe) = in_memory_point_sink(&[900, 901]);
+    let mut attachment = owner
+        .attach(
+            4,
+            &emissions,
+            &only_output_b,
+            FamilyArtifactBundleV2::empty(),
+            sink,
+        )
+        .expect("alias slots одного Paint не требуют повторной renderer topology");
+    let values = [Srgb8::new([0, 0, 0])];
+    let scenarios = [ScenarioV1::new(44, &values)];
+    {
+        let committed = attachment
+            .update(observed(1, &scenarios))
+            .expect("полный alias scope публикуется одним переходом");
+        assert_eq!(committed.evidence().kind(), StateKindV1::Ready);
+        let renders: Vec<_> = committed.render_outputs().collect();
+        assert_eq!(renders.len(), 1);
+        assert_eq!(renders[0].output(), OUTPUT_B);
+        assert_eq!(renders[0].occurrence(), TERMINAL);
+        assert_eq!(renders[0].sink_output().value(), 901);
+    }
+    assert_eq!(probe.snapshot().len(), 2);
+    assert_eq!(probe.intent_counts().set_all, 1);
+    attachment
+        .update(UpdateV1::Unknown {
+            revision: 2,
+            reason_id: 77,
+        })
+        .expect("unknown отзывает весь scope aliases");
+    assert!(probe.snapshot().is_empty());
+    assert_eq!(probe.intent_counts().revoke_all, 1);
+}
+
+#[test]
+fn a_distinct_output_paint_requires_its_own_presentation_coverage() {
+    let second_source = SourceIdV1::new(31);
+    let second_target = TargetIdV1::new(32);
+    let second_paint = PaintIdV1::new(33);
+    let context = AppearanceContextV1::try_new(64.0, 0.2, SurroundV1::Dim)
+        .expect("контекст находится в допустимом домене");
+    let black = Srgb8::new([0, 0, 0]);
+    let mut draft = DraftV1::new();
+    draft.push_source(SOURCE, black);
+    draft.push_source(second_source, black);
+    draft.push_fixed_target(TARGET, SOURCE);
+    draft.push_fixed_target(second_target, second_source);
+    draft.push_surface_input_port(INPUT);
+    draft.push_solid_paint(PAINT, TARGET);
+    draft.push_solid_paint(second_paint, second_target);
+    draft.push_input_surface(INPUT_SURFACE, INPUT);
+    draft.push_source_over_occurrence(TERMINAL, PAINT, INPUT_SURFACE, context);
+    draft.push_point_presentation_root(ROOT, TERMINAL);
+    draft.push_point_presentation_target(ROOT, TERMINAL);
+    draft.push_exact_visible_unary_hard(ConstraintIdV1::new(10), TERMINAL, black);
+    draft.push_exact_intrinsic_unary_hard(ConstraintIdV1::new(11), second_target, black);
+    let second_occurrence = OccurrenceIdV1::new(34);
+    draft.push_source_over_occurrence(second_occurrence, second_paint, INPUT_SURFACE, context);
+    draft.push_exact_visible_unary_report_only(ConstraintIdV1::new(12), second_occurrence, black);
+    draft.push_output(OUTPUT_A, PAINT);
+    draft.push_output(OUTPUT_B, second_paint);
+    let owner = draft
+        .compile()
+        .expect("разные Paint с одинаковым RGB сохраняют независимые identity");
+    let emissions = [
+        authored_emission(OUTPUT_A.value(), 900),
+        authored_emission(OUTPUT_B.value(), 901),
     ];
-    let (sink, _) = in_memory_point_sink(&[900, 901]);
+    let presentations = [authored_presentation(
+        OUTPUT_A.value(),
+        ROOT.value(),
+        TERMINAL.value(),
+    )];
+    let (sink, probe) = in_memory_point_sink(&[900, 901]);
 
     assert!(matches!(
         contract_error(owner.attach(
             4,
             &emissions,
-            &only_output_a,
+            &presentations,
             FamilyArtifactBundleV2::empty(),
             sink
         )),
         AttachmentCreateErrorV1::MissingOutputPresentation { output: OUTPUT_B }
     ));
+    assert!(probe.ambient_fallback_is_exposed());
+    assert_eq!(probe.intent_counts().set_all, 0);
 }
 
 #[test]
@@ -1764,7 +1848,7 @@ fn verified_snapshot_mints_attached_render_output_and_exact_confirm_only_for_ide
         let outputs: Vec<_> = committed.render_outputs().collect();
         assert_eq!(outputs.len(), 2);
         let output = outputs[0];
-        assert_eq!(output.certificate().observation().revision(), 1);
+        assert_eq!(output.evidence().observation().revision(), 1);
         assert_eq!(output.output(), OUTPUT_A);
         assert_eq!(output.paint().source(), Srgb8::new([12, 34, 56]));
         assert_eq!(output.root(), ROOT);
@@ -2278,7 +2362,7 @@ fn source_guards_keep_the_post_install_tail_destructor_free() {
         .next()
         .expect("writer implementation must precede closed-lease release");
     let sink_prepare = in_memory_sink
-        .split("fn prepare<'lease>(")
+        .split("fn prepare<")
         .nth(1)
         .expect("in-memory test sink must implement prepare");
     assert!(

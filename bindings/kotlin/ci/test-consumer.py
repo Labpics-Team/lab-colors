@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from tempfile import TemporaryFile
 import uuid
 from typing import IO
 import xml.etree.ElementTree as ET
@@ -224,6 +225,49 @@ class CrashCapture:
             "error": repr(error) if error else None}) + "\n")
 
 
+def emit_startup_capture(evidence: Path) -> None:
+    saved = json.loads((evidence / "startup-capture.json").read_text())
+    summary = {key: saved[key] for key in ("status", "exceptionFound", "truncated", "overflow", "bytesObserved")}
+    # Retain the local full capture; CI needs only its first 4 KiB of cause.
+    with (evidence / "first-startup-exception.txt").open("rb") as source:
+        prefix = source.read(4097)
+    summary["firstException"] = prefix[:4096].decode("utf-8", errors="replace")
+    summary["logTruncated"] = len(prefix) > 4096
+    print("ANDROID_STARTUP_CAPTURE " + json.dumps(summary), file=sys.stderr, flush=True)
+
+
+def emit_device_failure(adb: Path) -> None:
+    # The app-scoped capture cannot explain a system_server restart before APK
+    # installation. Read the device while the emulator action still owns it.
+    commands = (
+        ("boot", ["shell", "getprop", "sys.boot_completed"]),
+        ("system_server", ["shell", "pidof", "system_server"]),
+        ("package_service", ["shell", "service", "check", "package"]),
+        ("system_crash", ["logcat", "-d", "-b", "crash", "-v", "threadtime", "-t", "200"]),
+    )
+    for label, arguments in commands:
+        record = {"probe": label}
+        try:
+            with TemporaryFile() as output:
+                result = subprocess.run([str(adb), *arguments], stdout=output,
+                                        stderr=subprocess.STDOUT, timeout=10, check=False)
+                output.seek(0)
+                content = output.read(65537)
+            record.update({
+                "status": "completed", "returncode": result.returncode,
+                "truncated": len(content) > 65536,
+                "output": content[:65536].decode("utf-8", errors="replace"),
+            })
+        except (OSError, subprocess.SubprocessError) as error:
+            record.update({"status": "probe-error", "error": type(error).__name__})
+        try:
+            print("ANDROID_DEVICE_FAILURE " + json.dumps(record), file=sys.stderr, flush=True)
+        except OSError:
+            # A failed output sink cannot report further probes. Preserve the
+            # consumer failure instead of replacing it with a logging error.
+            return
+
+
 def connected_test(command: list[str], consumer: Path, environment: dict, adb: Path, variant: str) -> None:
     evidence = consumer / "build/outputs/consumer-diagnostics" / variant
     evidence.mkdir(parents=True, exist_ok=True)
@@ -256,6 +300,12 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
             capture.save(evidence, capture_error)
         except BaseException as error:
             capture_error = error
+    if primary or capture_error:
+        try:
+            emit_startup_capture(evidence)
+        except BaseException:
+            # Supplementary logging must never replace the original failure.
+            pass
     if primary:
         if capture_error:
             raise primary from capture_error
@@ -384,4 +434,6 @@ if __name__ == "__main__":
         else:
             main(consumer, int(sys.argv[2]))
     except subprocess.CalledProcessError as error:
+        if sys.argv[2] not in ("--assemble", "--inventory"):
+            emit_device_failure(Path(os.environ["ANDROID_HOME"]) / "platform-tools/adb")
         raise SystemExit(error.returncode) from error

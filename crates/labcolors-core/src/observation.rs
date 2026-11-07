@@ -346,7 +346,9 @@ mod arena {
 }
 
 pub(crate) use arena::ObservationArenaPoolV1;
+mod finite_field;
 use arena::ObservationBackingV1;
+pub(crate) use finite_field::{empty_field_schema, prepare_field_observation};
 
 /// Sealed observation admitted against the exact schema owned by its sealed
 /// Session plan.
@@ -355,9 +357,20 @@ pub(crate) struct RevisionBoundObservationV1 {
     stream: ObservationStreamId,
     revision: Revision,
     backing: Shared<ObservationBackingV1>,
+    field: Option<Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>>,
 }
 
 impl RevisionBoundObservationV1 {
+    pub(crate) fn field_payload(
+        &self,
+    ) -> Option<&crate::field_effect::final_raster::FieldObservedPayloadV1> {
+        self.field.as_deref()
+    }
+    pub(crate) fn field_payload_owner(
+        &self,
+    ) -> Option<&Shared<crate::field_effect::final_raster::FieldObservedPayloadV1>> {
+        self.field.as_ref()
+    }
     pub(crate) const fn stream(&self) -> ObservationStreamId {
         self.stream
     }
@@ -418,6 +431,11 @@ impl RevisionBoundObservationV1 {
         self.stream == other.stream
             && self.revision == other.revision
             && Shared::ptr_eq(&self.backing, &other.backing)
+            && match (&self.field, &other.field) {
+                (Some(left), Some(right)) => Shared::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     fn has_canonical_input(
@@ -425,7 +443,8 @@ impl RevisionBoundObservationV1 {
         schema: &CanonicalObservationSchemaV1,
         scenarios: &[ScenarioInput],
     ) -> bool {
-        self.backing.schema() == schema
+        self.field.is_none()
+            && self.backing.schema() == schema
             && canonical_input_matches_set(self.backing.set(), scenarios)
     }
 
@@ -435,7 +454,8 @@ impl RevisionBoundObservationV1 {
         source: &Source,
         order: &[usize],
     ) -> bool {
-        self.backing.schema() == schema
+        self.field.is_none()
+            && self.backing.schema() == schema
             && schema_ordered_input_matches_set(
                 self.backing.set(),
                 source,
@@ -641,7 +661,7 @@ pub(crate) fn canonicalize_observation_schema(
     if ports.is_empty() {
         return Err(ObservationError::EmptyCompiledSurfaceInputSchema);
     }
-    ports.sort_unstable();
+    crate::ordering::sort(&mut ports);
     if let Some(duplicate) = ports.windows(2).find(|window| window[0] == window[1]) {
         return Err(ObservationError::DuplicateCompiledSurfaceInputPort {
             input: duplicate[0],
@@ -753,6 +773,7 @@ pub(crate) fn prepare_observation<'owner, Owner: ObservationOwnerV1>(
                     stream,
                     revision: update.revision,
                     backing,
+                    field: None,
                 },
             }))
         }
@@ -793,7 +814,9 @@ pub(crate) fn prepare_schema_ordered_observation<
         .try_reserve_exact(scenario_count)
         .map_err(|_| ObservationError::ResourceExhausted)?;
     order_scratch.extend(0..scenario_count);
-    order_scratch.sort_unstable_by_key(|&scenario_index| source.scenario_id(scenario_index));
+    crate::ordering::sort_by_key(order_scratch, |&scenario_index| {
+        source.scenario_id(scenario_index)
+    });
 
     if let Some(duplicate) = order_scratch
         .windows(2)
@@ -815,7 +838,7 @@ pub(crate) fn prepare_schema_ordered_observation<
         }
     }
 
-    order_scratch.sort_unstable_by(|&left, &right| {
+    crate::ordering::sort_by(order_scratch, |&left, &right| {
         compare_schema_ordered_scenarios(source, left, right, schema.as_slice().len())
     });
 
@@ -857,6 +880,7 @@ pub(crate) fn prepare_schema_ordered_observation<
             stream,
             revision,
             backing,
+            field: None,
         },
     }))
 }
@@ -887,7 +911,7 @@ fn canonicalize_scenarios_input(
     }
 
     let mut scenarios = raw.scenarios;
-    scenarios.sort_unstable_by_key(|scenario| scenario.id);
+    crate::ordering::sort_by_key(&mut scenarios, |scenario| scenario.id);
     if let Some(duplicate) = scenarios
         .windows(2)
         .find(|window| window[0].id == window[1].id)
@@ -898,9 +922,7 @@ fn canonicalize_scenarios_input(
     }
 
     for scenario in &mut scenarios {
-        scenario
-            .bindings
-            .sort_unstable_by_key(|binding| binding.port);
+        crate::ordering::sort_by_key(&mut scenario.bindings, |binding| binding.port);
         if let Some(duplicate) = scenario
             .bindings
             .windows(2)
@@ -938,7 +960,7 @@ fn canonicalize_scenarios_input(
     // Reuse the caller-owned outer Vec and every bindings Vec. This complete
     // canonical input is enough for lower/same-revision decisions without any
     // new allocation; only an applied higher revision materializes backing.
-    scenarios.sort_unstable_by(|left, right| {
+    crate::ordering::sort_by(&mut scenarios, |left, right| {
         left.bindings
             .cmp(&right.bindings)
             .then_with(|| left.id.cmp(&right.id))

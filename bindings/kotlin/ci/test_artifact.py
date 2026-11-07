@@ -2,9 +2,12 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import importlib.util
+import io
+from contextlib import redirect_stderr
 from pathlib import Path
 import struct
 import shutil
@@ -97,7 +100,10 @@ class ArtifactTests(unittest.TestCase):
         first = PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "java.lang.NoClassDefFoundError: FIRST_CAUSE\n"
         noise = (PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: other.app, PID: 1234\n" + PREFIX + "LATER_CAUSE\n") * 300
         with tempfile.TemporaryDirectory() as directory:
-            capture = self.interval(Path(directory), first + noise, 0)
+            output = io.StringIO()
+            with redirect_stderr(output):
+                capture = self.interval(Path(directory), first + noise, 0)
+            self.assertEqual(output.getvalue(), "")
             self.assertIn("FIRST_CAUSE", capture.block.text)
             self.assertNotIn("LATER_CAUSE", capture.block.text)
             self.assertFalse(capture.block.truncated)
@@ -127,11 +133,24 @@ class ArtifactTests(unittest.TestCase):
     def test_connected_exception_is_preserved_and_reader_joined(self):
         with tempfile.TemporaryDirectory() as directory:
             failure = OSError("connected launch failed")
-            with self.assertRaises(OSError) as caught:
-                self.interval(Path(directory), "", failure)
+            first = PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "java.lang.NoClassDefFoundError: FIRST_CAUSE\n" + PREFIX + "x" * 16384 + "\n"
+            output = io.StringIO()
+            with redirect_stderr(output), self.assertRaises(OSError) as caught:
+                self.interval(Path(directory), first, failure)
             self.assertIs(caught.exception, failure)
-            receipt = json.loads((Path(directory) / "build/outputs/consumer-diagnostics/debug/connected-exit.json").read_text())
+            evidence = Path(directory) / "build/outputs/consumer-diagnostics/debug"
+            receipt = json.loads((evidence / "connected-exit.json").read_text())
             self.assertIn("exception", receipt)
+            self.assertTrue(output.getvalue().startswith("ANDROID_STARTUP_CAPTURE "))
+            emitted = json.loads(output.getvalue().removeprefix("ANDROID_STARTUP_CAPTURE "))
+            saved = json.loads((evidence / "startup-capture.json").read_text())
+            for key in ("status", "exceptionFound", "truncated", "overflow", "bytesObserved"):
+                self.assertEqual(emitted[key], saved[key])
+            saved_block = (evidence / "first-startup-exception.txt").read_bytes()
+            self.assertEqual(emitted["firstException"], saved_block[:4096].decode("utf-8", errors="replace"))
+            self.assertTrue(emitted["logTruncated"])
+            self.assertIn("FIRST_CAUSE", emitted["firstException"])
+            self.assertLess(len(output.getvalue().encode()), 25000)
 
     def test_inventory_missing_categories_fail_with_reports(self):
         for missing in ("app", "test", "mapping.txt", "configuration.txt", "usage.txt", "seeds.txt"):
@@ -183,7 +202,7 @@ class ArtifactTests(unittest.TestCase):
             root = Path(directory)
             command = ["gradle", "connectedDebugAndroidTest"]
             for result_code in (0, 17):
-                with self.subTest(result_code=result_code), patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
+                with self.subTest(result_code=result_code), redirect_stderr(io.StringIO()), patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
                     if result_code:
                         with self.assertRaises(subprocess.CalledProcessError) as failure:
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
@@ -194,6 +213,43 @@ class ArtifactTests(unittest.TestCase):
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
                     evidence = root / "build/outputs/consumer-diagnostics/debug"
                     self.assertEqual(json.loads((evidence / "connected-exit.json").read_text())["returncode"], result_code)
+            for diagnostic_fault in (
+                patch.object(Path, "read_text", side_effect=OSError("diagnostic read failed")),
+                patch.object(elf.sys, "stderr", unittest.mock.Mock(write=unittest.mock.Mock(side_effect=OSError("diagnostic output failed")))),
+            ):
+                with diagnostic_fault, patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close"), patch.object(elf.CrashCapture, "finish"), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, 17)):
+                    with self.assertRaises(subprocess.CalledProcessError) as failure:
+                        elf.connected_test(command, root, {}, Path("adb"), "debug")
+                    self.assertEqual(failure.exception.returncode, 17)
+                    self.assertIsNone(failure.exception.__cause__)
+
+    def test_device_failure_distinguishes_missing_probes_and_bounds_output(self):
+        def execute(command, **kwargs):
+            if "pidof" in command:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            if "logcat" in command:
+                kwargs["stdout"].write(b"crash" * 14000)
+            return subprocess.CompletedProcess(command, 0)
+        output = io.StringIO()
+        with redirect_stderr(output), patch.object(elf.subprocess, "run", side_effect=execute):
+            elf.emit_device_failure(Path("adb"))
+        records = [json.loads(line.removeprefix("ANDROID_DEVICE_FAILURE "))
+                   for line in output.getvalue().splitlines()]
+        self.assertEqual(len(records), 4)
+        self.assertEqual(records[0]["status"], "completed")
+        self.assertEqual(records[0]["output"], "")
+        self.assertEqual(records[1], {"probe": "system_server", "status": "probe-error", "error": "TimeoutExpired"})
+        self.assertTrue(records[-1]["truncated"])
+        self.assertEqual(len(records[-1]["output"]), 65536)
+        output = io.StringIO()
+        with redirect_stderr(output), patch.object(elf.subprocess, "run", side_effect=OSError("adb unavailable")):
+            elf.emit_device_failure(Path("adb"))
+        self.assertEqual(len(output.getvalue().splitlines()), 4)
+        with patch.object(elf.subprocess, "run", side_effect=execute) as probe, patch.object(
+            elf.sys, "stderr", unittest.mock.Mock(write=unittest.mock.Mock(side_effect=OSError("closed")))
+        ):
+            elf.emit_device_failure(Path("adb"))
+        self.assertEqual(probe.call_count, 1)
 
     def test_connected_capture_has_scoped_commands_and_no_false_exception(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -341,11 +397,58 @@ class ArtifactTests(unittest.TestCase):
 
     def test_android_aggregate_requires_all_finished_consumers(self):
         workflow = (ROOT.parents[2] / ".github/workflows/native-conformance-worker.yml").read_text()
-        aggregate = workflow.split("  android-package:\n", 1)[1]
-        self.assertIn("needs: [android-build, android-consumer]", aggregate)
-        self.assertIn("if: always()", aggregate)
-        self.assertIn("BUILD_RESULT: ${{ needs.android-build.result }}", aggregate)
-        self.assertIn("CONSUMER_RESULT: ${{ needs.android-consumer.result }}", aggregate)
+        aggregates = re.findall(
+            r"(?ms)^  android-package:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            workflow,
+        )
+        self.assertEqual(len(aggregates), 1)
+        aggregate = aggregates[0]
+
+        def require_aggregate_contract(block):
+            conditions = re.findall(r"(?m)^    if: (.+)$", block)
+            self.assertEqual(len(conditions), 1, "aggregate requires one completion condition")
+            self.assertEqual(conditions[0], "always()")
+            needs = re.findall(r"(?m)^    needs: (.+)$", block)
+            self.assertEqual(len(needs), 1, "aggregate requires one dependency declaration")
+            self.assertTrue(needs[0].startswith("[") and needs[0].endswith("]"))
+            dependencies = [name.strip() for name in needs[0][1:-1].split(",")]
+            self.assertEqual(len(dependencies), 2)
+            self.assertEqual(set(dependencies), {"android-build", "android-consumer"})
+            self.assertNotIn("continue-on-error:", block)
+            self.assertEqual(block.count("BUILD_RESULT: ${{ needs.android-build.result }}"), 1)
+            self.assertEqual(block.count("CONSUMER_RESULT: ${{ needs.android-consumer.result }}"), 1)
+
+        require_aggregate_contract(aggregate)
+        mutations = (
+            (
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-build]\n",
+            ),
+            (
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-consumer]\n",
+            ),
+            (
+                "    needs: [android-build, android-consumer]\n",
+                "    needs: [android-build, android-consumer, android-consumer]\n",
+            ),
+            (
+                "    if: always()\n",
+                "    if: success()\n",
+            ),
+        )
+        for anchor, replacement in mutations:
+            self.assertEqual(aggregate.count(anchor), 1)
+            with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
+                require_aggregate_contract(aggregate.replace(anchor, replacement, 1))
+        for declaration in (
+            "    needs: [android-build, android-consumer]\n",
+            "    if: always()\n",
+            "    continue-on-error: true\n",
+        ):
+            with self.subTest(declaration=declaration), self.assertRaises(AssertionError):
+                require_aggregate_contract(declaration + aggregate)
+
         script = "\n".join(line[10:] for line in aggregate.split("        run: |\n", 1)[1].splitlines())
         good = {"BUILD_RESULT": "success", "CONSUMER_RESULT": "success"}
         environment = {key: value for key, value in os.environ.items() if key not in (*good, "BASH_ENV", "ENV")}

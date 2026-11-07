@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 import zipfile
-from build import ROOT, digest, gradle, run
+from build import ROOT, digest, gradle, run, sdk_manager
 
 
 def extract(archive: Path, manifest: dict, target: Path) -> None:
@@ -52,7 +52,7 @@ def main(distribution: Path, consumer: Path) -> None:
     with (consumer / "gradle.properties").open("a") as out:
         out.write("publicationVersion=" + manifest["version"] + "\n")
         out.write("supportedAbis=" + ",".join(manifest["abis"]) + "\n")
-    sdkmanager = Path(os.environ["ANDROID_HOME"]) / "cmdline-tools/latest/bin/sdkmanager"
+    sdkmanager = sdk_manager(Path(os.environ["ANDROID_HOME"]))
     run(str(sdkmanager), "--install", "platforms;android-36", "build-tools;36.0.0")
     executable = gradle(consumer / "tools")
     (consumer / "gradle-path.txt").write_text(str(executable))

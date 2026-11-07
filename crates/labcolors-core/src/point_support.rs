@@ -325,6 +325,7 @@ impl SessionPlanV1 for CompiledPointSupportRecheckV1 {
     type OwnerLease = ();
     type Verified = VerifiedPointSupportV1;
     type Violation = PointSupportViolationV1;
+    type Incomplete = std::convert::Infallible;
     type Error = PointSupportEvaluationErrorV1;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {

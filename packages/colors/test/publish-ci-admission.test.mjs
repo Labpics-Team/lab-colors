@@ -187,6 +187,23 @@ test("publication inventory and exports match the source package contract", () =
   assert.deepEqual(actual.exports, source.exports, "publication must retain the source public API");
 });
 
+test("publication accepts the exact source proof control inventory", () => {
+  const source = JSON.parse(readFileSync(new URL(
+    "../../../crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json",
+    import.meta.url,
+  ), "utf8"));
+  const script = stepScript(publisher, "verified-artifact");
+  const predicates = [...script.matchAll(/pointProof\.source_negative_controls\s*!==\s*\d+/gu)];
+  assert.equal(predicates.length, 1, "publisher must check one proof control inventory");
+  const rejects = (count) => runInNewContext(predicates[0][0], {
+    pointProof: { source_negative_controls: count },
+  }, { timeout: 1000 });
+  assert.equal(rejects(source.source_negative_controls), false,
+    "the exact checked-out proof must remain publishable");
+  assert.equal(rejects(source.source_negative_controls - 1), true,
+    "an obsolete proof control inventory must be refused");
+});
+
 test("publication repacking controls remain canonical and preserve zero-filled payloads", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "colors-publication-repack-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

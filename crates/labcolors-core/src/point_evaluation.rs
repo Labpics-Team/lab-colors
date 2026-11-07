@@ -156,6 +156,7 @@ fn materialization_failure(
         TerminalBindingMismatch => "terminal_binding_mismatch",
         MissingPointAbsenceProof => "missing_point_absence_proof",
         AmbiguousObservationCases => "ambiguous_observation_cases",
+        AmbiguousBindings => "ambiguous_bindings",
     };
     PointEvaluationFailureV1::new(PointEvaluationFailureKindV1::Evaluation, domain, code)
 }

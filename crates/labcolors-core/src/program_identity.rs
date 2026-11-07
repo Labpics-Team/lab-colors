@@ -204,6 +204,7 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
+    pub(super) const TARGET_COMPUTED: u8 = 30;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -902,6 +903,37 @@ fn presentation_target_vertex(
     Ok(vertex)
 }
 
+fn field_output_color(
+    cleanliness: Option<crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1>,
+) -> Result<VertexColorV1, ProgramCompileError> {
+    field_output_color_for_release(
+        cleanliness,
+        crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+    )
+}
+
+fn field_output_color_for_release(
+    cleanliness: Option<crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1>,
+    release: [u8; 32],
+) -> Result<VertexColorV1, ProgramCompileError> {
+    use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1;
+    let mut color = VertexColorV1::new(vertex_tag::OUTPUT);
+    match cleanliness {
+        None => {}
+        Some(FinalRasterCleanlinessRequirementV1::Off) => {
+            // Off сохраняет прежние байты и не зависит от неиспользуемого release.
+            color.push_u64(0x46494e414c524742)?;
+            color.push_u64(FinalRasterCleanlinessRequirementV1::Off as u64)?;
+        }
+        Some(policy) => {
+            // Output + policy + полный release ровно укладываются в V9 capacity.
+            color.push_u8(policy as u8)?;
+            color.push_bytes(&release)?;
+        }
+    }
+    Ok(color)
+}
+
 fn field_value_vertex(
     inputs: &IdIndexV1<crate::field_effect::FieldInputPortIdV1>,
     operators: &IdIndexV1<crate::field_effect::FieldOperatorInstanceIdV1>,
@@ -1079,6 +1111,11 @@ where
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
+            TargetIntentV1::Computed(target) => {
+                let mut color = VertexColorV1::new(vertex_tag::TARGET_COMPUTED);
+                color.push_bytes(&target.identity_bytes())?;
+                color
+            }
         };
         let target_vertex = graph.add_member(target_color)?;
         targets.insert(target.id(), target_vertex)?;
@@ -1345,7 +1382,7 @@ where
         graph.add_edge(vertex, paints.get(output.paint())?, EdgeRoleV1::OutputPaint)?;
     }
     for output in &program.field_outputs {
-        let vertex = graph.add_member(VertexColorV1::new(vertex_tag::OUTPUT))?;
+        let vertex = graph.add_member(field_output_color(output.final_raster_cleanliness())?)?;
         graph.add_edge(
             vertex,
             field_operators.get(output.operator())?,
@@ -2344,174 +2381,54 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    if program.assignment.is_some()
+        || program
+            .targets
+            .iter()
+            .any(|target| matches!(target.intent(), TargetIntentV1::Computed(_)))
+    {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
     Ok(ProgramContentIdentityV9(*digest.as_bytes()))
 }
 
-mod ordering {
-    //! Allocation-free heapsort for cold Program identity construction.
-    //! Keep the binary small without changing runtime or candidate-order sorting.
-    use core::cmp::Ordering;
-
-    pub(crate) fn sort<T: Ord>(values: &mut [T]) {
-        sort_by(values, Ord::cmp);
+pub(super) fn compile_owner_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<ProgramOwnerIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    if program.assignment.is_some() {
+        return compile_computed_identity(program).map(ProgramOwnerIdentityV1::Computed);
     }
+    compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
+}
 
-    pub(crate) fn sort_by_key<T, K: Ord>(values: &mut [T], mut key: impl FnMut(&T) -> K) {
-        sort_by(values, |left, right| key(left).cmp(&key(right)));
-    }
-
-    pub(crate) fn sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
-        sort_indices(values.len(), &mut |left, right, swap| {
-            if swap {
-                values.swap(left, right);
-                false
-            } else {
-                compare(&values[left], &values[right]).is_lt()
-            }
-        });
-    }
-
-    // Один цикл сортировки обслуживает все типы записей холодного компилятора.
-    // Передача операций по индексам сохраняет владение элементами и обходится без аллокаций.
-    #[inline(never)]
-    fn sort_indices(n: usize, operation: &mut dyn FnMut(usize, usize, bool) -> bool) {
-        fn sift(
-            mut root: usize,
-            end: usize,
-            operation: &mut dyn FnMut(usize, usize, bool) -> bool,
-        ) {
-            while root < end / 2 {
-                let mut child = root * 2 + 1;
-                if child + 1 < end && operation(child, child + 1, false) {
-                    child += 1;
-                }
-                if !operation(root, child, false) {
-                    break;
-                }
-                operation(root, child, true);
-                root = child;
-            }
-        }
-        for root in (0..n / 2).rev() {
-            sift(root, n, operation);
-        }
-        for end in (1..n).rev() {
-            operation(0, end, true);
-            sift(0, end, operation);
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::cell::Cell;
-        use std::rc::Rc;
-
-        #[test]
-        fn all_small_multisets_match_the_standard_library() {
-            for length in 0..=8 {
-                for mut encoded in 0..3usize.pow(length) {
-                    let mut value = Vec::new();
-                    for _ in 0..length {
-                        value.push(encoded % 3);
-                        encoded /= 3;
-                    }
-                    let mut expected = value.clone();
-                    expected.sort_unstable();
-                    sort(&mut value);
-                    assert_eq!(value, expected);
-                    sort_by(&mut value, |a, b| b.cmp(a));
-                    expected.reverse();
-                    assert_eq!(value, expected);
-                }
-            }
-        }
-
-        #[test]
-        fn array_shapes_have_bounded_comparisons_and_no_allocator_events() {
-            for shape in 0..5 {
-                let mut values = [0u32; 4096];
-                for (i, value) in values.iter_mut().enumerate() {
-                    *value = match shape {
-                        0 => i as u32,
-                        1 => 4095 - i as u32,
-                        2 => (i.min(4095 - i)) as u32,
-                        3 => 7,
-                        _ => (i as u32).wrapping_mul(2_654_435_761),
-                    };
-                }
-                let mut expected = values;
-                expected.sort_unstable();
-                let mut comparisons = 0usize;
-                let (_, events) = crate::test_support::measured_allocator_events(|| {
-                    sort_by(&mut values, |a, b| {
-                        comparisons += 1;
-                        a.cmp(b)
-                    });
-                });
-                assert_eq!(values, expected);
-                assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
-                assert!(
-                    comparisons <= 4 * values.len() * 12,
-                    "comparison bound {comparisons}"
-                );
-            }
-        }
-
-        #[test]
-        fn projected_keys_keep_owned_records_and_their_complete_payload() {
-            let mut records = vec![(2, "b"), (1, "a"), (2, "c"), (0, "z")];
-            sort_by_key(&mut records, |row| (row.0, row.1));
-            assert_eq!(records, vec![(0, "z"), (1, "a"), (2, "b"), (2, "c")]);
-            let mut empty: [(); 0] = [];
-            sort(&mut empty);
-            let mut zero_sized = [(); 257];
-            sort(&mut zero_sized);
-        }
-
-        #[test]
-        fn comparator_failure_never_drops_or_duplicates_an_element() {
-            #[derive(Debug)]
-            struct Owned {
-                id: usize,
-                drops: Rc<Cell<usize>>,
-            }
-            impl Drop for Owned {
-                fn drop(&mut self) {
-                    self.drops.set(self.drops.get() + 1);
-                }
-            }
-            for stop in 0..100 {
-                let drops = Rc::new(Cell::new(0));
-                let mut records: Vec<_> = (0..17)
-                    .rev()
-                    .map(|id| Owned {
-                        id,
-                        drops: Rc::clone(&drops),
-                    })
-                    .collect();
-                let mut calls = 0;
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    sort_by(&mut records, |a, b| {
-                        if calls == stop {
-                            panic!("controlled comparator failure");
-                        }
-                        calls += 1;
-                        a.id.cmp(&b.id)
-                    });
-                }));
-                assert_eq!(drops.get(), 0);
-                let mut ids: Vec<_> = records.iter().map(|row| row.id).collect();
-                ids.sort_unstable();
-                assert_eq!(ids, (0..17).collect::<Vec<_>>());
-                drop(records);
-                assert_eq!(drops.get(), 17);
-            }
-        }
-    }
+fn compile_computed_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let graph = build_graph(program)?;
+    let canonical = canonical_preimage(&graph)?;
+    // Semantic identity связывает объявленную политику и граф. Предел работы
+    // принадлежит отдельному execution profile; старый V9 preimage не изменён.
+    let domain = b"labcolors.computed-program.v2.direct-oklab-f64.lex-rgb.full-recheck\0";
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(domain.len() + canonical.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    bytes.extend_from_slice(domain);
+    bytes.extend_from_slice(&canonical);
+    Ok(computed_assignment::ComputedIdentityV1(
+        *crate::sha256::digest(&bytes).as_bytes(),
+    ))
 }
 
 #[cfg(test)]
@@ -2606,6 +2523,70 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn final_raster_policy_color_binds_exact_nominal_release_with_one_bit_mutation()
+    -> Result<(), ProgramCompileError> {
+        use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1;
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
+        let mutant = clean_set_final_recheck_mutant_release_v1();
+        assert_eq!(mutant[0], release[0] ^ 1);
+        assert_eq!(&mutant[1..], &release[1..]);
+
+        for policy in [
+            FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
+            FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2,
+        ] {
+            let baseline = field_output_color(Some(policy))?;
+            assert_eq!(
+                baseline,
+                field_output_color_for_release(Some(policy), release)?,
+            );
+            assert_eq!(baseline.as_slice().len(), HASH_BOUND_COLOR_BYTES_V9);
+            assert_eq!(baseline.as_slice()[0], vertex_tag::OUTPUT);
+            assert_eq!(baseline.as_slice()[1], policy as u8);
+            assert_eq!(&baseline.as_slice()[2..], &release);
+            assert_ne!(
+                baseline,
+                field_output_color_for_release(Some(policy), mutant)?,
+            );
+        }
+        assert_ne!(
+            field_output_color(Some(
+                FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
+            ))?,
+            field_output_color(Some(
+                FinalRasterCleanlinessRequirementV1::ReportOnlyExactNominalSrgb8V2,
+            ))?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn final_raster_off_color_preserves_bytes_and_is_release_independent()
+    -> Result<(), ProgramCompileError> {
+        use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1;
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
+        let mutant = clean_set_final_recheck_mutant_release_v1();
+        let off = Some(FinalRasterCleanlinessRequirementV1::Off);
+        let mut previous = VertexColorV1::new(vertex_tag::OUTPUT);
+        previous.push_u64(0x46494e414c524742)?;
+        previous.push_u64(FinalRasterCleanlinessRequirementV1::Off as u64)?;
+
+        assert_eq!(field_output_color(off)?, previous);
+        assert_eq!(field_output_color_for_release(off, release)?, previous);
+        assert_eq!(field_output_color_for_release(off, mutant)?, previous);
+        assert_eq!(
+            field_output_color_for_release(None, release)?,
+            VertexColorV1::new(vertex_tag::OUTPUT),
+        );
+        assert_eq!(
+            field_output_color_for_release(None, release)?,
+            field_output_color_for_release(None, mutant)?,
+        );
+        assert_ne!(previous, field_output_color(None)?);
+        Ok(())
+    }
+
     use proptest::prelude::*;
 
     #[test]

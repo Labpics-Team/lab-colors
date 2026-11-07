@@ -24,6 +24,16 @@ ABIS = {
 }
 
 
+def sdk_manager(sdk: Path) -> Path:
+    executable = (sdk / "cmdline-tools/latest/bin/sdkmanager").resolve(strict=True)
+    root = (sdk / "cmdline-tools").resolve(strict=True)
+    if (not root.is_relative_to(sdk.resolve(strict=True))
+            or not executable.is_file() or not executable.is_relative_to(root)
+            or executable.name != "sdkmanager" or not os.access(executable, os.X_OK)):
+        raise RuntimeError("sdkmanager must belong to the declared Android SDK")
+    return executable
+
+
 def run(*args: str, cwd: Path = ROOT, capture: bool = False, env: dict | None = None) -> str:
     result = subprocess.run(args, cwd=cwd, env=env, check=True, text=True,
                             stdout=subprocess.PIPE if capture else None)
@@ -59,7 +69,7 @@ def main(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     toolchain = os.environ["RUST_TOOLCHAIN"]
     sdk = Path(os.environ["ANDROID_HOME"])
-    sdkmanager = sdk / "cmdline-tools/latest/bin/sdkmanager"
+    sdkmanager = sdk_manager(sdk)
     run(str(sdkmanager), "--install", "platforms;android-36", "build-tools;36.0.0", "ndk;" + NDK)
     compiler = sdk / "ndk" / NDK / "toolchains/llvm/prebuilt/linux-x86_64/bin"
     environment = dict(os.environ, CARGO_TARGET_DIR=str(output / "target"))

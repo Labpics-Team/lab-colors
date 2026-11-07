@@ -488,12 +488,39 @@ class ToolingTests(unittest.TestCase):
             )
             self.assertIsNotNone(aggregate, "stable core-tests aggregate must exist")
             aggregate_block = aggregate[1]
-            self.assertIn("    if: ${{ always() }}\n", aggregate_block)
-            self.assertIn("    needs: core-tests-worker\n", aggregate_block)
+            conditions = re.findall(r"(?m)^    if: (.+)$", aggregate_block)
+            self.assertEqual(len(conditions), 1, "aggregate requires one completion condition")
+            # Допускается только избыточная скобка вокруг always(), а не иной предикат.
+            self.assertEqual(
+                conditions[0].replace("(always())", "always()"),
+                "${{ always() }}",
+            )
+            needs = re.findall(r"(?m)^    needs: (.+)$", aggregate_block)
+            self.assertEqual(len(needs), 1, "aggregate requires one dependency declaration")
+            self.assertEqual(needs[0], "core-tests-worker")
+            self.assertEqual(
+                aggregate_block.count("CORE_SHARDS: ${{ needs.core-tests-worker.result }}"), 1
+            )
             self.assertIn('test "$CORE_SHARDS" = success', aggregate_block)
+            self.assertNotRegex(
+                aggregate_block,
+                r"(?m)^ {6,}(?:- )?['\"]?if['\"]?\s*:",
+                "aggregate steps must be unconditional",
+            )
             self.assertNotIn("continue-on-error:", aggregate_block)
 
         require_sharded_contract(text)
+        aggregate_header = (
+            "  core-tests:\n"
+            "    name: core tests and artifact contracts\n"
+            "    if: ${{ always() }}\n"
+        )
+        self.assertEqual(text.count(aggregate_header), 1)
+        require_sharded_contract(text.replace(
+            aggregate_header,
+            aggregate_header.replace("always()", "(always())"),
+            1,
+        ))
         mutations = (
             (
                 "  core-tests-worker:\n",
@@ -509,12 +536,57 @@ class ToolingTests(unittest.TestCase):
                 "  core-tests:\n",
                 "  core-tests:\n    continue-on-error: true\n",
             ),
+            (
+                "      - name: require every core test shard\n",
+                "      - name: require every core test shard\n        if: false\n",
+            ),
+            (
+                "      - name: require every core test shard\n",
+                "      - name: require every core test shard\n        continue-on-error: true\n",
+            ),
+            (
+                "    needs: core-tests-worker\n",
+                "",
+            ),
+            (
+                "    needs: core-tests-worker\n",
+                "    needs: [core-tests-worker, core-tests-worker]\n",
+            ),
+            (
+                "  core-tests:\n",
+                "  core-tests:\n    needs: core-tests-worker\n",
+            ),
+            (
+                "  core-tests:\n",
+                "  core-tests:\n    if: ${{ always() }}\n",
+            ),
+            (
+                aggregate_header,
+                aggregate_header.replace("always()", "success()"),
+            ),
         )
         for anchor, replacement in mutations:
             self.assertEqual(text.count(anchor), 1)
             mutant = text.replace(anchor, replacement, 1)
             with self.subTest(anchor=anchor), self.assertRaises(AssertionError):
                 require_sharded_contract(mutant)
+
+        scripts = job_run_commands(text, "core-tests")
+        self.assertEqual(len(scripts), 1)
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("CORE_SHARDS", "BASH_ENV", "ENV")}
+
+        def execute(results: dict[str, str]) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["bash", "--noprofile", "--norc", "-c", scripts[0]],
+                env=environment | results, capture_output=True, check=False, timeout=5,
+            )
+
+        self.assertEqual(execute({"CORE_SHARDS": "success"}).returncode, 0)
+        for result in ("failure", "cancelled", "skipped", "neutral", "in_progress", "unknown", ""):
+            with self.subTest(result=result):
+                self.assertNotEqual(execute({"CORE_SHARDS": result}).returncode, 0)
+        self.assertNotEqual(execute({}).returncode, 0)
 
     def test_every_pinned_scripts_test_module_is_executed_by_ci(self) -> None:
         # Инвентарь без исполнения: модуль, попавший в tests.json, но не запускаемый

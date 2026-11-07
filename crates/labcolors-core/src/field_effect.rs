@@ -12,6 +12,8 @@
     reason = "V7 field capability staged infrastructure; consumed by C7e Glow lowering in the next slice"
 )]
 
+pub(crate) mod final_raster;
+
 use crate::Srgb8;
 use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
 use crate::session::SessionObservationBindingPermitV1;
@@ -1283,7 +1285,7 @@ pub(crate) fn compile_field_program_v1(
     declarations: &mut FieldDeclarationsV1,
     terminal_operators: &[FieldOperatorInstanceIdV1],
 ) -> Result<CompiledFieldProgramV1, FieldProgramCompileErrorV1> {
-    declarations.inputs.sort_unstable_by_key(|input| input.id());
+    crate::ordering::sort_by_key(&mut declarations.inputs, |input| input.id());
     if let Some(pair) = declarations
         .inputs
         .windows(2)
@@ -1293,9 +1295,7 @@ pub(crate) fn compile_field_program_v1(
             input: pair[0].id(),
         });
     }
-    declarations
-        .operators
-        .sort_unstable_by_key(|operator| operator.id());
+    crate::ordering::sort_by_key(&mut declarations.operators, |operator| operator.id());
     if let Some(pair) = declarations
         .operators
         .windows(2)

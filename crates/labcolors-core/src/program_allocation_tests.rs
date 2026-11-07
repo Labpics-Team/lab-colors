@@ -1,9 +1,10 @@
 use crate::Srgb8;
 use crate::program::wire::ProgramWireBuilderV1;
 use crate::program_wire::{
-    ProgramAttachmentUpdateErrorV1, ProgramObservationV1, ProgramPointSinkHostErrorV1,
-    ProgramPointSinkHostV1, ProgramPointSinkIntentV1, ProgramPointSinkStampV1,
-    ProgramRuntimeErrorV1, ProgramScenarioV1, ProgramSnapshotStateV1, compile_program_wire_v1,
+    ProgramAssessmentVerdictV1, ProgramAttachmentUpdateErrorV1, ProgramConstraintAssessmentV1,
+    ProgramObservationV1, ProgramPointSinkHostErrorV1, ProgramPointSinkHostV1,
+    ProgramPointSinkIntentV1, ProgramPointSinkStampV1, ProgramRuntimeErrorV1, ProgramScenarioV1,
+    ProgramSnapshotStateV1, ProgramSnapshotV1, compile_program_wire_v1,
 };
 use crate::test_support::{AllocatorEvents, measured_allocator_events};
 
@@ -12,6 +13,10 @@ fn wire() -> Vec<u8> {
 }
 
 fn wire_with_outputs(count: u32) -> Vec<u8> {
+    wire_with_constraint(count, true)
+}
+
+fn wire_with_constraint(count: u32, hard: bool) -> Vec<u8> {
     let mut builder = ProgramWireBuilderV1::new();
     builder
         .source(1, Srgb8::new([0x40; 3]))
@@ -24,7 +29,7 @@ fn wire_with_outputs(count: u32) -> Vec<u8> {
         .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
         .presentation_root(9, 8)
         .presentation_target(9, 8)
-        .exact_visible_unary(true, 10, 8, Srgb8::new([0x60; 3]));
+        .exact_visible_unary(hard, 10, 8, Srgb8::new([0x60; 3]));
     for slot in 17..17 + count {
         builder.output(slot, 4);
     }
@@ -38,6 +43,37 @@ const RESULT_ALLOCATION: AllocatorEvents = AllocatorEvents {
     realloc: 0,
     dealloc: 0,
 };
+
+fn assert_same_result_body(previous: &ProgramSnapshotV1, current: &ProgramSnapshotV1) {
+    assert_eq!(previous.snapshot_version(), current.snapshot_version());
+    assert_eq!(previous.state(), current.state());
+    assert_eq!(previous.outputs(), current.outputs());
+    let before = previous
+        .assessment_report()
+        .expect("Ready has its owned report");
+    let after = current
+        .assessment_report()
+        .expect("Ready has its owned report");
+    assert_eq!(before.content_identity(), after.content_identity());
+    assert_eq!(before.stream_id(), after.stream_id());
+    assert_eq!(before.scenario_provenance(), after.scenario_provenance());
+    assert_eq!(before.cells(), after.cells());
+    // Этот публично объявленный Program имеет ровно root 9: проверяем каждую
+    // provenance, а не один удобный сценарий или только выбранный Paint.
+    for scenario in before.scenario_provenance() {
+        assert_eq!(
+            previous.presentation_composite_rgb(9, scenario.scenario_id()),
+            current.presentation_composite_rgb(9, scenario.scenario_id()),
+        );
+    }
+    assert_eq!(before.revision(), previous.revision());
+    assert_eq!(after.revision(), current.revision());
+    if previous.revision() == current.revision() {
+        assert_eq!(previous, current);
+    } else {
+        assert_ne!(previous, current);
+    }
+}
 
 #[derive(Default)]
 struct Host {
@@ -171,8 +207,17 @@ fn attachment_snapshot_is_inline_and_independent() {
                 events, RESULT_ALLOCATION,
                 "borrowed={borrowed}, revision={revision}"
             );
+            assert_eq!(snapshot.snapshot().revision(), revision);
+            assert_eq!(
+                snapshot
+                    .snapshot()
+                    .assessment_report()
+                    .expect("Ready has its exact revision report")
+                    .revision(),
+                revision,
+            );
             if let Some(old) = previous.as_ref() {
-                assert_eq!(old, snapshot.snapshot());
+                assert_same_result_body(old, snapshot.snapshot());
             }
             previous = Some(snapshot.snapshot().clone());
         }
@@ -344,11 +389,227 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
         let second = session
             .update_observed_view(6, input)
             .expect("the valid update must return an owned snapshot");
-        assert_eq!(snapshot, second);
+        assert_eq!(snapshot.revision(), 5);
+        assert_eq!(second.revision(), 6);
+        assert_same_result_body(&snapshot, &second);
         drop(session);
+        assert_eq!(snapshot.revision(), 5);
+        assert_eq!(
+            snapshot
+                .assessment_report()
+                .expect("old Ready report")
+                .revision(),
+            5
+        );
         for (index, output) in snapshot.outputs().iter().enumerate() {
             assert_eq!(output.slot(), 17 + index as u32);
             assert_eq!(output.source(), Srgb8::new([0x40; 3]));
         }
     }
+}
+
+#[test]
+fn identical_ready_projection_reuses_owned_body_beyond_small_scenario_counts() {
+    for rows in [33_u32, 129] {
+        let compiled = compile_program_wire_v1(&wire()).expect("the declared Program must compile");
+        let content_identity = compiled.content_identity();
+        let mut session = compiled
+            .instantiate(100)
+            .expect("the Session must instantiate");
+        let mut ids: Vec<_> = (0..rows).rev().collect();
+        let rgb = vec![0x80; rows as usize * 3];
+        for revision in 1..=4 {
+            session
+                .update_observed_view(
+                    revision,
+                    ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                        .expect("rectangular observations"),
+                )
+                .expect("the update must certify the declared output");
+        }
+        let mut retained = Vec::with_capacity(36);
+        for revision in 5..=40 {
+            let (snapshot, events) = measured_allocator_events(|| {
+                session
+                    .update_observed_view(
+                        revision,
+                        ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                            .expect("rectangular observations"),
+                    )
+                    .expect("the update must return an independent snapshot")
+            });
+            assert_eq!(
+                events, RESULT_ALLOCATION,
+                "rows={rows}, revision={revision}"
+            );
+            assert_eq!(snapshot.revision(), revision);
+            let report = snapshot
+                .assessment_report()
+                .expect("Ready has its complete report");
+            assert_eq!(report.content_identity(), content_identity);
+            assert_eq!(report.stream_id(), 100);
+            assert_eq!(report.revision(), revision);
+            assert_eq!(report.scenario_provenance().len(), rows as usize);
+            assert_eq!(report.cells().len(), 1);
+            assert_eq!(report.cells()[0].constraint_id(), 10);
+            assert_eq!(report.cells()[0].case_index(), 0);
+            assert!(report.cells()[0].hard());
+            assert_eq!(
+                report.cells()[0].assessment(),
+                ProgramConstraintAssessmentV1::ExactSrgb8 {
+                    verdict: ProgramAssessmentVerdictV1::Pass,
+                }
+            );
+            for (id, provenance) in report.scenario_provenance().iter().enumerate() {
+                assert_eq!(provenance.scenario_id(), id as u32);
+                assert_eq!(provenance.case_index(), 0);
+                assert_eq!(
+                    snapshot.presentation_composite_rgb(9, id as u32),
+                    Some(Srgb8::new([0x60; 3]))
+                );
+            }
+            if let Some(previous) = retained.last() {
+                assert_same_result_body(previous, &snapshot);
+            }
+            retained.push(snapshot);
+        }
+        ids.iter_mut().for_each(|id| *id += 1000);
+        let changed = session
+            .update_observed_view(
+                41,
+                ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                    .expect("rectangular changed provenance"),
+            )
+            .expect("different provenance owns its distinct data");
+        assert_eq!(
+            changed
+                .assessment_report()
+                .expect("changed Ready report")
+                .scenario_provenance()[0]
+                .scenario_id(),
+            1000
+        );
+        assert_eq!(changed.presentation_composite_rgb(9, 0), None);
+        assert_eq!(
+            changed.presentation_composite_rgb(9, 1000),
+            Some(Srgb8::new([0x60; 3]))
+        );
+        drop(session);
+        for (index, snapshot) in retained.iter().enumerate() {
+            assert_eq!(snapshot.revision(), index as u64 + 5);
+            let report = snapshot
+                .assessment_report()
+                .expect("historical owned report survives Session");
+            assert_eq!(report.revision(), snapshot.revision());
+            assert_eq!(report.scenario_provenance().len(), rows as usize);
+            assert_eq!(report.scenario_provenance()[0].scenario_id(), 0);
+            assert_eq!(
+                snapshot.presentation_composite_rgb(9, 0),
+                Some(Srgb8::new([0x60; 3]))
+            );
+            assert_eq!(snapshot.presentation_composite_rgb(9, 1000), None);
+        }
+    }
+}
+
+#[test]
+fn changed_ready_projection_owns_all_cells_composites_and_provenance() {
+    let mut session = compile_program_wire_v1(&wire_with_constraint(1, false))
+        .expect("report-only Program must compile")
+        .instantiate(100)
+        .expect("Session must instantiate");
+    let mut ids: Vec<_> = (0..33).collect();
+    let mut rgb = vec![0x80; ids.len() * 3];
+    for revision in 1..=4 {
+        session
+            .update_observed_view(
+                revision,
+                ProgramObservationV1::from_rgb8(&ids, &rgb, 1).expect("rectangular observations"),
+            )
+            .expect("report-only constraint permits the declared Paint");
+    }
+    let before = session
+        .update_observed_view(
+            5,
+            ProgramObservationV1::from_rgb8(&ids, &rgb, 1).expect("rectangular observations"),
+        )
+        .expect("initial Ready projection");
+    rgb.fill(255);
+    let (changed, events) = measured_allocator_events(|| {
+        session
+            .update_observed_view(
+                6,
+                ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                    .expect("rectangular changed observations"),
+            )
+            .expect("changed report-only projection remains Ready")
+    });
+    assert!(
+        events.alloc > 0,
+        "new multi-record data require genuine owned storage"
+    );
+    assert_eq!(events.realloc, 0);
+    assert_eq!(before.outputs(), changed.outputs());
+    assert_eq!(
+        before.presentation_composite_rgb(9, 0),
+        Some(Srgb8::new([0x60; 3]))
+    );
+    assert_eq!(
+        changed.presentation_composite_rgb(9, 0),
+        Some(Srgb8::new([0xA0; 3]))
+    );
+    assert_eq!(
+        before.assessment_report().expect("initial report").cells()[0].assessment(),
+        ProgramConstraintAssessmentV1::ExactSrgb8 {
+            verdict: ProgramAssessmentVerdictV1::Pass
+        }
+    );
+    assert_eq!(
+        changed.assessment_report().expect("changed report").cells()[0].assessment(),
+        ProgramConstraintAssessmentV1::ExactSrgb8 {
+            verdict: ProgramAssessmentVerdictV1::Violation
+        }
+    );
+    ids.iter_mut().for_each(|id| *id += 1000);
+    let provenance = session
+        .update_observed_view(
+            7,
+            ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                .expect("changed provenance remains rectangular"),
+        )
+        .expect("changed provenance has its own Ready body");
+    assert_eq!(
+        provenance
+            .assessment_report()
+            .expect("new provenance report")
+            .scenario_provenance()[0]
+            .scenario_id(),
+        1000
+    );
+    assert_eq!(
+        changed
+            .assessment_report()
+            .expect("previous provenance report")
+            .scenario_provenance()[0]
+            .scenario_id(),
+        0
+    );
+    drop(session);
+    assert_eq!(before.revision(), 5);
+    assert_eq!(changed.revision(), 6);
+    assert_eq!(provenance.revision(), 7);
+    assert_eq!(
+        before.presentation_composite_rgb(9, 0),
+        Some(Srgb8::new([0x60; 3]))
+    );
+    assert_eq!(
+        changed.presentation_composite_rgb(9, 0),
+        Some(Srgb8::new([0xA0; 3]))
+    );
+    assert_eq!(changed.presentation_composite_rgb(9, 1000), None);
+    assert_eq!(provenance.presentation_composite_rgb(9, 0), None);
+    assert_eq!(
+        provenance.presentation_composite_rgb(9, 1000),
+        Some(Srgb8::new([0xA0; 3]))
+    );
 }

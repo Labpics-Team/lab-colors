@@ -23,6 +23,9 @@ import {
   reserveEphemeralPort,
   verifyBrowserConsumer,
   verifyBrowserSelection,
+  verifyBrowserAssignment,
+  verifyBrowserLockedAssignment,
+  verifyBrowserBudgetAssignment,
   verifyCleanupFaultMatrix,
 } from "../../../scripts/test-program-runtime-browser.mjs";
 import { browserProofInvocation } from "../../../scripts/verify-package-release.mjs";
@@ -716,5 +719,107 @@ test("browser selection readout requires every context, preserved snapshots and 
   ]) {
     const invalid = structuredClone(good); mutate(invalid);
     assert.throws(() => verifyBrowserSelection(invalid), /browser finite selection drifted/u);
+  }
+});
+
+function assignmentBrowserReadout({ locked = false, budget = false, rgb = [120, 120, 120] } = {}) {
+  const refused = locked || budget;
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'assignment-attachment', 'assignment-host',
+    'assignment-first', 'assignment-stopped', 'assignment-replay', 'assignment-restored'];
+  const css = (value) => `rgb(${value.join(', ')})`;
+  const ready = (revision, color = [24, 24, 24]) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
+    outputs: [{ slot: 91, rgb: color, opacity: 1 }] });
+  const stopped = refused ? { version: 2, revision: '2', state: budget ? 'incomplete' : 'unsatisfied',
+    reason: budget ? 'limit' : null, hasRender: false, outputs: [] }
+    : ready('2', rgb);
+  return { initial: ready('1'), held: ready('1'), restored: ready('3'), stopped, replay: structuredClone(stopped),
+    css: css([24, 24, 24]), computed: css([24, 24, 24]), backgroundBefore: css([255, 255, 255]),
+    afterStop: refused ? '' : css(rgb), computedAfterStop: refused ? css([0, 0, 0]) : css(rgb),
+    backgroundAfterStop: css([0, 0, 0]), afterRestore: css([24, 24, 24]), computedAfterRestore: css([24, 24, 24]),
+    backgroundAfterRestore: css([255, 255, 255]),
+    refusalAuthority: refused ? { rejected: true, recognized: true, code: 'program_materialization_not_ready',
+      operation: 'materializationAuthority' } : undefined,
+    operations: ['setAll', refused ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'], acquired: names,
+    released: names.toReversed(), readback: Object.fromEntries(names.map((name) => [name, true])) };
+}
+
+test("browser assignment readout permits full RGB adaptation and rejects wrong context or stale output", () => {
+  const good = assignmentBrowserReadout();
+  assert.doesNotThrow(() => verifyBrowserAssignment(good));
+  assert.doesNotThrow(() => verifyBrowserAssignment(assignmentBrowserReadout({ rgb: [80, 140, 100] })));
+  for (const mutate of [
+    (x) => { x.stopped.state = 'incomplete'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb = [24, 24, 24]; x.afterStop = x.computedAfterStop = x.css; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].opacity = .5; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb = [-1, 255, 255]; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb[0] = 256; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].rgb[0] = 120.5; x.afterStop = x.computedAfterStop = 'rgb(' + x.stopped.outputs[0].rgb.join(', ') + ')'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs[0].slot = 17; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs = []; x.replay = structuredClone(x.stopped); },
+    (x) => { delete x.stopped.outputs; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = false; x.replay = structuredClone(x.stopped); },
+    (x) => { x.backgroundAfterStop = 'rgb(255, 255, 255)'; },
+    (x) => { x.afterStop = x.css; },
+    (x) => { x.computedAfterStop = x.css; },
+    (x) => { x.replay.outputs[0].rgb = [80, 140, 100]; },
+    (x) => { x.restored = structuredClone(x.stopped); },
+    (x) => { x.held.revision = '3'; },
+    (x) => { x.operations[2] = 'setAll'; },
+    (x) => { x.readback['assignment-host'] = false; },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserAssignment(invalid), /browser computed assignment drifted/u);
+  }
+});
+
+test("browser assignment locked domain requires genuine refusal, revoked sink and no fresh authority", () => {
+  const good = assignmentBrowserReadout({ locked: true });
+  assert.doesNotThrow(() => verifyBrowserLockedAssignment(good));
+  // Проекция V3/version 2 содержит только текущие подтверждённые outputs.
+  const historical = structuredClone(good);
+  historical.stopped.outputs = historical.initial.outputs;
+  historical.replay = structuredClone(historical.stopped);
+  assert.throws(() => verifyBrowserLockedAssignment(historical), /browser computed assignment drifted/u);
+  for (const mutate of [
+    (x) => { x.stopped.state = 'ready'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.state = 'incomplete'; x.stopped.reason = 'limit'; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = true; x.replay = structuredClone(x.stopped); },
+    (x) => { delete x.stopped.outputs; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs = [{ slot: 999, rgb: [500, -1, 0], opacity: 2 }]; x.replay = structuredClone(x.stopped); },
+    (x) => { x.afterStop = x.css; },
+    (x) => { x.computedAfterStop = x.css; },
+    (x) => { x.refusalAuthority.rejected = false; },
+    (x) => { x.refusalAuthority.recognized = false; },
+    (x) => { x.refusalAuthority.code = 'program_update'; },
+    (x) => { x.operations[1] = 'setAll'; },
+    (x) => { x.replay.revision = '3'; },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserLockedAssignment(invalid), /browser computed assignment drifted/u);
+  }
+});
+
+
+test("browser assignment limit revokes CSS, preserves refusal on replay and recovers at a fresh revision", () => {
+  const good = assignmentBrowserReadout({ budget: true });
+  assert.doesNotThrow(() => verifyBrowserBudgetAssignment(good));
+  // Unsatisfied и limit не взаимозаменяемы даже при одинаковом пустом sink.
+  assert.throws(() => verifyBrowserBudgetAssignment(assignmentBrowserReadout({ locked: true })), /browser computed assignment drifted/u);
+  assert.throws(() => verifyBrowserBudgetAssignment(assignmentBrowserReadout()), /browser computed assignment drifted/u);
+  for (const mutate of [
+    (x) => { x.stopped.reason = null; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.hasRender = true; x.replay = structuredClone(x.stopped); },
+    (x) => { x.stopped.outputs = x.initial.outputs; x.replay = structuredClone(x.stopped); },
+    (x) => { x.afterStop = x.css; },
+    (x) => { x.computedAfterStop = x.css; },
+    (x) => { x.refusalAuthority.rejected = false; },
+    (x) => { x.operations[1] = 'setAll'; },
+    (x) => { x.replay.state = 'ready'; },
+    (x) => { x.restored = structuredClone(x.stopped); },
+    (x) => { x.held.revision = '3'; },
+    (x) => { x.readback['assignment-host'] = false; },
+  ]) {
+    const invalid = structuredClone(good); mutate(invalid);
+    assert.throws(() => verifyBrowserBudgetAssignment(invalid), /browser computed assignment drifted/u);
   }
 });

@@ -1,77 +1,57 @@
-//! JSON projection of permanent non-Program capabilities retained after C7c.
+//! Структурная JS-проекция постоянных численных возможностей и WCAG-оценки Core.
 
-use std::fmt::Write as _;
+use wasm_bindgen::JsValue;
 
+use super::{
+    append_projection_key, append_projection_value, project_capability_manifest,
+    project_capability_site, project_wcag22_assessment, project_wcag22_evidence, report_array,
+};
 use crate::error::BindingError;
 
-fn push_str_lit(out: &mut String, value: &str) {
-    out.push_str(&serde_json::to_string(value).expect("string serialization is infallible"));
-}
-
-fn push_key_array<'a>(out: &mut String, name: &str, keys: impl Iterator<Item = &'a str>) {
-    out.push_str(",\"");
-    out.push_str(name);
-    out.push_str("\":[");
-    for (index, key) in keys.enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_str_lit(out, key);
+fn key_array<'a>(keys: impl Iterator<Item = &'a str>) -> Result<js_sys::Array, JsValue> {
+    let array = report_array()?;
+    for key in keys {
+        append_projection_key(&array, key)?;
     }
-    out.push(']');
+    Ok(array)
 }
 
-pub(crate) fn capability_manifest_json() -> String {
+pub(crate) fn capability_manifest() -> Result<JsValue, JsValue> {
     let manifest = labcolors_core::numerical_capability_manifest_v2();
-    let mut out = String::with_capacity(512);
-    out.push_str("{\"schemaVersion\":");
-    let _ = write!(out, "{}", manifest.schema_version);
-    out.push_str(",\"coverage\":");
-    push_str_lit(&mut out, manifest.coverage.key());
-    out.push_str(",\"sites\":[");
-    for (index, site) in manifest.sites.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"siteId\":");
-        push_str_lit(&mut out, site.site_id.key());
-        push_key_array(
-            &mut out,
-            "stableOutcomes",
-            site.stable_outcomes.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "compatibilityReleases",
-            site.compatibility_releases.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "evidenceClasses",
-            site.evidence_classes.iter().map(|v| v.key()),
-        );
-        push_key_array(
-            &mut out,
-            "artifactIds",
-            site.artifact_ids.iter().map(|v| v.key()),
-        );
-        push_key_array(&mut out, "boundIds", site.bound_ids.iter().map(|v| v.key()));
-        push_key_array(&mut out, "proofIds", site.proof_ids.iter().map(|v| v.key()));
-        push_key_array(
-            &mut out,
-            "runtimeAttestations",
-            site.runtime_attestations.iter().map(|v| v.key()),
-        );
-        out.push('}');
+    let sites = report_array()?;
+    for site in &manifest.sites {
+        let stable_outcomes = key_array(site.stable_outcomes.iter().map(|value| value.key()))?;
+        let compatibility_releases =
+            key_array(site.compatibility_releases.iter().map(|value| value.key()))?;
+        let evidence_classes = key_array(site.evidence_classes.iter().map(|value| value.key()))?;
+        let artifact_ids = key_array(site.artifact_ids.iter().map(|value| value.key()))?;
+        let bound_ids = key_array(site.bound_ids.iter().map(|value| value.key()))?;
+        let proof_ids = key_array(site.proof_ids.iter().map(|value| value.key()))?;
+        let runtime_attestations =
+            key_array(site.runtime_attestations.iter().map(|value| value.key()))?;
+        let projected = project_capability_site(
+            site.site_id.key(),
+            &stable_outcomes,
+            &compatibility_releases,
+            &evidence_classes,
+            &artifact_ids,
+            &bound_ids,
+            &proof_ids,
+            &runtime_attestations,
+        )?;
+        append_projection_value(&sites, &projected)?;
     }
-    out.push_str("],\"checksum\":");
-    push_str_lit(&mut out, &manifest.checksum.hex());
-    out.push('}');
-    out
+    project_capability_manifest(
+        manifest.schema_version,
+        manifest.coverage.key(),
+        &sites,
+        &manifest.checksum.hex(),
+    )
 }
-pub(crate) fn wcag22_json(
+
+pub(crate) fn wcag22(
     assessment: &labcolors_core::wcag22::Wcag22AssessmentV1,
-) -> Result<String, BindingError> {
+) -> Result<JsValue, BindingError> {
     use labcolors_core::NumericalDecisionEvidenceV1;
     use labcolors_core::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1};
 
@@ -106,9 +86,6 @@ pub(crate) fn wcag22_json(
             reason: "WCAG22 assessment/profile evidence identities drifted".to_string(),
         });
     }
-
-    let hex = |bytes: [u8; 3]| format!("#{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2]);
-    let criterion = criterion.key();
     let decision = match decision {
         Wcag22ApplicableDecisionV1::Pass => "pass",
         Wcag22ApplicableDecisionV1::Fail => "fail",
@@ -118,31 +95,7 @@ pub(crate) fn wcag22_json(
             });
         }
     };
-
-    Ok(format!(
-        concat!(
-            "{{\"kind\":\"evaluated\",\"profileId\":\"{}\",",
-            "\"criterion\":\"{}\",\"foreground\":\"{}\",\"background\":\"{}\",",
-            "\"foregroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
-            "\"backgroundLuminanceQ55\":{{\"lower\":\"{}\",\"upper\":\"{}\"}},",
-            "\"q55Scale\":\"{}\",\"decision\":\"{}\",",
-            "\"evidence\":{{\"kind\":\"canonical-finite-bounded\",",
-            "\"artifactId\":\"{}\",\"artifactSha256\":\"{}\",",
-            "\"boundId\":\"{}\",\"proofId\":\"{}\",",
-            "\"proofSha256\":\"{}\",\"proofPayloadSha256\":\"{}\",",
-            "\"generatorSha256\":\"{}\",\"verifierSha256\":\"{}\",",
-            "\"profileChecksum\":\"{}\",\"profileSha256\":\"{}\"}}}}"
-        ),
-        profile_id.key(),
-        criterion,
-        hex(measurement.foreground),
-        hex(measurement.background),
-        measurement.foreground_luminance.lower(),
-        measurement.foreground_luminance.upper(),
-        measurement.background_luminance.lower(),
-        measurement.background_luminance.upper(),
-        labcolors_core::wcag22::Wcag22LuminanceBoundsQ55V1::scale(),
-        decision,
+    let evidence = project_wcag22_evidence(
         artifact_id.key(),
         profile.artifact_sha256,
         bound_id.key(),
@@ -153,5 +106,26 @@ pub(crate) fn wcag22_json(
         profile.verifier_sha256,
         profile.profile_checksum,
         profile.source_sha256,
-    ))
+    )
+    .map_err(wcag22_projection_error)?;
+    project_wcag22_assessment(
+        profile_id.key(),
+        criterion.key(),
+        &measurement.foreground,
+        &measurement.background,
+        measurement.foreground_luminance.lower(),
+        measurement.foreground_luminance.upper(),
+        measurement.background_luminance.lower(),
+        measurement.background_luminance.upper(),
+        labcolors_core::wcag22::Wcag22LuminanceBoundsQ55V1::scale(),
+        decision,
+        &evidence,
+    )
+    .map_err(wcag22_projection_error)
+}
+
+fn wcag22_projection_error(_: JsValue) -> BindingError {
+    BindingError::Internal {
+        reason: "WCAG22 JS projection failed".to_string(),
+    }
 }

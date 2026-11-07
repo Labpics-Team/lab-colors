@@ -1,8 +1,18 @@
 name: package worker
 
 on:
+  workflow_dispatch:
+    inputs:
+      labui-sha:
+        description: Exact LabUI source to qualify against this verified package
+        type: string
+        required: true
   workflow_call:
     inputs:
+      labui-sha:
+        description: Optional exact LabUI source qualification
+        type: string
+        default: ''
       program-benchmark:
         description: Compare the public Program consumer with the exact PR base
         type: boolean
@@ -32,7 +42,8 @@ env:
 jobs:
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    # Версия Ubuntu поддерживается browser toolchain Core и потребителя LabUI.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       BINARYEN_RELEASE: version_117
@@ -150,11 +161,7 @@ jobs:
           if [[ "$PROGRAM_BENCHMARK" == true ]]; then
             [[ "$PROGRAM_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$PROGRAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-            results="$RUNNER_TEMP/program-performance"
             baseline="$RUNNER_TEMP/program-baseline-$GITHUB_JOB"
-            candidate="$RUNNER_TEMP/program-candidate-$GITHUB_JOB"
-            mkdir -p "$results" "$candidate"
-            cp -a packages/colors/. "$candidate/"
             git fetch --no-tags origin "$PROGRAM_BASE_SHA"
             git worktree add --detach "$baseline" "$PROGRAM_BASE_SHA"
             (
@@ -162,16 +169,6 @@ jobs:
               export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$baseline=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
               build_runtime
             )
-            node packages/colors/bench/wire-construction.mjs compare "$baseline/packages/colors" "$candidate"
-            python3 scripts/compare-program-performance.py \
-              --harness packages/colors/bench/program.mjs \
-              --baseline "$baseline/packages/colors" \
-              --candidate "$candidate" \
-              --baseline-revision "$PROGRAM_BASE_SHA" \
-              --candidate-revision "$GITHUB_SHA" \
-              --head-revision "$PROGRAM_HEAD_SHA" \
-              --profile \
-              --output "$results"
           fi
       - name: retain source-bound point-support evidence
         if: ${{ always() && inputs.program-benchmark }}
@@ -205,7 +202,36 @@ jobs:
             exit 1
           fi
           printf 'sha256=%s\n' "$tarball_sha256" >> "$GITHUB_OUTPUT"
+      - name: measure Program through the verified packed consumer
+        if: inputs.program-benchmark
+        env:
+          PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
+          results="$RUNNER_TEMP/program-performance"
+          baseline="$RUNNER_TEMP/program-baseline-$GITHUB_JOB"
+          candidate="$RUNNER_TEMP/program-candidate-$GITHUB_JOB"
+          mkdir -p "$results"
+          mkdir "$candidate"
+          tar --extract --gzip --file "$VERIFIED_TARBALL" \
+            --directory "$candidate" --strip-components=1
+          node packages/colors/bench/wire-construction.mjs compare "$baseline/packages/colors" "$candidate"
+          python3 scripts/compare-program-performance.py \
+            --harness packages/colors/bench/program.mjs \
+            --baseline "$baseline/packages/colors" \
+            --candidate "$candidate" \
+            --candidate-tarball "$VERIFIED_TARBALL" \
+            --candidate-tarball-sha256 "$VERIFIED_TARBALL_SHA256" \
+            --baseline-revision "$PROGRAM_BASE_SHA" \
+            --candidate-revision "$GITHUB_SHA" \
+            --head-revision "$PROGRAM_HEAD_SHA" \
+            --output "$results"
       - name: install Chrome + dependencies (Chrome for Testing + apt-get download)
+        id: chrome-runtime
         # Проверенные CfT + distro .so загружаются в job; ldd проверяет closure до browser test.
         run: |
           set -euo pipefail
@@ -257,7 +283,7 @@ jobs:
               CUPS_PACKAGE=libcups2
               GLIB_PACKAGE=libglib2.0-0
               ;;
-            debian:trixie|ubuntu:noble)
+            debian:trixie|ubuntu:noble|ubuntu:resolute)
               ALSA_PACKAGE=libasound2t64
               ATK_PACKAGE=libatk1.0-0t64
               ATK_BRIDGE_PACKAGE=libatk-bridge2.0-0t64
@@ -355,7 +381,8 @@ jobs:
             dpkg --extract "$deb" "$DEPS_DIR"
           done
           DEPS_LIB="$(find "$DEPS_DIR/usr/lib" -maxdepth 2 -type d | tr '\n' ':' | sed 's/:$//')"
-          echo "LD_LIBRARY_PATH=${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          # Runtime библиотек CfT ограничен двумя Core browser steps.
+          printf 'ld_library_path=%s\n' "${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_OUTPUT"
           echo "Chrome deps: $DEPS_LIB"
           assert_elf_closure() {
             local executable="$1"
@@ -374,11 +401,9 @@ jobs:
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROME_BIN" --version
           LD_LIBRARY_PATH="${DEPS_LIB}:${LD_LIBRARY_PATH:-}" "$CHROMEDRIVER_BIN" --version
 
-      - name: terminal Program in real browser
+      - name: test WASM crate in real browser
         env:
-          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
-          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
-          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}
         run: |
           set -euo pipefail
           : "${CHROME_PATH:?}" "${CHROMEDRIVER_PATH:?}" "${RUNNER_TEMP:?}"
@@ -403,7 +428,17 @@ jobs:
           writeFileSync(process.env.WASM_BINDGEN_TEST_WEBDRIVER_JSON, `${JSON.stringify(capabilities)}\n`);
           NODE
           wasm-pack test --headless --chrome --chromedriver "$CHROMEDRIVER_PATH" crates/labcolors-wasm --locked
-          node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
+
+      - name: terminal Program in real browser
+        # Единственная команда связывает конечный Program с проверенным архивом.
+        env:
+          BASH_ENV: ""
+          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}
+          LAB_COLORS_BROWSER_PROOF_TIMEOUT_MS: "60000"
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+        shell: bash
+        run: node scripts/test-program-runtime-browser.mjs "$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"
       - name: retain packer identity for the isolated publisher
         id: packer
         run: |
@@ -423,6 +458,63 @@ jobs:
           test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"
           test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$VERIFIED_TARBALL_SHA256"
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
+      - name: Bind verified package for optional consumer
+        id: consumer-package
+        if: inputs.labui-sha != ''
+        env:
+          UI_SOURCE_COMMIT: ${{ inputs.labui-sha }}
+          VERIFIED_MANIFEST: ${{ steps.verified-release.outputs.manifest }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          VERIFIED_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+          VERIFIED_RELEASE_OUTCOME: ${{ steps.verified-release.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const env = process.env;
+          const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+          assert.match(env.UI_SOURCE_COMMIT, /^[0-9a-f]{40}$/);
+          assert.equal(env.VERIFIED_RELEASE_OUTCOME, 'success');
+          const bytes = readFileSync(env.VERIFIED_MANIFEST);
+          const manifest = JSON.parse(bytes);
+          assert.equal(manifest.sourceSha, env.GITHUB_SHA);
+          assert.match(manifest.sourceSha, /^[0-9a-f]{40}$/);
+          assert.equal(manifest.artifacts.tarball.sha256, env.VERIFIED_TARBALL_SHA256);
+          assert.equal(sha256(readFileSync(env.VERIFIED_TARBALL)), env.VERIFIED_TARBALL_SHA256);
+          appendFileSync(env.GITHUB_OUTPUT, `source=${manifest.sourceSha}\nmanifest_sha256=${sha256(bytes)}\n`);
+          NODE
+      - name: Checkout exact optional consumer
+        id: consumer-checkout
+        if: inputs.labui-sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Labpics-Team/labui
+          ref: ${{ inputs.labui-sha }}
+          path: labui-consumer
+          persist-credentials: false
+      - name: Select consumer build runtime
+        if: inputs.labui-sha != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: Qualify verified package through consumer owner
+        if: inputs.labui-sha != ''
+        env:
+          BASH_ENV: ''
+          UI_SOURCE_COMMIT: ${{ inputs.labui-sha }}
+          VERIFIED_MANIFEST: ${{ steps.verified-release.outputs.manifest }}
+          VERIFIED_TARBALL: ${{ steps.verified-release.outputs.tarball }}
+          CORE_SOURCE_SHA: ${{ steps.consumer-package.outputs.source }}
+          CORE_TARBALL_SHA256: ${{ steps.verified-release-identity.outputs.sha256 }}
+          CORE_MANIFEST_SHA256: ${{ steps.consumer-package.outputs.manifest_sha256 }}
+          CORE_VERIFIED_RELEASE_OUTCOME: ${{ steps.verified-release.outcome }}
+        run: |
+          set -euo pipefail
+          bash labui-consumer/.github/scripts/colors-same-job.sh
+          test "$(sha256sum --binary -- "$VERIFIED_TARBALL" | cut --delimiter=' ' --fields=1)" = "$CORE_TARBALL_SHA256"
+          test "$(sha256sum --binary -- "$VERIFIED_MANIFEST" | cut --delimiter=' ' --fields=1)" = "$CORE_MANIFEST_SHA256"
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

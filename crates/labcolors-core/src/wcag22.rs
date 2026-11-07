@@ -22,10 +22,10 @@ pub use kernel::{evaluate_wcag22_hex, evaluate_wcag22_srgb8};
 const PROFILE_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-v1.json");
 const PROOF_SOURCE_JSON: &str = include_str!("../contracts/wcag22-srgb8-q55-proof-v1.json");
 const PROOF_SOURCE_SHA256: &str =
-    "2b2170e20bd24c059a0bbaf8d92603470ec941402f3a08185f54a5e1e41c69ca";
+    "ebce2be318f2ae74bc563344956bce3ad0a9df275f7381467c228d06537712d0";
 const PROOF_PAYLOAD_SHA256: &str =
-    "a4e02b4dce47c58310fb3ea9e34af1538ae5813b31b15ddee71a9a1be7bb76f8";
-const VERIFIER_SHA256: &str = "d22dedc689925ffe53d49d3c4b4b0d3ae67a97d26062b2fdd24bcb404e31f768";
+    "f7bdd316ead7718d9c3dc6bdb52e04930abefbaf0e621f3364adaf6bdfe8222c";
+const VERIFIER_SHA256: &str = "014fb4f8f85b8857e8a9fe13be21a2dba16537ea9cde6fed6a7412474bba4e49";
 
 /// Идентификатор immutable normative profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +221,28 @@ pub(crate) fn measure_wcag22_srgb8(
         foreground_luminance: kernel::luminance_bounds(foreground),
         background_luminance: kernel::luminance_bounds(background),
     }
+}
+
+/// Консервативное исключение двух RGB8-box. Монотонная Q55 luminance достигает
+/// крайних значений в RGB endpoints; проверяем обе возможные полярности через
+/// тот же точный point-kernel. `true` не удостоверяет допустимость всего box.
+pub(crate) fn rgb_boxes_may_pass(
+    foreground: ([u8; 3], [u8; 3]),
+    background: ([u8; 3], [u8; 3]),
+    criterion: Wcag22CriterionV1,
+) -> Result<bool, Wcag22EvaluationErrorV1> {
+    for (light, dark) in [(foreground.1, background.0), (background.1, foreground.0)] {
+        if matches!(
+            evaluate_wcag22_srgb8(light, dark, criterion)?,
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Total production decision for the admitted final-sRGB8 domain.

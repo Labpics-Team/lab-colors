@@ -72,6 +72,7 @@ use crate::observation::{
     ObservationArenaSlotV1, ObservationError, ObservationGroupId, ObservationSchemaMismatchV1,
     ObservationStreamId, RevisionBoundObservationV1, canonicalize_observation_schema,
 };
+use crate::ordering;
 use crate::relation::DirectedRelationV1;
 use crate::selection_release::{MaterialisedSelectionV1, SelectionReleaseIdentityV1};
 use crate::session::{
@@ -80,13 +81,66 @@ use crate::session::{
 };
 use crate::wcag22::Wcag22CriterionV1;
 
+pub(crate) mod computed_assignment;
+pub(crate) mod finite_field;
+
 #[path = "program_identity.rs"]
 mod identity;
+use computed_assignment::{
+    ComputedIdentityV1, ComputedSelectionV1, ComputedStoppedV1, ComputedTargetV1,
+    ComputedVerifiedV1,
+};
 pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
 pub(crate) use identity::graph_schema_for_test as program_identity_graph_schema_for_test;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramOwnerIdentityV1 {
+    Legacy(ProgramContentIdentityV9),
+    Computed(ComputedIdentityV1),
+}
+
+impl ProgramOwnerIdentityV1 {
+    pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
+        match self {
+            Self::Legacy(id) => id.as_bytes(),
+            Self::Computed(id) => &id.0,
+        }
+    }
+    pub(crate) const fn snapshot_version(self) -> u32 {
+        match self {
+            Self::Legacy(_) => 1,
+            Self::Computed(_) => 2,
+        }
+    }
+    pub(crate) const fn legacy(self) -> Option<ProgramContentIdentityV9> {
+        match self {
+            Self::Legacy(identity) => Some(identity),
+            Self::Computed(_) => None,
+        }
+    }
+}
+
+enum CandidateOriginV1 {
+    Fixed,
+    DeclaredFinite(usize),
+    Computed {
+        identity: ComputedIdentityV1,
+        values: Box<[Srgb8]>,
+    },
+}
+
+impl CandidateOriginV1 {
+    const fn declared_state_index(&self) -> Option<usize> {
+        match self {
+            Self::DeclaredFinite(index) => Some(*index),
+            Self::Fixed => None,
+            Self::Computed { .. } => None,
+        }
+    }
+}
 
 /// Opaque identity of one immutable authored colour source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -211,10 +265,17 @@ impl FinitePaintDomainV1 {
 pub enum TargetIntentV1 {
     FixedSource(SourceId),
     Finite(FinitePaintDomainV1),
+    Computed(ComputedTargetV1),
 }
 
-/// A Paint-addressable target distinct from both source data and appearance
-/// storage. Only finite targets participate in declared joint selection.
+impl TargetIntentV1 {
+    const fn is_solver_dependent(&self) -> bool {
+        !matches!(self, Self::FixedSource(_))
+    }
+}
+
+/// Paint-addressable цель отдельно от source и appearance storage.
+/// Finite и computed выбор получают собственные явные декларации порядка.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     id: TargetId,
@@ -1008,11 +1069,35 @@ pub struct OutputBinding {
 pub(crate) struct ProgramFieldOutputBindingV1 {
     output: OutputSlotId,
     operator: FieldOperatorInstanceIdV1,
+    final_opaque: Option<crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1>,
 }
 
 impl ProgramFieldOutputBindingV1 {
+    pub(crate) const fn final_opaque(
+        output: OutputSlotId,
+        operator: FieldOperatorInstanceIdV1,
+        cleanliness: crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1,
+    ) -> Self {
+        Self {
+            output,
+            operator,
+            final_opaque: Some(cleanliness),
+        }
+    }
+    pub(crate) const fn is_final_opaque(self) -> bool {
+        self.final_opaque.is_some()
+    }
+    pub(crate) const fn final_raster_cleanliness(
+        self,
+    ) -> Option<crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1> {
+        self.final_opaque
+    }
     pub(crate) const fn new(output: OutputSlotId, operator: FieldOperatorInstanceIdV1) -> Self {
-        Self { output, operator }
+        Self {
+            output,
+            operator,
+            final_opaque: None,
+        }
     }
 
     pub(crate) const fn output(self) -> OutputSlotId {
@@ -1072,6 +1157,9 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
+    assignment: Option<Vec<TargetId>>,
+    #[cfg(test)]
+    computed_budget: Option<u64>,
     observation_group: ObservationGroup,
     opacities: Vec<OpacityInput>,
     paints: Vec<Paint>,
@@ -1109,6 +1197,9 @@ where
             targets,
             families: Vec::new(),
             joint_selection: None,
+            assignment: None,
+            #[cfg(test)]
+            computed_budget: None,
             observation_group,
             opacities,
             paints,
@@ -1179,10 +1270,19 @@ where
         self
     }
 
-    pub fn compile(self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
+    pub fn compile(mut self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
+        computed_assignment::assign_preference(&mut self.targets, self.assignment.as_deref())?;
         prepare_program(self).map(|epoch| CompiledProgram {
             owner_generation: Shared::new(epoch),
         })
+    }
+
+    fn assignment_budget(&self) -> u64 {
+        #[cfg(test)]
+        if let Some(budget) = self.computed_budget {
+            return budget;
+        }
+        computed_assignment::EXECUTION_NODE_LIMIT_V1
     }
 }
 
@@ -1232,6 +1332,10 @@ impl CoreProgramDraftV1 {
         self.program.targets.push(target);
     }
 
+    pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
+        self.program.assignment = Some(order);
+    }
+
     pub(crate) fn push_family(&mut self, family: FamilyDeclarationV2) {
         self.program.families.push(family);
     }
@@ -1278,26 +1382,14 @@ impl CoreProgramDraftV1 {
         self.program.presentation_targets.push(target);
     }
 
-    #[expect(
-        dead_code,
-        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
-    )]
     pub(crate) fn push_field_input(&mut self, input: FieldInputDeclarationV1) {
         self.program.field.push_input(input);
     }
 
-    #[expect(
-        dead_code,
-        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
-    )]
     pub(crate) fn push_field_operator(&mut self, operator: FieldOperatorDeclarationV1) {
         self.program.field.push_operator(operator);
     }
 
-    #[expect(
-        dead_code,
-        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
-    )]
     pub(crate) fn push_field_output(&mut self, output: ProgramFieldOutputBindingV1) {
         self.program.field_outputs.push(output);
     }
@@ -1465,6 +1557,7 @@ impl CoreProgramDraftV1 {
 /// Atomic compile failure. No executable partial graph escapes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProgramCompileError {
+    InvalidComputedAssignment(computed_assignment::ComputedAdmissionErrorV1),
     DuplicateSource {
         source: SourceId,
     },
@@ -2109,6 +2202,7 @@ use admitted_compiled_joint_space::{
 
 enum CompiledTargetSelectionV1 {
     FixedOnly,
+    Computed(ComputedSelectionV1),
     Finite {
         release_identity: SelectionReleaseIdentityV1,
         space: AdmittedCompiledJointSpaceV1,
@@ -2119,6 +2213,7 @@ impl CompiledTargetSelectionV1 {
     fn state_count(&self) -> usize {
         match self {
             Self::FixedOnly => 1,
+            Self::Computed(_) => 1,
             Self::Finite { space, .. } => space.state_count(),
         }
     }
@@ -2126,6 +2221,7 @@ impl CompiledTargetSelectionV1 {
     const fn release_identity(&self) -> Option<SelectionReleaseIdentityV1> {
         match self {
             Self::FixedOnly => None,
+            Self::Computed(_) => None,
             Self::Finite {
                 release_identity, ..
             } => Some(*release_identity),
@@ -2138,7 +2234,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    content_identity: ProgramContentIdentityV9,
+    content_identity: ProgramOwnerIdentityV1,
     evaluator: Evaluation,
     families: Box<[FamilyDeclarationV2]>,
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
@@ -2153,15 +2249,7 @@ where
     constraint_phases: CompiledConstraintPhasesV1,
     point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
-    #[expect(
-        dead_code,
-        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
-    )]
     field: CompiledFieldProgramV1,
-    #[expect(
-        dead_code,
-        reason = "V7 field capability staged infrastructure; consumed by the C7e field-effect lowering in the next slice"
-    )]
     field_outputs: Box<[ProgramFieldOutputBindingV1]>,
     target_selection: CompiledTargetSelectionV1,
 }
@@ -2174,6 +2262,16 @@ pub(crate) struct ProgramOwnerLeaseV1<Evaluation>(Shared<ProgramEpochV1<Evaluati
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy;
+
+impl<Evaluation> ProgramOwnerLeaseV1<Evaluation>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    pub(crate) fn snapshot_version(&self) -> u32 {
+        self.0.content_identity.snapshot_version()
+    }
+}
 
 /// Fully validated immutable Program, not yet attached to runtime.
 pub struct CompiledProgram<Evaluation>
@@ -2200,7 +2298,7 @@ where
     /// Opaque ID и порядок неупорядоченных объявлений исключены; явный joint
     /// order входит в адрес. Адрес не подтверждает поколение владельца и не
     /// заменяет revision-bound evidence.
-    pub fn content_identity(&self) -> ProgramContentIdentityV9 {
+    pub(crate) fn content_identity(&self) -> ProgramOwnerIdentityV1 {
         self.owner_generation.content_identity
     }
 
@@ -2346,8 +2444,30 @@ where
         self.owner_generation.point_presentations.len()
     }
 
+    /// Полное покрытие renderer bindings относится к terminal targets;
+    /// ancestor targets сохраняют собственные evaluation ordinals.
+    pub(crate) fn terminal_point_presentation_ordinals(&self) -> impl Iterator<Item = usize> + '_ {
+        self.owner_generation
+            .point_presentations
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, presentation)| {
+                (presentation.target == presentation.terminal).then_some(ordinal)
+            })
+    }
+
+    pub(crate) fn terminal_point_presentation_count(&self) -> usize {
+        self.terminal_point_presentation_ordinals().count()
+    }
+
     pub(crate) fn output_count(&self) -> usize {
         self.owner_generation.outputs.len()
+    }
+
+    /// Field-выход требует whole-field payload; point-сценарий его не заменяет.
+    pub(crate) fn supports_point_observation(&self) -> bool {
+        self.owner_generation.field_outputs.is_empty()
     }
 
     /// Unique semantic artifacts required by this Program, in canonical order.
@@ -2410,75 +2530,81 @@ where
         stream: ObservationStreamId,
         family_artifacts: FamilyArtifactBundleV2,
     ) -> Result<Session<ProgramSessionPlan<Evaluation>>, ProgramSessionInstantiateFailureV2> {
-        let family_artifacts = match family_artifacts.bind(&self.owner_generation.families) {
-            Ok(bound) => bound,
-            Err(failure) => {
-                let (cause, family_artifacts) = failure.into_parts();
-                let cause = match cause {
-                    FamilyArtifactBindErrorV2::Contract(cause) => {
-                        ProgramSessionInstantiateError::FamilyArtifacts(cause)
-                    }
-                    FamilyArtifactBindErrorV2::ResourceExhausted => {
-                        ProgramSessionInstantiateError::ResourceExhausted
-                    }
-                };
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts,
-                });
-            }
-        };
-        let bindings = self
-            .owner_generation
-            .binding_template
-            .try_clone_v1()
-            .map_err(map_session_instantiate_error);
-        let bindings = match bindings {
-            Ok(bindings) => bindings,
-            Err(cause) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        let workspace = self
-            .owner_generation
-            .graph
-            .new_workspace()
-            .map_err(map_session_instantiate_error);
-        let workspace = match workspace {
-            Ok(workspace) => workspace,
-            Err(cause) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        let presentation_cache =
-            ProgramPresentationCacheV1::try_new(&self.owner_generation.point_presentations);
-        let presentation_cache = match presentation_cache {
-            Ok(cache) => cache,
-            Err(()) => {
-                return Err(ProgramSessionInstantiateFailureV2 {
-                    cause: ProgramSessionInstantiateError::ResourceExhausted,
-                    family_artifacts: family_artifacts.into_unbound(),
-                });
-            }
-        };
-        Ok(Session::new(
-            stream,
-            ProgramSessionPlan {
-                owner_generation: Shared::downgrade(&self.owner_generation),
-                bindings,
-                workspace,
-                presentation_cache,
-                evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
-                family_artifacts,
-            },
-        ))
+        prepare_session_plan(&self.owner_generation, family_artifacts)
+            .map(|plan| Session::new(stream, plan))
     }
+}
+
+fn prepare_session_plan<Evaluation>(
+    owner: &Shared<ProgramEpochV1<Evaluation>>,
+    family_artifacts: FamilyArtifactBundleV2,
+) -> Result<ProgramSessionPlan<Evaluation>, ProgramSessionInstantiateFailureV2>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let family_artifacts = match family_artifacts.bind(&owner.families) {
+        Ok(bound) => bound,
+        Err(failure) => {
+            let (cause, family_artifacts) = failure.into_parts();
+            let cause = match cause {
+                FamilyArtifactBindErrorV2::Contract(cause) => {
+                    ProgramSessionInstantiateError::FamilyArtifacts(cause)
+                }
+                FamilyArtifactBindErrorV2::ResourceExhausted => {
+                    ProgramSessionInstantiateError::ResourceExhausted
+                }
+            };
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts,
+            });
+        }
+    };
+    let bindings = owner
+        .binding_template
+        .try_clone_v1()
+        .map_err(map_session_instantiate_error);
+    let bindings = match bindings {
+        Ok(bindings) => bindings,
+        Err(cause) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    let workspace = owner
+        .graph
+        .new_workspace()
+        .map_err(map_session_instantiate_error);
+    let workspace = match workspace {
+        Ok(workspace) => workspace,
+        Err(cause) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    let presentation_cache = ProgramPresentationCacheV1::try_new(&owner.point_presentations);
+    let presentation_cache = match presentation_cache {
+        Ok(cache) => cache,
+        Err(()) => {
+            return Err(ProgramSessionInstantiateFailureV2 {
+                cause: ProgramSessionInstantiateError::ResourceExhausted,
+                family_artifacts: family_artifacts.into_unbound(),
+            });
+        }
+    };
+    Ok(ProgramSessionPlan {
+        owner_generation: Shared::downgrade(owner),
+        bindings,
+        workspace,
+        presentation_cache,
+        evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+        family_artifacts,
+    })
 }
 
 /// Failure while preparing mutable storage for one independent Session.
@@ -3009,6 +3135,8 @@ struct ProgramPointCausalRecordV1 {
     considered_state_index: Option<usize>,
     case_index: usize,
     presentation_root: PresentationRootId,
+    target: OccurrenceId,
+    domain: ExactFinalOwnedPointDomainV1,
     release: PointOccurrenceAbsenceReleaseV1,
     replay: NonEmptyReplaySpanV1,
 }
@@ -3112,6 +3240,9 @@ where
     selection_release_identity: Option<SelectionReleaseIdentityV1>,
     observation: RevisionBoundObservationV1,
     arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
+    field: Option<
+        Result<finite_field::FinalRasterMaterializationOwnerV1, finite_field::FinalRasterRefusalV1>,
+    >,
 }
 
 impl<Evaluation> ProgramReportV1<Evaluation>
@@ -3158,6 +3289,7 @@ where
             selection_release_identity: _,
             observation,
             arena,
+            field: _,
         } = self;
         let slot = observation.arena_slot();
         drop(observation);
@@ -3192,13 +3324,189 @@ impl ProgramPaintOutputV1 {
     }
 }
 
+/// Один результат общего Session. Legacy-сертификат и computed evidence
+/// остаются разными доказательствами, даже когда имеют одинаковые outputs.
+pub(crate) enum ProgramVerifiedOutcomeV1<E: ProgramConstraintEvaluatorSetV1> {
+    Legacy(ProgramVerifiedV1<E>),
+    Computed(ComputedVerifiedV1<E>),
+}
+
+pub(crate) enum ProgramViolationOutcomeV1<E: ProgramConstraintEvaluatorSetV1> {
+    Legacy(ProgramConflictV1<E>),
+    Computed(ComputedStoppedV1),
+}
+
+impl<E: ProgramConstraintEvaluatorSetV1> session_private::EvidenceSealed
+    for ProgramVerifiedOutcomeV1<E>
+{
+}
+impl<E: ProgramConstraintEvaluatorSetV1> session_private::EvidenceSealed
+    for ProgramViolationOutcomeV1<E>
+{
+}
+impl<E: ProgramConstraintEvaluatorSetV1> SessionEvidenceV1 for ProgramVerifiedOutcomeV1<E> {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        match self {
+            Self::Legacy(value) => value.observation(),
+            Self::Computed(value) => value.observation(),
+        }
+    }
+}
+impl<E: ProgramConstraintEvaluatorSetV1> SessionEvidenceV1 for ProgramViolationOutcomeV1<E> {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        match self {
+            Self::Legacy(value) => value.observation(),
+            Self::Computed(value) => value.observation(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PointPhysicalEvidenceV1 {
+    root: PresentationRootId,
+    target: OccurrenceId,
+    domain: ExactFinalOwnedPointDomainV1,
+}
+
+/// Данные нормального пересчёта не несут полномочий причинного сертификата.
+pub(crate) struct PresentationCompositeV1 {
+    pub(crate) root: PresentationRootId,
+    pub(crate) case_index: usize,
+    pub(crate) rgb: [u8; 3],
+}
+impl PointPhysicalEvidenceV1 {
+    pub(crate) const fn presentation_root(self) -> PresentationRootId {
+        self.root
+    }
+    pub(crate) fn target(self) -> OccurrenceId {
+        self.target
+    }
+    pub(crate) fn domain(self) -> ExactFinalOwnedPointDomainV1 {
+        self.domain
+    }
+}
+
+impl<E: ProgramConstraintEvaluatorSetV1> ProgramVerifiedOutcomeV1<E> {
+    pub(crate) const fn legacy(&self) -> Option<&ProgramVerifiedV1<E>> {
+        match self {
+            Self::Legacy(value) => Some(value),
+            Self::Computed(_) => None,
+        }
+    }
+    pub(crate) fn content_identity(&self) -> ProgramOwnerIdentityV1 {
+        match self {
+            Self::Legacy(value) => ProgramOwnerIdentityV1::Legacy(value.report.content_identity),
+            Self::Computed(value) => ProgramOwnerIdentityV1::Computed(value.identity),
+        }
+    }
+    pub(crate) fn outputs(&self) -> &[ProgramPaintOutputV1] {
+        &self.arena().storage.outputs
+    }
+    pub(crate) fn cells(&self) -> &[ProgramConstraintCellV1<E>] {
+        &self.arena().storage.cells
+    }
+    fn arena(&self) -> &ProgramEvaluationArenaLeaseV1<E> {
+        match self {
+            Self::Legacy(value) => &value.report.arena,
+            Self::Computed(value) => &value.arena,
+        }
+    }
+    pub(crate) fn point_domains(
+        &self,
+    ) -> impl ExactSizeIterator<Item = PointPhysicalEvidenceV1> + '_ {
+        self.arena()
+            .storage
+            .point_causal_records
+            .iter()
+            .map(|record| PointPhysicalEvidenceV1 {
+                root: record.presentation_root,
+                target: record.target,
+                domain: record.domain,
+            })
+    }
+    pub(crate) fn presentation_composites(
+        &self,
+    ) -> impl ExactSizeIterator<Item = Option<PresentationCompositeV1>> + '_ {
+        let storage = &self.arena().storage;
+        storage.point_causal_records.iter().map(|record| {
+            let steps = record.replay.get(&storage.point_causal_steps)?;
+            let summary = PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(steps)?;
+            Some(PresentationCompositeV1 {
+                root: record.presentation_root,
+                case_index: record.case_index,
+                rgb: summary.normal_root(),
+            })
+        })
+    }
+    fn into_arena(self) -> ProgramEvaluationArenaReturnV1<E> {
+        match self {
+            Self::Legacy(value) => value.into_arena(),
+            Self::Computed(value) => ProgramEvaluationArenaReturnV1 {
+                slot: value.observation.arena_slot(),
+                storage: value.arena.storage,
+            },
+        }
+    }
+}
+
+// Старые characterization tests явно проверяют только legacy evidence.
+// Эти accessors не входят в исполняемую поверхность и отвергают computed.
+#[cfg(test)]
+impl<E: ProgramConstraintEvaluatorSetV1> ProgramVerifiedOutcomeV1<E> {
+    pub(crate) fn report(&self) -> &ProgramReportV1<E> {
+        self.legacy().expect("legacy test evidence").report()
+    }
+    pub(crate) fn selected_state_index(&self) -> Option<usize> {
+        self.legacy()
+            .expect("legacy test evidence")
+            .selected_state_index()
+    }
+    pub(crate) fn point_causal_certificates(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ProgramPointCausalCertificateV1<'_>> + '_ {
+        self.legacy()
+            .expect("legacy test evidence")
+            .point_causal_certificates()
+    }
+    pub(crate) fn computed_for_test(&self) -> &ComputedVerifiedV1<E> {
+        match self {
+            Self::Computed(value) => value,
+            Self::Legacy(_) => panic!("computed test evidence"),
+        }
+    }
+}
+#[cfg(test)]
+impl<E: ProgramConstraintEvaluatorSetV1> ProgramViolationOutcomeV1<E> {
+    pub(crate) fn legacy_for_test(&self) -> &ProgramConflictV1<E> {
+        match self {
+            Self::Legacy(value) => value,
+            Self::Computed(_) => panic!("legacy test evidence"),
+        }
+    }
+    pub(crate) fn report(&self) -> &ProgramReportV1<E> {
+        self.legacy_for_test().report()
+    }
+    pub(crate) fn considered_state_count(&self) -> usize {
+        self.legacy_for_test().considered_state_count()
+    }
+    pub(crate) fn retained_output_value_count_for_test(&self) -> usize {
+        self.legacy_for_test()
+            .retained_output_value_count_for_test()
+    }
+    pub(crate) fn considered_point_causal_evidence(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ProgramConsideredPointCausalEvidenceV1<'_>> + '_ {
+        self.legacy_for_test().considered_point_causal_evidence()
+    }
+}
+
 /// All hard cells passed over the complete admitted physical support.
 pub struct ProgramVerifiedV1<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     report: ProgramReportV1<Evaluation>,
-    selected_state_index: Option<usize>,
+    origin: CandidateOriginV1,
 }
 
 impl<Evaluation> session_private::EvidenceSealed for ProgramVerifiedV1<Evaluation> where
@@ -3230,13 +3538,13 @@ where
     /// Index inside the authored total order. `None` means this Program has no
     /// finite targets and therefore performed validation only.
     pub const fn selected_state_index(&self) -> Option<usize> {
-        self.selected_state_index
+        self.origin.declared_state_index()
     }
 
     pub(crate) fn point_causal_certificates(
         &self,
     ) -> impl ExactSizeIterator<Item = ProgramPointCausalCertificateV1<'_>> + '_ {
-        let state = self.selected_state_index.map_or(
+        let state = self.selected_state_index().map_or(
             ProgramPointCausalSelectedStateV1::Fixed,
             ProgramPointCausalSelectedStateV1::Selected,
         );
@@ -3369,7 +3677,11 @@ pub enum ProgramSessionEvaluationError<EvaluationError> {
 type ProgramEvaluatorError<Evaluation> = <Evaluation as ProgramConstraintEvaluatorSetV1>::Error;
 
 type ProgramSessionEvaluationResult<Evaluation> = Result<
-    SessionDecision<ProgramVerifiedV1<Evaluation>, ProgramConflictV1<Evaluation>>,
+    SessionDecision<
+        ProgramVerifiedOutcomeV1<Evaluation>,
+        ProgramViolationOutcomeV1<Evaluation>,
+        ComputedStoppedV1,
+    >,
     ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>,
 >;
 
@@ -4095,8 +4407,9 @@ where
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
     type OwnerLease = ProgramOwnerLeaseV1<Evaluation>;
-    type Verified = ProgramVerifiedV1<Evaluation>;
-    type Violation = ProgramConflictV1<Evaluation>;
+    type Verified = ProgramVerifiedOutcomeV1<Evaluation>;
+    type Violation = ProgramViolationOutcomeV1<Evaluation>;
+    type Incomplete = ComputedStoppedV1;
     type Error = ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease> {
@@ -4116,8 +4429,23 @@ where
         observation: RevisionBoundObservationV1,
         previous: Option<&Self::Verified>,
         _permit: SessionObservationBindingPermitV1,
-    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error> {
-        evaluate_program_session(self, &owner.0, observation, previous)
+    ) -> Result<SessionDecision<Self::Verified, Self::Violation, Self::Incomplete>, Self::Error>
+    {
+        if observation.field_payload().is_some() {
+            finite_field::evaluate_final_field_session(self, &owner.0, observation, _permit)
+        } else if matches!(
+            owner.0.target_selection,
+            CompiledTargetSelectionV1::Computed(_)
+        ) {
+            computed_assignment::evaluate(self, &owner.0, observation)
+        } else {
+            evaluate_program_session(
+                self,
+                &owner.0,
+                observation,
+                previous.and_then(ProgramVerifiedOutcomeV1::legacy),
+            )
+        }
     }
 
     fn retire_verified(&mut self, evidence: Self::Verified) {
@@ -4125,12 +4453,14 @@ where
     }
 
     fn retire_violation(&mut self, evidence: Self::Violation) {
-        self.evaluation_arenas.restore(evidence.into_arena());
+        if let ProgramViolationOutcomeV1::Legacy(evidence) = evidence {
+            self.evaluation_arenas.restore(evidence.into_arena());
+        }
     }
 }
 
 enum ProgramEvaluationOutcomeV1 {
-    Verified { selected_state_index: Option<usize> },
+    Verified { origin: CandidateOriginV1 },
     Conflict { considered_state_count: usize },
 }
 
@@ -4178,25 +4508,30 @@ where
         // следующего prospective update, но ни одно значение не переживает verdict.
         arena.storage_mut().outputs.clear();
     }
+    let content_identity = epoch
+        .content_identity
+        .legacy()
+        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
     let report = ProgramReportV1 {
-        content_identity: epoch.content_identity,
+        content_identity,
         selection_release_identity: epoch.target_selection.release_identity(),
         observation,
         arena: arena.into_lease(),
+        field: None,
     };
     Ok(match outcome {
-        ProgramEvaluationOutcomeV1::Verified {
-            selected_state_index,
-        } => SessionDecision::Verified(ProgramVerifiedV1 {
-            report,
-            selected_state_index,
-        }),
+        ProgramEvaluationOutcomeV1::Verified { origin } => {
+            SessionDecision::Verified(ProgramVerifiedOutcomeV1::Legacy(ProgramVerifiedV1 {
+                report,
+                origin,
+            }))
+        }
         ProgramEvaluationOutcomeV1::Conflict {
             considered_state_count,
-        } => SessionDecision::Violation(ProgramConflictV1 {
+        } => SessionDecision::Violation(ProgramViolationOutcomeV1::Legacy(ProgramConflictV1 {
             report,
             considered_state_count,
-        }),
+        })),
     })
 }
 
@@ -4221,7 +4556,7 @@ where
                 runtime,
                 epoch,
                 scenario_set,
-                None,
+                CandidateOriginV1::Fixed,
                 1,
                 arena,
                 counts,
@@ -4229,6 +4564,9 @@ where
             );
         }
         CompiledTargetSelectionV1::Finite { space, .. } => space,
+        CompiledTargetSelectionV1::Computed(_) => {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
     };
 
     let state_count = space.state_count();
@@ -4251,7 +4589,7 @@ where
                 runtime,
                 epoch,
                 scenario_set,
-                Some(state_index),
+                CandidateOriginV1::DeclaredFinite(state_index),
                 state_index + 1,
                 arena,
                 counts,
@@ -4259,7 +4597,7 @@ where
             )? {
                 ProgramEvaluationOutcomeV1::Verified { .. } => {
                     return Ok(ProgramEvaluationOutcomeV1::Verified {
-                        selected_state_index: Some(state_index),
+                        origin: CandidateOriginV1::DeclaredFinite(state_index),
                     });
                 }
                 ProgramEvaluationOutcomeV1::Conflict { .. } => {
@@ -4399,7 +4737,7 @@ fn collect_program_candidate_into<Evaluation>(
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
     scenario_set: NonEmptyScenarioSetV1<'_>,
-    selected_state_index: Option<usize>,
+    origin: CandidateOriginV1,
     considered_state_count: usize,
     arena: &mut ProgramEvaluationArenaV1<Evaluation>,
     counts: ProgramEvaluationCardinalityV1,
@@ -4441,7 +4779,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    let candidate_state_index = selected_state_index.unwrap_or(0);
+    let candidate_state_index = origin.declared_state_index().unwrap_or(0);
     let has_hard_constraints = epoch
         .constraint_phases
         .contains(ProgramEvaluationPhaseV1::Hard);
@@ -4472,7 +4810,8 @@ where
     } else {
         false
     };
-    if let Some(state_index) = selected_state_index.filter(|_| has_hard_violation) {
+    if has_hard_violation && !matches!(origin, CandidateOriginV1::Fixed) {
+        let state_index = candidate_state_index;
         // Search only nominates a finite state. Its fresh hard recheck owns the
         // terminal verdict, so diagnostics cannot mask or mutate that failure.
         if arena.cells.iter().any(|cell| !cell.is_hard()) {
@@ -4541,9 +4880,7 @@ where
             considered_state_count,
         })
     } else {
-        Ok(ProgramEvaluationOutcomeV1::Verified {
-            selected_state_index,
-        })
+        Ok(ProgramEvaluationOutcomeV1::Verified { origin })
     }
 }
 
@@ -4618,11 +4955,12 @@ where
     let previous_storage = previous
         .filter(|verified| {
             Evaluation::supports_evidence_copy()
-                && verified.selected_state_index().is_none()
+                && matches!(verified.origin, CandidateOriginV1::Fixed)
                 && !epoch
                     .constraint_phases
                     .contains(ProgramEvaluationPhaseV1::ReportOnly)
-                && verified.report().content_identity() == epoch.content_identity
+                && ProgramOwnerIdentityV1::Legacy(verified.report().content_identity())
+                    == epoch.content_identity
                 && verified.report().selection_release_identity()
                     == epoch.target_selection.release_identity()
                 && verified
@@ -4786,6 +5124,8 @@ where
                     considered_state_index: point_causal.considered_state_index,
                     case_index,
                     presentation_root: presentation.root,
+                    target: presentation.target,
+                    domain: resolved.domain,
                     release: presentation.absence_release,
                     replay,
                 });
@@ -5192,7 +5532,7 @@ where
             bindings.push((input, id));
         }
     }
-    bindings.sort_unstable();
+    ordering::sort(&mut bindings);
 
     for pair in bindings.windows(2) {
         if let [
@@ -5228,15 +5568,23 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    if program.observation_group.surface_input_ports.is_empty() {
+    let field_only = program.outputs.is_empty()
+        && !program.field_outputs.is_empty()
+        && program.paints.is_empty()
+        && program.surfaces.is_empty()
+        && program.occurrences.is_empty()
+        && program.sources.is_empty()
+        && program.targets.is_empty()
+        && program.constraints.is_empty();
+    if !field_only && program.observation_group.surface_input_ports.is_empty() {
         return Err(ProgramCompileError::EmptyObservationGroup {
             group: program.observation_group.id,
         });
     }
-    if program.occurrences.is_empty() {
+    if !field_only && program.occurrences.is_empty() {
         return Err(ProgramCompileError::EmptyOccurrenceSet);
     }
-    if program.constraints.is_empty() {
+    if !field_only && program.constraints.is_empty() {
         return Err(ProgramCompileError::EmptyConstraintSet);
     }
     if program.outputs.is_empty() && program.field_outputs.is_empty() {
@@ -5264,20 +5612,27 @@ where
         .try_reserve_exact(program.observation_group.surface_input_ports.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     surface_input_ports.extend_from_slice(&program.observation_group.surface_input_ports);
-    surface_input_ports.sort_unstable();
+    ordering::sort(&mut surface_input_ports);
     if !canonical_surface_input_port_sequence_matches(
         graph.surface_input_ports(),
         &surface_input_ports,
     ) {
         return Err(ProgramCompileError::InternalInvariant);
     }
-    let observation_schema = canonicalize_observation_schema(surface_input_ports)
-        .map_err(map_observation_schema_compile_error)?;
+    let observation_schema = if field_only {
+        crate::observation::empty_field_schema()
+    } else {
+        canonicalize_observation_schema(surface_input_ports)
+            .map_err(map_observation_schema_compile_error)?
+    };
 
+    let computed_budget = program.assignment_budget();
     let target_selection = compile_targets(
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
+        program.assignment.as_deref(),
+        computed_budget,
     )?;
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
@@ -5302,6 +5657,7 @@ where
         &constraints,
         &dependency_index,
         &mut dependency_scratch,
+        &target_selection,
     )?;
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
     let occurrence_contexts =
@@ -5314,7 +5670,7 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_program_content_identity_v9(&program)?;
+    let content_identity = identity::compile_owner_identity(&program)?;
     let families = program.families.into_boxed_slice();
     Ok(ProgramEpochV1 {
         content_identity,
@@ -5347,13 +5703,13 @@ fn canonical_required_family_releases(
         .try_reserve_exact(families.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     releases.extend(families.iter().map(|family| family.semantic()));
-    releases.sort_unstable();
+    ordering::sort(&mut releases);
     releases.dedup();
     Ok(releases.into_boxed_slice())
 }
 
 fn canonicalize_families(families: &mut [FamilyDeclarationV2]) -> Result<(), ProgramCompileError> {
-    families.sort_unstable_by_key(|family| family.id());
+    ordering::sort_by_key(families, |family| family.id());
     if let Some(family) = families
         .windows(2)
         .find(|pair| pair[0].id() == pair[1].id())
@@ -5450,7 +5806,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    program.sources.sort_unstable_by_key(|source| source.id);
+    ordering::sort_by_key(&mut program.sources, |source| source.id);
     if let Some(source) = program
         .sources
         .windows(2)
@@ -5460,7 +5816,7 @@ where
         return Err(ProgramCompileError::DuplicateSource { source });
     }
 
-    program.targets.sort_unstable_by_key(|target| target.id);
+    ordering::sort_by_key(&mut program.targets, |target| target.id);
     if let Some(target) = program
         .targets
         .windows(2)
@@ -5554,7 +5910,7 @@ where
         };
         (id, index)
     }));
-    paint_ids.sort_unstable_by_key(|(id, _)| *id);
+    ordering::sort_by_key(&mut paint_ids, |(id, _)| *id);
 
     let mut surface_ids = Vec::new();
     surface_ids
@@ -5566,7 +5922,7 @@ where
         };
         (id, index)
     }));
-    surface_ids.sort_unstable_by_key(|(id, _)| *id);
+    ordering::sort_by_key(&mut surface_ids, |(id, _)| *id);
 
     let mut occurrence_ids = Vec::new();
     occurrence_ids
@@ -5579,7 +5935,7 @@ where
             .enumerate()
             .map(|(index, occurrence)| (occurrence.id, index)),
     );
-    occurrence_ids.sort_unstable_by_key(|(id, _)| *id);
+    ordering::sort_by_key(&mut occurrence_ids, |(id, _)| *id);
 
     let paint_ordinal = |id: PaintId| {
         paint_ids
@@ -5775,6 +6131,7 @@ fn validate_terminal_dependency_cone<Evaluation>(
     constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>],
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
+    target_selection: &CompiledTargetSelectionV1,
 ) -> Result<(), ProgramCompileError>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -5803,8 +6160,7 @@ where
         )?;
     }
     for (target_index, target) in program.targets.iter().enumerate() {
-        if matches!(&target.intent, TargetIntentV1::Finite(_)) && !constrained_targets[target_index]
-        {
+        if target.intent.is_solver_dependent() && !constrained_targets[target_index] {
             return Err(ProgramCompileError::UnconstrainedFiniteTarget { target: target.id });
         }
     }
@@ -5823,9 +6179,12 @@ where
     let finite_count = program
         .targets
         .iter()
-        .filter(|target| matches!(&target.intent, TargetIntentV1::Finite(_)))
+        .filter(|target| target.intent.is_solver_dependent())
         .count();
-    if finite_count > 1 {
+    // Computed выбирает полную tuple по всем ограничениям; общей строки для
+    // независимых групп не требуется. Покрытие каждой цели и output проверено выше.
+    // Дополнительное условие конечного выбора V1/V2 сохраняет прежний контракт.
+    if finite_count > 1 && !matches!(target_selection, CompiledTargetSelectionV1::Computed(_)) {
         let mut has_common_assessment = false;
         let mut per_constraint_targets = false_slots(program.targets.len())?;
         for constraint in constraints {
@@ -5839,8 +6198,7 @@ where
                 None,
             )?;
             if program.targets.iter().enumerate().all(|(index, target)| {
-                !matches!(&target.intent, TargetIntentV1::Finite(_))
-                    || per_constraint_targets[index]
+                !target.intent.is_solver_dependent() || per_constraint_targets[index]
             }) {
                 has_common_assessment = true;
                 break;
@@ -5976,7 +6334,26 @@ fn compile_targets(
     graph: &CompiledAppearanceGraph,
     authored_targets: &mut [Target],
     authored_selection: Option<&MaterialisedSelectionV1>,
+    assignment: Option<&[TargetId]>,
+    computed_budget: u64,
 ) -> Result<CompiledTargetSelectionV1, ProgramCompileError> {
+    if assignment.is_some() {
+        return computed_assignment::compile_selection(
+            graph,
+            authored_targets,
+            authored_selection,
+            computed_budget,
+        )
+        .map(CompiledTargetSelectionV1::Computed);
+    }
+    if authored_targets
+        .iter()
+        .any(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
+    {
+        return Err(ProgramCompileError::InvalidComputedAssignment(
+            computed_assignment::ComputedAdmissionErrorV1::InvalidPreferenceOrder,
+        ));
+    }
     struct CanonicalFiniteTargetV1<'a> {
         id: TargetId,
         binding: CompiledPaintInputSlotV1,
@@ -5995,7 +6372,7 @@ fn compile_targets(
         let binding = graph
             .bind_paint_input(target_paint_input_id(target.id))
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        candidates.sort_unstable_by_key(|candidate| candidate.id);
+        ordering::sort_by_key(candidates, |candidate| candidate.id);
         if let Some(candidate) = candidates
             .windows(2)
             .find(|pair| pair[0].id == pair[1].id)
@@ -6018,8 +6395,9 @@ fn compile_targets(
                 candidate.value,
             )
         }));
-        physical
-            .sort_unstable_by_key(|(source, opacity_bits, id, _)| (*source, *opacity_bits, *id));
+        ordering::sort_by_key(&mut physical, |(source, opacity_bits, id, _)| {
+            (*source, *opacity_bits, *id)
+        });
         if let Some(pair) = physical
             .windows(2)
             .find(|pair| pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1)
@@ -6176,7 +6554,7 @@ fn compile_occurrence_contexts(
             .iter()
             .map(|occurrence| (occurrence.id(), occurrence.context())),
     );
-    contexts.sort_unstable_by_key(|(occurrence, _)| *occurrence);
+    ordering::sort_by_key(&mut contexts, |(occurrence, _)| *occurrence);
 
     let mut compiled = Vec::new();
     compiled
@@ -6270,7 +6648,7 @@ where
                 body: constraint.body(),
             }),
     );
-    lowered.sort_unstable_by_key(|constraint| constraint.id);
+    ordering::sort_by_key(&mut lowered, |constraint| constraint.id);
     if let Some(duplicate) = lowered
         .windows(2)
         .find(|pair| pair[0].id == pair[1].id)
@@ -6360,10 +6738,10 @@ where
                         constraint: constraint.id,
                         reference: reference_id,
                     })?;
-                if matches!(
-                    program.targets[reference_index].intent,
-                    TargetIntentV1::Finite(_)
-                ) {
+                if program.targets[reference_index]
+                    .intent
+                    .is_solver_dependent()
+                {
                     return Err(
                         ProgramCompileError::SolverDependentIntrinsicRelationReference {
                             constraint: constraint.id,
@@ -6458,7 +6836,7 @@ where
                     .filter_map(|node| match *node {
                         IndexedDependencyNodeV1::Target(index) => {
                             let target = &program.targets[index];
-                            matches!(target.intent, TargetIntentV1::Finite(_)).then_some(target.id)
+                            target.intent.is_solver_dependent().then_some(target.id)
                         }
                         _ => None,
                     })
@@ -6545,7 +6923,7 @@ fn compact_constraint_contexts<Invocation>(
             | CompiledProgramConstraintBodyV1::PointPresentation { .. } => {}
         }
     }
-    targets.sort_unstable();
+    ordering::sort(&mut targets);
     targets.dedup();
 
     let mut compact = Vec::new();
@@ -6600,7 +6978,7 @@ fn compile_point_presentations(
     roots: &mut [PointPresentationRootV1],
     targets: &mut [PointPresentationTargetV1],
 ) -> Result<CompiledPointPresentationsV1, ProgramCompileError> {
-    roots.sort_unstable_by_key(|root| root.id);
+    ordering::sort_by_key(roots, |root| root.id);
     if let Some(root) = roots
         .windows(2)
         .find(|pair| pair[0].id == pair[1].id)
@@ -6642,7 +7020,7 @@ fn compile_point_presentations(
         compiled_roots.push((root.id, compiled));
     }
 
-    targets.sort_unstable_by_key(|target| (target.root, target.occurrence));
+    ordering::sort_by_key(targets, |target| (target.root, target.occurrence));
     if let Some(duplicate) = targets
         .windows(2)
         .find(|pair| pair[0] == pair[1])
@@ -6722,7 +7100,7 @@ fn compile_outputs(
     authored: &mut [OutputBinding],
 ) -> Result<Box<[CompiledOutputBinding]>, ProgramCompileError> {
     let len = authored.len();
-    authored.sort_unstable_by_key(|output| output.output);
+    ordering::sort_by_key(authored, |output| output.output);
     if let Some(duplicate) = authored
         .windows(2)
         .find(|pair| pair[0].output == pair[1].output)
@@ -6760,7 +7138,7 @@ fn compile_field_outputs(
     point_outputs: &[OutputBinding],
     authored: &mut [ProgramFieldOutputBindingV1],
 ) -> Result<Box<[ProgramFieldOutputBindingV1]>, ProgramCompileError> {
-    authored.sort_unstable_by_key(|output| output.output());
+    ordering::sort_by_key(authored, |output| output.output());
     if let Some(duplicate) = authored
         .windows(2)
         .find(|pair| pair[0].output() == pair[1].output())
@@ -6925,6 +7303,7 @@ where
                 })
                 .map(|candidate| candidate.value)
                 .ok_or(ProgramCompileError::InternalInvariant)?,
+            TargetIntentV1::Computed(target) => EncodedPointPaintValueV1::opaque(target.anchor()),
         };
         paint_inputs.push((target_paint_input_id(target.id), value));
     }

@@ -1,8 +1,8 @@
 # Lab Colors для Android
 
 Kotlin вызывает общий Rust Core через сгенерированный UniFFI API. Builder
-кодирует ProgramWire v1/v2 без JavaScript. Цветовая математика и выбор
-результата не дублируются.
+кодирует ProgramWire v1/v2/v3 без JavaScript; V4 вызывает генератор wire из Core.
+Цветовая математика и выбор результата не дублируются.
 
 ## Подключение
 
@@ -82,18 +82,87 @@ Builder принадлежит одному вызывающему контек�
 декларацию. Сессия допускает перенос между потоками, но одновременная запись
 и повторный вход получают явный отказ, не скрытую очередь.
 
+Для вычисляемых целей используйте `ProgramWireBuilderV3`. Приложение объявляет
+область, опору, допуск и порядок предпочтения; затем добавляет обычный граф
+поверхностей, opacity, occurrences, ограничений и outputs:
+
+```kotlin
+val builder = ProgramWireBuilderV3()
+    .computedTarget(21u, ProgramWireDomainV3.Gray(0u, 255u), byteArrayOf(64, 64, 64), 1.0)
+    .assignment(listOf(21u))
+```
+
+`ProgramWireDomainV3.Gray` принимает `UByte`-границы множества `[g, g, g]`.
+`Box(lower, upper)` принимает два `ByteArray` по три encoded sRGB8-канала.
+Границы включены; смысл цели и опору задаёт клиент. `anchor` может лежать вне
+области. `maxDelta` конечен, неотрицателен и имеет конечный квадрат в
+[метрике V3](../../docs/contracts/program-assignment-v3.md).
+Каждая вычисляемая цель входит в `assignment` ровно один раз; порядок задаёт
+лексикографическое предпочтение. Core сохраняет допустимую авторскую композицию,
+а при нарушении ограничений вычисляет разрешённую замену. Фиксированные цели
+можно использовать вместе с вычисляемыми; смесь с конечным выбором пока
+возвращает `program_unsupported`.
+
+Снимки V3 возвращают цвета только для `ready`. Значения `snapshotVersion`,
+`revision` и `reason` описаны в
+[справочнике Kotlin](../../docs/contracts/native-adapters.md#kotlin-снимок-и-полный-растр).
+
 ## Привязка к интерфейсу и ресурсы
 
-`attachProgramWire` принимает `ProgramPointSinkHost`. `tryInstall` выполняется
+`attachProgramWire` связывает один terminal point с `ProgramPointSinkHost`.
+`ProgramPointSinkIntent` содержит операцию, ревизию, stamps, `sinkOutput: UInt`
+и `point: ProgramPointPaint?` с slot, owned RGB8 `source` и opacity.
+`tryInstall` выполняется
 синхронно на вызывающем потоке и подтверждает целиком установленную команду.
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
 внешними потребителями; подтверждение рендера не выводится из расчёта цвета.
+`CONFIRM_EXACT` подтверждает прежнее состояние и stamp без повторной установки.
+После отзыва `point == null` допустим, только если у host также нет paint и
+совпадают sequence/binding epoch.
+
+`attachProgramWireWithBindings` принимает `ProgramAttachmentBindings` и
+`ProgramScopeSinkHost`. Emission bindings задают slot и sink output, presentation
+bindings — slot, root и occurrence. `ProgramScopeSinkIntent` содержит stamps,
+ревизию, полный `scope`, `points` с sink output и paint и `presentationComposites`
+с root, scenario и owned RGB8 `source`. `sinkOutput` и `point` — optional
+скалярные проекции. Host атомарно устанавливает всю команду. При отзыве полный
+scope сохраняется, points и composites пусты. Оба входа возвращают
+`ProgramAttachment` и используют общий Core owner.
+
+Attached snapshot предоставляет те же `snapshotVersion`, `revision` и `reason`.
+`renderCount()` и `renderAt(index)` перечисляют renders, `render()` возвращает
+значение при единственном render, `hasRender()` сообщает наличие хотя бы одного.
+`materializationAuthority()` и `materializationAuthorityFor(...)` требуют
+однозначный binding; несколько bindings дают `program_materialization_ambiguous_bindings`.
+Для выбранных root и occurrence используйте `materializationAuthorityForBinding(root, occurrence)`.
+Новая принятая ревизия с `incomplete` или `unsatisfied` сначала отзывает прежний
+paint. Если host отклоняет команду, сохраняется прежний head.
 
 Объекты UniFFI освобождаются через `use`/`close`. Для attachment сначала отзовите
 внешнюю привязку и вызовите `dispose(true)`, затем `close()`. Освобождение памяти
 не означает отзыв внешнего UI. `dispose(false)` сохраняет живую привязку для
 повтора. После закрытия native handle использовать объект нельзя.
+
+## Полный растр V4
+
+Для проверки конечной композиции объявите порты, output и режим Cleanliness:
+
+```kotlin
+val wire = ProgramWireBuilderV4(
+    sourcePort = 1uL,
+    destinationPort = 2uL,
+    operatorId = 3uL,
+    outputSlot = 17u,
+    cleanliness = ProgramFinalRasterCleanlinessRequirement.LINT_EXACT_NOMINAL_SRGB8_V2,
+).finish()
+```
+
+Передайте полный растр в runtime и примените полученные RGB8 через
+`consumeFinalRaster`.
+[Справочник Kotlin](../../docs/contracts/native-adapters.md#kotlin-снимок-и-полный-растр)
+описывает методы, владение массивами и ошибки;
+[контракт растра](../../docs/contracts/final-raster-v1.md) — физическую модель и область.
 
 ## Проверки
 

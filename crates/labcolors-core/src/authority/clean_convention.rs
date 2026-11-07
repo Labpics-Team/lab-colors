@@ -89,6 +89,14 @@ impl CleanConventionSelectionV1 {
         })
     }
 
+    pub(crate) fn select_final_raster() -> Self {
+        Self {
+            release: EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+            scope: CleanConventionScopeV1::WholeField,
+            admission: CleanConventionAdmissionKindV1::DeclaredPackagePolicyCandidate,
+        }
+    }
+
     pub(crate) const fn release(self) -> [u8; 32] {
         self.release
     }
@@ -248,3 +256,131 @@ mod tests;
 
 #[cfg(kani)]
 mod proofs;
+
+impl AuthorityStateV1 {
+    /// Вычисляет полный отчёт без AUTH admission. Report-only не выдаёт pass permit.
+    /// Все N пикселей участвуют в count; первый witness не заменяет проверку N−1.
+    pub(crate) fn assess_program_final_raster_clean_convention(
+        materialization: &crate::program_session::finite_field::FinalRasterMaterializationV1,
+        current: &crate::observation::RevisionBoundObservationV1,
+    ) -> Result<
+        crate::field_effect::final_raster::FinalRasterCleanlinessAssessmentV1,
+        crate::program_session::finite_field::FinalRasterRefusalV1,
+    > {
+        use crate::field_effect::final_raster::{
+            FinalRasterCleanlinessAssessmentV1, FinalRasterCleanlinessRequirementV1 as C,
+            FinalRasterCleanlinessViolationV1,
+        };
+        use crate::program_session::finite_field::FinalRasterRefusalV1 as E;
+        if !materialization.observation().is_same_binding_as(current) {
+            return Err(E::Stale);
+        }
+        let policy = materialization.cleanliness_requirement()?;
+        if policy == C::Off {
+            return Err(E::CleanConvention);
+        }
+        let payload = materialization.payload();
+        let count =
+            usize::try_from(u64::from(payload.extent.width()) * u64::from(payload.extent.height()))
+                .map_err(|_| E::ResourceExhausted)?;
+        if count != materialization.pixels().len() {
+            return Err(E::CleanConvention);
+        }
+        let mut violation_count = 0_usize;
+        let mut first_violation = None;
+        for (pixel_index, pixel) in materialization.pixels().iter().enumerate() {
+            if pixel.alpha() != 255 {
+                return Err(E::Transparent { pixel_index });
+            }
+            let channels = pixel.channels();
+            let composite = Srgb8::new([channels[0], channels[1], channels[2]]);
+            if let ExactNominalSrgb8CleanSetDecisionV1::Rejected(interval) =
+                ExactNominalSrgb8CleanSetV2.classify(composite)
+            {
+                violation_count = violation_count.checked_add(1).ok_or(E::ResourceExhausted)?;
+                if first_violation.is_none() {
+                    first_violation = Some(FinalRasterCleanlinessViolationV1::new(
+                        pixel_index,
+                        composite.bytes(),
+                        interval.endpoints(),
+                    ));
+                }
+            }
+        }
+        FinalRasterCleanlinessAssessmentV1::assessed(
+            policy,
+            count,
+            violation_count,
+            first_violation,
+        )
+        .map_err(|_| E::CleanConvention)
+    }
+
+    /// Полная pointwise принадлежность всех конечных opaque pixels nominal v2.
+    /// Точка, среднее, centroid и исходные carrier цвета не могут выдать этот proof.
+    pub(crate) fn admit_program_final_raster_clean_convention(
+        &mut self,
+        materialization: &crate::program_session::finite_field::FinalRasterMaterializationV1,
+        current: &crate::observation::RevisionBoundObservationV1,
+        expected: AuthorityExpectedCurrentV1,
+    ) -> Result<
+        AuthorityAdmissionOutcomeV1,
+        crate::program_session::finite_field::FinalRasterRefusalV1,
+    > {
+        use crate::program_session::finite_field::FinalRasterRefusalV1 as E;
+        if !materialization.observation().is_same_binding_as(current) {
+            return Err(E::Stale);
+        }
+        use crate::field_effect::final_raster::FinalRasterCleanlinessRequirementV1 as C;
+        if materialization.cleanliness_requirement()? != C::MandatoryExactNominalSrgb8V2 {
+            return Err(E::CleanConvention);
+        }
+        let assessment =
+            Self::assess_program_final_raster_clean_convention(materialization, current)?;
+        if let Some(first) = assessment.first_violation() {
+            return Err(E::Convention {
+                pixel_index: first.pixel_index(),
+                composite: Srgb8::new(first.composite()),
+                interval: first.rejected_blue_interval(),
+            });
+        }
+        let payload = materialization.payload();
+        let selection = CleanConventionSelectionV1::select_final_raster();
+        let mut release = Hasher::new();
+        release.update(b"labcolors.cc.final-raster.release.v1\0");
+        release.update(&selection.release);
+        release.update(&[selection.admission as u8]);
+        let release = *release.finalize().as_bytes();
+        let mut applicability = Hasher::new();
+        applicability.update(b"labcolors.cc.final-raster.applicability.v1\0");
+        applicability.update(&[selection.scope as u8]);
+        applicability.update(&payload.context);
+        applicability.update(&payload.extent.width().to_le_bytes());
+        applicability.update(&payload.extent.height().to_le_bytes());
+        applicability.update(&[payload.dpr.value()]);
+        let applicability = *applicability.finalize().as_bytes();
+        let mut provenance = Hasher::new();
+        provenance.update(b"labcolors.cc.final-raster.provenance.v1\0");
+        provenance.update(&release);
+        provenance.update(&applicability);
+        provenance.update(TECHNICAL_RECEIPT_PIN);
+        provenance.update(&materialization.subject());
+        let descriptor = AuthorityDescriptorV1::from_verified_owner(
+            AuthorityIdV1::CleanConvention,
+            release,
+            applicability,
+            *provenance.finalize().as_bytes(),
+        );
+        let owner_current = AuthorityOwnerCurrentV1::new(descriptor);
+        let permit = issue_permit(
+            &owner_current,
+            descriptor,
+            true,
+            RendererObservationRequirementV1::NotRequired,
+            ProgramRendererProvenanceV1::Unverified,
+        )
+        .map_err(|_| E::CleanConvention)?;
+        self.admit(descriptor, expected, permit)
+            .map_err(|_| E::CleanConvention)
+    }
+}

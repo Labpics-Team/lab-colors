@@ -1,4 +1,4 @@
-//! Публичная проверка, компиляция и runtime канонических Program wire-байтов (v1).
+//! Публичная проверка, компиляция и runtime канонических Program wire-байтов.
 //!
 //! Проверка возвращает content identity без runtime authority. Компиляция создаёт
 //! immutable owner для Session или terminal point attachment; физическим sink
@@ -7,6 +7,16 @@
 //! Отказы формата и семантики остаются раздельными. Возвращённая нехватка ресурсов
 //! или внутренний сбой сохраняют свой класс при проверке, компиляции и update;
 //! они не превращаются в отказ пользовательского графа или observation.
+
+mod finite_field;
+#[cfg(test)]
+mod scope_tests;
+pub use finite_field::{
+    FinalRasterAssessmentVerdictV1, FinalRasterCleanlinessAssessmentV1,
+    FinalRasterCleanlinessRequirementV1, FinalRasterCleanlinessViolationV1,
+    MAX_FINAL_RASTER_PIXELS_V1, ProgramCurrentFinalRasterV1, ProgramFinalRasterErrorV1,
+    ProgramFinalRasterInputV1, final_raster_source_over_wire_v1,
+};
 
 use crate::Srgb8;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
@@ -70,7 +80,8 @@ fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize)
             },
             *offset,
         ),
-        ProgramWireErrorV1::ResourceExhausted { section } => (
+        ProgramWireErrorV1::ResourceExhausted { section }
+        | ProgramWireErrorV1::AssignmentResourceExhausted { section } => (
             match section {
                 Section::Sources => "sources",
                 Section::Targets => "targets",
@@ -123,6 +134,12 @@ fn checked_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
     let draft = decoded.map_err(|error| {
+        if matches!(
+            error,
+            ProgramWireErrorV1::AssignmentResourceExhausted { .. }
+        ) {
+            return ProgramWireCheckErrorV1::ResourceExhausted;
+        }
         let (section, offset) = section_name(&error);
         ProgramWireCheckErrorV1::Wire { section, offset }
     })?;
@@ -325,13 +342,12 @@ mod fv01_red_tests {
     #[derive(Default)]
     struct Host {
         stamp: Option<ProgramPointSinkStampV1>,
-        intents: Vec<ProgramPointSinkIntentV1>,
     }
 
     impl ProgramPointSinkHostV1 for Host {
         fn try_install(
             &mut self,
-            intent: ProgramPointSinkIntentV1,
+            intent: ProgramPointSinkIntentV1<'_>,
         ) -> Result<(), ProgramPointSinkHostErrorV1> {
             if self
                 .stamp
@@ -340,7 +356,6 @@ mod fv01_red_tests {
                 return Err(ProgramPointSinkHostErrorV1::Rejected);
             }
             self.stamp = Some(intent.desired_stamp());
-            self.intents.push(intent);
             Ok(())
         }
     }
@@ -364,6 +379,58 @@ mod fv01_red_tests {
             result,
             Err(ProgramAttachErrorV1::NonTerminalTarget)
         ));
+    }
+
+    #[test]
+    fn public_report_preflight_failure_preserves_attachment_and_same_revision_retry()
+    -> Result<(), ProgramAttachmentUpdateErrorV1> {
+        let mut attachment = ready_attachment();
+        let scenarios = [ProgramScenarioV1::new(1, vec![Srgb8::new([0x80; 3])])];
+        let first = attachment.update_observed(1, &scenarios)?;
+        let render = first
+            .render()
+            .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?;
+        let previous_report = first
+            .snapshot()
+            .assessment_report()
+            .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+            .clone();
+        let bound = attachment.assessment_cells_per_case;
+        // CapacityOverflow воспроизводит отказ того же preflight до host-эффекта,
+        // без попытки выделить огромную память и без изменения входного сценария.
+        attachment.assessment_cells_per_case = usize::MAX;
+        assert!(matches!(
+            attachment.update_observed(2, &scenarios),
+            Err(ProgramAttachmentUpdateErrorV1::ResourceExhausted)
+        ));
+        assert_eq!(attachment.current_render(), Some(render));
+        assert_eq!(first.snapshot().assessment_report(), Some(&previous_report));
+        attachment.assessment_cells_per_case = bound;
+        let retry = attachment.update_observed(2, &scenarios)?;
+        assert_eq!(
+            retry
+                .render()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .revision(),
+            2
+        );
+        assert_eq!(
+            retry
+                .render()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .sink_stamp()
+                .sequence(),
+            2
+        );
+        assert_eq!(
+            retry
+                .snapshot()
+                .assessment_report()
+                .ok_or(ProgramAttachmentUpdateErrorV1::InternalInvariant)?
+                .revision(),
+            2
+        );
+        Ok(())
     }
 
     #[test]
@@ -560,11 +627,23 @@ pub struct CompiledProgramV1 {
     owner: crate::program::OwnerV1,
 }
 
+#[path = "program_assessment_report.rs"]
+mod assessment_report;
+
+pub use assessment_report::{
+    ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
+    ProgramConstraintAssessmentV1, ProgramScenarioProvenanceV1,
+};
+use assessment_report::{ProgramAssessmentReportScratchV1, ProgramReadyProjectionV1};
+
 /// Единственный runtime-владелец одной Session публичного Program.
 pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    assessment_scratch: ProgramAssessmentReportScratchV1,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
+    projection_cache: Option<ProgramReadyProjectionV1>,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -652,6 +731,8 @@ pub enum ProgramSnapshotStateV1 {
     Ready,
     Stale,
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Один сертифицированный Paint output.
@@ -685,22 +766,87 @@ impl ProgramPaintOutputV1 {
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
+    snapshot_version: u32,
+    revision: u64,
     state: ProgramSnapshotStateV1,
     outputs: ProgramSnapshotOutputsV1,
+    assessment_report: Option<ProgramAssessmentReportV1>,
+    projection: Option<ProgramReadyProjectionV1>,
 }
 
-// Point attachment всегда возвращает один output. Он принадлежит самому
-// snapshot; только общий многоцветный результат требует отдельного буфера.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProgramPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    rgb: crate::Srgb8,
+}
+
+// Один output принадлежит самому snapshot; многовыходный результат сохраняет
+// отдельный owned-буфер, независимо от срока жизни Session.
 #[derive(Debug, Clone, PartialEq)]
-enum ProgramSnapshotOutputsV1 {
-    One(ProgramPaintOutputV1),
-    Many(Vec<ProgramPaintOutputV1>),
+enum ProgramSnapshotItemsV1<T> {
+    One(T),
+    Many(Vec<T>),
 }
 
-fn reserve_snapshot_outputs(
-    storage: &mut Vec<ProgramPaintOutputV1>,
-    count: usize,
-) -> Result<(), ()> {
+type ProgramSnapshotOutputsV1 = ProgramSnapshotItemsV1<ProgramPaintOutputV1>;
+type ProgramAttachedRendersV1 = ProgramSnapshotItemsV1<ProgramAttachedRenderV1>;
+
+impl<T> ProgramSnapshotItemsV1<T> {
+    fn as_slice(&self) -> &[T] {
+        match self {
+            Self::One(item) => std::slice::from_ref(item),
+            Self::Many(items) => items,
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Self::One(_) => *self = Self::Many(Vec::new()),
+            Self::Many(items) => items.clear(),
+        }
+    }
+
+    fn reserve(&mut self, count: usize) -> Result<(), ()> {
+        if count > 1 {
+            if matches!(self, Self::One(_)) {
+                *self = Self::Many(Vec::new());
+            }
+            if let Self::Many(items) = self {
+                if items.capacity() < count {
+                    items
+                        .try_reserve_exact(count - items.len())
+                        .map_err(|_| ())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_from_slice(&mut self, items: &[T]) -> Result<(), ()>
+    where
+        T: Copy,
+    {
+        match items {
+            [] => self.clear(),
+            [item] => *self = Self::One(*item),
+            _ => {
+                let Self::Many(storage) = self else {
+                    return Err(());
+                };
+                if storage.capacity() < items.len() {
+                    return Err(());
+                }
+                storage.clear();
+                storage.extend_from_slice(items);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn reserve_snapshot_items<T>(storage: &mut Vec<T>, count: usize) -> Result<(), ()> {
+    storage.clear();
     if count > 1 {
         storage.try_reserve_exact(count).map_err(|_| ())?;
     }
@@ -708,6 +854,28 @@ fn reserve_snapshot_outputs(
 }
 
 impl ProgramSnapshotV1 {
+    /// Версия проекции: 1 сохраняет historical outputs V1/V2, 2 показывает current V3.
+    #[must_use]
+    pub const fn snapshot_version(&self) -> u32 {
+        self.snapshot_version
+    }
+
+    /// Ревизия принятого наблюдения, независимо от наличия current outputs.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Причина остановки вычисления; Unknown reason ID имеет отдельный смысл.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        if self.snapshot_version == 2 && matches!(self.state, ProgramSnapshotStateV1::Incomplete) {
+            Some("limit")
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub const fn state(&self) -> ProgramSnapshotStateV1 {
         self.state
@@ -715,10 +883,37 @@ impl ProgramSnapshotV1 {
 
     #[must_use]
     pub fn outputs(&self) -> &[ProgramPaintOutputV1] {
-        match &self.outputs {
-            ProgramSnapshotOutputsV1::One(output) => std::slice::from_ref(output),
-            ProgramSnapshotOutputsV1::Many(outputs) => outputs,
+        self.outputs.as_slice()
+    }
+
+    /// Проверенные оценки текущего Ready-снимка. Исторические outputs вне Ready
+    /// не получают новую привязку к наблюдению и не создают актуальный отчёт.
+    #[must_use]
+    pub fn assessment_report(&self) -> Option<&ProgramAssessmentReportV1> {
+        self.assessment_report.as_ref()
+    }
+
+    /// Нормальный encoded-sRGB8 итог root для точного observed scenario.
+    /// Возвращает только данные готового снимка, включая нулевой вклад target.
+    /// Неизвестные ID и неготовый снимок дают `None`; полномочия не выдаются.
+    #[must_use]
+    pub fn presentation_composite_rgb(&self, root: u32, scenario: u32) -> Option<crate::Srgb8> {
+        let mut rgb = None;
+        for value in self
+            .projection
+            .as_ref()
+            .map_or(&[][..], ProgramReadyProjectionV1::composites)
+            .iter()
+            .filter(|value| value.root == root && value.scenario == scenario)
+        {
+            // Разные target одного root обязаны сохранять один нормальный итог.
+            // Несогласованные записи не превращаются в выбор первого значения.
+            if rgb.is_some_and(|previous| previous != value.rgb) {
+                return None;
+            }
+            rgb = Some(value.rgb);
         }
+        rgb
     }
 }
 
@@ -814,18 +1009,65 @@ pub enum ProgramPointSinkOperationV1 {
     ConfirmExact,
 }
 
-/// Полный атомарный intent терминального point sink.
+/// Один paint в полном снимке host. Source и straight opacity не заменяются композицией.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProgramPointSinkIntentV1 {
+pub struct ProgramPointSinkPointV1 {
+    output: ProgramPaintOutputV1,
+    sink_output: u32,
+}
+
+impl ProgramPointSinkPointV1 {
+    #[must_use]
+    pub const fn output(self) -> ProgramPaintOutputV1 {
+        self.output
+    }
+
+    #[must_use]
+    pub const fn sink_output(self) -> u32 {
+        self.sink_output
+    }
+}
+
+/// Вычисленная композиция объявленной точки в одном observation case.
+/// Это данные prospective снимка; они не являются whole-field или human authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    visible: crate::Srgb8,
+}
+
+impl ProgramPointPresentationCompositeV1 {
+    #[must_use]
+    pub const fn root(self) -> u32 {
+        self.root
+    }
+
+    #[must_use]
+    pub const fn scenario(self) -> u32 {
+        self.scenario
+    }
+
+    #[must_use]
+    pub const fn visible(self) -> crate::Srgb8 {
+        self.visible
+    }
+}
+
+/// Полный атомарный intent одного terminal point scope.
+/// Borrow заканчивается вместе с синхронным host callback.
+#[derive(Debug, Clone, Copy)]
+pub struct ProgramPointSinkIntentV1<'a> {
     operation: ProgramPointSinkOperationV1,
     revision: u64,
     expected: ProgramPointSinkStampV1,
     desired: ProgramPointSinkStampV1,
-    point: Option<ProgramPaintOutputV1>,
-    sink_output: u32,
+    scope: &'a [crate::program::attachment::handoff::HandoffPointSinkOutputIdV1],
+    points: &'a [crate::program::attachment::handoff::HandoffPublishedPointV1],
+    composites: &'a [crate::program::attachment::PointSinkPresentationCompositeV1],
 }
 
-impl ProgramPointSinkIntentV1 {
+impl<'a> ProgramPointSinkIntentV1<'a> {
     /// Вид команды.
     #[must_use]
     pub const fn operation(self) -> ProgramPointSinkOperationV1 {
@@ -850,16 +1092,59 @@ impl ProgramPointSinkIntentV1 {
         self.desired
     }
 
-    /// Paint patch для SetAll/ConfirmExact; для RevokeAll отсутствует.
+    /// Совместимая scalar-проекция; batch никогда не выдаётся как первая точка.
     #[must_use]
-    pub const fn point(self) -> Option<ProgramPaintOutputV1> {
-        self.point
+    pub fn point(self) -> Option<ProgramPaintOutputV1> {
+        match self.points {
+            [point] => Some(public_sink_point(*point).output()),
+            _ => None,
+        }
     }
 
-    /// Непрозрачный host-side ID принадлежащего sink output.
+    /// Совместимая scalar-проекция принадлежащего scope.
     #[must_use]
-    pub const fn sink_output(self) -> u32 {
-        self.sink_output
+    pub fn sink_output(self) -> Option<u32> {
+        match self.scope {
+            [output] => Some(output.value()),
+            _ => None,
+        }
+    }
+
+    /// Весь неизменяемый owned scope, в том числе для RevokeAll.
+    pub fn scope(self) -> impl ExactSizeIterator<Item = u32> + 'a {
+        self.scope.iter().map(|output| output.value())
+    }
+
+    /// Полный сертифицированный paint patch; пустой для RevokeAll.
+    pub fn points(self) -> impl ExactSizeIterator<Item = ProgramPointSinkPointV1> + 'a {
+        self.points.iter().copied().map(public_sink_point)
+    }
+
+    /// Все уже вычисленные композиции, без повторного evaluator.
+    pub fn presentation_composites(
+        self,
+    ) -> impl ExactSizeIterator<Item = ProgramPointPresentationCompositeV1> + 'a {
+        self.composites
+            .iter()
+            .map(|composite| ProgramPointPresentationCompositeV1 {
+                root: composite.root(),
+                scenario: composite.scenario(),
+                visible: composite.visible(),
+            })
+    }
+}
+
+fn public_sink_point(
+    point: crate::program::attachment::handoff::HandoffPublishedPointV1,
+) -> ProgramPointSinkPointV1 {
+    let paint = point.paint();
+    ProgramPointSinkPointV1 {
+        output: ProgramPaintOutputV1 {
+            slot: point.output().value(),
+            source: paint.source(),
+            opacity: f64::from_bits(paint.opacity_bits()),
+        },
+        sink_output: point.sink_output().value(),
     }
 }
 
@@ -869,6 +1154,7 @@ impl ProgramPointSinkIntentV1 {
 pub enum ProgramPointSinkHostErrorV1 {
     Rejected,
     Protocol,
+    ResourceExhausted,
 }
 
 /// Единственная публичная граница эффекта attachment.
@@ -879,7 +1165,7 @@ pub enum ProgramPointSinkHostErrorV1 {
 pub trait ProgramPointSinkHostV1 {
     fn try_install(
         &mut self,
-        intent: ProgramPointSinkIntentV1,
+        intent: ProgramPointSinkIntentV1<'_>,
     ) -> Result<(), ProgramPointSinkHostErrorV1>;
 }
 
@@ -1032,6 +1318,7 @@ pub enum ProgramMaterializationAuthorityErrorV1 {
     TerminalBindingMismatch,
     MissingPointAbsenceProof,
     AmbiguousObservationCases,
+    AmbiguousBindings,
 }
 
 /// Материализация, полученная только из `Ready` commit attachment.
@@ -1210,7 +1497,7 @@ impl ProgramAttachedRenderV1 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramAttachedSnapshotV1 {
     snapshot: ProgramSnapshotV1,
-    render: Option<ProgramAttachedRenderV1>,
+    renders: ProgramAttachedRendersV1,
 }
 
 impl ProgramAttachedSnapshotV1 {
@@ -1222,8 +1509,17 @@ impl ProgramAttachedSnapshotV1 {
 
     /// Exact render commit; `None` для Waiting/Stale/Failed.
     #[must_use]
-    pub const fn render(&self) -> Option<ProgramAttachedRenderV1> {
-        self.render
+    pub fn render(&self) -> Option<ProgramAttachedRenderV1> {
+        match self.renders.as_slice() {
+            [render] => Some(*render),
+            _ => None,
+        }
+    }
+
+    /// Все точечные bindings одного committed scope, без переноса point proof на весь batch.
+    #[must_use]
+    pub fn renders(&self) -> &[ProgramAttachedRenderV1] {
+        self.renders.as_slice()
     }
 }
 
@@ -1287,7 +1583,6 @@ pub enum ProgramDisposeErrorV1<E> {
 
 struct ProgramPointSinkHostAdapterV1<H> {
     host: H,
-    sink_output: crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
 }
 
 impl<H> crate::program::attachment::handoff::HandoffPointSinkHostV1
@@ -1297,7 +1592,7 @@ where
 {
     fn try_install(
         &mut self,
-        intent: crate::program::attachment::handoff::HandoffPointSinkHostIntentV1,
+        intent: crate::program::attachment::handoff::HandoffPointSinkHostIntentV1<'_>,
     ) -> Result<(), crate::program::attachment::handoff::HandoffPointSinkHostErrorV1> {
         let operation = match intent.operation() {
             1 => ProgramPointSinkOperationV1::SetAll,
@@ -1310,20 +1605,14 @@ where
             }
         };
         let binding_epoch = intent.binding_epoch().value().get();
-        let point = intent
-            .point()
-            .map(|(output, _sink_output, paint)| ProgramPaintOutputV1 {
-                slot: output.value(),
-                source: paint.source(),
-                opacity: f64::from_bits(paint.opacity_bits()),
-            });
         let public_intent = ProgramPointSinkIntentV1 {
             operation,
             revision: intent.revision(),
             expected: ProgramPointSinkStampV1::new(intent.expected_sequence(), binding_epoch),
             desired: ProgramPointSinkStampV1::new(intent.desired_sequence(), binding_epoch),
-            point,
-            sink_output: self.sink_output.value(),
+            scope: intent.scope(),
+            points: intent.points(),
+            composites: intent.presentation_composites(),
         };
         self.host
             .try_install(public_intent)
@@ -1334,12 +1623,51 @@ where
                 ProgramPointSinkHostErrorV1::Protocol => {
                     crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::Protocol
                 }
+                ProgramPointSinkHostErrorV1::ResourceExhausted => {
+                    crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::ResourceExhausted
+                }
             })
     }
 }
 
 type ProgramInnerAttachmentV1<H> =
     crate::program::attachment::handoff::HandoffAttachmentV1<ProgramPointSinkHostAdapterV1<H>>;
+
+/// Не доверенная связь одного Program output с принадлежащим host ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointEmissionBindingV1 {
+    slot: u32,
+    sink_output: u32,
+}
+
+/// Budget одного binding списка соответствует записи существующего LCPW.
+pub const MAX_PROGRAM_POINT_BINDINGS_V1: u32 = crate::program::wire::MAX_SECTION_ENTRIES_V1;
+
+impl ProgramPointEmissionBindingV1 {
+    #[must_use]
+    pub const fn new(slot: u32, sink_output: u32) -> Self {
+        Self { slot, sink_output }
+    }
+}
+
+/// Не доверенная точечная связь; один output может иметь несколько presentations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramPointPresentationBindingV1 {
+    slot: u32,
+    root: u32,
+    occurrence: u32,
+}
+
+impl ProgramPointPresentationBindingV1 {
+    #[must_use]
+    pub const fn new(slot: u32, root: u32, occurrence: u32) -> Self {
+        Self {
+            slot,
+            root,
+            occurrence,
+        }
+    }
+}
 
 /// Публичный типизированный attachment для одного неизменяемого Program и sink,
 /// принадлежащего host.
@@ -1351,14 +1679,22 @@ where
     H: ProgramPointSinkHostV1,
 {
     inner: Option<ProgramInnerAttachmentV1<H>>,
-    current_render: Option<ProgramAttachedRenderV1>,
+    output_count: usize,
+    assessment_cells_per_case: usize,
+    presentation_count: usize,
+    evaluation_presentation_count: usize,
+    outputs_scratch: Vec<ProgramPaintOutputV1>,
+    assessment_scratch: ProgramAssessmentReportScratchV1,
+    composites_scratch: Vec<ProgramPresentationCompositeV1>,
+    renders_scratch: Vec<ProgramAttachedRenderV1>,
+    current_renders: ProgramAttachedRendersV1,
+    projection_cache: Option<ProgramReadyProjectionV1>,
 }
 
 impl CompiledProgramV1 {
     /// Создаёт один точный terminal point attachment из скомпилированного Program.
     ///
-    /// Первый публичный seam поддерживает один output и одну presentation target;
-    /// вся остальная топология output/presentation отклоняется допуском Core.
+    /// Scalar facade переводит связь в тот же полный binding admission.
     pub fn attach<H>(
         self,
         stream_id: u32,
@@ -1371,45 +1707,113 @@ impl CompiledProgramV1 {
     where
         H: ProgramPointSinkHostV1,
     {
+        self.attach_bindings(
+            stream_id,
+            &[ProgramPointEmissionBindingV1::new(output_slot, sink_output)],
+            &[ProgramPointPresentationBindingV1::new(
+                output_slot,
+                presentation_root,
+                occurrence,
+            )],
+            host,
+        )
+    }
+
+    /// Привязывает весь Program к одному атомарному host scope.
+    /// Покрытие, fan-out, terminal semantics и уникальность ID проверяет Core owner.
+    pub fn attach_bindings<H>(
+        self,
+        stream_id: u32,
+        emissions: &[ProgramPointEmissionBindingV1],
+        presentations: &[ProgramPointPresentationBindingV1],
+        host: H,
+    ) -> Result<ProgramAttachmentV1<H>, ProgramAttachErrorV1>
+    where
+        H: ProgramPointSinkHostV1,
+    {
         let output_count = self.owner.output_slots().count();
-        if output_count != 1 {
+        let assessment_cells_per_case = self
+            .owner
+            .evidence_cell_bounds(1)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?
+            .verified_cells();
+        let evaluation_presentation_count = self.owner.point_presentation_count();
+        let presentation_count = self.owner.terminal_point_presentation_count();
+        if emissions.len() != output_count || presentations.len() > evaluation_presentation_count {
             return Err(ProgramAttachErrorV1::Binding);
         }
-        self.owner
-            .bind_terminal_point_output_presentation(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                crate::program::PresentationRootIdV1::new(presentation_root),
-                crate::program::OccurrenceIdV1::new(occurrence),
-            )
-            .map_err(map_attachment_binding_error)?;
-        let sink_output_id =
-            crate::program::attachment::handoff::HandoffPointSinkOutputIdV1::new(sink_output);
+        for binding in presentations {
+            self.owner
+                .bind_terminal_point_output_presentation(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    crate::program::PresentationRootIdV1::new(binding.root),
+                    crate::program::OccurrenceIdV1::new(binding.occurrence),
+                )
+                .map_err(map_attachment_binding_error)?;
+        }
+        if presentations.len() != presentation_count {
+            return Err(ProgramAttachErrorV1::Binding);
+        }
+        let mut authored_presentations = Vec::new();
+        authored_presentations
+            .try_reserve_exact(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        for binding in presentations {
+            authored_presentations.push(
+                crate::program::attachment::AuthoredPointPresentationBindingV1::new(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    crate::program::PresentationRootIdV1::new(binding.root),
+                    crate::program::OccurrenceIdV1::new(binding.occurrence),
+                ),
+            );
+        }
+        let mut emission_order = Vec::new();
+        emission_order
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        emission_order.extend_from_slice(emissions);
+        crate::ordering::sort_by_key(&mut emission_order, |binding| binding.slot);
+        let mut authored_emissions = Vec::new();
+        authored_emissions
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        let mut owned_scope = Vec::new();
+        owned_scope
+            .try_reserve_exact(output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        for binding in emission_order {
+            let sink_output = crate::program::attachment::handoff::HandoffPointSinkOutputIdV1::new(
+                binding.sink_output,
+            );
+            authored_emissions.push(
+                crate::program::attachment::AuthoredPointEmissionBindingV1::new(
+                    crate::program::OutputSlotIdV1::new(binding.slot),
+                    sink_output,
+                ),
+            );
+            owned_scope.push(sink_output);
+        }
+        let mut outputs_scratch = Vec::new();
+        reserve_snapshot_items(&mut outputs_scratch, output_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+
+        let mut renders_scratch = Vec::new();
+        reserve_snapshot_items(&mut renders_scratch, presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
+        let mut current_renders = ProgramAttachedRendersV1::Many(Vec::new());
+        current_renders
+            .reserve(presentation_count)
+            .map_err(|_| ProgramAttachErrorV1::ResourceExhausted)?;
         let sink = crate::program::attachment::handoff::handoff_point_sink(
-            sink_output_id,
-            ProgramPointSinkHostAdapterV1 {
-                host,
-                sink_output: sink_output_id,
-            },
+            owned_scope,
+            ProgramPointSinkHostAdapterV1 { host },
         );
-        let emissions = [
-            crate::program::attachment::AuthoredPointEmissionBindingV1::new(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                sink_output_id,
-            ),
-        ];
-        let presentations = [
-            crate::program::attachment::AuthoredPointPresentationBindingV1::new(
-                crate::program::OutputSlotIdV1::new(output_slot),
-                crate::program::PresentationRootIdV1::new(presentation_root),
-                crate::program::OccurrenceIdV1::new(occurrence),
-            ),
-        ];
         let inner = self
             .owner
             .attach_external(
                 stream_id,
-                &emissions,
-                &presentations,
+                &authored_emissions,
+                &authored_presentations,
                 crate::family_artifact::FamilyArtifactBundleV2::empty(),
                 sink,
             )
@@ -1432,7 +1836,16 @@ impl CompiledProgramV1 {
             })?;
         Ok(ProgramAttachmentV1 {
             inner: Some(inner),
-            current_render: None,
+            output_count,
+            assessment_cells_per_case,
+            presentation_count,
+            evaluation_presentation_count,
+            outputs_scratch,
+            assessment_scratch: ProgramAssessmentReportScratchV1::default(),
+            composites_scratch: Vec::new(),
+            renders_scratch,
+            current_renders,
+            projection_cache: None,
         })
     }
 }
@@ -1510,14 +1923,37 @@ where
             }
         });
         if disposed {
-            self.current_render = None;
+            self.current_renders.clear();
+            self.projection_cache = None;
         }
         result
     }
 
     /// Текущий committed render; исторический snapshot его не заменяет.
     pub fn current_render(&self) -> Option<ProgramAttachedRenderV1> {
-        self.current_render
+        match self.current_renders.as_slice() {
+            [render] => Some(*render),
+            _ => None,
+        }
+    }
+
+    /// Все точечные bindings текущего head; каждый сохраняет собственную область доказательства.
+    #[must_use]
+    pub fn current_renders(&self) -> &[ProgramAttachedRenderV1] {
+        self.current_renders.as_slice()
+    }
+
+    #[must_use]
+    pub fn current_render_for(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Option<ProgramAttachedRenderV1> {
+        self.current_renders
+            .as_slice()
+            .iter()
+            .copied()
+            .find(|render| render.presentation_root() == root && render.occurrence() == occurrence)
     }
 
     /// Допускает authority только из текущего committed head attachment.
@@ -1527,9 +1963,12 @@ where
         candidate: ProgramMaterializationCandidateV1,
         expected: ProgramMaterializationExpectationV1,
     ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
-        let Some(render) = self.current_render else {
+        if self.current_renders.as_slice().is_empty() {
             return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
-        };
+        }
+        let render = self
+            .current_render_for(expected.presentation_root, expected.occurrence)
+            .ok_or(ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch)?;
         materialization_authority_from_render(render, candidate, expected)
     }
 
@@ -1537,9 +1976,30 @@ where
     pub fn current_materialization_authority(
         &self,
     ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
-        let Some(render) = self.current_render else {
-            return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
+        let render = match self.current_renders.as_slice() {
+            [] => return Err(ProgramMaterializationAuthorityErrorV1::NotReady),
+            [render] => *render,
+            _ => return Err(ProgramMaterializationAuthorityErrorV1::AmbiguousBindings),
         };
+        materialization_authority_from_render(
+            render,
+            ProgramMaterializationCandidateV1::AttachedCommit,
+            render.expectation(),
+        )
+    }
+
+    /// Выдаёт authority ровно для указанного текущего terminal binding.
+    pub fn current_materialization_authority_for(
+        &self,
+        root: u32,
+        occurrence: u32,
+    ) -> Result<AttachedMaterializationAuthorityV1, ProgramMaterializationAuthorityErrorV1> {
+        if self.current_renders.as_slice().is_empty() {
+            return Err(ProgramMaterializationAuthorityErrorV1::NotReady);
+        }
+        let render = self
+            .current_render_for(root, occurrence)
+            .ok_or(ProgramMaterializationAuthorityErrorV1::TerminalBindingMismatch)?;
         materialization_authority_from_render(
             render,
             ProgramMaterializationCandidateV1::AttachedCommit,
@@ -1553,16 +2013,75 @@ where
     ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
         let Self {
             inner,
-            current_render,
+            output_count,
+            assessment_cells_per_case,
+            presentation_count,
+            evaluation_presentation_count,
+            outputs_scratch,
+            assessment_scratch,
+            composites_scratch,
+            renders_scratch,
+            current_renders,
+            projection_cache,
         } = self;
+        let revision = match &update {
+            crate::program::UpdateV1::Observed { revision, .. }
+            | crate::program::UpdateV1::ObservedSource { revision, .. }
+            | crate::program::UpdateV1::Unknown { revision, .. } => *revision,
+        };
+        let scenario_count = match &update {
+            crate::program::UpdateV1::Observed { scenarios, .. } => scenarios.len(),
+            crate::program::UpdateV1::ObservedSource { source, .. } => source.scenario_count(),
+            crate::program::UpdateV1::Unknown { .. } => 0,
+        };
+        let cell_count = assessment_cells_per_case
+            .checked_mul(scenario_count)
+            .ok_or(ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        assessment_scratch
+            .reserve(cell_count, scenario_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        reserve_snapshot_composites(
+            composites_scratch,
+            *evaluation_presentation_count,
+            scenario_count,
+        )
+        .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        reserve_snapshot_items(outputs_scratch, *output_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        reserve_snapshot_items(renders_scratch, *presentation_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+        current_renders
+            .reserve(*presentation_count)
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
         let attachment = inner
             .as_mut()
             .ok_or(ProgramAttachmentUpdateErrorV1::AlreadyDisposed)?;
+        let mut projection = None;
         let commit = attachment
-            .update(update)
+            .update_with_projection(update, |verified| {
+                projection = prepare_ready_projection(
+                    verified,
+                    assessment_scratch,
+                    composites_scratch,
+                    projection_cache.as_ref(),
+                )?;
+                Ok(())
+            })
             .map_err(map_attachment_update_error)?;
-        let snapshot = attachment_snapshot_from_commit(commit)?;
-        *current_render = snapshot.render();
+        let snapshot = attachment_snapshot_from_commit(
+            commit,
+            outputs_scratch,
+            projection,
+            renders_scratch,
+            revision,
+        )?;
+        // Capacity полного immutable presentation scope зарезервирована до host effect.
+        current_renders
+            .copy_from_slice(snapshot.renders())
+            .map_err(|()| ProgramAttachmentUpdateErrorV1::InternalInvariant)?;
+        if let Some(projection) = snapshot.snapshot.projection.as_ref() {
+            *projection_cache = Some(projection.clone());
+        }
         Ok(snapshot)
     }
 }
@@ -1584,7 +2103,7 @@ fn map_attachment_update_error(
         },
         crate::program::attachment::AttachmentUpdateErrorV1::SinkPrepare(error)
         | crate::program::attachment::AttachmentUpdateErrorV1::SinkInstall(error) => {
-            ProgramAttachmentUpdateErrorV1::Sink(map_sink_error(error))
+            map_sink_error(error)
         }
         crate::program::attachment::AttachmentUpdateErrorV1::InternalInvariant(_) => {
             ProgramAttachmentUpdateErrorV1::InternalInvariant
@@ -1594,9 +2113,9 @@ fn map_attachment_update_error(
 
 fn map_sink_error(
     error: crate::program::attachment::handoff::HandoffPointSinkErrorV1,
-) -> ProgramPointSinkErrorV1 {
+) -> ProgramAttachmentUpdateErrorV1 {
     use crate::program::attachment::handoff::HandoffPointSinkErrorV1 as Error;
-    match error {
+    let sink_error = match error {
         Error::PatchScopeMismatch => ProgramPointSinkErrorV1::PatchScopeMismatch,
         Error::StampMismatch => ProgramPointSinkErrorV1::StampMismatch,
         Error::RevisionMismatch => ProgramPointSinkErrorV1::RevisionMismatch,
@@ -1608,8 +2127,16 @@ fn map_sink_error(
             crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::Protocol => {
                 ProgramPointSinkHostErrorV1::Protocol
             }
+            crate::program::attachment::handoff::HandoffPointSinkHostErrorV1::ResourceExhausted => {
+                return ProgramAttachmentUpdateErrorV1::ResourceExhausted;
+            }
         }),
-    }
+        Error::ResourceExhausted => return ProgramAttachmentUpdateErrorV1::ResourceExhausted,
+        Error::PresentationEvidenceMismatch => {
+            return ProgramAttachmentUpdateErrorV1::InternalInvariant;
+        }
+    };
+    ProgramAttachmentUpdateErrorV1::Sink(sink_error)
 }
 
 fn attachment_snapshot_from_commit(
@@ -1617,25 +2144,44 @@ fn attachment_snapshot_from_commit(
         '_,
         crate::program::attachment::handoff::HandoffPointSinkOutputIdV1,
     >,
+    outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
+    projection: Option<ProgramReadyProjectionV1>,
+    renders_scratch: &mut Vec<ProgramAttachedRenderV1>,
+    revision: u64,
 ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
-    // attach допускает ровно один output; snapshot хранит его inline.
-    let snapshot = snapshot_from_evidence_into(commit.evidence(), &mut Vec::new())
-        .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
-    let render = commit.render_outputs().next().map(|render| {
+    let snapshot = snapshot_from_evidence_into(
+        commit.evidence(),
+        outputs_scratch,
+        projection,
+        commit.snapshot_version(),
+        revision,
+    )
+    .map_err(|error| match error {
+        ProgramRuntimeErrorV1::ResourceExhausted => {
+            ProgramAttachmentUpdateErrorV1::ResourceExhausted
+        }
+        _ => ProgramAttachmentUpdateErrorV1::InternalInvariant,
+    })?;
+    renders_scratch.clear();
+    let renders = commit.render_outputs();
+    let render_count = renders.len();
+    if render_count > 1 && render_count > renders_scratch.capacity() {
+        return Err(ProgramAttachmentUpdateErrorV1::InternalInvariant);
+    }
+    let mut inline_render = None;
+    for render in renders {
         let mut terminal_composite = None;
         let mut saw_matching_certificate = false;
         let mut saw_empty_domain = false;
         let mut saw_conflicting_composite = false;
-        for certificate in render
-            .certificate()
-            .point_causal_certificates()
-            .filter(|certificate| {
-                certificate.presentation_root().value() == render.root().value()
-                    && certificate.target().value() == render.occurrence().value()
-            })
-        {
+        for domain in render.evidence().point_domains() {
+            if domain.presentation_root().value() != render.root().value()
+                || domain.target().value() != render.occurrence().value()
+            {
+                continue;
+            }
             saw_matching_certificate = true;
-            match certificate.domain() {
+            match domain.domain() {
                 crate::appearance::ExactFinalOwnedPointDomainV1::Empty => {
                     saw_empty_domain = true;
                 }
@@ -1656,7 +2202,7 @@ fn attachment_snapshot_from_commit(
         }
         let paint = render.paint();
         let published = render.published_stamp();
-        ProgramAttachedRenderV1 {
+        let projected = ProgramAttachedRenderV1 {
             output: ProgramPaintOutputV1 {
                 slot: render.output().value(),
                 source: paint.source(),
@@ -1668,19 +2214,31 @@ fn attachment_snapshot_from_commit(
                 published.sink_stamp().sequence(),
                 published.sink_stamp().binding_epoch().value().get(),
             ),
-            content_identity: *render.certificate().content_identity().as_bytes(),
+            content_identity: *render.evidence().content_identity().as_bytes(),
             presentation_root: render.root().value(),
             occurrence: render.occurrence().value(),
             context: ProgramAppearanceContextIdV1::from_core(render.context()),
-            // Closed Program V1 имеет единственный composition profile:
+            // Общий Program сохраняет единственный composition profile:
             // EncodedSrgb8SourceOverV1. Это профиль математики, не утверждение
             // о topology, числе слоёв или наблюдении реального renderer-а.
             physical_identity: Some(ProgramPhysicalIdentityV1::EncodedSrgb8SourceOverV1),
             terminal_composite,
             terminal_composite_ambiguous,
+        };
+        if render_count == 1 {
+            inline_render = Some(projected);
+        } else {
+            renders_scratch.push(projected);
         }
-    });
-    Ok(ProgramAttachedSnapshotV1 { snapshot, render })
+    }
+    Ok(ProgramAttachedSnapshotV1 {
+        snapshot,
+        renders: match inline_render {
+            Some(render) => ProgramAttachedRendersV1::One(render),
+            None if render_count == 0 => ProgramAttachedRendersV1::Many(Vec::new()),
+            None => ProgramAttachedRendersV1::Many(core::mem::take(renders_scratch)),
+        },
+    })
 }
 
 /// Typed-отказ публичного runtime-сеама. Payload внутренних вариантов не
@@ -1690,6 +2248,8 @@ fn attachment_snapshot_from_commit(
 pub enum ProgramRuntimeErrorV1 {
     Wire,
     Compile,
+    /// Распознанное сочетание возможностей пока не поддержано владельцем Program.
+    Unsupported,
     FamilyArtifactsRequired,
     Instantiate,
     Update,
@@ -1708,15 +2268,15 @@ pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, Progra
     compile_draft(decode_program_wire_v1(bytes))
 }
 
-/// Compile a supported Program envelope into the existing immutable runtime owner.
+/// Компилирует поддерживаемую wire-версию в существующий immutable owner.
 ///
-/// A V2 selection release orders the complete finite candidate space. Every
-/// observation still passes all hard constraints before the shared Session
-/// selects, rechecks and publishes a result. No scientific profile is implied.
+/// V2 задаёт полный порядок конечных кандидатов, V3 — области и предпочтение
+/// вычисляемого назначения. Общая Session проверяет ограничения и фактический
+/// результат; остановленный поиск V3 не публикует промежуточный кандидат.
 ///
 /// # Errors
-/// Returns the same typed format, graph, resource and family admission failures
-/// as the V1-only entry point.
+/// Возвращает типизированные отказы формата, графа, ресурсов, family admission
+/// либо распознанного неподдержанного сочетания возможностей.
 pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
     compile_draft(decode_program_wire(bytes))
 }
@@ -1724,8 +2284,14 @@ pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRu
 fn compile_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
-    let draft = decoded.map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+    let draft = decoded.map_err(|error| match error {
+        ProgramWireErrorV1::AssignmentResourceExhausted { .. } => {
+            ProgramRuntimeErrorV1::ResourceExhausted
+        }
+        _ => ProgramRuntimeErrorV1::Wire,
+    })?;
     let owner = draft.compile().map_err(|error| match error {
+        crate::program::CompileErrorV1::Unsupported => ProgramRuntimeErrorV1::Unsupported,
         crate::program::CompileErrorV1::ResourceExhausted => {
             ProgramRuntimeErrorV1::ResourceExhausted
         }
@@ -1765,6 +2331,9 @@ impl CompiledProgramV1 {
             owner: self.owner,
             session,
             outputs_scratch: Vec::new(),
+            assessment_scratch: ProgramAssessmentReportScratchV1::default(),
+            composites_scratch: Vec::new(),
+            projection_cache: None,
         })
     }
 }
@@ -1783,7 +2352,7 @@ impl ProgramSessionV1 {
         self.update_observed_source(revision, &ProgramScenarioSourceV1(scenarios))
     }
 
-    /// Применяет заимствованную RGB8-матрицу без временных массивов сценариев.
+    /// Применяет заимствованную RGB8-матрицу через тот же переход Session.
     pub fn update_observed_view(
         &mut self,
         revision: u64,
@@ -1797,15 +2366,53 @@ impl ProgramSessionV1 {
         revision: u64,
         source: &dyn SchemaOrderedScenarioSourceV1,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
-        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
+        self.owner
+            .validate_point_observation()
+            .map_err(map_runtime_update_error)?;
+        reserve_snapshot_composites(
+            &mut self.composites_scratch,
+            self.owner.point_presentation_count(),
+            source.scenario_count(),
+        )?;
+        reserve_snapshot_items(&mut self.outputs_scratch, self.owner.output_slots().count())
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+        let cell_count = self
+            .owner
+            .evidence_cell_bounds(source.scenario_count())
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
+            .verified_cells();
+        self.assessment_scratch
+            .reserve(cell_count, source.scenario_count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let transition = self
             .owner
             .prepare_schema_ordered_update(&mut self.session, revision, source)
             .map_err(map_runtime_update_error)?;
+        let projection = transition
+            .current_verified()
+            .map(|verified| {
+                prepare_ready_projection(
+                    verified,
+                    &mut self.assessment_scratch,
+                    &mut self.composites_scratch,
+                    self.projection_cache.as_ref(),
+                )
+            })
+            .transpose()
+            .map_err(map_runtime_update_error)?
+            .flatten();
         let evidence = transition.commit();
-        snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        let snapshot = snapshot_from_evidence_into(
+            evidence,
+            &mut self.outputs_scratch,
+            projection,
+            self.owner.snapshot_version(),
+            revision,
+        )?;
+        if let Some(projection) = snapshot.projection.as_ref() {
+            self.projection_cache = Some(projection.clone());
+        }
+        Ok(snapshot)
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -1814,7 +2421,7 @@ impl ProgramSessionV1 {
         revision: u64,
         reason_id: u32,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
-        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
+        reserve_snapshot_items(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let transition = self
             .owner
@@ -1826,13 +2433,19 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(map_runtime_update_error)?;
-        snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        snapshot_from_evidence_into(
+            transition.commit(),
+            &mut self.outputs_scratch,
+            None,
+            self.owner.snapshot_version(),
+            revision,
+        )
     }
 }
 
 fn map_runtime_update_error(error: crate::program::UpdateErrorV1) -> ProgramRuntimeErrorV1 {
     match error {
+        crate::program::UpdateErrorV1::Unsupported => ProgramRuntimeErrorV1::Unsupported,
         crate::program::UpdateErrorV1::ResourceExhausted { .. } => {
             ProgramRuntimeErrorV1::ResourceExhausted
         }
@@ -1866,44 +2479,152 @@ impl SchemaOrderedScenarioSourceV1 for ProgramScenarioSourceV1<'_> {
 fn snapshot_from_evidence_into(
     evidence: crate::program::EvidenceViewV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
-) -> Result<ProgramSnapshotV1, ()> {
+    projection: Option<ProgramReadyProjectionV1>,
+    snapshot_version: u32,
+    revision: u64,
+) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
     use crate::program::{CertificateV1, StateKindV1};
     let state = match evidence.kind() {
         StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
         StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
         StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
         StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
+        StateKindV1::Unsatisfied => ProgramSnapshotStateV1::Unsatisfied,
+        StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
     };
     outputs_scratch.clear();
-    if let Some(verified) = evidence
-        .certificates()
-        .find_map(|certificate| match certificate {
-            CertificateV1::Verified(verified) => Some(verified),
-            CertificateV1::Conflict(_) => None,
-        })
-    {
-        let mut outputs = verified.outputs().map(|output| ProgramPaintOutputV1 {
-            slot: output.output_slot().value(),
-            source: output.source(),
-            opacity: output.opacity(),
-        });
-        if outputs.len() == 1 {
-            if let Some(output) = outputs.next() {
-                return Ok(ProgramSnapshotV1 {
-                    state,
-                    outputs: ProgramSnapshotOutputsV1::One(output),
-                });
+    let outputs = match snapshot_version {
+        1 => {
+            if let Some(verified) =
+                evidence
+                    .certificates()
+                    .find_map(|certificate| match certificate {
+                        CertificateV1::Verified(verified) => Some(verified),
+                        CertificateV1::Conflict(_) => None,
+                    })
+            {
+                copy_snapshot_outputs(verified.outputs(), outputs_scratch)?
+            } else {
+                ProgramSnapshotOutputsV1::Many(Vec::new())
             }
         }
-        outputs_scratch
-            .try_reserve_exact(outputs.len())
-            .map_err(|_| ())?;
-        outputs_scratch.extend(outputs);
+        2 => {
+            if let Some(verified) = evidence.current_verified() {
+                copy_snapshot_outputs(verified.outputs(), outputs_scratch)?
+            } else {
+                ProgramSnapshotOutputsV1::Many(Vec::new())
+            }
+        }
+        _ => return Err(ProgramRuntimeErrorV1::InternalInvariant),
+    };
+    let mut assessment_report = None;
+    if let Some(verified) = evidence.current_verified() {
+        if let crate::program::ObservationHeadV1::Observed { stream, revision } =
+            evidence.observation_head()
+        {
+            let observation = verified.observation();
+            if state == ProgramSnapshotStateV1::Ready
+                && !observation.is_field()
+                && stream == observation.stream()
+                && revision == observation.revision()
+            {
+                let projection = projection
+                    .as_ref()
+                    .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
+                assessment_report = Some(ProgramAssessmentReportV1::from_projection(
+                    verified,
+                    projection.clone(),
+                ));
+            }
+        }
     }
     Ok(ProgramSnapshotV1 {
+        snapshot_version,
+        revision,
         state,
-        outputs: ProgramSnapshotOutputsV1::Many(std::mem::take(outputs_scratch)),
+        outputs,
+        assessment_report,
+        projection,
     })
+}
+
+fn prepare_ready_projection(
+    verified: crate::program::VerifiedOutputV1<'_>,
+    assessment_scratch: &mut ProgramAssessmentReportScratchV1,
+    composites_scratch: &mut Vec<ProgramPresentationCompositeV1>,
+    cached: Option<&ProgramReadyProjectionV1>,
+) -> Result<Option<ProgramReadyProjectionV1>, crate::program::UpdateErrorV1> {
+    use crate::program::{UpdateErrorV1, UpdateInvariantFailureV1, UpdatePhaseV1};
+    if verified.observation().is_field() {
+        return Ok(None);
+    }
+    composites_scratch.clear();
+    for composite in verified.presentation_composites() {
+        let composite = composite.ok_or(UpdateErrorV1::InternalInvariant {
+            source: UpdateInvariantFailureV1::ProgramEvaluation,
+        })?;
+        if composite.scenarios.len()
+            > composites_scratch
+                .capacity()
+                .saturating_sub(composites_scratch.len())
+        {
+            return Err(UpdateErrorV1::InternalInvariant {
+                source: UpdateInvariantFailureV1::ProgramEvaluation,
+            });
+        }
+        composites_scratch.extend(composite.scenarios.iter().map(|scenario| {
+            ProgramPresentationCompositeV1 {
+                root: composite.root,
+                scenario: scenario.value(),
+                rgb: crate::Srgb8::new(composite.rgb),
+            }
+        }));
+    }
+    assessment_scratch
+        .project_verified(verified, composites_scratch, cached)
+        .map(Some)
+        .map_err(|()| UpdateErrorV1::ResourceExhausted {
+            phase: UpdatePhaseV1::ProgramEvaluation,
+        })
+}
+
+fn reserve_snapshot_composites(
+    destination: &mut Vec<ProgramPresentationCompositeV1>,
+    presentation_count: usize,
+    scenario_count: usize,
+) -> Result<(), ProgramRuntimeErrorV1> {
+    let capacity = presentation_count
+        .checked_mul(scenario_count)
+        .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?;
+    destination.clear();
+    destination
+        .try_reserve_exact(capacity)
+        .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+}
+
+fn copy_snapshot_outputs<'a>(
+    outputs: impl ExactSizeIterator<Item = crate::program::CertifiedPaintOutputV1<'a>>,
+    destination: &mut Vec<ProgramPaintOutputV1>,
+) -> Result<ProgramSnapshotOutputsV1, ProgramRuntimeErrorV1> {
+    let mut outputs = outputs.map(|output| ProgramPaintOutputV1 {
+        slot: output.output_slot().value(),
+        source: output.source(),
+        opacity: output.opacity(),
+    });
+    if outputs.len() == 0 {
+        return Ok(ProgramSnapshotOutputsV1::Many(Vec::new()));
+    }
+    if outputs.len() == 1 {
+        return outputs
+            .next()
+            .map(ProgramSnapshotOutputsV1::One)
+            .ok_or(ProgramRuntimeErrorV1::InternalInvariant);
+    }
+    if outputs.len() > destination.capacity().saturating_sub(destination.len()) {
+        return Err(ProgramRuntimeErrorV1::InternalInvariant);
+    }
+    destination.extend(outputs);
+    Ok(ProgramSnapshotOutputsV1::Many(std::mem::take(destination)))
 }
 
 #[cfg(test)]
@@ -1927,6 +2648,563 @@ mod runtime_tests {
             .exact_visible_unary(true, 10, 8, expected)
             .output(17, 4);
         builder.finish().unwrap()
+    }
+
+    fn final_raster_runtime() -> Result<ProgramSessionV1, ProgramFinalRasterErrorV1> {
+        compile_program_wire(&final_raster_source_over_wire_v1(
+            1,
+            2,
+            3,
+            17,
+            FinalRasterCleanlinessRequirementV1::MandatoryExactNominalSrgb8V2,
+        ))
+        .map_err(ProgramFinalRasterErrorV1::Runtime)?
+        .instantiate(101)
+        .map_err(ProgramFinalRasterErrorV1::Runtime)
+    }
+
+    fn final_raster_payload(
+        shade: u8,
+    ) -> Result<ProgramFinalRasterInputV1, ProgramFinalRasterErrorV1> {
+        ProgramFinalRasterInputV1::try_new(
+            1,
+            1,
+            1,
+            [0; 32],
+            1,
+            &[[0; 4]],
+            2,
+            &[[shade, shade, shade, 255]],
+        )
+    }
+
+    #[test]
+    fn field_owner_refuses_point_observation_before_admission()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        struct UnreadablePointSource;
+        impl SchemaOrderedScenarioSourceV1 for UnreadablePointSource {
+            fn scenario_count(&self) -> usize {
+                panic!("unsupported point source must not be read");
+            }
+            fn scenario_id(&self, _: usize) -> ScenarioId {
+                panic!("unsupported point source must not be read");
+            }
+            fn value_count(&self, _: usize) -> usize {
+                panic!("unsupported point source must not be read");
+            }
+            fn value(&self, _: usize, _: usize) -> Srgb8 {
+                panic!("unsupported point source must not be read");
+            }
+        }
+
+        let mut runtime = final_raster_runtime()?;
+        runtime.update_final_raster(1, &final_raster_payload(64)?)?;
+        let old_head = runtime.session.evidence().observation_head();
+        let scenarios = [crate::program::ScenarioV1::new(7, &[])];
+        let refused = runtime
+            .owner
+            .prepare_update(
+                &mut runtime.session,
+                crate::program::UpdateV1::Observed {
+                    revision: 2,
+                    scenarios: &scenarios,
+                },
+            )
+            .err();
+        assert!(matches!(
+            refused,
+            Some(crate::program::UpdateErrorV1::Unsupported)
+        ));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+
+        let refused = runtime
+            .owner
+            .prepare_schema_ordered_update(&mut runtime.session, 2, &UnreadablePointSource)
+            .err();
+        assert!(matches!(
+            refused,
+            Some(crate::program::UpdateErrorV1::Unsupported)
+        ));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+        assert_eq!(
+            runtime.session.evidence().kind(),
+            crate::program::StateKindV1::Ready
+        );
+        {
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 1, [0; 32])?;
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
+        }
+        runtime.update_final_raster(2, &final_raster_payload(65)?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn wrong_point_update_preserves_field_commit_and_unknown_lifecycle()
+    -> Result<(), ProgramFinalRasterErrorV1> {
+        let mut runtime = final_raster_runtime()?;
+        let initial = runtime.update_final_raster(1, &final_raster_payload(64)?)?;
+        assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
+        assert!(initial.assessment_report().is_none());
+        let old_head = runtime.session.evidence().observation_head();
+
+        let refused = runtime.update_observed(2, &[ProgramScenarioV1::new(7, vec![])]);
+        assert!(matches!(refused, Err(ProgramRuntimeErrorV1::Unsupported)));
+        assert_eq!(runtime.session.evidence().observation_head(), old_head);
+        assert_eq!(
+            runtime.session.evidence().kind(),
+            crate::program::StateKindV1::Ready
+        );
+        {
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 1, [0; 32])?;
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[64; 3]]);
+        }
+
+        let retried = runtime.update_final_raster(2, &final_raster_payload(65)?)?;
+        assert_eq!(retried.state(), ProgramSnapshotStateV1::Ready);
+        assert!(retried.assessment_report().is_none());
+        {
+            let current =
+                runtime.current_final_raster(runtime.content_identity(), 17, 2, [0; 32])?;
+            assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[65; 3]]);
+        }
+
+        let unknown = runtime
+            .update_unknown(3, 23)
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
+        assert_eq!(unknown.state(), ProgramSnapshotStateV1::Stale);
+        assert!(unknown.assessment_report().is_none());
+        assert!(matches!(
+            runtime.current_final_raster(runtime.content_identity(), 17, 2, [0; 32]),
+            Err(ProgramFinalRasterErrorV1::Stale)
+        ));
+        runtime.update_final_raster(4, &final_raster_payload(66)?)?;
+        let current = runtime.current_final_raster(runtime.content_identity(), 17, 4, [0; 32])?;
+        assert_eq!(current.pixels().collect::<Vec<_>>(), vec![[66; 3]]);
+
+        let rgb = Srgb8::new([64; 3]);
+        let mut point = compile_program_wire(&runtime_wire(rgb))
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?
+            .instantiate(102)
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
+        let point_snapshot = point
+            .update_observed(1, &[ProgramScenarioV1::new(7, vec![rgb])])
+            .map_err(ProgramFinalRasterErrorV1::Runtime)?;
+        assert_eq!(point_snapshot.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(point_snapshot.outputs()[0].source(), rgb);
+        Ok(())
+    }
+
+    #[test]
+    fn composite_readout_is_current_scenario_bound_and_owned() -> Result<(), ProgramRuntimeErrorV1>
+    {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let initial = runtime.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(301, vec![rgb]),
+                ProgramScenarioV1::new(101, vec![rgb]),
+            ],
+        )?;
+        assert_eq!(initial.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 101), Some(rgb));
+        assert_eq!(initial.presentation_composite_rgb(9, 0), None);
+        assert_eq!(initial.presentation_composite_rgb(17, 101), None);
+        let stale = runtime.update_unknown(2, 3)?;
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert_eq!(stale.outputs(), initial.outputs());
+        assert_eq!(stale.presentation_composite_rgb(9, 101), None);
+        let failed =
+            runtime.update_observed(3, &[ProgramScenarioV1::new(101, vec![Srgb8::new([0; 3])])])?;
+        assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
+        assert_eq!(failed.presentation_composite_rgb(9, 101), None);
+        drop(runtime);
+        assert_eq!(initial.presentation_composite_rgb(9, 301), Some(rgb));
+        Ok(())
+    }
+
+    #[test]
+    fn composite_readout_rejects_conflicting_root_records_and_capacity_overflow()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let rgb = Srgb8::new([64; 3]);
+        let mut runtime = compile_program_wire(&runtime_wire(rgb))?.instantiate(1)?;
+        let mut snapshot = runtime.update_observed(1, &[ProgramScenarioV1::new(101, vec![rgb])])?;
+        let composites = snapshot
+            .projection
+            .as_mut()
+            .expect("Ready retains its projection")
+            .composites_mut_for_test();
+        composites.push(composites[0]);
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), Some(rgb));
+        snapshot
+            .projection
+            .as_mut()
+            .expect("Ready retains its projection")
+            .composites_mut_for_test()
+            .push(ProgramPresentationCompositeV1 {
+                root: 9,
+                scenario: 101,
+                rgb: Srgb8::new([0; 3]),
+            });
+        assert_eq!(snapshot.presentation_composite_rgb(9, 101), None);
+        assert_eq!(
+            reserve_snapshot_composites(&mut Vec::new(), usize::MAX, 2),
+            Err(ProgramRuntimeErrorV1::ResourceExhausted)
+        );
+        Ok(())
+    }
+
+    fn computed_runtime_wire() -> Vec<u8> {
+        computed_runtime_wire_for_domain(false)
+    }
+
+    fn computed_runtime_wire_for_domain(full_cube: bool) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        if full_cube {
+            builder.computed_box_target(2, [0; 3], [255; 3], Srgb8::new([64; 3]), 1.0);
+        } else {
+            builder.computed_gray_target(2, 0, 255, Srgb8::new([64; 3]), 1.0);
+        }
+        builder
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_unary(true, 10, 8, Srgb8::new([96; 3]))
+            .output(17, 4);
+        builder
+            .finish_assignment(&[2])
+            .expect("wire декларации кодируется")
+    }
+
+    fn computed_incomplete_runtime_wire() -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(11, Srgb8::new([96; 3]))
+            .fixed_target(12, 11)
+            .computed_box_target(2, [0; 3], [255; 3], Srgb8::new([64; 3]), 1.0)
+            .surface_input_port(6)
+            .opacity_input(5, 0.5)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .solid_paint(13, 12)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+            .source_over_occurrence(18, 13, 7, 64.0, 0.2, 2)
+            .presentation_root(9, 8)
+            .presentation_target(9, 8)
+            .exact_visible_relation_hard(10, 18, &[8])
+            .output(17, 4);
+        builder
+            .finish_assignment(&[2])
+            .expect("валидная relation-декларация кодируется")
+    }
+
+    #[test]
+    fn direct_assignment_policy_rejects_previous_experimental_tag() {
+        let mut bytes = computed_runtime_wire();
+        // header10 + sources4 + target-count4 + gray-target19 + families4
+        // + assignment-count4: поле policy находится на offset45.
+        assert_eq!(&bytes[45..47], &[2, 0]);
+        bytes[45] = 1;
+        assert_eq!(
+            compile_program_wire(&bytes).err(),
+            Some(ProgramRuntimeErrorV1::Wire)
+        );
+    }
+
+    #[test]
+    fn computed_full_rgb_domain_finishes_through_public_runtime() {
+        let mut session = compile_program_wire(&computed_runtime_wire_for_domain(true))
+            .expect("полный RGB domain допускается")
+            .instantiate(100)
+            .expect("stream допускается");
+        for (revision, backdrop, expected) in [
+            (1, 128, Some([64; 3])),
+            (2, 255, None),
+            (3, 0, Some([191; 3])),
+        ] {
+            let snapshot = session
+                .update_observed(
+                    revision,
+                    &[ProgramScenarioV1::new(7, vec![Srgb8::new([backdrop; 3])])],
+                )
+                .expect("наблюдение вычисляется");
+            if let Some(rgb) = expected {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+                assert_eq!(snapshot.outputs()[0].source(), Srgb8::new(rgb));
+            } else {
+                assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Unsatisfied);
+                assert!(snapshot.outputs().is_empty());
+            }
+            assert_eq!(snapshot.reason(), None);
+        }
+    }
+
+    #[test]
+    fn computed_snapshot_keeps_current_output_separate_from_legacy_history() {
+        let mut session = compile_program_wire(&computed_runtime_wire())
+            .expect("V3 проходит обычный публичный вход")
+            .instantiate(100)
+            .expect("Session создаётся с допустимым stream");
+        let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
+        let ready = session
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
+        assert_eq!(ready.snapshot_version(), 2);
+        assert_eq!(ready.revision(), 1);
+        assert_eq!(ready.reason(), None);
+        assert_eq!(ready.state().key(), "ready");
+        assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
+
+        let stale = session
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(stale.state().key(), "stale");
+        assert_eq!(stale.snapshot_version(), 2);
+        assert_eq!(stale.revision(), 2);
+        assert_eq!(stale.reason(), None);
+        assert!(stale.outputs().is_empty());
+        let unsatisfied = session
+            .update_observed(3, &scenarios(255))
+            .expect("наблюдение принимается");
+        assert_eq!(unsatisfied.state().key(), "unsatisfied");
+        assert_eq!(unsatisfied.revision(), 3);
+        assert_eq!(unsatisfied.reason(), None);
+        assert!(unsatisfied.outputs().is_empty());
+        let recovered = session
+            .update_observed(4, &scenarios(0))
+            .expect("наблюдение принимается");
+        assert_eq!(recovered.state().key(), "ready");
+        assert_eq!(recovered.outputs()[0].source(), Srgb8::new([191; 3]));
+        assert_eq!(ready.outputs()[0].source(), Srgb8::new([64; 3]));
+
+        let mut legacy = compile_program_wire_v1(&runtime_wire(Srgb8::new([96; 3])))
+            .expect("V1 Program компилируется")
+            .instantiate(101)
+            .expect("Session создаётся с допустимым stream");
+        let _ = legacy
+            .update_observed(1, &scenarios(128))
+            .expect("наблюдение принимается");
+        let historical = legacy
+            .update_unknown(2, 41)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(historical.state().key(), "stale");
+        assert_eq!(historical.snapshot_version(), 1);
+        assert_eq!(historical.revision(), 2);
+        assert_eq!(historical.reason(), None);
+        assert_eq!(historical.outputs()[0].source(), Srgb8::new([64; 3]));
+    }
+
+    #[test]
+    fn computed_snapshot_unknown_reason_is_not_search_limit() {
+        let mut session = compile_program_wire(&computed_runtime_wire())
+            .expect("допустимый Program компилируется")
+            .instantiate(100)
+            .expect("Session создаётся с допустимым stream");
+        let waiting = session
+            .update_unknown(1, u32::MAX)
+            .expect("неизвестное наблюдение принимается");
+        assert_eq!(waiting.snapshot_version(), 2);
+        assert_eq!(waiting.revision(), 1);
+        assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
+        assert_eq!(waiting.reason(), None);
+        assert!(waiting.outputs().is_empty());
+    }
+
+    #[test]
+    fn v3_admission_exhaustion_preserves_old_wire_error_classification() {
+        for version in [1_u16, 2, 3] {
+            let mut bytes = b"LCPW".to_vec();
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&14_u32.to_le_bytes());
+            bytes.extend_from_slice(&4097_u32.to_le_bytes());
+            if version == 3 {
+                assert_eq!(
+                    compile_program_wire(&bytes).err(),
+                    Some(ProgramRuntimeErrorV1::ResourceExhausted)
+                );
+                assert_eq!(
+                    check_program_wire(&bytes),
+                    Err(ProgramWireCheckErrorV1::ResourceExhausted)
+                );
+            } else {
+                assert_eq!(
+                    compile_program_wire(&bytes).err(),
+                    Some(ProgramRuntimeErrorV1::Wire)
+                );
+                assert_eq!(
+                    check_program_wire(&bytes),
+                    Err(ProgramWireCheckErrorV1::Wire {
+                        section: "sources",
+                        offset: 0
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn computed_attachment_revokes_stopped_outputs_and_preserves_rejected_head() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct RecordedIntent {
+            desired: ProgramPointSinkStampV1,
+            operation: ProgramPointSinkOperationV1,
+            point: Option<ProgramPaintOutputV1>,
+        }
+
+        struct Host {
+            reject: Rc<Cell<bool>>,
+            installed: Rc<RefCell<Vec<RecordedIntent>>>,
+        }
+
+        impl ProgramPointSinkHostV1 for Host {
+            fn try_install(
+                &mut self,
+                intent: ProgramPointSinkIntentV1<'_>,
+            ) -> Result<(), ProgramPointSinkHostErrorV1> {
+                if self.reject.get()
+                    || self
+                        .installed
+                        .borrow()
+                        .last()
+                        .is_some_and(|previous| previous.desired != intent.expected_stamp())
+                {
+                    return Err(ProgramPointSinkHostErrorV1::Rejected);
+                }
+                self.installed.borrow_mut().push(RecordedIntent {
+                    desired: intent.desired_stamp(),
+                    operation: intent.operation(),
+                    point: intent.point(),
+                });
+                Ok(())
+            }
+        }
+
+        for (full_cube, stopped_state, reason) in [
+            (false, ProgramSnapshotStateV1::Unsatisfied, None),
+            (true, ProgramSnapshotStateV1::Incomplete, Some("limit")),
+        ] {
+            let installed = Rc::new(RefCell::new(Vec::new()));
+            let reject = Rc::new(Cell::new(false));
+            let wire = if full_cube {
+                computed_incomplete_runtime_wire()
+            } else {
+                computed_runtime_wire()
+            };
+            let compiled = compile_program_wire(&wire).expect("допустимый Program компилируется");
+            let identity = compiled.content_identity();
+            let mut attachment = compiled
+                .attach(
+                    100,
+                    17,
+                    91,
+                    9,
+                    8,
+                    Host {
+                        reject: Rc::clone(&reject),
+                        installed: Rc::clone(&installed),
+                    },
+                )
+                .expect("подготовка тестового сценария успешна");
+            let scenarios = |gray| [ProgramScenarioV1::new(7, vec![Srgb8::new([gray; 3])])];
+            let first = attachment
+                .update_observed(1, &scenarios(128))
+                .expect("наблюдение принимается");
+            assert_eq!(first.snapshot().snapshot_version(), 2);
+            assert_eq!(first.snapshot().revision(), 1);
+            assert_eq!(first.snapshot().reason(), None);
+            assert_eq!(
+                first
+                    .render()
+                    .expect("готовый результат содержит render")
+                    .content_identity(),
+                identity
+            );
+            assert_eq!(
+                attachment
+                    .current_materialization_authority()
+                    .expect("готовый результат имеет authority")
+                    .revision(),
+                1
+            );
+
+            reject.set(true);
+            assert!(matches!(
+                attachment.update_observed(2, &scenarios(255)),
+                Err(ProgramAttachmentUpdateErrorV1::Sink(
+                    ProgramPointSinkErrorV1::Host(ProgramPointSinkHostErrorV1::Rejected)
+                ))
+            ));
+            assert_eq!(installed.borrow().len(), 1);
+            assert_eq!(
+                attachment
+                    .current_materialization_authority()
+                    .expect("готовый результат имеет authority")
+                    .revision(),
+                1
+            );
+            reject.set(false);
+
+            let stopped = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
+            assert_eq!(stopped.snapshot().snapshot_version(), 2);
+            assert_eq!(stopped.snapshot().revision(), 2);
+            assert_eq!(stopped.snapshot().state(), stopped_state);
+            assert_eq!(stopped.snapshot().reason(), reason);
+            assert!(stopped.snapshot().outputs().is_empty());
+            assert!(stopped.render().is_none());
+            assert!(attachment.current_render().is_none());
+            assert_eq!(
+                attachment.current_materialization_authority(),
+                Err(ProgramMaterializationAuthorityErrorV1::NotReady)
+            );
+            assert_eq!(
+                installed.borrow()[1].operation,
+                ProgramPointSinkOperationV1::RevokeAll
+            );
+            assert!(installed.borrow()[1].point.is_none());
+
+            let replay = attachment
+                .update_observed(2, &scenarios(255))
+                .expect("наблюдение принимается");
+            assert_eq!(replay, stopped);
+            assert_eq!(
+                installed.borrow()[2].operation,
+                ProgramPointSinkOperationV1::ConfirmExact
+            );
+            assert!(installed.borrow()[2].point.is_none());
+            assert!(attachment.update_observed(1, &scenarios(128)).is_err());
+            assert!(attachment.update_observed(2, &scenarios(0)).is_err());
+            assert_eq!(installed.borrow().len(), 3);
+
+            let recovered = attachment
+                .update_observed(3, &scenarios(128))
+                .expect("наблюдение принимается");
+            assert_eq!(recovered.snapshot().state(), ProgramSnapshotStateV1::Ready);
+            assert_eq!(recovered.snapshot().revision(), 3);
+            assert_eq!(recovered.snapshot().reason(), None);
+            assert_eq!(
+                recovered.snapshot().outputs()[0].source(),
+                Srgb8::new([64; 3])
+            );
+            assert_eq!(
+                installed.borrow()[3].operation,
+                ProgramPointSinkOperationV1::SetAll
+            );
+            assert_eq!(first.snapshot().revision(), 1);
+            assert_eq!(first.snapshot().outputs()[0].source(), Srgb8::new([64; 3]));
+        }
     }
 
     #[test]
@@ -2104,15 +3382,202 @@ mod runtime_tests {
         }
     }
 
+    fn clean_set_runtime_wire(
+        source: Srgb8,
+        opacity: f64,
+        final_color: Srgb8,
+        hard: Option<bool>,
+    ) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(11, source)
+            .fixed_target(21, 11)
+            .surface_input_port(31)
+            .opacity_input(32, opacity)
+            .solid_paint(42, 21)
+            .opacity_paint(41, 42, 32)
+            .input_surface(51, 31)
+            .source_over_occurrence(61, 41, 51, 64.0, 0.2, 1)
+            .presentation_root(71, 61)
+            .presentation_target(71, 61)
+            .exact_visible_unary(true, 82, 61, final_color)
+            .output(91, 41);
+        if let Some(hard) = hard {
+            builder.declared_srgb8_clean_set(hard, 81, 71, 61);
+        }
+        builder.finish().unwrap()
+    }
+
     #[test]
-    fn family_graphs_fail_closed_until_a_public_trust_parameter_exists() {
+    fn public_lint_report_preserves_nominal_rejection_output_and_duplicate_provenance()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let source = Srgb8::new([0, 199, 64]);
+        let compiled =
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))?;
+        let identity = compiled.content_identity();
+        let mut session = compiled.instantiate(100)?;
+        let snapshot = session.update_observed(
+            1,
+            &[
+                ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])]),
+                ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])]),
+            ],
+        )?;
+        let report = snapshot
+            .assessment_report()
+            .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(snapshot.outputs()[0].source(), source);
+        assert_eq!(snapshot.outputs()[0].opacity(), 1.0);
+        assert_eq!(report.content_identity(), identity);
+        assert_eq!(report.stream_id(), 100);
+        assert_eq!(report.revision(), 1);
+        assert_eq!(
+            report
+                .scenario_provenance()
+                .iter()
+                .map(|value| (value.case_index(), value.scenario_id()))
+                .collect::<Vec<_>>(),
+            vec![(0, 7), (0, 9)]
+        );
+        assert_eq!(
+            report
+                .cells()
+                .iter()
+                .map(|cell| cell.constraint_id())
+                .collect::<Vec<_>>(),
+            vec![81, 82]
+        );
+        let cell = report.cells()[0];
+        assert!(!cell.hard());
+        assert_eq!(cell.case_index(), 0);
+        assert_eq!(
+            cell.assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetRejected {
+                visible: source,
+                rejected_blue_interval: [64, 108],
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn public_lint_uses_final_alpha_composition_and_removes_stale_or_failed_report()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let source = Srgb8::new([128, 128, 129]);
+        let final_color = Srgb8::new([128; 3]);
+        let compiled = compile_program_wire(&clean_set_runtime_wire(
+            source,
+            0.5,
+            final_color,
+            Some(false),
+        ))?;
+        let mut session = compiled.instantiate(100)?;
+        let scenario = || ProgramScenarioV1::new(7, vec![Srgb8::new([128, 128, 127])]);
+        let first = session.update_observed(1, &[scenario()])?;
+        assert_eq!(
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
+                visible: final_color
+            }
+        );
+        assert_eq!(first.outputs()[0].source(), source);
+        assert_eq!(first.outputs()[0].opacity(), 0.5);
+        let stale = session.update_unknown(2, 99)?;
+        assert_eq!(stale.state(), ProgramSnapshotStateV1::Stale);
+        assert!(stale.assessment_report().is_none());
+        assert_eq!(stale.outputs(), first.outputs());
+        let fresh = session.update_observed(3, &[scenario()])?;
+        assert_eq!(
+            fresh
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .revision(),
+            3
+        );
+        let failed =
+            session.update_observed(4, &[ProgramScenarioV1::new(7, vec![Srgb8::new([0; 3])])])?;
+        assert_eq!(failed.state(), ProgramSnapshotStateV1::Failed);
+        assert!(failed.assessment_report().is_none());
+        assert_eq!(failed.outputs(), first.outputs());
+        drop(session);
+        assert_eq!(
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .revision(),
+            1
+        );
+        assert_eq!(
+            first
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass {
+                visible: final_color
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn public_lint_distinguishes_absent_domain_and_invalid_empty_program()
+    -> Result<(), ProgramRuntimeErrorV1> {
+        let source = Srgb8::new([0; 3]);
+        let compiled =
+            compile_program_wire(&clean_set_runtime_wire(source, 1.0, source, Some(false)))?;
+        let mut session = compiled.instantiate(100)?;
+        let waiting = session.update_unknown(1, 99)?;
+        assert_eq!(waiting.state(), ProgramSnapshotStateV1::Waiting);
+        assert!(waiting.assessment_report().is_none());
+        let absent = session.update_observed(2, &[ProgramScenarioV1::new(7, vec![source])])?;
+        assert_eq!(absent.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(
+            absent
+                .assessment_report()
+                .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+                .cells()[0]
+                .assessment(),
+            ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent
+        );
+
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(1, source)
+            .fixed_target(2, 1)
+            .solid_paint(3, 2)
+            .output(17, 3);
+        let bytes = builder.finish().map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+        // Пустая point-декларация не задаёт наблюдение и оценку output.
+        assert!(matches!(
+            decode_program_wire_v1(&bytes)
+                .map_err(|_| ProgramRuntimeErrorV1::Wire)?
+                .compile(),
+            Err(crate::program::CompileErrorV1::EmptySurfaceInputPortSet)
+        ));
+        assert!(matches!(
+            compile_program_wire(&bytes),
+            Err(ProgramRuntimeErrorV1::Compile)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn family_graphs_fail_closed_until_a_public_trust_parameter_exists()
+    -> Result<(), ProgramRuntimeErrorV1> {
         let mut builder = ProgramWireBuilderV1::new();
         builder.family(1, [7; 32]);
-        let bytes = builder.finish().unwrap();
+        let bytes = builder.finish().map_err(|_| ProgramRuntimeErrorV1::Wire)?;
         assert!(matches!(
             compile_program_wire_v1(&bytes),
             Err(ProgramRuntimeErrorV1::Compile | ProgramRuntimeErrorV1::FamilyArtifactsRequired)
         ));
+        Ok(())
     }
 }
 
@@ -2125,6 +3590,8 @@ impl ProgramSnapshotStateV1 {
             Self::Ready => "ready",
             Self::Stale => "stale",
             Self::Failed => "failed",
+            Self::Unsatisfied => "unsatisfied",
+            Self::Incomplete => "incomplete",
         }
     }
 }
@@ -2137,8 +3604,16 @@ mod snapshot_state_contract {
     fn wire_state_projection_preserves_every_lifecycle_state() {
         use ProgramSnapshotStateV1::*;
         assert_eq!(
-            [Waiting, Ready, Stale, Failed].map(ProgramSnapshotStateV1::key),
-            ["waiting", "ready", "stale", "failed"]
+            [Waiting, Ready, Stale, Failed, Unsatisfied, Incomplete]
+                .map(ProgramSnapshotStateV1::key),
+            [
+                "waiting",
+                "ready",
+                "stale",
+                "failed",
+                "unsatisfied",
+                "incomplete"
+            ]
         );
     }
 }

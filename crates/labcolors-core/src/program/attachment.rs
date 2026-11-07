@@ -14,16 +14,20 @@ use crate::program_session::{
     CompiledPointOutputPresentationV1, CoreProgramEvaluatorsV1, PointOutputPresentationBindErrorV1,
     ProgramOwnerLeaseV1, ProgramPaintOutputV1,
 };
-use crate::session::PreparedSessionDispositionV1;
+use crate::session::{PreparedSessionDispositionV1, SessionEvidenceV1};
 
 use super::{
     CorePreparedSessionTransitionV1, EvidenceViewV1, InstantiateErrorV1, OccurrenceIdV1,
     OutputSlotIdV1, OwnerV1, PresentationRootIdV1, SessionV1, UpdateErrorV1, UpdateV1,
-    VerifiedCertificateV1,
+    VerifiedOutputV1,
 };
 
 /// Sealing оставляет реализации физического writer внутри пакета.
 pub(crate) mod sink_private {
+    pub(crate) trait Sealed {}
+}
+
+mod presentation_private {
     pub(crate) trait Sealed {}
 }
 
@@ -114,8 +118,8 @@ impl<SinkOutputId: Copy> AttachedPointPresentationV1<SinkOutputId> {
 
 /// Непередаваемый compiler-side permit полного terminal scope.
 ///
-/// Значение создаётся только после точной output→sink и
-/// output→presentation bijection, удерживает exact owner generation и
+/// Значение создаётся после полного покрытия outputs и terminal targets
+/// с точным совпадением Paint, удерживает exact owner generation и
 /// поглощается единственным host admission. Content identity сама по себе не
 /// является этим полномочием.
 pub(crate) struct BoundPointSinkScopePermitV1<'a, SinkOutputId> {
@@ -228,12 +232,84 @@ struct AttachedRenderPatchEntryV1<SinkOutputId> {
     paint: EncodedPointPaintV1,
 }
 
+/// Конечная композиция в объявленном point-сценарии; данные не являются authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointSinkPresentationCompositeV1 {
+    root: u32,
+    scenario: u32,
+    visible: crate::Srgb8,
+}
+
+impl PointSinkPresentationCompositeV1 {
+    pub(crate) const fn new(root: u32, scenario: u32, visible: crate::Srgb8) -> Self {
+        Self {
+            root,
+            scenario,
+            visible,
+        }
+    }
+
+    pub(crate) const fn root(self) -> u32 {
+        self.root
+    }
+
+    pub(crate) const fn scenario(self) -> u32 {
+        self.scenario
+    }
+
+    pub(crate) const fn visible(self) -> crate::Srgb8 {
+        self.visible
+    }
+}
+
+/// Повторяемые immutable группы prospective-композиций; это ещё не authority.
+/// Размер группы известен без обхода сценариев. Оба прохода читают те же
+/// заимствованные данные; отсутствие группы обозначает неполное evidence.
+pub(crate) trait PointSinkPresentationSourceV1: presentation_private::Sealed + Copy {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>;
+}
+
+impl presentation_private::Sealed for &[PointSinkPresentationCompositeV1] {}
+
+impl PointSinkPresentationSourceV1 for &[PointSinkPresentationCompositeV1] {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>
+    {
+        core::iter::once(Some(self.iter().copied()))
+    }
+}
+
+impl presentation_private::Sealed for VerifiedOutputV1<'_> {}
+
+impl PointSinkPresentationSourceV1 for VerifiedOutputV1<'_> {
+    fn batches(
+        self,
+    ) -> impl Iterator<Item = Option<impl ExactSizeIterator<Item = PointSinkPresentationCompositeV1>>>
+    {
+        self.presentation_composites().map(|composite| {
+            composite.map(|composite| {
+                composite.scenarios.iter().map(move |scenario| {
+                    PointSinkPresentationCompositeV1::new(
+                        composite.root,
+                        scenario.value(),
+                        crate::Srgb8::new(composite.rgb),
+                    )
+                })
+            })
+        })
+    }
+}
+
 /// Единственные три intent, принимаемые терминальным point sink.
-pub(crate) enum PointSinkIntentV1<'a, SinkOutputId> {
+pub(crate) enum PointSinkIntentV1<'a, SinkOutputId, Presentation> {
     SetAll {
         revision: u64,
         stamp: PointSinkMutationStampV1,
         patch: &'a [PointSinkPatchEntryV1<SinkOutputId>],
+        presentation: Presentation,
     },
     RevokeAll {
         revision: u64,
@@ -284,9 +360,9 @@ pub(crate) trait PointSinkWriterV1: sink_private::Sealed {
 
     fn binding_epoch(&self) -> PointSinkBindingEpochV1;
 
-    fn prepare<'writer>(
+    fn prepare<'writer, P: PointSinkPresentationSourceV1>(
         &'writer mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
+        intent: PointSinkIntentV1<'_, Self::OutputId, P>,
     ) -> Result<Self::Prepared<'writer>, Self::Error>;
 }
 
@@ -654,6 +730,7 @@ pub(super) enum PreparedDispositionV1<'a> {
     SetAll {
         revision: u64,
         outputs: &'a [ProgramPaintOutputV1],
+        presentation: super::VerifiedOutputV1<'a>,
     },
 }
 
@@ -661,6 +738,9 @@ fn prepared_disposition<'prepared>(
     transition: &'prepared CorePreparedSessionTransitionV1<'_>,
 ) -> Result<PreparedDispositionV1<'prepared>, AttachmentInvariantV1> {
     match transition.disposition() {
+        PreparedSessionDispositionV1::Incomplete(cause) => Ok(PreparedDispositionV1::RevokeAll {
+            revision: cause.observation().revision().value(),
+        }),
         PreparedSessionDispositionV1::Idempotent { raw_head, .. } => raw_head
             .revision()
             .map(|revision| PreparedDispositionV1::ConfirmExact {
@@ -671,12 +751,13 @@ fn prepared_disposition<'prepared>(
             revision: unknown.revision().value(),
         }),
         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
-            revision: verified.report().observation().revision().value(),
+            revision: verified.observation().revision().value(),
             outputs: verified.outputs(),
+            presentation: super::VerifiedOutputV1 { inner: verified },
         }),
         PreparedSessionDispositionV1::Violation(violation) => {
             Ok(PreparedDispositionV1::RevokeAll {
-                revision: violation.report().observation().revision().value(),
+                revision: violation.observation().revision().value(),
             })
         }
     }
@@ -718,7 +799,7 @@ impl AttachedPublishedStampV1<'_> {
 
 /// Один элемент final render-authority после commit sink и Session.
 pub(crate) struct AttachedRenderOutputV1<'a, SinkOutputId> {
-    certificate: VerifiedCertificateV1<'a>,
+    evidence: VerifiedOutputV1<'a>,
     patch: AttachedRenderPatchEntryV1<SinkOutputId>,
     published_stamp: AttachedPublishedStampV1<'a>,
 }
@@ -732,8 +813,8 @@ impl<SinkOutputId: Copy> Clone for AttachedRenderOutputV1<'_, SinkOutputId> {
 }
 
 impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
-    pub(crate) const fn certificate(self) -> VerifiedCertificateV1<'a> {
-        self.certificate
+    pub(crate) const fn evidence(self) -> VerifiedOutputV1<'a> {
+        self.evidence
     }
 
     pub(crate) const fn output(self) -> OutputSlotIdV1 {
@@ -767,6 +848,7 @@ impl<'a, SinkOutputId: Copy> AttachedRenderOutputV1<'a, SinkOutputId> {
 
 /// Точный post-commit view; historical evidence и render authority не смешаны.
 pub(crate) struct AttachmentCommitV1<'a, SinkOutputId> {
+    owner: &'a ProgramOwnerLeaseV1<CoreProgramEvaluatorsV1>,
     evidence: EvidenceViewV1<'a>,
     session: &'a SessionV1,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
@@ -783,6 +865,9 @@ impl<SinkOutputId> Clone for AttachmentCommitV1<'_, SinkOutputId> {
 }
 
 impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
+    pub(crate) fn snapshot_version(self) -> u32 {
+        self.owner.snapshot_version()
+    }
     pub(crate) const fn evidence(self) -> EvidenceViewV1<'a> {
         self.evidence
     }
@@ -794,13 +879,9 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
     }
 
     pub(crate) fn render_outputs(self) -> AttachedRenderOutputsV1<'a, SinkOutputId> {
-        let certificate = self
-            .evidence
-            .state()
-            .current_verified()
-            .map(|current| VerifiedCertificateV1 { inner: current });
+        let evidence = self.evidence.current_verified();
         AttachedRenderOutputsV1 {
-            certificate,
+            evidence,
             committed_render_patch: self.committed_render_patch,
             published_stamp: AttachedPublishedStampV1 {
                 revision: self.committed_revision,
@@ -812,7 +893,7 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
 }
 
 pub(crate) struct AttachedRenderOutputsV1<'a, SinkOutputId> {
-    certificate: Option<VerifiedCertificateV1<'a>>,
+    evidence: Option<VerifiedOutputV1<'a>>,
     committed_render_patch: &'a [AttachedRenderPatchEntryV1<SinkOutputId>],
     published_stamp: AttachedPublishedStampV1<'a>,
     index: usize,
@@ -822,18 +903,18 @@ impl<'a, SinkOutputId: Copy> Iterator for AttachedRenderOutputsV1<'a, SinkOutput
     type Item = AttachedRenderOutputV1<'a, SinkOutputId>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let certificate = self.certificate?;
+        let evidence = self.evidence?;
         let patch = *self.committed_render_patch.get(self.index)?;
         self.index += 1;
         Some(AttachedRenderOutputV1 {
-            certificate,
+            evidence,
             patch,
             published_stamp: self.published_stamp,
         })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = if self.certificate.is_some() {
+        let remaining = if self.evidence.is_some() {
             self.committed_render_patch.len().saturating_sub(self.index)
         } else {
             0
@@ -1099,7 +1180,7 @@ impl<SinkOutputId> PreparedAttachmentBindingsV1<SinkOutputId>
 where
     SinkOutputId: Copy + Eq,
 {
-    /// Проверяет authored terminal bindings и завершает все их allocation.
+    /// Проверяет terminal coverage и явные authored bindings до host admission.
     fn try_new(
         owner: &OwnerV1,
         authored_emissions: &[AuthoredPointEmissionBindingV1<SinkOutputId>],
@@ -1125,7 +1206,7 @@ where
                 sink_output: binding.sink_output,
             }
         }));
-        emissions.sort_unstable_by_key(|binding| binding.output);
+        crate::ordering::sort_by_key(&mut emissions, |binding| binding.output);
         for adjacent in emissions.windows(2) {
             if adjacent[0].output == adjacent[1].output {
                 return Err(AttachmentCreateErrorV1::DuplicateEmissionOutput {
@@ -1177,7 +1258,7 @@ where
             return Err(AttachmentCreateErrorV1::EmptyPresentations);
         }
         let expected_presentations = owner.compiled.point_presentation_count();
-        if authored_presentations.len() != expected_presentations {
+        if authored_presentations.len() > expected_presentations {
             return Err(AttachmentCreateErrorV1::PresentationCount {
                 expected: expected_presentations,
                 actual: authored_presentations.len(),
@@ -1227,43 +1308,36 @@ where
                 });
             }
         }
-        for (presentation_ordinal, presentation) in presentations.iter().enumerate() {
-            if presentation.compiled.presentation_ordinal() != presentation_ordinal {
+        for presentation_ordinal in owner.compiled.terminal_point_presentation_ordinals() {
+            if presentations
+                .binary_search_by_key(&presentation_ordinal, |binding| {
+                    binding.compiled.presentation_ordinal()
+                })
+                .is_err()
+            {
                 return Err(AttachmentCreateErrorV1::MissingCompiledPresentation {
                     presentation_ordinal,
                 });
             }
         }
-        presentations.sort_unstable_by_key(|binding| {
-            (
-                binding.compiled.output_ordinal(),
-                binding.compiled.presentation_ordinal(),
-            )
-        });
-        let mut presentation_index = 0;
-        for emission in &emissions {
+        // Aliases разделяют Paint, но не создают дополнительные renderer targets.
+        crate::ordering::sort_by_key(&mut presentations, |binding| binding.compiled.paint());
+        for (emission, (_, paint)) in emissions.iter().zip(owner.compiled.outputs()) {
             if presentations
-                .get(presentation_index)
-                .is_none_or(|presentation| {
-                    presentation.compiled.output_ordinal() != emission.output_ordinal
-                })
+                .binary_search_by_key(&paint, |binding| binding.compiled.paint())
+                .is_err()
             {
                 return Err(AttachmentCreateErrorV1::MissingOutputPresentation {
                     output: emission.output,
                 });
             }
-            while presentations
-                .get(presentation_index)
-                .is_some_and(|presentation| {
-                    presentation.compiled.output_ordinal() == emission.output_ordinal
-                })
-            {
-                presentation_index += 1;
-            }
         }
-        if presentation_index != presentations.len() {
-            return Err(AttachmentCreateErrorV1::InternalInvariant);
-        }
+        crate::ordering::sort_by_key(&mut presentations, |binding| {
+            (
+                binding.compiled.output_ordinal(),
+                binding.compiled.presentation_ordinal(),
+            )
+        });
         for binding in &emissions {
             if !owned_scope.contains(&binding.sink_output) {
                 return Err(AttachmentCreateErrorV1::UnownedSinkOutput {
@@ -1324,6 +1398,14 @@ where
 {
     /// Готовит, атомарно устанавливает и infallibly публикует целый update.
     fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
+        self.update_with_projection(update, |_| Ok(()))
+    }
+
+    fn update_with_projection(
+        &mut self,
+        update: UpdateV1<'_>,
+        project: impl FnOnce(VerifiedOutputV1<'_>) -> Result<(), UpdateErrorV1>,
+    ) -> AttachmentUpdateResultV1<'_, W> {
         let transition = self
             .session
             .prepare_update(update)
@@ -1347,8 +1429,12 @@ where
             PreparedDispositionV1::SetAll { .. } | PreparedDispositionV1::RevokeAll { .. } => {}
         }
 
-        let action = match disposition {
-            PreparedDispositionV1::SetAll { revision, outputs } => {
+        let (intent, desired_sink_stamp, action) = match disposition {
+            PreparedDispositionV1::SetAll {
+                revision,
+                outputs,
+                presentation,
+            } => {
                 stage_complete_patches(
                     &self.emissions,
                     &self.presentations,
@@ -1357,20 +1443,6 @@ where
                     &mut self.scratch_render_patch,
                 )
                 .map_err(AttachmentUpdateErrorV1::InternalInvariant)?;
-                PreparedPatchActionV1::SetAll { revision }
-            }
-            PreparedDispositionV1::RevokeAll { revision } => {
-                self.scratch_sink_patch.clear();
-                self.scratch_render_patch.clear();
-                PreparedPatchActionV1::RevokeAll { revision }
-            }
-            PreparedDispositionV1::ConfirmExact { revision } => {
-                PreparedPatchActionV1::ConfirmExact { revision }
-            }
-        };
-
-        let (intent, desired_sink_stamp) = match action {
-            PreparedPatchActionV1::SetAll { revision } => {
                 let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
                     AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::SinkStampExhausted,
@@ -1381,11 +1453,15 @@ where
                         revision,
                         stamp,
                         patch: &self.scratch_sink_patch,
+                        presentation,
                     },
                     stamp.desired(),
+                    PreparedPatchActionV1::SetAll { revision },
                 )
             }
-            PreparedPatchActionV1::RevokeAll { revision } => {
+            PreparedDispositionV1::RevokeAll { revision } => {
+                self.scratch_sink_patch.clear();
+                self.scratch_render_patch.clear();
                 let stamp = PointSinkMutationStampV1::new(self.expected_sink_stamp).ok_or(
                     AttachmentUpdateErrorV1::InternalInvariant(
                         AttachmentInvariantV1::SinkStampExhausted,
@@ -1394,16 +1470,24 @@ where
                 (
                     PointSinkIntentV1::RevokeAll { revision, stamp },
                     stamp.desired(),
+                    PreparedPatchActionV1::RevokeAll { revision },
                 )
             }
-            PreparedPatchActionV1::ConfirmExact { revision } => (
+            PreparedDispositionV1::ConfirmExact { revision } => (
                 PointSinkIntentV1::ConfirmExact {
                     revision,
                     published_stamp: self.expected_sink_stamp,
                 },
                 self.expected_sink_stamp,
+                PreparedPatchActionV1::ConfirmExact { revision },
             ),
         };
+        // Disposition, published revision и полный patch уже проверены.
+        // Только prospective Ready допускает projection; отказ или unwind
+        // завершается до sink prepare/install и не публикует Session head.
+        if let Some(verified) = super::prepared_current_verified(&transition) {
+            project(verified).map_err(AttachmentUpdateErrorV1::Update)?;
+        }
         let sink_prepared = self
             .sink
             .prepare(intent)
@@ -1432,6 +1516,7 @@ where
         installed_sink.finish_after_session();
 
         Ok(AttachmentCommitV1 {
+            owner: &self._owner_pin,
             evidence: self.session.evidence(),
             session: &self.session,
             committed_render_patch: &self.committed_render_patch,
@@ -1491,6 +1576,16 @@ where
 
     pub(crate) fn update(&mut self, update: UpdateV1<'_>) -> AttachmentUpdateResultV1<'_, W> {
         self.state.update(update)
+    }
+
+    /// Package-private shell готовит owned readout из текущего prospective
+    /// evidence. Callback не получает Session, sink или capability публикации.
+    pub(crate) fn update_with_projection(
+        &mut self,
+        update: UpdateV1<'_>,
+        project: impl FnOnce(VerifiedOutputV1<'_>) -> Result<(), UpdateErrorV1>,
+    ) -> AttachmentUpdateResultV1<'_, W> {
+        self.state.update_with_projection(update, project)
     }
 
     /// Confirms and consumes one externally managed attachment as one

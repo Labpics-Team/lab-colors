@@ -1,6 +1,11 @@
 """Локальные байты пакета и изоляция полномочий публикации."""
 from pathlib import Path
+import os
+import tempfile
+import subprocess
+import textwrap
 import re
+import shlex
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -13,6 +18,12 @@ def job(source, name):
     return match.group()
 
 
+def require_terminal_browser_environment(step):
+    values = re.findall(r"(?m)^          BASH_ENV: ([^\r\n]+)$", step)
+    if values not in (['""'], ["''"]):
+        raise AssertionError("terminal browser must clear inherited BASH_ENV")
+
+
 def validate(ci, package, release):
     for caller in [job(ci,"wasm"),job(release,"prepare")]:
         if "    uses: ./.github/workflows/package-worker.yml\n" not in caller:
@@ -22,15 +33,52 @@ def validate(ci, package, release):
     if "environment:" in package or "secrets." in package:
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
+    if re.findall(r"(?m)^    runs-on: ([^\r\n]+)$", owner) != ["ubuntu-24.04"]:
+        raise AssertionError("package browsers require the supported Ubuntu 24.04 image")
+    blocks=re.findall(r"(?ms)^      - .*?(?=^      - |\Z)",owner)
+    chrome_setup = [block for block in blocks
+                    if re.search(r"(?m)^        id: chrome-runtime$", block)]
+    if len(chrome_setup) != 1 or not re.search(
+            r'(?m)^          (?:echo|printf) [^\r\n]*ld_library_path=[^\r\n]*>> "\$GITHUB_OUTPUT"$',
+            chrome_setup[0]):
+        raise AssertionError("Chrome library path must be a setup step output")
+    if any("LD_LIBRARY_PATH" in line and "GITHUB_ENV" in line
+           for line in package.splitlines() if not line.lstrip().startswith("#")):
+        raise AssertionError("Chrome library path must not enter the shared job environment")
+    chrome_library_path = "${{ steps.chrome-runtime.outputs.ld_library_path }}"
+    for block in blocks:
+        browser = ("wasm-pack test --headless --chrome" in block
+                   or "node scripts/test-program-runtime-browser.mjs" in block)
+        values = re.findall(r"(?m)^          LD_LIBRARY_PATH: ([^\r\n]+)$", block)
+        if values != ([chrome_library_path] if browser else []):
+            raise AssertionError("only Core browser steps may consume the Chrome library path")
+    if len(re.findall(r"(?m)^[ \t]*LD_LIBRARY_PATH:", package)) != 2:
+        raise AssertionError("Chrome library path must not be workflow or job scoped")
     for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
                     "npm run typecheck", "npm test", "npm run release:verify",
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
                     'test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"',
                     'node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"']:
-        blocks=re.findall(r"(?ms)^      - .*?(?=^      - |\Z)",owner)
         matches=[block for block in blocks if command in block]
         if len(matches)!=1 or "\n        if:" in matches[0] or "continue-on-error:" in matches[0]:
             raise AssertionError("package verification missing or conditional: "+command)
+    browser_command = ('node scripts/test-program-runtime-browser.mjs '
+                       '"$VERIFIED_TARBALL" "$VERIFIED_TARBALL_SHA256"')
+    browser_steps = [block for block in blocks if browser_command in block]
+    # Отдельный шаг с одной командой исключает ранний выход и маскировку её статуса.
+    if len(browser_steps) != 1:
+        raise AssertionError("terminal browser invocation changed")
+    # Явный Bash перекрывает наследуемые defaults.run.shell.
+    shells = re.findall(r"(?m)^        shell: ([^\r\n]+)$", browser_steps[0])
+    if shells not in (["bash"], ["\"bash\""], ["'bash'"]):
+        raise AssertionError("terminal browser shell does not execute the command")
+    require_terminal_browser_environment(browser_steps[0])
+    runs = re.findall(r"(?ms)^        run: (.*?)(?=^        \S|\Z)", browser_steps[0])
+    statements = [[line.strip() for line in run.splitlines()
+                   if line.strip() and not line.lstrip().startswith("#")]
+                  for run in runs]
+    if statements != [[browser_command]]:
+        raise AssertionError("terminal browser invocation is not executed")
     if "uses: actions/download-artifact@" in owner:
         raise AssertionError("local consumers depend on external storage")
     uploads=re.findall(r"(?ms)^      - name: upload verified npm tarball and manifest\n(.*?)(?=^      - name:|\Z)",owner)
@@ -81,6 +129,51 @@ class CiStorageTests(unittest.TestCase):
         values[1]+='\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000\n'
         with self.assertRaises(AssertionError):
             validate(*values)
+        package = self.sources[1]
+        output = ('          printf \'ld_library_path=%s\\n\' '
+                  '"${DEPS_LIB}:${LD_LIBRARY_PATH:-}" >> "$GITHUB_OUTPUT"')
+        browser_environment = (
+            "          LD_LIBRARY_PATH: ${{ steps.chrome-runtime.outputs.ld_library_path }}\n")
+        for before, after in (
+            ("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
+            ("runs-on: ubuntu-24.04", "runs-on: ubuntu-26.04"),
+            ("id: chrome-runtime", "id: other-runtime"),
+            (output, output.replace("ld_library_path=%s", "LD_LIBRARY_PATH=%s")
+                           .replace("$GITHUB_OUTPUT", "$GITHUB_ENV")),
+            (output, output + '\n          echo "LD_LIBRARY_PATH=$DEPS_LIB" >> "$GITHUB_ENV"'),
+            (output, output.replace("ld_library_path=%s", "wrong_output=%s")),
+            (browser_environment, ""),
+            (browser_environment, browser_environment.replace("chrome-runtime", "other-runtime")),
+            (browser_environment, browser_environment.replace("ld_library_path", "wrong_output")),
+            ("      BINARYEN_RELEASE: version_117\n",
+             "      BINARYEN_RELEASE: version_117\n      LD_LIBRARY_PATH: /shared/chrome-libs\n"),
+            ('  CARGO_TERM_COLOR: "always"\n',
+             '  CARGO_TERM_COLOR: "always"\n  LD_LIBRARY_PATH: /shared/chrome-libs\n'),
+        ):
+            with self.subTest(chrome_environment=before):
+                self.assertIn(before, package)
+                values = list(self.sources)
+                values[1] = package.replace(before, after, 1)
+                with self.assertRaises(AssertionError):
+                    validate(*values)
+        blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(package, "wasm"))
+        for command, before, after in (
+            ("node scripts/test-program-runtime-browser.mjs", browser_environment, ""),
+            ("node scripts/verify-package-release.mjs --package-smoke", "        env:\n",
+             "        env:\n" + browser_environment),
+            ("bash labui-consumer/.github/scripts/colors-same-job.sh", "        env:\n",
+             "        env:\n" + browser_environment),
+        ):
+            with self.subTest(chrome_consumer=command):
+                matching = [block for block in blocks if command in block]
+                self.assertEqual(len(matching), 1)
+                block = matching[0]
+                self.assertIn(before, block)
+                values = list(self.sources)
+                values[1] = package.replace(block, block.replace(before, after, 1), 1)
+                self.assertNotEqual(values[1], package)
+                with self.assertRaises(AssertionError):
+                    validate(*values)
 
 
 def job_level_optional(source, name):
@@ -200,6 +293,14 @@ class NativeStorageTests(unittest.TestCase):
         validate_native_storage(self.source)
         validate_mutation_storage(self.mutation_source)
 
+    def test_android_emulator_uses_one_shared_headless_configuration(self):
+        consumer = job(self.source, "android-consumer")
+        options = re.findall(r"(?m)^          emulator-options: ([^\n]+)$", consumer)
+        self.assertEqual(len(options), 1)
+        arguments = shlex.split(options[0])
+        self.assertEqual(arguments, ["-no-window", "-gpu", "swiftshader", "-no-snapshot",
+                                     "-noaudio", "-no-boot-anim", "-camera-back", "none"])
+
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
             ("retention-days: 1", "retention-days: 7"),
@@ -296,6 +397,79 @@ class NativeStorageTests(unittest.TestCase):
                 self.assertIn(before, self.mutation_source)
                 with self.assertRaises(AssertionError):
                     validate_mutation_storage(self.mutation_source.replace(before, after, 1))
+
+
+keys = ('ALSA_PACKAGE', 'ATK_PACKAGE', 'ATK_BRIDGE_PACKAGE', 'ATSPI_PACKAGE', 'CUPS_PACKAGE', 'GLIB_PACKAGE')
+old = ('libasound2', 'libatk1.0-0', 'libatk-bridge2.0-0', 'libatspi2.0-0', 'libcups2', 'libglib2.0-0')
+time64 = tuple(value + 't64' for value in old)
+
+class ChromeDependencyReleaseTests(unittest.TestCase):
+    def evaluate(self, distro, release):
+        source = (ROOT / ".github/workflows/package-worker.yml").read_text()
+        match = re.search(r'(?ms)^\s*case "\$ID:\$VERSION_CODENAME" in\n.*?^\s*esac$', source)
+        self.assertIsNotNone(match, "Chrome ABI selector is missing")
+        selector = textwrap.dedent(match.group())
+        output = '\n'.join('printf "%s\\n" "$' + key + '"' for key in keys)
+        return subprocess.run(['bash', '-eu', '-c', selector + '\n' + output],
+                              env={'PATH': '/usr/bin:/bin', 'ID': distro, 'VERSION_CODENAME': release},
+                              text=True, capture_output=True, timeout=5)
+
+    def test_legacy_and_time64_supported_releases(self):
+        for distro, release, expected in (
+            ('debian', 'bookworm', old), ('ubuntu', 'jammy', old),
+            ('debian', 'trixie', time64), ('ubuntu', 'noble', time64),
+            ('ubuntu', 'resolute', time64),
+        ):
+            with self.subTest(distro=distro, release=release):
+                result = self.evaluate(distro, release)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(tuple(result.stdout.splitlines()), expected)
+
+    def test_unknown_release_cannot_select_a_plausible_abi(self):
+        for distro, release in (('ubuntu', 'future'), ('debian', 'resolute'), ('alpine', 'noble')):
+            with self.subTest(distro=distro, release=release):
+                result = self.evaluate(distro, release)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('unsupported Chrome dependency release: ' + distro + ':' + release, result.stderr)
+
+class BrowserStartupEnvironmentTests(unittest.TestCase):
+    def step(self):
+        source = (ROOT / ".github/workflows/package-worker.yml").read_text()
+        return next(block for block in re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "wasm"))
+                    if 'run: node scripts/test-program-runtime-browser.mjs ' in block)
+
+    def execute(self, step):
+        command = re.search(r"(?m)^        run: (.+)$", step).group(1)
+        with tempfile.TemporaryDirectory(prefix="browser-shell-control-") as name:
+            root = Path(name)
+            startup = root / "startup.sh"
+            startup.write_text("exit 0\n")
+            trace = root / "argv"
+            node = root / "node"
+            node.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$TRACE_FILE"\nexit 23\n')
+            node.chmod(0o700)
+            environment = dict(os.environ, PATH=str(root) + ":/usr/bin:/bin",
+                               BASH_ENV=str(startup), TRACE_FILE=str(trace),
+                               VERIFIED_TARBALL="exact-package.tgz", VERIFIED_TARBALL_SHA256="a" * 64)
+            if re.search(r"(?m)^          BASH_ENV: (?:\"\"|'')$", step):
+                environment["BASH_ENV"] = ""
+            result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+                                    env=environment, text=True, capture_output=True, timeout=5)
+            return result.returncode, trace.read_text().splitlines() if trace.exists() else []
+
+    def test_inherited_startup_cannot_skip_browser_or_erase_failure(self):
+        code, arguments = self.execute(self.step())
+        self.assertEqual(code, 23)
+        self.assertEqual(arguments, ["scripts/test-program-runtime-browser.mjs", "exact-package.tgz", "a" * 64])
+
+    def test_removing_empty_environment_is_detected_and_reproduces_skip(self):
+        step = self.step()
+        require_terminal_browser_environment(step)
+        mutant = re.sub(r"(?m)^          BASH_ENV: .*\n", "", step)
+        with self.assertRaisesRegex(AssertionError, "BASH_ENV"):
+            require_terminal_browser_environment(mutant)
+        self.assertEqual(self.execute(mutant), (0, []))
 
 
 if __name__=="__main__":

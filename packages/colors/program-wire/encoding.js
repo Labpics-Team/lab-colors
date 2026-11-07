@@ -1,5 +1,5 @@
-// Wire V1/V2: LCPW header, little-endian sections in Core draft order.
-// This module admits scalar inputs; Rust checks graph semantics in program/wire.rs.
+// Канонические скаляры Program wire V1/V2/V3 и little-endian кодирование.
+// Этот модуль проверяет скаляры; семантика графа принадлежит program/wire.rs.
 
 export const PROGRAM_WIRE_MAGIC_V1 = Object.freeze([0x4c, 0x43, 0x50, 0x57]); // LCPW
 export const PROGRAM_WIRE_VERSION_V1 = 1;

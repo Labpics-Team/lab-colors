@@ -542,9 +542,9 @@ impl PointSinkWriterV1 for ClosedAllocatorPointSinkLeaseV1 {
         self.binding_epoch
     }
 
-    fn prepare<'lease>(
+    fn prepare<'lease, P: PointSinkPresentationSourceV1>(
         &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
+        intent: PointSinkIntentV1<'_, Self::OutputId, P>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
         if self.shared.busy.replace(true) {
             return Err(InMemoryPointSinkErrorV1::Busy);
@@ -563,6 +563,7 @@ impl PointSinkWriterV1 for ClosedAllocatorPointSinkLeaseV1 {
                 revision,
                 stamp,
                 patch,
+                ..
             } => {
                 if stamp.expected() != base_stamp {
                     self.shared.busy.set(false);
@@ -802,9 +803,9 @@ impl PointSinkWriterV1 for ClosedInMemoryPointSinkLeaseV1 {
         self.binding_epoch
     }
 
-    fn prepare<'lease>(
+    fn prepare<'lease, P: PointSinkPresentationSourceV1>(
         &'lease mut self,
-        intent: PointSinkIntentV1<'_, Self::OutputId>,
+        intent: PointSinkIntentV1<'_, Self::OutputId, P>,
     ) -> Result<Self::Prepared<'lease>, Self::Error> {
         if self.shared.host_binding.get() != self.bound_host {
             return Err(InMemoryPointSinkErrorV1::BindingDrift);
@@ -828,6 +829,7 @@ impl PointSinkWriterV1 for ClosedInMemoryPointSinkLeaseV1 {
                 revision,
                 stamp,
                 patch,
+                ..
             } => {
                 if stamp.expected() != base_stamp {
                     return Err(InMemoryPointSinkErrorV1::StampMismatch);

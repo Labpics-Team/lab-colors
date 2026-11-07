@@ -2,6 +2,9 @@ import init, {
   MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachedSnapshot,
+  ProgramAttachment,
+  attachProgramWire,
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
@@ -14,7 +17,12 @@ import type {
   CertificateErrorCode,
   BindingError,
   ProgramErrorCode,
+  ProgramCompileErrorCode,
+  ProgramAttachmentErrorCode,
+  ProgramUpdateErrorCode,
   ProgramOperation,
+  ProgramAttachmentBindings,
+  ProgramPointSinkHost,
   UntrustedCertificateEnvelopeV1,
 } from "@labpics/colors";
 import {
@@ -133,6 +141,42 @@ function scalarInputTypes(
 
 void scalarInputTypes;
 
+function attachmentScopeTypes(bytes: Uint8Array): ProgramAttachment {
+  const bindings: ProgramAttachmentBindings = {
+    emissions: [{ slot: 91, sinkOutput: 501 }, { slot: 92, sinkOutput: 502 }],
+    presentations: [{ slot: 91, root: 71, occurrence: 61 }, { slot: 92, root: 72, occurrence: 62 }],
+  };
+  const host: ProgramPointSinkHost = (intent) => {
+    const scope: Uint32Array = intent.scope;
+    const singleton: number | null = intent.sinkOutput;
+    for (const point of intent.points) {
+      const source: Uint8Array = point.source;
+      const sinkOutput: number = point.sinkOutput;
+      void source; void sinkOutput;
+    }
+    for (const composite of intent.presentationComposites) {
+      const root: number = composite.root;
+      const source: Uint8Array = composite.source;
+      void root; void source;
+    }
+    void scope; void singleton;
+    return true;
+  };
+  const attachment = attachProgramWire(bytes, 1, bindings, host);
+  const snapshot = attachment.updateObserved(1n, new Uint32Array([1]), new Uint8Array([0, 0, 0]), 1);
+  snapshot.renderCount();
+  snapshot.renderAt(0).presentationRoot();
+  attachment.materializationAuthorityForBinding(71, 61).terminalCompositeRgb();
+  // @ts-expect-error Каждый emission обязан назвать sink output.
+  attachProgramWire(bytes, 1, { emissions: [{ slot: 91 }], presentations: [] }, host);
+  // @ts-expect-error Индекс binding остаётся number.
+  snapshot.renderAt(0n);
+  // @ts-expect-error Root остаётся number и не приводится из строки.
+  attachment.materializationAuthorityForBinding("71", 61);
+  return attachment;
+}
+void attachmentScopeTypes;
+
 function declaredCleanSetInputTypes(builder: ProgramWireBuilderV1): void {
   const chained: ProgramWireBuilderV1 = builder.declaredSrgb8CleanSet(true, 81, 71, 61);
   builder.declaredSrgb8CleanSet(false, 82, 71, 61).finish();
@@ -154,3 +198,32 @@ void declaredCleanSetInputTypes;
 const readBindingFailure = (error: unknown): BindingError["code"] | undefined =>
   isBindingError(error) ? error.code : undefined;
 void readBindingFailure;
+
+function versionedSnapshotTypes(snapshot: ProgramSnapshot | ProgramAttachedSnapshot): void {
+  const version: number = snapshot.snapshotVersion;
+  const revision: bigint = snapshot.revision;
+  const reason: string | undefined = snapshot.reason;
+  // @ts-expect-error причина отсутствует вне incomplete.
+  const requiredReason: string = snapshot.reason;
+  // @ts-expect-error getter версии доступен только для чтения.
+  snapshot.snapshotVersion = 2;
+  // @ts-expect-error getter revision доступен только для чтения.
+  snapshot.revision = 1n;
+  // @ts-expect-error getter reason доступен только для чтения.
+  snapshot.reason = "limit";
+  void [version, revision, reason, requiredReason];
+}
+void versionedSnapshotTypes;
+
+function unsupportedErrorTypes(error: unknown): void {
+  const compile: ProgramCompileErrorCode = "program_unsupported";
+  const attach: ProgramAttachmentErrorCode = "program_unsupported";
+  const update: ProgramUpdateErrorCode = "program_unsupported";
+  if (isProgramError(error) && error.code === "program_unsupported") {
+    // @ts-expect-error неподдержанное обновление тоже возвращает этот код.
+    const operation: "compileProgramWire" | "attachProgramWire" = error.operation;
+    void operation;
+  }
+  void [compile, attach, update];
+}
+void unsupportedErrorTypes;

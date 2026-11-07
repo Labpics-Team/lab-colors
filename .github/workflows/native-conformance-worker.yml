@@ -184,7 +184,7 @@ jobs:
           target: ${{ matrix.target }}
           arch: x86_64
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
       - name: verify staged failure artifact inventory
         if: failure()

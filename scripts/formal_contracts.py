@@ -137,11 +137,11 @@ CONTRACTS.update({
     ),
     "session::proofs::current_evidence_never_promotes_historical_state": (
         {"render authority must never promote historical evidence to current", "last good evidence must remain distinct from current authority"},
-        {"ready evidence authorizes", "historical evidence does not authorize", "no evidence remains absent"},
+        {"ready evidence authorizes", "historical evidence does not authorize", "no evidence remains absent", "incomplete retains only historical evidence", "incomplete has no invented evidence"},
     ),
     "session::proofs::state_displacement_conserves_every_owned_payload": (
-        {"displacement must empty the old state before publication", "displacement must retain exactly the old good and violation payloads"},
-        {"failed state keeps two owned payloads", "first violation has no invented predecessor", "empty state has nothing to retire"},
+        {"displacement must empty the old state before publication", "displacement must retain exactly the old good violation and incomplete payloads"},
+        {"failed state keeps two owned payloads", "first violation has no invented predecessor", "empty state has nothing to retire", "incomplete state keeps two owned payloads", "first incomplete has no invented predecessor"},
     ),
     "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap": (
         {"sink mutation must refuse exhausted sequence instead of wrapping", "sink CAS must preserve the entire expected token", "sink successor must advance exactly once within the same epoch"},
@@ -158,8 +158,8 @@ MUTANTS += (
      "    if records >= MAX_ADMISSION_ENTRIES_V1 {", "    if records > MAX_ADMISSION_ENTRIES_V1 {"),
     ("historical-evidence-promotion", "session.rs", "session::proofs::current_evidence_never_promotes_historical_state",
      "render authority must never promote historical evidence to current",
-     "            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } => None,",
-     "            Self::Stale { previous } => Some(previous),\n            Self::Waiting | Self::Failed { .. } => None,"),
+     "            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } | Self::Incomplete { .. } => {\n                None\n            }",
+     "            Self::Stale { previous } => Some(previous),\n            Self::Waiting | Self::Failed { .. } | Self::Incomplete { .. } => None,"),
     ("sink-stamp-no-advance", "program/attachment.rs", "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap",
      "sink successor must advance exactly once within the same epoch",
      "        match self.sequence.checked_add(1) {", "        match self.sequence.checked_add(0) {"),
@@ -249,50 +249,74 @@ MUTANTS += (
 SOURCES += ("field_effect.rs",)
 
 
-CONTRACTS.update({
-    "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect": (
+HANDOFF_OPERATION_PARTITIONS = ("set_all", "revoke_all", "confirm_exact")
+HANDOFF_STATE_PARTITIONS = ("empty", "published")
+HANDOFF_PARTITION_CONTRACTS = {
+    "preparation_is_exact_and_has_no_publication_effect": (
         {"handoff preparation must retain the exact previous and desired state",
          "handoff command must preserve every publication field",
          "handoff command must preserve the requested operation",
          "handoff preparation must reject exactly wrong stamp scope or revision",
          "preparing or abandoning a handoff must never publish or advance state"},
-        {"valid set prepared", "valid revoke prepared", "published value confirmed",
-         "empty value confirmed", "foreign stamp rejected", "foreign scope rejected", "foreign revision rejected"},
+        ({"valid set prepared", "foreign stamp rejected", "foreign scope rejected"},
+         {"valid revoke prepared", "foreign stamp rejected"},
+         {"published value confirmed", "empty value confirmed", "foreign stamp rejected",
+          "foreign revision rejected"}),
     ),
-    "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only": (
+    "rejected_install_is_atomic_retryable_and_success_is_once_only": (
         {"handoff must propagate the exact host refusal",
          "failed handoff must preserve committed and retryable state",
          "exact handoff retry must remain usable",
          "successful handoff must commit the complete acknowledged command exactly once",
          "a consumed handoff must never call the host again",
          "finishing the handoff must preserve its acknowledged result"},
-        {"rejected set retried", "rejected revoke retried",
-         "exhausted stamp still permits confirmation", "protocol refusal is retryable"},
+        ({"rejected set retried", "protocol refusal is retryable"},
+         {"rejected revoke retried", "protocol refusal is retryable"},
+         {"exhausted stamp still permits confirmation", "protocol refusal is retryable"}),
     ),
-    "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host": (
+    "stale_prepared_command_never_reaches_the_host": (
         {"stale prepared handoff must fail before any host call or state mutation"},
-        {"same sequence foreign epoch rejected", "same epoch foreign sequence rejected"},
+        ({"same sequence foreign epoch rejected", "same epoch foreign sequence rejected"},) * 3,
     ),
-})
-MUTANTS += (
-    ("handoff-foreign-confirmation", "program/attachment/handoff.rs",
-     "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect",
+}
+# Две формы прежнего Option-state проверяются отдельными harnesses, без общей
+# символической ветви heap. Конъюнкция всех операций и форм обязательна.
+for base, (assertions, partition_covers) in HANDOFF_PARTITION_CONTRACTS.items():
+    for partition, covers in zip(HANDOFF_OPERATION_PARTITIONS, partition_covers, strict=True):
+        for state in HANDOFF_STATE_PARTITIONS:
+            state_covers = covers | {f"{state} prior state"}
+            if base == "preparation_is_exact_and_has_no_publication_effect" and partition == "confirm_exact":
+                other = "published" if state == "empty" else "empty"
+                state_covers -= {f"{other} value confirmed"}
+            CONTRACTS[f"program::attachment::handoff::proofs::{base}_{partition}_{state}"] = (assertions, state_covers)
+
+for state in HANDOFF_STATE_PARTITIONS:
+    MUTANTS += (
+    (f"handoff-foreign-confirmation-{state}", "program/attachment/handoff.rs",
+     f"program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact_{state}",
      "handoff preparation must reject exactly wrong stamp scope or revision",
-     "                if current.revision != Some(revision) {", "                if false {"),
-    ("handoff-swallowed-host-refusal", "program/attachment/handoff.rs",
-     "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+     "                if self.committed.revision != Some(revision) {", "                if false {"),
+    )
+for partition in (f"{operation}_{state}" for operation in HANDOFF_OPERATION_PARTITIONS
+                  for state in HANDOFF_STATE_PARTITIONS):
+    MUTANTS += (
+    (f"handoff-swallowed-host-refusal-{partition}", "program/attachment/handoff.rs",
+     f"program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_{partition}",
      "handoff must propagate the exact host refusal",
-     "            .map_err(HandoffPointSinkErrorV1::Host)?;",
-     "            .map_err(HandoffPointSinkErrorV1::Host).unwrap_or(());"),
-    ("handoff-repeated-install", "program/attachment/handoff.rs",
-     "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+     "        if let Err(error) = self.writer.host.try_install(intent) {\n"
+     "            return Err(HandoffPointSinkErrorV1::Host(error));\n"
+     "        }",
+     "        let _ = self.writer.host.try_install(intent);"),
+    (f"handoff-repeated-install-{partition}", "program/attachment/handoff.rs",
+     f"program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_{partition}",
      "successful handoff must commit the complete acknowledged command exactly once",
-     "        self.staged = None;", "        self.staged = Some(staged);"),
-    ("handoff-stale-install", "program/attachment/handoff.rs",
-     "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host",
+     "        let Some(staged) = self.staged.take() else {",
+     "        let Some(staged) = self.staged.clone() else {"),
+    (f"handoff-stale-install-{partition}", "program/attachment/handoff.rs",
+     f"program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_{partition}",
      "stale prepared handoff must fail before any host call or state mutation",
-     "        if self.writer.committed.stamp != staged.expected_stamp {", "        if false {"),
-)
+     "        if self.writer.committed.stamp != staged.expected_stamp() {", "        if false {"),
+    )
 SOURCES += ("program/attachment/handoff.rs",)
 
 

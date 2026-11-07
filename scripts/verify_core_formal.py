@@ -11,8 +11,10 @@ import signal
 import stat
 from pathlib import Path
 import subprocess
+import time
 
 from formal_contracts import CONTRACTS, MUTANTS, SOURCES
+from formal_resources import FormalResources
 
 ROOT = Path(__file__).resolve().parents[1]
 KANI_VERSION = "0.68.0"
@@ -33,6 +35,10 @@ POSITIVE_SHARDS = (
         "composition::proofs::opacity_domain_preserves_all_boundaries",
         "authority::clean_convention::proofs::selection_admits_exactly_declared_modeled_point_release",
         "composition::proofs::opacity_admission_is_exact_and_canonical",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_set_all_empty",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_set_all_published",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_set_all_empty",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_set_all_published",
     ),
     (
         "authority::proofs::auth_admission_is_exact_atomic_and_lane_local",
@@ -46,14 +52,22 @@ POSITIVE_SHARDS = (
         "composition::proofs::identical_channels_are_fixed_for_every_opacity",
         "program::attachment::proofs::mutation_stamp_preserves_epoch_and_cannot_wrap",
         "composition::proofs::multiply_preserves_the_entire_admitted_domain",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_revoke_all_empty",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_revoke_all_published",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_set_all_empty",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_set_all_published",
     ),
     (
         "wcag22::kernel::proofs::exact_points_are_total_symmetric_and_correct",
         "wcag22::kernel::proofs::interval_ui_component_is_sound_for_every_enclosed_point",
         "observation::proofs::equality_requires_the_same_observation_allocation",
-        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact_empty",
+        "program::attachment::handoff::proofs::preparation_is_exact_and_has_no_publication_effect_confirm_exact_published",
         "srgb8::proofs::hex_admits_exactly_six_hex_digits",
-        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_empty",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_revoke_all_published",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all_empty",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_revoke_all_published",
         "field_effect::proofs::gaussian_sampling_clamps_without_coordinate_wrap",
         "certificate::proofs::reader_big_endian_and_length_prefix",
         "field_effect::proofs::rectangles_admit_exactly_nonempty_in_bounds_geometry",
@@ -65,7 +79,10 @@ POSITIVE_SHARDS = (
         "authority::proofs::auth_issue_admit_require_composes",
         "wcag22::kernel::proofs::interval_large_text_is_sound_for_every_enclosed_point",
         "authority::proofs::auth_require_iff_full_binding",
-        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact_empty",
+        "program::attachment::handoff::proofs::rejected_install_is_atomic_retryable_and_success_is_once_only_confirm_exact_published",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_confirm_exact_empty",
+        "program::attachment::handoff::proofs::stale_prepared_command_never_reaches_the_host_confirm_exact_published",
         "authority::proofs::auth_permit_iff_exact_current_proof",
         "joint::proofs::doubling_cardinality_cannot_wrap_into_empty_success",
         "field_effect::proofs::expanded_rectangles_preserve_exact_clipped_influence",
@@ -168,6 +185,155 @@ def validate_mutant(report: dict, returncode: int, mutant: tuple) -> None:
             raise ValueError("mutant failed outside its declared semantic properties")
 
 
+def _open_regular_log(log: Path):
+    descriptor = os.open(log, os.O_CREAT | os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW, 0o666)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("formal logfile must be a regular file")
+        os.ftruncate(descriptor, 0)
+        os.set_blocking(descriptor, True)
+        return os.fdopen(descriptor, "wb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_log_reader(writer):
+    # Read the admitted inode at an independent offset, even if its path changes.
+    return open(f"/proc/self/fd/{writer.fileno()}", "rb")
+
+
+def _open_live_output_fd() -> int:
+    mode = os.fstat(1).st_mode
+    if stat.S_ISFIFO(mode) or stat.S_ISCHR(mode):
+        # dup shares status flags with the CI shell. Reopen a private description.
+        return os.open("/proc/self/fd/1", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    if stat.S_ISREG(mode):
+        return os.dup(1)
+    raise OSError("CI stdout must be a regular file, pipe, or terminal")
+
+
+def _run_logged_command(command: list[str], log: Path, *, timeout: float = 1200,
+                        observe_resources: bool = False) -> int:
+    """Follow the regular logfile; command completion belongs to its leader PID."""
+    requested_signal = None
+    previous_handlers = {}
+    process = None
+    output_fd = None
+    cleaned = False
+    stop_reason = "error"
+    resources = FormalResources() if observe_resources else None
+
+    def request_stop(signum, frame):
+        nonlocal requested_signal
+        if requested_signal is None:
+            requested_signal = signum
+
+    def cleanup():
+        nonlocal cleaned
+        if process is not None and not cleaned:
+            if resources is not None:
+                resources.sample("stopping", process.pid, requested_signal=requested_signal,
+                                 returncode=process.returncode,
+                                 reason="signal" if requested_signal is not None else stop_reason)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                process.wait()
+            cleaned = True
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, request_stop)
+        try:
+            writer = _open_regular_log(log)
+        except OSError:
+            return 125
+        with writer:
+            try:
+                reader = _open_log_reader(writer)
+            except OSError:
+                return 125
+            with reader:
+                relay_failed = False
+                try:
+                    output_fd = _open_live_output_fd()
+                except OSError:
+                    relay_failed = True
+                if resources is not None:
+                    resources.sample("baseline")
+                process = subprocess.Popen(command, cwd=ROOT, stdout=writer, stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+                started = time.monotonic()
+                deadline, next_sample = started + timeout, started + 10
+                pending, offset = b"", 0
+                try:
+                    if resources is not None:
+                        resources.sample("started", process.pid)
+                    while requested_signal is None:
+                        returncode = process.poll()
+                        if returncode is not None:
+                            stop_reason = "exited"
+                            cleanup()
+                        if requested_signal is not None:
+                            break
+                        now = time.monotonic()
+                        remaining = deadline - now
+                        if remaining <= 0:
+                            stop_reason = "timeout"
+                            if returncode is None and not relay_failed:
+                                raise subprocess.TimeoutExpired(command, timeout)
+                            return 125
+                        if resources is not None and not cleaned and now >= next_sample:
+                            resources.sample("running", process.pid)
+                            next_sample = now + 10
+                        progressed = False
+                        if not relay_failed:
+                            if offset == len(pending):
+                                try:
+                                    pending = reader.read(65536)
+                                    offset = 0
+                                except OSError:
+                                    relay_failed = True
+                            if not relay_failed and pending:
+                                try:
+                                    written = os.write(output_fd, memoryview(pending)[offset:])
+                                    if written == 0:
+                                        relay_failed = True
+                                    else:
+                                        offset += written
+                                        progressed = True
+                                except BlockingIOError:
+                                    pass
+                                except OSError:
+                                    relay_failed = True
+                        if cleaned and (relay_failed or not pending):
+                            return 125 if relay_failed else returncode
+                        if not progressed:
+                            if cleaned:
+                                time.sleep(min(0.1, remaining))
+                            else:
+                                try:
+                                    process.wait(timeout=min(0.1, remaining))
+                                except subprocess.TimeoutExpired:
+                                    pass
+                finally:
+                    cleanup()
+    finally:
+        try:
+            if resources is not None:
+                resources.close()
+            if output_fd is not None:
+                os.close(output_fd)
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+        if requested_signal is not None:
+            raise SystemExit(128 + requested_signal)
+
+
 def run_kani(
     output: Path,
     *,
@@ -177,32 +343,24 @@ def run_kani(
     output.unlink(missing_ok=True)
     if harness is not None and positive_harnesses is not None:
         raise ValueError("mutant and positive harness filters are mutually exclusive")
-    command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--output-format", "terse",
+    command = ["cargo", "kani", "-p", "labcolors-core", "--lib", "--output-format", "regular",
                "-Z", "unstable-options", "--harness-timeout", "300s", "--export-json", str(output)]
     if harness is not None:
         command.extend(["--harness", harness, "--exact", "-Z", "concrete-playback", "--concrete-playback", "print"])
     else:
-        command.append("--jobs=4")
+        # Positive CBMC searches share one hosted VM. Bound peak memory by
+        # running one solver at a time; keep every harness and its time budget.
+        command.append("--jobs=1")
         if positive_harnesses is not None:
             if not positive_harnesses:
                 raise ValueError("empty positive harness shard")
             for selected in positive_harnesses:
                 command.extend(["--harness", selected])
             command.append("--exact")
+    command.extend(["--cbmc-args", "--symex-cache-dereferences"])
     log = output.with_suffix(".log")
-    with log.open("w", encoding="utf-8") as stream:
-        process = subprocess.Popen(command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        try:
-            process.wait(timeout=1200)
-        finally:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-    print(log.read_text(encoding="utf-8"), end="", flush=True)
-    return json.loads(output.read_text(encoding="utf-8")), process.returncode
+    returncode = _run_logged_command(command, log, observe_resources=True)
+    return json.loads(output.read_text(encoding="utf-8")), returncode
 
 
 def digest(path: Path) -> str:
@@ -219,6 +377,7 @@ def formal_source_files() -> list[Path]:
         CORE / "program_wire.rs",
         Path(__file__),
         ROOT / "scripts/formal_contracts.py",
+        ROOT / "scripts/formal_resources.py",
     ]
     for source in SOURCES:
         files.extend([CORE / source, CORE / source.removesuffix(".rs") / "proofs.rs"])

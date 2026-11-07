@@ -170,6 +170,12 @@ pub(crate) fn source_over_channel_value(tint: u8, alpha: f64, backdrop: u8) -> f
     f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))
 }
 
+// Final RGB8 монотонен по обоим цветам при fixed admitted alpha. По tint это
+// композиция монотонных операций. По backdrop зависимость повторяется: ошибка
+// product+add относительно real affine <=2^-45 (разность u8 точна). При
+// alpha<=511/512 соседний real gap >=1/512 превосходит две ошибки. При большей
+// alpha расстояние до целого tint <=255/512+2^-45<1/2: round всегда даёт tint.
+// Это закон final bytes; вещественный affine oracle на half-ties ему не равен.
 pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u8 {
     source_over_channel_value(tint, alpha, backdrop).round() as u8
 }
@@ -204,6 +210,40 @@ mod tests {
     use super::{
         AdmittedOpacityV1, OpacityAdmissionErrorV1, OpacityDomainAdmissionErrorV1, OpacityDomainV1,
     };
+
+    #[test]
+    fn final_bytes_preserve_rgb_order_at_monotonicity_proof_cuts() {
+        use super::source_over_channel_srgb8 as value;
+        let cut = 511.0_f64 / 512.0;
+        let alphas = [
+            0.0,
+            0.5,
+            f64::from_bits(cut.to_bits() - 1),
+            cut,
+            f64::from_bits(cut.to_bits() + 1),
+            f64::from_bits(1.0_f64.to_bits() - 1),
+            1.0,
+        ];
+        for alpha in alphas {
+            for tint in 0..=255_u8 {
+                for backdrop in 0..=255_u8 {
+                    let current = value(tint, alpha, backdrop);
+                    if tint < 255 {
+                        assert!(current <= value(tint + 1, alpha, backdrop));
+                    }
+                    if backdrop < 255 {
+                        assert!(current <= value(tint, alpha, backdrop + 1));
+                    }
+                    if alpha >= cut {
+                        assert_eq!(current, tint);
+                    }
+                }
+            }
+        }
+        // Exact-real affine результат расположен ниже half-tie, actual f64
+        // попадает в него. Oracle с другой арифметикой здесь неверен.
+        assert_eq!(value(0, 0.1, 5), 5);
+    }
 
     #[test]
     fn opacity_domain_rejects_invalid_or_reversed_boundaries_before_execution() {

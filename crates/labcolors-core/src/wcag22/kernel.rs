@@ -34,12 +34,14 @@ fn threshold(criterion: Wcag22CriterionV1) -> ThresholdV1 {
 }
 
 pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 {
-    let red = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])];
-    let green = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])];
-    let blue = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])];
+    let red = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[0][usize::from(rgb[0])];
+    let green = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[1][usize::from(rgb[1])];
+    let blue = super::q55_data::WEIGHTED_CONTRIBUTION_LOWER[2][usize::from(rgb[2])];
+    let lower = red + green + blue;
+    // Генератор и независимый oracle доказывают delta = (code != 0) для каждого вклада.
     Wcag22LuminanceBoundsQ55V1 {
-        lower: red[0] + green[0] + blue[0],
-        upper: red[1] + green[1] + blue[1],
+        lower,
+        upper: lower + u64::from(rgb[0] != 0) + u64::from(rgb[1] != 0) + u64::from(rgb[2] != 0),
     }
 }
 

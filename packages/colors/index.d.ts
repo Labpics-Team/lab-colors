@@ -19,6 +19,11 @@ export {
 } from "./pkg/labcolors.js";
 
 export type {
+  ProgramAssessmentReportV1,
+  ProgramAssessmentCellV1,
+  ProgramScenarioProvenanceV1,
+  ProgramConstraintAssessmentV1,
+  ProgramAssessmentVerdictV1,
   NumericalCapabilitySiteV2,
   NumericalCapabilityManifestV2,
   Wcag22DecisionV1,
@@ -34,9 +39,15 @@ export type ProgramCompileErrorCode =
   | ProgramInfrastructureErrorCode
   | "program_wire"
   | "program_compile"
+  | "program_unsupported"
   | "program_family_artifacts_required"
   | "program_instantiate";
-export type ProgramUpdateErrorCode = "program_update" | ProgramInfrastructureErrorCode;
+export type ProgramRuntimeBusyErrorCode = "program_runtime_busy";
+export type ProgramUpdateErrorCode =
+  | "program_update"
+  | "program_unsupported"
+  | ProgramInfrastructureErrorCode
+  | ProgramRuntimeBusyErrorCode;
 export type ProgramAttachmentErrorCode =
   | ProgramCompileErrorCode
   | "program_attachment_binding"
@@ -77,9 +88,24 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_terminal_binding_mismatch"
   | "program_materialization_missing_point_absence_proof"
   | "program_materialization_ambiguous_observation_cases"
+  | "program_materialization_ambiguous_bindings"
   | "program_attachment_busy";
 export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
+export type ProgramRuntimeBusyOperation =
+  | ProgramUpdateOperation
+  | "updateFinalRaster" | "consumeFinalRaster"
+  | "contentIdentity" | "finalRasterRefusal" | "free";
+export type ProgramFinalRasterErrorCode =
+  | "program_resource_exhausted"
+  | "program_field_extent" | "program_field_dpr" | "program_field_length"
+  | "program_field_premultiplied" | "program_field_ports" | "program_field_update"
+  | "program_field_unsupported" | "program_field_transparent" | "program_field_convention"
+  | "program_field_tq" | "program_field_cc" | "program_field_stale" | "program_field_program"
+  | "program_field_output" | "program_field_context" | "program_field_internal"
+  | "program_field_consumer_rejected" | "program_field_consumer_failed";
 export type ProgramError = Error & (
+  | Readonly<{ code: ProgramRuntimeBusyErrorCode; operation: ProgramRuntimeBusyOperation }>
+  | Readonly<{ code: ProgramFinalRasterErrorCode; operation: "finalRasterSourceOverWire" | "updateFinalRaster" | "consumeFinalRaster" }>
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
@@ -91,6 +117,7 @@ export type ProgramError = Error & (
   | Readonly<{ code: ProgramAttachmentFreeErrorCode; operation: "attachmentFree" }>
   | Readonly<{ code: ProgramPhysicalIdentityErrorCode; operation: "physicalIdentity" }>
   | Readonly<{ code: ProgramMaterializationErrorCode; operation: "materializationAuthority" }>
+  | Readonly<{ code: ProgramInfrastructureErrorCode; operation: "assessmentReport" }>
 );
 export type ProgramErrorCode = ProgramError["code"];
 export type ProgramOperation = ProgramError["operation"];
@@ -163,14 +190,38 @@ export interface ProgramPointSinkPoint {
   readonly source: Uint8Array;
   readonly opacity: number;
 }
+export interface ProgramPointSinkPublishedPoint extends ProgramPointSinkPoint {
+  readonly sinkOutput: number;
+}
+export interface ProgramPointPresentationComposite {
+  readonly root: number;
+  readonly scenario: number;
+  readonly source: Uint8Array;
+}
+export interface ProgramPointEmissionBinding {
+  readonly slot: number;
+  readonly sinkOutput: number;
+}
+export interface ProgramPointPresentationBinding {
+  readonly slot: number;
+  readonly root: number;
+  readonly occurrence: number;
+}
+export interface ProgramAttachmentBindings {
+  readonly emissions: readonly ProgramPointEmissionBinding[];
+  readonly presentations: readonly ProgramPointPresentationBinding[];
+}
 export interface ProgramPointSinkIntent {
   readonly operation: ProgramPointSinkOperation;
   readonly revision: bigint;
   readonly expectedSequence: bigint;
   readonly desiredSequence: bigint;
   readonly bindingEpoch: bigint;
-  readonly sinkOutput: number;
+  readonly sinkOutput: number | null;
   readonly point: ProgramPointSinkPoint | null;
+  readonly scope: Uint32Array;
+  readonly points: readonly ProgramPointSinkPublishedPoint[];
+  readonly presentationComposites: readonly ProgramPointPresentationComposite[];
 }
 export type ProgramPointSinkHost = (intent: ProgramPointSinkIntent) => boolean;
 
@@ -192,6 +243,12 @@ export declare function evaluateWcag22(
 export declare function attachProgramWire(
   bytes: Uint8Array,
   streamId: number,
+  bindings: ProgramAttachmentBindings,
+  host: ProgramPointSinkHost,
+): ProgramAttachment;
+export declare function attachProgramWire(
+  bytes: Uint8Array,
+  streamId: number,
   outputSlot: number,
   sinkOutput: number,
   presentationRoot: number,
@@ -207,5 +264,17 @@ export type BindingError = Error & (
     }>
   | Readonly<{ operation: "numericalCapabilityManifest"; code: "internal_error" }>
   | Readonly<{ operation: "readProgramOutput"; code: "invalid_output_index" }>
+  | Readonly<{
+      operation: "readPresentationComposite";
+      code: "invalid_composite_id" | "presentation_composite_unavailable";
+    }>
 );
 export declare function isBindingError(error: unknown): error is BindingError;
+
+export type { FinalRasterBytesV1, FinalRasterConsumerV1, FinalRasterCleanlinessAssessmentV1, FinalRasterCleanlinessViolationV1 } from "./pkg/labcolors.js";
+/** Locked source-over tuple. Успех сохраняет входы; произвольная коррекция не заявляется. */
+export declare function finalRasterSourceOverWire(
+  sourcePort: bigint, destinationPort: bigint, operator: bigint, outputSlot: number,
+  cleanliness: "off" | "lint-exact-nominal-srgb8-v2" | "mandatory-exact-nominal-srgb8-v2",
+): Uint8Array;
+export declare const MAX_FINAL_RASTER_PIXELS: 65536;

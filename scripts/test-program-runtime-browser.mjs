@@ -950,6 +950,167 @@ export function verifyBrowserSelection(result) {
   }
 }
 
+export function browserAssignmentScenario(origin, locked = false, budget = false) {
+  return 'const done=arguments[arguments.length-1]; const browserCleanup=' + browserCleanup.toString()
+    + '; (' + browserAssignmentConsumer.toString() + ')(' + JSON.stringify(origin)
+    + ', ' + JSON.stringify(locked) + ', ' + JSON.stringify(budget)
+    + ').then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));';
+}
+
+export function browserLockedAssignmentScenario(origin) {
+  return browserAssignmentScenario(origin, true);
+}
+
+export function browserBudgetAssignmentScenario(origin) {
+  return browserAssignmentScenario(origin, false, true);
+}
+
+async function browserAssignmentConsumer(origin, locked, budget) {
+  const resources = [], handles = [], acquired = [], released = [];
+  let primary, result, element, attachment;
+  const property = '--assignment';
+  try {
+    const api = await import(origin + '/index.js');
+    const { ProgramWireBuilderV3, SURROUND_AVERAGE_V1, WCAG22_SC143_TEXT_DEFAULT_V1 } =
+      await import(origin + '/program-wire/abi-v3.js');
+    await api.init();
+    const anchor = [24, 24, 24];
+    const domain = locked ? { kind: 'box', lower: anchor, upper: anchor }
+      : { kind: 'box', lower: [0, 0, 0], upper: [255, 255, 255] };
+    const builder = new ProgramWireBuilderV3()
+      .computedTarget(21, domain, anchor, locked ? 0 : 1)
+      .assignment([21]).surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
+      .sourceOverOccurrence(61, 41, 51, 64, .2, SURROUND_AVERAGE_V1)
+      .presentationRoot(71, 61).presentationTarget(71, 61)
+      .wcag22VisibleUnary(true, 81, 61, WCAG22_SC143_TEXT_DEFAULT_V1).output(91, 41);
+    // Существующий Node witness исчерпывает поиск отношения на чёрном фоне;
+    // это самостоятельный исход limit, а не доказательство несовместимости.
+    if (budget) builder.source(11, anchor).fixedTarget(22, 11).exactIntrinsicRelationHard(82, 22, [21]);
+    const wire = builder.finish();
+    element = document.createElement('span');
+    element.textContent = 'Assignment'; element.style.color = `var(${property})`;
+    document.body.append(element);
+    const host = { sequence: 0n, epoch: null, operations: [] };
+    attachment = api.attachProgramWire(wire, 1, 91, 501, 71, 61, (intent) => {
+      if (intent.sinkOutput !== 501 || intent.expectedSequence !== host.sequence
+        || (host.epoch !== null && intent.bindingEpoch !== host.epoch)) return false;
+      if (intent.operation === 'setAll') {
+        if (intent.point?.slot !== 91 || intent.point.opacity !== 1 || intent.point.source.length !== 3) return false;
+        const [r, g, b] = intent.point.source;
+        element.style.setProperty(property, `rgb(${r}, ${g}, ${b})`);
+      } else if (intent.operation === 'revokeAll') {
+        if (intent.point !== null) return false;
+        element.style.removeProperty(property);
+      } else if (intent.operation !== 'confirmExact' || intent.desiredSequence !== intent.expectedSequence) return false;
+      host.sequence = intent.desiredSequence; host.epoch = intent.bindingEpoch;
+      host.operations.push(intent.operation); return true;
+    });
+    acquired.push('assignment-attachment', 'assignment-host');
+    resources.push({ name: 'assignment-attachment', release() {
+      attachment.dispose(true); attachment.free(); released.push('assignment-attachment');
+    } }, { name: 'assignment-host', release() {
+      element.style.removeProperty(property); element.remove(); released.push('assignment-host');
+    } });
+    const observe = (name, revision, background) => {
+      element.style.backgroundColor = `rgb(${background.join(', ')})`;
+      const handle = attachment.updateObserved(revision, new Uint32Array([1]), new Uint8Array(background), 1);
+      handles.push({ name, handle }); acquired.push(name);
+      resources.push({ name, release() { handle.free(); released.push(name); } }); return handle;
+    };
+    const read = (snapshot) => ({ version: snapshot.snapshotVersion, revision: String(snapshot.revision),
+      state: snapshot.state, reason: snapshot.reason ?? null, hasRender: snapshot.hasRender(),
+      outputs: Array.from({ length: snapshot.outputCount() }, (_, i) => ({ slot: snapshot.outputSlot(i),
+        rgb: Array.from(snapshot.outputRgb(i)), opacity: snapshot.outputOpacity(i) })),
+    });
+    const first = observe('assignment-first', 1n, [255, 255, 255]);
+    const initial = read(first), css = element.style.getPropertyValue(property);
+    const computed = getComputedStyle(element).color;
+    const backgroundBefore = getComputedStyle(element).backgroundColor;
+    const stopped = observe('assignment-stopped', 2n, [0, 0, 0]);
+    const afterStop = element.style.getPropertyValue(property);
+    const computedAfterStop = getComputedStyle(element).color;
+    const backgroundAfterStop = getComputedStyle(element).backgroundColor;
+    let refusalAuthority;
+    if (locked || budget) {
+      refusalAuthority = { rejected: false };
+      try { attachment.materializationAuthority().free(); }
+      catch (error) {
+        refusalAuthority = { rejected: true, recognized: api.isProgramError(error),
+          code: error.code, operation: error.operation };
+      }
+    }
+    const replay = observe('assignment-replay', 2n, [0, 0, 0]);
+    const restored = observe('assignment-restored', 3n, [255, 255, 255]);
+    result = { initial, stopped: read(stopped), replay: read(replay), restored: read(restored), held: read(first),
+      css, computed, backgroundBefore, afterStop, computedAfterStop, backgroundAfterStop, refusalAuthority,
+      afterRestore: element.style.getPropertyValue(property), computedAfterRestore: getComputedStyle(element).color,
+      backgroundAfterRestore: getComputedStyle(element).backgroundColor, operations: host.operations };
+  } catch (error) { primary = error; }
+  const outcome = browserCleanup(primary, resources.toReversed());
+  if (element?.isConnected && !resources.some(({ name }) => name === 'assignment-host')) element.remove();
+  return { ...result, ...outcome, acquired, released, readback: {
+    ...Object.fromEntries(handles.map(({ name, handle }) => [name, handle.__wbg_ptr === 0])),
+    'assignment-attachment': attachment?.__wbg_ptr === 0,
+    'assignment-host': !element?.isConnected && element?.style.getPropertyValue(property) === '',
+  } };
+}
+
+export function verifyBrowserAssignment(result) {
+  verifyBrowserAssignmentHistory(result, false);
+}
+
+export function verifyBrowserLockedAssignment(result) {
+  verifyBrowserAssignmentHistory(result, true);
+}
+
+export function verifyBrowserBudgetAssignment(result) {
+  verifyBrowserAssignmentHistory(result, false, true);
+}
+
+function verifyBrowserAssignmentHistory(result, locked, budget = false) {
+  const anchor = [24, 24, 24];
+  const css = (rgb) => `rgb(${rgb.join(', ')})`;
+  const ready = (revision) => ({ version: 2, revision, state: 'ready', reason: null, hasRender: true,
+    outputs: [{ slot: 91, rgb: anchor, opacity: 1 }] });
+  const names = ['temp-install', 'browser', 'browser-session', 'server', 'assignment-attachment', 'assignment-host',
+    'assignment-first', 'assignment-stopped', 'assignment-replay', 'assignment-restored'];
+  const changed = result.stopped?.outputs?.[0];
+  const rgb = changed?.rgb;
+  const bounded = Array.isArray(rgb) && rgb.length === 3
+    && rgb.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255);
+  // WCAG 2.2 SC 1.4.3: независимый oracle конечного непрозрачного sRGB на чёрном фоне.
+  const linear = (channel) => { const s = channel / 255; return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4; };
+  const contrast = bounded ? (.2126 * linear(rgb[0]) + .7152 * linear(rgb[1]) + .0722 * linear(rgb[2]) + .05) / .05 : 0;
+  const refused = locked || budget;
+  const contextOutcome = refused
+    ? result.stopped?.version === 2 && result.stopped.revision === '2'
+      && result.stopped.state === (budget ? 'incomplete' : 'unsatisfied')
+      && result.stopped.reason === (budget ? 'limit' : null) && result.stopped.hasRender === false
+      && isDeepStrictEqual(result.stopped.outputs, [])
+      && result.afterStop === '' && result.computedAfterStop === css([0, 0, 0])
+      && result.refusalAuthority?.rejected === true
+      && result.refusalAuthority.recognized === true && result.refusalAuthority.code === 'program_materialization_not_ready'
+      && result.refusalAuthority.operation === 'materializationAuthority'
+    : result.stopped?.version === 2 && result.stopped.revision === '2'
+      && result.stopped.state === 'ready' && result.stopped.reason === null && result.stopped.hasRender === true
+      && Array.isArray(result.stopped.outputs) && result.stopped.outputs.length === 1
+      && changed?.slot === 91 && changed?.opacity === 1
+      && bounded && !isDeepStrictEqual(rgb, anchor) && contrast >= 4.5
+      && result.afterStop === css(rgb) && result.computedAfterStop === css(rgb);
+  if (result.error || result.cleanupError || !contextOutcome
+    || ![result.initial, result.held].every((value) => isDeepStrictEqual(value, ready('1')))
+    || !isDeepStrictEqual(result.restored, ready('3')) || !isDeepStrictEqual(result.stopped, result.replay)
+    || result.css !== css(anchor) || result.computed !== css(anchor)
+    || result.backgroundBefore !== css([255, 255, 255]) || result.backgroundAfterStop !== css([0, 0, 0])
+    || result.afterRestore !== result.css || result.computedAfterRestore !== result.css
+    || result.backgroundAfterRestore !== css([255, 255, 255])
+    || !isDeepStrictEqual(result.operations, ['setAll', refused ? 'revokeAll' : 'setAll', 'confirmExact', 'setAll'])
+    || !isDeepStrictEqual(result.acquired, names) || !isDeepStrictEqual(result.released, names.toReversed())
+    || names.some((name) => result.readback?.[name] !== true)) {
+    fail('browser computed assignment drifted: ' + JSON.stringify(result));
+  }
+}
+
 export function verifyBrowserConsumer(result) {
   const equal = isDeepStrictEqual;
   const expectedSnapshot = { state: "ready", outputs: [{ slot: 91, rgb: [12, 34, 56], opacity: 0.875 }] };
@@ -1167,6 +1328,15 @@ async function main() {
   const selection = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserSelectionScenario });
   verifyBrowserSelection(selection);
   console.log('LAB_COLORS_PROGRAM_SELECTION_BROWSER_RESULT ' + JSON.stringify(selection));
+  const assignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserAssignmentScenario });
+  verifyBrowserAssignment(assignment);
+  console.log('LAB_COLORS_PROGRAM_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(assignment));
+  const lockedAssignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserLockedAssignmentScenario });
+  verifyBrowserLockedAssignment(lockedAssignment);
+  console.log('LAB_COLORS_PROGRAM_LOCKED_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(lockedAssignment));
+  const budgetAssignment = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserBudgetAssignmentScenario });
+  verifyBrowserBudgetAssignment(budgetAssignment);
+  console.log('LAB_COLORS_PROGRAM_BUDGET_ASSIGNMENT_BROWSER_RESULT ' + JSON.stringify(budgetAssignment));
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);

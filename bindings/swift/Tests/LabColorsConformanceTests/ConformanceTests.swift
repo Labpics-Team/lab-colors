@@ -90,7 +90,7 @@ final class ConformanceTests: XCTestCase {
 
     func testCoreVersionMatchesManifest() throws {
         let manifest = try load("manifest.json", as: Manifest.self)
-        XCTAssertEqual(manifest.packVersion, "12.0.0", "Swift проверяет действующий пакет conformance v12")
+        XCTAssertEqual(manifest.packVersion, "13.0.0", "Swift проверяет действующий пакет conformance v13")
         XCTAssertFalse(coreVersion().isEmpty)
         XCTAssertEqual(
             coreVersion(), manifest.coreVersion,

@@ -28,6 +28,7 @@ export function decodeCertificateEnvelope(bytes) {
 }
 export function attachProgramWire() { throw new Error("Unexpected attachment call in ingress test"); }
 export function compileProgramWire() { throw new Error("Unexpected compiler call in ingress test"); }
+export function finalRasterSourceOverWire() { throw new Error("Unexpected raster call in ingress test"); }
 export function evaluateWcag22() { throw new Error("Unexpected evaluator call in ingress test"); }
 export function numericalCapabilityManifest() { throw new Error("Unexpected manifest call in ingress test"); }
 export class ProgramRuntime {}
@@ -43,9 +44,11 @@ test("certificate size refusal precedes entry into the generated WASM copier", a
   // Node сохраняет primary assertion и возможную отдельную ошибку after-hook.
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(join(directory, "pkg"));
+  await mkdir(join(directory, "program-wire"));
   await Promise.all([
     writeFile(join(directory, "package.json"), '{"type":"module"}\n'),
     writeFile(join(directory, "index.js"), await readFile(new URL("../index.js", import.meta.url))),
+    writeFile(join(directory, "program-wire/encoding.js"), await readFile(new URL("../program-wire/encoding.js", import.meta.url))),
     writeFile(join(directory, "pkg/labcolors.js"), instrumentedBinding),
   ]);
   const api = await import(pathToFileURL(join(directory, "index.js")).href);
