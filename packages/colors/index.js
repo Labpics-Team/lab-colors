@@ -611,11 +611,13 @@ ProgramRuntime.prototype.updateFinalRaster = function (
   return withRuntimeOperation(this, "updateFinalRaster", () => {
     const invalid = () => programIngressError("updateFinalRaster", "program_field_length");
     if (!Number.isInteger(width) || !Number.isInteger(height) ||
-        width <= 0 || height <= 0 || width > 0xffff_ffff || height > 0xffff_ffff ||
-        !Number.isInteger(dpr) || dpr < 1 || dpr > 4) throw invalid();
+        width <= 0 || height <= 0 || width > 0xffff_ffff || height > 0xffff_ffff)
+      throw programIngressError("updateFinalRaster", "program_field_extent");
     const count = width * height;
     if (!Number.isSafeInteger(count) || count > MAX_FINAL_RASTER_PIXELS)
       throw programIngressError("updateFinalRaster", "program_resource_exhausted");
+    if (!Number.isInteger(dpr) || dpr < 1 || dpr > 4)
+      throw programIngressError("updateFinalRaster", "program_field_dpr");
     const c = inspectTypedArrayStorage(context, byteStorage, invalid);
     const s = inspectTypedArrayStorage(source, byteStorage, invalid);
     const d = inspectTypedArrayStorage(destination, byteStorage, invalid);

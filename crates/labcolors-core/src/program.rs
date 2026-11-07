@@ -2193,7 +2193,7 @@ impl OwnerV1 {
         }
         self.compiled
             .validate_final_field_payload(&payload)
-            .map_err(|_| UpdateErrorV1::OwnerMismatch)?;
+            .map_err(|_| UpdateErrorV1::Unsupported)?;
         let transition = session
             .session
             .prepare_field(Revision::new(revision), payload)
@@ -4174,7 +4174,7 @@ impl UpdateInvariantFailureV1 {
 /// авторитетные IDs и факты отказа находятся в этом enum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateErrorV1 {
-    /// Point-наблюдение не поддержано owner с field-выходом.
+    /// Наблюдение не поддержано скомпилированной формой Program.
     Unsupported,
     /// Session создана другой точной owner-эпохой.
     OwnerMismatch,

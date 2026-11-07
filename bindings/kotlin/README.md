@@ -150,8 +150,11 @@ paint. Если host отклоняет команду, сохраняется �
 
 ```kotlin
 val wire = ProgramWireBuilderV4(
-    1uL, 2uL, 3uL, 17u,
-    ProgramFinalRasterCleanlinessRequirement.LINT_EXACT_NOMINAL_SRGB8_V2,
+    sourcePort = 1uL,
+    destinationPort = 2uL,
+    operatorId = 3uL,
+    outputSlot = 17u,
+    cleanliness = ProgramFinalRasterCleanlinessRequirement.LINT_EXACT_NOMINAL_SRGB8_V2,
 ).finish()
 ```
 

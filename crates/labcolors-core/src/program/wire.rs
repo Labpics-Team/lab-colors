@@ -1,4 +1,4 @@
-//! Каноническая wire-грамматика авторского Draft-графа Program (V1–V3).
+//! Каноническая wire-грамматика авторского Draft-графа Program (V1–V4).
 //!
 //! Слой 1 двухслойного публичного контракта: байты -> декларации. Семантику
 //! графа проверяет слой 2 — атомарный [`super::DraftV1::compile`]; декодер
@@ -30,6 +30,7 @@ pub(crate) const PROGRAM_WIRE_VERSION_V1: u16 = 1;
 /// Explicit authored SelectionRelease envelope; V1 remains unchanged.
 pub(crate) const PROGRAM_WIRE_VERSION_V2: u16 = 2;
 pub(crate) const PROGRAM_WIRE_VERSION_V3: u16 = 3;
+pub(crate) const PROGRAM_WIRE_VERSION_V4: u16 = 4;
 /// Верхняя граница записей одной секции: fail-closed budget pin по образцу
 /// evidence-bounds. Значение намеренно щедрое для авторских графов и
 /// намеренно фатальное для hostile length-полей.
@@ -261,7 +262,10 @@ fn decode_program_wire_version(
     let version = reader.read_u16()?;
     if !matches!(
         version,
-        PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2 | PROGRAM_WIRE_VERSION_V3 | 4
+        PROGRAM_WIRE_VERSION_V1
+            | PROGRAM_WIRE_VERSION_V2
+            | PROGRAM_WIRE_VERSION_V3
+            | PROGRAM_WIRE_VERSION_V4
     ) || required.is_some_and(|expected| version != expected)
     {
         return Err(ProgramWireErrorV1::UnsupportedVersion { declared: version });
@@ -283,7 +287,7 @@ fn decode_program_wire_version(
 
 fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, ProgramWireErrorV1> {
     let mut draft = DraftV1::new();
-    if version == 4 {
+    if version == PROGRAM_WIRE_VERSION_V4 {
         // Одна locked tuple полного растра, окончательный opaque RGB8 output.
         // Первый discriminant задаёт scope; второй — политику той же конвенции.
         let start = reader.offset;

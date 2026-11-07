@@ -563,6 +563,14 @@ mod tests {
         let identity = current.content_identity();
         assert_eq!(foreign.content_identity(), identity);
         assert!(matches!(
+            foreign.owner.prepare_field_update(
+                &mut current.session,
+                2,
+                Shared::clone(&payload(64)?.0),
+            ),
+            Err(crate::program::UpdateErrorV1::OwnerMismatch)
+        ));
+        assert!(matches!(
             foreign
                 .owner
                 .current_final_raster(&current.session, identity, 17, 1, [0; 32]),
@@ -605,6 +613,24 @@ mod tests {
             Err(ProgramFinalRasterErrorV1::Stale)
         ));
         current.update_final_raster(1, &payload(64)?)?;
+        let wrong_port = ProgramFinalRasterInputV1::try_new(
+            1,
+            1,
+            1,
+            [0; 32],
+            9,
+            &[[0; 4]],
+            2,
+            &[[64, 64, 64, 255]],
+        )?;
+        assert!(matches!(
+            current.owner.prepare_field_update(
+                &mut current.session,
+                2,
+                Shared::clone(&wrong_port.0),
+            ),
+            Err(crate::program::UpdateErrorV1::Unsupported)
+        ));
         let mut other_identity = identity;
         other_identity[0] ^= 1;
         for (content, output, revision, context, expected) in [

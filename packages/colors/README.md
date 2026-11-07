@@ -488,4 +488,4 @@ cleanliness)` объявляет один source-over двух полных prem
 либо отказывает. Для подбора цветов в заданных областях используйте
 [вычисляемое назначение V3](#вычисляемое-назначение-цветов).
 Человеческое восприятие этот технический профиль не оценивает.
-Контракт, схема отчёта и пределы: [final-raster-v1](../../docs/contracts/final-raster-v1.md).
+Контракт, схема отчёта и пределы: [final-raster-v1](https://github.com/Labpics-Team/lab-colors/blob/main/docs/contracts/final-raster-v1.md).

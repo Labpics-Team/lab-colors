@@ -126,6 +126,16 @@ test("complete shape, revision payload identity and every context binding are en
   }
   assert.throws(() => rt.updateFinalRaster(2n,65537,1,1,context,1n,new Uint8Array(),2n,new Uint8Array()),
     error => error.code==="program_resource_exhausted");
+  for (const [width,height,dpr,code] of [
+    [0,1,5,"program_field_extent"],
+    [1,1.5,5,"program_field_extent"],
+    [0x1_0000_0000,1,1,"program_field_extent"],
+    [65537,1,5,"program_resource_exhausted"],
+    [2,2,5,"program_field_dpr"],
+  ]) {
+    assert.throws(() => rt.updateFinalRaster(2n,width,height,dpr,context,1n,source,2n,destination),
+      error => isProgramError(error) && error.operation==="updateFinalRaster" && error.code===code);
+  }
   const changed=destination.slice();changed[12]=65;changed[13]=65;changed[14]=65;
   assert.throws(() => update(rt,1n,source,changed),isProgramError);
   update(rt,1n,source,destination).free();
