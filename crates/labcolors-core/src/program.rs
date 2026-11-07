@@ -2543,6 +2543,20 @@ pub(crate) struct PreparedSessionTransitionV1<'session> {
     transition: CorePreparedSessionTransitionV1<'session>,
 }
 
+fn prepared_current_verified<'prepared>(
+    transition: &'prepared CorePreparedSessionTransitionV1<'_>,
+) -> Option<VerifiedOutputV1<'prepared>> {
+    use crate::session::PreparedSessionDispositionV1;
+    let verified = match transition.disposition() {
+        PreparedSessionDispositionV1::Verified(verified) => Some(verified),
+        PreparedSessionDispositionV1::Idempotent { state, .. } => state.current_verified(),
+        PreparedSessionDispositionV1::Unknown(_)
+        | PreparedSessionDispositionV1::Violation(_)
+        | PreparedSessionDispositionV1::Incomplete(_) => None,
+    }?;
+    Some(VerifiedOutputV1 { inner: verified })
+}
+
 impl<'session> PreparedSessionTransitionV1<'session> {
     /// Только validated prospective Ready; historical evidence не допускается.
     pub(crate) fn current_verified(&self) -> Option<VerifiedOutputV1<'_>> {
@@ -2556,20 +2570,6 @@ impl<'session> PreparedSessionTransitionV1<'session> {
             session: self.transition.commit(),
         }
     }
-}
-
-fn prepared_current_verified<'prepared>(
-    transition: &'prepared CorePreparedSessionTransitionV1<'_>,
-) -> Option<VerifiedOutputV1<'prepared>> {
-    use crate::session::PreparedSessionDispositionV1;
-    let verified = match transition.disposition() {
-        PreparedSessionDispositionV1::Verified(verified) => Some(verified),
-        PreparedSessionDispositionV1::Idempotent { state, .. } => state.current_verified(),
-        PreparedSessionDispositionV1::Unknown(_)
-        | PreparedSessionDispositionV1::Violation(_)
-        | PreparedSessionDispositionV1::Incomplete(_) => None,
-    }?;
-    Some(VerifiedOutputV1 { inner: verified })
 }
 
 /// Collision-resistant адрес канонического физического содержания Program.
