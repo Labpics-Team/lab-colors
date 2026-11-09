@@ -65,6 +65,111 @@ class PipeProcess:
         return self.returncode
 
 
+class AndroidReadinessTests(unittest.TestCase):
+    def test_package_service_must_be_ready_again_after_successful_debug_tests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gradle-path.txt").write_text("gradle")
+            registered = True
+            probes = []
+            variants = []
+            clears = []
+
+            def execute(command, **kwargs):
+                nonlocal registered
+                args = command[1:]
+                if args == ["shell", "service", "check", "package"]:
+                    probes.append(registered)
+                    if not registered:
+                        registered = True
+                        return "Service package: not found\n"
+                    return "Service package: found\n"
+                if not registered:
+                    raise subprocess.CalledProcessError(20, command, stderr="cmd: Can't find service: package")
+                if args == ["shell", "pm", "list", "packages", "pics.lab.colors.consumer"]:
+                    return "package:pics.lab.colors.consumer\n"
+                if args == ["shell", "pm", "clear", "pics.lab.colors.consumer"]:
+                    clears.append(variants.copy())
+                    return "Success\n"
+                self.fail("unexpected Android command: " + repr(command))
+
+            def connected(command, consumer, environment, adb, variant):
+                nonlocal registered
+                variants.append(variant)
+                emitted_artifacts(root, variant)
+                (root / "build/outputs/androidTest-results").mkdir(parents=True)
+                # The original failure occurred after successful debug instrumentation.
+                if variant == "debug":
+                    registered = False
+
+            with patch.dict(os.environ, {"ANDROID_HOME": "/sdk", "JAVA_HOME": "/java"}), \
+                 patch.object(elf.subprocess, "check_output", side_effect=execute), \
+                 patch.object(elf, "connected_test", side_effect=connected), \
+                 patch.object(elf, "verify_reports"), patch.object(elf, "check_apk"), \
+                 patch("time.sleep") as sleep, patch("builtins.print"):
+                elf.main(root, 16384)
+            self.assertEqual(variants, ["debug", "release"])
+            self.assertEqual(probes, [True, False, True])
+            self.assertEqual(clears, [[], ["debug"]])
+            sleep.assert_called_once()
+
+    def test_ready_service_is_accepted_without_waiting_or_replaying_commands(self):
+        with patch.object(elf.subprocess, "check_output", return_value="Service package: found\n") as command, \
+             patch("time.sleep") as sleep:
+            elf.wait_for_package_manager(Path("adb"))
+        command.assert_called_once()
+        self.assertEqual(command.call_args.args[0], ["adb", "shell", "service", "check", "package"])
+        self.assertGreater(command.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(command.call_args.kwargs["timeout"], 30)
+        sleep.assert_not_called()
+
+    def test_one_deadline_rejects_missing_and_late_ready_service(self):
+        for response in ["Service package: not found\n", "Service package: found\n"]:
+            with self.subTest(response=response), \
+                 patch.object(elf.subprocess, "check_output", return_value=response) as command, \
+                 patch("time.monotonic", side_effect=[0, 0, 1]), patch("time.sleep") as sleep:
+                with self.assertRaisesRegex(TimeoutError, "Package Manager.*readiness deadline"):
+                    elf.wait_for_package_manager(Path("adb"), timeout=1)
+                command.assert_called_once()
+                self.assertEqual(command.call_args.kwargs["timeout"], 1)
+                sleep.assert_not_called()
+
+    def test_readiness_transport_and_malformed_responses_fail_without_retry(self):
+        failures = [subprocess.CalledProcessError(1, ["adb"], stderr="device offline"),
+                    subprocess.TimeoutExpired(["adb"], 30)]
+        for failure in failures:
+            with self.subTest(failure=failure), \
+                 patch.object(elf.subprocess, "check_output", side_effect=failure) as command:
+                with self.assertRaises(type(failure)) as caught:
+                    elf.wait_for_package_manager(Path("adb"))
+                self.assertIs(caught.exception, failure)
+                command.assert_called_once()
+        for response in ["", "Service package: unknown", "Service activity: found"]:
+            with self.subTest(response=response), \
+                 patch.object(elf.subprocess, "check_output", return_value=response) as command:
+                with self.assertRaisesRegex(ValueError, "invalid.*readiness response"):
+                    elf.wait_for_package_manager(Path("adb"))
+                command.assert_called_once()
+
+    def test_package_clear_failure_after_readiness_is_preserved_without_replaying_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gradle-path.txt").write_text("gradle")
+            command = ["adb", "shell", "pm", "clear", "pics.lab.colors.consumer"]
+            failure = subprocess.CalledProcessError(20, command)
+            responses = ["Service package: found\n", "package:pics.lab.colors.consumer\n", failure]
+            with patch.dict(os.environ, {"ANDROID_HOME": "/sdk", "JAVA_HOME": "/java"}), \
+                 patch.object(elf.subprocess, "check_output", side_effect=responses) as adb, \
+                 patch.object(elf, "connected_test") as connected, patch("time.sleep") as sleep:
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    elf.main(root, 16384)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(adb.call_count, 3)
+            self.assertEqual(adb.call_args.args[0][1:], command[1:])
+            connected.assert_not_called()
+            sleep.assert_not_called()
+
+
 class ArtifactTests(unittest.TestCase):
     def interval(self, root, log, result: int | BaseException):
         process = PipeProcess()
