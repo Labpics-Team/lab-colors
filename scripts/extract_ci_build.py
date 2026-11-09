@@ -4,7 +4,7 @@
 Nested directories are not GitHub workflow entrypoints. Verification checks
 schema, count, self-hash and the complete current file set. Paths from an input
 record are never used for file access. Unreadable inputs and links are refused.
-Historical drift is checked separately by scripts/artifact_matrix.py.
+Changes between revisions are reviewed through Git; this record binds one tree.
 """
 import sys
 from pathlib import Path
