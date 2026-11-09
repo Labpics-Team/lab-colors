@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from typing import IO
 import xml.etree.ElementTree as ET
@@ -264,6 +265,26 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
         raise capture_error
 
 
+def wait_for_package_manager(adb: Path, timeout: float = 30) -> None:
+    """Ждать регистрацию нужного Binder-сервиса, а не только завершение boot."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Android Package Manager did not register before the readiness deadline")
+        state = subprocess.check_output(
+            [str(adb), "shell", "service", "check", "package"], text=True, timeout=remaining,
+        ).strip()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Android Package Manager did not register before the readiness deadline")
+        if state == "Service package: found":
+            return
+        if state != "Service package: not found":
+            raise ValueError("invalid Android Package Manager readiness response: " + repr(state))
+        time.sleep(min(0.5, remaining))
+
+
 def main(consumer: Path, expected_page: int) -> None:
     sdk = Path(os.environ["ANDROID_HOME"])
     adb = sdk / "platform-tools/adb"
@@ -278,6 +299,7 @@ def main(consumer: Path, expected_page: int) -> None:
         "release": {"optimizedApplicationExecutesTheInstalledNativePackage", "applicationUsesTheRequestedMemoryPageSize"},
     }
     for variant, tests in expected_tests.items():
+        wait_for_package_manager(adb)
         # Application.onCreate должен выполнить этот APK, а не оставить успех
         # от предыдущей debug/release установки в SharedPreferences.
         package = "pics.lab.colors.consumer"
