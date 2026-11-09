@@ -3,7 +3,7 @@
 
 The scope is crates/labcolors-core/src. Verification compares file identities
 with the complete live tree; it does not classify runtime reachability.
-Historical drift is checked separately by scripts/artifact_matrix.py.
+Changes between revisions are reviewed through Git; this record binds one tree.
 """
 import sys
 from pathlib import Path

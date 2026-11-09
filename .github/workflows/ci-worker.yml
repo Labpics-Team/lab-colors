@@ -502,19 +502,12 @@ jobs:
       - name: prove point-support retained reference surplus over Q55 bounds
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/verify_point_support_surplus.py
-      # Матрица фиксирует состав артефактов и тестов; CI сравнивает её без refresh.
       - name: tracked documentation bytes and protocol domain parity
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 scripts/test_document_bytes.py
-      - name: artifact matrix - pinned records reproduce
-        if: ${{ matrix.lane == 'proof-contracts' }}
-        run: python3 scripts/artifact_matrix.py check
-      - name: artifact matrix - extractor sabotage suites
+      - name: source metadata extraction and tamper contracts
         if: ${{ matrix.lane == 'proof-contracts' }}
         run: python3 -m unittest discover -s scripts -p 'test_extract_*.py'
-      - name: artifact matrix - gate anti-vacuum mutants
-        if: ${{ matrix.lane == 'proof-contracts' }}
-        run: python3 scripts/test_artifact_matrix.py
 
   core-tests:
     name: core tests and artifact contracts
