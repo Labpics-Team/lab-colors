@@ -67,7 +67,7 @@ def validate_package(ci, package):
     build = containing(steps(job(package, "wasm")), "PROGRAM_BENCHMARK:")
     expression(build, "PROGRAM_BASE_SHA", BASE)
     expression(build, "PROGRAM_HEAD_SHA", SOURCE)
-    if "\n        if:" in build or "continue-on-error:" in build:
+    if re.search(r"(?m)^(?:      - |        )if:", build) or "continue-on-error:" in build:
         raise AssertionError("ordinary package verification must stay unconditional")
 
 
@@ -89,6 +89,20 @@ class MergeGroupEvidenceTest(unittest.TestCase):
 
     def test_optional_pr_benchmark_does_not_replace_package_checks(self):
         validate_package(self.ci, self.package)
+
+    def test_package_verification_cannot_be_conditional_in_any_step_key_order(self):
+        build = containing(steps(job(self.package, "wasm")), "PROGRAM_BENCHMARK:")
+        first = build.splitlines()[0]
+        self.assertTrue(first.startswith("      - name:"))
+        for optional in ("if: false", "continue-on-error: true"):
+            for replacement in (
+                first.replace("- name:", f"- {optional}\n        name:"),
+                first + f"\n        {optional}",
+            ):
+                with self.subTest(optional=optional, first_key=replacement.splitlines()[0]):
+                    changed = build.replace(first, replacement, 1)
+                    with self.assertRaises(AssertionError):
+                        validate_package(self.ci, self.package.replace(build, changed, 1))
 
     def test_workflow_policy_compares_the_exact_event_head_and_base(self):
         validate_gate(self.gate)
