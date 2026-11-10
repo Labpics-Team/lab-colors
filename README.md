@@ -55,6 +55,25 @@ cargo test --workspace --locked
 Версия Rust указана в [Cargo.toml](Cargo.toml). Команды сборки и проверки
 npm-пакета находятся в [package.json](packages/colors/package.json).
 
+Cargo обнаруживает проверки рядом с модулем Core и публичные контракты в
+`crates/*/tests`. Для адресного запуска выбирайте крейт, тестовый файл,
+затем функцию или группу. Например, публичный Program wire:
+
+```sh
+cargo test -p labcolors-core --test program_wire_contract --locked -- --list
+cargo test -p labcolors-core --test program_wire_contract --locked -- check::
+cargo test -p labcolors-core --test program_wire_contract --locked -- check::empty_input_is_rejected_as_wire_error --exact
+```
+
+`--list` только показывает обнаруженные проверки. В обычном выводе и при
+ошибке виден путь, например `check::empty_input_is_rejected_as_wire_error`;
+адресный успех не означает успех всего workspace. Этот же файл автоматически
+входит в `cargo test --workspace --locked` в CI. Отдельные feature-, proof-
+и платформенные проверки остаются в [CI workflow](.github/workflows/ci-worker.yml)
+и не заменяются запуском одного контракта.
+
+[Общие правила тестирования Labpics](https://github.com/Labpics-Team/.github/blob/main/docs/testing.md).
+
 ## Зависимости
 
 У `labcolors-core` ноль рантайм-зависимостей во всех наборах возможностей.
