@@ -312,7 +312,7 @@ def main(consumer: Path, expected_page: int) -> None:
         # Результат debug не может подтвердить пропущенный тест release.
         if reports.exists():
             shutil.rmtree(reports)
-        connected_test([executable, "--no-daemon", "--max-workers=2", "-PconsumerBuildType=" + variant,
+        connected_test([executable, "--max-workers=2", "-PconsumerBuildType=" + variant,
                         "-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=" + str(expected_page),
                         "connected" + variant.title() + "AndroidTest"], consumer, environment, adb, variant)
         verify_reports(reports, tests)
@@ -371,7 +371,7 @@ def assemble(consumer: Path) -> None:
         evidence.mkdir(parents=True, exist_ok=True)
         for configuration in (variant + "RuntimeClasspath", variant + "AndroidTestRuntimeClasspath"):
             with (evidence / (configuration + ".txt")).open("w") as output:
-                subprocess.run([executable, "--no-daemon", "--max-workers=2", "-PconsumerBuildType=" + variant,
+                subprocess.run([executable, "--max-workers=2", "-PconsumerBuildType=" + variant,
                                 "dependencies", "--configuration", configuration],
                                cwd=consumer, env=environment, stdout=output, check=True)
             report = evidence / (configuration + ".txt")
@@ -379,7 +379,7 @@ def assemble(consumer: Path) -> None:
                 raise ValueError("consumer dependency identity is incomplete or exceeds its budget")
         for category, task in (("app", "assemble" + variant.title()),
                                ("test", "assemble" + variant.title() + "AndroidTest")):
-            subprocess.run([executable, "--no-daemon", "--max-workers=2", "-PconsumerBuildType=" + variant, task],
+            subprocess.run([executable, "--max-workers=2", "-PconsumerBuildType=" + variant, task],
                            cwd=consumer, env=environment, check=True)
             stages[variant][category] = "assembled"
             inventory(consumer, stages)
@@ -394,15 +394,30 @@ def assemble(consumer: Path) -> None:
                                stdout=output, stderr=subprocess.STDOUT)
 
 
+def stop(consumer: Path) -> None:
+    """Завершить daemon этой версии в текущем Gradle User Home, сохранив cache."""
+    executable = (consumer / "gradle-path.txt").read_text().strip()
+    environment = dict(os.environ, PATH=os.environ["JAVA_HOME"] + "/bin:/usr/bin:/bin")
+    result = subprocess.run([executable, "--stop"], cwd=consumer, env=environment, timeout=30,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(result.stdout, end="")
+    result.check_returncode()
+    # Gradle StopDispatcher сообщает этот отказ даже с exit 0.
+    if "Unable to stop one of the daemons." in result.stdout:
+        raise RuntimeError("Gradle did not stop every consumer daemon")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        raise SystemExit("usage: test-consumer.py CONSUMER EXPECTED_PAGE_SIZE|--assemble|--inventory")
+        raise SystemExit("usage: test-consumer.py CONSUMER EXPECTED_PAGE_SIZE|--assemble|--inventory|--stop")
     consumer = Path(sys.argv[1]).resolve()
     try:
         if sys.argv[2] == "--assemble":
             assemble(consumer)
         elif sys.argv[2] == "--inventory":
             inventory(consumer)
+        elif sys.argv[2] == "--stop":
+            stop(consumer)
         else:
             main(consumer, int(sys.argv[2]))
     except subprocess.CalledProcessError as error:
