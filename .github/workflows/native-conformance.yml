@@ -3,8 +3,6 @@ name: Native conformance
 on:
   push:
     branches: [main]
-  pull_request:
-  merge_group:
   workflow_dispatch:
     inputs:
       authoring_baseline:

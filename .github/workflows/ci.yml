@@ -3,8 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-  merge_group:
 
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.run_attempt == 1 && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
@@ -22,3 +20,79 @@ jobs:
       id-token: write
       attestations: write
     uses: ./.github/workflows/ci-worker.yml
+
+  transport-distribution-attestation:
+    name: transport distribution signed attestations
+    needs: worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: materialize the producer SBOM without executing its checkout
+        env:
+          CI_SBOM: ${{ fromJSON(needs.worker.outputs.distributions)['transport-distribution']['sbom'] }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = os.environ["CI_SBOM"]
+          if not value or len(value.encode()) > 60 * 1024:
+              raise ValueError("missing or oversized producer SBOM")
+          document = json.loads(value)
+          if document.get("bomFormat") != "CycloneDX":
+              raise ValueError("unknown producer SBOM")
+          with (Path(os.environ["RUNNER_TEMP"]) / "distribution.sbom.json").open("x") as stream:
+              stream.write(value)
+          PY
+      - name: attest binary build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ fromJSON(needs.worker.outputs.distributions)['transport-distribution']['subject-name'] }}
+          subject-digest: ${{ fromJSON(needs.worker.outputs.distributions)['transport-distribution']['subject-digest'] }}
+      - name: attest binary SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ fromJSON(needs.worker.outputs.distributions)['transport-distribution']['subject-name'] }}
+          subject-digest: ${{ fromJSON(needs.worker.outputs.distributions)['transport-distribution']['subject-digest'] }}
+          sbom-path: ${{ runner.temp }}/distribution.sbom.json
+
+  evaluate-distribution-attestation:
+    name: evaluate distribution signed attestations
+    needs: worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: materialize the producer SBOM without executing its checkout
+        env:
+          CI_SBOM: ${{ fromJSON(needs.worker.outputs.distributions)['evaluate-distribution']['sbom'] }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          value = os.environ["CI_SBOM"]
+          if not value or len(value.encode()) > 60 * 1024:
+              raise ValueError("missing or oversized producer SBOM")
+          document = json.loads(value)
+          if document.get("bomFormat") != "CycloneDX":
+              raise ValueError("unknown producer SBOM")
+          with (Path(os.environ["RUNNER_TEMP"]) / "distribution.sbom.json").open("x") as stream:
+              stream.write(value)
+          PY
+      - name: attest binary build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ fromJSON(needs.worker.outputs.distributions)['evaluate-distribution']['subject-name'] }}
+          subject-digest: ${{ fromJSON(needs.worker.outputs.distributions)['evaluate-distribution']['subject-digest'] }}
+      - name: attest binary SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ fromJSON(needs.worker.outputs.distributions)['evaluate-distribution']['subject-name'] }}
+          subject-digest: ${{ fromJSON(needs.worker.outputs.distributions)['evaluate-distribution']['subject-digest'] }}
+          sbom-path: ${{ runner.temp }}/distribution.sbom.json

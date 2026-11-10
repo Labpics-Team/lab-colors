@@ -2060,9 +2060,7 @@ class MutationTruthTest(unittest.TestCase):
                 "authority-mutation-worker",
                 "authority-mutation",
                 "transport-distribution",
-                "transport-distribution-attestation",
                 "evaluate-distribution",
-                "evaluate-distribution-attestation",
                 "audit",
             },
         )
@@ -2122,7 +2120,6 @@ class MutationTruthTest(unittest.TestCase):
         }
         verify_ci_binding(repo, os.environ)
         for command in (
-            "python3 scripts/test_ci_peer_gate.py",
             "python3 scripts/test_mutation.py",
         ):
             self.assertIn(

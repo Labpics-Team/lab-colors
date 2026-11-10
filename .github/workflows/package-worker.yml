@@ -8,6 +8,9 @@ on:
         type: boolean
         default: false
     outputs:
+      checks:
+        description: Results of every declared job and nested reusable check
+        value: ${{ format('{{"results":{0},"children":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}
       node:
         description: Verified packer Node.js version
         value: ${{ jobs.wasm.outputs.node }}

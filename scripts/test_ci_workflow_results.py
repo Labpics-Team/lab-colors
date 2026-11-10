@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adversarial tests for the fail-closed CI peer gate."""
+"""Native CI graph and result contracts; immutable source and browser bindings."""
 
 from __future__ import annotations
 
@@ -13,134 +13,146 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import re
 import unittest
 from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[1]
-SCRIPT = Path(__file__).parent / "ci" / "peer_gate.py"
-SPEC = importlib.util.spec_from_file_location("ci_peer_gate", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
-gate = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = gate
-SPEC.loader.exec_module(gate)
+sys.path.insert(0, str(REPO / "scripts/ci"))
+import workflow_results as gate
 
 
-SHA = "a" * 40
-CI = ".github/workflows/ci.yml"
-NATIVE = ".github/workflows/native-conformance.yml"
-ADMISSION = ".github/workflows/code-admission-public.yml"
+def checks(expected):
+    return {"results": ["success"] * expected[0],
+            "children": [json.dumps(checks(child)) for child in expected[1]]}
 
 
-def run(
-    path: str,
-    *,
-    status: str = "completed",
-    conclusion: str | None = "success",
-    head_sha: str = SHA,
-    event: str = "pull_request",
-    run_id: int = 1,
-    run_attempt: int = 1,
-) -> dict[str, object]:
-    return {
-        "path": path,
-        "status": status,
-        "conclusion": conclusion,
-        "head_sha": head_sha,
-        "event": event,
-        "id": run_id,
-        "run_attempt": run_attempt,
-    }
+def needs(expected):
+    return {name: {"result": "success", "outputs": {} if child is None else {"checks": json.dumps(checks(child))}}
+            for name, child in expected.items()}
 
 
-class PeerGateTest(unittest.TestCase):
-    def evaluate(self, runs: list[dict], event: str = "pull_request"):
-        return gate.evaluate_runs(runs, head_sha=SHA, event=event)
+class NativeResultTest(unittest.TestCase):
+    def setUp(self):
+        self.expected = gate.graph(REPO)
+        self.good = needs(self.expected)
 
-    def test_exact_required_successes_are_the_only_green_state(self) -> None:
-        decision = self.evaluate([run(CI), run(NATIVE), run(ADMISSION)])
-        self.assertEqual(decision.state, "success")
+    def test_exact_native_successes_are_green(self):
+        gate.verify_needs(self.good, self.expected)
 
-    def test_empty_run_set_waits_and_can_never_turn_green(self) -> None:
-        decision = self.evaluate([])
-        self.assertEqual(decision.state, "wait")
-        self.assertEqual(len(decision.reasons), 3)
+    def test_missing_empty_unknown_and_unsuccessful_dependencies_are_red(self):
+        values = [{}, None, [], self.good | {"unknown": {"result": "success"}}]
+        for name in self.good:
+            values.append({key: value for key, value in self.good.items() if key != name})
+            for status in ("failure", "cancelled", "skipped", "neutral", "pending", "", "invented", None):
+                values.append(self.good | {name: {"result": status}})
+            values.append(self.good | {name: {"outputs": self.good[name]["outputs"]}})
+        for value in values:
+            with self.subTest(value=value), self.assertRaises(gate.WorkflowError):
+                gate.verify_needs(value, self.expected)
 
-    def test_wrong_head_and_wrong_event_do_not_satisfy_admission(self) -> None:
-        for mutant in (
-            [run(CI, head_sha="b" * 40), run(NATIVE), run(ADMISSION)],
-            [run(CI, event="merge_group"), run(NATIVE), run(ADMISSION)],
-        ):
-            with self.subTest(mutant=mutant):
-                self.assertEqual(self.evaluate(mutant).state, "wait")
+    def test_missing_empty_unknown_or_unsuccessful_nested_results_are_red(self):
+        expected = (2, ((3, ()),))
+        good = checks(expected)
+        gate.verify_checks(good, expected)
+        values = [None, {}, [], {"results": [], "children": []},
+                  good | {"extra": "unknown"}, good | {"results": ["success"]},
+                  good | {"children": []}, good | {"children": [None]}]
+        for status in ("failure", "cancelled", "skipped", "neutral", "", "invented", None):
+            values.append(good | {"results": ["success", status]})
+            values.append(good | {"children": [json.dumps({"results": ["success", status, "success"], "children": []})]})
+        for value in values:
+            with self.subTest(value=value), self.assertRaises((gate.WorkflowError, ValueError, TypeError)):
+                gate.verify_checks(value, expected)
 
-    def test_skipped_neutral_cancelled_and_failure_are_red(self) -> None:
-        for conclusion in ("skipped", "neutral", "cancelled", "failure", None):
-            with self.subTest(conclusion=conclusion):
-                decision = self.evaluate(
-                    [run(CI, conclusion=conclusion), run(NATIVE), run(ADMISSION)]
-                )
-                self.assertEqual(decision.state, "fail")
+    def test_child_order_does_not_change_success(self):
+        expected = (3, ((1, ()), (2, ())))
+        value = checks(expected)
+        value["children"].reverse()
+        gate.verify_checks(value, expected)
 
-    def test_pending_required_run_waits(self) -> None:
-        decision = self.evaluate(
-            [run(CI, status="in_progress", conclusion=None), run(NATIVE), run(ADMISSION)]
-        )
-        self.assertEqual(decision.state, "wait")
+    def test_artifact_outputs_do_not_satisfy_native_results(self):
+        expected = (2, ())
+        with self.assertRaises(gate.WorkflowError):
+            gate.verify_checks({"results": ["success", "skipped"], "children": [], "outputs": {"shard": "success"}}, expected)
 
-    def test_unknown_status_is_red_not_pending(self) -> None:
-        decision = self.evaluate(
-            [run(CI, status="invented", conclusion=None), run(NATIVE), run(ADMISSION)]
-        )
-        self.assertEqual(decision.state, "fail")
+    def test_transport_contains_only_small_result_projections(self):
+        expected = self.expected["ci"]
+        self.assertLess(len(json.dumps(needs(self.expected)).encode()), 8192)
+        source = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        self.assertIn("github.event_name == 'push' && format(", source)
+        self.assertNotIn("toJSON(jobs)", gate.CHECKS)
 
-    def test_latest_attempt_owns_the_result(self) -> None:
-        decision = self.evaluate(
-            [
-                run(CI, conclusion="failure", run_id=10, run_attempt=1),
-                run(CI, run_id=10, run_attempt=2),
-                run(NATIVE),
-                run(ADMISSION),
-            ]
-        )
-        self.assertEqual(decision.state, "success")
 
-    def test_new_run_supersedes_an_older_rerun(self) -> None:
-        decision = self.evaluate(
-            [
-                run(CI, run_id=10, run_attempt=2),
-                run(CI, conclusion="failure", run_id=11, run_attempt=1),
-                run(NATIVE),
-                run(ADMISSION),
-            ]
-        )
-        self.assertEqual(decision.state, "fail")
+class NativeWorkflowGraphTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="native-ci-graph-")
+        self.root = Path(self.temp.name)
+        shutil.copytree(REPO / ".github/workflows", self.root / ".github/workflows")
 
-    def test_unadmitted_peer_is_red(self) -> None:
-        decision = self.evaluate(
-            [run(CI), run(NATIVE), run(ADMISSION), run(".github/workflows/new-peer.yml")]
-        )
-        self.assertEqual(decision.state, "fail")
+    def tearDown(self):
+        self.temp.cleanup()
 
-    def test_gate_run_is_ignored_without_counting_as_evidence(self) -> None:
-        decision = self.evaluate(
-            [run(gate.GATE_WORKFLOW), run(CI), run(NATIVE), run(ADMISSION)]
-        )
-        self.assertEqual(decision.state, "success")
+    def test_all_premerge_workflows_are_in_one_native_graph(self):
+        gate.graph(self.root)
 
-    def test_merge_queue_requires_the_same_complete_evidence(self) -> None:
-        decision = self.evaluate(
-            [run(CI, event="merge_group"), run(NATIVE, event="merge_group"), run(ADMISSION, event="merge_group")],
-            event="merge_group",
-        )
-        self.assertEqual(decision.state, "success")
+    def test_independent_new_or_renamed_premerge_root_is_red(self):
+        for event in ("pull_request", "pull_request_target", "merge_group"):
+            p = self.root / ".github/workflows/new-root.yml"
+            p.write_text(f"on:\n  {event}:\njobs:\n  new:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n", encoding="utf-8")
+            with self.subTest(event=event), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+            p.unlink()
 
-    def test_unsupported_event_fails_closed(self) -> None:
-        self.assertEqual(self.evaluate([], event="workflow_dispatch").state, "fail")
+    def test_removed_dependency_skipped_gate_or_unbound_context_is_red(self):
+        p = self.root / gate.ENTRY
+        source = p.read_text(encoding="utf-8")
+        for before, after in (("workflow-policy, ci, native, admission", "workflow-policy, ci, native"),
+                              ("if: ${{ always() }}", "if: success()"),
+                              ("toJSON(needs)", "toJSON(github)"),
+                              ("github.workflow_sha", "github.sha"),
+                              ("./.github/workflows/ci-worker.yml", "foreign/repo/.github/workflows/ci-worker.yml@main")):
+            p.write_text(source.replace(before, after), encoding="utf-8")
+            with self.subTest(before=before), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        p.write_text(source, encoding="utf-8")
 
-    def test_ci_caller_selects_the_worker_from_its_own_snapshot(self) -> None:
+    def test_new_jobs_are_discovered_and_missing_or_failed_results_are_red(self):
+        p = self.root / ".github/workflows/native-conformance-worker.yml"
+        source = p.read_text(encoding="utf-8")
+        old = gate.graph(self.root)
+        p.write_text(source + "\n  new-check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n", encoding="utf-8")
+        current = gate.graph(self.root)
+        with self.assertRaises(gate.WorkflowError):
+            gate.verify_needs(needs(old), current)
+        value = needs(current)
+        gate.verify_needs(value, current)
+        tree = json.loads(value["native"]["outputs"]["checks"])
+        tree["results"][-1] = "failure"
+        value["native"]["outputs"]["checks"] = json.dumps(tree)
+        with self.assertRaises(gate.WorkflowError):
+            gate.verify_needs(value, current)
+
+    def test_conditional_new_check_or_missing_nested_export_is_red(self):
+        p = self.root / ".github/workflows/package-worker.yml"
+        source = p.read_text(encoding="utf-8")
+        for before, after in (("  wasm:\n", "  wasm:\n    if: false\n"),
+                              (gate.CHECKS, "${{ toJSON(jobs.wasm.outputs) }}")):
+            p.write_text(source.replace(before, after), encoding="utf-8")
+            with self.subTest(before=before), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        p.write_text(source, encoding="utf-8")
+
+    def test_yaml_duplicate_keys_and_empty_jobs_are_red(self):
+        p = self.root / ".github/workflows/package-worker.yml"
+        for value in ("on: workflow_call\njobs: {}\n", "jobs:\n  duplicate: {}\n  duplicate: {}\n"):
+            p.write_text(value, encoding="utf-8")
+            with self.subTest(value=value), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+
+    def test_ci_caller_selects_the_worker_from_its_own_snapshot(self):
         verify_ci_binding(REPO, os.environ)
-
 
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:
