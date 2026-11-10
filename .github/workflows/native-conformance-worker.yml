@@ -173,6 +173,7 @@ jobs:
           name: android-sdk-${{ github.sha }}
           path: ${{ runner.temp }}/android-artifact
       - name: install the archive into an independent Android project
+        id: prepare_consumer
         run: python3 bindings/kotlin/ci/prepare-consumer.py "$RUNNER_TEMP/android-artifact" "$RUNNER_TEMP/android-consumer"
       - name: compile the independent application and tests before starting an emulator
         run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble
@@ -186,6 +187,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
+      - name: stop Gradle after success, failure or cancellation
+        if: always() && steps.prepare_consumer.outcome == 'success'
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --stop
       - name: verify staged failure artifact inventory
         if: failure()
         run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory

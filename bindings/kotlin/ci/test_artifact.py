@@ -350,6 +350,43 @@ class ArtifactTests(unittest.TestCase):
                 receipt = json.loads((root / "build/outputs/consumer-diagnostics/artifact-inventory.json").read_text())
                 self.assertEqual(set(item["status"] for item in receipt["categories"].values()), {"not-built"})
 
+    def test_stop_uses_prepared_gradle_and_current_dependency_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "gradle-path.txt").write_text("prepared-gradle")
+            with patch.dict(os.environ, {"JAVA_HOME": directory, "GRADLE_USER_HOME": "cached-home"}), \
+                    patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        ["prepared-gradle", "--stop"], 0, stdout="No Gradle daemons are running.\n")) as run:
+                elf.stop(root)
+            self.assertEqual(run.call_args.args[0], ["prepared-gradle", "--stop"])
+            self.assertEqual(run.call_args.kwargs["cwd"], root)
+            self.assertEqual(run.call_args.kwargs["env"]["GRADLE_USER_HOME"], "cached-home")
+            self.assertEqual(run.call_args.kwargs["env"]["JAVA_HOME"], directory)
+            self.assertEqual(run.call_args.kwargs["timeout"], 30)
+            self.assertTrue(run.call_args.kwargs["text"])
+
+    def test_stop_never_reports_success_after_cleanup_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.dict(os.environ, {"JAVA_HOME": directory}), patch.object(elf.subprocess, "run") as run:
+                with self.assertRaises(FileNotFoundError):
+                    elf.stop(root)
+                run.assert_not_called()
+            (root / "gradle-path.txt").write_text("prepared-gradle")
+            for result, error in (
+                    (subprocess.CompletedProcess(["prepared-gradle", "--stop"], 23, stdout=""), subprocess.CalledProcessError),
+                    (subprocess.CompletedProcess(["prepared-gradle", "--stop"], 0,
+                         stdout="Unable to stop one of the daemons. The daemon may have crashed.\n"), RuntimeError)):
+                with self.subTest(error=error.__name__), \
+                        patch.dict(os.environ, {"JAVA_HOME": directory}), \
+                        patch.object(elf.subprocess, "run", return_value=result):
+                    with self.assertRaises(error):
+                        elf.stop(root)
+            with patch.dict(os.environ, {"JAVA_HOME": directory}), patch.object(elf.subprocess, "run",
+                    side_effect=subprocess.TimeoutExpired(["prepared-gradle", "--stop"], 30)):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    elf.stop(root)
+
     def test_partial_assembly_failure_preserves_successful_app_stage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
