@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       program-benchmark:
-        description: Compare the public Program consumer with the exact PR base
+        description: Compare the public Program consumer with the exact event base
         type: boolean
         default: false
     outputs:
@@ -105,8 +105,8 @@ jobs:
       - name: repeat runtime WASM build in one toolchain-pinned CI job
         env:
           PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
-          PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         # Remap убирает пути workspace/CARGO_HOME из WASM; повторимость проверяется внутри этого job.
         run: |
           set -euo pipefail

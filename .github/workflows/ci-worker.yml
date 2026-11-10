@@ -368,6 +368,9 @@ jobs:
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_ci_peer_gate.py
+      - name: PR and merge-queue distribution input contracts
+        if: ${{ matrix.lane == 'default' }}
+        run: python3 scripts/test_ci_merge_group.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         if: ${{ matrix.lane == 'default' }}
         with:
@@ -560,8 +563,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          # Distribution evidence привязано к PR head.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # PR проверяет свой head; очередь — всю будущую комбинацию.
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -583,12 +586,12 @@ jobs:
           cargo build --release --locked -p labcolors-transport-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
-      - name: build paired merge-base control on pull requests
+      - name: build paired merge-base control before merging
         id: base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           BASE_ROOT: ${{ runner.temp }}/transport-base-source
           CARGO_TARGET_DIR: ${{ runner.temp }}/transport-base-target
         run: |
@@ -609,7 +612,7 @@ jobs:
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
       - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
           CANDIDATE_BINARY: ${{ runner.temp }}/transport-candidate-target/release/labcolors-transport
           BASE_BINARY: ${{ runner.temp }}/transport-base-target/release/labcolors-transport
@@ -634,7 +637,7 @@ jobs:
       - name: pass verified subject and SBOM to the isolated attester
         id: handoff
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: node scripts/ci/distribution_outputs.mjs "$RUNNER_TEMP/transport-distribution" transport.intoto.json "$SOURCE_SHA"
 
   transport-distribution-attestation:
@@ -689,7 +692,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -711,12 +714,12 @@ jobs:
           cargo build --release --locked -p labcolors-evaluate-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
-      - name: build paired merge-base control on pull requests
+      - name: build paired merge-base control before merging
         id: base
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
           CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-base-target
         run: |
@@ -737,7 +740,7 @@ jobs:
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
       - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
           CANDIDATE_BINARY: ${{ runner.temp }}/evaluate-candidate-target/release/labcolors-evaluate
           BASE_BINARY: ${{ runner.temp }}/evaluate-base-target/release/labcolors-evaluate
@@ -762,7 +765,7 @@ jobs:
       - name: pass verified subject and SBOM to the isolated attester
         id: handoff
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: node scripts/ci/distribution_outputs.mjs "$RUNNER_TEMP/evaluate-distribution" evaluate.intoto.json "$SOURCE_SHA"
 
   evaluate-distribution-attestation:
@@ -826,6 +829,7 @@ jobs:
   wasm:
     uses: ./.github/workflows/package-worker.yml
     with:
+      # Запрошенная PR-диагностика; обязательные package/size checks не зависят от метки.
       program-benchmark: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'performance') }}
     permissions:
       contents: read
