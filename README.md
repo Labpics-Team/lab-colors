@@ -72,7 +72,7 @@ cargo test -p labcolors-core --test program_wire_contract --locked -- check::emp
 и платформенные проверки остаются в [CI workflow](.github/workflows/ci-worker.yml)
 и не заменяются запуском одного контракта.
 
-[Общие правила тестирования Labpics](https://github.com/Labpics-Team/.github/blob/main/docs/testing.md).
+[Организация тестов Rust](https://doc.rust-lang.org/book/ch11-03-test-organization.html) и [штатная фильтрация Cargo](https://doc.rust-lang.org/cargo/commands/cargo-test.html) описывают эти границы для внешних участников.
 
 ## Зависимости
 
