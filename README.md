@@ -65,7 +65,9 @@ cargo test -p labcolors-core --test program_wire_contract --locked -- check::
 cargo test -p labcolors-core --test program_wire_contract --locked -- check::empty_input_is_rejected_as_wire_error --exact
 ```
 
-`--list` только показывает обнаруженные проверки. В обычном выводе и при
+`--list` только показывает обнаруженные проверки. Фильтр, включая `--exact`,
+может вернуть код 0 без совпадений: последний пример подтверждает свойство,
+только если итог показывает один выполненный тест (`1 passed`). В обычном выводе и при
 ошибке виден путь, например `check::empty_input_is_rejected_as_wire_error`;
 адресный успех не означает успех всего workspace. Этот же файл автоматически
 входит в `cargo test --workspace --locked` в CI. Отдельные feature-, proof-
