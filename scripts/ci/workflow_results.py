@@ -15,6 +15,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ".github/workflows/ci-gate.yml"
+COMPLETE_MODE = "complete"
+ENTRYPOINT = Path(__file__).resolve().relative_to(ROOT).as_posix()
+COMPLETE_COMMAND = f"python3 {ENTRYPOINT} {COMPLETE_MODE}"
 CHECKS = "${{ format('{{\"results\":{0},\"children\":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}"
 QUALIFICATION = "${{ always() && github.event_name != 'pull_request' }}"
 EVENTS = {"pull_request", "merge_group"}
@@ -99,13 +102,17 @@ def graph(root: Path, event: str = "merge_group") -> dict[str, Producer]:
         raise WorkflowError("required CI must run on both PR and merge queue")
     jobs = entry["jobs"]
     gate = jobs.get("gate", {})
-    if gate.get("name") != "CI" or gate.get("if") != "${{ always() }}":
+    if (gate.get("name") != "CI" or gate.get("if") != "${{ always() }}" or
+            gate.get("continue-on-error", "false") != "false"):
         raise WorkflowError("required CI must run after unsuccessful dependencies")
     if set(dependencies(gate)) != jobs.keys() - {"gate"}:
         raise WorkflowError("required CI does not depend on every producer")
     final = gate.get("steps", [])[-1]
     if final.get("env", {}).get("CI_NEEDS") != "${{ toJSON(needs) }}" or final.get("env", {}).get("GATE_EVENT") != "${{ github.event_name }}":
         raise WorkflowError("required CI is not bound to its native dependencies and event")
+    if (final.get("run") != COMPLETE_COMMAND or "if" in final or
+            final.get("continue-on-error", "false") != "false"):
+        raise WorkflowError("required CI does not execute its native result validation")
     for name, job in jobs.items():
         for step in job.get("steps", []):
             if str(step.get("uses", "")).startswith("actions/checkout@") and step.get("with", {}).get("ref") != "${{ github.workflow_sha }}":
@@ -185,7 +192,7 @@ def verify_needs(value: object, expected: dict[str, Producer]) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) == 2 and sys.argv[1] == "complete":
+    if len(sys.argv) == 2 and sys.argv[1] == COMPLETE_MODE:
         expected = graph(ROOT, os.environ.get("GATE_EVENT"))
         verify_needs(json.loads(os.environ["CI_NEEDS"]), expected)
         print("Every declared CI producer satisfied its native workflow event.")

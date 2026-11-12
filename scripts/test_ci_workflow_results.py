@@ -127,6 +127,17 @@ class NativeResultTest(unittest.TestCase):
         good["formal"]["outputs"] = {"checks": ""}
         gate.verify_needs(good, expected)
 
+    def test_actual_cli_mode_distinguishes_graph_audit_from_failed_results(self):
+        bad = needs(gate.graph(REPO, "merge_group"))
+        bad["ci"]["result"] = "failure"
+        command = [sys.executable, str(REPO / gate.ENTRYPOINT)]
+        environment = {**os.environ, "GATE_EVENT": "merge_group", "CI_NEEDS": json.dumps(bad)}
+        audit = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
+        complete = subprocess.run([*command, gate.COMPLETE_MODE], env=environment,
+                                  capture_output=True, text=True, timeout=10)
+        self.assertEqual(audit.returncode, 0, audit.stderr)
+        self.assertNotEqual(complete.returncode, 0)
+
 
 class NativeWorkflowGraphTest(unittest.TestCase):
     def setUp(self):
@@ -196,6 +207,23 @@ class NativeWorkflowGraphTest(unittest.TestCase):
 
     def test_ci_caller_selects_the_worker_from_its_own_snapshot(self):
         verify_ci_binding(REPO, os.environ)
+
+    def test_final_command_cannot_replace_or_skip_native_result_validation(self):
+        p = self.root / gate.ENTRY
+        source = p.read_text(encoding="utf-8")
+        command = "        run: " + gate.COMPLETE_COMMAND + "\n"
+        self.assertEqual(source.count(command), 1)
+        replacements = (
+            command.replace(" " + gate.COMPLETE_MODE, ""),
+            command.replace(gate.ENTRYPOINT, "scripts/ci/foreign.py"),
+            command.replace("\n", " || true\n"),
+            "        if: false\n" + command,
+            "        continue-on-error: true\n" + command,
+        )
+        for replacement in replacements:
+            p.write_text(source.replace(command, replacement), encoding="utf-8")
+            with self.subTest(replacement=replacement), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
 
     def test_event_guard_cannot_hide_a_partial_qualification_graph(self):
         p = self.root / gate.ENTRY
