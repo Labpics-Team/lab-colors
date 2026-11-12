@@ -37,7 +37,8 @@ def checks_export(jobs: dict) -> str:
         raise WorkflowError("invalid native job identifier")
     fields = ",".join(f'"{name}":{{{index}}}' for index, name in enumerate(names))
     template = '{{"results":{{' + fields + '}},"children":{' + str(len(names)) + '}}}'
-    values = [f"toJSON(jobs.{name}.result)" for name in names]
+    # Normalize each job object at the JSON boundary before projecting its result.
+    values = [f"toJSON(fromJSON(toJSON(jobs.{name})).result)" for name in names]
     return "${{ format('" + template + "', " + ", ".join((*values, "toJSON(jobs.*.outputs.checks)")) + ") }}"
 
 

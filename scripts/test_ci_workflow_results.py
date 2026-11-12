@@ -86,6 +86,9 @@ class NativeResultTest(unittest.TestCase):
         source = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
         self.assertIn("github.event_name == 'push' && format(", source)
         self.assertNotIn("toJSON(jobs)", gate.CHECKS)
+        projection = gate.checks_export(gate.load_workflow(REPO, ".github/workflows/ci-worker.yml")["jobs"])
+        self.assertNotIn("toJSON(jobs)", projection)
+        self.assertIn("toJSON(fromJSON(toJSON(jobs.formal-core)).result)", projection)
 
     def test_real_cli_binds_named_results_to_the_native_event(self):
         for event in ("pull_request", "merge_group"):
