@@ -255,6 +255,75 @@ class NativeWorkflowGraphTest(unittest.TestCase):
             with self.subTest(after=after), self.assertRaises(gate.WorkflowError):
                 gate.graph(self.root)
 
+    def test_publication_selects_every_main_branch_push(self):
+        path = self.root / ".github/workflows/ci.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        for trigger in ("push", ["push"], {"push": ""}, {"push": {}},
+                        {"push": {"branches": ["main"]}}):
+            path.write_text(gate.yaml.safe_dump(workflow | {"on": trigger}), encoding="utf-8")
+            with self.subTest(trigger=trigger):
+                gate.graph(self.root)
+        filters = ({"branches": ["release"]}, {"branches": ["!main"]},
+                   {"branches": ["main", "!main"]}, {"branches": ["*"]},
+                   {"branches-ignore": ["main"]}, {"paths": ["proof/**"]},
+                   {"paths-ignore": ["proof/**"]}, {"tags": ["v*"]},
+                   {"tags-ignore": ["v*"]}, {"unknown": "true"})
+        for trigger in ({}, {"workflow_dispatch": ""}, ["push", {}],
+                        {"push": {}, "unknown": {}}, *({"push": value} for value in filters)):
+            path.write_text(gate.yaml.safe_dump(workflow | {"on": trigger}), encoding="utf-8")
+            with self.subTest(trigger=trigger), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+
+    def test_publication_qualification_allows_executed_dependency_chains(self):
+        path = self.root / ".github/workflows/ci.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        workflow["jobs"]["formal"]["needs"] = "worker"
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        gate.graph(self.root)
+        workflow["jobs"]["worker"]["needs"] = "prepare"
+        workflow["jobs"]["unrelated"] = {"if": "false", "runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        for guard in (None, "always()", "${{ always() }}", gate.QUALIFICATION):
+            workflow["jobs"]["prepare"] = {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+            if guard is not None:
+                workflow["jobs"]["prepare"]["if"] = guard
+            path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+            with self.subTest(guard=guard):
+                gate.graph(self.root)
+
+    def test_invalid_or_skipped_publication_dependency_chains_are_red(self):
+        path = self.root / ".github/workflows/ci.yml"
+        original = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        original["jobs"]["formal"]["needs"] = "worker"
+        original["jobs"]["worker"]["needs"] = "prepare"
+        original["jobs"]["prepare"] = {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        cases = (("formal", {"needs": "missing"}), ("formal", {"needs": "formal"}),
+                 ("worker", {"needs": "formal"}), ("prepare", {"needs": "missing"}),
+                 ("worker", {"if": "false"}), ("prepare", {"if": "false"}),
+                 ("prepare", {"if": "${{ github.ref == 'refs/heads/main' }}"}),
+                 ("worker", {"continue-on-error": "true"}), ("prepare", {"steps": []}),
+                 ("worker", {"uses": "foreign/repo/.github/workflows/ci-worker.yml@main"}))
+        for name, change in cases:
+            workflow = copy.deepcopy(original)
+            workflow["jobs"][name].update(change)
+            path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+            with self.subTest(name=name, change=change), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        workflow = copy.deepcopy(original)
+        workflow["jobs"]["unrelated"] = {"needs": "unrelated", "runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root)
+
+    def test_reusable_native_dependency_cycle_is_red(self):
+        path = self.root / ".github/workflows/formal-worker.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/formal-worker.yml")
+        names = list(workflow["jobs"])
+        workflow["jobs"][names[0]]["needs"] = names[1]
+        workflow["jobs"][names[1]]["needs"] = names[0]
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root)
+
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:
         try:

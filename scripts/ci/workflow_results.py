@@ -71,6 +71,83 @@ def dependencies(job: dict) -> list[str]:
     return value
 
 
+def dependency_graph(jobs: dict) -> dict[str, list[str]]:
+    """Validate the native DAG once, including jobs outside a selected closure."""
+    edges = {}
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            raise WorkflowError(f"{name}: invalid native job")
+        edges[name] = dependencies(job)
+        if not set(edges[name]) <= jobs.keys():
+            raise WorkflowError(f"{name}: missing native dependency")
+    visiting, visited = set(), set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise WorkflowError(f"{name}: cyclic native dependency")
+        if name in visited:
+            return
+        visiting.add(name)
+        for dependency in edges[name]:
+            visit(dependency)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in jobs:
+        visit(name)
+    return edges
+
+
+def producer_result(job: dict, event: str) -> str:
+    if job.get("continue-on-error", "false") != "false":
+        raise WorkflowError("native CI producer is optional")
+    guard = job.get("if")
+    if guard in (None, "always()", "${{ always() }}"):
+        return "success"
+    if guard == QUALIFICATION:
+        return "skipped" if event == "pull_request" else "success"
+    raise WorkflowError("native CI producer has an unknown job guard")
+
+
+def publication_graph(root: Path) -> tuple[dict, dict[str, list[str]]]:
+    workflow = load_workflow(root, ".github/workflows/ci.yml")
+    trigger = workflow.get("on")
+    if isinstance(trigger, (str, list)):
+        valid = trigger in ("push", ["push"])
+    elif isinstance(trigger, dict) and set(trigger) == {"push"}:
+        # Prove every main branch push is selected without implementing GitHub globs.
+        valid = trigger["push"] in ("", {}, {"branches": ["main"]})
+    else:
+        valid = False
+    if not valid:
+        raise WorkflowError("publication CI does not select every main branch push")
+    jobs = workflow["jobs"]
+    return jobs, dependency_graph(jobs)
+
+
+def verify_publication_qualification(root: Path, path: str, jobs: dict, edges: dict) -> None:
+    matches = [name for name, job in jobs.items() if "uses" in job and local_call(job["uses"]) == path]
+    if len(matches) != 1:
+        raise WorkflowError(f"{path}: publication lacks its full native qualification")
+    visited = set()
+
+    def visit(name: str) -> None:
+        if name in visited:
+            return
+        visited.add(name)
+        job = jobs[name]
+        if producer_result(job, "push") != "success":
+            raise WorkflowError(f"{name}: publication dependency is skipped")
+        if "uses" in job:
+            shape(root, local_call(job["uses"]))
+        elif not job.get("runs-on") or not job.get("steps"):
+            raise WorkflowError(f"{name}: publication dependency has no executable job")
+        for dependency in edges[name]:
+            visit(dependency)
+
+    visit(matches[0])
+
+
 def shape(root: Path, path: str, ancestors: tuple[str, ...] = ()) -> tuple:
     if path in ancestors:
         raise WorkflowError("recursive CI workflow call")
@@ -79,14 +156,13 @@ def shape(root: Path, path: str, ancestors: tuple[str, ...] = ()) -> tuple:
     if not isinstance(call, dict) or call.get("outputs", {}).get("checks", {}).get("value") != CHECKS:
         raise WorkflowError(f"{path}: native check results are not exported")
     jobs = workflow["jobs"]
+    dependency_graph(jobs)
     children = []
     for name, job in jobs.items():
         if not isinstance(job, dict) or job.get("continue-on-error", "false") != "false":
             raise WorkflowError(f"{path}/{name}: optional check")
         if job.get("if", "always()") not in {"always()", "${{ always() }}"}:
             raise WorkflowError(f"{path}/{name}: check has a conditional job guard")
-        if not set(dependencies(job)) <= jobs.keys():
-            raise WorkflowError(f"{path}/{name}: missing native dependency")
         if "uses" in job:
             children.append(shape(root, local_call(job["uses"]), (*ancestors, path)))
         elif not job.get("runs-on") or not job.get("steps"):
@@ -101,6 +177,7 @@ def graph(root: Path, event: str = "merge_group") -> dict[str, Producer]:
     if set(entry.get("on", {})) != {"pull_request", "merge_group"}:
         raise WorkflowError("required CI must run on both PR and merge queue")
     jobs = entry["jobs"]
+    dependency_graph(jobs)
     gate = jobs.get("gate", {})
     if (gate.get("name") != "CI" or gate.get("if") != "${{ always() }}" or
             gate.get("continue-on-error", "false") != "false"):
@@ -123,23 +200,18 @@ def graph(root: Path, event: str = "merge_group") -> dict[str, Producer]:
         if name == "gate":
             continue
         guard = job.get("if")
-        if guard not in {None, QUALIFICATION} or job.get("continue-on-error", "false") != "false":
-            raise WorkflowError(f"{name}: required CI producer is optional")
+        status = producer_result(job, event)
         if guard == QUALIFICATION:
             if "uses" not in job:
                 raise WorkflowError("event qualification must call a complete reusable graph")
             qualifications.append(local_call(job["uses"]))
-        status = "skipped" if guard == QUALIFICATION and event == "pull_request" else "success"
         result[name] = Producer(status, shape(root, local_call(job["uses"])) if "uses" in job else None)
     if not any(value.checks is not None for value in result.values()):
         raise WorkflowError("required CI has no reusable checks")
     # Publication retains a full same-commit call for every deferred qualification.
-    push = load_workflow(root, ".github/workflows/ci.yml")
-    calls = [(local_call(job["uses"]), job) for job in push["jobs"].values() if "uses" in job]
+    push_jobs, push_edges = publication_graph(root)
     for path in qualifications:
-        matches = [job for called, job in calls if called == path]
-        if len(matches) != 1 or "if" in matches[0] or matches[0].get("continue-on-error", "false") != "false":
-            raise WorkflowError(f"{path}: publication lacks its full native qualification")
+        verify_publication_qualification(root, path, push_jobs, push_edges)
     for path in sorted((root / ".github/workflows").glob("*.y*ml")):
         relative = path.relative_to(root).as_posix()
         triggers = load_workflow(root, relative).get("on", {})
