@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { repackPublicationTarball } from "../../../scripts/verify-publication.mjs";
+import { parseAllDocuments } from "yaml";
 
 const workflow = (name) => readFileSync(new URL("../../../.github/workflows/" + name, import.meta.url), "utf8");
 const publisher = workflow("publish-worker.yml");
@@ -31,45 +32,103 @@ function stepScript(source, id) {
   }).join("\n");
 }
 
-// Fixture job names come from the producer, never from the publisher's allowlist.
-// Only literal job-level names participate; matrix leaves are covered by their
-// existing aggregate jobs. Unexpected naming syntax cannot silently shrink it.
-function producerNames(files) {
-  const names = files.flatMap((file) => [...workflow(file).matchAll(/^    name: (.+)$/gmu)]
-    .map((match) => match[1].trim())
-    .filter((name) => !name.includes("${{"))
-    .map((name) => name.startsWith('"') ? JSON.parse(name) : name.startsWith("'") ? name.slice(1, -1) : name));
-  assert.ok(names.length > 0, "producer fixture must contain actual jobs");
-  return [...new Set(names)];
+function matrixRows(matrix) {
+  if (matrix === undefined) return [{}];
+  assert.ok(matrix && typeof matrix === "object" && !Array.isArray(matrix), "matrix must be declared in YAML");
+  const axes = Object.keys(matrix).filter((key) => key !== "include" && key !== "exclude");
+  let original = axes.length ? [{}] : [];
+  for (const axis of axes) {
+    assert.ok(Array.isArray(matrix[axis]) && matrix[axis].length > 0, "matrix axis must contain values");
+    original = original.flatMap((row) => matrix[axis].map((value) => ({ ...row, [axis]: value })));
+    assert.ok(original.length <= 256, "producer matrix exceeds the native job limit");
+  }
+  const includes = matrix.include ?? [], excludes = matrix.exclude ?? [];
+  assert.ok(Array.isArray(includes) && Array.isArray(excludes), "matrix include/exclude must be lists");
+  const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+  for (const exclusion of excludes) {
+    assert.ok(exclusion && typeof exclusion === "object" && !Array.isArray(exclusion), "matrix exclude must be a mapping");
+  }
+  original = original.filter((row) => !excludes.some((exclude) =>
+    Object.entries(exclude).every(([key, value]) => equal(row[key], value))));
+  const rows = original.map((row) => ({ ...row }));
+  for (const addition of includes) {
+    assert.ok(addition && typeof addition === "object" && !Array.isArray(addition), "matrix include must be a mapping");
+    const matches = original.flatMap((row, index) =>
+      axes.every((axis) => !(axis in addition) || equal(row[axis], addition[axis])) ? [index] : []);
+    if (matches.length) for (const index of matches) Object.assign(rows[index], addition);
+    else rows.push({ ...addition });
+  }
+  assert.ok(rows.length > 0 && rows.length <= 256, "producer matrix must yield native jobs");
+  return rows;
 }
 
-function evidence() {
-  const nativeReferences = [...workflow("native-conformance.yml").matchAll(/^    uses: (\S+)$/gmu)];
-  assert.deepEqual(nativeReferences.map((match) => match[1]),
-    ["./.github/workflows/native-conformance-worker.yml"],
-    "native caller must bind one worker from its own source revision");
-  const ciNames = producerNames(["ci-worker.yml", "package-worker.yml"]);
-  assert.ok(ciNames.includes("core tests and artifact contracts"), "healthy control lacks the Core aggregate");
-  assert.ok(ciNames.includes("test"), "healthy control lacks the full verification aggregate");
-  const nativeNames = producerNames(["native-conformance-worker.yml"]);
+// References follow local calls; job names retain caller depth and multiplicity.
+function producerGraph(entry, readWorkflow = workflow) {
+  const names = [], references = new Set(), documents = new Map();
+  function visit(file, callers, ancestors) {
+    assert.ok(!ancestors.includes(file), "recursive workflow call: " + [...ancestors, file].join(" -> "));
+    if (!documents.has(file)) {
+      const docs = parseAllDocuments(readWorkflow(file), { strict: true, uniqueKeys: true });
+      assert.equal(docs.length, 1, "producer must contain one YAML document");
+      assert.deepEqual([...docs[0].errors, ...docs[0].warnings], [], "ambiguous producer YAML: " + file);
+      const value = docs[0].toJS({ maxAliasCount: 100 });
+      assert.ok(value?.jobs && typeof value.jobs === "object" && !Array.isArray(value.jobs), "producer lacks jobs: " + file);
+      assert.ok(Object.keys(value.jobs).length > 0, "producer has no jobs: " + file);
+      documents.set(file, value);
+    }
+    for (const [id, job] of Object.entries(documents.get(file).jobs)) {
+      assert.ok(job && typeof job === "object" && !Array.isArray(job), "invalid producer job: " + id);
+      assert.ok(job.if === undefined || job.if === true || job.if === "always()" || job.if === "${{ always() }}",
+        "healthy fixture cannot assume conditional producer success: " + id);
+      const template = job.name ?? id;
+      assert.equal(typeof template, "string", "producer job name must be text");
+      for (const row of matrixRows(job.strategy?.matrix)) {
+        const name = template.replace(/\$\{\{\s*matrix\.([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}/gu, (_, key) => {
+          const value = key.split(".").reduce((value, part) => value?.[part], row);
+          assert.ok(["string", "number", "boolean"].includes(typeof value), "unresolved matrix job name: " + key);
+          return String(value);
+        });
+        assert.ok(name.length > 0 && !name.includes("${{"), "unresolved producer job name: " + name);
+        if (job.uses !== undefined) {
+          assert.ok(job.steps === undefined && job["runs-on"] === undefined, "workflow call cannot contain an inline job");
+          assert.equal(typeof job.uses, "string", "workflow call must be text");
+          const local = job.uses.match(/^\.\/\.github\/workflows\/([A-Za-z0-9_-]+\.ya?ml)$/u);
+          assert.ok(local, "producer call escaped its own source revision: " + job.uses);
+          references.add(local[1]);
+          visit(local[1], [...callers, name], [...ancestors, file]);
+        } else {
+          assert.ok(job["runs-on"] && Array.isArray(job.steps) && job.steps.length > 0, "producer lacks an executable job: " + id);
+          names.push([...callers, name].join(" / "));
+        }
+      }
+    }
+  }
+  visit(entry, [], []);
+  assert.ok(names.length > 0, "producer fixture must contain actual jobs");
+  return { names, references: [...references] };
+}
+
+function evidence(readWorkflow = workflow) {
+  const ciGraph = producerGraph("ci.yml", readWorkflow), nativeGraph = producerGraph("native-conformance.yml", readWorkflow);
+  assert.ok(ciGraph.names.some((name) => name.endsWith(" / core tests and artifact contracts")), "healthy control lacks the Core aggregate");
+  assert.ok(ciGraph.names.some((name) => name.endsWith(" / test")), "healthy control lacks the full verification aggregate");
   const run = (id, file, references) => ({
     id, run_attempt: 1, path: ".github/workflows/" + file,
     head_sha: sha, head_branch: "main", event: "push",
     status: "completed", conclusion: "success", referenced_workflows: references,
   });
-  const ci = run(101, "ci.yml", ["ci-worker.yml", "package-worker.yml"].map((file) => ({
+  const references = (graph) => graph.references.map((file) => ({
     path: repository + "/.github/workflows/" + file + "@" + sha, sha,
-  })));
-  const native = run(202, "native-conformance.yml", [{
-    path: repository + nativeReferences[0][1].slice(1) + "@" + sha, sha,
-  }]);
+  }));
+  const ci = run(101, "ci.yml", references(ciGraph));
+  const native = run(202, "native-conformance.yml", references(nativeGraph));
   const jobs = (id, names) => names.map((name, index) => ({
     id: id * 100 + index, run_id: id, name: "caller / nested caller / " + name,
     status: "completed", conclusion: "success",
   }));
   return {
     runs: { "ci.yml": [ci], "native-conformance.yml": [native] },
-    jobs: { 101: jobs(101, ciNames), 202: jobs(202, nativeNames) },
+    jobs: { 101: jobs(101, ciGraph.names), 202: jobs(202, nativeGraph.names) },
   };
 }
 
@@ -126,6 +185,49 @@ test("publication admits successful current producer jobs at arbitrary caller de
   assert.equal(result.exitCode, 0, result.errors.join("\n"));
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.writes, ["ci_run_id=101\nci_run_attempt=1\nnative_run_id=202\n"]);
+});
+
+test("producer fixture preserves YAML names, transitive calls and duplicate job suffixes", () => {
+  const files = {
+    "entry.yml": "jobs:\n  left:\n    name: \"first: caller\"\n    uses: &call ./.github/workflows/child.yml\n  right:\n    name: >-\n      another caller\n    uses: *call\n",
+    "child.yml": "jobs:\n  nested:\n    uses: ./.github/workflows/leaf.yml\n",
+    "leaf.yml": "jobs:\n  check:\n    name: 'quoted: leaf'\n    runs-on: ubuntu-latest\n    steps: [{run: true}]\n",
+  };
+  const graph = producerGraph("entry.yml", (file) => files[file]);
+  assert.deepEqual(graph.references, ["child.yml", "leaf.yml"]);
+  assert.deepEqual(graph.names, ["first: caller / nested / quoted: leaf", "another caller / nested / quoted: leaf"]);
+});
+
+test("producer fixture rejects unknown, cyclic and ambiguous workflow declarations", () => {
+  const leaf = "jobs:\n  check:\n    name: check\n    steps: [{run: true}]\n";
+  for (const [source, reason] of [
+    ["jobs:\n  call:\n    uses: foreign/repo/.github/workflows/worker.yml@main\n", /escaped/u],
+    ["jobs:\n  call:\n    uses: ./.github/workflows/unknown.yml\n", /unknown workflow/u],
+    ["jobs:\n  call:\n    uses: ./.github/workflows/entry.yml\n", /recursive/u],
+    ["jobs:\n  check: {name: first}\n  check: {name: second}\n", /ambiguous/u],
+    ["jobs:\n  check:\n    name: ${{ github.unknown }}\n", /unresolved/u],
+    ["jobs:\n  check:\n    if: false\n    name: check\n", /conditional producer/u],
+  ]) {
+    assert.throws(() => producerGraph("entry.yml", (file) => {
+      assert.ok(file === "entry.yml" || file === "leaf.yml", "unknown workflow: " + file);
+      return file === "entry.yml" ? source : leaf;
+    }), reason);
+  }
+});
+
+test("producer fixture matrix names preserve multiplicity and include after exclude", () => {
+  assert.deepEqual(matrixRows({ os: ["linux", "mac"], exclude: [{ os: "mac" }], include: [{ os: "mac", extra: true }] }),
+    [{ os: "linux" }, { os: "mac", extra: true }]);
+  const graph = producerGraph("entry.yml", () =>
+    "jobs:\n  check:\n    name: check\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        shard: [0, 1]\n    steps: [{run: true}]\n");
+  assert.deepEqual(graph.names, ["check", "check"]);
+});
+
+test("publication refuses duplicate actual reusable calls instead of deduplicating their jobs", async () => {
+  const record = evidence((file) => workflow(file) + (file === "ci.yml" ?
+    "\n  duplicate-ci:\n    name: Other caller\n    uses: ./.github/workflows/ci-worker.yml\n" : ""));
+  assert.equal(record.runs["ci.yml"][0].referenced_workflows.filter((reference) => reference.path.includes("/ci-worker.yml@")).length, 1);
+  assertRefused(await admit(record), /expected one job/u);
 });
 
 for (const condition of ["missing", "duplicate", "foreign-run", "failure", "skipped", "in-progress"]) {
