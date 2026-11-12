@@ -1957,7 +1957,10 @@ class MutationTruthTest(unittest.TestCase):
                 self.assertNotIn("continue-on-error:", block)
 
         formal = jobs["formal-core"]
-        self.assertIn("    if: ${{ always() }}\n", formal)
+        self.assertIn("    if: *qualification\n", formal)
+        self.assertIn("    if: &qualification ${{ always() && github.event_name != 'pull_request' }}\n",
+                      jobs["formal-positive"])
+        self.assertIn("    if: *qualification\n", jobs["formal-mutants"])
         self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
         self.assertIn("--phase assemble", formal)
         self.assertIn("formal_outputs.py restore", formal)

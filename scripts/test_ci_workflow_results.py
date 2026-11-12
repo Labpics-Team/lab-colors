@@ -24,6 +24,9 @@ import workflow_results as gate
 
 
 def checks(expected):
+    if isinstance(expected, gate.NamedChecks):
+        return {"results": dict(expected.results),
+                "children": [json.dumps(checks(child)) for child in expected.children]}
     return {"results": ["success"] * expected[0],
             "children": [json.dumps(checks(child)) for child in expected[1]]}
 
@@ -83,6 +86,58 @@ class NativeResultTest(unittest.TestCase):
         source = (REPO / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
         self.assertIn("github.event_name == 'push' && format(", source)
         self.assertNotIn("toJSON(jobs)", gate.CHECKS)
+
+    def test_real_cli_binds_named_results_to_the_native_event(self):
+        for event in ("pull_request", "merge_group"):
+            expected = gate.graph(REPO, event)
+            good = needs(expected)
+            ci = json.loads(good["ci"]["outputs"]["checks"])
+            self.assertEqual({name for name, result in ci["results"].items() if result == "skipped"},
+                             {"formal-positive", "formal-mutants", "formal-core"} if event == "pull_request" else set())
+            variants = [(event, good, True)]
+            other = "merge_group" if event == "pull_request" else "pull_request"
+            variants.append((other, good, False))
+            variants.append(("workflow_dispatch", good, False))
+            for name in ci["results"]:
+                for result in ("failure", "cancelled", "neutral", "", None):
+                    bad = copy.deepcopy(good)
+                    value = copy.deepcopy(ci)
+                    value["results"][name] = result
+                    bad["ci"]["outputs"]["checks"] = json.dumps(value)
+                    with self.subTest(event=event, name=name, result=result), self.assertRaises(gate.WorkflowError):
+                        gate.verify_needs(bad, expected)
+                    if name == "msrv":
+                        variants.append((event, bad, False))
+            for value in (ci | {"results": {key: result for key, result in ci["results"].items() if key != "msrv"}},
+                          ci | {"results": ci["results"] | {"unknown": "success"}}):
+                bad = copy.deepcopy(good)
+                bad["ci"]["outputs"]["checks"] = json.dumps(value)
+                variants.append((event, bad, False))
+            swapped = copy.deepcopy(ci)
+            swapped["results"]["msrv"], swapped["results"]["formal-core"] = (
+                "skipped", "success")
+            bad = copy.deepcopy(good)
+            bad["ci"]["outputs"]["checks"] = json.dumps(swapped)
+            variants.append((event, bad, False))
+            for bound_event, value, success in variants:
+                with self.subTest(event=event, bound_event=bound_event, value=value):
+                    result = subprocess.run([sys.executable, str(REPO / "scripts/ci/workflow_results.py"), "complete"],
+                        env={**os.environ, "GATE_EVENT": bound_event, "CI_NEEDS": json.dumps(value)},
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
+
+    def test_unknown_event_and_unrequested_skip_are_red(self):
+        for event in ("push", "workflow_dispatch", "", None):
+            with self.subTest(event=event), self.assertRaises(gate.WorkflowError):
+                gate.graph(REPO, event)
+        for event in ("pull_request", "merge_group"):
+            expected = gate.graph(REPO, event)
+            good = needs(expected)
+            ci = json.loads(good["ci"]["outputs"]["checks"])
+            ci["results"]["msrv"] = "skipped"
+            good["ci"]["outputs"]["checks"] = json.dumps(ci)
+            with self.subTest(event=event), self.assertRaises(gate.WorkflowError):
+                gate.verify_needs(good, expected)
 
 
 class NativeWorkflowGraphTest(unittest.TestCase):
@@ -153,6 +208,44 @@ class NativeWorkflowGraphTest(unittest.TestCase):
 
     def test_ci_caller_selects_the_worker_from_its_own_snapshot(self):
         verify_ci_binding(REPO, os.environ)
+
+    def test_named_projection_is_derived_and_preserves_every_other_byte(self):
+        path = ".github/workflows/ci-worker.yml"
+        p = self.root / path
+        source = p.read_text(encoding="utf-8")
+        p.write_text(source + "\n  new-check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n", encoding="utf-8")
+        before = p.read_bytes()
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root)
+        gate.project_checks(self.root, path)
+        current = gate.graph(self.root)
+        self.assertIn(("new-check", "success"), current["ci"].results)
+        projected = p.read_bytes()
+        self.assertEqual(before.split(b"        value: >-", 1)[0],
+                         projected.split(b"        value: >-", 1)[0])
+        self.assertEqual(before.split(b"      distributions:", 1)[1],
+                         projected.split(b"      distributions:", 1)[1])
+        gate.project_checks(self.root, path)
+        self.assertEqual(p.read_bytes(), projected)
+        self.assertTrue(p.read_text(encoding="utf-8").endswith("\n  new-check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n"))
+        p.write_bytes(projected.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        before = p.read_bytes()
+        gate.project_checks(self.root, path)
+        self.assertEqual(p.read_bytes(), before)
+
+    def test_guard_law_and_unordered_scoped_export_mutations_are_red(self):
+        p = self.root / ".github/workflows/ci-worker.yml"
+        source = p.read_text(encoding="utf-8")
+        for before, after in (("always() && github.event_name != 'pull_request'", "github.event_name != 'pull_request'"),
+                              ("always() && github.event_name != 'pull_request'", "always() && github.event_name == 'merge_group'")):
+            p.write_text(source.replace(before, after), encoding="utf-8")
+            with self.subTest(after=after), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        p.write_text(source, encoding="utf-8")
+        projected = source.split("        value: >-\n", 1)[1].split("      distributions:", 1)[0]
+        p.write_text(source.replace("        value: >-\n" + projected, "        value: " + gate.CHECKS + "\n"), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root, "pull_request")
 
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:

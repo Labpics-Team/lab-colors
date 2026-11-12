@@ -5,7 +5,26 @@ on:
     outputs:
       checks:
         description: Results of every declared job and nested reusable check
-        value: ${{ format('{{"results":{0},"children":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}
+        value: >-
+          ${{ format('{{"results":{{"audit":{0},"authority-mutation":{1},"authority-mutation-worker":{2},"core-tests":{3},"core-tests-worker":{4},"docs":{5},"evaluate-distribution":{6},"formal-core":{7},"formal-mutants":{8},"formal-positive":{9},"lint":{10},"msrv":{11},"region-proof":{12},"region-proof-worker":{13},"test":{14},"transport-distribution":{15},"wasm":{16}}},"children":{17}}}',
+          toJSON(jobs.audit.result),
+          toJSON(jobs.authority-mutation.result),
+          toJSON(jobs.authority-mutation-worker.result),
+          toJSON(jobs.core-tests.result),
+          toJSON(jobs.core-tests-worker.result),
+          toJSON(jobs.docs.result),
+          toJSON(jobs.evaluate-distribution.result),
+          toJSON(jobs.formal-core.result),
+          toJSON(jobs.formal-mutants.result),
+          toJSON(jobs.formal-positive.result),
+          toJSON(jobs.lint.result),
+          toJSON(jobs.msrv.result),
+          toJSON(jobs.region-proof.result),
+          toJSON(jobs.region-proof-worker.result),
+          toJSON(jobs.test.result),
+          toJSON(jobs.transport-distribution.result),
+          toJSON(jobs.wasm.result),
+          toJSON(jobs.*.outputs.checks)) }}
       distributions:
         description: Verified distribution subjects and SBOMs for isolated push attesters
         value: ${{ github.event_name == 'push' && format('{{"transport-distribution":{0},"evaluate-distribution":{1}}}', toJSON(jobs.transport-distribution.outputs), toJSON(jobs.evaluate-distribution.outputs)) || '' }}
@@ -25,6 +44,7 @@ env:
 jobs:
   formal-positive:
     name: formal core positive (${{ matrix.shard }})
+    if: &qualification ${{ always() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -64,6 +84,7 @@ jobs:
 
   formal-mutants:
     name: formal core mutants (${{ matrix.shard }})
+    if: *qualification
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -103,7 +124,7 @@ jobs:
 
   formal-core:
     name: formal core (Kani)
-    if: ${{ always() }}
+    if: *qualification
     needs: [formal-positive, formal-mutants]
     runs-on: ubuntu-latest
     timeout-minutes: 5

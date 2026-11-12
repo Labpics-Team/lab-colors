@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -15,10 +16,51 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ".github/workflows/ci-gate.yml"
 CHECKS = "${{ format('{{\"results\":{0},\"children\":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}"
+QUALIFICATION = "${{ always() && github.event_name != 'pull_request' }}"
+EVENTS = {"pull_request", "merge_group"}
 
 
 class WorkflowError(AssertionError):
     pass
+
+
+@dataclass(frozen=True)
+class NamedChecks:
+    results: tuple[tuple[str, str], ...]
+    children: tuple
+
+
+def checks_export(jobs: dict) -> str:
+    """Project only named statuses; report and distribution outputs stay local."""
+    names = sorted(jobs)
+    if not names or any(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name) is None for name in names):
+        raise WorkflowError("invalid native job identifier")
+    fields = ",".join(f'"{name}":{{{index}}}' for index, name in enumerate(names))
+    template = '{{"results":{{' + fields + '}},"children":{' + str(len(names)) + '}}}'
+    values = [f"toJSON(jobs.{name}.result)" for name in names]
+    return "${{ format('" + template + "', " + ", ".join((*values, "toJSON(jobs.*.outputs.checks)")) + ") }}"
+
+
+def project_checks(root: Path, path: str) -> None:
+    """Regenerate the checked projection without rewriting the workflow."""
+    path = local_call("./" + path)
+    workflow = load_workflow(root, path)
+    old = workflow.get("on", {}).get("workflow_call", {}).get("outputs", {}).get("checks", {}).get("value")
+    source_path = root / path
+    source = source_path.read_bytes().decode("utf-8")
+    newline = "\r\n" if "\r\n" in source else "\n"
+    source = source.replace("\r\n", "\n")
+    block = re.compile(r"(\n      checks:\n(?:        (?!value:)[^\n]*\n)*)(        value:[^\n]*\n(?:          [^\n]*\n)*)")
+    if not isinstance(old, str) or len(block.findall(source)) != 1:
+        raise WorkflowError("native checks projection must have one literal value")
+    expression = checks_export(workflow['jobs'])
+    template, values = expression.split("', ", 1)
+    lines = [template + "',", *values.split(", ")]
+    for index in range(1, len(lines) - 1):
+        lines[index] += ","
+    replacement = "        value: >-\n" + "".join(f"          {line}\n" for line in lines)
+    updated = block.sub(lambda match: match[1] + replacement, source)
+    source_path.write_bytes(updated.replace("\n", newline).encode("utf-8"))
 
 
 class WorkflowLoader(yaml.BaseLoader):
@@ -59,30 +101,44 @@ def dependencies(job: dict) -> list[str]:
     return value
 
 
-def shape(root: Path, path: str, ancestors: tuple[str, ...] = ()) -> tuple:
+def shape(root: Path, path: str, event: str, ancestors: tuple[str, ...] = ()) -> tuple | NamedChecks:
     if path in ancestors:
         raise WorkflowError("recursive CI workflow call")
     workflow = load_workflow(root, path)
     call = workflow.get("on", {}).get("workflow_call")
-    if not isinstance(call, dict) or call.get("outputs", {}).get("checks", {}).get("value") != CHECKS:
-        raise WorkflowError(f"{path}: native check results are not exported")
+    exported = call.get("outputs", {}).get("checks", {}).get("value") if isinstance(call, dict) else None
     jobs = workflow["jobs"]
+    named = exported == checks_export(jobs)
+    if not named and exported != CHECKS:
+        raise WorkflowError(f"{path}: native check results are not exported")
     children = []
+    results = []
     for name, job in jobs.items():
         if not isinstance(job, dict) or job.get("continue-on-error", "false") != "false":
             raise WorkflowError(f"{path}/{name}: optional check")
-        if job.get("if", "always()") not in {"always()", "${{ always() }}"}:
+        guard = job.get("if", "always()")
+        if guard == QUALIFICATION and named:
+            status = "skipped" if event == "pull_request" else "success"
+        elif guard in {"always()", "${{ always() }}"}:
+            status = "success"
+        else:
             raise WorkflowError(f"{path}/{name}: check has a conditional job guard")
+        results.append((name, status))
         if not set(dependencies(job)) <= jobs.keys():
             raise WorkflowError(f"{path}/{name}: missing native dependency")
         if "uses" in job:
-            children.append(shape(root, local_call(job["uses"]), (*ancestors, path)))
+            if guard == QUALIFICATION:
+                raise WorkflowError("event-scoped checks must not hide nested reusable results")
+            children.append(shape(root, local_call(job["uses"]), event, (*ancestors, path)))
         elif not job.get("runs-on") or not job.get("steps"):
             raise WorkflowError(f"{path}/{name}: check has no executable job")
-    return len(jobs), tuple(sorted(children))
+    children = tuple(sorted(children, key=repr))
+    return NamedChecks(tuple(sorted(results)), children) if named else (len(jobs), children)
 
 
-def graph(root: Path) -> dict[str, tuple | None]:
+def graph(root: Path, event: str = "merge_group") -> dict[str, tuple | NamedChecks | None]:
+    if event not in EVENTS:
+        raise WorkflowError("unsupported required CI event")
     entry = load_workflow(root, ENTRY)
     if set(entry.get("on", {})) != {"pull_request", "merge_group"}:
         raise WorkflowError("required CI must run on both PR and merge queue")
@@ -105,7 +161,7 @@ def graph(root: Path) -> dict[str, tuple | None]:
             continue
         if "if" in job or job.get("continue-on-error", "false") != "false":
             raise WorkflowError(f"{name}: required CI producer is optional")
-        result[name] = shape(root, local_call(job["uses"])) if "uses" in job else None
+        result[name] = shape(root, local_call(job["uses"]), event) if "uses" in job else None
     if not any(value is not None for value in result.values()):
         raise WorkflowError("required CI has no reusable checks")
     for path in sorted((root / ".github/workflows").glob("*.y*ml")):
@@ -118,18 +174,24 @@ def graph(root: Path) -> dict[str, tuple | None]:
     return result
 
 
-def verify_checks(value: object, expected: tuple) -> None:
+def verify_checks(value: object, expected: tuple | NamedChecks) -> None:
     if isinstance(value, str):
         value = json.loads(value)
     if not isinstance(value, dict) or set(value) != {"results", "children"}:
         raise WorkflowError("missing or unknown native check result tree")
     results, children = value["results"], value["children"]
-    if not isinstance(results, list) or len(results) != expected[0] or not results or any(item != "success" for item in results):
-        raise WorkflowError("native checks are missing, unsuccessful or unknown")
-    if not isinstance(children, list) or len(children) != len(expected[1]):
+    if isinstance(expected, NamedChecks):
+        if not isinstance(results, dict) or results != dict(expected.results):
+            raise WorkflowError("named native checks are missing, unsuccessful or outside their event")
+        child_shapes = expected.children
+    else:
+        if not isinstance(results, list) or len(results) != expected[0] or not results or any(item != "success" for item in results):
+            raise WorkflowError("native checks are missing, unsuccessful or unknown")
+        child_shapes = expected[1]
+    if not isinstance(children, list) or len(children) != len(child_shapes):
         raise WorkflowError("nested native check results are missing or unexpected")
     # Object filters do not promise ordering. Every child must match one declared subtree.
-    remaining = list(expected[1])
+    remaining = list(child_shapes)
     for child in children:
         for index, child_shape in enumerate(remaining):
             try:
@@ -142,7 +204,7 @@ def verify_checks(value: object, expected: tuple) -> None:
             raise WorkflowError("nested native check result does not match the workflow graph")
 
 
-def verify_needs(value: object, expected: dict[str, tuple | None]) -> None:
+def verify_needs(value: object, expected: dict[str, tuple | NamedChecks | None]) -> None:
     if not isinstance(value, dict) or not value or set(value) != set(expected):
         raise WorkflowError("native dependencies are missing or unexpected")
     for name, child in expected.items():
@@ -154,13 +216,15 @@ def verify_needs(value: object, expected: dict[str, tuple | None]) -> None:
 
 
 def main() -> None:
-    expected = graph(ROOT)
+    if len(sys.argv) == 3 and sys.argv[1] == "project":
+        project_checks(ROOT, sys.argv[2])
+        return
     if len(sys.argv) == 2 and sys.argv[1] == "complete":
-        if os.environ.get("GATE_EVENT") not in {"pull_request", "merge_group"}:
-            raise WorkflowError("unsupported required CI event")
+        expected = graph(ROOT, os.environ.get("GATE_EVENT"))
         verify_needs(json.loads(os.environ["CI_NEEDS"]), expected)
-        print("Every declared CI check completed successfully on this native workflow run.")
+        print("Every declared CI check satisfied its native workflow event.")
     else:
+        graph(ROOT)
         print("All pre-merge checks belong to the required native CI graph.")
 
 
