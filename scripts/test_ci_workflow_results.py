@@ -29,8 +29,10 @@ def checks(expected):
 
 
 def needs(expected):
-    return {name: {"result": "success", "outputs": {} if child is None else {"checks": json.dumps(checks(child))}}
-            for name, child in expected.items()}
+    return {name: {"result": producer.result,
+                   "outputs": {} if producer.checks is None or producer.result == "skipped" else
+                       {"checks": json.dumps(checks(producer.checks))}}
+            for name, producer in expected.items()}
 
 
 class NativeResultTest(unittest.TestCase):
@@ -84,6 +86,58 @@ class NativeResultTest(unittest.TestCase):
         self.assertIn("github.event_name == 'push' && format(", source)
         self.assertNotIn("toJSON(jobs)", gate.CHECKS)
 
+    def test_real_cli_binds_named_producers_to_the_native_event(self):
+        for event in ("pull_request", "merge_group"):
+            expected = gate.graph(REPO, event)
+            good = needs(expected)
+            self.assertEqual(good["formal"]["result"], "skipped" if event == "pull_request" else "success")
+            self.assertEqual(good["ci"]["result"], "success")
+            variants = [(event, good, True), ("workflow_dispatch", good, False),
+                        ("merge_group" if event == "pull_request" else "pull_request", good, False)]
+            swapped = copy.deepcopy(good)
+            swapped["ci"]["result"], swapped["formal"]["result"] = "skipped", "success"
+            variants.append((event, swapped, False))
+            for name in good:
+                for status in ("failure", "cancelled", "neutral", "", None):
+                    bad = copy.deepcopy(good)
+                    bad[name]["result"] = status
+                    with self.subTest(event=event, name=name, status=status), self.assertRaises(gate.WorkflowError):
+                        gate.verify_needs(bad, expected)
+                    if name == "ci" and status in ("failure", "cancelled"):
+                        variants.append((event, bad, False))
+            for bad in ({name: value for name, value in good.items() if name != "formal"},
+                        good | {"unknown": {"result": "success", "outputs": {}}}):
+                variants.append((event, bad, False))
+            for bound_event, value, success in variants:
+                with self.subTest(event=event, bound_event=bound_event, value=value):
+                    result = subprocess.run([sys.executable, str(REPO / "scripts/ci/workflow_results.py"), "complete"],
+                        env={**os.environ, "GATE_EVENT": bound_event, "CI_NEEDS": json.dumps(value)},
+                        capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
+
+    def test_skipped_producer_cannot_export_stale_results(self):
+        expected = gate.graph(REPO, "pull_request")
+        good = needs(expected)
+        for output in ({"checks": json.dumps(checks(expected["formal"].checks))},
+                       {"unknown": "success"}, None):
+            bad = copy.deepcopy(good)
+            bad["formal"]["outputs"] = output
+            with self.subTest(output=output), self.assertRaises(gate.WorkflowError):
+                gate.verify_needs(bad, expected)
+        good["formal"]["outputs"] = {"checks": ""}
+        gate.verify_needs(good, expected)
+
+    def test_actual_cli_mode_distinguishes_graph_audit_from_failed_results(self):
+        bad = needs(gate.graph(REPO, "merge_group"))
+        bad["ci"]["result"] = "failure"
+        command = [sys.executable, str(REPO / gate.ENTRYPOINT)]
+        environment = {**os.environ, "GATE_EVENT": "merge_group", "CI_NEEDS": json.dumps(bad)}
+        audit = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=10)
+        complete = subprocess.run([*command, gate.COMPLETE_MODE], env=environment,
+                                  capture_output=True, text=True, timeout=10)
+        self.assertEqual(audit.returncode, 0, audit.stderr)
+        self.assertNotEqual(complete.returncode, 0)
+
 
 class NativeWorkflowGraphTest(unittest.TestCase):
     def setUp(self):
@@ -108,7 +162,7 @@ class NativeWorkflowGraphTest(unittest.TestCase):
     def test_removed_dependency_skipped_gate_or_unbound_context_is_red(self):
         p = self.root / gate.ENTRY
         source = p.read_text(encoding="utf-8")
-        for before, after in (("workflow-policy, ci, native, admission", "workflow-policy, ci, native"),
+        for before, after in (("workflow-policy, ci, formal, native, admission", "workflow-policy, ci, native, admission"),
                               ("if: ${{ always() }}", "if: success()"),
                               ("toJSON(needs)", "toJSON(github)"),
                               ("github.workflow_sha", "github.sha"),
@@ -153,6 +207,122 @@ class NativeWorkflowGraphTest(unittest.TestCase):
 
     def test_ci_caller_selects_the_worker_from_its_own_snapshot(self):
         verify_ci_binding(REPO, os.environ)
+
+    def test_final_command_cannot_replace_or_skip_native_result_validation(self):
+        p = self.root / gate.ENTRY
+        source = p.read_text(encoding="utf-8")
+        command = "        run: " + gate.COMPLETE_COMMAND + "\n"
+        self.assertEqual(source.count(command), 1)
+        replacements = (
+            command.replace(" " + gate.COMPLETE_MODE, ""),
+            command.replace(gate.ENTRYPOINT, "scripts/ci/foreign.py"),
+            command.replace("\n", " || true\n"),
+            "        if: false\n" + command,
+            "        continue-on-error: true\n" + command,
+        )
+        for replacement in replacements:
+            p.write_text(source.replace(command, replacement), encoding="utf-8")
+            with self.subTest(replacement=replacement), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+
+    def test_event_guard_cannot_hide_a_partial_qualification_graph(self):
+        p = self.root / gate.ENTRY
+        source = p.read_text(encoding="utf-8")
+        for after in ("github.event_name != 'pull_request'", "always() && github.event_name == 'merge_group'", "false"):
+            p.write_text(source.replace("always() && github.event_name != 'pull_request'", after), encoding="utf-8")
+            with self.subTest(after=after), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        p.write_text(source, encoding="utf-8")
+        formal = self.root / ".github/workflows/formal-worker.yml"
+        original = formal.read_text(encoding="utf-8")
+        formal.write_text(original + "\n  new-check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n", encoding="utf-8")
+        current = gate.graph(self.root)
+        with self.assertRaises(gate.WorkflowError):
+            gate.verify_needs(needs(gate.graph(REPO)), current)
+        gate.verify_needs(needs(current), current)
+        formal.write_text(original.replace("  formal-positive:\n", "  formal-positive:\n    if: false\n"), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root, "pull_request")
+
+    def test_deferred_premerge_qualification_remains_full_for_publication(self):
+        p = self.root / ".github/workflows/ci.yml"
+        source = p.read_text(encoding="utf-8")
+        call = "  formal:\n    name: Formal qualification\n    uses: ./.github/workflows/formal-worker.yml\n\n"
+        self.assertIn(call, source)
+        for after in ("", call.replace("    uses:", "    if: false\n    uses:"),
+                      call.replace("    uses:", "    continue-on-error: true\n    uses:")):
+            p.write_text(source.replace(call, after), encoding="utf-8")
+            with self.subTest(after=after), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+
+    def test_publication_selects_every_main_branch_push(self):
+        path = self.root / ".github/workflows/ci.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        for trigger in ("push", ["push"], {"push": ""}, {"push": {}},
+                        {"push": {"branches": ["main"]}}):
+            path.write_text(gate.yaml.safe_dump(workflow | {"on": trigger}), encoding="utf-8")
+            with self.subTest(trigger=trigger):
+                gate.graph(self.root)
+        filters = ({"branches": ["release"]}, {"branches": ["!main"]},
+                   {"branches": ["main", "!main"]}, {"branches": ["*"]},
+                   {"branches-ignore": ["main"]}, {"paths": ["proof/**"]},
+                   {"paths-ignore": ["proof/**"]}, {"tags": ["v*"]},
+                   {"tags-ignore": ["v*"]}, {"unknown": "true"})
+        for trigger in ({}, {"workflow_dispatch": ""}, ["push", {}],
+                        {"push": {}, "unknown": {}}, *({"push": value} for value in filters)):
+            path.write_text(gate.yaml.safe_dump(workflow | {"on": trigger}), encoding="utf-8")
+            with self.subTest(trigger=trigger), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+
+    def test_publication_qualification_allows_executed_dependency_chains(self):
+        path = self.root / ".github/workflows/ci.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        workflow["jobs"]["formal"]["needs"] = "worker"
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        gate.graph(self.root)
+        workflow["jobs"]["worker"]["needs"] = "prepare"
+        workflow["jobs"]["unrelated"] = {"if": "false", "runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        for guard in (None, "always()", "${{ always() }}", gate.QUALIFICATION):
+            workflow["jobs"]["prepare"] = {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+            if guard is not None:
+                workflow["jobs"]["prepare"]["if"] = guard
+            path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+            with self.subTest(guard=guard):
+                gate.graph(self.root)
+
+    def test_invalid_or_skipped_publication_dependency_chains_are_red(self):
+        path = self.root / ".github/workflows/ci.yml"
+        original = gate.load_workflow(self.root, ".github/workflows/ci.yml")
+        original["jobs"]["formal"]["needs"] = "worker"
+        original["jobs"]["worker"]["needs"] = "prepare"
+        original["jobs"]["prepare"] = {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        cases = (("formal", {"needs": "missing"}), ("formal", {"needs": "formal"}),
+                 ("worker", {"needs": "formal"}), ("prepare", {"needs": "missing"}),
+                 ("worker", {"if": "false"}), ("prepare", {"if": "false"}),
+                 ("prepare", {"if": "${{ github.ref == 'refs/heads/main' }}"}),
+                 ("worker", {"continue-on-error": "true"}), ("prepare", {"steps": []}),
+                 ("worker", {"uses": "foreign/repo/.github/workflows/ci-worker.yml@main"}))
+        for name, change in cases:
+            workflow = copy.deepcopy(original)
+            workflow["jobs"][name].update(change)
+            path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+            with self.subTest(name=name, change=change), self.assertRaises(gate.WorkflowError):
+                gate.graph(self.root)
+        workflow = copy.deepcopy(original)
+        workflow["jobs"]["unrelated"] = {"needs": "unrelated", "runs-on": "ubuntu-latest", "steps": [{"run": "true"}]}
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root)
+
+    def test_reusable_native_dependency_cycle_is_red(self):
+        path = self.root / ".github/workflows/formal-worker.yml"
+        workflow = gate.load_workflow(self.root, ".github/workflows/formal-worker.yml")
+        names = list(workflow["jobs"])
+        workflow["jobs"][names[0]]["needs"] = names[1]
+        workflow["jobs"][names[1]]["needs"] = names[0]
+        path.write_text(gate.yaml.safe_dump(workflow), encoding="utf-8")
+        with self.assertRaises(gate.WorkflowError):
+            gate.graph(self.root)
 
 def browser_script(workflow: str | None = None) -> str:
     if workflow is None:

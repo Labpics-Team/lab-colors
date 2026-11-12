@@ -64,7 +64,8 @@
   "devDependencies": {
     "es-module-lexer": "1.7.0",
     "typescript": "^5.5.0",
-    "typescript-floor": "npm:typescript@5.2.2"
+    "typescript-floor": "npm:typescript@5.2.2",
+    "yaml": "2.9.1"
   },
   "types": "./index.d.ts",
   "sideEffects": false,

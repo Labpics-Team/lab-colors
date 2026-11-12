@@ -33,6 +33,11 @@ jobs:
     name: CI
     uses: ./.github/workflows/ci-worker.yml
 
+  formal:
+    name: Formal qualification
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    uses: ./.github/workflows/formal-worker.yml
+
   native:
     name: Native conformance
     uses: ./.github/workflows/native-conformance-worker.yml
@@ -44,7 +49,7 @@ jobs:
   gate:
     name: CI
     if: ${{ always() }}
-    needs: [workflow-policy, ci, native, admission]
+    needs: [workflow-policy, ci, formal, native, admission]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

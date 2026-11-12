@@ -257,6 +257,12 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
             capture.save(evidence, capture_error)
         except BaseException as error:
             capture_error = error
+    if primary is not None or capture_error is not None:
+        print(f"{variant}: Android startup capture", file=sys.stderr)
+        print(capture.block.text or "No matching AndroidRuntime exception was captured.",
+              file=sys.stderr, flush=True)
+        if capture_error is not None:
+            print(f"Startup capture failed: {capture_error!r}", file=sys.stderr, flush=True)
     if primary:
         if capture_error:
             raise primary from capture_error

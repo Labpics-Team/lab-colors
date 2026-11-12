@@ -21,6 +21,10 @@ jobs:
       attestations: write
     uses: ./.github/workflows/ci-worker.yml
 
+  formal:
+    name: Formal qualification
+    uses: ./.github/workflows/formal-worker.yml
+
   transport-distribution-attestation:
     name: transport distribution signed attestations
     needs: worker

@@ -28,7 +28,7 @@ class BindingError(AssertionError):
 
 
 def _parse_caller(source: str) -> None:
-    """Push caller keeps one same-commit CI worker and isolated attesters."""
+    """Push caller keeps its same-commit worker, qualifications and attesters."""
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent / "ci"))
     from workflow_results import WorkflowLoader
@@ -38,8 +38,12 @@ def _parse_caller(source: str) -> None:
         jobs = caller["jobs"]
         worker = jobs["worker"]
         uses = [job.get("uses") for job in jobs.values() if "uses" in job]
-        if caller.get("name") != "CI" or worker.get("name") != "CI" or uses != [LOCAL_WORKER]:
+        if (caller.get("name") != "CI" or worker.get("name") != "CI" or
+                worker.get("uses") != LOCAL_WORKER or uses.count(LOCAL_WORKER) != 1):
             raise BindingError("ci.yml must retain one same-commit CI worker call")
+        for value in uses:
+            if not isinstance(value, str) or re.fullmatch(r"\./\.github/workflows/[A-Za-z0-9_-]+\.ya?ml", value) is None:
+                raise BindingError("ci.yml call escaped its own workflow snapshot")
     except (AssertionError, yaml.YAMLError, KeyError, TypeError, AttributeError) as error:
         raise BindingError("ci.yml has an invalid immutable CI worker binding") from error
 
@@ -170,7 +174,7 @@ class TestCiWorkflowBinding(unittest.TestCase):
         original = (self.root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         for mutation in mutations:
             with self.subTest(mutation=mutation):
-                updated, count = re.subn(r"(?m)^    uses: \S+$", mutation, original)
+                updated, count = re.subn(r"(?m)^    uses: " + re.escape(LOCAL_WORKER) + r"$", mutation, original)
                 self.assertEqual(count, 1)
                 with self.assertRaises(BindingError):
                     _parse_caller(updated)
