@@ -573,9 +573,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: prepare shared Cargo cache and artifact paths
+        id: cargo
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-target
+          BASE_ROOT: ${{ runner.temp }}/transport-base-source
+          CANDIDATE_BINARY: ${{ runner.temp }}/transport-candidate-target/release/labcolors-transport
+          BASE_BINARY: ${{ runner.temp }}/transport-base-target/release/labcolors-transport
+        run: |
+          python3 - <<'PY'
+          import os
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name in ("CARGO_TARGET_DIR", "BASE_ROOT", "CANDIDATE_BINARY", "BASE_BINARY"):
+                  print(f"{name}={os.environ[name]}", file=environment)
+              # Одинаковые remap-флаги позволяют main прогревать кэш для обеих сборок PR.
+              flags = [f"--remap-path-prefix={os.environ[name]}={canonical}"
+                       for name, canonical in (("GITHUB_WORKSPACE", "/workspace/lab-colors"),
+                                               ("BASE_ROOT", "/workspace/lab-colors"),
+                                               ("CARGO_HOME", "/cargo-home"))]
+              print("CARGO_ENCODED_RUSTFLAGS=" + "\x1f".join(flags), file=environment)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              root = os.environ["GITHUB_WORKSPACE"]
+              print(f"workspace={root} -> {os.path.relpath(os.environ['CARGO_TARGET_DIR'], root)}", file=output)
+          PY
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: transport-distribution
+          workspaces: ${{ steps.cargo.outputs.workspace }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
@@ -583,22 +608,19 @@ jobs:
       - name: distribution verifier hostile tests
         run: node --test scripts/test_transport_distribution.mjs scripts/test_distribution_outputs.mjs
       - name: build exact candidate transport artifact
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-candidate-target
         run: |
           set -euo pipefail
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           cargo build --release --locked -p labcolors-transport-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
+          mkdir -p "$(dirname "$CANDIDATE_BINARY")"
+          cp "$CARGO_TARGET_DIR/release/labcolors-transport" "$CANDIDATE_BINARY"
+          sha256sum "$CANDIDATE_BINARY"
       - name: build paired merge-base control before merging
         id: base
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          BASE_ROOT: ${{ runner.temp }}/transport-base-source
-          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-base-target
         run: |
           set -euo pipefail
           test -n "$HEAD_SHA"
@@ -610,17 +632,17 @@ jobs:
           git cat-file -e "$CONTROL_SHA^{commit}"
           echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
           git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
+          trap 'git -C "$GITHUB_WORKSPACE" worktree remove --force "$BASE_ROOT"' EXIT
           cd "$BASE_ROOT"
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           cargo build --release --locked -p labcolors-transport-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
+          mkdir -p "$(dirname "$BASE_BINARY")"
+          cp "$CARGO_TARGET_DIR/release/labcolors-transport" "$BASE_BINARY"
+          sha256sum "$BASE_BINARY"
       - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
-          CANDIDATE_BINARY: ${{ runner.temp }}/transport-candidate-target/release/labcolors-transport
-          BASE_BINARY: ${{ runner.temp }}/transport-base-target/release/labcolors-transport
           EVIDENCE_DIR: ${{ runner.temp }}/transport-distribution
         run: |
           set -euo pipefail
@@ -662,9 +684,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: prepare shared Cargo cache and artifact paths
+        id: cargo
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-target
+          BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
+          CANDIDATE_BINARY: ${{ runner.temp }}/evaluate-candidate-target/release/labcolors-evaluate
+          BASE_BINARY: ${{ runner.temp }}/evaluate-base-target/release/labcolors-evaluate
+        run: |
+          python3 - <<'PY'
+          import os
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name in ("CARGO_TARGET_DIR", "BASE_ROOT", "CANDIDATE_BINARY", "BASE_BINARY"):
+                  print(f"{name}={os.environ[name]}", file=environment)
+              # Одинаковые remap-флаги позволяют main прогревать кэш для обеих сборок PR.
+              flags = [f"--remap-path-prefix={os.environ[name]}={canonical}"
+                       for name, canonical in (("GITHUB_WORKSPACE", "/workspace/lab-colors"),
+                                               ("BASE_ROOT", "/workspace/lab-colors"),
+                                               ("CARGO_HOME", "/cargo-home"))]
+              print("CARGO_ENCODED_RUSTFLAGS=" + "\x1f".join(flags), file=environment)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              root = os.environ["GITHUB_WORKSPACE"]
+              print(f"workspace={root} -> {os.path.relpath(os.environ['CARGO_TARGET_DIR'], root)}", file=output)
+          PY
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: evaluate-distribution
+          workspaces: ${{ steps.cargo.outputs.workspace }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
@@ -672,22 +719,19 @@ jobs:
       - name: distribution verifier hostile tests
         run: node --test scripts/test_evaluate_distribution.mjs scripts/test_distribution_outputs.mjs
       - name: build exact candidate evaluate artifact
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-candidate-target
         run: |
           set -euo pipefail
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           cargo build --release --locked -p labcolors-evaluate-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+          mkdir -p "$(dirname "$CANDIDATE_BINARY")"
+          cp "$CARGO_TARGET_DIR/release/labcolors-evaluate" "$CANDIDATE_BINARY"
+          sha256sum "$CANDIDATE_BINARY"
       - name: build paired merge-base control before merging
         id: base
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
-          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-base-target
         run: |
           set -euo pipefail
           test -n "$HEAD_SHA"
@@ -699,17 +743,17 @@ jobs:
           git cat-file -e "$CONTROL_SHA^{commit}"
           echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
           git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
+          trap 'git -C "$GITHUB_WORKSPACE" worktree remove --force "$BASE_ROOT"' EXIT
           cd "$BASE_ROOT"
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           cargo build --release --locked -p labcolors-evaluate-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+          mkdir -p "$(dirname "$BASE_BINARY")"
+          cp "$CARGO_TARGET_DIR/release/labcolors-evaluate" "$BASE_BINARY"
+          sha256sum "$BASE_BINARY"
       - name: generate exact-SHA SBOM, license, benchmark and in-toto statement
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
-          CANDIDATE_BINARY: ${{ runner.temp }}/evaluate-candidate-target/release/labcolors-evaluate
-          BASE_BINARY: ${{ runner.temp }}/evaluate-base-target/release/labcolors-evaluate
           EVIDENCE_DIR: ${{ runner.temp }}/evaluate-distribution
         run: |
           set -euo pipefail
