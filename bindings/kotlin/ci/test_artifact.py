@@ -1,5 +1,7 @@
 """Контрольные примеры для установки архива и проверки Android ELF."""
+from contextlib import redirect_stderr
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -201,11 +203,24 @@ class ArtifactTests(unittest.TestCase):
     def test_interval_retains_early_crash_after_noise(self):
         first = PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "java.lang.NoClassDefFoundError: FIRST_CAUSE\n"
         noise = (PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: other.app, PID: 1234\n" + PREFIX + "LATER_CAUSE\n") * 300
-        with tempfile.TemporaryDirectory() as directory:
-            capture = self.interval(Path(directory), first + noise, 0)
-            self.assertIn("FIRST_CAUSE", capture.block.text)
-            self.assertNotIn("LATER_CAUSE", capture.block.text)
-            self.assertFalse(capture.block.truncated)
+        for result_code in (0, 17):
+            with self.subTest(result_code=result_code), tempfile.TemporaryDirectory() as directory, \
+                 redirect_stderr(io.StringIO()) as diagnostic:
+                root = Path(directory)
+                if result_code:
+                    with self.assertRaises(subprocess.CalledProcessError) as failure:
+                        self.interval(root, first + noise, result_code)
+                    self.assertEqual(failure.exception.returncode, result_code)
+                    self.assertIn("FIRST_CAUSE", diagnostic.getvalue())
+                    self.assertNotIn("LATER_CAUSE", diagnostic.getvalue())
+                else:
+                    self.interval(root, first + noise, result_code)
+                    self.assertEqual(diagnostic.getvalue(), "")
+                evidence = root / "build/outputs/consumer-diagnostics/debug"
+                block = (evidence / "first-startup-exception.txt").read_text()
+                self.assertIn("FIRST_CAUSE", block)
+                self.assertNotIn("LATER_CAUSE", block)
+                self.assertFalse(json.loads((evidence / "startup-capture.json").read_text())["truncated"])
 
     def test_truncation_overflow_and_no_match_are_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -288,7 +303,7 @@ class ArtifactTests(unittest.TestCase):
             root = Path(directory)
             command = ["gradle", "connectedDebugAndroidTest"]
             for result_code in (0, 17):
-                with self.subTest(result_code=result_code), patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
+                with self.subTest(result_code=result_code), redirect_stderr(io.StringIO()) as diagnostic, patch.object(elf.CrashCapture, "start"), patch.object(elf.CrashCapture, "close") as close, patch.object(elf.CrashCapture, "finish", side_effect=OSError("capture failure")), patch.object(elf.subprocess, "run", return_value=subprocess.CompletedProcess(command, result_code)):
                     if result_code:
                         with self.assertRaises(subprocess.CalledProcessError) as failure:
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
@@ -297,6 +312,8 @@ class ArtifactTests(unittest.TestCase):
                     else:
                         with self.assertRaises(OSError):
                             elf.connected_test(command, root, {}, Path("adb"), "debug")
+                    self.assertIn("No matching AndroidRuntime exception", diagnostic.getvalue())
+                    self.assertIn("capture failure", diagnostic.getvalue())
                     evidence = root / "build/outputs/consumer-diagnostics/debug"
                     self.assertEqual(json.loads((evidence / "connected-exit.json").read_text())["returncode"], result_code)
 
