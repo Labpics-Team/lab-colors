@@ -1874,6 +1874,9 @@ class MutationTruthTest(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] /
                   ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
         jobs = workflow_job_blocks(source, "ci-worker.yml")
+        formal_source = (Path(__file__).resolve().parents[1] /
+                         ".github/workflows/formal-worker.yml").read_text(encoding="utf-8")
+        jobs |= workflow_job_blocks(formal_source, "formal-worker.yml")
 
         workers = {
             "core-tests-worker": (
@@ -1957,10 +1960,7 @@ class MutationTruthTest(unittest.TestCase):
                 self.assertNotIn("continue-on-error:", block)
 
         formal = jobs["formal-core"]
-        self.assertIn("    if: *qualification\n", formal)
-        self.assertIn("    if: &qualification ${{ always() && github.event_name != 'pull_request' }}\n",
-                      jobs["formal-positive"])
-        self.assertIn("    if: *qualification\n", jobs["formal-mutants"])
+        self.assertIn("    if: ${{ always() }}\n", formal)
         self.assertIn("    needs: [formal-positive, formal-mutants]\n", formal)
         self.assertIn("--phase assemble", formal)
         self.assertIn("formal_outputs.py restore", formal)
@@ -2141,16 +2141,8 @@ class MutationTruthTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
 
-        workers = {
-            name: (workflows / name).read_text(encoding="utf-8-sig")
-            for name in (
-                "ci-worker.yml",
-                "package-worker.yml",
-                "mutation-worker.yml",
-                "native-conformance-worker.yml",
-                "publish-worker.yml",
-            )
-        }
+        workers = {path.name: path.read_text(encoding="utf-8-sig")
+                   for path in workflows.glob("*-worker.yml")}
         verify_ci_binding(repo, os.environ)
         for command in (
             "python3 scripts/test_mutation.py",
