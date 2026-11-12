@@ -77,7 +77,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "8ab231b0a7fac8ebf78e04c3a2e70c1a7e477fdd3324ffa9d0eb100e89df1059"
+    "9e2496dc0fc4f53d0f8f157ca7aa6dde96fc1a2d1a482e7ba04d7bd2101b094e"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
