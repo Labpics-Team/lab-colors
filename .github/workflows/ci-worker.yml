@@ -573,32 +573,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: transport-distribution
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          package-manager-cache: false
-          node-version: ${{ env.NODE_TOOLCHAIN }}
-      - name: distribution verifier hostile tests
-        run: node --test scripts/test_transport_distribution.mjs scripts/test_distribution_outputs.mjs
-      - name: build exact candidate transport artifact
+      - name: prepare Cargo cache and build inputs
+        id: cargo
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-candidate-target
+          CANDIDATE_TARGET_DIR: ${{ runner.temp }}/transport-candidate-target
+          BASE_ROOT: ${{ runner.temp }}/transport-base-source
+          BASE_TARGET_DIR: ${{ runner.temp }}/transport-base-target
         run: |
-          set -euo pipefail
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
-          cargo build --release --locked -p labcolors-transport-cli
-          test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
-      - name: build paired merge-base control before merging
+          python3 - <<'PY'
+          import os
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name in ("CANDIDATE_TARGET_DIR", "BASE_ROOT", "BASE_TARGET_DIR"):
+                  print(f"{name}={os.environ[name]}", file=environment)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for name, root, target in (
+                  ("candidate", os.environ["GITHUB_WORKSPACE"], os.environ["CANDIDATE_TARGET_DIR"]),
+                  ("base", os.environ["BASE_ROOT"], os.environ["BASE_TARGET_DIR"]),
+              ):
+                  # RustCache присоединяет target к реальному корню Cargo workspace.
+                  print(f"{name}-workspace={root} -> {os.path.relpath(target, root)}", file=output)
+                  flags = (f"--remap-path-prefix={root}=/workspace/lab-colors",
+                           f"--remap-path-prefix={os.environ['CARGO_HOME']}=/cargo-home")
+                  print(f"{name}-rustflags=" + "\x1f".join(flags), file=output)
+          PY
+      - name: materialize paired merge-base source before caching
         id: base
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          BASE_ROOT: ${{ runner.temp }}/transport-base-source
-          CARGO_TARGET_DIR: ${{ runner.temp }}/transport-base-target
         run: |
           set -euo pipefail
           test -n "$HEAD_SHA"
@@ -610,8 +614,47 @@ jobs:
           git cat-file -e "$CONTROL_SHA^{commit}"
           echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
           git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
-          cd "$BASE_ROOT"
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          # Post-шаг RustCache читает source; runner.temp очищается после завершения job.
+      - name: cache exact candidate Cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        env:
+          CARGO_TARGET_DIR: ${{ env.CANDIDATE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.candidate-rustflags }}
+        with:
+          shared-key: transport-distribution
+          workspaces: ${{ steps.cargo.outputs.candidate-workspace }}
+      - name: cache paired merge-base Cargo dependencies
+        if: steps.base.outputs.sha != ''
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        env:
+          CARGO_TARGET_DIR: ${{ env.BASE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.base-rustflags }}
+        with:
+          shared-key: transport-distribution
+          workspaces: ${{ steps.cargo.outputs.base-workspace }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: distribution verifier hostile tests
+        run: node --test scripts/test_transport_distribution.mjs scripts/test_distribution_outputs.mjs
+      - name: build exact candidate transport artifact
+        env:
+          CARGO_TARGET_DIR: ${{ env.CANDIDATE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.candidate-rustflags }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p labcolors-transport-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
+      - name: build paired merge-base control before merging
+        if: steps.base.outputs.sha != ''
+        working-directory: ${{ env.BASE_ROOT }}
+        env:
+          CARGO_TARGET_DIR: ${{ env.BASE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.base-rustflags }}
+        run: |
+          set -euo pipefail
           cargo build --release --locked -p labcolors-transport-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-transport"
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-transport"
@@ -619,8 +662,8 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
-          CANDIDATE_BINARY: ${{ runner.temp }}/transport-candidate-target/release/labcolors-transport
-          BASE_BINARY: ${{ runner.temp }}/transport-base-target/release/labcolors-transport
+          CANDIDATE_BINARY: ${{ env.CANDIDATE_TARGET_DIR }}/release/labcolors-transport
+          BASE_BINARY: ${{ env.BASE_TARGET_DIR }}/release/labcolors-transport
           EVIDENCE_DIR: ${{ runner.temp }}/transport-distribution
         run: |
           set -euo pipefail
@@ -662,32 +705,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: evaluate-distribution
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          package-manager-cache: false
-          node-version: ${{ env.NODE_TOOLCHAIN }}
-      - name: distribution verifier hostile tests
-        run: node --test scripts/test_evaluate_distribution.mjs scripts/test_distribution_outputs.mjs
-      - name: build exact candidate evaluate artifact
+      - name: prepare Cargo cache and build inputs
+        id: cargo
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-candidate-target
+          CANDIDATE_TARGET_DIR: ${{ runner.temp }}/evaluate-candidate-target
+          BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
+          BASE_TARGET_DIR: ${{ runner.temp }}/evaluate-base-target
         run: |
-          set -euo pipefail
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
-          cargo build --release --locked -p labcolors-evaluate-cli
-          test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
-          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
-      - name: build paired merge-base control before merging
+          python3 - <<'PY'
+          import os
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name in ("CANDIDATE_TARGET_DIR", "BASE_ROOT", "BASE_TARGET_DIR"):
+                  print(f"{name}={os.environ[name]}", file=environment)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for name, root, target in (
+                  ("candidate", os.environ["GITHUB_WORKSPACE"], os.environ["CANDIDATE_TARGET_DIR"]),
+                  ("base", os.environ["BASE_ROOT"], os.environ["BASE_TARGET_DIR"]),
+              ):
+                  # RustCache присоединяет target к реальному корню Cargo workspace.
+                  print(f"{name}-workspace={root} -> {os.path.relpath(target, root)}", file=output)
+                  flags = (f"--remap-path-prefix={root}=/workspace/lab-colors",
+                           f"--remap-path-prefix={os.environ['CARGO_HOME']}=/cargo-home")
+                  print(f"{name}-rustflags=" + "\x1f".join(flags), file=output)
+          PY
+      - name: materialize paired merge-base source before caching
         id: base
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          BASE_ROOT: ${{ runner.temp }}/evaluate-base-source
-          CARGO_TARGET_DIR: ${{ runner.temp }}/evaluate-base-target
         run: |
           set -euo pipefail
           test -n "$HEAD_SHA"
@@ -699,8 +746,47 @@ jobs:
           git cat-file -e "$CONTROL_SHA^{commit}"
           echo "sha=$CONTROL_SHA" >> "$GITHUB_OUTPUT"
           git worktree add --detach "$BASE_ROOT" "$CONTROL_SHA"
-          cd "$BASE_ROOT"
-          export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$BASE_ROOT=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
+          # Post-шаг RustCache читает source; runner.temp очищается после завершения job.
+      - name: cache exact candidate Cargo dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        env:
+          CARGO_TARGET_DIR: ${{ env.CANDIDATE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.candidate-rustflags }}
+        with:
+          shared-key: evaluate-distribution
+          workspaces: ${{ steps.cargo.outputs.candidate-workspace }}
+      - name: cache paired merge-base Cargo dependencies
+        if: steps.base.outputs.sha != ''
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        env:
+          CARGO_TARGET_DIR: ${{ env.BASE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.base-rustflags }}
+        with:
+          shared-key: evaluate-distribution
+          workspaces: ${{ steps.cargo.outputs.base-workspace }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ env.NODE_TOOLCHAIN }}
+      - name: distribution verifier hostile tests
+        run: node --test scripts/test_evaluate_distribution.mjs scripts/test_distribution_outputs.mjs
+      - name: build exact candidate evaluate artifact
+        env:
+          CARGO_TARGET_DIR: ${{ env.CANDIDATE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.candidate-rustflags }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p labcolors-evaluate-cli
+          test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+          sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
+      - name: build paired merge-base control before merging
+        if: steps.base.outputs.sha != ''
+        working-directory: ${{ env.BASE_ROOT }}
+        env:
+          CARGO_TARGET_DIR: ${{ env.BASE_TARGET_DIR }}
+          CARGO_ENCODED_RUSTFLAGS: ${{ steps.cargo.outputs.base-rustflags }}
+        run: |
+          set -euo pipefail
           cargo build --release --locked -p labcolors-evaluate-cli
           test -x "$CARGO_TARGET_DIR/release/labcolors-evaluate"
           sha256sum "$CARGO_TARGET_DIR/release/labcolors-evaluate"
@@ -708,8 +794,8 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           BASE_SHA: ${{ steps.base.outputs.sha || '' }}
-          CANDIDATE_BINARY: ${{ runner.temp }}/evaluate-candidate-target/release/labcolors-evaluate
-          BASE_BINARY: ${{ runner.temp }}/evaluate-base-target/release/labcolors-evaluate
+          CANDIDATE_BINARY: ${{ env.CANDIDATE_TARGET_DIR }}/release/labcolors-evaluate
+          BASE_BINARY: ${{ env.BASE_TARGET_DIR }}/release/labcolors-evaluate
           EVIDENCE_DIR: ${{ runner.temp }}/evaluate-distribution
         run: |
           set -euo pipefail
