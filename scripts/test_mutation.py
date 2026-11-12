@@ -20,6 +20,8 @@ import unittest
 from unittest import mock
 
 from ci_workflow_binding import verify_ci_binding
+from ci.workflow_results import WorkflowLoader, local_call
+import yaml
 
 
 SCRIPT = Path(__file__).with_name("mutation.py")
@@ -127,6 +129,33 @@ def workflow_job_blocks(source: str, label: str) -> dict[str, str]:
         ]
         for index, anchor in enumerate(anchors)
     }
+
+
+def verify_ci_job_execution(source: str) -> None:
+    """Check every declared job's executor without registering job identities."""
+    workflow = yaml.load(source, Loader=WorkflowLoader)
+    jobs = workflow.get("jobs") if isinstance(workflow, dict) else None
+    if not isinstance(jobs, dict) or not jobs:
+        raise AssertionError("CI worker has no declared checks")
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            raise AssertionError(f"{name}: CI job is not a mapping")
+        concurrency = job.get("concurrency", {})
+        if isinstance(concurrency, dict) and concurrency.get("cancel-in-progress", "false") != "false":
+            raise AssertionError(f"{name}: worker job can cancel running evidence")
+        if "uses" in job:
+            local_call(job["uses"])
+            if "runs-on" in job or "steps" in job:
+                raise AssertionError(f"{name}: reusable check declares a second executor")
+            continue
+        if job.get("runs-on") != "ubuntu-latest":
+            raise AssertionError(f"{name}: executable CI check is not on its public runner")
+        steps = job.get("steps")
+        if not isinstance(steps, list) or not steps or not any(
+            isinstance(step, dict) and (step.get("run") or step.get("uses"))
+            for step in steps
+        ):
+            raise AssertionError(f"{name}: CI check has no execution")
 
 
 def load_publish_worker() -> tuple[str, str]:
@@ -2038,34 +2067,7 @@ class MutationTruthTest(unittest.TestCase):
                 f"  cancel-in-progress: {cancel_rule}\n",
                 workflow,
             )
-        ci_ephemeral = {
-            name: block
-            for name, block in workflow_job_blocks(ci_worker, "ci-worker.yml").items()
-            if "runs-on: ubuntu-latest" in block
-        }
-        self.assertEqual(
-            set(ci_ephemeral),
-            {
-                "formal-positive",
-                "formal-mutants",
-                "formal-core",
-                "msrv",
-                "lint",
-                "docs",
-                "test",
-                "core-tests-worker",
-                "core-tests",
-                "region-proof-worker",
-                "region-proof",
-                "authority-mutation-worker",
-                "authority-mutation",
-                "transport-distribution",
-                "transport-distribution-attestation",
-                "evaluate-distribution",
-                "evaluate-distribution-attestation",
-                "audit",
-            },
-        )
+        verify_ci_job_execution(ci_worker)
         native_blocks = workflow_job_blocks(
             native_worker, "native-conformance-worker.yml"
         )
@@ -2106,6 +2108,32 @@ class MutationTruthTest(unittest.TestCase):
             run_policy("pull_request", 2, 42, 42)[0],
         )
 
+    def test_ci_executor_discovery_accepts_new_and_renamed_jobs(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        new_job = (
+            "\n  independent-property:\n"
+            "    runs-on: ubuntu-latest\n"
+            "    timeout-minutes: 1\n"
+            "    steps:\n"
+            "      - run: python3 --version\n"
+        )
+        for additional in (new_job, new_job.replace("independent-property", "renamed-property")):
+            with self.subTest(job=additional.splitlines()[1]):
+                verify_ci_job_execution(source + additional)
+
+    def test_ci_executor_discovery_rejects_wrong_placement_missing_execution_and_cancellation(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / ".github/workflows/ci-worker.yml").read_text(encoding="utf-8")
+        for body in (
+            "    runs-on: [self-hosted, Linux, X64]\n    steps:\n      - run: true\n",
+            "    runs-on: ubuntu-latest\n    steps: []\n",
+            "    runs-on: ubuntu-latest\n    steps:\n      - name: no command\n",
+            "    steps:\n      - run: true\n",
+            "    runs-on: ubuntu-latest\n    concurrency:\n      group: evidence\n      cancel-in-progress: true\n    steps:\n      - run: true\n",
+            "    uses: ./.github/workflows/package-worker.yml\n    runs-on: ubuntu-latest\n",
+        ):
+            with self.subTest(body=body), self.assertRaises(AssertionError):
+                verify_ci_job_execution(source + "\n  independent-property:\n" + body)
+
     def test_reusable_workers_bound_jobs_and_binaryen_transport(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         workflows = repo / ".github" / "workflows"
@@ -2122,7 +2150,6 @@ class MutationTruthTest(unittest.TestCase):
         }
         verify_ci_binding(repo, os.environ)
         for command in (
-            "python3 scripts/test_ci_peer_gate.py",
             "python3 scripts/test_mutation.py",
         ):
             self.assertIn(

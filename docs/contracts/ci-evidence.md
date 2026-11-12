@@ -1,9 +1,24 @@
 # Источники проверок перед слиянием
 
-Обязательный `CI` принимает только завершённые успешные workflows того же
-события и SHA. Проверка PR не заменяет проверку общей комбинации в
+Обязательный `CI` объединяет проверки одним нативным графом GitHub:
+[PR и merge queue](../../.github/workflows/ci-gate.yml) вызывают Core, Native
+и source admission. GitHub ждёт зависимости без занятого раннера; завершающая
+job запускается и после отказа, отмены или пропуска producer.
+
+Reusable workflows экспортируют только `jobs.*.result` и такие же результаты
+вложенных вызовов. Состав и полнота следуют из объявленных jobs и local `uses`
+того же workflow snapshot: отдельного перечня имён checks нет. Пустой,
+неполный, неизвестный, skipped или неуспешный результат не даёт зелёный `CI`.
+Matrix проверяется через её нативный job result и существующие проверки
+полноты producer-отчётов; наличие output отдельного shard не означает успех.
+Все jobs этого графа обязательны; диагностика остаётся отдельным ручным входом.
+Контракт проверяет [workflow_results.py](../../scripts/ci/workflow_results.py).
+
+Проверка PR не заменяет проверку общей комбинации в
 [очереди GitHub](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
-Состав проверок задаёт [peer_gate.py](../../scripts/ci/peer_gate.py).
+Отдельные push/main callers CI и Native сохраняют identity для публикации;
+подписанные distribution attestations выполняются в push caller после проверки
+producer. Формальные JSON-отчёты и SBOM не копируются в результат PR-графа.
 
 Парные distribution-проверки transport/evaluate в
 [CI worker](../../.github/workflows/ci-worker.yml) используют:

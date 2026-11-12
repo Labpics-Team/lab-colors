@@ -1,7 +1,10 @@
 name: code-admission-public
 on:
-  pull_request:
-  merge_group:
+  workflow_call:
+    outputs:
+      checks:
+        description: Results of every declared job and nested reusable check
+        value: ${{ format('{{"results":{0},"children":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}
 permissions:
   contents: read
 concurrency:

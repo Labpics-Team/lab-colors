@@ -13,10 +13,9 @@ import tempfile
 import unittest
 
 
-WORKFLOW_PATHS: Final = (
-    ".github/workflows/ci.yml",
-    ".github/workflows/ci-worker.yml",
-    ".github/workflows/package-worker.yml",
+WORKFLOW_PATHS: Final = tuple(
+    path.relative_to(Path(__file__).resolve().parents[1]).as_posix()
+    for path in sorted((Path(__file__).resolve().parents[1] / ".github/workflows").glob("*.y*ml"))
 )
 LOCAL_WORKER: Final = "./.github/workflows/ci-worker.yml"
 SHA_PATTERN: Final = re.compile(r"[0-9a-f]{40}")
@@ -29,62 +28,27 @@ class BindingError(AssertionError):
 
 
 def _parse_caller(source: str) -> None:
-    """Разобрать узкий block-mapping формат caller'а; прочий YAML запрещён."""
-    values: dict[tuple[str, ...], str | None] = {}
-    stack: list[str] = []
-    for line_number, line in enumerate(source.splitlines(), start=1):
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        match = re.fullmatch(r"( *)([A-Za-z_][A-Za-z0-9_-]*):(.*)", line)
-        if match is None or "\t" in line or len(match[1]) % 2:
-            raise BindingError(f"ci.yml line {line_number} uses unsupported YAML syntax")
-        depth = len(match[1]) // 2
-        if depth > len(stack):
-            raise BindingError(f"ci.yml line {line_number} skips a mapping level")
-        stack[depth:] = []
-        if depth and values.get(tuple(stack)) is not None:
-            raise BindingError(f"ci.yml line {line_number} nests below a scalar")
-        key = match[2]
-        raw_value = match[3]
-        if raw_value == "":
-            value = None
-        elif (
-            raw_value.startswith(" ")
-            and (scalar := raw_value.lstrip(" "))
-            and not scalar.startswith(NONPLAIN_PREFIXES)
-        ):
-            value = raw_value[1:]
-        else:
-            raise BindingError(f"ci.yml line {line_number} uses unsupported YAML syntax")
-        path = (*stack, key)
-        if path in values:
-            raise BindingError(f"ci.yml duplicates {'/'.join(path)}")
-        values[path] = value
-        stack.append(key)
-
-    uses = [path for path in values if path[-1:] == ("uses",)]
-    if uses != [("jobs", "worker", "uses")]:
-        raise BindingError("ci.yml must contain exactly one active uses directive")
-    jobs = {path: value for path, value in values.items() if path[:1] == ("jobs",)}
-    expected = {
-        ("jobs",): None,
-        ("jobs", "worker"): None,
-        ("jobs", "worker", "name"): "CI",
-        ("jobs", "worker", "permissions"): None,
-        ("jobs", "worker", "permissions", "contents"): "read",
-        ("jobs", "worker", "permissions", "id-token"): "write",
-        ("jobs", "worker", "permissions", "attestations"): "write",
-        ("jobs", "worker", "uses"): LOCAL_WORKER,
-    }
-    if jobs != expected:
-        raise BindingError("ci.yml must contain exactly one local CI worker call")
+    """Push caller keeps one same-commit CI worker and isolated attesters."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "ci"))
+    from workflow_results import WorkflowLoader
+    import yaml
+    try:
+        caller = yaml.load(source, Loader=WorkflowLoader)
+        jobs = caller["jobs"]
+        worker = jobs["worker"]
+        uses = [job.get("uses") for job in jobs.values() if "uses" in job]
+        if caller.get("name") != "CI" or worker.get("name") != "CI" or uses != [LOCAL_WORKER]:
+            raise BindingError("ci.yml must retain one same-commit CI worker call")
+    except (AssertionError, yaml.YAMLError, KeyError, TypeError, AttributeError) as error:
+        raise BindingError("ci.yml has an invalid immutable CI worker binding") from error
 
 
 def verify_ci_binding(repo: Path, environment: Mapping[str, str]) -> str:
     """Сопоставить байты caller'а и worker'а с реальным snapshot workflow."""
     try:
         local_workflows = {path: (repo / path).read_bytes() for path in WORKFLOW_PATHS}
-        caller = local_workflows[WORKFLOW_PATHS[0]].decode("utf-8")
+        caller = local_workflows[".github/workflows/ci.yml"].decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise BindingError("cannot read local workflow files as a valid CI binding") from error
     _parse_caller(caller)
@@ -150,13 +114,13 @@ class TestCiWorkflowBinding(unittest.TestCase):
         self._git(("add", ".github/workflows"))
         self._git(("commit", "--quiet", "-m", "base"))
         self.base = self._git_text(("rev-parse", "HEAD"))
-        caller = self.root / WORKFLOW_PATHS[0]
+        caller = self.root / ".github/workflows/ci.yml"
         caller.write_text(
             caller.read_text(encoding="utf-8")
             + f"#    uses: Labpics-Team/lab-colors/.github/workflows/ci-worker.yml@{self.base}\n",
             encoding="utf-8",
         )
-        self._git(("add", WORKFLOW_PATHS[0]))
+        self._git(("add", ".github/workflows/ci.yml"))
         self._git(("commit", "--quiet", "-m", "candidate"))
         self.candidate = self._git_text(("rev-parse", "HEAD"))
 
@@ -203,7 +167,7 @@ class TestCiWorkflowBinding(unittest.TestCase):
             "    name: |\n      uses: ./.github/workflows/ci-worker.yml",
             "    uses: ./.github/workflows/ci-worker.yml\njobs: {}",
         )
-        original = (self.root / WORKFLOW_PATHS[0]).read_text(encoding="utf-8")
+        original = (self.root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         for mutation in mutations:
             with self.subTest(mutation=mutation):
                 updated, count = re.subn(r"(?m)^    uses: \S+$", mutation, original)
@@ -267,7 +231,7 @@ class TestCiWorkflowBinding(unittest.TestCase):
                     workflow.write_bytes(original)
 
     def test_reports_invalid_utf8_caller_as_binding_error(self) -> None:
-        (self.root / WORKFLOW_PATHS[0]).write_bytes(b"\xff")
+        (self.root / ".github/workflows/ci.yml").write_bytes(b"\xff")
 
         with self.assertRaises(BindingError):
             verify_ci_binding(self.root, self.git_env)

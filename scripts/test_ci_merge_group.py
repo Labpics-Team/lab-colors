@@ -72,9 +72,9 @@ def validate_package(ci, package):
 
 
 def validate_gate(source):
-    policy = containing(steps(job(source, "gate")), "Reject accidental PR-blocking")
-    expression(policy, "HEAD_SHA", SOURCE)
-    expression(policy, "BASE_SHA", BASE)
+    final = containing(steps(job(source, "gate")), "Require every result")
+    expression(final, "GATE_EVENT", "github.event_name")
+    expression(final, "CI_NEEDS", "toJSON(needs)")
 
 
 class MergeGroupEvidenceTest(unittest.TestCase):
@@ -104,7 +104,7 @@ class MergeGroupEvidenceTest(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         validate_package(self.ci, self.package.replace(build, changed, 1))
 
-    def test_workflow_policy_compares_the_exact_event_head_and_base(self):
+    def test_required_ci_uses_the_native_event_and_dependencies(self):
         validate_gate(self.gate)
 
     def test_lost_queue_identity_and_baseline_are_rejected(self):
@@ -130,9 +130,6 @@ class MergeGroupEvidenceTest(unittest.TestCase):
                 self.assertTrue(before in self.package, f"mutation target absent: {before}")
                 with self.assertRaises(AssertionError):
                     validate_package(self.ci, self.package.replace(before, after))
-                self.assertTrue(before in self.gate, f"mutation target absent: {before}")
-                with self.assertRaises(AssertionError):
-                    validate_gate(self.gate.replace(before, after))
         for replacement in ("true", "false", "github.event_name == 'merge_group'"):
             with self.subTest(benchmark=replacement):
                 self.assertTrue(BENCHMARK in self.ci, "benchmark opt-in is absent")

@@ -2,6 +2,10 @@ name: Native conformance worker
 
 on:
   workflow_call:
+    outputs:
+      checks:
+        description: Results of every declared job and nested reusable check
+        value: ${{ format('{{"results":{0},"children":{1}}}', toJSON(jobs.*.result), toJSON(jobs.*.outputs.checks)) }}
     inputs:
       authoring_baseline:
         required: false
