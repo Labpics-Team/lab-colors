@@ -1913,7 +1913,7 @@ class MutationTruthTest(unittest.TestCase):
         ):
             mutation.read_json(json_input)
         with (
-            mock.patch.dict(os.environ, {"CARGO": "/usr/bin/true"}),
+            mock.patch.object(mutation, "_pinned_cargo_binary", return_value=Path(TEST_REAL_CARGO)),
             mock.patch.object(mutation, "_run_bytes", return_value=b"[]"),
             mock.patch.object(
                 mutation.json,
