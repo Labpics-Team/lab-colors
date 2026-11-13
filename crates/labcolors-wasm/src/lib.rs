@@ -574,6 +574,26 @@ impl ProgramSnapshot {
             .map(|output| output.opacity())
             .ok_or_else(output_index_error)
     }
+
+    /// Таблица всех выходов снимка одним переходом границы: пять f64 на
+    /// строку `[slot, red, green, blue, opacity]`, строка `i` совпадает с
+    /// `outputSlot(i)`/`outputRgb(i)`/`outputOpacity(i)`.
+    #[wasm_bindgen(js_name = copyOutputTable)]
+    pub fn copy_output_table(&self) -> Vec<f64> {
+        let outputs = self.inner.outputs();
+        let mut table = Vec::with_capacity(outputs.len() * 5);
+        for output in outputs {
+            let [red, green, blue] = output.source().bytes();
+            table.extend_from_slice(&[
+                f64::from(output.slot()),
+                f64::from(red),
+                f64::from(green),
+                f64::from(blue),
+                output.opacity(),
+            ]);
+        }
+        table
+    }
 }
 
 /// Компилирует canonical Program wire bytes и создаёт одну runtime Session.

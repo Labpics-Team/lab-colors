@@ -50,6 +50,12 @@ fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult
     assert_eq!(first.output_rgb(0)?, [0; 3]);
     assert_eq!(first.output_slot(0)?, 91);
     assert_eq!(first.output_opacity(0)?, 1.0);
+    assert_eq!(
+        first.copy_output_table(),
+        [91.0, 0.0, 0.0, 0.0, 1.0],
+        "таблица должна повторять поштучные геттеры поле в поле"
+    );
+    assert_eq!(second.copy_output_table(), [91.0, 255.0, 255.0, 255.0, 1.0]);
     expect_error(first.output_rgb(1), "invalid_output_index");
     for row in fixtures()["history"]
         .as_array()
