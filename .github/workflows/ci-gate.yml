@@ -24,10 +24,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: python3 -m pip install --disable-pip-version-check --no-deps -r scripts/ci/requirements.txt
-      - name: Verify the complete native pre-merge graph
+      - name: Verify CI contracts before merge
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: python3 scripts/test_ci_workflow_results.py
+        run: python3 -m unittest discover -s scripts -p 'test_ci_*.py'
 
   ci:
     name: CI
