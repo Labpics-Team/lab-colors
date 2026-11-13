@@ -394,7 +394,7 @@ def capture_device_failure(adb: Path, evidence: Path) -> None:
 def main(consumer: Path, expected_page: int) -> None:
     try:
         run_consumer(consumer, expected_page)
-    except BaseException:
+    except Exception:
         try:
             capture_device_failure(Path(os.environ["ANDROID_HOME"]) / "platform-tools/adb",
                                    consumer / "runtime")

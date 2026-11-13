@@ -319,6 +319,18 @@ class PreparedRuntimeTests(unittest.TestCase):
                 self.assertFalse((root / "runtime/debug/tests.json").exists())
                 self.assertFalse((root / "runtime/release/tests.json").exists())
 
+    def test_cancelled_runtime_does_not_start_a_new_device_probe(self):
+        interruption = KeyboardInterrupt("cancel consumer")
+        def cancel(path):
+            raise interruption
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                self.exercise(root, verify=cancel)
+            self.assertIs(caught.exception, interruption)
+            calls = json.loads((root / "adb-state.json").read_text())["calls"]
+            self.assertEqual(calls, [])
+
     def test_failed_device_probe_cannot_replace_original_runtime_failure(self):
         for primary in ("crashed protocol", "adb exit 29"):
             for probe in ("nonzero", "timeout", "oversize"):
