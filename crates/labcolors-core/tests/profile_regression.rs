@@ -26,7 +26,10 @@ fn cached_evidence_path_stays_fast() {
 
     for index in 0..WARMUP {
         let foreground = [255 - (index % 2) as u8, 255, 255];
-        black_box(evaluate_wcag22_srgb8(black_box([20, 20, 20]), black_box(foreground), criterion).unwrap());
+        black_box(
+            evaluate_wcag22_srgb8(black_box([20, 20, 20]), black_box(foreground), criterion)
+                .unwrap(),
+        );
     }
 
     let mut samples = Vec::with_capacity(BATCHES);
