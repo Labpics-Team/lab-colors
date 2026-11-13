@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+from tempfile import TemporaryFile
 from typing import IO
 import zipfile
 
@@ -367,7 +368,48 @@ def wait_for_package_manager(adb: Path, timeout: float = 30) -> None:
         time.sleep(min(0.5, remaining))
 
 
+def capture_device_failure(adb: Path, evidence: Path) -> None:
+    """Read the guest before teardown; app-scoped Java capture misses native/system deaths."""
+    evidence.mkdir(parents=True, exist_ok=True)
+    record = {"probe": "device-logcat"}
+    with TemporaryFile() as output:
+        try:
+            result = subprocess.run(
+                [str(adb), "logcat", "-d", "-b", "crash", "-b", "main", "-b", "system",
+                 "-v", "threadtime", "-t", "200", "*:V"],
+                stdout=output, stderr=subprocess.STDOUT, timeout=10, check=False)
+            record.update({"status": "completed", "returncode": result.returncode})
+        except (OSError, subprocess.SubprocessError) as error:
+            record.update({"status": "probe-error", "error": type(error).__name__})
+        size = output.seek(0, os.SEEK_END)
+        output.seek(max(0, size - 65536))
+        content = output.read(65536)
+    record.update({"truncated": size > 65536, "bytesObserved": size})
+    (evidence / "device-logcat.txt").write_bytes(content)
+    (evidence / "device-logcat.json").write_text(json.dumps(record) + "\n")
+    print("ANDROID_DEVICE_FAILURE " + json.dumps(record | {
+        "output": content[-4096:].decode("utf-8", errors="replace"),
+        "logTruncated": len(content) > 4096}), file=sys.stderr, flush=True)
+
+
 def main(consumer: Path, expected_page: int) -> None:
+    try:
+        run_consumer(consumer, expected_page)
+    except Exception:
+        try:
+            capture_device_failure(Path(os.environ["ANDROID_HOME"]) / "platform-tools/adb",
+                                   consumer / "runtime")
+        except BaseException as error:
+            try:
+                print("ANDROID_DEVICE_FAILURE " + json.dumps({
+                    "probe": "device-logcat", "status": "probe-error", "error": type(error).__name__}),
+                    file=sys.stderr, flush=True)
+            except BaseException:
+                pass
+        raise
+
+
+def run_consumer(consumer: Path, expected_page: int) -> None:
     from consumer_artifact import verify_artifact
 
     sdk = Path(os.environ["ANDROID_HOME"])
