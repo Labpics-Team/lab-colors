@@ -143,8 +143,20 @@ DEBUG = ["runtimeHistoryAndThreadMigration", "authoringIsCanonicalAndTransaction
          "applicationUsesTheRequestedMemoryPageSize"]
 RELEASE = ["optimizedApplicationExecutesTheInstalledNativePackage", "applicationUsesTheRequestedMemoryPageSize"]
 
+PROCESS_CRASH = "INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0\n"
+DEVICE_LOGCAT = b"""--------- beginning of crash
+11-14 12:34:56.000  1234  1234 F libc    : Fatal signal 11 (SIGSEGV), code 1, fault addr 0x0
+11-14 12:34:56.001  1235  1235 F DEBUG   : pid: 1234, tid: 1234, name: colors.consumer >>> pics.lab.colors.consumer <<<
+11-14 12:34:56.002  1235  1235 F DEBUG   : backtrace: #00 pc 000000000000abcd /data/app/lib/x86_64/liblabcolors.so
+--------- beginning of main
+11-14 12:34:56.003  1234  1234 E libc    : native startup aborted
+--------- beginning of system
+11-14 12:34:56.004   999   999 I ActivityManager: Killing 1234:pics.lab.colors.consumer/u0a123: low memory
+11-14 12:34:56.005   998   998 I lmkd    : Kill 'pics.lab.colors.consumer' (1234), oom_score_adj 0 to free 16384kB
+"""
+
 ADB = r'''
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 state_path = pathlib.Path(os.environ["FAKE_ADB_STATE"])
 state = json.loads(state_path.read_text())
 args = sys.argv[1:]
@@ -164,6 +176,21 @@ elif args[:4] == ["shell", "am", "instrument", "-w"]:
     sys.stdout.write(pathlib.Path(os.environ["FAKE_REPORT_" + state["variant"].upper()]).read_text())
     save()
     raise SystemExit(int(os.environ.get("FAKE_EXIT_" + state["variant"].upper(), "0")))
+elif args[:2] == ["logcat", "-d"]:
+    # Refuse narrowed Java/tag-only captures: native tombstones and system
+    # process deaths must survive the real device-diagnostic command.
+    buffers = [args[index + 1] for index, arg in enumerate(args) if arg == "-b"]
+    if set(buffers) != {"crash", "main", "system"} or args[-1] != "*:V":
+        save()
+        raise SystemExit("device logcat is filtered or missing a buffer: " + repr(args))
+    if args[args.index("-v") + 1] != "threadtime" or args[args.index("-t") + 1] != "200":
+        save()
+        raise SystemExit("device logcat must request bounded recent context: " + repr(args))
+    sys.stdout.buffer.write(pathlib.Path(os.environ["FAKE_DEVICE_LOGCAT"]).read_bytes())
+    sys.stdout.buffer.flush()
+    save()
+    time.sleep(float(os.environ.get("FAKE_DEVICE_LOGCAT_DELAY", "0")))
+    raise SystemExit(int(os.environ.get("FAKE_DEVICE_LOGCAT_EXIT", "0")))
 else:
     save()
     raise SystemExit("unrecognized adb arguments: " + repr(args))
@@ -172,7 +199,8 @@ save()
 
 
 class PreparedRuntimeTests(unittest.TestCase):
-    def exercise(self, root, *, debug_output=None, release_output=None, debug_exit=0, clear_result="Success", verify=None):
+    def exercise(self, root, *, debug_output=None, release_output=None, debug_exit=0, clear_result="Success", verify=None,
+                 device_output=DEVICE_LOGCAT, device_exit=0, device_timeout=False, diagnostic_sink=None):
         for variant in ("debug", "release"):
             for kind in ("apk", "apk/androidTest"):
                 apk = root / "outputs" / kind / variant / "consumer.apk"
@@ -188,6 +216,8 @@ class PreparedRuntimeTests(unittest.TestCase):
         debug.write_text(report(DEBUG) if debug_output is None else debug_output)
         release = root / "release.txt"
         release.write_text(report(RELEASE) if release_output is None else release_output)
+        device = root / "device-logcat.txt"
+        device.write_bytes(device_output)
         captures = []
 
         class Capture:
@@ -206,6 +236,13 @@ class PreparedRuntimeTests(unittest.TestCase):
             self.assertEqual(command[0], str(adb))
             return [sys.executable, str(adb), *command[1:]]
         def execute(command, **kwargs):
+            if command[1] == "logcat":
+                self.assertGreater(kwargs["timeout"], 0)
+                self.assertLessEqual(kwargs["timeout"], 10)
+                if device_timeout:
+                    # The production deadline is checked above. Only shorten
+                    # this real child's timeout; run still kills and waits it.
+                    kwargs["timeout"] = 0.5
             return real_run(actual_command(command), **kwargs)
         def query(command, **kwargs):
             return real_run(actual_command(command), stdout=subprocess.PIPE, check=True, **kwargs).stdout
@@ -213,16 +250,38 @@ class PreparedRuntimeTests(unittest.TestCase):
         artifact = SimpleNamespace(verify_artifact=verify or (lambda path: {}))
         environment = {"ANDROID_HOME": str(sdk), "FAKE_ADB_STATE": str(state), "FAKE_REPORT_DEBUG": str(debug),
                        "FAKE_REPORT_RELEASE": str(release), "FAKE_EXIT_DEBUG": str(debug_exit),
-                       "FAKE_CLEAR_RESULT": clear_result}
+                       "FAKE_CLEAR_RESULT": clear_result, "FAKE_DEVICE_LOGCAT": str(device),
+                       "FAKE_DEVICE_LOGCAT_EXIT": str(device_exit),
+                       "FAKE_DEVICE_LOGCAT_DELAY": "5" if device_timeout else "0"}
         try:
             with patch.dict(os.environ, environment), patch.dict(sys.modules, {"consumer_artifact": artifact}), \
                  patch.object(runtime, "CrashCapture", Capture), patch.object(runtime.subprocess, "run", side_effect=execute), \
                  patch.object(runtime.subprocess, "check_output", side_effect=query), \
-                 redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                 redirect_stdout(io.StringIO()), redirect_stderr(diagnostic_sink or io.StringIO()):
                 runtime.main(root, 16384)
         finally:
             self.assertTrue(all(capture.closed for capture in captures))
         return json.loads(state.read_text())["calls"]
+
+    def assert_device_capture(self, root, output=DEVICE_LOGCAT, *, returncode=0, error=None):
+        calls = json.loads((root / "adb-state.json").read_text())["calls"]
+        probes = [call for call in calls if call[0] == "logcat"]
+        self.assertEqual(len(probes), 1, "failure context must be captured once before main returns")
+        self.assertEqual(calls[-1], probes[0], "device context must follow the failing runtime operation")
+        self.assertEqual((root / "runtime/device-logcat.txt").read_bytes(), output[:65536])
+        receipt = json.loads((root / "runtime/device-logcat.json").read_text())
+        self.assertEqual(receipt["probe"], "device-logcat")
+        self.assertEqual(receipt["truncated"], len(output) > 65536)
+        self.assertEqual(receipt["bytesObserved"], min(len(output), 65537))
+        if error:
+            self.assertEqual(receipt["status"], "probe-error")
+            self.assertEqual(receipt["error"], error)
+            self.assertNotIn("returncode", receipt)
+        else:
+            self.assertEqual(receipt["status"], "completed")
+            self.assertEqual(receipt["returncode"], returncode)
+            self.assertNotIn("error", receipt)
+        return probes[0]
 
     def test_real_runtime_entry_installs_same_prepared_pairs_and_checks_both_variants(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -244,6 +303,63 @@ class PreparedRuntimeTests(unittest.TestCase):
                 self.assertEqual(result["pageSize"], 16384)
                 self.assertTrue((root / "runtime" / variant / "instrumentation.txt").is_file())
             self.assertFalse((root / "gradle-path.txt").exists())
+            self.assertFalse(any(call[0] == "logcat" for call in calls))
+            self.assertFalse((root / "runtime/device-logcat.txt").exists())
+            self.assertFalse((root / "runtime/device-logcat.json").exists())
+
+    def test_raw_crashed_process_with_adb_exit_zero_keeps_native_and_system_context(self):
+        for output in (PROCESS_CRASH, "INSTRUMENTATION_CODE: 0\n"):
+            with self.subTest(output=output), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with self.assertRaises(ValueError):
+                    self.exercise(root, debug_output=output)
+                self.assertEqual(json.loads((root / "runtime/debug/connected-exit.json").read_text())["returncode"], 0)
+                self.assertEqual((root / "runtime/debug/instrumentation.txt").read_text(), output)
+                self.assert_device_capture(root)
+                self.assertFalse((root / "runtime/debug/tests.json").exists())
+                self.assertFalse((root / "runtime/release/tests.json").exists())
+
+    def test_failed_device_probe_cannot_replace_original_runtime_failure(self):
+        for primary in ("crashed protocol", "adb exit 29"):
+            for probe in ("nonzero", "timeout", "oversize"):
+                with self.subTest(primary=primary, probe=probe), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    output = DEVICE_LOGCAT + b"\xff\xfe" + b"x" * 70000 if probe == "oversize" else DEVICE_LOGCAT
+                    options = {"device_output": output, "device_exit": 43 if probe == "nonzero" else 0,
+                               "device_timeout": probe == "timeout"}
+                    if primary == "crashed protocol":
+                        with self.assertRaisesRegex(ValueError, "Process crashed"):
+                            self.exercise(root, debug_output=PROCESS_CRASH, **options)
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError) as caught:
+                            self.exercise(root, debug_exit=29, **options)
+                        self.assertEqual(caught.exception.returncode, 29)
+                        self.assertEqual(caught.exception.cmd[1:4], ["shell", "am", "instrument"])
+                    self.assert_device_capture(root, output, returncode=43 if probe == "nonzero" else 0,
+                                               error="TimeoutExpired" if probe == "timeout" else None)
+                    self.assertFalse((root / "runtime/release/tests.json").exists())
+
+    def test_device_evidence_file_and_log_errors_keep_original_command_exit(self):
+        class BrokenDiagnosticLog(io.StringIO):
+            def write(self, text):
+                if text.startswith("ANDROID_DEVICE_FAILURE "):
+                    raise OSError("diagnostic log sink failed")
+                return super().write(text)
+
+        for failure in ("file", "log"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if failure == "file":
+                    (root / "runtime/device-logcat.txt").mkdir(parents=True)
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    self.exercise(root, debug_exit=29,
+                                  diagnostic_sink=BrokenDiagnosticLog() if failure == "log" else None)
+                self.assertEqual(caught.exception.returncode, 29)
+                self.assertEqual(caught.exception.cmd[1:4], ["shell", "am", "instrument"])
+                calls = json.loads((root / "adb-state.json").read_text())["calls"]
+                self.assertEqual(sum(call[0] == "logcat" for call in calls), 1)
+                if failure == "log":
+                    self.assert_device_capture(root)
 
     def test_adb_success_does_not_qualify_empty_partial_or_skipped_execution(self):
         variants = ["", report(DEBUG).replace("INSTRUMENTATION_CODE: -1", ""),
@@ -264,6 +380,7 @@ class PreparedRuntimeTests(unittest.TestCase):
             self.assertEqual(caught.exception.returncode, 29)
             self.assertFalse((root / "runtime/release/tests.json").exists())
             self.assertEqual(json.loads((root / "runtime/debug/connected-exit.json").read_text())["returncode"], 29)
+            self.assert_device_capture(root)
 
     def test_previous_app_state_must_be_cleared_before_any_installation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -272,6 +389,7 @@ class PreparedRuntimeTests(unittest.TestCase):
                 self.exercise(root, clear_result="Error")
             calls = json.loads((root / "adb-state.json").read_text())["calls"]
             self.assertFalse(any(call[0] == "install" for call in calls))
+            self.assert_device_capture(root)
 
     def test_post_execution_material_change_refuses_release_and_success_receipt(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -88,29 +88,59 @@ def job_level_optional(source, name):
 
 
 def validate_native_storage(source):
-    if source.count("uses: actions/upload-artifact@") != 1:
-        raise AssertionError("native CI may only transfer the Android SDK")
     build = job(source, "android-build")
     if job_level_optional(source, "android-build"):
         raise AssertionError("Android SDK build job became optional")
     blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", build)
-    upload = [block for block in blocks if "uses: actions/upload-artifact@" in block]
-    if len(upload) != 1:
+    uploads = [block for block in blocks if "uses: actions/upload-artifact@" in block]
+    sdk_upload = [block for block in uploads if "name: android-sdk-" in block]
+    if len(sdk_upload) != 1:
         raise AssertionError("Android SDK transfer missing")
     for required in ("name: android-sdk-", "if-no-files-found: error"):
-        if required not in upload[0]:
+        if required not in sdk_upload[0]:
             raise AssertionError("Android SDK transfer changed: " + required)
-    if not re.search(r"(?m)^[ \t]*retention-days:[ \t]*1[ \t]*$", upload[0]):
-        raise AssertionError("Android SDK transfer must expire after one day")
-    if "continue-on-error:" in upload[0] or "\n        if:" in upload[0]:
-        raise AssertionError("Android SDK transfer became optional")
     consumer = job(source, "android-consumer")
     if job_level_optional(source, "android-consumer"):
         raise AssertionError("external Android consumer job became optional")
     consumer_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", consumer)
+    downloads = [block for block in consumer_steps if "uses: actions/download-artifact@" in block]
+    if len(downloads) != 1:
+        raise AssertionError("Android application consumer needs one artifact")
+    download_names = re.findall(r"(?m)^          name: (.+)$", downloads[0])
+    if len(download_names) != 1:
+        raise AssertionError("Android application artifact identity missing")
+    application_upload = [block for block in uploads
+                          if re.findall(r"(?m)^          name: (.+)$", block) == download_names]
+    if len(application_upload) != 1 or application_upload[0] == sdk_upload[0]:
+        raise AssertionError("Android application transfer has no matching producer")
+    if len(uploads) != len(sdk_upload) + len(application_upload):
+        raise AssertionError("Android producer stores an artifact without a consumer")
+    for transfer in sdk_upload + application_upload:
+        if not re.search(r"(?m)^[ \t]*retention-days:[ \t]*1[ \t]*$", transfer):
+            raise AssertionError("Android transfers must expire after one day")
+        if "if-no-files-found: error" not in transfer:
+            raise AssertionError("Android transfer can silently omit its material")
+        if re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", transfer):
+            raise AssertionError("Android transfer became optional")
+    if "include-hidden-files: true" not in application_upload[0]:
+        raise AssertionError("Android application transfer can omit hidden outputs")
+    diagnostics = [block for block in consumer_steps if "uses: actions/upload-artifact@" in block]
+    for diagnostic in diagnostics:
+        if (re.findall(r"(?m)^        if: (.+)$", diagnostic) != ["failure()"]
+                or not re.search(r"(?m)^          retention-days: 1[ \t]*$", diagnostic)):
+            raise AssertionError("Android diagnostics must be bounded and failure-only")
+    if source.count("uses: actions/upload-artifact@") != len(uploads) + len(diagnostics):
+        raise AssertionError("native CI stores an unrelated artifact")
     for required_step in (
-        "uses: actions/download-artifact@", "run: python3 bindings/kotlin/ci/prepare-consumer.py",
+        "run: python3 bindings/kotlin/ci/prepare-consumer.py",
         'run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble',
+        "run: python3 bindings/kotlin/ci/consumer_artifact.py",
+    ):
+        matching = [block for block in blocks if required_step in block]
+        if len(matching) != 1 or re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", matching[0]):
+            raise AssertionError("Android application producer missing or optional: " + required_step)
+    for required_step in (
+        "uses: actions/download-artifact@",
         "uses: reactivecircus/android-emulator-runner@",
     ):
         matching = [block for block in consumer_steps if required_step in block]
@@ -127,7 +157,7 @@ def validate_native_storage(source):
     if runtime_commands != [expected_runtime]:
         raise AssertionError("external Android runtime consumer is not executed in the emulator")
     for required in ("needs: android-build", "uses: actions/download-artifact@",
-                     "name: android-sdk-", "prepare-consumer.py", "test-consumer.py"):
+                     "test-consumer.py"):
         if required not in consumer:
             raise AssertionError("external Android consumer missing: " + required)
     if job_level_optional(source, "apple-package"):
@@ -196,9 +226,24 @@ class NativeStorageTests(unittest.TestCase):
         self.source = (ROOT / ".github/workflows/native-conformance-worker.yml").read_text()
         self.mutation_source = (ROOT / ".github/workflows/mutation-worker.yml").read_text()
 
-    def test_only_sdk_transfer_survives(self):
+    def test_transfers_follow_the_producer_and_diagnostics_only_follow_failure(self):
         validate_native_storage(self.source)
         validate_mutation_storage(self.mutation_source)
+
+    def test_application_transfer_uses_its_consumer_identity_not_a_name_registry(self):
+        changed = self.source.replace("name: android-consumer-", "name: verified-applications-")
+        self.assertNotEqual(changed, self.source)
+        validate_native_storage(changed)
+        consumer = job(self.source, "android-consumer")
+        mismatch = consumer.replace("name: android-consumer-", "name: unrelated-")
+        with self.assertRaisesRegex(AssertionError, "matching producer"):
+            validate_native_storage(self.source.replace(consumer, mismatch))
+        with self.assertRaisesRegex(AssertionError, "hidden outputs"):
+            validate_native_storage(self.source.replace("include-hidden-files: true", "include-hidden-files: false"))
+        diagnostic = "      - name: retain runtime diagnostics on failure\n        if: failure()"
+        self.assertIn(diagnostic, self.source)
+        with self.assertRaisesRegex(AssertionError, "failure-only"):
+            validate_native_storage(self.source.replace(diagnostic, diagnostic.replace("failure()", "always()")))
 
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
