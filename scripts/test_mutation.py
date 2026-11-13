@@ -53,7 +53,9 @@ def mutant(index: int, file: str = "crates/core/src/lib.rs") -> dict:
     }
 
 
-TEST_CARGO = "/runner/toolchains/1.96.0-x86_64-unknown-linux-gnu/bin/cargo"
+TEST_CARGO = "/runner/source/scripts/mutation_cargo.py"
+TEST_REAL_CARGO = "/runner/toolchains/1.96.0-x86_64-unknown-linux-gnu/bin/cargo"
+TEST_CARGO_SHA256 = "a" * 64
 TEST_PACKAGE = "core@0.1.0"
 
 
@@ -250,11 +252,16 @@ class MutationTruthTest(unittest.TestCase):
             '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2021"\n',
             encoding="utf-8",
         )
+        adapter = root / mutation.CARGO_ADAPTER_RELPATH
+        adapter.parent.mkdir()
+        adapter.write_bytes(SCRIPT.with_name("mutation_cargo.py").read_bytes())
+        adapter.chmod(0o755)
         # Один неизменяемый seed; каждый тест получает собственные index,
         # refs, objects и working tree без hardlinks или Git alternates.
         for arguments in (
             ("init", "--quiet"),
             ("add", "."),
+            ("update-index", "--chmod=+x", mutation.CARGO_ADAPTER_RELPATH),
             ("commit", "--quiet", "-m", "fixture"),
         ):
             subprocess.run(
@@ -359,6 +366,90 @@ class MutationTruthTest(unittest.TestCase):
         ).strip()
         self.assertEqual(seed_head, self._fixture_revision)
 
+    @unittest.skipUnless(os.open in os.supports_dir_fd, "native directory descriptors required")
+    def test_mutation_snapshot_binds_raw_changed_bytes_and_preserves_pristine_source(self) -> None:
+        source_root = self.external / "source"
+        mutation.materialize_execution_source(self.root, self.revision, source_root)
+        specimen = self.external / "specimen"
+        shutil.copytree(source_root, specimen)
+        original = (source_root / "crates/core/src/lib.rs").read_bytes()
+        baseline_tree = mutation.snapshot_cargo_source(source_root, specimen)
+        self.assertEqual(baseline_tree, self.git_output("rev-parse", "HEAD^{tree}"))
+        path = specimen / "crates/core/src/lib.rs"
+        original_time = path.stat()
+        changed = original.replace(b"true", b"false") + b"// raw CRLF\r\n"
+        path.write_bytes(changed)
+        os.utime(path, ns=(original_time.st_atime_ns, original_time.st_mtime_ns))
+        changed_tree = mutation.snapshot_cargo_source(source_root, specimen)
+        self.assertNotEqual(changed_tree, baseline_tree)
+        actual = subprocess.check_output([self.git_binary, "show", "HEAD:crates/core/src/lib.rs"], cwd=specimen, env=self.git_env)
+        self.assertEqual(actual, changed)
+        head = subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env)
+        self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), changed_tree)
+        self.assertEqual(subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env), head)
+        path.write_bytes(original)
+        self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), baseline_tree)
+        self.assertEqual((source_root / "crates/core/src/lib.rs").read_bytes(), original)
+        self.assertFalse((source_root / ".git").exists())
+        self.assertEqual(self.git_output("rev-parse", "HEAD"), self.revision)
+
+    @unittest.skipUnless(os.open in os.supports_dir_fd, "native directory descriptors required")
+    def test_mutation_snapshot_refuses_source_root_extra_inputs_and_foreign_metadata(self) -> None:
+        source_root = self.external / "source"
+        mutation.materialize_execution_source(self.root, self.revision, source_root)
+        with self.assertRaises(mutation.ContractError):
+            mutation.snapshot_cargo_source(source_root, source_root)
+        specimen = self.external / "specimen"
+        shutil.copytree(source_root, specimen)
+        extra = specimen / "ignored.rs"
+        extra.write_text("compile_error!(\"extra\");\n")
+        with self.assertRaisesRegex(mutation.ContractError, "namespace"):
+            mutation.snapshot_cargo_source(source_root, specimen)
+        extra.unlink()
+        (specimen / ".git").symlink_to(self.root / ".git", target_is_directory=True)
+        with self.assertRaisesRegex(mutation.ContractError, "independently owned"):
+            mutation.snapshot_cargo_source(source_root, specimen)
+        self.assertEqual(self.git_output("rev-parse", "HEAD"), self.revision)
+
+    def test_preparation_failure_after_green_baseline_is_never_a_semantic_catch(self) -> None:
+        manifest = self.make_manifest()
+        parent = self.root / "mutation-shard-0"
+        expected = mutation.expected_shard_specs(manifest, 0)
+        for defect in ("missing", "preparation failure", "identity unavailable", "wrong Cargo", "unmutated", "changed between phases"):
+            with self.subTest(defect=defect):
+                self.write_outcomes(parent, expected)
+                log = parent / "mutants.out/log/mutant-0.log"
+                text = log.read_text()
+                if defect == "missing":
+                    text = "test failed\n"
+                elif defect == "preparation failure":
+                    text += "mutation cargo preparation error: Git unavailable\n"
+                elif defect == "identity unavailable":
+                    text += "producer_identity_unavailable\n"
+                elif defect == "wrong Cargo":
+                    text = text.replace(TEST_CARGO_SHA256, "b" * 64)
+                elif defect == "unmutated":
+                    text = text.replace(mutation._digest_value(expected[0])[:40], manifest["execution_source"]["git_tree"])
+                else:
+                    text = text.replace(mutation._digest_value(expected[0])[:40], "c" * 40, 1)
+                log.write_text(text)
+                with self.assertRaisesRegex(mutation.ContractError, "Cargo"):
+                    mutation.validate_and_record_shard(
+                        manifest, repo_root=self.root, config_path=self.config,
+                        output_parent=parent, shard_index=0, observed_revision=self.revision,
+                        tool_version_output=mutation.TOOL_VERSION_OUTPUT, exit_code=0,
+                    )
+
+    def test_manifest_binds_adapter_mode_and_underlying_cargo_digest(self) -> None:
+        manifest = self.make_manifest()
+        entry = next(entry for entry in manifest["execution_source"]["entries"] if entry["path"] == mutation.CARGO_ADAPTER_RELPATH)
+        self.assertEqual(entry["sha256"], hashlib.sha256(SCRIPT.with_name("mutation_cargo.py").read_bytes()).hexdigest())
+        self.assertEqual(manifest["execution"]["cargo_sha256"], TEST_CARGO_SHA256)
+        entry["mode"] = "100644"
+        manifest["execution_source"]["sha256"] = mutation._digest_value(mutation._execution_source_payload(manifest["execution_source"]))
+        with self.assertRaisesRegex(mutation.ContractError, "executable committed input"):
+            mutation.validate_manifest(manifest)
+
     def git(
         self,
         *arguments: str,
@@ -392,6 +483,7 @@ class MutationTruthTest(unittest.TestCase):
             revision=self.revision,
             run_id=123,
             run_attempt=1,
+            cargo_sha256=TEST_CARGO_SHA256,
         )
 
     def make_bound_manifest(self, source_root: Path) -> dict:
@@ -409,6 +501,7 @@ class MutationTruthTest(unittest.TestCase):
             revision=self.revision,
             run_id=123,
             run_attempt=1,
+            cargo_sha256=TEST_CARGO_SHA256,
             source_root=source_root,
         )
 
@@ -458,7 +551,15 @@ class MutationTruthTest(unittest.TestCase):
                 "phase_results": phase("Success"),
             }
         ]
-        (out / "log" / "baseline.log").write_text("baseline\n", encoding="utf-8")
+        def cargo_log(summary: str, source_tree: str) -> str:
+            return "".join(mutation.CARGO_EXECUTION_PREFIX + json.dumps({
+                "argv": [TEST_REAL_CARGO, *item["argv"][1:]],
+                "cargo_sha256": TEST_CARGO_SHA256, "source_tree": source_tree,
+            }) + "\n" for item in phase(summary))
+
+        (out / "log" / "baseline.log").write_text(
+            cargo_log("Success", self.git_output("rev-parse", "HEAD^{tree}")), encoding="utf-8",
+        )
         counts = {
             "CaughtMutant": 0,
             "Failure": 0,
@@ -469,7 +570,7 @@ class MutationTruthTest(unittest.TestCase):
         for index, (item, summary) in enumerate(zip(mutants, summaries)):
             log_path = f"log/mutant-{index}.log"
             diff_path = f"diff/mutant-{index}.diff"
-            (out / log_path).write_text("log\n", encoding="utf-8")
+            (out / log_path).write_text(cargo_log(summary, mutation._digest_value(item)[:40]), encoding="utf-8")
             (out / diff_path).write_text("diff\n", encoding="utf-8")
             outcomes.append(
                 {
@@ -596,10 +697,10 @@ class MutationTruthTest(unittest.TestCase):
         with self.assertRaisesRegex(mutation.ContractError, "does not exist"):
             self.make_manifest([mutant(0, "crates/core/src/foreign.rs")])
 
-    def test_v4_evidence_rejects_pre_failure_count_schemas(self) -> None:
+    def test_evidence_rejects_schemas_without_source_preparation(self) -> None:
         manifest = self.make_manifest()
         old_manifest = copy.deepcopy(manifest)
-        old_manifest["schema"] = "lab-colors-mutation-population-v3"
+        old_manifest["schema"] = "lab-colors-mutation-population-v4"
         old_manifest["manifest_sha256"] = mutation._digest_value(
             mutation._manifest_payload(old_manifest)
         )
@@ -608,7 +709,7 @@ class MutationTruthTest(unittest.TestCase):
 
         _, record = self.record(manifest, 0)
         old_record = copy.deepcopy(record)
-        old_record["schema"] = "lab-colors-mutation-shard-v3"
+        old_record["schema"] = "lab-colors-mutation-shard-v4"
         old_record["record_sha256"] = mutation._digest_value(
             mutation._shard_payload(old_record)
         )
@@ -1354,7 +1455,7 @@ class MutationTruthTest(unittest.TestCase):
             exit_code=0,
         )
 
-        self.assertEqual(record["schema"], "lab-colors-mutation-shard-v4")
+        self.assertEqual(record["schema"], "lab-colors-mutation-shard-v5")
         self.assertEqual(record["counts"]["failure"], 1)
         self.assertEqual(record["exit_code"], 0)
 
@@ -1619,8 +1720,9 @@ class MutationTruthTest(unittest.TestCase):
         shards = self.complete_shards(manifest)
         first = shards / "mutation-shard-0" / "mutants.out"
         baseline_log = first / "log" / "baseline.log"
+        original_baseline_log = baseline_log.read_bytes()
         baseline_log.write_text("tampered baseline\n", encoding="utf-8")
-        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes"):
+        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes|execution evidence"):
             mutation.aggregate(
                 manifest,
                 repo_root=self.root,
@@ -1628,10 +1730,10 @@ class MutationTruthTest(unittest.TestCase):
                 shards_root=shards,
                 observed_revision=self.revision,
             )
-        baseline_log.write_text("baseline\n", encoding="utf-8")
+        baseline_log.write_bytes(original_baseline_log)
         mutant_diff = next((first / "diff").iterdir())
         mutant_diff.write_text("tampered diff\n", encoding="utf-8")
-        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes"):
+        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes|execution evidence"):
             mutation.aggregate(
                 manifest,
                 repo_root=self.root,
@@ -1644,7 +1746,7 @@ class MutationTruthTest(unittest.TestCase):
             path for path in (first / "log").iterdir() if path.name != "baseline.log"
         )
         mutant_log.write_text("tampered mutant log\n", encoding="utf-8")
-        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes"):
+        with self.assertRaisesRegex(mutation.ContractError, "exact artifact bytes|execution evidence"):
             mutation.aggregate(
                 manifest,
                 repo_root=self.root,
@@ -1755,7 +1857,7 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(aggregate["counts"]["timeout"], 1)
         self.assertEqual(aggregate["counts"]["unviable"], 1)
         self.assertEqual(aggregate["counts"]["failure"], 1)
-        self.assertEqual(aggregate["schema"], "lab-colors-mutation-aggregate-v4")
+        self.assertEqual(aggregate["schema"], "lab-colors-mutation-aggregate-v5")
 
     def test_outcome_fixture_rejects_missing_or_extra_summaries(self) -> None:
         parent = self.root / "fixture-length"
@@ -1860,11 +1962,13 @@ class MutationTruthTest(unittest.TestCase):
         first = mutation._build_execution_contract(
             [mutant(0)],
             {"core": "0.1.0"},
+            TEST_CARGO_SHA256,
         )
         first["commands"]["Build"][0] = "hostile"
         second = mutation._build_execution_contract(
             [mutant(0)],
             {"core": "0.1.0"},
+            TEST_CARGO_SHA256,
         )
 
         self.assertEqual(mutation.EXECUTION_COMMANDS["Build"][0], "test")
