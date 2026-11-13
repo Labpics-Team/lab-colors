@@ -1163,6 +1163,22 @@ def _git_quoted_path(path: str) -> bytes:
     ) + b'"'
 
 
+def _pinned_cargo_binary() -> Path:
+    # PATH cargo is commonly a rustup proxy. The manifest and every specimen
+    # select the same explicit toolchain binary, independent of inherited CARGO.
+    raw = _run_bytes(
+        ["rustup", "which", "--toolchain", CARGO_TOOLCHAIN_ID, "cargo"],
+        cwd=Path.cwd(), label="pinned Cargo executable lookup",
+    )
+    try:
+        cargo = Path(raw.decode("utf-8").strip())
+    except UnicodeDecodeError as error:
+        raise ContractError("pinned Cargo executable path is invalid") from error
+    if not cargo.is_absolute() or not cargo.as_posix().endswith("/" + CARGO_BINARY_SUFFIX) or not cargo.is_file():
+        raise ContractError("pinned Cargo executable is unavailable")
+    return cargo
+
+
 def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
     """Give only cargo-mutants' isolated copy a raw-byte Git source artifact.
 
@@ -1225,6 +1241,7 @@ def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
                 oid = by_path[path]
                 git_mode = "100755" if mode & 0o111 else "100644"
             entries.extend(f"{git_mode} {oid}\t".encode("ascii") + os.fsencode(path) + b"\0")
+        _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index")
         _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries))
         tree = _git_output(specimen_root, ["write-tree"], "mutation source tree")
         previous_tree = None if fresh else _git_output(specimen_root, ["rev-parse", "--verify", "HEAD^{tree}"], "previous mutation source")
@@ -1240,7 +1257,7 @@ def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
 
 
 def run_mutation_cargo(source_root: Path, arguments: list[str]) -> None:
-    cargo = Path(os.environ.get("MUTATION_REAL_CARGO", ""))
+    cargo = _pinned_cargo_binary()
     expected_digest = os.environ.get("MUTATION_CARGO_SHA256", "")
     if not cargo.is_absolute() or not cargo.as_posix().endswith("/" + CARGO_BINARY_SUFFIX):
         raise ContractError("mutation underlying Cargo executable is not pinned")
@@ -1305,11 +1322,9 @@ def _cargo_package_versions(
         _validate_mutant(spec, f"population[{index}]", repo_root)["package"]
         for index, spec in enumerate(population)
     }
-    cargo = os.environ.get("CARGO") or shutil.which("cargo")
-    if not cargo:
-        raise ContractError("cargo executable is unavailable for package provenance")
+    cargo = _pinned_cargo_binary()
     raw = _run_bytes(
-        [cargo, "metadata", "--format-version", "1", "--no-deps", "--locked"],
+        [str(cargo), "metadata", "--format-version", "1", "--no-deps", "--locked"],
         cwd=repo_root,
         label="cargo metadata",
     )
@@ -2374,7 +2389,7 @@ def _manifest_command(arguments: argparse.Namespace) -> None:
         revision=arguments.revision,
         run_id=arguments.run_id,
         run_attempt=arguments.run_attempt,
-        cargo_sha256=_digest_file(Path(os.environ.get("CARGO") or shutil.which("cargo") or "")),
+        cargo_sha256=_digest_file(_pinned_cargo_binary()),
         source_root=source_root,
     )
     output = Path(arguments.output)

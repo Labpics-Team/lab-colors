@@ -450,6 +450,19 @@ class MutationTruthTest(unittest.TestCase):
         with self.assertRaisesRegex(mutation.ContractError, "executable committed input"):
             mutation.validate_manifest(manifest)
 
+    def test_manifest_and_adapter_select_the_same_cargo_without_inherited_cargo(self) -> None:
+        cargo = self.external / mutation.CARGO_BINARY_SUFFIX
+        cargo.parent.mkdir(parents=True)
+        cargo.write_bytes(b"native toolchain Cargo, not its rustup proxy\n")
+        for inherited in (None, "/runner/.cargo/bin/cargo", "/runner/source/scripts/mutation_cargo.py"):
+            with self.subTest(inherited=inherited), mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CARGO", None)
+                if inherited is not None:
+                    os.environ["CARGO"] = inherited
+                with mock.patch.object(mutation, "_run_bytes", return_value=(str(cargo) + "\n").encode()) as run:
+                    self.assertEqual(mutation._pinned_cargo_binary(), cargo)
+                self.assertEqual(run.call_args.args[0], ["rustup", "which", "--toolchain", mutation.CARGO_TOOLCHAIN_ID, "cargo"])
+
     def git(
         self,
         *arguments: str,

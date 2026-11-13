@@ -159,7 +159,6 @@ jobs:
           cd "$source_root"
           set +e
           CARGO="$source_root/scripts/mutation_cargo.py" \
-          MUTATION_REAL_CARGO="$(rustup which cargo)" \
           MUTATION_CARGO_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["execution"]["cargo_sha256"])' "$RUNNER_TEMP/mutation-manifest/mutation-manifest.json")" \
           "$RUNNER_TEMP/mutants-bin/cargo-mutants" mutants \
             --baseline=run \
