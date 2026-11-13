@@ -207,6 +207,24 @@ impl ProgramSnapshot {
     pub fn output_opacity(&self, index: u32) -> Result<f64, LabColorsError> {
         Ok(output(&self.inner, index)?.opacity())
     }
+    /// Таблица всех выходов снимка: пять f64 на строку
+    /// `[slot, red, green, blue, opacity]`, строка `i` совпадает с
+    /// `output_slot(i)`/`output_rgb(i)`/`output_opacity(i)`.
+    pub fn copy_output_table(&self) -> Vec<f64> {
+        let outputs = self.inner.outputs();
+        let mut table = Vec::with_capacity(outputs.len() * 5);
+        for output in outputs {
+            let [red, green, blue] = output.source().bytes();
+            table.extend_from_slice(&[
+                f64::from(output.slot()),
+                f64::from(red),
+                f64::from(green),
+                f64::from(blue),
+                output.opacity(),
+            ]);
+        }
+        table
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
