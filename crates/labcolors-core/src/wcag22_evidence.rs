@@ -111,7 +111,17 @@ fn validate_canonical_row(row: &NumericalSiteRecordV2) -> Result<(), String> {
 }
 
 /// Mint the only terminal evidence admitted by the proof-bound WCAG kernel.
+///
+/// Registry lookup and canonical-row validation are constant work over the
+/// immutable `&'static` registry, so the first mint is memoized and every
+/// later caller receives the identical sealed payload by copy.
 pub(crate) fn mint_wcag22_evidence() -> Result<NumericalDecisionEvidenceV1, String> {
+    static MINTED: std::sync::OnceLock<Result<NumericalDecisionEvidenceV1, String>> =
+        std::sync::OnceLock::new();
+    MINTED.get_or_init(mint_wcag22_evidence_uncached).clone()
+}
+
+fn mint_wcag22_evidence_uncached() -> Result<NumericalDecisionEvidenceV1, String> {
     let row = numerical_registry_v2()
         .iter()
         .find(|row| row.site_id == SITE_ID)

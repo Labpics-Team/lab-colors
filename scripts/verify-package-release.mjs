@@ -998,8 +998,8 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "12.0.0") {
-    fail(`release requires conformance pack 12.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "13.0.0") {
+    fail(`release requires conformance pack 13.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
