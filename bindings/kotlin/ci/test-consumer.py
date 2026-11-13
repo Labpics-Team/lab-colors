@@ -330,7 +330,7 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
             capture.save(evidence, capture_error)
         except BaseException as error:
             capture_error = error
-    if primary is not None or capture_error is not None:
+    if primary is not None or capture_error is not None or capture.block.found:
         print(f"{variant}: Android startup capture", file=sys.stderr)
         print(capture.block.text or "No matching AndroidRuntime exception was captured.",
               file=sys.stderr, flush=True)
@@ -342,6 +342,8 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
         raise primary
     if capture_error:
         raise capture_error
+    if capture.block.found:
+        raise ValueError("consumer process reported a fatal AndroidRuntime exception")
     return output
 
 

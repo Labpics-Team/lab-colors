@@ -224,8 +224,10 @@ class ArtifactTests(unittest.TestCase):
                     self.assertIn("FIRST_CAUSE", diagnostic.getvalue())
                     self.assertNotIn("LATER_CAUSE", diagnostic.getvalue())
                 else:
-                    self.interval(root, first + noise, result_code)
-                    self.assertEqual(diagnostic.getvalue(), "")
+                    with self.assertRaisesRegex(ValueError, "fatal AndroidRuntime"):
+                        self.interval(root, first + noise, result_code)
+                    self.assertIn("FIRST_CAUSE", diagnostic.getvalue())
+                    self.assertNotIn("LATER_CAUSE", diagnostic.getvalue())
                 evidence = root / "build/outputs/consumer-diagnostics/debug"
                 block = (evidence / "first-startup-exception.txt").read_text()
                 self.assertIn("FIRST_CAUSE", block)
@@ -238,7 +240,8 @@ class ArtifactTests(unittest.TestCase):
             evidence = root / "build/outputs/consumer-diagnostics/debug"
             self.interval(root, "", 0)
             self.assertEqual(json.loads((evidence / "startup-capture.json").read_text())["status"], "no-match")
-            self.interval(root, PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "TRUNCATED\n", 0)
+            with self.assertRaisesRegex(ValueError, "fatal AndroidRuntime"):
+                self.interval(root, PREFIX + "FATAL EXCEPTION: main\n" + PREFIX + "Process: pics.lab.colors.consumer, PID: 1234\n" + PREFIX + "TRUNCATED\n", 0)
             self.assertEqual(json.loads((evidence / "startup-capture.json").read_text())["status"], "truncated")
             block = elf.CrashBlock()
             block.feed(PREFIX + "FATAL EXCEPTION: main\n")

@@ -81,6 +81,61 @@ class InstrumentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "capture budget"):
             runtime.verify_instrumentation(["INSTRUMENTATION_RESULT: stream=" + "x" * (1 << 20)], set())
 
+    def test_real_capture_rejects_consumer_fatal_with_successful_eight_test_protocol(self):
+        from test_artifact import PipeProcess, PREFIX
+
+        for package, fatal in (("pics.lab.colors.consumer", True), ("other.app", False)):
+            with self.subTest(package=package), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                evidence = root / "runtime/debug"
+                process = PipeProcess()
+                captures = []
+                original = runtime.CrashCapture
+                command = ["adb", "shell", "am", "instrument", "-w", "-r"]
+
+                def construct(adb):
+                    capture = original(adb)
+                    captures.append(capture)
+                    return capture
+
+                def execute(arguments, **kwargs):
+                    if arguments == command:
+                        self.assertTrue(captures[0].started.is_set())
+                        kwargs["stdout"].write(report(DEBUG))
+                        process.writer.write((PREFIX + "FATAL EXCEPTION: main\n" + PREFIX +
+                                              f"Process: {package}, PID: 1234\n" + PREFIX +
+                                              "java.lang.NoClassDefFoundError: NATIVE_STARTUP_FAILURE\n").encode())
+                    elif arguments[1:3] == ["shell", "log"]:
+                        process.writer.write(("10-24 12:34:56.789  1234  1234 E ConsumerCapture: " +
+                                              arguments[-1] + "\n").encode())
+                    elif arguments[1:] != ["logcat", "-b", "crash", "-c"]:
+                        self.fail("unexpected capture command: " + repr(arguments))
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                try:
+                    with patch.object(runtime, "CrashCapture", side_effect=construct), \
+                         patch.object(runtime.subprocess, "Popen", return_value=process), \
+                         patch.object(runtime.subprocess, "run", side_effect=execute), \
+                         redirect_stderr(io.StringIO()) as diagnostic:
+                        if fatal:
+                            with self.assertRaisesRegex(ValueError, "fatal AndroidRuntime"):
+                                runtime.connected_test(command, root, {}, Path("adb"), "debug", evidence)
+                            self.assertIn("NATIVE_STARTUP_FAILURE", diagnostic.getvalue())
+                        else:
+                            runtime.connected_test(command, root, {}, Path("adb"), "debug", evidence)
+                            self.assertEqual(diagnostic.getvalue(), "")
+                finally:
+                    self.assertTrue(process.waited)
+                    self.assertTrue(process.stdout.closed)
+                    self.assertFalse(captures[0].reader.is_alive())
+                # Prove this is a fatal-capture refusal, not a malformed report
+                # or nonzero command result disguised as the counterexample.
+                with (evidence / "instrumentation.txt").open() as output:
+                    self.assertEqual(len(runtime.verify_instrumentation(output, set(DEBUG))), 8)
+                self.assertEqual(json.loads((evidence / "connected-exit.json").read_text())["returncode"], 0)
+                capture = json.loads((evidence / "startup-capture.json").read_text())
+                self.assertEqual(capture["exceptionFound"], fatal)
+
 
 DEBUG = ["runtimeHistoryAndThreadMigration", "authoringIsCanonicalAndTransactional",
          "hostFailureReentryRevocationAndRecovery", "numericalVectors", "sourceIdentityAndUntrustedEnvelope",
@@ -137,7 +192,7 @@ class PreparedRuntimeTests(unittest.TestCase):
 
         class Capture:
             def __init__(self, adb):
-                self.block = SimpleNamespace(text="")
+                self.block = SimpleNamespace(text="", found=False)
                 self.closed = False
                 captures.append(self)
             def start(self): pass
