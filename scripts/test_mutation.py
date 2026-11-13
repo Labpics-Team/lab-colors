@@ -373,8 +373,16 @@ class MutationTruthTest(unittest.TestCase):
         specimen = self.external / "specimen"
         shutil.copytree(source_root, specimen)
         original = (source_root / "crates/core/src/lib.rs").read_bytes()
+        def git_metadata() -> dict[str, tuple[int, int]]:
+            return {
+                entry.relative_to(specimen).as_posix(): (entry.lstat().st_mtime_ns, entry.lstat().st_ctime_ns)
+                for entry in [specimen / ".git", *(specimen / ".git").rglob("*")]
+            }
         baseline_tree = mutation.snapshot_cargo_source(source_root, specimen)
         self.assertEqual(baseline_tree, self.git_output("rev-parse", "HEAD^{tree}"))
+        metadata = git_metadata()
+        self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), baseline_tree)
+        self.assertEqual(git_metadata(), metadata)
         path = specimen / "crates/core/src/lib.rs"
         original_time = path.stat()
         changed = original.replace(b"true", b"false") + b"// raw CRLF\r\n"
@@ -385,7 +393,9 @@ class MutationTruthTest(unittest.TestCase):
         actual = subprocess.check_output([self.git_binary, "show", "HEAD:crates/core/src/lib.rs"], cwd=specimen, env=self.git_env)
         self.assertEqual(actual, changed)
         head = subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env)
+        metadata = git_metadata()
         self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), changed_tree)
+        self.assertEqual(git_metadata(), metadata)
         self.assertEqual(subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env), head)
         self.assertFalse((specimen / ".git/index").exists())
         self.assertEqual(list(self.external.glob("mutation-source-index-*")), [])
@@ -394,6 +404,10 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual((source_root / "crates/core/src/lib.rs").read_bytes(), original)
         self.assertFalse((source_root / ".git").exists())
         self.assertEqual(self.git_output("rev-parse", "HEAD"), self.revision)
+        blob = subprocess.check_output([self.git_binary, "rev-parse", "HEAD:crates/core/src/lib.rs"], cwd=specimen, env=self.git_env).decode().strip()
+        (specimen / ".git/objects" / blob[:2] / blob[2:]).unlink()
+        with self.assertRaisesRegex(mutation.ContractError, "Git blob"):
+            mutation.snapshot_cargo_source(source_root, specimen)
 
     @unittest.skipUnless(os.open in os.supports_dir_fd, "native directory descriptors required")
     def test_mutation_snapshot_refuses_source_root_extra_inputs_and_foreign_metadata(self) -> None:

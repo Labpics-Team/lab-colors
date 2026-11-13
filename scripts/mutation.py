@@ -1228,7 +1228,7 @@ def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
             raise ContractError("mutation Git root is not the build copy")
         paths = [path for path, entry in sorted(actual.items()) if entry[0] != "120000"]
         objects = _run_git_bytes(
-            specimen_root, ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+            specimen_root, ["hash-object", "--no-filters", "--stdin-paths"],
             "snapshot raw mutation source", input_bytes=b"\n".join(map(_git_quoted_path, paths)) + b"\n",
         ).decode("ascii").splitlines()
         if len(objects) != len(paths) or any(not HEX40.fullmatch(oid) for oid in objects):
@@ -1238,23 +1238,48 @@ def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
         for path, (kind, mode, value) in sorted(actual.items()):
             if kind == "120000":
                 oid = _run_git_bytes(
-                    specimen_root, ["hash-object", "-w", "--stdin"], "snapshot mutation symlink", input_bytes=os.fsencode(value),
+                    specimen_root, ["hash-object", "--stdin"], "snapshot mutation symlink", input_bytes=os.fsencode(value),
                 ).decode("ascii").strip()
+                by_path[path] = oid
                 git_mode = "120000"
             else:
                 oid = by_path[path]
                 git_mode = "100755" if mode & 0o111 else "100644"
             entries.extend(f"{git_mode} {oid}\t".encode("ascii") + os.fsencode(path) + b"\0")
-        # Cargo watches the source Git metadata. An index rewrite would rerun
-        # the source descriptor and recompile unchanged Core between Build/Test.
-        # This disposable native index computes the same raw tree outside it.
-        with tempfile.TemporaryDirectory(prefix="mutation-source-index-", dir=specimen_root.parent) as temporary:
-            index_file = Path(temporary) / "index"
-            _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index", index_file=index_file)
-            _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries), index_file=index_file)
-            tree = _run_git_bytes(specimen_root, ["write-tree"], "mutation source tree", index_file=index_file).decode("ascii").strip()
         previous_tree = None if fresh else _git_output(specimen_root, ["rev-parse", "--verify", "HEAD^{tree}"], "previous mutation source")
-        if tree != previous_tree:
+        previous_entries = [] if fresh else [
+            record.replace(b" blob ", b" ", 1)
+            for record in _run_git_bytes(
+                specimen_root, ["ls-tree", "-rz", "--full-tree", "-r", previous_tree],
+                "previous raw mutation source",
+            ).split(b"\0") if record
+        ]
+        # hash-object -w refreshes even existing object mtimes. Prove equality
+        # from every raw blob, mode and literal link before any metadata write.
+        # Cargo can then reuse an unchanged Build for Test without weakening
+        # the source descriptor's observation of the complete Git directory.
+        tree = previous_tree
+        if sorted(previous_entries) == sorted(bytes(entries).split(b"\0")[:-1]):
+            # Matching names/OIDs must still refer to real, intact Git blobs.
+            _git_blob_bytes(specimen_root, by_path.values())
+        else:
+            written = _run_git_bytes(
+                specimen_root, ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+                "store raw mutation source", input_bytes=b"\n".join(map(_git_quoted_path, paths)) + b"\n",
+            ).decode("ascii").splitlines()
+            if written != objects:
+                raise ContractError("mutation source changed while storing its objects")
+            for path, (kind, _, value) in sorted(actual.items()):
+                if kind == "120000":
+                    _run_git_bytes(
+                        specimen_root, ["hash-object", "-w", "--stdin"],
+                        "store mutation symlink", input_bytes=os.fsencode(value),
+                    )
+            with tempfile.TemporaryDirectory(prefix="mutation-source-index-", dir=specimen_root.parent) as temporary:
+                index_file = Path(temporary) / "index"
+                _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index", index_file=index_file)
+                _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries), index_file=index_file)
+                tree = _run_git_bytes(specimen_root, ["write-tree"], "mutation source tree", index_file=index_file).decode("ascii").strip()
             commit = _git_output(specimen_root, ["-c", "user.name=Lab Colors Verification", "-c", "user.email=verification@localhost", "commit-tree", tree, "-m", "isolated mutation source artifact"], "commit mutation source")
             _run_git_bytes(specimen_root, ["update-ref", "HEAD", commit], "bind mutation source artifact")
         if _walk_materialized_source_fd(specimen_fd, excluded_root_entries=frozenset({".git", "target"}))[0] != actual:
