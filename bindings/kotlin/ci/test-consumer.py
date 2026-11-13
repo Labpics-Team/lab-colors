@@ -381,13 +381,14 @@ def capture_device_failure(adb: Path, evidence: Path) -> None:
             record.update({"status": "completed", "returncode": result.returncode})
         except (OSError, subprocess.SubprocessError) as error:
             record.update({"status": "probe-error", "error": type(error).__name__})
-        output.seek(0)
-        content = output.read(65537)
-    record.update({"truncated": len(content) > 65536, "bytesObserved": len(content)})
-    (evidence / "device-logcat.txt").write_bytes(content[:65536])
+        size = output.seek(0, os.SEEK_END)
+        output.seek(max(0, size - 65536))
+        content = output.read(65536)
+    record.update({"truncated": size > 65536, "bytesObserved": size})
+    (evidence / "device-logcat.txt").write_bytes(content)
     (evidence / "device-logcat.json").write_text(json.dumps(record) + "\n")
     print("ANDROID_DEVICE_FAILURE " + json.dumps(record | {
-        "output": content[:4096].decode("utf-8", errors="replace"),
+        "output": content[-4096:].decode("utf-8", errors="replace"),
         "logTruncated": len(content) > 4096}), file=sys.stderr, flush=True)
 
 

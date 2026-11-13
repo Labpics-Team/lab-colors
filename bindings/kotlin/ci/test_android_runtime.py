@@ -268,11 +268,11 @@ class PreparedRuntimeTests(unittest.TestCase):
         probes = [call for call in calls if call[0] == "logcat"]
         self.assertEqual(len(probes), 1, "failure context must be captured once before main returns")
         self.assertEqual(calls[-1], probes[0], "device context must follow the failing runtime operation")
-        self.assertEqual((root / "runtime/device-logcat.txt").read_bytes(), output[:65536])
+        self.assertEqual((root / "runtime/device-logcat.txt").read_bytes(), output[-65536:])
         receipt = json.loads((root / "runtime/device-logcat.json").read_text())
         self.assertEqual(receipt["probe"], "device-logcat")
         self.assertEqual(receipt["truncated"], len(output) > 65536)
-        self.assertEqual(receipt["bytesObserved"], min(len(output), 65537))
+        self.assertEqual(receipt["bytesObserved"], len(output))
         if error:
             self.assertEqual(receipt["status"], "probe-error")
             self.assertEqual(receipt["error"], error)
@@ -336,7 +336,8 @@ class PreparedRuntimeTests(unittest.TestCase):
             for probe in ("nonzero", "timeout", "oversize"):
                 with self.subTest(primary=primary, probe=probe), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
-                    output = DEVICE_LOGCAT + b"\xff\xfe" + b"x" * 70000 if probe == "oversize" else DEVICE_LOGCAT
+                    noise = (b"11-13 12:00:00.000 100 100 I preceding: " + b"x" * 1000 + b"\n") * 70
+                    output = noise + b"\xff\xfe\n" + DEVICE_LOGCAT if probe == "oversize" else DEVICE_LOGCAT
                     options = {"device_output": output, "device_exit": 43 if probe == "nonzero" else 0,
                                "device_timeout": probe == "timeout"}
                     if primary == "crashed protocol":
@@ -349,6 +350,7 @@ class PreparedRuntimeTests(unittest.TestCase):
                         self.assertEqual(caught.exception.cmd[1:4], ["shell", "am", "instrument"])
                     self.assert_device_capture(root, output, returncode=43 if probe == "nonzero" else 0,
                                                error="TimeoutExpired" if probe == "timeout" else None)
+                    self.assertIn(DEVICE_LOGCAT, (root / "runtime/device-logcat.txt").read_bytes())
                     self.assertFalse((root / "runtime/release/tests.json").exists())
 
     def test_device_evidence_file_and_log_errors_keep_original_command_exit(self):
