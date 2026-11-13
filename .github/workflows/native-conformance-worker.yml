@@ -124,6 +124,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24.14.0'
@@ -146,6 +147,28 @@ jobs:
             ${{ runner.temp }}/android-distribution/authoring-surface.json
           if-no-files-found: error
           retention-days: 1
+      - name: prepare one external consumer of the exact SDK
+        id: prepare_consumer
+        run: python3 bindings/kotlin/ci/prepare-consumer.py "$RUNNER_TEMP/android-distribution" "$RUNNER_TEMP/android-consumer"
+      - name: assemble and verify the debug and R8 applications once
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble
+      - name: bind the application outputs to their source and SDK
+        run: python3 bindings/kotlin/ci/consumer_artifact.py "$RUNNER_TEMP/android-consumer" "$RUNNER_TEMP/android-distribution" "$RUNNER_TEMP/android-consumer-artifact"
+      - name: pass the same signed application bytes to both Android environments
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-consumer-${{ github.sha }}
+          path: ${{ runner.temp }}/android-consumer-artifact
+          compression-level: 0
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+      - name: stop the producer Gradle after success, failure or cancellation
+        if: always() && steps.prepare_consumer.outcome == 'success'
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --stop
+      - name: verify staged assembly failure artifact inventory
+        if: failure()
+        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory
   android-consumer:
     name: android consumer (${{ matrix.name }})
     needs: android-build
@@ -171,16 +194,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: android-sdk-${{ github.sha }}
-          path: ${{ runner.temp }}/android-artifact
-      - name: install the archive into an independent Android project
-        id: prepare_consumer
-        run: python3 bindings/kotlin/ci/prepare-consumer.py "$RUNNER_TEMP/android-artifact" "$RUNNER_TEMP/android-consumer"
-      - name: compile the independent application and tests before starting an emulator
-        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --assemble
+          name: android-consumer-${{ github.sha }}
+          path: ${{ runner.temp }}/android-consumer
       - name: allow this ephemeral runner to use hardware virtualization
         run: sudo setfacl -m "u:$(id -un):rw" /dev/kvm
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
@@ -191,12 +208,14 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" ${{ matrix.page }}
-      - name: stop Gradle after success, failure or cancellation
-        if: always() && steps.prepare_consumer.outcome == 'success'
-        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --stop
-      - name: verify staged failure artifact inventory
+      - name: retain runtime diagnostics on failure
         if: failure()
-        run: python3 bindings/kotlin/ci/test-consumer.py "$RUNNER_TEMP/android-consumer" --inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-runtime-${{ github.sha }}-${{ matrix.page }}
+          path: ${{ runner.temp }}/android-consumer/runtime
+          if-no-files-found: ignore
+          retention-days: 1
   android-package:
     name: android package
     needs: [android-build, android-consumer]

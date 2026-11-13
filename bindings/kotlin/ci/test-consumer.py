@@ -2,6 +2,7 @@
 """Проверить установленный SDK на Android и в приложении после R8."""
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 import struct
 import shutil
@@ -11,7 +12,6 @@ import threading
 import time
 import uuid
 from typing import IO
-import xml.etree.ElementTree as ET
 import zipfile
 
 MACHINES = {"arm64-v8a": (2, 183), "armeabi-v7a": (1, 40), "x86": (1, 3), "x86_64": (2, 62)}
@@ -69,19 +69,87 @@ def check_apk(path: Path, sdk: Path) -> None:
     subprocess.run([str(sdk / "build-tools/36.0.0/zipalign"), "-c", "-P", "16", "4", str(path)], check=True)
 
 
-def verify_reports(directory: Path, required: set[str]) -> None:
-    passed = set()
-    for report in directory.rglob("TEST-*.xml"):
-        tree = ET.parse(report)
-        for suite in tree.iter("testsuite"):
-            if any(int(suite.get(key, "0")) != 0 for key in ("failures", "errors", "skipped")):
-                raise ValueError("external consumer test suite failed or was skipped")
-        for case in tree.iter("testcase"):
-            if any(child.tag in ("failure", "error", "skipped") for child in case):
-                raise ValueError("external consumer test failed or was skipped")
-            passed.add(case.attrib["name"])
+def verify_instrumentation(lines: Iterable[str], required: set[str]) -> list[dict]:
+    """Принять завершённый raw-протокол AndroidJUnitRunner, а не exit code adb."""
+    # AndroidJUnitRunner reports paired start/success status bundles, a stable
+    # total count and a final Instrumentation result (-1). Failure and ignored
+    # status codes must never become a successful runtime qualification.
+    status = {}
+    result = {}
+    completed = []
+    seen = set()
+    active = None
+    total = None
+    last_key = None
+    finished = False
+    bytes_observed = 0
+    for line in lines:
+        bytes_observed += len(line.encode("utf-8"))
+        if bytes_observed > 1 << 20:
+            raise ValueError("instrumentation report exceeds its capture budget")
+        text = line.rstrip("\r\n")
+        if finished:
+            if text.strip():
+                raise ValueError("instrumentation emitted data after completion")
+            continue
+        if text.startswith("INSTRUMENTATION_STATUS: "):
+            fields, content = status, text.removeprefix("INSTRUMENTATION_STATUS: ")
+        elif text.startswith("INSTRUMENTATION_RESULT: "):
+            if status or active:
+                raise ValueError("instrumentation ended before its active test completed")
+            fields, content = result, text.removeprefix("INSTRUMENTATION_RESULT: ")
+        else:
+            fields = None
+        if fields is not None:
+            key, separator, value = content.partition("=")
+            if not separator or not key or key in fields:
+                raise ValueError("malformed or duplicate instrumentation field")
+            if key in ("shortMsg", "longMsg", "Error") and value:
+                raise ValueError("instrumentation reported an execution error: " + value)
+            fields[key] = value
+            last_key = key
+            continue
+        if text.startswith("INSTRUMENTATION_STATUS_CODE: "):
+            code = text.removeprefix("INSTRUMENTATION_STATUS_CODE: ")
+            if code not in ("1", "0"):
+                raise ValueError("instrumentation test failed, was skipped, or has an unknown status: " + code)
+            if result:
+                raise ValueError("instrumentation test status follows its final result")
+            if status.get("id") != "AndroidJUnitRunner" or not status.get("class") or not status.get("test"):
+                raise ValueError("instrumentation test identity is missing")
+            if any(not status.get(key, "").isascii() or not status.get(key, "").isdigit()
+                   for key in ("numtests", "current")):
+                raise ValueError("instrumentation test counts are invalid")
+            count, current = int(status["numtests"]), int(status["current"])
+            if not count or (total is not None and count != total) or current != len(completed) + 1 or current > count:
+                raise ValueError("instrumentation test count changed or sequence is incomplete")
+            total = count
+            identity = (status["class"], status["test"])
+            if code == "1":
+                if active is not None or identity in seen:
+                    raise ValueError("instrumentation test started more than once")
+                active = identity
+            else:
+                if active != identity or status.get("stack"):
+                    raise ValueError("instrumentation success has no matching clean start")
+                completed.append({"class": identity[0], "test": identity[1]})
+                seen.add(identity)
+                active = None
+            status = {}
+            last_key = None
+        elif text.startswith("INSTRUMENTATION_CODE: "):
+            if text.removeprefix("INSTRUMENTATION_CODE: ") != "-1" or status or active or not total or len(completed) != total:
+                raise ValueError("instrumentation run did not complete every declared test")
+            finished = True
+            last_key = None
+        elif text.startswith("INSTRUMENTATION_") or (text.strip() and last_key not in ("stream", "stack")):
+            raise ValueError("invalid instrumentation protocol line: " + text)
+    if not finished:
+        raise ValueError("instrumentation run has no completion result")
+    passed = {case["test"] for case in completed}
     if not required.issubset(passed):
         raise ValueError("consumer did not execute its required tests: " + str(required - passed))
+    return completed
 
 
 class CrashBlock:
@@ -225,16 +293,21 @@ class CrashCapture:
             "error": repr(error) if error else None}) + "\n")
 
 
-def connected_test(command: list[str], consumer: Path, environment: dict, adb: Path, variant: str) -> None:
-    evidence = consumer / "build/outputs/consumer-diagnostics" / variant
+def connected_test(command: list[str], consumer: Path, environment: dict, adb: Path, variant: str,
+                   evidence_dir: Path | None = None) -> Path:
+    evidence = evidence_dir or consumer / "build/outputs/consumer-diagnostics" / variant
     evidence.mkdir(parents=True, exist_ok=True)
+    output = evidence / "instrumentation.txt"
     capture = CrashCapture(adb)
     primary = None
     capture_error = None
     try:
         capture.start()
         try:
-            result = subprocess.run(command, cwd=consumer, env=environment, check=False)
+            with output.open("w", encoding="utf-8") as stream, \
+                 (evidence / "instrumentation-stderr.txt").open("w", encoding="utf-8") as errors:
+                result = subprocess.run(command, cwd=consumer, env=environment, check=False,
+                                        stdout=stream, stderr=errors, text=True)
         except BaseException as error:
             primary = error
             (evidence / "connected-exit.json").write_text(json.dumps({"exception": repr(error)}) + "\n")
@@ -257,7 +330,7 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
             capture.save(evidence, capture_error)
         except BaseException as error:
             capture_error = error
-    if primary is not None or capture_error is not None:
+    if primary is not None or capture_error is not None or capture.block.found:
         print(f"{variant}: Android startup capture", file=sys.stderr)
         print(capture.block.text or "No matching AndroidRuntime exception was captured.",
               file=sys.stderr, flush=True)
@@ -269,6 +342,9 @@ def connected_test(command: list[str], consumer: Path, environment: dict, adb: P
         raise primary
     if capture_error:
         raise capture_error
+    if capture.block.found:
+        raise ValueError("consumer process reported a fatal AndroidRuntime exception")
+    return output
 
 
 def wait_for_package_manager(adb: Path, timeout: float = 30) -> None:
@@ -292,12 +368,14 @@ def wait_for_package_manager(adb: Path, timeout: float = 30) -> None:
 
 
 def main(consumer: Path, expected_page: int) -> None:
+    from consumer_artifact import verify_artifact
+
     sdk = Path(os.environ["ANDROID_HOME"])
     adb = sdk / "platform-tools/adb"
     if expected_page not in (4096, 16384):
         raise ValueError("unknown memory page contract")
-    executable = (consumer / "gradle-path.txt").read_text().strip()
-    environment = dict(os.environ, PATH=os.environ["JAVA_HOME"] + "/bin:" + str(sdk / "platform-tools") + ":/usr/bin:/bin")
+    verify_artifact(consumer)
+    environment = dict(os.environ)
     expected_tests = {
         "debug": {"runtimeHistoryAndThreadMigration", "authoringIsCanonicalAndTransactional", "hostFailureReentryRevocationAndRecovery",
                   "numericalVectors", "sourceIdentityAndUntrustedEnvelope", "compiledApiIncludesEveryNativeAndAuthoringOperation",
@@ -305,6 +383,10 @@ def main(consumer: Path, expected_page: int) -> None:
         "release": {"optimizedApplicationExecutesTheInstalledNativePackage", "applicationUsesTheRequestedMemoryPageSize"},
     }
     for variant, tests in expected_tests.items():
+        application_apks = list((consumer / "outputs/apk" / variant).glob("*.apk"))
+        test_apks = list((consumer / "outputs/apk/androidTest" / variant).glob("*.apk"))
+        if len(application_apks) != 1 or len(test_apks) != 1:
+            raise ValueError("expected one verified application/test APK pair")
         wait_for_package_manager(adb)
         # Application.onCreate должен выполнить этот APK, а не оставить успех
         # от предыдущей debug/release установки в SharedPreferences.
@@ -314,29 +396,29 @@ def main(consumer: Path, expected_page: int) -> None:
             cleared = subprocess.check_output([str(adb), "shell", "pm", "clear", package], text=True).strip()
             if cleared != "Success":
                 raise ValueError("cannot clear previous consumer application state")
-        reports = consumer / "build/outputs/androidTest-results"
-        # Результат debug не может подтвердить пропущенный тест release.
-        if reports.exists():
-            shutil.rmtree(reports)
-        connected_test([executable, "--max-workers=2", "-PconsumerBuildType=" + variant,
-                        "-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=" + str(expected_page),
-                        "connected" + variant.title() + "AndroidTest"], consumer, environment, adb, variant)
-        verify_reports(reports, tests)
-        evidence = consumer / "build/outputs/verified-android-tests" / variant
+        for apk in (application_apks[0], test_apks[0]):
+            installed = subprocess.check_output([str(adb), "install", "-r", "-t", str(apk)], text=True).strip().splitlines()
+            if not installed or installed[-1] != "Success":
+                raise ValueError("Android did not confirm installation of the verified APK")
+        # Mutable runtime evidence never changes the material checked by its manifest.
+        evidence = consumer / "runtime" / variant
         if evidence.exists():
             shutil.rmtree(evidence)
-        shutil.copytree(reports, evidence)
-        apks = list((consumer / "build/outputs/apk" / variant).glob("*.apk"))
-        if len(apks) != 1:
-            raise ValueError("expected one installed application APK")
-        check_apk(apks[0], sdk)
-    mapping = consumer / "build/outputs/mapping/release/mapping.txt"
-    if not mapping.is_file() or not mapping.read_text().strip():
-        raise ValueError("release consumer did not run R8")
+        output = connected_test([str(adb), "shell", "am", "instrument", "-w", "-r",
+                                 "-e", "expectedPageSize", str(expected_page),
+                                 "pics.lab.colors.consumer.test/androidx.test.runner.AndroidJUnitRunner"],
+                                consumer, environment, adb, variant, evidence)
+        with output.open(encoding="utf-8") as report:
+            completed = verify_instrumentation(report, tests)
+        verify_artifact(consumer)
+        (evidence / "tests.json").write_text(json.dumps({"pageSize": expected_page, "tests": completed}) + "\n")
+        print(f"{variant}: {len(completed)} Android instrumentation tests passed.")
     print(f"Installed SDK verified: debug, R8 release, {expected_page}-byte Android pages; all native dependencies inspected.")
 
 
 def inventory(consumer: Path, stages: dict | None = None) -> None:
+    from consumer_artifact import artifact_inventory
+
     evidence = consumer / "build/outputs/consumer-diagnostics"
     evidence.mkdir(parents=True, exist_ok=True)
     state_path = evidence / "assembly-stages.json"
@@ -345,29 +427,15 @@ def inventory(consumer: Path, stages: dict | None = None) -> None:
         state = stages
     else:
         state = json.loads(state_path.read_text()) if state_path.is_file() else {variant: {"app": "not-built", "test": "not-built"} for variant in ("debug", "release")}
-    outputs = consumer / "build/outputs"
-    categories = {}
-    missing = []
-    for variant in ("debug", "release"):
-        required = {"app-apk": list((outputs / "apk" / variant).glob("*.apk")),
-                    "test-apk": list((outputs / "apk/androidTest" / variant).glob("*.apk"))}
-        if variant == "release":
-            for name in ("mapping.txt", "configuration.txt", "usage.txt", "seeds.txt"):
-                required[name] = [outputs / "mapping/release" / name]
-        for category, paths in required.items():
-            files = [path for path in paths if path.is_file() and (path.stat().st_size or category in ("usage.txt", "seeds.txt"))]
-            stage = state[variant]["test" if category == "test-apk" else "app"]
-            status = "not-built" if stage != "assembled" else "present" if files else "missing"
-            key = variant + "/" + category
-            categories[key] = {"status": status, "files": [str(path.relative_to(outputs)) for path in files]}
-            if status == "missing":
-                missing.append(key)
-    (evidence / "artifact-inventory.json").write_text(json.dumps({"stages": state, "categories": categories, "missing": missing}, indent=2) + "\n")
-    if missing:
-        raise ValueError("missing required capture artifact: " + ", ".join(missing))
+    data = artifact_inventory(consumer / "build/outputs", state)
+    (evidence / "artifact-inventory.json").write_text(json.dumps(data, indent=2) + "\n")
+    if data["missing"]:
+        raise ValueError("missing required capture artifact: " + ", ".join(data["missing"]))
 
 
 def assemble(consumer: Path) -> None:
+    from consumer_artifact import require_assembled
+
     executable = (consumer / "gradle-path.txt").read_text().strip()
     environment = dict(os.environ, PATH=os.environ["JAVA_HOME"] + "/bin:/usr/bin:/bin")
     stages = {variant: {"app": "not-built", "test": "not-built"} for variant in ("debug", "release")}
@@ -389,15 +457,17 @@ def assemble(consumer: Path) -> None:
                            cwd=consumer, env=environment, check=True)
             stages[variant][category] = "assembled"
             inventory(consumer, stages)
+        app_apks = list((consumer / "build/outputs/apk" / variant).glob("*.apk"))
+        test_apks = list((consumer / "build/outputs/apk/androidTest" / variant).glob("*.apk"))
+        if len(app_apks) != 1 or len(test_apks) != 1:
+            raise ValueError("expected one application/test APK pair")
+        check_apk(app_apks[0], Path(os.environ["ANDROID_HOME"]))
         if variant == "release":
-            app_apks = list((consumer / "build/outputs/apk/release").glob("*.apk"))
-            test_apks = list((consumer / "build/outputs/apk/androidTest/release").glob("*.apk"))
-            if len(app_apks) != 1 or len(test_apks) != 1:
-                raise ValueError("expected one release app/test APK pair")
             with (evidence / "desugar-linkage.txt").open("w") as output:
                 subprocess.run([sys.executable, str(Path(__file__).with_name("desugar-linkage.py")),
                                 str(app_apks[0]), str(test_apks[0])], check=True,
                                stdout=output, stderr=subprocess.STDOUT)
+    require_assembled(consumer / "build/outputs")
 
 
 def stop(consumer: Path) -> None:
