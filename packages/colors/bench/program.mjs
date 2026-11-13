@@ -63,12 +63,21 @@ for (let sample = 0; sample <= samples; sample += 1) {
         assert.equal(snapshot.state, refused ? "failed" : "ready");
         if (!refused) {
           assert.equal(snapshot.outputCount(), nodes);
+          // Табличный readout снимка: один переход границы на снимок вместо
+          // трёх на выход. Baseline-пакет отвечает только поштучными геттерами.
+          const table = typeof snapshot.copyOutputTable === "function"
+            ? snapshot.copyOutputTable()
+            : null;
           for (let output = 0; output < nodes; output += 1) {
-            const slot = snapshot.outputSlot(output);
+            const row = table === null ? -1 : output * 5;
+            const slot = table === null ? snapshot.outputSlot(output) : table[row];
             assert.equal(slot, output + 1);
-            const rgb = snapshot.outputRgb(output);
+            const rgb = table === null
+              ? snapshot.outputRgb(output)
+              : [table[row + 1], table[row + 2], table[row + 3]];
             assert.deepEqual([...rgb], color(slot - 1));
-            assert.equal(snapshot.outputOpacity(output), 1);
+            const opacity = table === null ? snapshot.outputOpacity(output) : table[row + 4];
+            assert.equal(opacity, 1);
             checksum = (checksum + slot + rgb[0]) >>> 0;
           }
         }
