@@ -19,9 +19,9 @@ import tempfile
 from typing import Any
 
 
-SCHEMA_MANIFEST = "lab-colors-mutation-population-v4"
-SCHEMA_SHARD = "lab-colors-mutation-shard-v4"
-SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v4"
+SCHEMA_MANIFEST = "lab-colors-mutation-population-v5"
+SCHEMA_SHARD = "lab-colors-mutation-shard-v5"
+SCHEMA_AGGREGATE = "lab-colors-mutation-aggregate-v5"
 SHARD_COUNT = 32
 SHARD_ALGORITHM = "round-robin"
 TOOL_VERSION = "25.3.1"
@@ -40,6 +40,8 @@ CONFIG_RELPATH = ".cargo/mutants.toml"
 EXECUTION_SOURCE_DIGEST_LAW = "canonical-json-full-root-mode-content-symlink-v1"
 CARGO_TOOLCHAIN_ID = "1.96.0-x86_64-unknown-linux-gnu"
 CARGO_BINARY_SUFFIX = f"toolchains/{CARGO_TOOLCHAIN_ID}/bin/cargo"
+CARGO_ADAPTER_RELPATH = "scripts/mutation_cargo.py"
+CARGO_EXECUTION_PREFIX = "@@labcolors-mutation-cargo-v1 "
 EXECUTION_COMMANDS = {
     "Build": ["test", "--no-run", "--verbose"],
     "Test": ["test", "--verbose"],
@@ -395,13 +397,17 @@ def _run_git_bytes(
     label: str,
     *,
     input_bytes: bytes | None = None,
+    index_file: Path | None = None,
 ) -> bytes:
+    environment = _git_authority_environment()
+    if index_file is not None:
+        environment["GIT_INDEX_FILE"] = str(index_file)
     return _run_bytes(
         ["git", "--no-replace-objects", *arguments],
         cwd=repo_root,
         label=label,
         input_bytes=input_bytes,
-        environment=_git_authority_environment(),
+        environment=environment,
     )
 
 
@@ -732,6 +738,8 @@ def _digest_fd(descriptor: int) -> str:
 
 def _walk_materialized_source_fd(
     source_fd: int,
+    *,
+    excluded_root_entries: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, tuple[str, int, str]], set[str]]:
     files: dict[str, tuple[str, int, str]] = {}
     directories: set[str] = set()
@@ -756,6 +764,9 @@ def _walk_materialized_source_fd(
                 stack.pop()
                 if owns_descriptor:
                     os.close(directory_fd)
+                continue
+
+            if relative_parent is None and child_name in excluded_root_entries:
                 continue
 
             relative = (
@@ -1147,10 +1158,163 @@ def materialize_execution_source(
     return execution_source
 
 
+def _git_quoted_path(path: str) -> bytes:
+    # --stdin-paths accepts Git's byte-oriented C quoting, not JSON \u escapes.
+    return b'"' + b"".join(
+        bytes([byte]) if 32 <= byte < 127 and byte not in (34, 92)
+        else f"\\{byte:03o}".encode("ascii")
+        for byte in os.fsencode(path)
+    ) + b'"'
+
+
+def _pinned_cargo_binary() -> Path:
+    # PATH cargo is commonly a rustup proxy. The manifest and every specimen
+    # select the same explicit toolchain binary, independent of inherited CARGO.
+    raw = _run_bytes(
+        ["rustup", "which", "--toolchain", CARGO_TOOLCHAIN_ID, "cargo"],
+        cwd=Path.cwd(), label="pinned Cargo executable lookup",
+    )
+    try:
+        cargo = Path(raw.decode("utf-8").strip())
+    except UnicodeDecodeError as error:
+        raise ContractError("pinned Cargo executable path is invalid") from error
+    if not cargo.is_absolute() or not cargo.as_posix().endswith("/" + CARGO_BINARY_SUFFIX) or not cargo.is_file():
+        raise ContractError("pinned Cargo executable is unavailable")
+    return cargo
+
+
+def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
+    """Give only cargo-mutants' isolated copy a raw-byte Git source artifact.
+
+    The pristine materialization stays unchanged. Each Build/Test snapshots the
+    current copy before Cargo observes its metadata, including neutral mutations.
+    Git plumbing avoids attributes, filters, hooks and any shared repository.
+    """
+    source_root = _resolve_path(source_root, "pristine mutation source")
+    specimen_root = _resolve_path(specimen_root, "mutation build copy")
+    source_fd = _open_source_root(source_root)
+    specimen_fd = _open_source_root(specimen_root)
+    try:
+        _assert_directory_fds_disjoint(source_fd, specimen_fd)
+        expected, expected_dirs = _walk_materialized_source_fd(source_fd)
+        actual, actual_dirs = _walk_materialized_source_fd(
+            specimen_fd, excluded_root_entries=frozenset({".git", "target"}),
+        )
+        if set(actual) != set(expected) or actual_dirs != expected_dirs:
+            raise ContractError("mutation build copy does not preserve the source namespace")
+        identity = _digest_value(expected)
+        metadata = specimen_root / ".git"
+        marker = metadata / "labcolors-mutation-source"
+        fresh = not os.path.lexists(metadata)
+        if fresh:
+            if actual != expected:
+                raise ContractError("first mutation build copy is not the healthy source")
+            _run_git_bytes(specimen_root, ["init", "--quiet", "--object-format=sha1", "--template="], "initialize mutation artifact")
+            marker.write_text(identity, encoding="ascii")
+        if (
+            not stat.S_ISDIR(metadata.lstat().st_mode)
+            or marker.is_symlink()
+            or marker.read_text(encoding="ascii") != identity
+            or os.path.lexists(metadata / "objects/info/alternates")
+        ):
+            raise ContractError("mutation Git metadata is not independently owned")
+        for arguments in (
+            ["rev-parse", "--absolute-git-dir"],
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ):
+            if _resolve_path(Path(_git_output(specimen_root, arguments, "mutation Git location")), "mutation Git location") != metadata:
+                raise ContractError("mutation Git metadata points outside the build copy")
+        if _resolve_path(Path(_git_output(specimen_root, ["rev-parse", "--show-toplevel"], "mutation Git root")), "mutation Git root") != specimen_root:
+            raise ContractError("mutation Git root is not the build copy")
+        paths = [path for path, entry in sorted(actual.items()) if entry[0] != "120000"]
+        objects = _run_git_bytes(
+            specimen_root, ["hash-object", "--no-filters", "--stdin-paths"],
+            "snapshot raw mutation source", input_bytes=b"\n".join(map(_git_quoted_path, paths)) + b"\n",
+        ).decode("ascii").splitlines()
+        if len(objects) != len(paths) or any(not HEX40.fullmatch(oid) for oid in objects):
+            raise ContractError("mutation source object inventory is invalid")
+        by_path = dict(zip(paths, objects))
+        entries = bytearray()
+        for path, (kind, mode, value) in sorted(actual.items()):
+            if kind == "120000":
+                oid = _run_git_bytes(
+                    specimen_root, ["hash-object", "--stdin"], "snapshot mutation symlink", input_bytes=os.fsencode(value),
+                ).decode("ascii").strip()
+                by_path[path] = oid
+                git_mode = "120000"
+            else:
+                oid = by_path[path]
+                git_mode = "100755" if mode & 0o111 else "100644"
+            entries.extend(f"{git_mode} {oid}\t".encode("ascii") + os.fsencode(path) + b"\0")
+        previous_tree = None if fresh else _git_output(specimen_root, ["rev-parse", "--verify", "HEAD^{tree}"], "previous mutation source")
+        previous_entries = [] if fresh else [
+            record.replace(b" blob ", b" ", 1)
+            for record in _run_git_bytes(
+                specimen_root, ["ls-tree", "-rz", "--full-tree", "-r", previous_tree],
+                "previous raw mutation source",
+            ).split(b"\0") if record
+        ]
+        # hash-object -w refreshes even existing object mtimes. Prove equality
+        # from every raw blob, mode and literal link before any metadata write.
+        # Cargo can then reuse an unchanged Build for Test without weakening
+        # the source descriptor's observation of the complete Git directory.
+        tree = previous_tree
+        if sorted(previous_entries) == sorted(bytes(entries).split(b"\0")[:-1]):
+            # Matching names/OIDs must still refer to real, intact Git blobs.
+            _git_blob_bytes(specimen_root, by_path.values())
+        else:
+            written = _run_git_bytes(
+                specimen_root, ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+                "store raw mutation source", input_bytes=b"\n".join(map(_git_quoted_path, paths)) + b"\n",
+            ).decode("ascii").splitlines()
+            if written != objects:
+                raise ContractError("mutation source changed while storing its objects")
+            for path, (kind, _, value) in sorted(actual.items()):
+                if kind == "120000":
+                    _run_git_bytes(
+                        specimen_root, ["hash-object", "-w", "--stdin"],
+                        "store mutation symlink", input_bytes=os.fsencode(value),
+                    )
+            with tempfile.TemporaryDirectory(prefix="mutation-source-index-", dir=specimen_root.parent) as temporary:
+                index_file = Path(temporary) / "index"
+                _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index", index_file=index_file)
+                _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries), index_file=index_file)
+                tree = _run_git_bytes(specimen_root, ["write-tree"], "mutation source tree", index_file=index_file).decode("ascii").strip()
+            commit = _git_output(specimen_root, ["-c", "user.name=Lab Colors Verification", "-c", "user.email=verification@localhost", "commit-tree", tree, "-m", "isolated mutation source artifact"], "commit mutation source")
+            _run_git_bytes(specimen_root, ["update-ref", "HEAD", commit], "bind mutation source artifact")
+        if _walk_materialized_source_fd(specimen_fd, excluded_root_entries=frozenset({".git", "target"}))[0] != actual:
+            raise ContractError("mutation source changed during snapshot")
+        return tree
+    finally:
+        os.close(specimen_fd)
+        os.close(source_fd)
+
+
+def run_mutation_cargo(source_root: Path, arguments: list[str]) -> None:
+    cargo = _pinned_cargo_binary()
+    expected_digest = os.environ.get("MUTATION_CARGO_SHA256", "")
+    if not cargo.is_absolute() or not cargo.as_posix().endswith("/" + CARGO_BINARY_SUFFIX):
+        raise ContractError("mutation underlying Cargo executable is not pinned")
+    if not HEX64.fullmatch(expected_digest) or _digest_file(cargo) != expected_digest:
+        raise ContractError("mutation underlying Cargo executable changed")
+    if arguments and arguments[0] in {"test", "check"}:
+        tree = snapshot_cargo_source(source_root, Path.cwd())
+        print(CARGO_EXECUTION_PREFIX + _canonical_bytes({
+            "argv": [cargo.as_posix(), *arguments], "cargo_sha256": expected_digest,
+            "source_tree": tree,
+        }).decode("utf-8"), flush=True)
+    environment = dict(os.environ)
+    environment["CARGO"] = str(cargo)
+    os.execve(cargo, [str(cargo), *arguments], environment)
+
+
 def _build_execution_contract(
     specs: list[dict[str, Any]],
     package_versions: dict[str, str],
+    cargo_sha256: str,
 ) -> dict[str, Any]:
+    if not HEX64.fullmatch(cargo_sha256):
+        raise ContractError("Cargo executable digest is invalid")
     package_names = sorted({spec["package"] for spec in specs})
     if set(package_versions) != set(package_names):
         raise ContractError(
@@ -1171,6 +1335,8 @@ def _build_execution_contract(
     return {
         "baseline": "run",
         "cargo_binary_suffix": CARGO_BINARY_SUFFIX,
+        "cargo_adapter_relpath": CARGO_ADAPTER_RELPATH,
+        "cargo_sha256": cargo_sha256,
         "commands": {
             phase: list(arguments)
             for phase, arguments in EXECUTION_COMMANDS.items()
@@ -1190,11 +1356,9 @@ def _cargo_package_versions(
         _validate_mutant(spec, f"population[{index}]", repo_root)["package"]
         for index, spec in enumerate(population)
     }
-    cargo = os.environ.get("CARGO") or shutil.which("cargo")
-    if not cargo:
-        raise ContractError("cargo executable is unavailable for package provenance")
+    cargo = _pinned_cargo_binary()
     raw = _run_bytes(
-        [cargo, "metadata", "--format-version", "1", "--no-deps", "--locked"],
+        [str(cargo), "metadata", "--format-version", "1", "--no-deps", "--locked"],
         cwd=repo_root,
         label="cargo metadata",
     )
@@ -1272,6 +1436,7 @@ def build_manifest(
     revision: str,
     run_id: int,
     run_attempt: int,
+    cargo_sha256: str,
     source_root: Path | None = None,
 ) -> dict[str, Any]:
     repo_root = _resolve_path(repo_root, "Git worktree root")
@@ -1317,7 +1482,7 @@ def build_manifest(
             "path": CONFIG_RELPATH,
             "sha256": _digest_file(config_path),
         },
-        "execution": _build_execution_contract(specs, package_versions),
+        "execution": _build_execution_contract(specs, package_versions, cargo_sha256),
         "population": {
             "count": len(entries),
             "mutants": entries,
@@ -1413,6 +1578,8 @@ def _validate_execution_contract(
         {
             "baseline",
             "cargo_binary_suffix",
+            "cargo_adapter_relpath",
+            "cargo_sha256",
             "commands",
             "mutant_test_scope",
             "packages",
@@ -1424,6 +1591,7 @@ def _validate_execution_contract(
     fixed = {
         "baseline": "run",
         "cargo_binary_suffix": CARGO_BINARY_SUFFIX,
+        "cargo_adapter_relpath": CARGO_ADAPTER_RELPATH,
         "commands": EXECUTION_COMMANDS,
         "mutant_test_scope": "mutated-package",
         "phases": ["Build", "Test"],
@@ -1432,6 +1600,8 @@ def _validate_execution_contract(
     for field, expected in fixed.items():
         if execution[field] != expected:
             raise ContractError(f"manifest execution contract mismatch for {field}")
+    if not isinstance(execution["cargo_sha256"], str) or not HEX64.fullmatch(execution["cargo_sha256"]):
+        raise ContractError("manifest Cargo executable digest is invalid")
     packages = _expect_list(execution["packages"], "manifest.execution.packages")
     observed_names: list[str] = []
     for index, raw_package in enumerate(packages):
@@ -1516,6 +1686,9 @@ def validate_manifest(value: Any) -> dict[str, Any]:
         {spec["file"] for spec in specs},
     )
     _validate_execution_contract(manifest["execution"], specs)
+    adapter_entries = [entry for entry in manifest["execution_source"]["entries"] if entry["path"] == CARGO_ADAPTER_RELPATH]
+    if len(adapter_entries) != 1 or adapter_entries[0]["mode"] != "100755":
+        raise ContractError("mutation Cargo adapter is not an executable committed input")
     expected_manifest_digest = _digest_value(_manifest_payload(manifest))
     if manifest["manifest_sha256"] != expected_manifest_digest:
         raise ContractError("manifest digest mismatch")
@@ -1619,7 +1792,7 @@ def _validate_cargo_command(
     if (
         not cargo_path.is_absolute()
         or cargo_path.as_posix() != cargo_binary
-        or not cargo_binary.endswith(f"/{execution['cargo_binary_suffix']}")
+        or not cargo_binary.endswith(f"/{execution['cargo_adapter_relpath']}")
     ):
         raise ContractError(f"{label} command identity has an unexpected Cargo executable")
     package_arguments = _execution_package_arguments(execution)
@@ -1729,11 +1902,49 @@ def _artifact_evidence(
     return {"path": path_text, "sha256": _digest_file(path)}
 
 
+def _validate_cargo_preparation(
+    log: Path, phase_results: list[dict[str, Any]], execution: dict[str, Any],
+    *, baseline_tree: str, baseline: bool,
+) -> None:
+    text = log.read_bytes().decode("utf-8", errors="replace")
+    if "mutation cargo preparation error:" in text or "producer_identity_unavailable" in text:
+        raise ContractError("mutation Cargo preparation/source identity failed")
+    markers = [line[len(CARGO_EXECUTION_PREFIX):] for line in text.splitlines() if line.startswith(CARGO_EXECUTION_PREFIX)]
+    if len(markers) != len(phase_results):
+        raise ContractError("mutation Cargo execution evidence does not cover every phase")
+    trees: set[str] = set()
+    binaries: set[str] = set()
+    for marker, phase_result in zip(markers, phase_results):
+        try:
+            prepared = json.loads(marker, object_pairs_hook=_object_without_duplicate_keys, parse_constant=_reject_constant)
+        except (ValueError, ContractError) as error:
+            raise ContractError("invalid mutation Cargo preparation evidence") from error
+        _expect_exact_keys(_expect_dict(prepared, "Cargo preparation"), {"argv", "cargo_sha256", "source_tree"}, "Cargo preparation")
+        argv = _expect_list(prepared["argv"], "prepared Cargo argv")
+        if (
+            not argv or not isinstance(argv[0], str)
+            or not PurePosixPath(argv[0]).is_absolute()
+            or not argv[0].endswith("/" + execution["cargo_binary_suffix"])
+            or argv[1:] != phase_result["argv"][1:]
+            or prepared["cargo_sha256"] != execution["cargo_sha256"]
+            or not isinstance(prepared["source_tree"], str)
+            or not HEX40.fullmatch(prepared["source_tree"])
+        ):
+            raise ContractError("mutation Cargo preparation provenance mismatch")
+        trees.add(prepared["source_tree"])
+        binaries.add(argv[0])
+    if len(trees) != 1 or len(binaries) != 1 or (baseline and trees != {baseline_tree}):
+        raise ContractError("mutation Cargo phases do not share the exact source artifact")
+    if not baseline and trees == {baseline_tree}:
+        raise ContractError("mutation Cargo specimen did not change the source artifact")
+
+
 def _validate_outcomes(
     value: Any,
     expected_specs: list[dict[str, Any]],
     out_dir: Path,
     execution: dict[str, Any],
+    baseline_tree: str,
 ) -> tuple[dict[str, int], list[str], list[dict[str, str]], str]:
     report = _expect_dict(value, "outcomes.json")
     _expect_exact_keys(
@@ -1801,6 +2012,10 @@ def _validate_outcomes(
             raise ContractError(f"{label}.log_path must be a path")
         referenced_artifacts.append(
             _artifact_evidence(out_dir, outcome["log_path"], "log path", "log")
+        )
+        _validate_cargo_preparation(
+            _artifact_file(out_dir, outcome["log_path"], "log path", "log"),
+            outcome["phase_results"], execution, baseline_tree=baseline_tree, baseline=index == 0,
         )
         if outcome["log_path"] in seen_logs:
             raise ContractError(f"duplicate log path: {outcome['log_path']}")
@@ -1902,6 +2117,7 @@ def _regenerate_shard_record(
         expected_specs,
         out_dir,
         manifest["execution"],
+        manifest["execution_source"]["git_tree"],
     )
     derived_exit = expected_exit_code(summaries)
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != derived_exit:
@@ -2009,7 +2225,7 @@ def _validate_record_header(value: Any) -> dict[str, Any]:
     if (
         not isinstance(cargo_binary, str)
         or not PurePosixPath(cargo_binary).is_absolute()
-        or not cargo_binary.endswith(f"/{CARGO_BINARY_SUFFIX}")
+        or not cargo_binary.endswith(f"/{CARGO_ADAPTER_RELPATH}")
         or not isinstance(execution["contract_sha256"], str)
         or not HEX64.fullmatch(execution["contract_sha256"])
     ):
@@ -2207,6 +2423,7 @@ def _manifest_command(arguments: argparse.Namespace) -> None:
         revision=arguments.revision,
         run_id=arguments.run_id,
         run_attempt=arguments.run_attempt,
+        cargo_sha256=_digest_file(_pinned_cargo_binary()),
         source_root=source_root,
     )
     output = Path(arguments.output)
