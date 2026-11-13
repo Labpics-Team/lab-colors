@@ -28,7 +28,7 @@ fn cached_evidence_path_stays_fast() {
         let foreground = [255 - (index % 2) as u8, 255, 255];
         black_box(
             evaluate_wcag22_srgb8(black_box([20, 20, 20]), black_box(foreground), criterion)
-                .unwrap(),
+                .expect("evaluation must succeed"),
         );
     }
 
