@@ -14,6 +14,7 @@
 
 use crate::Srgb8;
 use crate::observation::{ObservationStreamId, Revision, RevisionBoundObservationV1};
+use crate::program_session::identity::ordering;
 use crate::session::SessionObservationBindingPermitV1;
 use crate::sha256::Hasher;
 
@@ -1283,7 +1284,7 @@ pub(crate) fn compile_field_program_v1(
     declarations: &mut FieldDeclarationsV1,
     terminal_operators: &[FieldOperatorInstanceIdV1],
 ) -> Result<CompiledFieldProgramV1, FieldProgramCompileErrorV1> {
-    declarations.inputs.sort_unstable_by_key(|input| input.id());
+    ordering::sort_by_key(&mut declarations.inputs, |input| input.id());
     if let Some(pair) = declarations
         .inputs
         .windows(2)
@@ -1293,9 +1294,7 @@ pub(crate) fn compile_field_program_v1(
             input: pair[0].id(),
         });
     }
-    declarations
-        .operators
-        .sort_unstable_by_key(|operator| operator.id());
+    ordering::sort_by_key(&mut declarations.operators, |operator| operator.id());
     if let Some(pair) = declarations
         .operators
         .windows(2)

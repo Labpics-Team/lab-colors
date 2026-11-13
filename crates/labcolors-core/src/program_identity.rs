@@ -172,6 +172,15 @@ impl VertexColorV1 {
     const fn tag(&self) -> u8 {
         self.bytes[1]
     }
+
+    /// Старшие 8 байт ключа как big-endian u64: сравнение префиксов совпадает
+    /// с лексикографическим порядком полного ключа, поэтому полная сортировка
+    /// сводится к быстрой сортировке по префиксу плюс досортировке групп.
+    fn prefix_u64(&self) -> u64 {
+        let mut prefix = [0_u8; 8];
+        prefix.copy_from_slice(&self.bytes[..8]);
+        u64::from_be_bytes(prefix)
+    }
 }
 
 mod vertex_tag {
@@ -212,6 +221,15 @@ macro_rules! declare_edge_roles_v1 {
         #[repr(u8)]
         enum EdgeRoleV1 {
             $($name = $value),+
+        }
+
+        impl EdgeRoleV1 {
+            fn from_u8(value: u8) -> Option<Self> {
+                match value {
+                    $($value => Some(EdgeRoleV1::$name),)+
+                    _ => None,
+                }
+            }
         }
 
         #[cfg(test)]
@@ -271,6 +289,30 @@ struct ArcV1 {
     direction: u8,
     role: EdgeRoleV1,
     neighbour: usize,
+}
+
+// Порядок дуги (direction, role, neighbour) совпадает с порядком упакованного
+// ключа, поэтому одна сортировка по u64 обслуживает и списки смежности, и
+// исходящие рёбра сериализации: новый инстанс pdqsort на каждый тип записи в
+// бинарник не попадает. Индексы вершин и меток не превышают 2^48, что
+// проверяется при построении графа.
+const ARC_KEY_NEIGHBOUR_MASK_V1: u64 = (1 << 48) - 1;
+const ARC_KEY_NEIGHBOUR_LIMIT_V1: u64 = 1 << 48;
+
+fn pack_arc_key_v1(arc: &ArcV1) -> u64 {
+    (u64::from(arc.direction) << 56) | (u64::from(arc.role as u8) << 48) | arc.neighbour as u64
+}
+
+fn unpack_arc_key_v1(key: u64) -> Option<ArcV1> {
+    Some(ArcV1 {
+        direction: (key >> 56) as u8,
+        role: EdgeRoleV1::from_u8(((key >> 48) & 0xff) as u8)?,
+        neighbour: (key & ARC_KEY_NEIGHBOUR_MASK_V1) as usize,
+    })
+}
+
+fn pack_label_key_v1(role: EdgeRoleV1, label: usize) -> u64 {
+    (u64::from(role as u8) << 48) | label as u64
 }
 
 struct CanonicalGraphV1 {
@@ -362,8 +404,20 @@ impl GraphBuilderV1 {
                 neighbour: edge.from,
             });
         }
+        if adjacency.len() as u64 > ARC_KEY_NEIGHBOUR_LIMIT_V1 {
+            return Err(ProgramCompileError::ResourceExhausted);
+        }
+        let mut packed = Vec::new();
         for arcs in &mut adjacency {
-            ordering::sort(arcs);
+            packed.clear();
+            packed
+                .try_reserve(arcs.len())
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            packed.extend(arcs.iter().map(pack_arc_key_v1));
+            packed.sort_unstable();
+            for (arc, &key) in arcs.iter_mut().zip(packed.iter()) {
+                *arc = unpack_arc_key_v1(key).ok_or(ProgramCompileError::InternalInvariant)?;
+            }
         }
         Ok(CanonicalGraphV1 {
             colors: self.colors,
@@ -1432,25 +1486,66 @@ struct EquitablePartitionV1(PartitionV1);
 
 impl PartitionV1 {
     fn initial(graph: &CanonicalGraphV1) -> Result<Self, ProgramCompileError> {
+        let vertex_count = graph.colors.len();
+        // Полный порядок (цвет, индекс): стабильная LSD-сортировка сначала по
+        // старшим 8 байтам ключа, затем — только внутри групп с равным
+        // префиксом — по остатку цвета. Равные цвета всех фаз сохраняют
+        // порядок индексов, поэтому результат совпадает с прямой сортировкой
+        // целых ключей. Проходы с единственным значением байта пропускаются.
+        let mut keyed = Vec::new();
+        keyed
+            .try_reserve_exact(vertex_count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for (vertex, color) in graph.colors.iter().enumerate() {
+            keyed.push((color.prefix_u64(), vertex));
+        }
+        let colors = &graph.colors;
+        let mut scratch = Vec::new();
+        scratch
+            .try_reserve_exact(vertex_count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        scratch.resize(vertex_count, (0_u64, 0_usize));
+        for byte_index in (0..8).rev() {
+            radix_byte_pass(&mut keyed, &mut scratch, |&(prefix, _)| {
+                (prefix >> (8 * (7 - byte_index))) as u8
+            });
+        }
+        let mut max_len = 0;
+        for color in colors {
+            max_len = max_len.max(color.bytes[0] as usize);
+        }
+        let mut start = 0;
+        while start < keyed.len() {
+            let prefix = keyed[start].0;
+            let mut end = start + 1;
+            while end < keyed.len() && keyed[end].0 == prefix {
+                end += 1;
+            }
+            if end - start > 1 {
+                let group = &mut keyed[start..end];
+                let group_scratch = &mut scratch[..group.len()];
+                for byte_index in (8..=max_len).rev() {
+                    radix_byte_pass(group, group_scratch, |&(_, vertex)| {
+                        colors[vertex].bytes[byte_index]
+                    });
+                }
+            }
+            start = end;
+        }
+
         let mut order = Vec::new();
         order
-            .try_reserve_exact(graph.colors.len())
+            .try_reserve_exact(vertex_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        order.extend(0..graph.colors.len());
-        ordering::sort_by(&mut order, |left, right| {
-            graph.colors[*left]
-                .cmp(&graph.colors[*right])
-                .then_with(|| left.cmp(right))
-        });
-
+        order.extend(keyed.iter().map(|&(_, vertex)| vertex));
         let mut cells = Vec::new();
         cells
-            .try_reserve_exact(graph.colors.len())
+            .try_reserve_exact(vertex_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         let mut start = 0;
         while start < order.len() {
             let mut end = start + 1;
-            while end < order.len() && graph.colors[order[start]] == graph.colors[order[end]] {
+            while end < order.len() && colors[order[start]] == colors[order[end]] {
                 end += 1;
             }
             cells.push(copy_vertices(&order[start..end])?);
@@ -1475,6 +1570,41 @@ fn copy_vertices(source: &[usize]) -> Result<Vec<usize>, ProgramCompileError> {
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     copied.extend_from_slice(source);
     Ok(copied)
+}
+
+// Один стабильный проход поразрядной сортировки по байту ключа. Проход с
+// единственным значением байта не переставляет элементы и ничего не стоит.
+fn radix_byte_pass<Byte>(values: &mut [(u64, usize)], scratch: &mut [(u64, usize)], byte_of: Byte)
+where
+    Byte: Fn(&(u64, usize)) -> u8,
+{
+    let mut counts = [0_usize; 256];
+    let mut uniform = true;
+    let mut first_byte = 0_u8;
+    for (position, item) in values.iter().enumerate() {
+        let byte = byte_of(item);
+        counts[byte as usize] += 1;
+        if position == 0 {
+            first_byte = byte;
+        } else if byte != first_byte {
+            uniform = false;
+        }
+    }
+    if uniform {
+        return;
+    }
+    let mut offset = 0_usize;
+    for count in &mut counts {
+        let bucket = *count;
+        *count = offset;
+        offset += bucket;
+    }
+    for item in values.iter() {
+        let byte = byte_of(item);
+        scratch[counts[byte as usize]] = *item;
+        counts[byte as usize] += 1;
+    }
+    values.swap_with_slice(&mut scratch[..values.len()]);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1609,7 +1739,7 @@ fn refine_partition_impl(
                     });
                 }
                 let signature = start..signatures.len();
-                ordering::sort(&mut signatures[signature.clone()]);
+                ordering::sort_short(&mut signatures[signature.clone()]);
                 records.push(RefinementRecordV1 { vertex, signature });
             }
             ordering::sort_by(&mut records, |left, right| {
@@ -1830,12 +1960,12 @@ fn serialize_leaf(
             graph.adjacency[vertex]
                 .iter()
                 .filter(|arc| arc.direction == 0)
-                .map(|arc| (arc.role, label_of[arc.neighbour])),
+                .map(|arc| pack_label_key_v1(arc.role, label_of[arc.neighbour])),
         );
-        ordering::sort(&mut outgoing);
-        for &(role, target) in &outgoing {
-            output.push(role as u8);
-            push_u64_bytes(&mut output, usize_as_u64(target)?);
+        outgoing.sort_unstable();
+        for &key in &outgoing {
+            output.push((key >> 48) as u8);
+            push_u64_bytes(&mut output, key & ARC_KEY_NEIGHBOUR_MASK_V1);
         }
     }
     Ok(SerializedLeafV1 {
@@ -2350,13 +2480,37 @@ where
     Ok(ProgramContentIdentityV9(*digest.as_bytes()))
 }
 
-mod ordering {
+pub(crate) mod ordering {
     //! Allocation-free heapsort for cold Program identity construction.
     //! Keep the binary small without changing runtime or candidate-order sorting.
     use core::cmp::Ordering;
 
     pub(crate) fn sort<T: Ord>(values: &mut [T]) {
         sort_by(values, Ord::cmp);
+    }
+
+    // Короткие списки дуг и подписей: вставки дешевле вызовов кучи через dyn.
+    #[inline(always)]
+    pub(crate) fn sort_short<T: Copy + Ord>(values: &mut [T]) {
+        if values.len() > 16 {
+            sort_short_long(values);
+            return;
+        }
+        for index in 1..values.len() {
+            let item = values[index];
+            let mut position = index;
+            while position > 0 && values[position - 1] > item {
+                values[position] = values[position - 1];
+                position -= 1;
+            }
+            values[position] = item;
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sort_short_long<T: Copy + Ord>(values: &mut [T]) {
+        sort(values);
     }
 
     pub(crate) fn sort_by_key<T, K: Ord>(values: &mut [T], mut key: impl FnMut(&T) -> K) {

@@ -81,7 +81,7 @@ use crate::session::{
 use crate::wcag22::Wcag22CriterionV1;
 
 #[path = "program_identity.rs"]
-mod identity;
+pub(crate) mod identity;
 pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
