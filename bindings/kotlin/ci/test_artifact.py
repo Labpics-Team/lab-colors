@@ -71,7 +71,9 @@ class AndroidReadinessTests(unittest.TestCase):
     def test_package_service_must_be_ready_again_after_successful_debug_tests(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gradle-path.txt").write_text("gradle")
+            for variant in ("debug", "release"):
+                emitted_artifacts(root, variant)
+            shutil.move(root / "build/outputs", root / "outputs")
             registered = True
             probes = []
             variants = []
@@ -93,21 +95,26 @@ class AndroidReadinessTests(unittest.TestCase):
                 if args == ["shell", "pm", "clear", "pics.lab.colors.consumer"]:
                     clears.append(variants.copy())
                     return "Success\n"
+                if args[:3] == ["install", "-r", "-t"]:
+                    return "Success\n"
                 self.fail("unexpected Android command: " + repr(command))
 
-            def connected(command, consumer, environment, adb, variant):
+            def connected(command, consumer, environment, adb, variant, evidence_dir=None):
                 nonlocal registered
                 variants.append(variant)
-                emitted_artifacts(root, variant)
-                (root / "build/outputs/androidTest-results").mkdir(parents=True)
+                evidence_dir.mkdir(parents=True, exist_ok=True)
+                transcript = evidence_dir / "instrumentation.txt"
+                transcript.write_text("runtime result")
                 # The original failure occurred after successful debug instrumentation.
                 if variant == "debug":
                     registered = False
+                return transcript
 
             with patch.dict(os.environ, {"ANDROID_HOME": "/sdk", "JAVA_HOME": "/java"}), \
                  patch.object(elf.subprocess, "check_output", side_effect=execute), \
                  patch.object(elf, "connected_test", side_effect=connected), \
-                 patch.object(elf, "verify_reports"), patch.object(elf, "check_apk"), \
+                 patch("consumer_artifact.verify_artifact", return_value={}), \
+                 patch.object(elf, "verify_instrumentation", return_value=[]), \
                  patch("time.sleep") as sleep, patch("builtins.print"):
                 elf.main(root, 16384)
             self.assertEqual(variants, ["debug", "release"])
@@ -156,11 +163,14 @@ class AndroidReadinessTests(unittest.TestCase):
     def test_package_clear_failure_after_readiness_is_preserved_without_replaying_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "gradle-path.txt").write_text("gradle")
+            for variant in ("debug", "release"):
+                emitted_artifacts(root, variant)
+            shutil.move(root / "build/outputs", root / "outputs")
             command = ["adb", "shell", "pm", "clear", "pics.lab.colors.consumer"]
             failure = subprocess.CalledProcessError(20, command)
             responses = ["Service package: found\n", "package:pics.lab.colors.consumer\n", failure]
             with patch.dict(os.environ, {"ANDROID_HOME": "/sdk", "JAVA_HOME": "/java"}), \
+                 patch("consumer_artifact.verify_artifact", return_value={}), \
                  patch.object(elf.subprocess, "check_output", side_effect=responses) as adb, \
                  patch.object(elf, "connected_test") as connected, patch("time.sleep") as sleep:
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
@@ -279,7 +289,8 @@ class ArtifactTests(unittest.TestCase):
                                     target.parent.mkdir(parents=True, exist_ok=True)
                                     target.write_text("R8 output")
                     return subprocess.CompletedProcess(command, 0)
-                with patch.dict(os.environ, {"JAVA_HOME": directory}), patch.object(elf.subprocess, "run", side_effect=execute):
+                with patch.dict(os.environ, {"JAVA_HOME": directory, "ANDROID_HOME": directory}), \
+                     patch.object(elf, "check_apk"), patch.object(elf.subprocess, "run", side_effect=execute):
                     with self.assertRaisesRegex(ValueError, "missing.*artifact"):
                         elf.assemble(root)
 
@@ -341,8 +352,11 @@ class ArtifactTests(unittest.TestCase):
                 else:
                     emitted_artifacts(root, "release" if "-PconsumerBuildType=release" in command else "debug")
                 return subprocess.CompletedProcess(command, 0)
-            with patch.dict(os.environ, {"JAVA_HOME": directory}), patch.object(elf.subprocess, "run", side_effect=execute):
+            with patch.dict(os.environ, {"JAVA_HOME": directory, "ANDROID_HOME": directory}), \
+                 patch.object(elf, "check_apk") as inspected, patch.object(elf.subprocess, "run", side_effect=execute):
                 elf.assemble(root)
+            self.assertEqual({call.args[0] for call in inspected.call_args_list},
+                             {root / "build/outputs/apk" / variant / "app.apk" for variant in ("debug", "release")})
             self.assertEqual(len(calls), 9)
             linkage = calls[-1]
             self.assertEqual(linkage[:2], [sys.executable, str(ROOT / "desugar-linkage.py")])
@@ -476,27 +490,6 @@ class ArtifactTests(unittest.TestCase):
                     else:
                         with self.assertRaisesRegex(ValueError, "path"):
                             consumer.extract(archive, manifest, target)
-
-    def test_consumer_reports_require_current_tests_and_reject_partial_success(self):
-        with tempfile.TemporaryDirectory() as directory:
-            reports = Path(directory) / "reports"
-            reports.mkdir()
-            report = reports / "TEST-consumer.xml"
-            report.write_text('<testsuite tests="2" failures="0"><testcase name="app"/><testcase name="page"/></testsuite>')
-            elf.verify_reports(reports, {"app", "page"})
-            # Same reset used between variants: no prior debug result remains.
-            shutil.rmtree(reports)
-            with self.assertRaisesRegex(ValueError, "required tests"):
-                elf.verify_reports(reports, {"app", "page"})
-            reports.mkdir()
-            for body in [
-                '<testsuite><testcase name="app"/></testsuite>',
-                '<testsuite failures="1"><testcase name="app"/><testcase name="page"/></testsuite>',
-                '<testsuite><testcase name="app"/><testcase name="page"><skipped/></testcase></testsuite>',
-            ]:
-                report.write_text(body)
-                with self.assertRaises(ValueError):
-                    elf.verify_reports(reports, {"app", "page"})
 
     def test_android_aggregate_requires_all_finished_consumers(self):
         workflow = (ROOT.parents[2] / ".github/workflows/native-conformance-worker.yml").read_text()
