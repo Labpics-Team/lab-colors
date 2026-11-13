@@ -1926,8 +1926,10 @@ class MutationTruthTest(unittest.TestCase):
             ),
         ):
             mutation._cargo_package_versions(self.root, [mutant(0)])
+        non_directory = self.external / "not-a-directory"
+        non_directory.write_text("not a directory", encoding="utf-8")
         with self.assertRaisesRegex(mutation.ContractError, "cannot write JSON"):
-            mutation.write_json(Path("/dev/null/child.json"), {})
+            mutation.write_json(non_directory / "child.json", {})
 
         parser = mock.Mock()
         arguments = mock.Mock()
