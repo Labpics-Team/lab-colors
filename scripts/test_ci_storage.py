@@ -125,6 +125,11 @@ def validate_native_storage(source):
     if "include-hidden-files: true" not in application_upload[0]:
         raise AssertionError("Android application transfer can omit hidden outputs")
     diagnostics = [block for block in consumer_steps if "uses: actions/upload-artifact@" in block]
+    if len(diagnostics) != 1:
+        raise AssertionError("Android runtime failure context needs one diagnostic handoff")
+    roots = re.findall(r"(?m)^          path: (.+)$", downloads[0])
+    if len(roots) != 1 or re.findall(r"(?m)^          path: (.+)$", diagnostics[0]) != [roots[0] + "/runtime"]:
+        raise AssertionError("Android runtime failure context must transfer its actual material")
     for diagnostic in diagnostics:
         if (re.findall(r"(?m)^        if: (.+)$", diagnostic) != ["failure()"]
                 or not re.search(r"(?m)^          retention-days: 1[ \t]*$", diagnostic)):
@@ -244,6 +249,16 @@ class NativeStorageTests(unittest.TestCase):
         self.assertIn(diagnostic, self.source)
         with self.assertRaisesRegex(AssertionError, "failure-only"):
             validate_native_storage(self.source.replace(diagnostic, diagnostic.replace("failure()", "always()")))
+
+    def test_complete_runtime_failure_context_must_reach_the_diagnostic_consumer(self):
+        consumer = job(self.source, "android-consumer")
+        blocks = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", consumer)
+        diagnostic = next(block for block in blocks if "uses: actions/upload-artifact@" in block)
+        for kind, changed in (("missing", self.source.replace(diagnostic, "")),
+                              ("wrong material", self.source.replace(diagnostic, diagnostic.replace("/runtime", "/unrelated")))):
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(AssertionError, "failure context"):
+                    validate_native_storage(changed)
 
     def test_reintroduced_diagnostics_and_weakened_transfer_are_rejected(self):
         for before, after in [
