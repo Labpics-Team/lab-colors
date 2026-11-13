@@ -397,13 +397,17 @@ def _run_git_bytes(
     label: str,
     *,
     input_bytes: bytes | None = None,
+    index_file: Path | None = None,
 ) -> bytes:
+    environment = _git_authority_environment()
+    if index_file is not None:
+        environment["GIT_INDEX_FILE"] = str(index_file)
     return _run_bytes(
         ["git", "--no-replace-objects", *arguments],
         cwd=repo_root,
         label=label,
         input_bytes=input_bytes,
-        environment=_git_authority_environment(),
+        environment=environment,
     )
 
 
@@ -1241,9 +1245,14 @@ def snapshot_cargo_source(source_root: Path, specimen_root: Path) -> str:
                 oid = by_path[path]
                 git_mode = "100755" if mode & 0o111 else "100644"
             entries.extend(f"{git_mode} {oid}\t".encode("ascii") + os.fsencode(path) + b"\0")
-        _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index")
-        _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries))
-        tree = _git_output(specimen_root, ["write-tree"], "mutation source tree")
+        # Cargo watches the source Git metadata. An index rewrite would rerun
+        # the source descriptor and recompile unchanged Core between Build/Test.
+        # This disposable native index computes the same raw tree outside it.
+        with tempfile.TemporaryDirectory(prefix="mutation-source-index-", dir=specimen_root.parent) as temporary:
+            index_file = Path(temporary) / "index"
+            _run_git_bytes(specimen_root, ["read-tree", "--empty"], "clear previous mutation index", index_file=index_file)
+            _run_git_bytes(specimen_root, ["update-index", "-z", "--index-info"], "index mutation source", input_bytes=bytes(entries), index_file=index_file)
+            tree = _run_git_bytes(specimen_root, ["write-tree"], "mutation source tree", index_file=index_file).decode("ascii").strip()
         previous_tree = None if fresh else _git_output(specimen_root, ["rev-parse", "--verify", "HEAD^{tree}"], "previous mutation source")
         if tree != previous_tree:
             commit = _git_output(specimen_root, ["-c", "user.name=Lab Colors Verification", "-c", "user.email=verification@localhost", "commit-tree", tree, "-m", "isolated mutation source artifact"], "commit mutation source")

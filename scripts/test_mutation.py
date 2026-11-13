@@ -387,6 +387,8 @@ class MutationTruthTest(unittest.TestCase):
         head = subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env)
         self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), changed_tree)
         self.assertEqual(subprocess.check_output([self.git_binary, "rev-parse", "HEAD"], cwd=specimen, env=self.git_env), head)
+        self.assertFalse((specimen / ".git/index").exists())
+        self.assertEqual(list(self.external.glob("mutation-source-index-*")), [])
         path.write_bytes(original)
         self.assertEqual(mutation.snapshot_cargo_source(source_root, specimen), baseline_tree)
         self.assertEqual((source_root / "crates/core/src/lib.rs").read_bytes(), original)
