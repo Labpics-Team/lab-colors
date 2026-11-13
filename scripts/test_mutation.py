@@ -1075,7 +1075,7 @@ class MutationTruthTest(unittest.TestCase):
     def test_execution_source_digest_binds_all_tracked_modes_and_symlink_targets(self) -> None:
         baseline = mutation._build_execution_source(self.root, self.revision)
         executable = self.root / "scripts" / "integration.sh"
-        executable.parent.mkdir()
+        executable.parent.mkdir(exist_ok=True)
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
         link = self.root / "integration-link"
