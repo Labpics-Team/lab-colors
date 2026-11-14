@@ -1670,7 +1670,7 @@ impl ActiveRefinementV1 {
         &mut self,
         graph: &CanonicalGraphV1,
         cell: usize,
-        #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
+        #[cfg(test)] trace: Option<&mut RefinementTraceV1>,
     ) -> Result<(), ProgramCompileError> {
         let end_dirty = self.cell_of.len();
         let mut vertex = self.cells[cell].dirty_head;
@@ -1703,7 +1703,7 @@ impl ActiveRefinementV1 {
             self.record(graph, vertex)?;
         }
         #[cfg(test)]
-        if let Some(trace) = trace.as_deref_mut() {
+        if let Some(trace) = trace {
             trace.built_signatures += self.records.len();
             trace.shared_signatures += clean_count.saturating_sub(1);
         }

@@ -103,7 +103,6 @@ jobs:
           binaryen="$root/binaryen-${BINARYEN_RELEASE}"
           test -f "$binaryen/wasm-opt.js"
           test -f "$binaryen/wasm-opt.wasm"
-          test -f "$binaryen/wasm-opt.worker.js"
           echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
       - name: repeat runtime WASM build in one toolchain-pinned CI job
         env:
