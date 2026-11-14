@@ -2350,8 +2350,10 @@ fn canonical_search_impl(
         &mut bulk_groups,
     )?;
     let mut stack = Vec::new();
+    // Глубину задаёт поиск после refinement, а не число вершин графа.
+    // Каждый следующий push также предваряется fallible reserve.
     stack
-        .try_reserve_exact(graph.colors.len())
+        .try_reserve_exact(1)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     stack.push(SearchFrameV1::new(initial, component_twins)?);
     let mut best: Option<SerializedLeafV1> = None;
@@ -2792,13 +2794,9 @@ mod tests {
                             for split in 1..=explored.len() {
                                 let mut index = None;
                                 let mut cell_of = Vec::new();
-                                for (generator_count, explored_count) in [
-                                    (0, 0),
-                                    (1, 1),
-                                    (1, split),
-                                    (2, split),
-                                    (2, explored.len()),
-                                ] {
+                                for (generator_count, explored_count) in
+                                    [(0, 0), (1, 1), (1, split), (2, split), (2, explored.len())]
+                                {
                                     for &candidate in vertices {
                                         assert_eq!(
                                             candidate_is_in_explored_orbit(
@@ -2833,8 +2831,8 @@ mod tests {
     }
 
     #[test]
-    fn non_preserving_generators_do_not_form_a_hidden_stabilizer()
-    -> Result<(), ProgramCompileError> {
+    fn non_preserving_generators_do_not_form_a_hidden_stabilizer() -> Result<(), ProgramCompileError>
+    {
         let partition = PartitionV1 {
             cells: vec![vec![0, 1], vec![2, 3]],
         };
@@ -2941,12 +2939,8 @@ mod tests {
             (vec![vec![0, 1]], vec![0], 2),
             (vec![vec![0, 1]], vec![2], 1),
         ] {
-            let expected = breadth_first_orbit_reference(
-                &partition,
-                &explored,
-                candidate,
-                &generators,
-            );
+            let expected =
+                breadth_first_orbit_reference(&partition, &explored, candidate, &generators);
             assert_eq!(expected, Err(ProgramCompileError::InternalInvariant));
             assert_eq!(
                 candidate_is_in_explored_orbit(
@@ -2964,8 +2958,8 @@ mod tests {
     }
 
     #[test]
-    fn shared_orbit_scratch_does_not_mix_partition_stabilizers()
-    -> Result<(), ProgramCompileError> {
+    fn shared_orbit_scratch_does_not_mix_partition_stabilizers() -> Result<(), ProgramCompileError>
+    {
         let first_partition = PartitionV1 {
             cells: vec![vec![0, 1, 2], vec![3]],
         };
