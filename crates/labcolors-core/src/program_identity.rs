@@ -1565,8 +1565,10 @@ fn refine_partition_impl(
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     next_dirty.resize(graph.colors.len(), false);
     let mut next_cells = Vec::new();
-    // Записи ссылаются на один переиспользуемый буфер атомов. Длины сигнатур
-    // и прежний heapsort остаются точными, включая порядок равных записей.
+    // Все чистые вершины клетки имеют одну сигнатуру. Сортируем только dirty
+    // и одного чистого представителя; остальные вершины добавляем в его split.
+    // Порядок клеток точен, порядок вершин внутри клетки не задаёт байты V9:
+    // поиск перебирает её варианты, пропуская лишь доказанные автоморфизмы.
     let mut signatures = Vec::new();
     let mut records = Vec::new();
     let mut cell_of = Vec::new();
@@ -1582,17 +1584,16 @@ fn refine_partition_impl(
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         next_dirty.fill(false);
         let previous_count = partition.cells.len();
-        for mut cell in partition.cells.drain(..) {
+        for cell in partition.cells.drain(..) {
             if cell.len() == 1 {
                 next_cells.push(cell);
                 continue;
             }
-            if !cell.iter().any(|&vertex| dirty[vertex]) {
+            let dirty_count = cell.iter().filter(|&&vertex| dirty[vertex]).count();
+            if dirty_count == 0 {
                 // Соседи остались в представительных дочерних клетках.
                 // Их ранги меняются строго монотонно, поэтому все сигнатуры
-                // клетки по-прежнему равны. Старый heapsort равных ключей
-                // делает ровно этот сдвиг, в том числе в последнем раунде.
-                cell.rotate_left(1);
+                // клетки по-прежнему равны. Порядок её членов несущественен.
                 next_cells.push(cell);
                 #[cfg(test)]
                 if let Some(trace) = trace.as_deref_mut() {
@@ -1602,28 +1603,24 @@ fn refine_partition_impl(
             }
             records.clear();
             signatures.clear();
+            let clean_count = cell.len() - dirty_count;
             records
-                .try_reserve_exact(cell.len())
+                .try_reserve_exact(dirty_count + usize::from(clean_count != 0))
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            let mut clean_signature: Option<core::ops::Range<usize>> = None;
+            let mut clean_vertex = None;
             for &vertex in &cell {
                 if !dirty[vertex] {
-                    if let Some(signature) = &clean_signature {
+                    if clean_vertex.is_some() {
                         // Все чистые вершины имели одну сигнатуру до split.
                         // Их соседи остались в представительных дочерних
                         // клетках; монотонная замена рангов одинакова для всех.
-                        // Запись остаётся на прежнем месте: перестановка
-                        // равных ключей в heapsort не меняется.
-                        records.push(RefinementRecordV1 {
-                            vertex,
-                            signature: signature.clone(),
-                        });
                         #[cfg(test)]
                         if let Some(trace) = trace.as_deref_mut() {
                             trace.shared_signatures += 1;
                         }
                         continue;
                     }
+                    clean_vertex = Some(vertex);
                 }
                 let arcs = graph
                     .adjacency
@@ -1642,9 +1639,6 @@ fn refine_partition_impl(
                 }
                 let signature = start..signatures.len();
                 ordering::sort(&mut signatures[signature.clone()]);
-                if !dirty[vertex] {
-                    clean_signature = Some(signature.clone());
-                }
                 records.push(RefinementRecordV1 { vertex, signature });
                 #[cfg(test)]
                 if let Some(trace) = trace.as_deref_mut() {
@@ -1652,20 +1646,15 @@ fn refine_partition_impl(
                 }
             }
             ordering::sort_by(&mut records, |left, right| {
-                if left.signature == right.signature {
-                    core::cmp::Ordering::Equal
-                } else {
-                    signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
-                }
+                signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
             });
 
             // После сортировки равенство крайних сигнатур означает, что
             // клетка не разделилась. Её старый Vec уже содержит все вершины;
-            // воспроизводим перестановку равных ключей без нового выделения.
+            // сохраняем его без нового выделения.
             if signatures[records[0].signature.clone()]
                 == signatures[records[records.len() - 1].signature.clone()]
             {
-                cell.rotate_left(1);
                 next_cells.push(cell);
                 continue;
             }
@@ -1676,17 +1665,27 @@ fn refine_partition_impl(
             while start < records.len() {
                 let mut end = start + 1;
                 while end < records.len()
-                    && (records[start].signature == records[end].signature
-                        || signatures[records[start].signature.clone()]
-                            == signatures[records[end].signature.clone()])
+                    && signatures[records[start].signature.clone()]
+                        == signatures[records[end].signature.clone()]
                 {
                     end += 1;
                 }
+                let contains_clean = records[start..end]
+                    .iter()
+                    .any(|record| Some(record.vertex) == clean_vertex);
+                let split_len = end - start + if contains_clean { clean_count - 1 } else { 0 };
                 let mut split = Vec::new();
                 split
-                    .try_reserve_exact(end - start)
+                    .try_reserve_exact(split_len)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 split.extend(records[start..end].iter().map(|record| record.vertex));
+                if contains_clean {
+                    split.extend(
+                        cell.iter()
+                            .copied()
+                            .filter(|&vertex| !dirty[vertex] && Some(vertex) != clean_vertex),
+                    );
+                }
                 if next_cells.len() == first_split || split.len() > next_cells[largest_split].len()
                 {
                     largest_split = next_cells.len();
@@ -3832,7 +3831,8 @@ mod tests {
             };
             rank[*vertex] = index;
         }
-        let mut partition = refine_partition(graph, PartitionV1::initial(graph)?)?;
+        let mut partition =
+            full_refine_partition_reference(graph, PartitionV1::initial(graph)?, &mut Vec::new())?;
         while let Some(cell) = partition.0.first_non_singleton() {
             // Выбор вершины допустим в исходном полном поиске; все последующие
             // split и их порядок вычисляет прежний refine без пакетной ветви.
@@ -3841,7 +3841,11 @@ mod tests {
                 .copied()
                 .min_by_key(|&vertex| rank[vertex])
                 .ok_or(ProgramCompileError::InternalInvariant)?;
-            partition = refine_partition(graph, individualize(&partition.0, cell, vertex)?)?;
+            partition = full_refine_partition_reference(
+                graph,
+                individualize(&partition.0, cell, vertex)?,
+                &mut Vec::new(),
+            )?;
         }
         Ok(partition)
     }
@@ -3909,9 +3913,35 @@ mod tests {
         )?;
         let mut trace = RefinementTraceV1::default();
         let actual = refine_partition_impl(graph, partition, Some(&mut trace))?;
-        assert_eq!(actual.0.cells, expected.0.cells, "ordered final cells");
-        assert_eq!(trace.rounds, expected_rounds, "every synchronous round");
+        assert_eq!(
+            ordered_cell_memberships(&actual.0.cells),
+            ordered_cell_memberships(&expected.0.cells),
+            "ordered final cells",
+        );
+        assert_eq!(
+            trace
+                .rounds
+                .iter()
+                .map(|cells| ordered_cell_memberships(cells))
+                .collect::<Vec<_>>(),
+            expected_rounds
+                .iter()
+                .map(|cells| ordered_cell_memberships(cells))
+                .collect::<Vec<_>>(),
+            "every synchronous round, preserving cell order",
+        );
         Ok((actual, trace))
+    }
+
+    fn ordered_cell_memberships(cells: &[Vec<usize>]) -> Vec<Vec<usize>> {
+        cells
+            .iter()
+            .map(|cell| {
+                let mut members = cell.clone();
+                members.sort_unstable();
+                members
+            })
+            .collect()
     }
 
     fn check_initial_and_individualized_refinement(
@@ -3930,18 +3960,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn equal_signature_heapsort_preserves_one_left_rotation() {
-        for count in 0..=64 {
-            let mut actual = (0..count).collect::<Vec<_>>();
-            let expected = (1..count)
-                .chain((count != 0).then_some(0))
-                .collect::<Vec<_>>();
-            ordering::sort_by(&mut actual, |_, _| core::cmp::Ordering::Equal);
-            assert_eq!(actual, expected, "equal-key cell length {count}");
-        }
     }
 
     #[test]
@@ -4016,11 +4034,10 @@ mod tests {
                 trace.skipped_cells >= trace.rounds.len() - 1,
                 "stable cell must execute the optimized branch",
             );
-            let rotations = trace.rounds.len() % stable.len();
-            stable.rotate_left(rotations);
+            stable.sort_unstable();
             assert!(
-                partition.0.cells.contains(&stable),
-                "include the terminal no-split round's equal-key permutation",
+                ordered_cell_memberships(&partition.0.cells).contains(&stable),
+                "unchanged cell survives every round, including the terminal round",
             );
             check_initial_and_individualized_refinement(&graph)?;
         }
@@ -4257,7 +4274,7 @@ mod tests {
         graph: &CanonicalGraphV1,
         partition: PartitionV1,
     ) -> Result<Vec<u8>, ProgramCompileError> {
-        let partition = refine_partition(graph, partition)?.0;
+        let partition = full_refine_partition_reference(graph, partition, &mut Vec::new())?.0;
         match partition.first_non_singleton() {
             None => Ok(serialize_leaf(graph, &partition)?.preimage),
             Some(cell) => {
