@@ -70,9 +70,10 @@ metadata = {
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
 observations = []
 scenarios = {
-    nodes: ("repeated", "distinct", "shared", "grouped") + (("ring",) if nodes <= 256 else ())
+    nodes: ("repeated", "distinct", "shared", "grouped", "sparse") + (("ring",) if nodes <= 1024 else ())
     for nodes in (8, 64, 256, 1024, 4096)
 }
+scenarios[2048] = ("ring",)
 deadline = time.monotonic() + args.budget
 for nodes, patterns in scenarios.items():
     for pattern in patterns:
@@ -123,7 +124,9 @@ for nodes, patterns in scenarios.items():
                 samples = [s for m in measurements for s in m["samplesAfterWarmup"]]
                 row[label].update(
                     compileMedianMs=statistics.median(s["compileMs"] for s in samples),
+                    updatesMedianMs=statistics.median(sum(s["updatesMs"]) for s in samples),
                     cycleMedianMs=statistics.median(s["cycleMs"] for s in samples),
+                    coldCycleMedianMs=statistics.median(m["cold"]["cycleMs"] for m in measurements),
                     maxRssKiB=max(m["maxRssKiB"] for m in measurements),
                     wasmSha256=sorted({m["wasmSha256"] for m in measurements}),
                     checksums=sorted({s["checksum"] for s in samples}),
@@ -132,6 +135,7 @@ for nodes, patterns in scenarios.items():
             if row["baseline"]["checksums"] != row["candidate"]["checksums"]:
                 raise SystemExit(f"output checksum changed: {pattern}/{nodes}")
             row["compileSpeedup"] = row["baseline"]["compileMedianMs"] / row["candidate"]["compileMedianMs"]
+            row["updatesSpeedup"] = row["baseline"]["updatesMedianMs"] / row["candidate"]["updatesMedianMs"]
             row["cycleSpeedup"] = row["baseline"]["cycleMedianMs"] / row["candidate"]["cycleMedianMs"]
         summary.append(row)
 (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
