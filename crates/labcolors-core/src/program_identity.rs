@@ -1569,11 +1569,12 @@ fn refine_partition_impl(
     // и прежний heapsort остаются точными, включая порядок равных записей.
     let mut signatures = Vec::new();
     let mut records = Vec::new();
+    let mut cell_of = Vec::new();
     loop {
         if partition.is_discrete() {
             return Ok(EquitablePartitionV1(partition));
         }
-        let cell_of = partition_cells(&partition, graph.colors.len())?;
+        partition_cells_into(&partition, graph.colors.len(), &mut cell_of)?;
         // После swap здесь прежний внешний Vec разбиения; его исходная
         // capacity могла быть меньше числа вершин (после individualize).
         next_cells
@@ -1657,6 +1658,17 @@ fn refine_partition_impl(
                     signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
                 }
             });
+
+            // После сортировки равенство крайних сигнатур означает, что
+            // клетка не разделилась. Её старый Vec уже содержит все вершины;
+            // воспроизводим перестановку равных ключей без нового выделения.
+            if signatures[records[0].signature.clone()]
+                == signatures[records[records.len() - 1].signature.clone()]
+            {
+                cell.rotate_left(1);
+                next_cells.push(cell);
+                continue;
+            }
 
             let first_split = next_cells.len();
             let mut largest_split = first_split;
