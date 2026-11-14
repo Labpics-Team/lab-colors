@@ -1777,7 +1777,6 @@ struct SearchFrameV1 {
     candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
     component_twins: Option<ComponentTwinIndexV1>,
-    explored_orbits: Option<ExploredOrbitIndexV1>,
     next_candidate: usize,
     leaf_pending: bool,
 }
@@ -1799,7 +1798,6 @@ impl SearchFrameV1 {
             candidates,
             explored_candidates: Vec::new(),
             component_twins,
-            explored_orbits: None,
             next_candidate: 0,
         })
     }
@@ -1945,212 +1943,71 @@ fn automorphism_preserves_partition(
     Ok(true)
 }
 
-#[derive(Clone, Copy, Default)]
-struct OrbitRootV1 {
-    rank: u8,
-    explored: bool,
-}
-
-struct OrbitComponentsV1 {
-    vertices: Vec<usize>,
-    parents: Vec<usize>,
-    roots: Vec<OrbitRootV1>,
-    explored_count: usize,
-}
-
-impl OrbitComponentsV1 {
-    fn new(cell_of: &[usize], branch_cell: usize) -> Result<Self, ProgramCompileError> {
-        let vertex_count = cell_of.iter().filter(|&&cell| cell == branch_cell).count();
-        let mut vertices = Vec::new();
-        vertices
-            .try_reserve_exact(vertex_count)
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        vertices.extend(
-            cell_of
-                .iter()
-                .enumerate()
-                .filter_map(|(vertex, &cell)| (cell == branch_cell).then_some(vertex)),
-        );
-        let mut parents = Vec::new();
-        parents
-            .try_reserve_exact(vertex_count)
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        parents.extend(0..vertex_count);
-        let mut roots = Vec::new();
-        roots
-            .try_reserve_exact(vertex_count)
-            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        roots.resize(vertex_count, OrbitRootV1::default());
-        Ok(Self {
-            vertices,
-            parents,
-            roots,
-            explored_count: 0,
-        })
-    }
-
-    fn root(&mut self, mut vertex: usize) -> usize {
-        while self.parents[vertex] != vertex {
-            let parent = self.parents[vertex];
-            self.parents[vertex] = self.parents[parent];
-            vertex = parent;
-        }
-        vertex
-    }
-
-    fn join(&mut self, left: usize, right: usize) {
-        let mut left = self.root(left);
-        let mut right = self.root(right);
-        if left == right {
-            return;
-        }
-        if self.roots[left].rank < self.roots[right].rank {
-            core::mem::swap(&mut left, &mut right);
-        }
-        self.parents[right] = left;
-        let explored = self.roots[right].explored;
-        self.roots[left].explored |= explored;
-        if self.roots[left].rank == self.roots[right].rank {
-            // Ранг r требует хотя бы 2^r вершин, поэтому он меньше usize::BITS.
-            self.roots[left].rank += 1;
-        }
-    }
-
-    fn contains_explored(
-        &mut self,
-        explored: &[usize],
-        candidate: usize,
-    ) -> Result<bool, ProgramCompileError> {
-        let new_explored = explored
-            .get(self.explored_count..)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
-        for &vertex in new_explored {
-            let vertex = self
-                .vertices
-                .binary_search(&vertex)
-                .map_err(|_| ProgramCompileError::InternalInvariant)?;
-            let root = self.root(vertex);
-            self.roots[root].explored = true;
-            self.explored_count += 1;
-        }
-        let candidate = self
-            .vertices
-            .binary_search(&candidate)
-            .map_err(|_| ProgramCompileError::InternalInvariant)?;
-        let root = self.root(candidate);
-        Ok(self.roots[root].explored)
-    }
-}
-
-/// Индекс принадлежит неизменяемому разбиению одного search frame. Глобальный
-/// список доказанных автоморфизмов и список исследованных ветвей только растут.
-/// Каждый новый автоморфизм проверяется здесь один раз; неподходящий не меняет
-/// орбиты. Буферы компонент появляются лишь при первом stabilizer-е.
-struct ExploredOrbitIndexV1 {
-    vertex_count: usize,
-    branch_cell: usize,
-    automorphism_count: usize,
-    components: Option<OrbitComponentsV1>,
-}
-
-impl ExploredOrbitIndexV1 {
-    fn new(
-        partition: &PartitionV1,
-        vertex_count: usize,
-        branch_cell: usize,
-    ) -> Result<Self, ProgramCompileError> {
-        if branch_cell >= partition.cells.len() {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
-        Ok(Self {
-            vertex_count,
-            branch_cell,
-            automorphism_count: 0,
-            components: None,
-        })
-    }
-
-    fn contains(
-        &mut self,
-        partition: &PartitionV1,
-        explored: &[usize],
-        candidate: usize,
-        automorphisms: &[Vec<usize>],
-        cell_of: &mut Vec<usize>,
-    ) -> Result<bool, ProgramCompileError> {
-        if candidate >= self.vertex_count {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
-        let new_automorphisms = automorphisms
-            .get(self.automorphism_count..)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
-        if !new_automorphisms.is_empty() {
-            // Scratch общий для всего поиска: после работы другого frame
-            // восстанавливаем его только при поступлении новых генераторов.
-            partition_cells_into(partition, self.vertex_count, cell_of)?;
-            if cell_of[candidate] != self.branch_cell {
-                return Err(ProgramCompileError::InternalInvariant);
-            }
-        }
-        for permutation in new_automorphisms {
-            if automorphism_preserves_partition(permutation, cell_of)? {
-                if self.components.is_none() {
-                    self.components = Some(OrbitComponentsV1::new(cell_of, self.branch_cell)?);
-                }
-                let components = self
-                    .components
-                    .as_mut()
-                    .ok_or(ProgramCompileError::InternalInvariant)?;
-                // У конечной перестановки p обратное действие равно p^(k-1)
-                // для некоторого k. Поэтому неориентированные компоненты
-                // рёбер v--p(v) точно совпадают с достижимостью прежнего BFS
-                // по всем сохраняющим разбиение генераторам, включая их слова.
-                // Stabilizer не выводит вершины из branch cell. Остальные
-                // компоненты не участвуют в отсечении этого frame и не хранятся.
-                for vertex in 0..components.vertices.len() {
-                    let image = permutation[components.vertices[vertex]];
-                    let image = components
-                        .vertices
-                        .binary_search(&image)
-                        .map_err(|_| ProgramCompileError::InternalInvariant)?;
-                    components.join(vertex, image);
-                }
-            }
-            self.automorphism_count += 1;
-        }
-        match self.components.as_mut() {
-            Some(components) => components.contains_explored(explored, candidate),
-            None => Ok(false),
-        }
-    }
-}
-
-/// Орбиты строятся только из отображений, доказанных совпадением полных
-/// сериализаций листьев. Эквивалентность сама по себе не предполагается из
-/// равенства refinement-сигнатур или принадлежности одной клетке.
+/// Проверяет, лежит ли `candidate` в орбите уже исследованной ветви при
+/// автоморфизмах, стабилизирующих текущее упорядоченное разбиение. Отсечение
+/// точное: отображение сохраняется лишь после совпадения полных сериализаций
+/// листьев, доказывающего автоморфизм графа.
 fn candidate_is_in_explored_orbit(
     partition: &PartitionV1,
-    branch_cell: usize,
     explored: &[usize],
     candidate: usize,
     automorphisms: &[Vec<usize>],
-    index: &mut Option<ExploredOrbitIndexV1>,
-    cell_of: &mut Vec<usize>,
 ) -> Result<bool, ProgramCompileError> {
     if explored.is_empty() || automorphisms.is_empty() {
         return Ok(false);
     }
-    if index.is_none() {
-        *index = Some(ExploredOrbitIndexV1::new(
-            partition,
-            automorphisms[0].len(),
-            branch_cell,
-        )?);
+    let vertex_count = automorphisms[0].len();
+    let cell_of = partition_cells(partition, vertex_count)?;
+    if candidate >= vertex_count {
+        return Err(ProgramCompileError::InternalInvariant);
     }
-    index
-        .as_mut()
-        .ok_or(ProgramCompileError::InternalInvariant)?
-        .contains(partition, explored, candidate, automorphisms, cell_of)
+
+    let mut stabilizers = Vec::new();
+    stabilizers
+        .try_reserve_exact(automorphisms.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for (index, permutation) in automorphisms.iter().enumerate() {
+        if automorphism_preserves_partition(permutation, &cell_of)? {
+            stabilizers.push(index);
+        }
+    }
+    if stabilizers.is_empty() {
+        return Ok(false);
+    }
+
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(vertex_count)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    seen.resize(vertex_count, false);
+    let mut queue = Vec::new();
+    queue
+        .try_reserve_exact(vertex_count)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for &representative in explored {
+        let slot = seen
+            .get_mut(representative)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        if !*slot {
+            *slot = true;
+            queue.push(representative);
+        }
+    }
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        let vertex = queue[cursor];
+        cursor += 1;
+        for &index in &stabilizers {
+            let image = automorphisms[index][vertex];
+            let slot = seen
+                .get_mut(image)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if !*slot {
+                *slot = true;
+                queue.push(image);
+            }
+        }
+    }
+    Ok(seen[candidate])
 }
 
 /// Для каждой вершины хранит клетку, если её компонента после удаления
@@ -2402,7 +2259,6 @@ fn canonical_search_impl(
     stack.push(SearchFrameV1::new(initial, component_twins)?);
     let mut best: Option<SerializedLeafV1> = None;
     let mut automorphisms: Vec<Vec<usize>> = Vec::new();
-    let mut orbit_cell_of = Vec::new();
     let mut leaf_count = 0_usize;
 
     while !stack.is_empty() {
@@ -2461,14 +2317,9 @@ fn canonical_search_impl(
                     &mut frame.component_twins,
                 )? || candidate_is_in_explored_orbit(
                     &frame.partition.0,
-                    frame
-                        .branch_cell
-                        .ok_or(ProgramCompileError::InternalInvariant)?,
                     &frame.explored_candidates,
                     candidate,
                     &automorphisms,
-                    &mut frame.explored_orbits,
-                    &mut orbit_cell_of,
                 )? {
                     continue;
                 }
@@ -2722,338 +2573,6 @@ mod ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Независимый алгоритм прежнего пути: направленная достижимость по
-    // сохраняющим разбиение перестановкам, без объединения компонент.
-    fn breadth_first_orbit_reference(
-        partition: &PartitionV1,
-        explored: &[usize],
-        candidate: usize,
-        automorphisms: &[Vec<usize>],
-    ) -> Result<bool, ProgramCompileError> {
-        if explored.is_empty() || automorphisms.is_empty() {
-            return Ok(false);
-        }
-        let vertex_count = automorphisms[0].len();
-        let cell_of = partition_cells(partition, vertex_count)?;
-        if candidate >= vertex_count {
-            return Err(ProgramCompileError::InternalInvariant);
-        }
-        let mut stabilizers = Vec::new();
-        for (index, permutation) in automorphisms.iter().enumerate() {
-            if automorphism_preserves_partition(permutation, &cell_of)? {
-                stabilizers.push(index);
-            }
-        }
-        if stabilizers.is_empty() {
-            return Ok(false);
-        }
-        let mut seen = vec![false; vertex_count];
-        let mut queue = Vec::new();
-        for &representative in explored {
-            let slot = seen
-                .get_mut(representative)
-                .ok_or(ProgramCompileError::InternalInvariant)?;
-            if !*slot {
-                *slot = true;
-                queue.push(representative);
-            }
-        }
-        let mut cursor = 0;
-        while cursor < queue.len() {
-            let vertex = queue[cursor];
-            cursor += 1;
-            for &index in &stabilizers {
-                let image = automorphisms[index][vertex];
-                let slot = seen
-                    .get_mut(image)
-                    .ok_or(ProgramCompileError::InternalInvariant)?;
-                if !*slot {
-                    *slot = true;
-                    queue.push(image);
-                }
-            }
-        }
-        Ok(seen[candidate])
-    }
-
-    fn all_small_partitions(vertex_count: usize) -> Vec<PartitionV1> {
-        fn visit(
-            vertex: usize,
-            vertex_count: usize,
-            cells: &mut Vec<Vec<usize>>,
-            partitions: &mut Vec<PartitionV1>,
-        ) {
-            if vertex == vertex_count {
-                partitions.push(PartitionV1 {
-                    cells: cells.clone(),
-                });
-                return;
-            }
-            for cell in 0..cells.len() {
-                cells[cell].push(vertex);
-                visit(vertex + 1, vertex_count, cells, partitions);
-                cells[cell].pop();
-            }
-            cells.push(vec![vertex]);
-            visit(vertex + 1, vertex_count, cells, partitions);
-            cells.pop();
-        }
-        let mut partitions = Vec::new();
-        visit(0, vertex_count, &mut Vec::new(), &mut partitions);
-        partitions
-    }
-
-    fn all_small_permutations(vertex_count: usize) -> Vec<Vec<usize>> {
-        fn visit(cursor: usize, permutation: &mut [usize], output: &mut Vec<Vec<usize>>) {
-            if cursor == permutation.len() {
-                output.push(permutation.to_vec());
-                return;
-            }
-            for next in cursor..permutation.len() {
-                permutation.swap(cursor, next);
-                visit(cursor + 1, permutation, output);
-                permutation.swap(cursor, next);
-            }
-        }
-        let mut output = Vec::new();
-        visit(0, &mut (0..vertex_count).collect::<Vec<_>>(), &mut output);
-        output
-    }
-
-    #[test]
-    fn growing_orbits_match_bfs_for_every_four_vertex_partition_and_generator_pair()
-    -> Result<(), ProgramCompileError> {
-        let permutations = all_small_permutations(4);
-        for partition in all_small_partitions(4) {
-            for (branch_cell, vertices) in partition.cells.iter().enumerate() {
-                for first in &permutations {
-                    for second in &permutations {
-                        let generators = [first.clone(), second.clone()];
-                        for rotation in 0..vertices.len() {
-                            let mut explored = vertices.clone();
-                            explored.rotate_left(rotation);
-                            // Чередование роста generators/explored ловит
-                            // потерю уже отмеченной орбиты при новом объединении.
-                            for split in 1..=explored.len() {
-                                let mut index = None;
-                                let mut cell_of = Vec::new();
-                                for (generator_count, explored_count) in
-                                    [(0, 0), (1, 1), (1, split), (2, split), (2, explored.len())]
-                                {
-                                    for &candidate in vertices {
-                                        assert_eq!(
-                                            candidate_is_in_explored_orbit(
-                                                &partition,
-                                                branch_cell,
-                                                &explored[..explored_count],
-                                                candidate,
-                                                &generators[..generator_count],
-                                                &mut index,
-                                                &mut cell_of,
-                                            )?,
-                                            breadth_first_orbit_reference(
-                                                &partition,
-                                                &explored[..explored_count],
-                                                candidate,
-                                                &generators[..generator_count],
-                                            )?,
-                                            "cells {:?}, generators {:?}, explored {:?}, candidate {candidate}",
-                                            partition.cells,
-                                            &generators[..generator_count],
-                                            &explored[..explored_count],
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn non_preserving_generators_do_not_form_a_hidden_stabilizer() -> Result<(), ProgramCompileError>
-    {
-        let partition = PartitionV1 {
-            cells: vec![vec![0, 1], vec![2, 3]],
-        };
-        // Их композиция сохраняет клетку {0,1}, но прежний алгоритм допускает
-        // только генераторы, каждый из которых сам сохраняет всё разбиение.
-        let generators = [vec![2, 1, 0, 3], vec![1, 2, 0, 3], vec![1, 0, 2, 3]];
-        let mut index = None;
-        let mut cell_of = Vec::new();
-        assert!(!candidate_is_in_explored_orbit(
-            &partition,
-            0,
-            &[0],
-            1,
-            &generators[..2],
-            &mut index,
-            &mut cell_of,
-        )?);
-        assert!(candidate_is_in_explored_orbit(
-            &partition,
-            0,
-            &[0],
-            1,
-            &generators,
-            &mut index,
-            &mut cell_of,
-        )?);
-        Ok(())
-    }
-
-    #[test]
-    fn merging_orbits_retains_explored_members_and_queries_do_not_allocate()
-    -> Result<(), ProgramCompileError> {
-        let partition = PartitionV1 {
-            cells: vec![(0..6).collect()],
-        };
-        let generators = [
-            vec![1, 0, 2, 3, 4, 5],
-            vec![0, 1, 3, 2, 5, 4],
-            vec![0, 1, 4, 3, 2, 5],
-            vec![2, 1, 0, 3, 4, 5],
-        ];
-        let mut index = None;
-        let mut cell_of = Vec::new();
-        assert!(candidate_is_in_explored_orbit(
-            &partition,
-            0,
-            &[0],
-            1,
-            &generators[..3],
-            &mut index,
-            &mut cell_of,
-        )?);
-        assert!(!candidate_is_in_explored_orbit(
-            &partition,
-            0,
-            &[0],
-            2,
-            &generators[..3],
-            &mut index,
-            &mut cell_of,
-        )?);
-        let (result, events) = crate::test_support::measured_allocator_events(|| {
-            // Последний generator присоединяет меньшую explored-орбиту
-            // к большей, до этого не исследованной компоненте.
-            if !candidate_is_in_explored_orbit(
-                &partition,
-                0,
-                &[0],
-                5,
-                &generators,
-                &mut index,
-                &mut cell_of,
-            )? {
-                return Err(ProgramCompileError::InternalInvariant);
-            }
-            for &candidate in &partition.cells[0] {
-                if !candidate_is_in_explored_orbit(
-                    &partition,
-                    0,
-                    &[0, 3],
-                    candidate,
-                    &generators,
-                    &mut index,
-                    &mut cell_of,
-                )? {
-                    return Err(ProgramCompileError::InternalInvariant);
-                }
-            }
-            Ok(())
-        });
-        result?;
-        assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn malformed_orbit_permutations_and_vertices_keep_typed_failures() {
-        let partition = PartitionV1 {
-            cells: vec![vec![0, 1]],
-        };
-        for (generators, explored, candidate) in [
-            (vec![vec![0, 1], vec![0]], vec![0], 1),
-            (vec![vec![0, 2]], vec![0], 1),
-            (vec![vec![0, 1]], vec![0], 2),
-            (vec![vec![0, 1]], vec![2], 1),
-        ] {
-            let expected =
-                breadth_first_orbit_reference(&partition, &explored, candidate, &generators);
-            assert_eq!(expected, Err(ProgramCompileError::InternalInvariant));
-            assert_eq!(
-                candidate_is_in_explored_orbit(
-                    &partition,
-                    0,
-                    &explored,
-                    candidate,
-                    &generators,
-                    &mut None,
-                    &mut Vec::new(),
-                ),
-                expected,
-            );
-        }
-    }
-
-    #[test]
-    fn shared_orbit_scratch_does_not_mix_partition_stabilizers() -> Result<(), ProgramCompileError>
-    {
-        let first_partition = PartitionV1 {
-            cells: vec![vec![0, 1, 2], vec![3]],
-        };
-        let second_partition = PartitionV1 {
-            cells: vec![vec![0, 1, 3], vec![2]],
-        };
-        let generators = [vec![1, 0, 2, 3], vec![3, 1, 2, 0]];
-        let mut first = None;
-        let mut second = None;
-        let mut cell_of = Vec::new();
-        assert!(candidate_is_in_explored_orbit(
-            &first_partition,
-            0,
-            &[0],
-            1,
-            &generators[..1],
-            &mut first,
-            &mut cell_of,
-        )?);
-        assert!(candidate_is_in_explored_orbit(
-            &second_partition,
-            0,
-            &[0],
-            3,
-            &generators,
-            &mut second,
-            &mut cell_of,
-        )?);
-        assert!(!candidate_is_in_explored_orbit(
-            &first_partition,
-            0,
-            &[0],
-            2,
-            &generators,
-            &mut first,
-            &mut cell_of,
-        )?);
-        // Без нового generator запрос читает DSU второго frame, хотя scratch
-        // после предыдущего вызова описывает первое разбиение.
-        assert!(candidate_is_in_explored_orbit(
-            &second_partition,
-            0,
-            &[0],
-            3,
-            &generators,
-            &mut second,
-            &mut cell_of,
-        )?);
-        Ok(())
-    }
 
     #[test]
     fn joint_selection_vertex_binds_tag_and_exact_release_identity_bytes() {
