@@ -9,9 +9,11 @@ const packageRoot = resolve(process.argv[2] ?? dirname(fileURLToPath(new URL("..
 const pattern = process.argv[3] ?? "repeated";
 const nodes = Number(process.argv[4] ?? 8);
 const samples = Number(process.argv[5] ?? 7);
-assert.ok(["repeated", "distinct", "shared", "grouped", "ring", "sparse"].includes(pattern), "pattern: repeated | distinct | shared | grouped | ring | sparse");
+assert.ok(["repeated", "distinct", "shared", "grouped", "ring", "sparse", "complete", "bipartite"].includes(pattern), "pattern: repeated | distinct | shared | grouped | ring | sparse | complete | bipartite");
 assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..4096");
 assert.ok(pattern !== "ring" || (nodes >= 3 && nodes <= 2048), "ring nodes: 3..2048 (two hard constraints per node)");
+assert.ok(!["complete", "bipartite"].includes(pattern) || (nodes >= 2 && nodes <= 32), "dense diagnostic nodes: 2..32");
+assert.ok(pattern !== "bipartite" || nodes % 2 === 0, "bipartite nodes must be even");
 assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
 const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v1.js")));
@@ -22,9 +24,9 @@ const initializationMs = performance.now() - started;
 const producer = api.decodeCertificateEnvelope(api.issueSourceCertificateEnvelope()).producerRevision;
 
 function color(index) {
-  if (pattern === "repeated" || pattern === "shared" || pattern === "ring" || pattern === "sparse") return [20, 20, 20];
   if (pattern === "grouped") return [20 + index % 4, 20, 20];
-  return [index % 128, Math.floor(index / 128) % 128, 20];
+  if (pattern === "distinct") return [index % 128, Math.floor(index / 128) % 128, 20];
+  return [20, 20, 20];
 }
 
 const builder = new abi.ProgramWireBuilderV1();
@@ -45,6 +47,17 @@ if (pattern === "ring") {
   // target branches, so the residual component repeats each partition cell.
   for (let id = 1; id <= nodes; id += 1) {
     builder.exactIntrinsicRelationHard(nodes + id, id, [id % nodes + 1]);
+  }
+} else if (pattern === "complete" || pattern === "bipartite") {
+  for (let id = 1; id <= nodes; id += 1) {
+    const candidates = [];
+    for (let other = 1; other <= nodes; other += 1) {
+      const connected = pattern === "complete"
+        ? other !== id
+        : (id <= nodes / 2) !== (other <= nodes / 2);
+      if (connected) candidates.push(other);
+    }
+    builder.exactIntrinsicRelationHard(nodes + id, id, candidates);
   }
 }
 const wire = builder.finish();

@@ -120,7 +120,7 @@ jobs:
             local wasm=packages/colors/pkg/labcolors_bg.wasm
             local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm
             node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \
-              -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int
+              --flatten --rereloop -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int
             mv -- "$optimized" "$wasm"
           }
 

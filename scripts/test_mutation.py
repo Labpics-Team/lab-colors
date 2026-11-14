@@ -2320,13 +2320,13 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(wasm.count("wasm-pack build "), 1)
         self.assertIn(
             'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
-            "              -Oz --converge --enable-bulk-memory "
+            "              --flatten --rereloop -Oz --converge --enable-bulk-memory "
             "--enable-nontrapping-float-to-int",
             wasm,
         )
         self.assertEqual(
             wasm.count(
-                "-Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int"
+                "--flatten --rereloop -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int"
             ),
             1,
         )

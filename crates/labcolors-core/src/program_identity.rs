@@ -1975,34 +1975,36 @@ fn individualize(
 struct SearchFrameV1 {
     partition: EquitablePartitionV1,
     branch_cell: Option<usize>,
-    candidates: Vec<usize>,
     explored_candidates: Vec<usize>,
     component_twins: Option<ComponentTwinIndexV1>,
     explored_orbits: Option<ExploredOrbitIndexV1>,
     next_candidate: usize,
-    leaf_pending: bool,
+    // Порядок минимального листа завершённых дочерних поддеревьев.
+    // Полные сериализации живут только во время сравнения: память минимумов
+    // O(depth * V + V + E), включая плотные графы.
+    best: Option<Vec<usize>>,
 }
 
 impl SearchFrameV1 {
     fn new(
-        partition: EquitablePartitionV1,
+        mut partition: EquitablePartitionV1,
         component_twins: Option<ComponentTwinIndexV1>,
-    ) -> Result<Self, ProgramCompileError> {
+    ) -> Self {
         let branch_cell = partition.0.first_non_singleton();
-        let candidates = match branch_cell {
-            Some(index) => copy_vertices(&partition.0.cells[index])?,
-            None => Vec::new(),
-        };
-        Ok(Self {
-            leaf_pending: branch_cell.is_none(),
+        if let Some(index) = branch_cell {
+            // Frame владеет клеткой. Её порядок задаёт очередь кандидатов;
+            // отдельный буфер той же последовательности не нужен.
+            ordering::sort(&mut partition.0.cells[index]);
+        }
+        Self {
+            best: None,
             partition,
             branch_cell,
-            candidates,
             explored_candidates: Vec::new(),
             component_twins,
             explored_orbits: None,
             next_candidate: 0,
-        })
+        }
     }
 }
 
@@ -2030,19 +2032,37 @@ fn serialize_leaf(
     order
         .try_reserve_exact(graph.colors.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for cell in &partition.cells {
+        let [vertex] = cell.as_slice() else {
+            return Err(ProgramCompileError::InternalInvariant);
+        };
+        order.push(*vertex);
+    }
+    let preimage = serialize_order(graph, &order)?;
+    Ok(SerializedLeafV1 { preimage, order })
+}
+
+fn serialize_order(
+    graph: &CanonicalGraphV1,
+    order: &[usize],
+) -> Result<Vec<u8>, ProgramCompileError> {
+    if order.len() != graph.colors.len() {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
     let mut label_of = Vec::new();
     label_of
         .try_reserve_exact(graph.colors.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     label_of.resize(graph.colors.len(), usize::MAX);
-    for (label, cell) in partition.cells.iter().enumerate() {
-        let [vertex] = cell.as_slice() else {
+    for (label, &vertex) in order.iter().enumerate() {
+        let slot = label_of
+            .get_mut(vertex)
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        if *slot != usize::MAX {
             return Err(ProgramCompileError::InternalInvariant);
-        };
-        label_of[*vertex] = label;
-        order.push(*vertex);
+        }
+        *slot = label;
     }
-
     let edge_bytes = graph
         .edge_count
         .checked_mul(9)
@@ -2068,8 +2088,7 @@ fn serialize_leaf(
     push_u64_bytes(&mut output, usize_as_u64(graph.edge_count)?);
 
     let mut outgoing = Vec::new();
-    for cell in &partition.cells {
-        let vertex = cell[0];
+    for &vertex in order {
         let color = graph.colors[vertex];
         push_u64_bytes(&mut output, u64::from(color.len()));
         output.extend_from_slice(color.as_slice());
@@ -2095,10 +2114,7 @@ fn serialize_leaf(
             push_u64_bytes(&mut output, usize_as_u64(target)?);
         }
     }
-    Ok(SerializedLeafV1 {
-        preimage: output,
-        order,
-    })
+    Ok(output)
 }
 
 fn equal_leaf_automorphism(
@@ -2492,7 +2508,8 @@ fn factor_component_twins(
         {
             return Ok((equitable, Some(twins)));
         }
-        let roots = copy_vertices(&equitable.0.cells[branch_cell])?;
+        ordering::sort(&mut equitable.0.cells[branch_cell]);
+        let roots = &equitable.0.cells[branch_cell];
         let component_count = roots.len();
         if let Some(remaining) = remaining_branch_expansions {
             // Fault injection считает логические individualize, в том числе
@@ -2600,125 +2617,139 @@ fn canonical_search_impl(
     stack
         .try_reserve_exact(1)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    stack.push(SearchFrameV1::new(initial, component_twins)?);
-    let mut best: Option<SerializedLeafV1> = None;
+    stack.push(SearchFrameV1::new(initial, component_twins));
     let mut automorphisms: Vec<Vec<usize>> = Vec::new();
     let mut orbit_cell_of = Vec::new();
     let mut leaf_count = 0_usize;
 
-    while !stack.is_empty() {
+    loop {
         let leaf = stack
             .last()
-            .map(|frame| frame.leaf_pending)
+            .map(|frame| frame.branch_cell.is_none())
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        if leaf {
-            let candidate = {
+        let candidate = if leaf {
+            let frame = stack.pop().ok_or(ProgramCompileError::InternalInvariant)?;
+            let candidate = serialize_leaf(graph, &frame.partition.0)?;
+            // Счётчик учитывает только сериализованные листья, не передачу
+            // завершённого минимума через предков, и не участвует в admission.
+            leaf_count = leaf_count.saturating_add(1);
+            candidate
+        } else {
+            let child = {
                 let frame = stack
                     .last_mut()
                     .ok_or(ProgramCompileError::InternalInvariant)?;
-                frame.leaf_pending = false;
-                serialize_leaf(graph, &frame.partition.0)?
-            };
-            stack.pop();
-            // Диагностический счётчик не участвует в admission: насыщение не
-            // влияет на выбранный прообраз даже у недостижимо большого дерева.
-            leaf_count = leaf_count.saturating_add(1);
-            match &best {
-                None => best = Some(candidate),
-                Some(current) if candidate.preimage < current.preimage => best = Some(candidate),
-                Some(current) if candidate.preimage == current.preimage => {
-                    let permutation = equal_leaf_automorphism(&current.order, &candidate.order)?;
-                    // Отсечение не требуется для корректности. Храним не более
-                    // V доказанных автоморфизмов: при длине V это ограничивает
-                    // память O(V²), а остальные ветви исследуются полностью.
-                    if permutation.iter().enumerate().any(|(from, to)| from != *to)
-                        && automorphisms.len() < graph.colors.len()
-                        && !automorphisms.contains(&permutation)
-                    {
-                        automorphisms
-                            .try_reserve(1)
-                            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                        automorphisms.push(permutation);
+                let cell = frame
+                    .branch_cell
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let candidates = &frame.partition.0.cells[cell];
+                let mut selected = None;
+                while frame.next_candidate < candidates.len() {
+                    let candidate = candidates[frame.next_candidate];
+                    frame.next_candidate += 1;
+                    if candidate_is_component_twin(
+                        graph,
+                        &frame.partition,
+                        &frame.explored_candidates,
+                        candidate,
+                        &mut frame.component_twins,
+                    )? || candidate_is_in_explored_orbit(
+                        &frame.partition.0,
+                        cell,
+                        &frame.explored_candidates,
+                        candidate,
+                        &automorphisms,
+                        &mut frame.explored_orbits,
+                        &mut orbit_cell_of,
+                    )? {
+                        continue;
                     }
-                }
-                Some(_) => {}
-            }
-            continue;
-        }
-
-        let child = {
-            let frame = stack
-                .last_mut()
-                .ok_or(ProgramCompileError::InternalInvariant)?;
-            let mut selected = None;
-            while frame.next_candidate < frame.candidates.len() {
-                let candidate = frame.candidates[frame.next_candidate];
-                frame.next_candidate += 1;
-                if candidate_is_component_twin(
-                    graph,
-                    &frame.partition,
-                    &frame.explored_candidates,
-                    candidate,
-                    &mut frame.component_twins,
-                )? || candidate_is_in_explored_orbit(
-                    &frame.partition.0,
                     frame
-                        .branch_cell
-                        .ok_or(ProgramCompileError::InternalInvariant)?,
-                    &frame.explored_candidates,
-                    candidate,
-                    &automorphisms,
-                    &mut frame.explored_orbits,
-                    &mut orbit_cell_of,
-                )? {
-                    continue;
+                        .explored_candidates
+                        .try_reserve(1)
+                        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                    frame.explored_candidates.push(candidate);
+                    selected = Some(candidate);
+                    break;
                 }
-                frame
-                    .explored_candidates
-                    .try_reserve(1)
-                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                frame.explored_candidates.push(candidate);
-                selected = Some(candidate);
-                break;
-            }
-            match selected {
-                Some(candidate) => {
-                    if let Some(remaining) = &mut remaining_branch_expansions {
-                        *remaining = remaining
-                            .checked_sub(1)
-                            .ok_or(ProgramCompileError::ResourceExhausted)?;
+                match selected {
+                    Some(candidate) => {
+                        if let Some(remaining) = &mut remaining_branch_expansions {
+                            *remaining = remaining
+                                .checked_sub(1)
+                                .ok_or(ProgramCompileError::ResourceExhausted)?;
+                        }
+                        let partition = refine_partition(
+                            graph,
+                            individualize(&frame.partition.0, cell, candidate)?,
+                        )?;
+                        Some(factor_component_twins(
+                            graph,
+                            partition,
+                            &mut remaining_branch_expansions,
+                            &mut bulk_groups,
+                        )?)
                     }
-                    let cell = frame
-                        .branch_cell
-                        .ok_or(ProgramCompileError::InternalInvariant)?;
-                    let partition = refine_partition(
-                        graph,
-                        individualize(&frame.partition.0, cell, candidate)?,
-                    )?;
-                    Some(factor_component_twins(
-                        graph,
-                        partition,
-                        &mut remaining_branch_expansions,
-                        &mut bulk_groups,
-                    )?)
+                    None => None,
                 }
-                None => None,
-            }
-        };
-        match child {
-            Some((partition, component_twins)) => {
+            };
+            if let Some((partition, component_twins)) = child {
                 stack
                     .try_reserve(1)
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                stack.push(SearchFrameV1::new(partition, component_twins)?);
+                stack.push(SearchFrameV1::new(partition, component_twins));
+                continue;
             }
-            None => {
-                stack.pop();
+            let order = stack
+                .pop()
+                .ok_or(ProgramCompileError::InternalInvariant)?
+                .best
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            let preimage = serialize_order(graph, &order)?;
+            SerializedLeafV1 { preimage, order }
+        };
+        let Some(parent) = stack.last_mut() else {
+            return Ok((candidate.preimage, leaf_count, bulk_groups));
+        };
+        // Оба сравниваемых листа продолжают одно разбиение parent. При равных
+        // полных сериализациях отображение сохраняет его клетки и выбранных
+        // предков. Глобальная опорная ветвь для такого доказательства не нужна.
+        let comparison = match parent.best.as_deref() {
+            Some(current) => candidate.preimage.cmp(&serialize_order(graph, current)?),
+            None => core::cmp::Ordering::Less,
+        };
+        match comparison {
+            core::cmp::Ordering::Less => parent.best = Some(candidate.order),
+            core::cmp::Ordering::Equal => {
+                let current = parent
+                    .best
+                    .as_deref()
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let permutation = equal_leaf_automorphism(current, &candidate.order)?;
+                #[cfg(test)]
+                assert!(
+                    automorphism_preserves_partition(
+                        &permutation,
+                        &partition_cells(&parent.partition.0, graph.colors.len())?,
+                    )?,
+                    "equal local minima must preserve their parent partition",
+                );
+                // Отсечение не требуется для корректности. Храним не более
+                // V доказанных автоморфизмов: при длине V это ограничивает
+                // память O(V²), а остальные ветви исследуются полностью.
+                if permutation.iter().enumerate().any(|(from, to)| from != *to)
+                    && automorphisms.len() < graph.colors.len()
+                    && !automorphisms.contains(&permutation)
+                {
+                    automorphisms
+                        .try_reserve(1)
+                        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                    automorphisms.push(permutation);
+                }
             }
+            core::cmp::Ordering::Greater => {}
         }
     }
-    let best = best.ok_or(ProgramCompileError::InternalInvariant)?;
-    Ok((best.preimage, leaf_count, bulk_groups))
 }
 
 fn canonical_search(graph: &CanonicalGraphV1) -> Result<(Vec<u8>, usize), ProgramCompileError> {
@@ -4086,6 +4117,34 @@ mod tests {
     }
 
     #[test]
+    fn bulk_roots_ignore_partition_member_storage_order() -> Result<(), ProgramCompileError> {
+        let graph = interleaved_component_graph(3, [2, 0, 1], true)?;
+        let initial = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+        let mut reordered = PartitionV1 {
+            cells: initial.0.cells.clone(),
+        };
+        for cell in &mut reordered.cells {
+            cell.reverse();
+        }
+        let mut first_groups = 0;
+        let (first, _) = factor_component_twins(&graph, initial, &mut None, &mut first_groups)?;
+        let mut second_groups = 0;
+        let (second, _) = factor_component_twins(
+            &graph,
+            EquitablePartitionV1(reordered),
+            &mut None,
+            &mut second_groups,
+        )?;
+        assert_eq!(first_groups, 2);
+        assert_eq!(second_groups, first_groups);
+        let first_leaf = serialize_leaf(&graph, &first.0)?;
+        let second_leaf = serialize_leaf(&graph, &second.0)?;
+        assert_eq!(second_leaf.order, first_leaf.order);
+        assert_eq!(second_leaf.preimage, first_leaf.preimage);
+        Ok(())
+    }
+
+    #[test]
     fn repeated_components_use_one_bulk_group_instead_of_search_depth()
     -> Result<(), ProgramCompileError> {
         let graph = repeated_component_graph(256)?;
@@ -4494,6 +4553,36 @@ mod tests {
             }
         }
         graph.finish()
+    }
+
+    #[test]
+    fn search_candidates_ignore_partition_member_storage_order() -> Result<(), ProgramCompileError>
+    {
+        let graph = connected_cycle_graph(6, false)?;
+        let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+        let (first, events) =
+            crate::test_support::measured_allocator_events(|| SearchFrameV1::new(partition, None));
+        assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
+        let mut reordered = PartitionV1 {
+            cells: first.partition.0.cells.clone(),
+        };
+        // Перестановка членов сохраняет equitable-свойство и порядок клеток.
+        for cell in &mut reordered.cells {
+            cell.reverse();
+        }
+        let second = SearchFrameV1::new(EquitablePartitionV1(reordered), None);
+        let first_cell = first
+            .branch_cell
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let second_cell = second
+            .branch_cell
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        assert_eq!(first.partition.0.cells[first_cell], vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            second.partition.0.cells[second_cell],
+            first.partition.0.cells[first_cell]
+        );
+        Ok(())
     }
 
     #[test]

@@ -74,6 +74,8 @@ scenarios = {
     for nodes in (8, 64, 256, 1024, 4096)
 }
 scenarios[2048] = ("ring",)
+scenarios[8] += ("complete",)
+scenarios[16] = ("bipartite",)
 deadline = time.monotonic() + args.budget
 for nodes, patterns in scenarios.items():
     for pattern in patterns:
