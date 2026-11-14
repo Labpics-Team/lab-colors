@@ -2307,10 +2307,10 @@ class MutationTruthTest(unittest.TestCase):
             "wasm"
         ]
         self.assertNotIn("BINARYEN_CORES", workers["ci-worker.yml"])
-        self.assertIn("      BINARYEN_RELEASE: version_117\n", wasm)
+        self.assertIn("      BINARYEN_RELEASE: version_133\n", wasm)
         self.assertIn(
             '      BINARYEN_NODE_SHA256: "'
-            '2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"\n',
+            '3507aedecef25c46f2889530a7da304677e97122869274125f782b586cb508ab"\n',
             wasm,
         )
         self.assertIn("binaryen-${BINARYEN_RELEASE}-node.tar.gz", wasm)
@@ -2320,13 +2320,13 @@ class MutationTruthTest(unittest.TestCase):
         self.assertEqual(wasm.count("wasm-pack build "), 1)
         self.assertIn(
             'node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \\\n'
-            "              -Oz --enable-bulk-memory "
+            "              -Oz --converge --enable-bulk-memory "
             "--enable-nontrapping-float-to-int",
             wasm,
         )
         self.assertEqual(
             wasm.count(
-                "-Oz --enable-bulk-memory --enable-nontrapping-float-to-int"
+                "-Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int"
             ),
             1,
         )

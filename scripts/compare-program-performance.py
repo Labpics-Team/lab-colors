@@ -60,7 +60,7 @@ metadata = {
     "rustc": tool_version("rustc", "--version", "--verbose"),
     "cargo": tool_version("cargo", "--version"),
     "node": tool_version("node", "--version"),
-    "npm": tool_version("npm", "--version"),
+    "npm": tool_version("npm.cmd" if os.name == "nt" else "npm", "--version"),
     "wasmSha256": {label: hashlib.sha256((root / "pkg/labcolors_bg.wasm").read_bytes()).hexdigest()
                    for label, root in roots.items()},
     "harnessSha256": hashlib.sha256(args.harness.read_bytes()).hexdigest(),

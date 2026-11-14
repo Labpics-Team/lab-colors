@@ -1496,6 +1496,8 @@ struct RefinementTraceV1 {
     skipped_cells: usize,
     built_signatures: usize,
     shared_signatures: usize,
+    processed_cells: usize,
+    moved_vertices: usize,
 }
 
 fn partition_cells(
@@ -1563,7 +1565,6 @@ struct ActiveRefinementV1 {
     active: Vec<usize>,
     signatures: Vec<RefinementAtomV1>,
     records: Vec<RefinementRecordV1>,
-    rank_updates: Vec<(usize, usize)>,
 }
 
 impl ActiveRefinementV1 {
@@ -1619,7 +1620,6 @@ impl ActiveRefinementV1 {
             active,
             signatures: Vec::new(),
             records: Vec::new(),
-            rank_updates: Vec::new(),
         })
     }
 
@@ -1773,10 +1773,11 @@ impl ActiveRefinementV1 {
             }
             if start == largest_start {
                 self.cells[cell].vertices = vertices;
-                self.rank_updates
-                    .try_reserve(1)
-                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                self.rank_updates.push((cell, rank));
+                // Старый ID остаётся внутри прежнего непересекающегося
+                // интервала. Даже частичная замена рангов старых IDs строго
+                // монотонна, поэтому не меняет сравнения signatures других
+                // клеток этого раунда. Их vertex -> ID пока остаётся прежним.
+                self.cells[cell].rank = rank;
             } else {
                 self.cells
                     .try_reserve(1)
@@ -1798,16 +1799,14 @@ impl ActiveRefinementV1 {
         graph: &CanonicalGraphV1,
         first_new_cell: usize,
     ) -> Result<(), ProgramCompileError> {
-        // До этой границы ВСЕ signatures читали старые cell_of и ранги.
+        // До этой границы ВСЕ signatures читали старый cell_of. Ранги старых
+        // IDs могли лишь монотонно сдвинуться внутри своих прежних интервалов.
         // Новые IDs принадлежат только меньшим дочерним клеткам. ID наибольшей
         // наследуется, даже если её interval начинается в середине parent.
         for cell in first_new_cell..self.cells.len() {
             for &vertex in &self.cells[cell].vertices {
                 self.cell_of[vertex] = cell;
             }
-        }
-        for (cell, rank) in self.rank_updates.drain(..) {
-            self.cells[cell].rank = rank;
         }
         for cell in first_new_cell..self.cells.len() {
             for offset in 0..self.cells[cell].vertices.len() {
@@ -1844,26 +1843,9 @@ impl ActiveRefinementV1 {
             .collect()
     }
 
-    fn finish(self) -> Result<EquitablePartitionV1, ProgramCompileError> {
-        let Self {
-            mut cells,
-            cell_of,
-            position,
-            dirty_next,
-            active,
-            signatures,
-            records,
-            rank_updates,
-        } = self;
-        drop((
-            cell_of,
-            position,
-            dirty_next,
-            active,
-            signatures,
-            records,
-            rank_updates,
-        ));
+    fn finish(mut self) -> Result<EquitablePartitionV1, ProgramCompileError> {
+        let mut cells = core::mem::take(&mut self.cells);
+        drop(self);
         ordering::sort_by(&mut cells, |left, right| left.rank.cmp(&right.rank));
         let mut ordered = Vec::new();
         ordered
@@ -1891,6 +1873,7 @@ fn refine_partition_impl(
         let previous_count = state.cells.len();
         #[cfg(test)]
         if let Some(trace) = trace.as_deref_mut() {
+            trace.processed_cells += current.len();
             trace.skipped_cells += state
                 .cells
                 .iter()
@@ -1907,6 +1890,13 @@ fn refine_partition_impl(
             )?;
         }
         current.clear();
+        #[cfg(test)]
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.moved_vertices += state.cells[previous_count..]
+                .iter()
+                .map(|cell| cell.vertices.len())
+                .sum::<usize>();
+        }
         state.commit_round(graph, previous_count)?;
         #[cfg(test)]
         if let Some(trace) = trace.as_deref_mut() {
@@ -4211,6 +4201,48 @@ mod tests {
                     trace.shared_signatures > trace.built_signatures,
                     "mixed cells must construct only changed signatures and one clean representative",
                 );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn active_refinement_work_grows_linearly_on_fixed_degree_rings()
+    -> Result<(), ProgramCompileError> {
+        for bidirectional in [false, true] {
+            let mut previous: Option<(usize, usize)> = None;
+            for count in [64, 128, 256] {
+                let graph = connected_cycle_graph(count, bidirectional)?;
+                let initial = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+                let cell = initial
+                    .0
+                    .first_non_singleton()
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let (_, trace) =
+                    assert_refinement_matches_full(&graph, individualize(&initial.0, cell, 1)?)?;
+                assert!(
+                    trace.rounds.len() >= count / 4,
+                    "fixture must propagate through many rounds"
+                );
+                assert!(
+                    trace.processed_cells <= 2 * count,
+                    "only the active wave is refined"
+                );
+                assert!(
+                    trace.moved_vertices <= count,
+                    "ring vertices enter smaller children once"
+                );
+                if let Some((processed, moved)) = previous {
+                    assert!(
+                        trace.processed_cells < 3 * processed,
+                        "doubling the ring must not quadruple cell work"
+                    );
+                    assert!(
+                        trace.moved_vertices < 3 * moved,
+                        "doubling the ring must not quadruple map updates"
+                    );
+                }
+                previous = Some((trace.processed_cells, trace.moved_vertices));
             }
         }
         Ok(())
