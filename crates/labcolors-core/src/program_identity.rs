@@ -1494,6 +1494,8 @@ struct RefinementRecordV1 {
 struct RefinementTraceV1 {
     rounds: Vec<Vec<Vec<usize>>>,
     skipped_cells: usize,
+    built_signatures: usize,
+    shared_signatures: usize,
 }
 
 fn partition_cells(
@@ -1602,7 +1604,26 @@ fn refine_partition_impl(
             records
                 .try_reserve_exact(cell.len())
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            let mut clean_signature: Option<core::ops::Range<usize>> = None;
             for &vertex in &cell {
+                if !dirty[vertex] {
+                    if let Some(signature) = &clean_signature {
+                        // Все чистые вершины имели одну сигнатуру до split.
+                        // Их соседи остались в представительных дочерних
+                        // клетках; монотонная замена рангов одинакова для всех.
+                        // Запись остаётся на прежнем месте: перестановка
+                        // равных ключей в heapsort не меняется.
+                        records.push(RefinementRecordV1 {
+                            vertex,
+                            signature: signature.clone(),
+                        });
+                        #[cfg(test)]
+                        if let Some(trace) = trace.as_deref_mut() {
+                            trace.shared_signatures += 1;
+                        }
+                        continue;
+                    }
+                }
                 let arcs = graph
                     .adjacency
                     .get(vertex)
@@ -1620,10 +1641,21 @@ fn refine_partition_impl(
                 }
                 let signature = start..signatures.len();
                 ordering::sort(&mut signatures[signature.clone()]);
+                if !dirty[vertex] {
+                    clean_signature = Some(signature.clone());
+                }
                 records.push(RefinementRecordV1 { vertex, signature });
+                #[cfg(test)]
+                if let Some(trace) = trace.as_deref_mut() {
+                    trace.built_signatures += 1;
+                }
             }
             ordering::sort_by(&mut records, |left, right| {
-                signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
+                if left.signature == right.signature {
+                    core::cmp::Ordering::Equal
+                } else {
+                    signatures[left.signature.clone()].cmp(&signatures[right.signature.clone()])
+                }
             });
 
             let first_split = next_cells.len();
@@ -1632,8 +1664,9 @@ fn refine_partition_impl(
             while start < records.len() {
                 let mut end = start + 1;
                 while end < records.len()
-                    && signatures[records[start].signature.clone()]
-                        == signatures[records[end].signature.clone()]
+                    && (records[start].signature == records[end].signature
+                        || signatures[records[start].signature.clone()]
+                            == signatures[records[end].signature.clone()])
                 {
                     end += 1;
                 }
@@ -3910,6 +3943,34 @@ mod tests {
                 cell.reverse();
             }
             assert_refinement_matches_full(&graph, reversed)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_cells_share_clean_signatures_without_changing_synchronous_rounds()
+    -> Result<(), ProgramCompileError> {
+        for bidirectional in [false, true] {
+            let graph = connected_cycle_graph(64, bidirectional)?;
+            let initial = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+            let cell = initial
+                .0
+                .first_non_singleton()
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            for &vertex in &[1, 32] {
+                let (_, trace) = assert_refinement_matches_full(
+                    &graph,
+                    individualize(&initial.0, cell, vertex)?,
+                )?;
+                assert!(
+                    trace.rounds.len() >= 16,
+                    "ring must propagate across rounds"
+                );
+                assert!(
+                    trace.shared_signatures > trace.built_signatures,
+                    "mixed cells must construct only changed signatures and one clean representative",
+                );
+            }
         }
         Ok(())
     }
