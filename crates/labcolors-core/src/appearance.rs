@@ -1707,9 +1707,8 @@ impl AppearanceEvaluation {
 
 /// Reusable scratch для одного compiled physical graph.
 ///
-/// После первого fallible sizing повторные evaluate сохраняют backing allocations.
-/// Композиция переиспользуется только внутри того же графа и при совпадении
-/// полных входов сертификата, а не одних конечных RGB-байтов.
+/// После первого fallible sizing повторные evaluate того же shape полностью
+/// перезаписывают slots; capacity и backing allocations остаются неизменными.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AppearanceWorkspaceShape {
     paints: usize,
@@ -1729,7 +1728,6 @@ impl AppearanceWorkspaceShape {
 
 #[derive(Debug)]
 pub(crate) struct AppearanceWorkspace {
-    graph_instance: Arc<()>,
     shape: AppearanceWorkspaceShape,
     paints: Vec<Option<EncodedPointPaintV1>>,
     surfaces: Vec<Option<Srgb8>>,
@@ -1737,13 +1735,9 @@ pub(crate) struct AppearanceWorkspace {
 }
 
 impl AppearanceWorkspace {
-    fn for_program(
-        program: CompiledAppearanceProgram<'_>,
-        graph_instance: Arc<()>,
-    ) -> Result<Self, BindingError> {
+    fn for_program(program: CompiledAppearanceProgram<'_>) -> Result<Self, BindingError> {
         let shape = AppearanceWorkspaceShape::of(program);
         let mut workspace = Self {
-            graph_instance,
             shape,
             paints: Vec::new(),
             surfaces: Vec::new(),
@@ -1759,19 +1753,9 @@ impl AppearanceWorkspace {
         if self.shape != AppearanceWorkspaceShape::of(program) {
             return Err(BindingError::IncompatibleWorkspace);
         }
-        // Оба topo покрывают все узлы. execute_into обновляет каждый slot либо
-        // сохраняет его точный результат до чтения зависимыми узлами.
+        // Оба topo покрывают все узлы. execute_into перезаписывает каждый slot
+        // до его чтения зависимыми узлами и не имеет частичного выхода.
         Ok(())
-    }
-
-    fn bind_graph(&mut self, graph_instance: &Arc<()>) {
-        if !Arc::ptr_eq(&self.graph_instance, graph_instance) {
-            // Равенство shape допускает переиспользование памяти, но не
-            // сертификатов другого immutable IR. Ошибки schema/shape уже
-            // проверены до этой мутации; paints и surfaces перепишет topo.
-            self.occurrences.fill(None);
-            self.graph_instance = Arc::clone(graph_instance);
-        }
     }
 
     #[cfg(test)]
@@ -2131,7 +2115,7 @@ impl CompiledAppearanceGraph {
 
     /// Fallible one-time allocation of scratch for this exact physical shape.
     pub(crate) fn new_workspace(&self) -> Result<AppearanceWorkspace, BindingError> {
-        AppearanceWorkspace::for_program(self.program(), Arc::clone(&self.instance))
+        AppearanceWorkspace::for_program(self.program())
     }
 
     /// Allocation-free steady-state execution over already admitted bindings.
@@ -2275,7 +2259,6 @@ impl<'program> CompiledAppearanceProgram<'program> {
             return Err(BindingError::IncompatibleAdmittedBindings);
         }
         workspace.validate_shape(self)?;
-        workspace.bind_graph(graph_instance);
 
         let paint_inputs = &bindings.paint_inputs;
         let surfaces = &bindings.surfaces;
@@ -2363,21 +2346,6 @@ impl<'program> CompiledAppearanceProgram<'program> {
                     let subject = resolved_paints[spec.subject].unwrap_or_else(|| unreachable!());
                     let backdrop =
                         resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
-                    if resolved_occurrences[index].as_ref().is_some_and(|previous| {
-                        previous.id == spec.id
-                            && previous.subject == spec.subject_id
-                            && previous.against == spec.against_id
-                            && previous.certificate.profile == spec.profile
-                            && previous.certificate.subject_rgb == subject.source().bytes()
-                            && previous.certificate.subject_opacity == subject.opacity()
-                            && previous.certificate.backdrop_rgb == backdrop.bytes()
-                    }) {
-                        // Входы immutable закона совпали целиком. Изменившаяся
-                        // upstream-причина с теми же bytes не меняет физику
-                        // downstream-композиции; её собственный certificate
-                        // при этом уже обновлён в topo выше.
-                        continue;
-                    }
                     let certificate = SourceOverCertificateV1::compose(
                         spec.profile,
                         subject.source().bytes(),
@@ -2398,7 +2366,3 @@ impl<'program> CompiledAppearanceProgram<'program> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "appearance_incremental_tests.rs"]
-mod incremental_tests;
