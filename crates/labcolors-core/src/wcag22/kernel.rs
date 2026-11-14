@@ -43,21 +43,29 @@ pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 {
     }
 }
 
+// Q55 is the largest power-of-two scale keeping the 4.5:1 cleared
+// denominator below i64::MAX even for the conservative S+3 enclosure.
+// The full-domain verifier independently checks the channel/colour bound.
+const _: () = {
+    let scale = super::q55_data::Q55_SCALE;
+    assert!(180 * (scale + 3) + 7 * scale <= i64::MAX as u64);
+};
+
 fn classify_orientation(
     lighter: Wcag22LuminanceBoundsQ55V1,
     darker: Wcag22LuminanceBoundsQ55V1,
     threshold: ThresholdV1,
 ) -> OrientedDecisionV1 {
-    let scale = u128::from(super::q55_data::Q55_SCALE);
-    let light_lower = u128::from(lighter.lower);
-    let light_upper = u128::from(lighter.upper);
-    let dark_lower = u128::from(darker.lower);
-    let dark_upper = u128::from(darker.upper);
-    // All products are promoted to u128 before evaluation. Independently, the
-    // committed verifier proves the conservative worst Q55 term
-    // 180·(S+3)+7·S fits signed 64-bit with 2_485_986_994_308_513_251
-    // headroom, while Q56 does not; Q55 is therefore the maximal binary scale
-    // that remains replayable without wider integer arithmetic.
+    let scale = super::q55_data::Q55_SCALE;
+    let light_lower = lighter.lower;
+    let light_upper = lighter.upper;
+    let dark_lower = darker.lower;
+    let dark_upper = darker.upper;
+    // Each Q55 colour is a sum of three outward-bounded channel contributions,
+    // so its upper bound is at most S+3 (S = Q55_SCALE). The independent
+    // full-domain verifier proves this enclosure, and the compile-time bound
+    // below keeps every threshold intermediate inside signed 64-bit. The
+    // already-admitted u64 representation therefore needs no widening.
     // With S = Q55_SCALE, clearing denominators in
     // (L + 0.05S) / (D + 0.05S) gives
     // 3:1 => 10L >= 30D + S and 4.5:1 => 40L >= 180D + 7S.
