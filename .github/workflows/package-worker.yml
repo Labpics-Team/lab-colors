@@ -38,8 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      BINARYEN_RELEASE: version_117
-      BINARYEN_NODE_SHA256: "2d5a42f2d167a7cc2b4b6664c44c5ace1690d13db4f527324f052afbad461a07"
+      BINARYEN_RELEASE: version_133
+      BINARYEN_NODE_SHA256: "3507aedecef25c46f2889530a7da304677e97122869274125f782b586cb508ab"
       WASM_BINDGEN_CLI_SHA256: "064948d58e2d6c0a745216477a639ba696216d6309aaa902939d1b865b1d869d"
     outputs:
       node: ${{ steps.packer.outputs.node }}
@@ -103,7 +103,6 @@ jobs:
           binaryen="$root/binaryen-${BINARYEN_RELEASE}"
           test -f "$binaryen/wasm-opt.js"
           test -f "$binaryen/wasm-opt.wasm"
-          test -f "$binaryen/wasm-opt.worker.js"
           echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
       - name: repeat runtime WASM build in one toolchain-pinned CI job
         env:
@@ -121,7 +120,7 @@ jobs:
             local wasm=packages/colors/pkg/labcolors_bg.wasm
             local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm
             node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \
-              -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
+              --flatten --rereloop -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int
             mv -- "$optimized" "$wasm"
           }
 
