@@ -18,7 +18,7 @@ PLATFORMS = {row["target"]: (row["platform"], row["library"]) for row in
 
 
 def run(*args, capture=False, env=None, cwd=ROOT):
-    result = subprocess.run(args, check=True, cwd=cwd, env=env, text=True,
+    result = subprocess.run(args, check=True, cwd=cwd, env=env, text=True, encoding="utf-8",
                             stdout=subprocess.PIPE if capture else None)
     return result.stdout.strip() if capture else ""
 
@@ -40,6 +40,7 @@ def archive_tree(root, archive):
 
 
 def main(output):
+    run(sys.executable, str(Path(__file__).with_name("generate_platforms.py")), "--check")
     if run("git", "status", "--porcelain", "--untracked-files=no", capture=True):
         raise ValueError("native producer needs a clean source revision")
     if output.exists() and any(p.name != "target" for p in output.iterdir()):
@@ -56,7 +57,7 @@ def main(output):
     generated = content / "generated"
     run("cargo", "+" + toolchain, "run", "--locked", "-p", "labcolors-ffi", "--features", "cli",
         "--bin", "uniffi-bindgen", "--", "generate", "--library", str(output / "target/debug" / filename),
-        "--language", "kotlin", "--config", str(ROOT / "bindings/kotlin/desktop/uniffi.toml"),
+        "--language", "kotlin", "--no-format", "--config", str(ROOT / "bindings/kotlin/desktop/uniffi.toml"),
         "--out-dir", str(generated), env=environment)
     messages = run("cargo", "+" + toolchain, "build", "--locked", "--release", "--lib", "-p", "labcolors-ffi",
                    "--message-format=json-render-diagnostics", capture=True, env=environment)

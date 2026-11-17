@@ -46,9 +46,8 @@ fun main() {
     check(declared.contentEquals(fixedWire.hex()))
     val closed = compileProgramWire(declared, 1u)
     closed.close(); closed.close()
-    try {
-        closed.updateUnknown(2uL, 7u)
-        error("disposed Program was usable")
-    } catch (_: IllegalStateException) { }
+    val afterClose = runCatching { closed.updateUnknown(2uL, 7u) }
+    afterClose.getOrNull()?.close()
+    check(afterClose.exceptionOrNull() is IllegalStateException) { "disposed Program was usable" }
     println("Installed desktop Program: history, RGB, opacity, retained snapshot, builder and disposal passed")
 }
