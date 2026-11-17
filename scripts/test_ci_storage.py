@@ -134,7 +134,21 @@ def validate_native_storage(source):
         if (re.findall(r"(?m)^        if: (.+)$", diagnostic) != ["failure()"]
                 or not re.search(r"(?m)^          retention-days: 1[ \t]*$", diagnostic)):
             raise AssertionError("Android diagnostics must be bounded and failure-only")
-    if source.count("uses: actions/upload-artifact@") != len(uploads) + len(diagnostics):
+    apple = job(source, "apple-package")
+    apple_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", apple)
+    apple_uploads = [block for block in apple_steps if "uses: actions/upload-artifact@" in block]
+    if len(apple_uploads) != 1:
+        raise AssertionError("tested Apple SDK must reach native release")
+    apple_upload = apple_uploads[0]
+    for required in ("name: apple-sdk-${{ github.sha }}", "LabColors.swiftpm.zip",
+                     "swift-release-manifest.json", "SHA256SUMS", "if-no-files-found: error",
+                     "retention-days: 3"):
+        if required not in apple_upload:
+            raise AssertionError("Apple release handoff missing: " + required)
+    if (re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", apple_upload)
+            or apple.index(apple_upload) < apple.index("run: python3 bindings/swift/ci/test-apple.py")):
+        raise AssertionError("Apple release handoff must follow successful verification")
+    if source.count("uses: actions/upload-artifact@") != len(uploads) + len(diagnostics) + len(apple_uploads):
         raise AssertionError("native CI stores an unrelated artifact")
     for required_step in (
         "run: python3 bindings/kotlin/ci/prepare-consumer.py",
@@ -167,7 +181,6 @@ def validate_native_storage(source):
             raise AssertionError("external Android consumer missing: " + required)
     if job_level_optional(source, "apple-package"):
         raise AssertionError("external Apple verification job became optional")
-    apple_steps = re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", job(source, "apple-package"))
     for required in ("build-apple.py", "test-apple.py"):
         matching = [block for block in apple_steps if "run: python3 bindings/swift/ci/" + required in block]
         if len(matching) != 1:
@@ -249,6 +262,17 @@ class NativeStorageTests(unittest.TestCase):
         self.assertIn(diagnostic, self.source)
         with self.assertRaisesRegex(AssertionError, "failure-only"):
             validate_native_storage(self.source.replace(diagnostic, diagnostic.replace("failure()", "always()")))
+
+    def test_tested_apple_sdk_reaches_native_release(self):
+        release = (ROOT / ".github/workflows/release-native.yml").read_text()
+        self.assertIn("pattern: '*-sdk-${{ steps.source.outputs.sha }}'", release)
+        self.assertIn("run-id: ${{ inputs.conformance_run_id }}", release)
+        for before, after in (("LabColors.swiftpm.zip", "screenshots.zip"),
+                              ("swift-release-manifest.json", "unrelated.json"),
+                              ("retention-days: 3", "retention-days: 90")):
+            with self.subTest(before=before):
+                with self.assertRaisesRegex(AssertionError, "Apple release handoff"):
+                    validate_native_storage(self.source.replace(before, after))
 
     def test_complete_runtime_failure_context_must_reach_the_diagnostic_consumer(self):
         consumer = job(self.source, "android-consumer")
