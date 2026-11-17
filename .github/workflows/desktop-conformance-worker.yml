@@ -50,6 +50,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: trust this mounted checkout inside the Linux container
+        if: runner.os == 'Linux'
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: '. -> ${{ runner.temp }}/desktop-native/target'
@@ -124,4 +128,6 @@ jobs:
           path: ${{ runner.temp }}/desktop-distribution
       - name: run exact published bytes with automatic JNA loading
         shell: bash
-        run: python3 bindings/kotlin/desktop/ci/test_consumer.py "$RUNNER_TEMP/desktop-distribution" "$RUNNER_TEMP/desktop-consumer"
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then git config --global --add safe.directory "$GITHUB_WORKSPACE"; fi
+          python3 bindings/kotlin/desktop/ci/test_consumer.py "$RUNNER_TEMP/desktop-distribution" "$RUNNER_TEMP/desktop-consumer"
