@@ -53,7 +53,7 @@ def main(output):
     host = next(line[6:] for line in run("rustc", "+" + toolchain, "-vV", capture=True).splitlines()
                 if line.startswith("host: "))
     prefix, filename = PLATFORMS[host]
-    environment = dict(os.environ, CARGO_TARGET_DIR=str(output / "target"))
+    environment = dict(os.environ, CARGO_TARGET_DIR=str(output / "target"), RUST_TOOLCHAIN=toolchain)
     if sys.platform == "darwin":
         environment["MACOSX_DEPLOYMENT_TARGET"] = "13.0"
     run("cargo", "+" + toolchain, "build", "--locked", "-p", "labcolors-ffi", "--features", "cli", env=environment)
@@ -77,6 +77,7 @@ def main(output):
             raise ValueError("desktop Linux library requires newer than Ubuntu 20.04 glibc")
     inventory = output / "build-packages.json"
     inventory.write_text(json.dumps(packages) + "\n", encoding="utf-8")
+    (content / "notices").mkdir()
     run("node", "scripts/native-distribution-licenses.mjs", str(content / "notices"), str(inventory), env=environment)
     revision = run("git", "rev-parse", "HEAD", capture=True)
     metadata = json.loads(run("cargo", "+" + toolchain, "metadata", "--no-deps", "--format-version=1", capture=True))
