@@ -255,6 +255,7 @@ test("publication refuses workflow references from another source revision", asy
   for (const [file, index, reason] of [
     ["ci.yml", 1, /escaped the admitted source revision/u],
     ["native-conformance.yml", 0, /primary worker is missing or repeated/u],
+    ["native-conformance.yml", 1, /escaped the admitted source revision/u],
   ]) {
     for (const coordinate of ["path", "sha", "both"]) {
       const record = evidence();
@@ -272,6 +273,12 @@ test("publication rejects a missing native result after a successful CI run", as
   const record = evidence();
   record.jobs[202] = [];
   assertRefused(await admit(record), /swift package/u);
+});
+
+test("publication requires the desktop package and installed consumers aggregate", async () => {
+  const record = evidence();
+  record.jobs[202] = record.jobs[202].filter((job) => !job.name.endsWith(" / desktop package"));
+  assertRefused(await admit(record), /desktop package/u);
 });
 
 test("publication inventory and exports match the source package contract", () => {

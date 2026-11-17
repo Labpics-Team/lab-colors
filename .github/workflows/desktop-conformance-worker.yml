@@ -92,6 +92,23 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  complete:
+    name: desktop package
+    needs: [native, package, consumer]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: require the complete package and every installed consumer
+        env:
+          NATIVE_RESULT: ${{ needs.native.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          CONSUMER_RESULT: ${{ needs.consumer.result }}
+        run: |
+          test "$NATIVE_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$CONSUMER_RESULT" = success
+
   consumer:
     name: installed desktop Program (${{ matrix.platform }})
     needs: package
