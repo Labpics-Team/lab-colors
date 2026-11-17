@@ -47,6 +47,15 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def verify_source_tag(remote, tag, sha):
+    ref = "refs/tags/" + tag
+    refs = dict(line.split()[::-1] for line in
+                run("git", "ls-remote", remote, ref, ref + "^{}", capture=True).splitlines())
+    commit = refs.get(ref + "^{}", refs.get(ref))
+    if commit is not None and commit != sha:
+        raise ValueError("release tag points to a different source")
+
+
 def publish(artifacts, output):
     repository = os.environ["GITHUB_REPOSITORY"]
     sha = os.environ["NATIVE_SOURCE_SHA"]
@@ -94,6 +103,8 @@ def publish(artifacts, output):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-" + sha, version):
         raise ValueError("Maven coordinate is not tied to this source revision")
     tag = "colors-native-v" + version[:-(len(sha) + 1)] + "-" + sha[:12]
+    remote = f"https://github.com/{repository}.git"
+    verify_source_tag(remote, tag, sha)
     branch = "maven-" + tag
     url = f"https://raw.githubusercontent.com/{repository}/{branch}/"
     notes = (f"Native Colors, source `{sha}`.\n\n"
@@ -111,7 +122,6 @@ def publish(artifacts, output):
     run("git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com", cwd=maven)
     run("git", "add", ".", cwd=maven)
     run("git", "commit", "-m", "Publish native Colors " + version, cwd=maven)
-    remote = f"https://github.com/{repository}.git"
     credential = base64.b64encode(("x-access-token:" + os.environ["GH_TOKEN"]).encode()).decode()
     environment = dict(os.environ, GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="http.https://github.com/.extraheader",
                        GIT_CONFIG_VALUE_0="AUTHORIZATION: basic " + credential)
@@ -127,8 +137,6 @@ def publish(artifacts, output):
         run("gh", "release", "create", tag, "--repo", repository, "--target", sha, "--title", tag,
             "--notes-file", str(notes_path), *[str(path) for path in sorted(assets.iterdir())])
     else:
-        if api(f"repos/{repository}/git/ref/tags/{tag}")["object"]["sha"] != sha:
-            raise ValueError("release tag points to a different source")
         published = {asset["name"]: asset for asset in json.loads(release.stdout)["assets"]}
         for path in sorted(assets.iterdir()):
             if path.name not in published:
