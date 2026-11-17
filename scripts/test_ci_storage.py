@@ -145,8 +145,11 @@ def validate_native_storage(source):
                      "retention-days: 3"):
         if required not in apple_upload:
             raise AssertionError("Apple release handoff missing: " + required)
+    verification = apple.find("run: python3 bindings/swift/ci/test-apple.py")
+    if verification < 0:
+        raise AssertionError("external Apple verification missing: test-apple.py")
     if (re.search(r"(?m)^(?:        |      - )(?:if|continue-on-error):", apple_upload)
-            or apple.index(apple_upload) < apple.index("run: python3 bindings/swift/ci/test-apple.py")):
+            or apple.index(apple_upload) < verification):
         raise AssertionError("Apple release handoff must follow successful verification")
     if source.count("uses: actions/upload-artifact@") != len(uploads) + len(diagnostics) + len(apple_uploads):
         raise AssertionError("native CI stores an unrelated artifact")
