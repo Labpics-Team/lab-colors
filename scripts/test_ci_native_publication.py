@@ -1,10 +1,12 @@
 """Native archives must retain their tested source identity at publication."""
 
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 spec = importlib.util.spec_from_file_location(
@@ -14,6 +16,20 @@ spec.loader.exec_module(publisher)
 
 
 class NativeSourceTagTest(unittest.TestCase):
+    def setUp(self):
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in list(os.environ):
+            if name.startswith("GIT_"):
+                del os.environ[name]
+        os.environ.update({
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        })
+
     def test_missing_matching_and_conflicting_tags(self):
         with tempfile.TemporaryDirectory() as directory:
             def git(*args):
