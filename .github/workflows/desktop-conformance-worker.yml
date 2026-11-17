@@ -1,0 +1,113 @@
+name: Desktop Colors distribution
+
+on:
+  workflow_call:
+    outputs:
+      checks:
+        description: Desktop package and its installed consumers
+        value: ${{ format('{{"results":{0},"children":[]}}', toJSON(jobs.*.result)) }}
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  native:
+    name: native library (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 30
+    strategy: &desktop-platforms
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: win32-x86-64, runner: windows-latest, container: null }
+          - { platform: win32-aarch64, runner: windows-11-arm, container: null }
+          - { platform: darwin-aarch64, runner: macos-15, container: null }
+          - { platform: linux-x86-64, runner: ubuntu-24.04, container: 'ubuntu:20.04' }
+          - { platform: linux-aarch64, runner: ubuntu-24.04-arm, container: 'ubuntu:20.04' }
+    steps:
+      - name: prepare minimum Linux userspace
+        if: runner.os == 'Linux'
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git python3 build-essential pkg-config
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: '. -> ${{ runner.temp }}/desktop-native/target'
+          key: ${{ matrix.platform }}-ubuntu20
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24.14.0'
+          package-manager-cache: false
+      - name: build native library and matching Kotlin API
+        shell: bash
+        run: python3 bindings/kotlin/desktop/ci/build_native.py "$RUNNER_TEMP/desktop-native"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-native-${{ matrix.platform }}-${{ github.sha }}
+          path: ${{ runner.temp }}/desktop-native/LabColors.*.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  package:
+    name: assemble desktop Maven package
+    needs: native
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: desktop-native-*-${{ github.sha }}
+          path: ${{ runner.temp }}/desktop-parts
+          merge-multiple: true
+      - name: assemble all platforms from the same revision
+        run: python3 bindings/kotlin/desktop/ci/package.py "$RUNNER_TEMP/desktop-parts" "$RUNNER_TEMP/desktop-distribution"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-sdk-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/desktop-distribution/LabColors.desktop.zip
+            ${{ runner.temp }}/desktop-distribution/desktop-release-manifest.json
+            ${{ runner.temp }}/desktop-distribution/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3
+
+  consumer:
+    name: installed desktop Program (${{ matrix.platform }})
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 15
+    strategy: *desktop-platforms
+    steps:
+      - name: prepare minimum Linux userspace
+        if: runner.os == 'Linux'
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git python3 libfreetype6 libfontconfig1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: desktop-sdk-${{ github.sha }}
+          path: ${{ runner.temp }}/desktop-distribution
+      - name: run exact published bytes with automatic JNA loading
+        shell: bash
+        run: python3 bindings/kotlin/desktop/ci/test_consumer.py "$RUNNER_TEMP/desktop-distribution" "$RUNNER_TEMP/desktop-consumer"

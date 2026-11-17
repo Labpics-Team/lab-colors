@@ -22,6 +22,10 @@ env:
   SWIFT_IMAGE_V1: swift@sha256:fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec
 
 jobs:
+  desktop:
+    name: desktop
+    uses: ./.github/workflows/desktop-conformance-worker.yml
+
   swift-conformance-linux:
     name: swift package (Linux)
     runs-on: ubuntu-latest
@@ -100,6 +104,16 @@ jobs:
         run: python3 bindings/swift/ci/build-apple.py "$RUNNER_TEMP/swift-distribution"
       - name: exercise the exact archive as an external Apple consumer
         run: python3 bindings/swift/ci/test-apple.py "$RUNNER_TEMP/swift-distribution" "$RUNNER_TEMP/swift-consumer"
+      - name: retain the tested Apple SDK for native release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: apple-sdk-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/swift-distribution/LabColors.swiftpm.zip
+            ${{ runner.temp }}/swift-distribution/swift-release-manifest.json
+            ${{ runner.temp }}/swift-distribution/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3
       - name: compare Swift authoring against an exact prior implementation
         if: inputs.authoring_baseline != ''
         env:
