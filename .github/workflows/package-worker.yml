@@ -35,7 +35,8 @@ env:
 jobs:
   wasm:
     name: wasm build + headless test + size
-    runs-on: ubuntu-latest
+    # Chrome dependency closure is verified for Noble; ubuntu-latest has moved to Resolute.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       BINARYEN_RELEASE: version_133

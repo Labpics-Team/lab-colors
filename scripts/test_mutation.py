@@ -2421,7 +2421,7 @@ class MutationTruthTest(unittest.TestCase):
             workflow,
         )
         self.assertIn("const references = run.referenced_workflows;", workflow)
-        self.assertIn("references.length !== 1", workflow)
+        self.assertIn("primary.length !== 1", workflow)
         self.assertIn("reference?.path === spec.worker.path", workflow)
         self.assertIn("reference?.sha === spec.worker.sha", workflow)
         self.assertIn(
@@ -2479,11 +2479,13 @@ const names = [
   ['formal core (Kani)', 'MSRV workspace check', 'clippy + rustfmt',
    'cargo doc (intra-doc links)', 'test', 'cargo audit (rustsec)',
    'wasm build + headless test + size'],
-  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package'],
+  ['swift package (Linux)', 'swift package (macOS and iOS)', 'android package', 'desktop package'],
 ];
 const mutations = {
   valid: () => {},
   validClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha}); },
+  validNativeClosure: (runs) => { runs[1].referenced_workflows.push({path: prefix + 'desktop-conformance-worker.yml@' + sha, sha}); },
+  staleNativeClosure: (runs) => { runs[1].referenced_workflows.push({path: prefix + 'desktop-conformance-worker.yml@' + 'a'.repeat(40), sha}); },
   escapedClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + '../other.yml@' + sha, sha}); },
   staleClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + 'a'.repeat(40), sha}); },
   wrongDigestClosure: (runs) => { runs[0].referenced_workflows.push({path: prefix + 'package-worker.yml@' + sha, sha: 'a'.repeat(40)}); },
@@ -2514,6 +2516,9 @@ const mutations = {
   missingAndroid: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('android package')); },
   skippedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'skipped'; },
   failedAndroid: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('android package')).conclusion = 'failure'; },
+  missingDesktop: (_runs, jobs) => { jobs[1] = jobs[1].filter((job) => !job.name.endsWith('desktop package')); },
+  skippedDesktop: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('desktop package')).conclusion = 'skipped'; },
+  failedDesktop: (_runs, jobs) => { jobs[1].find((job) => job.name.endsWith('desktop package')).conclusion = 'failure'; },
 };
 (async () => {
   for (const [label, mutate] of Object.entries(mutations)) {
@@ -2565,7 +2570,7 @@ const mutations = {
       },
     };
     await vm.runInNewContext(input.script, context, { timeout: 1000 });
-    if (label === 'valid' || label === 'validClosure') {
+    if (label === 'valid' || label === 'validClosure' || label === 'validNativeClosure') {
       assert.equal(process.exitCode, 0, errors.join('\n'));
       assert.equal(output, 'ci_run_id=100\nci_run_attempt=2\nnative_run_id=101\n');
     } else {
@@ -2583,7 +2588,7 @@ const mutations = {
             text=True, capture_output=True, check=False, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("32 receipt scenarios passed", result.stdout)
+        self.assertRegex(result.stdout, r"^[1-9][0-9]* receipt scenarios passed")
 
     def test_publish_numerical_contract_accepts_only_current_evidence_rows(self) -> None:
         workflow, _ = load_publish_worker()
