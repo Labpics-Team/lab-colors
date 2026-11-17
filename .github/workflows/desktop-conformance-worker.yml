@@ -14,20 +14,32 @@ env:
   RUST_TOOLCHAIN: 1.96.0
 
 jobs:
+  platforms:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: matrix
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          platforms = json.loads(Path('bindings/kotlin/desktop/platforms.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('value=' + json.dumps({'include': platforms}) + '\n')
+          PY
   native:
     name: native library (${{ matrix.platform }})
+    needs: platforms
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     timeout-minutes: 30
-    strategy: &desktop-platforms
+    strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { platform: win32-x86-64, runner: windows-latest, container: null }
-          - { platform: win32-aarch64, runner: windows-11-arm, container: null }
-          - { platform: darwin-aarch64, runner: macos-15, container: null }
-          - { platform: linux-x86-64, runner: ubuntu-24.04, container: 'ubuntu:20.04' }
-          - { platform: linux-aarch64, runner: ubuntu-24.04-arm, container: 'ubuntu:20.04' }
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     steps:
       - name: prepare minimum Linux userspace
         if: runner.os == 'Linux'
@@ -88,11 +100,13 @@ jobs:
 
   consumer:
     name: installed desktop Program (${{ matrix.platform }})
-    needs: package
+    needs: [platforms, package]
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     timeout-minutes: 15
-    strategy: *desktop-platforms
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     steps:
       - name: prepare minimum Linux userspace
         if: runner.os == 'Linux'

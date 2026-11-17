@@ -1,0 +1,45 @@
+name: Release native Colors
+
+on:
+  workflow_dispatch:
+    inputs:
+      conformance_run_id:
+        description: Successful Native conformance run for a commit already merged into main
+        required: true
+        type: string
+
+concurrency:
+  group: release-native-colors
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NATIVE_RUN_ID: ${{ inputs.conformance_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: identify the successful native build on main history
+        id: source
+        run: python3 scripts/publish-native.py identify
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.conformance_run_id }}
+          pattern: '*-sdk-${{ steps.source.outputs.sha }}'
+          path: ${{ runner.temp }}/native-artifacts
+      - name: publish those exact SDKs and Maven repository
+        env:
+          NATIVE_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: python3 scripts/publish-native.py publish "$RUNNER_TEMP/native-artifacts" "$RUNNER_TEMP/native-publication"

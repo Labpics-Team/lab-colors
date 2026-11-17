@@ -13,13 +13,8 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[4]
-PLATFORMS = {
-    "x86_64-pc-windows-msvc": ("win32-x86-64", "labcolors.dll"),
-    "aarch64-pc-windows-msvc": ("win32-aarch64", "labcolors.dll"),
-    "x86_64-unknown-linux-gnu": ("linux-x86-64", "liblabcolors.so"),
-    "aarch64-unknown-linux-gnu": ("linux-aarch64", "liblabcolors.so"),
-    "aarch64-apple-darwin": ("darwin-aarch64", "liblabcolors.dylib"),
-}
+PLATFORMS = {row["target"]: (row["platform"], row["library"]) for row in
+             json.loads((ROOT / "bindings/kotlin/desktop/platforms.json").read_text())}
 
 
 def run(*args, capture=False, env=None, cwd=ROOT):
