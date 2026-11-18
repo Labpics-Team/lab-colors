@@ -198,11 +198,13 @@ class NativeWorkflowGraphTest(unittest.TestCase):
                   for name in ("apple-package", "android-build")]
         self.assertEqual(checks[0], checks[1])
         sha = "a" * 40
-        github = {"status": "ahead", "behind_by": 0, "ahead_by": 1,
+        url = f"https://api.github.com/repos/Labpics-Team/lab-colors/compare/{sha}...refs/pull/879/head"
+        github = {"url": url, "status": "ahead", "behind_by": 0, "ahead_by": 1,
                   "base_commit": {"sha": sha}, "merge_base_commit": {"sha": sha}}
         for patch, curl_status, expected in [({}, 0, 1), ({"status": "identical", "ahead_by": 0}, 0, 0),
                 ({"status": "behind", "behind_by": 1}, 0, 0), ({"status": "diverged"}, 0, 0),
-                ({"base_commit": {"sha": "b" * 40}}, 0, 0), ({}, 28, 0)]:
+                ({"base_commit": {"sha": "b" * 40}}, 0, 0), ({"url": url.replace("/879/", "/878/")}, 0, 0),
+                ({"url": url.replace("/lab-colors/", "/another/")}, 0, 0), ({}, 28, 0)]:
             with self.subTest(patch=patch, curl_status=curl_status):
                 result = subprocess.run(["bash", "-eo", "pipefail", "-c",
                     'curl() { printf %s "$RESPONSE"; return "$CURL_STATUS"; }\n' + checks[0]["run"]],
