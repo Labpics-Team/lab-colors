@@ -460,6 +460,7 @@ where
 // is handed to the caller by value, so no synchronization edge with any other
 // datum is required — uniqueness of the returned value is the only invariant,
 // and `fetch_update` makes the increment atomic regardless of ordering.
+#[allow(deprecated, reason = "try_update requires Rust 1.95; preserve the 1.85 MSRV")]
 fn next_handoff_point_sink_epoch_v1() -> Option<PointSinkBindingEpochV1> {
     NEXT_HANDOFF_POINT_SINK_EPOCH_V1
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

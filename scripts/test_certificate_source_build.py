@@ -157,6 +157,8 @@ def oracle(tree: str) -> tuple[bytes, list[str], bytes]:
 
 class SourceBuildTests(unittest.TestCase):
     def setUp(self) -> None:
+        from ci.rust_environment import selected_rust_environment
+
         self.temporary = tempfile.TemporaryDirectory(prefix="certificate-source-build-")
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
@@ -164,6 +166,8 @@ class SourceBuildTests(unittest.TestCase):
         self.target = self.base / "target"
         self.checkout_targets: dict[Path, Path] = {}
         self.env = dict(os.environ)
+        # This standalone source fixture has no repository toolchain file.
+        self.env.update(selected_rust_environment())
         # Fixture — native std-only build, независимый от WASM job target/flags/cache.
         for name in list(self.env):
             if name.startswith("GIT_") and name != "GIT_EXEC_PATH":

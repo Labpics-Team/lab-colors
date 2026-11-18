@@ -90,16 +90,19 @@ def main() -> None:
                      "crates/labcolors-evaluate-cli/examples/" + example], cwd=specimen,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=240,
                 )
+                received = f"exit={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
                 if result.returncode != expected_exit:
-                    raise RuntimeError(f"Пример {example} не прошёл: {result.stderr!r}")
+                    raise RuntimeError(f"Пример {example} не прошёл: {received}")
+                try:
+                    document = json.loads(result.stdout if expected_exit == 0 else result.stderr)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise RuntimeError(f"Пример {example} не вернул JSON: {received}") from error
                 if expected_exit == 0:
-                    document = json.loads(result.stdout)
-                    if result.stderr or document.get("kind") != "labcolors-declared-point-report-v1" or document.get("terminalSrgb8") != [128,128,128]:
-                        raise RuntimeError("Документированный успешный пример нарушил контракт")
+                    if result.stderr or not isinstance(document, dict) or document.get("kind") != "labcolors-declared-point-report-v1" or document.get("terminalSrgb8") != [128,128,128]:
+                        raise RuntimeError(f"Документированный успешный пример нарушил контракт: {received}")
                 else:
-                    document = json.loads(result.stderr)
-                    if result.stdout or document.get("error") != {"domain":"clean-convention", "code":"rejected_by_convention"}:
-                        raise RuntimeError("Документированный отказ нарушил контракт")
+                    if result.stdout or not isinstance(document, dict) or document.get("error") != {"domain":"clean-convention", "code":"rejected_by_convention"}:
+                        raise RuntimeError(f"Документированный отказ нарушил контракт: {received}")
                 print(f"verified documented {example}", flush=True)
             for name, relative, command, before, after, test in MUTANTS:
                 git(specimen, "switch", "--detach", head)

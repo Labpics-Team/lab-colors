@@ -39,6 +39,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: install pinned Kani
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
@@ -79,6 +82,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: install pinned Kani
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked

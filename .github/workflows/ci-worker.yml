@@ -53,6 +53,9 @@ jobs:
           toolchain: ${{ steps.msrv.outputs.version }}
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo check on declared MSRV
         run: |
@@ -72,6 +75,9 @@ jobs:
           components: clippy, rustfmt
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -90,6 +96,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
@@ -219,6 +228,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: AUTH-01 semantic mutation gate
         env:
@@ -259,6 +271,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: PR and merge-queue distribution input contracts
         if: ${{ matrix.lane == 'default' }}
@@ -280,6 +295,8 @@ jobs:
         run: python3 scripts/test_mutation.py
       - name: locked wasm-bindgen installer contracts
         run: python3 scripts/test_wasm_bindgen_install.py
+      - name: selected Rust environment survives external build roots
+        run: python3 scripts/test_rust_environment.py
       - name: Core source certificate build histories
         if: ${{ matrix.lane == 'default' }}
         timeout-minutes: 4
@@ -466,6 +483,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: prepare shared Cargo cache and artifact paths
         id: cargo
         env:
@@ -578,6 +598,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: prepare shared Cargo cache and artifact paths
         id: cargo
         env:
@@ -684,6 +707,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # cargo-audit 0.22+ понимает RUSTSEC с CVSS v4.

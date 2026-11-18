@@ -50,6 +50,8 @@ jobs:
           chmod +x /tmp/rustup-init
           /tmp/rustup-init -y --no-modify-path \
             --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
+      - name: Carry the selected Rust environment into every build root
+        run: python3 scripts/ci/rust_environment.py
       - name: verify the pinned toolchain is live
         run: |
           set -euo pipefail
@@ -92,6 +94,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: '. -> ${{ runner.temp }}/swift-distribution/target'
@@ -144,6 +149,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: '. -> ${{ runner.temp }}/android-distribution/target'

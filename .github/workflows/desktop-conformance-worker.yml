@@ -38,6 +38,9 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: trust this mounted checkout inside the Linux container
         if: runner.os == 'Linux'
         shell: bash
