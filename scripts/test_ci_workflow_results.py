@@ -197,22 +197,67 @@ class NativeWorkflowGraphTest(unittest.TestCase):
         checks = [next(step for step in jobs[name]["steps"] if "PR_HEAD" in step.get("env", {}))
                   for name in ("apple-package", "android-build")]
         self.assertEqual(checks[0], checks[1])
+        apple_step = next(step for step in jobs["apple-package"]["steps"] if "test-apple.py" in step.get("run", ""))
+        self.assertEqual(apple_step["env"], checks[0]["env"])
+        self.assertEqual(checks[0]["run"], "python3 scripts/ci/pr_head.py")
         sha = "a" * 40
         url = f"https://api.github.com/repos/Labpics-Team/lab-colors/compare/{sha}...refs/pull/879/head"
         github = {"url": url, "status": "ahead", "behind_by": 0, "ahead_by": 1,
                   "base_commit": {"sha": sha}, "merge_base_commit": {"sha": sha}}
+        curl = self.root / "curl"
+        curl.write_text('#!/bin/sh\nprintf %s "$RESPONSE"\nexit "$CURL_STATUS"\n')
+        curl.chmod(0o755)
+        env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+               "GITHUB_API_URL": "https://api.github.com", "GITHUB_REPOSITORY": "Labpics-Team/lab-colors",
+               "PR_REPOSITORY": "Labpics-Team/lab-colors", "PR_NUMBER": "879", "PR_HEAD": sha}
         for patch, curl_status, expected in [({}, 0, 1), ({"status": "identical", "ahead_by": 0}, 0, 0),
                 ({"status": "behind", "behind_by": 1}, 0, 0), ({"status": "diverged"}, 0, 0),
                 ({"base_commit": {"sha": "b" * 40}}, 0, 0), ({"url": url.replace("/879/", "/878/")}, 0, 0),
-                ({"url": url.replace("/lab-colors/", "/another/")}, 0, 0), ({}, 28, 0)]:
+                ({"url": url.replace("/lab-colors/", "/another/")}, 0, 0), ({"behind_by": False}, 0, 0),
+                ({"ahead_by": True}, 0, 0), ({}, 28, 0)]:
             with self.subTest(patch=patch, curl_status=curl_status):
-                result = subprocess.run(["bash", "-eo", "pipefail", "-c",
-                    'curl() { printf %s "$RESPONSE"; return "$CURL_STATUS"; }\n' + checks[0]["run"]],
-                    env={**os.environ, "GITHUB_API_URL": "https://api.github.com",
-                         "GITHUB_REPOSITORY": "Labpics-Team/lab-colors", "PR_REPOSITORY": "Labpics-Team/lab-colors",
-                         "PR_NUMBER": "879", "PR_HEAD": sha, "GH_TOKEN": "", "CURL_STATUS": str(curl_status),
-                         "RESPONSE": json.dumps(github | patch)}, capture_output=True, text=True, timeout=5)
+                result = subprocess.run(checks[0]["run"].split(), cwd=REPO,
+                    env=env | {"CURL_STATUS": str(curl_status), "RESPONSE": json.dumps(github | patch)},
+                    capture_output=True, text=True, timeout=8)
                 self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_superseded_apple_consumer_releases_its_own_simulator(self):
+        spec = importlib.util.spec_from_file_location("apple_consumer", REPO / "bindings/swift/ci/test-apple.py")
+        apple = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(apple)
+        for checkpoint, expected in [
+            (1, ["head"]),
+            (2, ["head", "create", "test", "head", "shutdown", "delete"]),
+            (None, ["head", "create", "test", "head", "surface", "shutdown", "delete"]),
+        ]:
+            events = []
+            def head(env):
+                self.assertEqual(env, {"PR_HEAD": "a" * 40})
+                events.append("head")
+                if events.count("head") == checkpoint:
+                    raise SystemExit(1)
+            def run(*cmd, **kwargs):
+                if cmd[0] == "xcodebuild":
+                    self.assertIn("id=owned-device", cmd)
+                    events.append("test")
+                elif cmd[2] == "create":
+                    events.append("create")
+                    return "owned-device"
+                else:
+                    self.assertEqual(cmd[2:], ("delete", "owned-device"))
+                    events.append("delete")
+            def shutdown(cmd, **kwargs):
+                self.assertEqual(cmd, ("xcrun", "simctl", "shutdown", "owned-device"))
+                events.append("shutdown")
+            with self.subTest(checkpoint=checkpoint), mock.patch.object(apple, "require_current", head), \
+                    mock.patch.object(apple, "run", run), mock.patch.object(apple.subprocess, "run", shutdown), \
+                    mock.patch.object(apple, "extract_surface", side_effect=lambda *args: events.append("surface")):
+                try:
+                    apple.simulator_surface(self.root, self.root, "runtime", "arm64-apple", {"PR_HEAD": "a" * 40})
+                except SystemExit as err:
+                    self.assertIn(checkpoint, (1, 2))
+                    self.assertEqual(err.code, 1)
+                self.assertEqual(events, expected)
 
     def test_independent_new_or_renamed_premerge_root_is_red(self):
         for event in ("pull_request", "pull_request_target", "merge_group"):
