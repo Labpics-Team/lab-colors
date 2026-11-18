@@ -151,6 +151,39 @@ class NativeWorkflowGraphTest(unittest.TestCase):
     def test_all_premerge_workflows_are_in_one_native_graph(self):
         gate.graph(self.root)
 
+    def test_pr_checks_can_start_while_the_previous_result_is_waiting(self):
+        entry = gate.load_workflow(self.root, gate.ENTRY)
+        jobs = entry["jobs"]
+
+        def group(policy, event, run, pr=11, queue="merge-a"):
+            fields = {
+                "github.repository": "Labpics-Team/lab-colors",
+                "github.workflow": "CI",
+                "github.event_name": event,
+                "github.event.pull_request.number || github.run_id": pr if event == "pull_request" else run,
+                ("github.event_name == 'pull_request' && format('pr-run-{0}', github.run_id) || "
+                 "github.event.merge_group.head_sha"): f"pr-run-{run}" if event == "pull_request" else queue,
+            }
+            return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: str(fields[m[1]]), policy["group"]).casefold()
+
+        root = entry["concurrency"]
+        self.assertNotEqual(group(root, "pull_request", 1), group(root, "pull_request", 2))
+        self.assertEqual(group(root, "merge_group", 1), group(root, "merge_group", 2))
+        self.assertNotEqual(group(root, "merge_group", 1), group(root, "merge_group", 1, queue="merge-b"))
+        self.assertEqual(root["cancel-in-progress"], "true")
+        self.assertNotIn("concurrency", jobs["gate"])
+        self.assertNotIn("concurrency", jobs["admission"])  # The public admission workflow owns its lock.
+        pr_groups = set()
+        for name in ("workflow-policy", "ci", "native"):
+            policy = jobs[name]["concurrency"]
+            self.assertEqual(policy["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}")
+            first = group(policy, "pull_request", 1)
+            self.assertEqual(first, group(policy, "pull_request", 2))
+            self.assertNotEqual(first, group(policy, "pull_request", 2, pr=12))
+            self.assertNotEqual(group(policy, "merge_group", 1), group(policy, "merge_group", 2))
+            pr_groups.add(first)
+        self.assertEqual(len(pr_groups), 3)
+
     def test_independent_new_or_renamed_premerge_root_is_red(self):
         for event in ("pull_request", "pull_request_target", "merge_group"):
             p = self.root / ".github/workflows/new-root.yml"
