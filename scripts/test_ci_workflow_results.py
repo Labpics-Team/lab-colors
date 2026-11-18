@@ -205,11 +205,14 @@ class NativeWorkflowGraphTest(unittest.TestCase):
         github = {"url": url, "status": "ahead", "behind_by": 0, "ahead_by": 1,
                   "base_commit": {"sha": sha}, "merge_base_commit": {"sha": sha}}
         curl = self.root / "curl"
-        curl.write_text('#!/bin/sh\nprintf %s "$RESPONSE"\nexit "$CURL_STATUS"\n')
+        curl.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CURL_ARGS"\ncat > "$CURL_HEADER"\n'
+                        'printf %s "$RESPONSE"\nexit "$CURL_STATUS"\n')
         curl.chmod(0o755)
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                "GITHUB_API_URL": "https://api.github.com", "GITHUB_REPOSITORY": "Labpics-Team/lab-colors",
-               "PR_REPOSITORY": "Labpics-Team/lab-colors", "PR_NUMBER": "879", "PR_HEAD": sha}
+               "PR_REPOSITORY": "Labpics-Team/lab-colors", "PR_NUMBER": "879", "PR_HEAD": sha,
+               "LABCOLORS_PR_TOKEN": "test-read-only", "CURL_ARGS": str(self.root / "comparison-args"),
+               "CURL_HEADER": str(self.root / "comparison-header")}
         for patch, curl_status, expected in [({}, 0, 1), ({"status": "identical", "ahead_by": 0}, 0, 0),
                 ({"status": "behind", "behind_by": 1}, 0, 0), ({"status": "diverged"}, 0, 0),
                 ({"base_commit": {"sha": "b" * 40}}, 0, 0), ({"url": url.replace("/879/", "/878/")}, 0, 0),
@@ -220,6 +223,10 @@ class NativeWorkflowGraphTest(unittest.TestCase):
                     env=env | {"CURL_STATUS": str(curl_status), "RESPONSE": json.dumps(github | patch)},
                     capture_output=True, text=True, timeout=8)
                 self.assertEqual(result.returncode, expected, result.stderr)
+        args = (self.root / "comparison-args").read_text().splitlines()
+        self.assertEqual(args, ["--disable", "--proto", "=https", "--fail", "--silent", "--max-time", "4", "-H", "@-",
+                                url.replace("refs/pull/879/head", "refs%2Fpull%2F879%2Fhead") + "?per_page=1&page=2"])
+        self.assertEqual((self.root / "comparison-header").read_text(), "Authorization: Bearer test-read-only\n")
 
     def test_superseded_apple_consumer_releases_its_own_simulator(self):
         spec = importlib.util.spec_from_file_location("apple_consumer", REPO / "bindings/swift/ci/test-apple.py")

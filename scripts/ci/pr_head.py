@@ -19,7 +19,7 @@ def require_current(env):
     try:
         token = env.get("LABCOLORS_PR_TOKEN", "")
         header = f"Authorization: Bearer {token}\n".encode() if token else b""
-        response = subprocess.run(["curl", "--fail", "--silent", "--max-time", "4", "-H", "@-",
+        response = subprocess.run(["curl", "--disable", "--proto", "=https", "--fail", "--silent", "--max-time", "4", "-H", "@-",
             base + reference.replace("/", "%2F") + "?per_page=1&page=2"],
             input=header, capture_output=True, check=True, timeout=5)
         record = json.loads(response.stdout)
