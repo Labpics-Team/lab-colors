@@ -9,8 +9,9 @@ builder канонических Program-байтов. [Справочник API
 
 Версии Rust, Swift, Xcode и образ Linux-потребителя задаёт
 [worker](../../.github/workflows/native-conformance-worker.yml).
-[Вызываемый workflow](../../.github/workflows/native-conformance.yml)
-выбирает worker из той же ревизии. Обе проверки обязательны для PR:
+Обе проверки обязательны для PR и кандидата очереди слияния. Их запускает
+[CI](../../.github/workflows/ci-gate.yml). После push в main и при ручном запуске тот же
+worker вызывает [Native conformance](../../.github/workflows/native-conformance.yml).
 
 * Linux: Rust-производитель собирает библиотеку из точного Git-снимка.
   Отдельный Swift-контейнер получает только готовую библиотеку, публичные
@@ -18,6 +19,12 @@ builder канонических Program-байтов. [Справочник API
 * Apple: создаётся самостоятельный SwiftPM-архив с XCFramework. Другой проект
   устанавливает архив, выполняет тесты на macOS и iOS Simulator и собирается
   для iOS-устройства. Физическое устройство этим прогоном не проверяется.
+
+При обновлении PR Apple-проверка сверяет свой коммит с текущим head перед
+сборкой, перед созданием iOS Simulator и после его тестов. Подтверждённый
+новый потомок завершает старую попытку с ошибкой. Запущенная команда Xcode
+успевает закончиться, созданный симулятор удаляется. Если GitHub недоступен
+или история разошлась, проверка идёт дальше.
 
 Скрипты находятся в `ci/`. `run-conformance.sh` требует объявленные
 `RUST_TOOLCHAIN`, `SWIFT_TOOLCHAIN` и `SWIFT_IMAGE_V1`; `build-apple.py`
