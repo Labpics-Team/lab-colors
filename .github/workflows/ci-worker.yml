@@ -15,8 +15,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: 1.96.0
-  MSRV_TOOLCHAIN: 1.85.0
   # Формат архива npm входит в контракт выпуска, поэтому Node закреплён.
   NODE_TOOLCHAIN: 24.14.0
   # Proof требует Python 3.11+; OCI manifest закреплён для linux/amd64.
@@ -41,9 +39,20 @@ jobs:
         run: |
           python3 scripts/test_verify_clean_set_receipt.py
           python3 -O scripts/test_verify_clean_set_receipt.py
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - name: Read declared minimum Rust version
+        id: msrv
+        run: |
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["rust-version"]
+          print("version=" + version + (".0" if version.count(".") == 1 else ""))
+          PYTHON
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.MSRV_TOOLCHAIN }}
+          toolchain: ${{ steps.msrv.outputs.version }}
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo check on declared MSRV
         run: |
@@ -58,10 +67,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -76,9 +86,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
@@ -204,9 +215,10 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: AUTH-01 semantic mutation gate
         env:
@@ -243,9 +255,10 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: PR and merge-queue distribution input contracts
         if: ${{ matrix.lane == 'default' }}
@@ -265,6 +278,8 @@ jobs:
         env:
           CI_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: python3 scripts/test_mutation.py
+      - name: locked wasm-bindgen installer contracts
+        run: python3 scripts/test_wasm_bindgen_install.py
       - name: Core source certificate build histories
         if: ${{ matrix.lane == 'default' }}
         timeout-minutes: 4
@@ -447,9 +462,10 @@ jobs:
           fetch-depth: 0
           # PR проверяет свой head; очередь — всю будущую комбинацию.
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - name: prepare shared Cargo cache and artifact paths
         id: cargo
         env:
@@ -558,9 +574,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - name: prepare shared Cargo cache and artifact paths
         id: cargo
         env:
@@ -663,9 +680,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install cargo-audit
         # cargo-audit 0.22+ понимает RUSTSEC с CVSS v4.

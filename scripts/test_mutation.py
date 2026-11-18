@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -54,7 +55,7 @@ def mutant(index: int, file: str = "crates/core/src/lib.rs") -> dict:
 
 
 TEST_CARGO = "/runner/source/scripts/mutation_cargo.py"
-TEST_REAL_CARGO = "/runner/toolchains/1.96.0-x86_64-unknown-linux-gnu/bin/cargo"
+TEST_REAL_CARGO = f"/runner/toolchains/{mutation.CARGO_TOOLCHAIN_ID}/bin/cargo"
 TEST_CARGO_SHA256 = "a" * 64
 TEST_PACKAGE = "core@0.1.0"
 
@@ -3051,7 +3052,6 @@ jobs:
             env = {
                 **os.environ,
                 "PATH": f"{stub_bin}:{os.environ['PATH']}",
-                "RUST_TOOLCHAIN": "1.96.0",
                 "SWIFT_TOOLCHAIN": "6.1.3",
                 "SWIFT_IMAGE_V1": "swift@sha256:" + "a" * 64,
                 "LABCOLORS_SWIFT_DOCKER": "/fixture/not-invoked-docker",
@@ -3185,10 +3185,12 @@ jobs:
         self.assertIn(mutation.TOOL_ARCHIVE_SHA256, workflow)
         self.assertIn(mutation.TOOL_ARCHIVE_URL, workflow)
         self.assertIn(mutation.TOOL_VERSION_OUTPUT, workflow)
-        self.assertIn("RUST_TOOLCHAIN: 1.96.0", workflow)
+        self.assertIn("actions-rust-lang/setup-rust-toolchain@", workflow)
+        self.assertNotIn("RUST_TOOLCHAIN:", workflow)
         self.assertEqual(
             mutation.CARGO_TOOLCHAIN_ID,
-            "1.96.0-x86_64-unknown-linux-gnu",
+            tomllib.loads((repo / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+            + "-x86_64-unknown-linux-gnu",
         )
         self.assertEqual(
             mutation.TOOL_RELEASE_TAG_OBJECT,

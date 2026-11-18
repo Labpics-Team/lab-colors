@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 from typing import Any
 
 
@@ -38,7 +39,10 @@ TOOL_ARCHIVE_SHA256 = (
 )
 CONFIG_RELPATH = ".cargo/mutants.toml"
 EXECUTION_SOURCE_DIGEST_LAW = "canonical-json-full-root-mode-content-symlink-v1"
-CARGO_TOOLCHAIN_ID = "1.96.0-x86_64-unknown-linux-gnu"
+CARGO_TOOLCHAIN_ID = (
+    tomllib.loads((Path(__file__).resolve().parents[1] / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    + "-x86_64-unknown-linux-gnu"
+)
 CARGO_BINARY_SUFFIX = f"toolchains/{CARGO_TOOLCHAIN_ID}/bin/cargo"
 CARGO_ADAPTER_RELPATH = "scripts/mutation_cargo.py"
 CARGO_EXECUTION_PREFIX = "@@labcolors-mutation-cargo-v1 "

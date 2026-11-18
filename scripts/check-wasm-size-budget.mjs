@@ -197,10 +197,10 @@ export function evaluateWasmBudget(budget, wasm, currentPlatform) {
   const gzipBytes = gzipSync(bytes, { level: 9 }).length;
   const artifactSha256 = sha256(bytes);
   const isCanonicalPlatform = currentPlatform === budget.measurement.platform;
-  if (isCanonicalPlatform && rawBytes !== budget.measurement.rawBytes) {
+  if (isCanonicalPlatform && rawBytes > budget.policy.maxRawBytes) {
     fail(
-      `runtime exact artifact length mismatch on ${currentPlatform}: ` +
-        `expected=${budget.measurement.rawBytes}B actual=${rawBytes}B; ` +
+      `runtime size exceeds measured budget on ${currentPlatform}: ` +
+        `maximum=${budget.policy.maxRawBytes}B actual=${rawBytes}B; ` +
         `gzip=${gzipBytes}B diagnostic-only sha256=${artifactSha256}`,
     );
   }

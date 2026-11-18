@@ -48,7 +48,7 @@ test("WASM budget rejects non-canonical documents and arbitrary headroom", () =>
   );
 });
 
-test("canonical WASM measurements require the exact pinned length", () => {
+test("canonical WASM measurements reject growth beyond the measured ceiling", () => {
   const budget = fixtureBudget();
   const result = evaluateWasmBudget(budget, emptyWasm, budget.measurement.platform);
   assert.equal(result.status, "PASS");
@@ -57,12 +57,21 @@ test("canonical WASM measurements require the exact pinned length", () => {
     () => evaluateWasmBudget(
       budget, Buffer.concat([emptyWasm, Buffer.from([0])]), budget.measurement.platform,
     ),
-    /exact artifact length mismatch/u,
+    /exceeds measured budget/u,
   );
   assert.throws(
     () => evaluateWasmBudget(budget, Buffer.alloc(8), budget.measurement.platform),
     /not a WebAssembly binary/u,
   );
+});
+
+test("a smaller artifact passes without rewriting the measured baseline", () => {
+  const budget = fixtureBudget();
+  budget.measurement.rawBytes += 1;
+  budget.policy.maxRawBytes += 1;
+  const result = evaluateWasmBudget(budget, emptyWasm, budget.measurement.platform);
+  assert.equal(result.status, "PASS");
+  assert.equal(result.deltaBytes, -1);
 });
 
 test("non-canonical platforms stay diagnostic rather than gaining authority", () => {

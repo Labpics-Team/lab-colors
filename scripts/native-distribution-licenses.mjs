@@ -3,9 +3,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { distributionNotices, licenseInventory } from "./distribution-licenses.mjs";
 
-const [output, artifactInventory] = process.argv.slice(2), toolchain = process.env.RUST_TOOLCHAIN;
-if (!output || !artifactInventory || !toolchain) throw new Error("usage: RUST_TOOLCHAIN=... licenses.mjs SDK_DIRECTORY BUILD_PACKAGES_JSON");
-const metadata = JSON.parse(execFileSync("cargo", [`+${toolchain}`, "metadata", "--locked", "--format-version", "1"],
+const [output, artifactInventory] = process.argv.slice(2);
+if (!output || !artifactInventory) throw new Error("usage: licenses.mjs SDK_DIRECTORY BUILD_PACKAGES_JSON");
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--format-version", "1"],
   { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
 const packages = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]));
 // Владельцем состава служат compiler-artifact сообщения реальных release-сборок,

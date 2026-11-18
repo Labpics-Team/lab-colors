@@ -45,7 +45,7 @@ def main(output):
         raise ValueError("native producer needs a clean source revision")
     if output.exists() and any(p.name != "target" for p in output.iterdir()):
         raise ValueError("output may contain only the Cargo cache")
-    toolchain = os.environ.get("RUST_TOOLCHAIN", "1.96.0")
+    toolchain = run("rustc", "--version", capture=True).split()[1]
     host = next(line[6:] for line in run("rustc", "+" + toolchain, "-vV", capture=True).splitlines()
                 if line.startswith("host: "))
     prefix, filename = PLATFORMS[host]

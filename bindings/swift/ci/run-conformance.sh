@@ -3,10 +3,8 @@
 # попадают только готовая библиотека, Swift API и публичные тестовые векторы.
 set -euo pipefail
 
-: "${RUST_TOOLCHAIN:?declare the exact Rust toolchain}"
 : "${SWIFT_TOOLCHAIN:?declare the exact Swift toolchain}"
 : "${SWIFT_IMAGE_V1:?declare the digest-pinned Swift image}"
-[[ "$RUST_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$SWIFT_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$SWIFT_IMAGE_V1" =~ @sha256:[0-9a-f]{64}$ ]]
 readonly source_root="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}"
@@ -14,6 +12,8 @@ readonly temp_root="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 [[ -d "$temp_root" && -w "$temp_root" && -x "$temp_root" ]]
 readonly docker="${LABCOLORS_SWIFT_DOCKER:-$(command -v docker)}"
 export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+RUST_TOOLCHAIN="$(cd "$source_root" && rustc --version | cut -d ' ' -f 2)"
+[[ "$RUST_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
 [[ "$(rustc +"$RUST_TOOLCHAIN" --version)" == "rustc ${RUST_TOOLCHAIN} "* ]]
 [[ "$(cargo +"$RUST_TOOLCHAIN" --version)" == "cargo ${RUST_TOOLCHAIN} "* ]]
