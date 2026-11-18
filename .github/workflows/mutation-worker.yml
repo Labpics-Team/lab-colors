@@ -14,7 +14,6 @@ env:
   MUTANTS_ARCHIVE_SHA256: be41e6f74b633452fb17ef3b6b6113e180130f7b5693863b400c58b39e476726
   MUTANTS_ARCHIVE_URL: https://github.com/sourcefrog/cargo-mutants/releases/download/v25.3.1/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
   MUTANTS_VERSION_OUTPUT: cargo-mutants 25.3.1
-  RUST_TOOLCHAIN: 1.96.0
 
 jobs:
   manifest:
@@ -25,9 +24,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: install verified cargo-mutants release asset
         run: |
           mkdir -p "$RUNNER_TEMP/mutants-bin"
@@ -129,9 +132,13 @@ jobs:
         with:
           name: mutation-manifest
           path: ${{ runner.temp }}/mutation-manifest
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master @ 2026-03-27
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: install verified cargo-mutants release asset
         run: |

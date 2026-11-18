@@ -16,7 +16,6 @@ permissions:
   contents: read
 
 env:
-  RUST_TOOLCHAIN: 1.96.0
   SWIFT_TOOLCHAIN: 6.1.3
   # Версию Swift проверяет run-conformance.sh; digest задаёт образ.
   SWIFT_IMAGE_V1: swift@sha256:fddaf02db3d41844916167ef4d199d5ca14c6003d052a0b9ab579646a9c720ec
@@ -38,6 +37,8 @@ jobs:
       - name: install pinned Rust toolchain
         run: |
           set -euo pipefail
+          RUST_TOOLCHAIN="$(python3 -c 'import tomllib; from pathlib import Path; print(tomllib.loads(Path("rust-toolchain.toml").read_text())["toolchain"]["channel"])')"
+          printf 'RUST_TOOLCHAIN=%s\n' "$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
           # rustup-init закреплён sha256 официального дистрибутива (см.
           # rustup-init.sha256 рядом с бинарником на static.rust-lang.org);
           # точный тулчейн независимо fail-closed проверяет run-conformance.sh.
@@ -49,6 +50,8 @@ jobs:
           chmod +x /tmp/rustup-init
           /tmp/rustup-init -y --no-modify-path \
             --default-toolchain "$RUST_TOOLCHAIN" --profile minimal
+      - name: Carry the selected Rust environment into every build root
+        run: python3 scripts/ci/rust_environment.py
       - name: verify the pinned toolchain is live
         run: |
           set -euo pipefail
@@ -87,9 +90,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: python3 scripts/ci/pr_head.py
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: '. -> ${{ runner.temp }}/swift-distribution/target'
@@ -138,9 +145,13 @@ jobs:
         with:
           persist-credentials: false
       - *check-current-native-head
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: '. -> ${{ runner.temp }}/android-distribution/target'

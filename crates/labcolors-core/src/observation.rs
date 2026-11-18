@@ -324,12 +324,12 @@ mod arena {
             &mut self,
             materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
         ) -> Result<Shared<ObservationBackingV1>, ObservationError> {
-            for slot_index in 0..OBSERVATION_ARENA_SLOT_COUNT_V1 {
-                let Some(backing) = Shared::get_mut(&mut self.slots[slot_index]) else {
+            for slot in &mut self.slots {
+                let Some(backing) = Shared::get_mut(slot) else {
                     continue;
                 };
                 materialize(&mut backing.set)?;
-                return Ok(Shared::clone(&self.slots[slot_index]));
+                return Ok(Shared::clone(slot));
             }
             Err(ObservationError::InternalInvariant)
         }

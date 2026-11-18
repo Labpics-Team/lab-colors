@@ -30,6 +30,10 @@ impl PointSinkStampV1 {
     }
 }
 
+#[allow(
+    deprecated,
+    reason = "try_update requires Rust 1.95; preserve the 1.85 MSRV"
+)]
 fn next_test_sink_epoch() -> Option<PointSinkBindingEpochV1> {
     NEXT_TEST_SINK_EPOCH
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {

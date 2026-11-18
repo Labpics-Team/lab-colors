@@ -10,9 +10,6 @@ on:
 permissions:
   contents: read
 
-env:
-  RUST_TOOLCHAIN: 1.96.0
-
 jobs:
   native:
     name: native library (${{ matrix.platform }})
@@ -37,9 +34,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: trust this mounted checkout inside the Linux container
         if: runner.os == 'Linux'
         shell: bash

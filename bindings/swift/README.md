@@ -27,8 +27,8 @@ worker вызывает [Native conformance](../../.github/workflows/native-conf
 или история разошлась, проверка идёт дальше.
 
 Скрипты находятся в `ci/`. `run-conformance.sh` требует объявленные
-`RUST_TOOLCHAIN`, `SWIFT_TOOLCHAIN` и `SWIFT_IMAGE_V1`; `build-apple.py`
-требует macOS с выбранным Xcode и `RUST_TOOLCHAIN`. Исполняйте их в CI,
+`SWIFT_TOOLCHAIN` и `SWIFT_IMAGE_V1`; Rust выбирается из корневого
+`rust-toolchain.toml`. `build-apple.py` требует macOS с выбранным Xcode. Исполняйте их в CI,
 используя настройки точной проверяемой ревизии.
 
 Каталог `bindings/swift` является исходным пакетом разработки: файлы

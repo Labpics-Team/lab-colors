@@ -40,7 +40,7 @@ def main(output: Path) -> None:
     if run("git", "status", "--porcelain", "--untracked-files=no", capture=True):
         raise ValueError("source revision must be clean")
     output.mkdir(parents=True, exist_ok=True)
-    toolchain = os.environ["RUST_TOOLCHAIN"]
+    toolchain = run("rustc", "--version", capture=True).split()[1]
     sdk = Path(os.environ["ANDROID_HOME"])
     sdkmanager = sdk / "cmdline-tools/latest/bin/sdkmanager"
     run(str(sdkmanager), "--install", "platforms;android-36", "build-tools;36.0.0", "ndk;" + NDK)

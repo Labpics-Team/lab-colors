@@ -12,7 +12,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: 1.96.0
 
 jobs:
   formal-positive:
@@ -36,9 +35,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: install pinned Kani
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked
@@ -75,9 +78,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          cache: false
+          rustflags: ""
+      - name: Carry the selected Rust environment into every build root
+        shell: bash
+        run: python3 scripts/ci/rust_environment.py
       - name: install pinned Kani
         run: |
           cargo install kani-verifier --version "$(python3 scripts/verify_core_formal.py --kani-version)" --locked

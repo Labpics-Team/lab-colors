@@ -904,6 +904,15 @@ macro_rules! define_core_program_evaluators_v1 {
                 point: ProgramPointOccurrenceV1,
                 invocation: Self::Invocation,
             ) -> ProgramConstraintAssessmentResultV1<Self> {
+                // Keep adaptation generic: an evaluator may use Infallible.
+                fn map_error<Source, Target>(
+                    map: impl FnOnce(Source) -> Target,
+                ) -> impl FnOnce(ProgramPointAssessmentErrorV1<Source>) -> ProgramPointAssessmentErrorV1<Target> {
+                    move |ProgramPointAssessmentErrorV1::Evaluator(source)| {
+                        ProgramPointAssessmentErrorV1::Evaluator(map(source))
+                    }
+                }
+
                 #[cfg(test)]
                 CORE_PROGRAM_ASSESSMENT_CALLS.with(|calls| calls.set(calls.get() + 1));
                 match invocation {
@@ -913,18 +922,14 @@ macro_rules! define_core_program_evaluators_v1 {
                             point,
                             &evaluator,
                             invocation,
-                        ) {
+                        ).map_err(map_error(CoreProgramEvaluatorErrorV1::$variant)) {
                             Ok(HardDecision::Pass(evidence)) => Ok(HardDecision::Pass(
                                 CoreProgramPassEvidenceV1::$variant(evidence),
                             )),
                             Ok(HardDecision::Violation(evidence)) => Ok(HardDecision::Violation(
                                 CoreProgramViolationEvidenceV1::$variant(evidence),
                             )),
-                            Err(ProgramPointAssessmentErrorV1::Evaluator(source)) => Err(
-                                ProgramPointAssessmentErrorV1::Evaluator(
-                                    CoreProgramEvaluatorErrorV1::$variant(source),
-                                ),
-                            ),
+                            Err(error) => Err(error),
                         }
                     }),+
                 }

@@ -36,7 +36,7 @@ def main(output: Path) -> None:
         raise ValueError("Apple SDK assembly requires macOS and Xcode")
     if output.exists() and any(entry.name != "target" for entry in output.iterdir()):
         raise ValueError("output may contain only the restored Cargo target cache")
-    toolchain = os.environ["RUST_TOOLCHAIN"]
+    toolchain = run("rustc", "--version", capture=True).split()[1]
     output.mkdir(parents=True, exist_ok=True)
     target = output / "target"
     os.environ.update(CARGO_TARGET_DIR=str(target), MACOSX_DEPLOYMENT_TARGET=MINIMUM["macOS"],

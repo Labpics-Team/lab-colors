@@ -1549,15 +1549,15 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
         1,
         "one Session-owned pool must retain every reusable observation backing",
     );
+    // Observation and Program allocation tests exercise reuse and retained
+    // backing. This guard binds storage and privacy, not the loop's spelling.
     for required in [
         "pub(crate)constOBSERVATION_ARENA_SLOT_COUNT_V1:usize=3;",
         "Shared::new(ObservationBackingV1{",
-        "Shared::get_mut(&mutself.slots[slot_index])",
-        "Ok(Shared::clone(&self.slots[slot_index]))",
     ] {
         assert!(
             observation_syntax.contains(required),
-            "the three-slot reuse proof is incomplete; missing `{required}`",
+            "the three-slot storage contract is incomplete; missing `{required}`",
         );
     }
     assert!(
