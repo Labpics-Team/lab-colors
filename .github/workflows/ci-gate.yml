@@ -6,8 +6,8 @@ on:
   merge_group:
 
 concurrency:
-  # PR ставит проверки в очередь, пока завершается итог предыдущей ревизии.
-  group: ci-gate-${{ github.repository }}-${{ github.event.merge_group.head_sha || format('pr-run-{0}', github.run_id) }}
+  # У каждой попытки PR своя группа, включая повтор старого запуска.
+  group: ci-gate-${{ github.repository }}-${{ github.event.merge_group.head_sha || format('pr-run-{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: true
 
 permissions:
@@ -15,9 +15,6 @@ permissions:
 
 jobs:
   workflow-policy:
-    concurrency:
-      group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-workflow-policy
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     name: CI workflow contracts
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -34,9 +31,6 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_ci_*.py'
 
   ci:
-    concurrency:
-      group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-ci
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     name: CI
     uses: ./.github/workflows/ci-worker.yml
 
@@ -46,9 +40,6 @@ jobs:
     uses: ./.github/workflows/formal-worker.yml
 
   native:
-    concurrency:
-      group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-native
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     name: Native conformance
     uses: ./.github/workflows/native-conformance-worker.yml
 

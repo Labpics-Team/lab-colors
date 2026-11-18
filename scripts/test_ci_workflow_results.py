@@ -153,41 +153,64 @@ class NativeWorkflowGraphTest(unittest.TestCase):
 
     def test_pr_checks_can_start_while_the_previous_result_is_waiting(self):
         entry = gate.load_workflow(self.root, gate.ENTRY)
-        jobs = entry["jobs"]
+        admission = gate.load_workflow(self.root, gate.local_call(entry["jobs"]["admission"]["uses"]))
 
-        def group(policy, event, run, pr=11, queue="merge-a"):
+        def group(policy, event, run, attempt=1, queue="merge-a"):
             fields = {
-                "github.repository": "Labpics-Team/lab-colors",
-                "github.workflow": "CI",
-                "github.event_name": event,
-                "github.run_id": run,
-                "github.event.pull_request.number": pr if event == "pull_request" else None,
+                "github.repository": "Labpics-Team/lab-colors", "github.workflow": "CI",
+                "github.event.pull_request.number": 11 if event == "pull_request" else None,
                 "github.event.merge_group.head_sha": queue if event == "merge_group" else None,
-                "format('pr-run-{0}', github.run_id)": f"pr-run-{run}",
+                "github.event_name == 'pull_request'": event == "pull_request",
+                "github.event_name": event, "github.run_id": run, "github.sha": queue,
+                "format('pr-run-{0}-{1}', github.run_id, github.run_attempt)": f"pr-run-{run}-{attempt}",
             }
+
             def evaluate(match):
-                values = (fields[term.strip()] for term in match[1].split("||"))
-                return str(next(value for value in values if value))
+                for alternative in match[1].split("||"):
+                    value = None
+                    for term in alternative.split("&&"):
+                        value = fields[term.strip()]
+                        if not value:
+                            break
+                    if value:
+                        return str(value)
+                return ""
 
             return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", evaluate, policy["group"]).casefold()
 
-        root = entry["concurrency"]
-        self.assertNotEqual(group(root, "pull_request", 1), group(root, "pull_request", 2))
-        self.assertEqual(group(root, "merge_group", 1), group(root, "merge_group", 2))
-        self.assertNotEqual(group(root, "merge_group", 1), group(root, "merge_group", 1, queue="merge-b"))
-        self.assertEqual(root["cancel-in-progress"], "true")
-        self.assertNotIn("concurrency", jobs["gate"])
-        self.assertNotIn("concurrency", jobs["admission"])  # The public admission workflow owns its lock.
-        pr_groups = set()
-        for name in ("workflow-policy", "ci", "native"):
-            policy = jobs[name]["concurrency"]
-            self.assertEqual(policy["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}")
-            first = group(policy, "pull_request", 1)
-            self.assertEqual(first, group(policy, "pull_request", 2))
-            self.assertNotEqual(first, group(policy, "pull_request", 2, pr=12))
-            self.assertNotEqual(group(policy, "merge_group", 1), group(policy, "merge_group", 2))
-            pr_groups.add(first)
-        self.assertEqual(len(pr_groups), 3)
+        policies = [owner["concurrency"] for workflow in (entry, admission)
+                    for owner in (workflow, *workflow["jobs"].values()) if "concurrency" in owner]
+        for order in ([(1, 1), (2, 1), (1, 2)], [(2, 1), (1, 2), (1, 1)]):
+            busy = set()
+            for run, attempt in order:
+                keys = {group(policy, "pull_request", run, attempt) for policy in policies}
+                self.assertTrue(busy.isdisjoint(keys), keys)
+                busy.update(keys)
+        for policy in [entry["concurrency"], admission["concurrency"]]:
+            self.assertEqual(group(policy, "merge_group", 1), group(policy, "merge_group", 2))
+            self.assertNotEqual(group(policy, "merge_group", 1), group(policy, "merge_group", 2, queue="merge-b"))
+        self.assertEqual(entry["concurrency"]["cancel-in-progress"], "true")
+        self.assertEqual(admission["concurrency"]["cancel-in-progress"], "false")
+
+    def test_native_build_stops_only_when_the_pr_has_advanced(self):
+        jobs = gate.load_workflow(self.root, ".github/workflows/native-conformance-worker.yml")["jobs"]
+        checks = [next(step for step in jobs[name]["steps"] if "PR_HEAD" in step.get("env", {}))
+                  for name in ("apple-package", "android-build")]
+        self.assertEqual(checks[0], checks[1])
+        sha = "a" * 40
+        github = {"status": "ahead", "behind_by": 0, "ahead_by": 1,
+                  "base_commit": {"sha": sha}, "merge_base_commit": {"sha": sha}}
+        for patch, curl_status, expected in [({}, 0, 1), ({"status": "identical", "ahead_by": 0}, 0, 0),
+                ({"status": "behind", "behind_by": 1}, 0, 0), ({"status": "diverged"}, 0, 0),
+                ({"base_commit": {"sha": "b" * 40}}, 0, 0), ({}, 28, 0)]:
+            with self.subTest(patch=patch, curl_status=curl_status):
+                result = subprocess.run(["bash", "-eo", "pipefail", "-c",
+                    'curl() { printf %s "$RESPONSE"; return "$CURL_STATUS"; }\n' + checks[0]["run"]],
+                    env={**os.environ, "GITHUB_API_URL": "https://api.github.com",
+                         "GITHUB_REPOSITORY": "Labpics-Team/lab-colors", "PR_REPOSITORY": "Labpics-Team/lab-colors",
+                         "PR_NUMBER": "879", "PR_HEAD": sha, "GH_TOKEN": "", "CURL_STATUS": str(curl_status),
+                         "RESPONSE": json.dumps(github | patch)}, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_independent_new_or_renamed_premerge_root_is_red(self):
         for event in ("pull_request", "pull_request_target", "merge_group"):
