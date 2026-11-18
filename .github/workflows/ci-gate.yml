@@ -7,7 +7,7 @@ on:
 
 concurrency:
   # PR ставит проверки в очередь, пока завершается итог предыдущей ревизии.
-  group: ci-gate-${{ github.repository }}-${{ github.event_name == 'pull_request' && format('pr-run-{0}', github.run_id) || github.event.merge_group.head_sha }}
+  group: ci-gate-${{ github.repository }}-${{ github.event.merge_group.head_sha || format('pr-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 permissions:

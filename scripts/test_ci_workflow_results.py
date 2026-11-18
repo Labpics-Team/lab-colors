@@ -160,11 +160,16 @@ class NativeWorkflowGraphTest(unittest.TestCase):
                 "github.repository": "Labpics-Team/lab-colors",
                 "github.workflow": "CI",
                 "github.event_name": event,
-                "github.event.pull_request.number || github.run_id": pr if event == "pull_request" else run,
-                ("github.event_name == 'pull_request' && format('pr-run-{0}', github.run_id) || "
-                 "github.event.merge_group.head_sha"): f"pr-run-{run}" if event == "pull_request" else queue,
+                "github.run_id": run,
+                "github.event.pull_request.number": pr if event == "pull_request" else None,
+                "github.event.merge_group.head_sha": queue if event == "merge_group" else None,
+                "format('pr-run-{0}', github.run_id)": f"pr-run-{run}",
             }
-            return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: str(fields[m[1]]), policy["group"]).casefold()
+            def evaluate(match):
+                values = (fields[term.strip()] for term in match[1].split("||"))
+                return str(next(value for value in values if value))
+
+            return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", evaluate, policy["group"]).casefold()
 
         root = entry["concurrency"]
         self.assertNotEqual(group(root, "pull_request", 1), group(root, "pull_request", 2))
