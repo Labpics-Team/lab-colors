@@ -474,6 +474,41 @@ fn revision_bound_clone_is_allocation_free_and_shares_all_canonical_backing() {
 }
 
 #[test]
+fn retained_observations_survive_exhaustion_and_released_slots_are_reused() {
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let update = |revision, channel| {
+        observed_update(
+            STREAM,
+            revision,
+            scenarios([scenario(1, [binding(PORT_A, [channel; 3])])]),
+        )
+    };
+    state.apply(update(1, 10)).unwrap();
+    let first = revision_bound(&state).clone();
+    state.apply(update(2, 20)).unwrap();
+    let second = revision_bound(&state).clone();
+    state.apply(update(3, 30)).unwrap();
+    let third = revision_bound(&state).clone();
+
+    assert_eq!(
+        state.apply(update(4, 40)),
+        Err(ObservationError::InternalInvariant),
+    );
+    assert_eq!(revision_bound(&state).revision(), Revision::new(3));
+
+    let released = second.backing_ptr_for_test();
+    drop(second);
+    state.apply(update(4, 40)).unwrap();
+    assert_eq!(revision_bound(&state).backing_ptr_for_test(), released);
+    for (observation, channel) in [(&first, 10), (&third, 30), (revision_bound(&state), 40)] {
+        assert_eq!(
+            observation.physical_values(0).unwrap()[0],
+            ColorSignal::from_srgb8(Srgb8::new([channel; 3])),
+        );
+    }
+}
+
+#[test]
 fn independent_equal_admissions_do_not_alias_observation_or_schema_backing() {
     let first = scenarios([
         scenario(9, [binding(PORT_B, [4, 5, 6]), binding(PORT_A, [1, 2, 3])]),
