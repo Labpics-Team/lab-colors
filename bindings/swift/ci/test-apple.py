@@ -12,6 +12,8 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+from pr_head import require_current
 
 
 def run(*args: str, cwd: Path, capture: bool = False) -> str:
@@ -55,7 +57,26 @@ def extract_surface(consumer: Path, modules: Path, platform: str, variant: str |
     return graph
 
 
+def simulator_surface(consumer: Path, derived: Path, runtime: str, target: str, pr_env: dict) -> Path:
+    require_current(pr_env)
+    identifier = run("xcrun", "simctl", "create", "LabColorsConsumer", "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+                     runtime, cwd=consumer, capture=True)
+    try:
+        run("xcodebuild", "-scheme", "Consumer", "-destination", "id=" + identifier,
+            "-derivedDataPath", str(derived), "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test", cwd=consumer)
+        require_current(pr_env)
+        return extract_surface(consumer, derived / "Build/Products/Debug-iphonesimulator", "ios", "simulator",
+                               target.split("-", 1)[0] + "-apple-ios15.0-simulator")
+    finally:
+        subprocess.run(("xcrun", "simctl", "shutdown", identifier), cwd=consumer, check=False)
+        run("xcrun", "simctl", "delete", identifier, cwd=consumer)
+
+
 def main(distribution: Path, consumer: Path) -> None:
+    # Keep the read-only comparison token out of Swift and Xcode subprocesses.
+    token = os.environ.pop("LABCOLORS_PR_TOKEN", "")
+    pr_env = ({**os.environ, "LABCOLORS_PR_TOKEN": token}
+              if os.environ.get("GITHUB_EVENT_NAME") == "pull_request" and token else {})
     manifest = json.loads((distribution / "swift-release-manifest.json").read_text())
     if manifest.get("schemaVersion") != 1 or manifest.get("archive") != "LabColors.swiftpm.zip":
         raise ValueError("unknown SDK distribution schema")
@@ -141,15 +162,7 @@ public func makeRuntime(_ bytes: Data) throws -> ProgramRuntime {
         if not supported:
             raise ValueError("no available iOS Simulator runtime")
         runtime = sorted(supported, key=lambda item: tuple(map(int, item["version"].split("."))))[-1]
-        identifier = run("xcrun", "simctl", "create", "LabColorsConsumer", "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
-                         runtime["identifier"], cwd=consumer, capture=True)
-        try:
-            run("xcodebuild", "-scheme", "Consumer", "-destination", "id=" + identifier,
-                "-derivedDataPath", str(derived), "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test", cwd=consumer)
-            graphs.append(extract_surface(consumer, derived / "Build/Products/Debug-iphonesimulator", "ios", "simulator", target.split("-", 1)[0] + "-apple-ios15.0-simulator"))
-        finally:
-            subprocess.run(("xcrun", "simctl", "shutdown", identifier), cwd=consumer, check=False)
-            run("xcrun", "simctl", "delete", identifier, cwd=consumer)
+        graphs.append(simulator_surface(consumer, derived, runtime["identifier"], target, pr_env))
     finally:
         os.environ["PATH"] = previous_path
     run("node", "scripts/verify-swift-surface.mjs", str(distribution / "native-surface.json"),
