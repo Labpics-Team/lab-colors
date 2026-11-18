@@ -74,6 +74,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - &check-current-native-head
+        name: Stop this check if the PR already contains a newer commit
+        if: github.event_name == 'pull_request'
+        env: &native-pr-environment
+          LABCOLORS_PR_TOKEN: ${{ github.event_name == 'pull_request' && github.token || '' }}
+          PR_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/pr_head.py
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -99,6 +108,7 @@ jobs:
       - name: assemble the self-contained Swift package
         run: python3 bindings/swift/ci/build-apple.py "$RUNNER_TEMP/swift-distribution"
       - name: exercise the exact archive as an external Apple consumer
+        env: *native-pr-environment
         run: python3 bindings/swift/ci/test-apple.py "$RUNNER_TEMP/swift-distribution" "$RUNNER_TEMP/swift-consumer"
       - name: compare Swift authoring against an exact prior implementation
         if: inputs.authoring_baseline != ''
@@ -113,6 +123,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - *check-current-native-head
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
