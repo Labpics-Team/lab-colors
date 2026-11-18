@@ -115,6 +115,7 @@ jobs:
           persist-credentials: false
       - name: verifier contract hostile tests
         run: |
+          python3 -m pip install --disable-pip-version-check --no-deps -r scripts/ci/requirements.txt
           python3 scripts/test_ci_storage.py
           python3 scripts/test_verify_core_formal.py
           python3 scripts/test_formal_outputs.py

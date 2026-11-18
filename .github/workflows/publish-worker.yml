@@ -140,6 +140,7 @@ jobs:
                 "swift package (Linux)",
                 "swift package (macOS and iOS)",
                 "android package",
+                "desktop package",
               ],
             },
           ];
@@ -203,8 +204,7 @@ jobs:
             if (primary.length !== 1 || new Set(references.map(reference => reference?.path)).size !== references.length) {
               throw new Error(`${spec.path} run ${run.id}: primary worker is missing or repeated`);
             }
-            if (spec.key === 'ci') {
-              for (const reference of references) {
+            for (const reference of references) {
                 const expectedPrefix = repository + '/.github/workflows/';
                 const expectedSuffix = '@' + expectedSha;
                 const path = reference?.path;
@@ -213,9 +213,6 @@ jobs:
                 if (!/^[A-Za-z0-9_-]+\.ya?ml$/u.test(name) || reference?.sha !== expectedSha) {
                   throw new Error(`${spec.path} run ${run.id}: workflow escaped the admitted source revision`);
                 }
-              }
-            } else if (references.length !== 1) {
-              throw new Error(`${spec.path} run ${run.id}: native worker reference is ambiguous`);
             }
             return run;
           }

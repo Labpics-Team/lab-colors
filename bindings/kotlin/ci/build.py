@@ -9,12 +9,11 @@ import shutil
 import subprocess
 import sys
 import tomllib
-import urllib.request
 import zipfile
 
+from gradle_distribution import GRADLE_VERSION, gradle
+
 ROOT = Path(__file__).resolve().parents[3]
-GRADLE_VERSION = "8.13"
-GRADLE_SHA256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
 NDK = "28.2.13676358"
 ABIS = {
     "arm64-v8a": ("aarch64-linux-android", "aarch64-linux-android"),
@@ -33,22 +32,6 @@ def run(*args: str, cwd: Path = ROOT, capture: bool = False, env: dict | None = 
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def gradle(directory: Path) -> Path:
-    archive = directory / "gradle.zip"
-    directory.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip", timeout=120) as response:
-        with archive.open("wb") as stream:
-            shutil.copyfileobj(response, stream)
-    if digest(archive) != GRADLE_SHA256:
-        raise ValueError("Gradle distribution checksum mismatch")
-    with zipfile.ZipFile(archive) as bundle:
-        bundle.extractall(directory)
-    archive.unlink()
-    executable = directory / f"gradle-{GRADLE_VERSION}/bin/gradle"
-    executable.chmod(0o755)
-    return executable
 
 
 def main(output: Path) -> None:
