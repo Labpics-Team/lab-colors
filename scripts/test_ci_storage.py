@@ -87,6 +87,28 @@ def job_level_optional(source, name):
     return re.search(r"(?m)^    (?:if|continue-on-error):", job(source, name)) is not None
 
 
+def action_inputs(source, name, action):
+    import yaml
+    from ci.workflow_results import WorkflowLoader
+
+    workflow = yaml.load(source, Loader=WorkflowLoader)
+    steps = workflow["jobs"][name]["steps"]
+    matches = [step for step in steps if step.get("uses", "").startswith(action + "@")]
+    if len(matches) != 1:
+        raise AssertionError("expected one " + action + " step in " + name)
+    return matches[0].get("with", {})
+
+
+def validate_native_release(source):
+    inputs = action_inputs(source, "publish", "actions/download-artifact")
+    for name, expected in {
+        "pattern": "*-sdk-${{ steps.source.outputs.sha }}",
+        "run-id": "${{ inputs.conformance_run_id }}",
+    }.items():
+        if inputs.get(name) != expected:
+            raise AssertionError("native release download changed: " + name)
+
+
 def validate_native_storage(source):
     build = job(source, "android-build")
     if job_level_optional(source, "android-build"):
@@ -140,11 +162,20 @@ def validate_native_storage(source):
     if len(apple_uploads) != 1:
         raise AssertionError("tested Apple SDK must reach native release")
     apple_upload = apple_uploads[0]
-    for required in ("name: apple-sdk-${{ github.sha }}", "LabColors.swiftpm.zip",
-                     "swift-release-manifest.json", "SHA256SUMS", "if-no-files-found: error",
-                     "retention-days: 3"):
-        if required not in apple_upload:
-            raise AssertionError("Apple release handoff missing: " + required)
+    apple_inputs = action_inputs(source, "apple-package", "actions/upload-artifact")
+    for name, expected in {
+        "name": "apple-sdk-${{ github.sha }}",
+        "if-no-files-found": "error",
+        "retention-days": "3",
+    }.items():
+        if apple_inputs.get(name) != expected:
+            raise AssertionError("Apple release handoff changed: " + name)
+    if apple_inputs.get("path", "").splitlines() != [
+        "${{ runner.temp }}/swift-distribution/LabColors.swiftpm.zip",
+        "${{ runner.temp }}/swift-distribution/swift-release-manifest.json",
+        "${{ runner.temp }}/swift-distribution/SHA256SUMS",
+    ]:
+        raise AssertionError("Apple release handoff changed: path")
     verification = apple.find("run: python3 bindings/swift/ci/test-apple.py")
     if verification < 0:
         raise AssertionError("external Apple verification missing: test-apple.py")
@@ -268,14 +299,28 @@ class NativeStorageTests(unittest.TestCase):
 
     def test_tested_apple_sdk_reaches_native_release(self):
         release = (ROOT / ".github/workflows/release-native.yml").read_text()
-        self.assertIn("pattern: '*-sdk-${{ steps.source.outputs.sha }}'", release)
-        self.assertIn("run-id: ${{ inputs.conformance_run_id }}", release)
+        validate_native_release(release)
         for before, after in (("LabColors.swiftpm.zip", "screenshots.zip"),
                               ("swift-release-manifest.json", "unrelated.json"),
+                              ("swift-distribution/swift-release-manifest.json",
+                               "unrelated/swift-release-manifest.json"),
+                              ("retention-days: 3", "retention-days: 30"),
                               ("retention-days: 3", "retention-days: 90")):
             with self.subTest(before=before):
+                self.assertIn(before, self.source)
                 with self.assertRaisesRegex(AssertionError, "Apple release handoff"):
                     validate_native_storage(self.source.replace(before, after))
+
+    def test_native_download_parameters_cannot_be_satisfied_by_comments(self):
+        release = (ROOT / ".github/workflows/release-native.yml").read_text()
+        for name, value in (("pattern", "'*-sdk-${{ steps.source.outputs.sha }}'"),
+                            ("run-id", "${{ inputs.conformance_run_id }}")):
+            with self.subTest(name=name):
+                before = "          " + name + ": " + value
+                after = "          # " + name + ": " + value + "\n          " + name + ": unrelated"
+                self.assertIn(before, release)
+                with self.assertRaisesRegex(AssertionError, "native release download changed: " + name):
+                    validate_native_release(release.replace(before, after))
 
     def test_complete_runtime_failure_context_must_reach_the_diagnostic_consumer(self):
         consumer = job(self.source, "android-consumer")
