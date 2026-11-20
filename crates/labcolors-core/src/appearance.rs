@@ -1462,19 +1462,19 @@ pub(crate) enum PointOccurrenceAbsenceStepV1 {
 }
 
 impl PointOccurrenceAbsenceStepV1 {
-    pub(crate) const fn occurrence(self) -> OccurrenceId {
+    pub(crate) const fn occurrence(&self) -> OccurrenceId {
         match self {
-            Self::Removed { occurrence, .. } | Self::Propagated { occurrence, .. } => occurrence,
+            Self::Removed { occurrence, .. } | Self::Propagated { occurrence, .. } => *occurrence,
         }
     }
 
-    pub(crate) const fn normal(self) -> SourceOverCertificateV1 {
+    pub(crate) const fn normal(&self) -> SourceOverCertificateV1 {
         match self {
-            Self::Removed { normal, .. } | Self::Propagated { normal, .. } => normal,
+            Self::Removed { normal, .. } | Self::Propagated { normal, .. } => *normal,
         }
     }
 
-    pub(crate) const fn counterfactual_output(self) -> [u8; 3] {
+    pub(crate) const fn counterfactual_output(&self) -> [u8; 3] {
         match self {
             Self::Removed { normal, .. } => normal.backdrop_rgb(),
             Self::Propagated { counterfactual, .. } => counterfactual.output_rgb(),
@@ -1487,32 +1487,44 @@ impl PointOccurrenceAbsenceStepV1 {
 /// у владеющего ими revision-bound отчёта.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PointOccurrenceAbsenceSummaryV1 {
-    first: PointOccurrenceAbsenceStepV1,
-    last: PointOccurrenceAbsenceStepV1,
+    target: OccurrenceId,
+    root: OccurrenceId,
+    normal_root: [u8; 3],
+    counterfactual_root: [u8; 3],
 }
 
 impl PointOccurrenceAbsenceSummaryV1 {
     pub(crate) fn from_nonempty_steps(steps: &[PointOccurrenceAbsenceStepV1]) -> Option<Self> {
+        let first = steps.first()?;
+        let last = steps.last()?;
+        let normal = match last {
+            PointOccurrenceAbsenceStepV1::Removed { normal, .. }
+            | PointOccurrenceAbsenceStepV1::Propagated { normal, .. } => normal,
+        };
+        // Сводке нужны только две координаты и конечные байты. Полные
+        // сертификаты остаются в единственной владеющей replay arena.
         Some(Self {
-            first: steps.first().copied()?,
-            last: steps.last().copied()?,
+            target: first.occurrence(),
+            root: last.occurrence(),
+            normal_root: normal.output_rgb(),
+            counterfactual_root: last.counterfactual_output(),
         })
     }
 
     pub(crate) const fn target(self) -> OccurrenceId {
-        self.first.occurrence()
+        self.target
     }
 
     pub(crate) const fn root(self) -> OccurrenceId {
-        self.last.occurrence()
+        self.root
     }
 
     pub(crate) const fn normal_root(self) -> [u8; 3] {
-        self.last.normal().output_rgb()
+        self.normal_root
     }
 
     pub(crate) const fn counterfactual_root(self) -> [u8; 3] {
-        self.last.counterfactual_output()
+        self.counterfactual_root
     }
 
     pub(crate) fn domain(self) -> ExactFinalOwnedPointDomainV1 {
@@ -1534,7 +1546,7 @@ pub(crate) struct PointOccurrenceAbsenceReplayV1<'steps> {
 }
 
 impl PointOccurrenceAbsenceReplayV1<'_> {
-    fn summary(&self) -> PointOccurrenceAbsenceSummaryV1 {
+    pub(crate) fn summary(&self) -> PointOccurrenceAbsenceSummaryV1 {
         PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(self.steps)
             .unwrap_or_else(|| unreachable!("созданный компилятором пересчёт непуст"))
     }
