@@ -275,8 +275,24 @@ struct ArcV1 {
 
 struct CanonicalGraphV1 {
     colors: Vec<VertexColorV1>,
-    adjacency: Vec<Vec<ArcV1>>,
+    adjacency_offsets: Vec<usize>,
+    arcs: Vec<ArcV1>,
     edge_count: usize,
+}
+
+impl CanonicalGraphV1 {
+    fn adjacent(&self, vertex: usize) -> Result<&[ArcV1], ProgramCompileError> {
+        let Some([start, end]) = self
+            .adjacency_offsets
+            .get(vertex..)
+            .and_then(|offsets| offsets.get(..2))
+        else {
+            return Err(ProgramCompileError::InternalInvariant);
+        };
+        self.arcs
+            .get(*start..*end)
+            .ok_or(ProgramCompileError::InternalInvariant)
+    }
 }
 
 struct GraphBuilderV1 {
@@ -326,48 +342,86 @@ impl GraphBuilderV1 {
     }
 
     fn finish(self) -> Result<CanonicalGraphV1, ProgramCompileError> {
-        let mut degrees = Vec::new();
-        degrees
-            .try_reserve_exact(self.colors.len())
+        let offset_count = self
+            .colors
+            .len()
+            .checked_add(1)
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
+        let mut offsets = Vec::new();
+        offsets
+            .try_reserve_exact(offset_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        degrees.resize(self.colors.len(), 0_usize);
+        offsets.resize(offset_count, 0_usize);
         for edge in &self.edges {
-            degrees[edge.from] = degrees[edge.from]
-                .checked_add(1)
-                .ok_or(ProgramCompileError::ResourceExhausted)?;
-            degrees[edge.to] = degrees[edge.to]
-                .checked_add(1)
-                .ok_or(ProgramCompileError::ResourceExhausted)?;
+            for vertex in [edge.from, edge.to] {
+                let end = vertex
+                    .checked_add(1)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let degree = offsets
+                    .get_mut(end)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                *degree = degree
+                    .checked_add(1)
+                    .ok_or(ProgramCompileError::ResourceExhausted)?;
+            }
         }
-
-        let mut adjacency = Vec::new();
-        adjacency
-            .try_reserve_exact(self.colors.len())
+        let mut arc_count = 0_usize;
+        for offset in offsets.iter_mut().skip(1) {
+            arc_count = arc_count
+                .checked_add(*offset)
+                .ok_or(ProgramCompileError::ResourceExhausted)?;
+            *offset = arc_count;
+        }
+        let mut arcs = Vec::new();
+        arcs.try_reserve_exact(arc_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for degree in degrees {
-            let mut arcs = Vec::new();
-            arcs.try_reserve_exact(degree)
-                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            adjacency.push(arcs);
-        }
-        for edge in &self.edges {
-            adjacency[edge.from].push(ArcV1 {
+        arcs.resize(
+            arc_count,
+            ArcV1 {
                 direction: 0,
-                role: edge.role,
-                neighbour: edge.to,
-            });
-            adjacency[edge.to].push(ArcV1 {
-                direction: 1,
-                role: edge.role,
-                neighbour: edge.from,
-            });
+                role: EdgeRoleV1::ProgramMember,
+                neighbour: 0,
+            },
+        );
+        // Концы диапазонов служат курсорами заполнения справа налево. После
+        // последней дуги каждого узла они уже равны началам его диапазона;
+        // отдельный временный буфер курсоров не нужен. Обратный обход рёбер и
+        // обеих дуг сохраняет исходный порядок, включая отсортированные списки.
+        for edge in self.edges.iter().rev() {
+            for (vertex, direction, neighbour) in [(edge.to, 1, edge.from), (edge.from, 0, edge.to)]
+            {
+                let end = vertex
+                    .checked_add(1)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                let cursor = offsets
+                    .get_mut(end)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                *cursor = cursor
+                    .checked_sub(1)
+                    .ok_or(ProgramCompileError::InternalInvariant)?;
+                *arcs
+                    .get_mut(*cursor)
+                    .ok_or(ProgramCompileError::InternalInvariant)? = ArcV1 {
+                    direction,
+                    role: edge.role,
+                    neighbour,
+                };
+            }
         }
-        for arcs in &mut adjacency {
-            ordering::sort(arcs);
+        offsets.copy_within(1.., 0);
+        *offsets
+            .last_mut()
+            .ok_or(ProgramCompileError::InternalInvariant)? = arc_count;
+        for bounds in offsets.windows(2) {
+            ordering::sort(
+                arcs.get_mut(bounds[0]..bounds[1])
+                    .ok_or(ProgramCompileError::InternalInvariant)?,
+            );
         }
         Ok(CanonicalGraphV1 {
             colors: self.colors,
-            adjacency,
+            adjacency_offsets: offsets,
+            arcs,
             edge_count: self.edges.len(),
         })
     }
@@ -1404,9 +1458,10 @@ where
     edge_roles
         .try_reserve_exact(graph.edge_count)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for adjacency in &graph.adjacency {
+    for vertex in 0..graph.colors.len() {
         edge_roles.extend(
-            adjacency
+            graph
+                .adjacent(vertex)?
                 .iter()
                 .filter(|arc| arc.direction == 0)
                 .map(|arc| arc.role as u8),
@@ -1628,10 +1683,7 @@ impl ActiveRefinementV1 {
         graph: &CanonicalGraphV1,
         vertex: usize,
     ) -> Result<(), ProgramCompileError> {
-        let arcs = graph
-            .adjacency
-            .get(vertex)
-            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let arcs = graph.adjacent(vertex)?;
         let start = self.signatures.len();
         self.signatures
             .try_reserve(arcs.len())
@@ -1811,7 +1863,7 @@ impl ActiveRefinementV1 {
         for cell in first_new_cell..self.cells.len() {
             for offset in 0..self.cells[cell].vertices.len() {
                 let vertex = self.cells[cell].vertices[offset];
-                for arc in &graph.adjacency[vertex] {
+                for arc in graph.adjacent(vertex)? {
                     let neighbour = arc.neighbour;
                     let target = self.cell_of[neighbour];
                     if self.cells[target].vertices.len() == 1
@@ -2118,17 +2170,15 @@ fn serialize_order(
         push_u64_bytes(&mut output, u64::from(color.len()));
         output.extend_from_slice(color.as_slice());
 
-        let outgoing_count = graph.adjacency[vertex]
-            .iter()
-            .filter(|arc| arc.direction == 0)
-            .count();
+        let adjacent = graph.adjacent(vertex)?;
+        let outgoing_count = adjacent.iter().filter(|arc| arc.direction == 0).count();
         push_u64_bytes(&mut output, usize_as_u64(outgoing_count)?);
         outgoing.clear();
         outgoing
             .try_reserve(outgoing_count)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         outgoing.extend(
-            graph.adjacency[vertex]
+            adjacent
                 .iter()
                 .filter(|arc| arc.direction == 0)
                 .map(|arc| (arc.role, label_of[arc.neighbour])),
@@ -2441,7 +2491,7 @@ impl ComponentTwinIndexV1 {
                     unique = false;
                 }
                 seen_cell[cell] = root;
-                for arc in &graph.adjacency[vertex] {
+                for arc in graph.adjacent(vertex)? {
                     let neighbour = arc.neighbour;
                     if state[neighbour] == 0 && partition.cells[cell_of[neighbour]].len() != 1 {
                         state[neighbour] = 1;
@@ -2488,12 +2538,13 @@ fn candidate_is_component_twin(
     if explored.is_empty() {
         return Ok(false);
     }
-    let candidate_arcs = &graph.adjacency[candidate];
-    if explored.iter().any(|&vertex| {
-        graph.colors[vertex] == graph.colors[candidate]
-            && graph.adjacency[vertex] == *candidate_arcs
-    }) {
-        return Ok(true);
+    let candidate_arcs = graph.adjacent(candidate)?;
+    for &vertex in explored {
+        if graph.colors[vertex] == graph.colors[candidate]
+            && graph.adjacent(vertex)? == candidate_arcs
+        {
+            return Ok(true);
+        }
     }
     if component_twins.is_none() {
         *component_twins = Some(ComponentTwinIndexV1::new(graph, equitable)?);
@@ -2564,7 +2615,7 @@ fn factor_component_twins(
             while cursor < pending.len() {
                 let vertex = pending[cursor];
                 cursor += 1;
-                for arc in &graph.adjacency[vertex] {
+                for arc in graph.adjacent(vertex)? {
                     let neighbour = arc.neighbour;
                     if twins.unique_cell_of[neighbour] == usize::MAX {
                         continue;
@@ -3016,6 +3067,103 @@ mod ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_adjacency_uses_constant_number_of_buffers() -> Result<(), ProgramCompileError> {
+        for members in [0, 1, 17, 4096] {
+            let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+            for _ in 0..members {
+                builder.add_member(VertexColorV1::new(vertex_tag::PAINT_SOLID))?;
+            }
+            let (graph, events) =
+                crate::test_support::measured_allocator_events(|| builder.finish());
+            let graph = graph?;
+            assert_eq!(graph.edge_count, members);
+            assert_eq!(graph.adjacent(0)?.len(), members);
+            assert!(
+                events.alloc <= 2,
+                "{members} members allocated {} adjacency buffers",
+                events.alloc,
+            );
+            assert_eq!(events.realloc, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn flat_adjacency_matches_independent_lists_with_loops_and_parallel_edges()
+    -> Result<(), ProgramCompileError> {
+        for members in [0, 1, 2, 17, 257] {
+            for reverse in [false, true] {
+                let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+                for _ in 0..members {
+                    builder.add_member(VertexColorV1::new(vertex_tag::PAINT_SOLID))?;
+                }
+                let vertex_count = builder.colors.len();
+                for from in 0..vertex_count {
+                    builder.add_edge(from, from, EdgeRoleV1::OutputPaint)?;
+                    for (ordinal, &role) in EDGE_ROLES_V1.iter().enumerate() {
+                        let to = (from * 17 + ordinal * 13) % vertex_count;
+                        builder.add_edge(from, to, role)?;
+                        if ordinal % 3 == 0 {
+                            builder.add_edge(from, to, role)?;
+                        }
+                    }
+                }
+                if reverse {
+                    builder.edges.reverse();
+                }
+                let mut expected = vec![Vec::new(); vertex_count];
+                for edge in &builder.edges {
+                    expected[edge.from].push(ArcV1 {
+                        direction: 0,
+                        role: edge.role,
+                        neighbour: edge.to,
+                    });
+                    expected[edge.to].push(ArcV1 {
+                        direction: 1,
+                        role: edge.role,
+                        neighbour: edge.from,
+                    });
+                }
+                for adjacent in &mut expected {
+                    adjacent.sort_unstable();
+                }
+                let graph = builder.finish()?;
+                assert_eq!(graph.adjacency_offsets.len(), vertex_count + 1);
+                assert_eq!(graph.arcs.len(), graph.edge_count * 2);
+                for (vertex, adjacent) in expected.iter().enumerate() {
+                    assert_eq!(graph.adjacent(vertex)?, adjacent);
+                }
+                for vertex in [vertex_count, usize::MAX] {
+                    assert_eq!(
+                        graph.adjacent(vertex).err(),
+                        Some(ProgramCompileError::InternalInvariant),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn flat_adjacency_rejects_dangling_private_edges() -> Result<(), ProgramCompileError> {
+        for vertex in [1, usize::MAX] {
+            for incoming in [false, true] {
+                let mut builder = GraphBuilderV1::new(VertexColorV1::new(vertex_tag::PROGRAM))?;
+                builder.edges.push(EdgeV1 {
+                    from: if incoming { 0 } else { vertex },
+                    to: if incoming { vertex } else { 0 },
+                    role: EdgeRoleV1::OutputPaint,
+                });
+                assert_eq!(
+                    builder.finish().err(),
+                    Some(ProgramCompileError::InternalInvariant),
+                );
+            }
+        }
+        Ok(())
+    }
 
     // Независимый алгоритм прежнего пути: направленная достижимость по
     // сохраняющим разбиение перестановкам, без объединения компонент.
@@ -3648,11 +3796,17 @@ mod tests {
             if left.colors[vertex] != right.colors[image] {
                 return false;
             }
-            let mut left_arcs = left.adjacency[vertex]
+            let Ok(left_adjacent) = left.adjacent(vertex) else {
+                return false;
+            };
+            let Ok(right_adjacent) = right.adjacent(image) else {
+                return false;
+            };
+            let mut left_arcs = left_adjacent
                 .iter()
                 .map(|arc| (arc.direction, arc.role, mapping[arc.neighbour]))
                 .collect::<Vec<_>>();
-            let mut right_arcs = right.adjacency[image]
+            let mut right_arcs = right_adjacent
                 .iter()
                 .map(|arc| (arc.direction, arc.role, arc.neighbour))
                 .collect::<Vec<_>>();
@@ -4021,8 +4175,8 @@ mod tests {
         // Независимый oracle объединяет метки концов каждого ребра; обхода
         // компонент и поколений seen_cell здесь нет.
         let mut component = (0..graph.colors.len()).collect::<Vec<_>>();
-        for (vertex, arcs) in graph.adjacency.iter().enumerate() {
-            for arc in arcs {
+        for vertex in 0..graph.colors.len() {
+            for arc in graph.adjacent(vertex)? {
                 if partition.0.cells[cells[vertex]].len() == 1
                     || partition.0.cells[cells[arc.neighbour]].len() == 1
                 {
@@ -4644,10 +4798,7 @@ mod tests {
                     .try_reserve_exact(cell.len())
                     .map_err(|_| ProgramCompileError::ResourceExhausted)?;
                 for &vertex in &cell {
-                    let arcs = graph
-                        .adjacency
-                        .get(vertex)
-                        .ok_or(ProgramCompileError::InternalInvariant)?;
+                    let arcs = graph.adjacent(vertex)?;
                     let mut signature = Vec::new();
                     signature
                         .try_reserve_exact(arcs.len())
