@@ -62,7 +62,7 @@
     "release:verify": "node ../../scripts/verify-publication.mjs"
   },
   "devDependencies": {
-    "es-module-lexer": "1.7.0",
+    "es-module-lexer": "3.0.5",
     "typescript": "^5.5.0",
     "typescript-floor": "npm:typescript@5.2.2",
     "yaml": "2.9.1"
