@@ -112,6 +112,14 @@ fn validate_canonical_row(row: &NumericalSiteRecordV2) -> Result<(), String> {
 
 /// Mint the only terminal evidence admitted by the proof-bound WCAG kernel.
 pub(crate) fn mint_wcag22_evidence() -> Result<NumericalDecisionEvidenceV1, String> {
+    // Реестр и все условия допуска неизменяемы. Кэш хранит только результат
+    // их проверки, включая отказ; цвета, контекст и решения сюда не входят.
+    static MINTED: std::sync::OnceLock<Result<NumericalDecisionEvidenceV1, String>> =
+        std::sync::OnceLock::new();
+    MINTED.get_or_init(mint_wcag22_evidence_uncached).clone()
+}
+
+fn mint_wcag22_evidence_uncached() -> Result<NumericalDecisionEvidenceV1, String> {
     let row = numerical_registry_v2()
         .iter()
         .find(|row| row.site_id == SITE_ID)

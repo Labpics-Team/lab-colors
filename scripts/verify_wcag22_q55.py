@@ -77,11 +77,11 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "8ab231b0a7fac8ebf78e04c3a2e70c1a7e477fdd3324ffa9d0eb100e89df1059"
+    "f82a1bf356141a1cd79605c889bc0f67b7b861a35de4fe18745d71eee4f36a53"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
-    "19dea4c88a75414c6869bedc0a36058a884d73f36ed9cb5c2f243764f10ac5dc"
+    "d02b40a44cc24e813d7a00a20f198692b47215f28d6c942f2608836617794a71"
 )
 PARSER_ID = "encoded-srgb8-hex-parser-v1"
 EXPECTED_PARSER_SHA256 = (
