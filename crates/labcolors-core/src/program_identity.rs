@@ -2788,7 +2788,7 @@ where
 }
 
 mod ordering {
-    //! Allocation-free heapsort for cold Program identity construction.
+    //! Allocation-free ordering for cold Program identity construction.
     //! Keep the binary small without changing runtime or candidate-order sorting.
     use core::cmp::Ordering;
 
@@ -2801,6 +2801,11 @@ mod ordering {
     }
 
     pub(crate) fn sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
+        // Индексы и однородные клетки часто уже упорядочены. Проверка использует
+        // тот же полный порядок; heap нужен только при настоящей инверсии.
+        if values.is_sorted_by(|left, right| !compare(left, right).is_gt()) {
+            return;
+        }
         sort_indices(values.len(), &mut |left, right, swap| {
             if swap {
                 values.swap(left, right);
@@ -2863,6 +2868,38 @@ mod ordering {
                     sort_by(&mut value, |a, b| b.cmp(a));
                     expected.reverse();
                     assert_eq!(value, expected);
+                }
+            }
+        }
+
+        #[test]
+        fn ordered_inputs_need_at_most_one_comparison_per_adjacent_pair() {
+            for length in [0_usize, 1, 2, 17, 257, 4096] {
+                for repeats in [1, 4, usize::MAX] {
+                    for descending in [false, true] {
+                        let mut values: Vec<_> = (0..length).map(|index| index / repeats).collect();
+                        if descending {
+                            values.reverse();
+                        }
+                        let expected = values.clone();
+                        let mut comparisons = 0;
+                        let (_, events) = crate::test_support::measured_allocator_events(|| {
+                            sort_by(&mut values, |left, right| {
+                                comparisons += 1;
+                                if descending {
+                                    right.cmp(left)
+                                } else {
+                                    left.cmp(right)
+                                }
+                            });
+                        });
+                        assert_eq!(values, expected);
+                        assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
+                        assert!(
+                            comparisons <= length.saturating_sub(1),
+                            "ordered length {length}, repeats {repeats}, descending {descending}: {comparisons} comparisons",
+                        );
+                    }
                 }
             }
         }
