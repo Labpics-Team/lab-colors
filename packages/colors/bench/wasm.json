@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "artifact": "packages/colors/pkg/labcolors_bg.wasm",
   "toolchain": {
-    "rust": "1.96.0",
-    "rustcCommit": "ac68faa20",
+    "rust": "1.100.0",
+    "rustcCommit": "0ef1bc386059596dada8fb65b50425aab2ea637a",
     "wasmPack": "0.13.1",
     "wasmBindgen": "0.2.126",
     "target": "wasm32-unknown-unknown",
@@ -27,13 +27,13 @@
     ]
   },
   "measurement": {
-    "source": "github-actions-run-43591375571",
+    "source": "github-actions-run-44821471798",
     "platform": "linux-x64",
-    "rawBytes": 442027
+    "rawBytes": 627422
   },
   "policy": {
-    "maxRawBytes": 442027,
-    "basis": "measured-reproducible-program-canonicalization",
+    "maxRawBytes": 627422,
+    "basis": "measured-reproducible-program-runtime",
     "gzip": "diagnostic-only"
   }
 }
