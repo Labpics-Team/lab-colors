@@ -54,7 +54,7 @@ const materializationCodes = [
   "program_attachment_busy",
 ];
 const physicalIdentityCodes = ["program_physical_identity"];
-const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "other", undefined];
+const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "copyOutputTable", "other", undefined];
 const attachmentOperations = [
   "attachProgramWire",
   "attachmentUpdateObserved",
@@ -85,6 +85,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
   ]) {
     for (const operation of operations) {
       const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
+        : operation === "copyOutputTable" ? code === "program_resource_exhausted"
         : (operation === "updateObserved" || operation === "updateUnknown") && updateCodes.includes(code);
       assert.equal(isProgramError(errorWith(code, operation)), expected);
     }

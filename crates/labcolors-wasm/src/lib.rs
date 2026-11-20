@@ -269,11 +269,39 @@ fn output_index_error() -> JsValue {
     .into()
 }
 
+fn copy_snapshot_outputs(
+    outputs: &[labcolors_core::program_wire::ProgramPaintOutputV1],
+) -> Result<Vec<f64>, JsValue> {
+    let exhausted = || {
+        to_program_js_error(
+            labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+            ProgramOperation::CopyOutputTable,
+        )
+    };
+    let length = outputs.len().checked_mul(5).ok_or_else(exhausted)?;
+    let mut table = Vec::new();
+    table.try_reserve_exact(length).map_err(|_| exhausted())?;
+    for output in outputs {
+        let [red, green, blue] = output.source().bytes();
+        table.extend_from_slice(&[
+            f64::from(output.slot()),
+            f64::from(red),
+            f64::from(green),
+            f64::from(blue),
+            output.opacity(),
+        ]);
+    }
+    // Штатный Vec ABI копирует таблицу в JS-owned Float64Array. u32/u8 точно
+    // представимы в f64; opacity переносится без промежуточного округления.
+    Ok(table)
+}
+
 #[derive(Clone, Copy)]
 enum ProgramOperation {
     CompileProgramWire,
     UpdateObserved,
     UpdateUnknown,
+    CopyOutputTable,
     AttachProgramWire,
     AttachmentUpdateObserved,
     AttachmentUpdateUnknown,
@@ -287,6 +315,7 @@ impl ProgramOperation {
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
             Self::UpdateUnknown => "updateUnknown",
+            Self::CopyOutputTable => "copyOutputTable",
             Self::AttachProgramWire => "attachProgramWire",
             Self::AttachmentUpdateObserved => "attachmentUpdateObserved",
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
@@ -532,6 +561,13 @@ impl ProgramSnapshot {
     #[wasm_bindgen(js_name = outputCount)]
     pub fn output_count(&self) -> usize {
         self.inner.outputs().len()
+    }
+
+    /// Независимая JS-копия outputs: строки `[slot, red, green, blue, opacity]`
+    /// в порядке поштучных геттеров. Состояние snapshot не меняется.
+    #[wasm_bindgen(js_name = copyOutputTable)]
+    pub fn copy_output_table(&self) -> Result<Vec<f64>, JsValue> {
+        copy_snapshot_outputs(self.inner.outputs())
     }
 
     #[wasm_bindgen(js_name = outputSlot)]
@@ -997,6 +1033,13 @@ impl ProgramAttachedSnapshot {
         self.inner.snapshot().outputs().len()
     }
 
+    /// Независимая JS-копия outputs: строки `[slot, red, green, blue, opacity]`
+    /// в порядке поштучных геттеров. Состояние snapshot не меняется.
+    #[wasm_bindgen(js_name = copyOutputTable)]
+    pub fn copy_output_table(&self) -> Result<Vec<f64>, JsValue> {
+        copy_snapshot_outputs(self.inner.snapshot().outputs())
+    }
+
     #[wasm_bindgen(js_name = outputSlot)]
     pub fn output_slot(
         &self,
@@ -1338,6 +1381,11 @@ mod browser_tests {
             (
                 E::ResourceExhausted,
                 ProgramOperation::UpdateObserved,
+                "program_resource_exhausted",
+            ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::CopyOutputTable,
                 "program_resource_exhausted",
             ),
             (

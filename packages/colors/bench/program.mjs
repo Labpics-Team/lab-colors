@@ -9,14 +9,19 @@ const packageRoot = resolve(process.argv[2] ?? dirname(fileURLToPath(new URL("..
 const pattern = process.argv[3] ?? "repeated";
 const nodes = Number(process.argv[4] ?? 8);
 const samples = Number(process.argv[5] ?? 7);
+const requestedReadout = process.argv[6] ?? "auto";
 assert.ok(["repeated", "distinct", "shared", "grouped", "ring", "sparse", "complete", "bipartite"].includes(pattern), "pattern: repeated | distinct | shared | grouped | ring | sparse | complete | bipartite");
 assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..4096");
 assert.ok(pattern !== "ring" || (nodes >= 3 && nodes <= 2048), "ring nodes: 3..2048 (two hard constraints per node)");
 assert.ok(!["complete", "bipartite"].includes(pattern) || (nodes >= 2 && nodes <= 32), "dense diagnostic nodes: 2..32");
 assert.ok(pattern !== "bipartite" || nodes % 2 === 0, "bipartite nodes must be even");
 assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
+assert.ok(["auto", "table", "getters"].includes(requestedReadout), "readout: auto | table | getters");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
 const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v1.js")));
+const hasOutputTable = typeof api.ProgramSnapshot.prototype.copyOutputTable === "function";
+assert.ok(requestedReadout !== "table" || hasOutputTable, "the package must provide copyOutputTable");
+const readout = requestedReadout === "getters" || !hasOutputTable ? "getters" : "table";
 const started = performance.now();
 const wasm = await readFile(resolve(packageRoot, "pkg/labcolors_bg.wasm"));
 await api.default({ module_or_path: wasm });
@@ -87,13 +92,24 @@ for (let sample = 0; sample <= samples; sample += 1) {
         assert.equal(snapshot.state, refused ? "failed" : "ready");
         if (!refused) {
           assert.equal(snapshot.outputCount(), nodes);
+          const table = readout === "table" ? snapshot.copyOutputTable() : null;
+          if (table !== null) assert.equal(table.length, nodes * 5);
           for (let output = 0; output < nodes; output += 1) {
-            const slot = snapshot.outputSlot(output);
+            const row = output * 5;
+            const slot = table === null ? snapshot.outputSlot(output) : table[row];
+            const rgb = table === null ? snapshot.outputRgb(output) : null;
+            const red = table === null ? rgb[0] : table[row + 1];
+            const green = table === null ? rgb[1] : table[row + 2];
+            const blue = table === null ? rgb[2] : table[row + 3];
+            const opacity = table === null ? snapshot.outputOpacity(output) : table[row + 4];
+            const expected = color(slot - 1);
+            // Одинаковый oracle проверяет каждое поле без дополнительной RGB-копии.
             assert.equal(slot, output + 1);
-            const rgb = snapshot.outputRgb(output);
-            assert.deepEqual([...rgb], color(slot - 1));
-            assert.equal(snapshot.outputOpacity(output), 1);
-            checksum = (checksum + slot + rgb[0]) >>> 0;
+            assert.equal(red, expected[0]);
+            assert.equal(green, expected[1]);
+            assert.equal(blue, expected[2]);
+            assert.equal(opacity, 1);
+            checksum = (checksum + slot + red) >>> 0;
           }
         }
       } finally {
@@ -109,7 +125,7 @@ for (let sample = 0; sample <= samples; sample += 1) {
 assert.ok(results.every((result) => result.checksum === results[0].checksum));
 const cold = results.shift();
 console.log(JSON.stringify({
-  node: process.version, v8: process.versions.v8, producer, pattern, nodes, samples,
+  node: process.version, v8: process.versions.v8, producer, pattern, nodes, samples, readout,
   wasmBytes: wasm.length, wasmSha256: createHash("sha256").update(wasm).digest("hex"),
   initializationMs, cold, samplesAfterWarmup: results, maxRssKiB: process.resourceUsage().maxRSS,
 }));

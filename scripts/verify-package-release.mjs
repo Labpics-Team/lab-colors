@@ -1387,6 +1387,8 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   );
   snapshot.state;
   snapshot.outputCount();
+  const table: Float64Array = snapshot.copyOutputTable();
+  void table;
   return runtime;
 }
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
@@ -1433,6 +1435,8 @@ function attachTypes(wire: Uint8Array): ProgramAttachment {
   );
   const authority: AttachedMaterializationAuthority = attachment.materializationAuthority();
   snapshot.state;
+  const table: Float64Array = snapshot.copyOutputTable();
+  void table;
   authority.terminalCompositeRgb();
   attachment.materializationAuthorityFor(1n, authority.contentIdentity(), authority.bindingEpoch());
   return attachment;
@@ -1450,7 +1454,7 @@ void (null as unknown as RoleRecipe);
 async function verifyAdaptiveContract(consumer) {
   // Тот же контракт исполняется вне checkout против установленного tarball.
   const paths = [];
-  for (const filename of ["program-adaptive-contract.test.mjs", "program-sparse-update.test.mjs"]) {
+  for (const filename of ["program-adaptive-contract.test.mjs", "program-sparse-update.test.mjs", "program-output-table.test.mjs"]) {
     const path = resolve(consumer, filename);
     await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
     paths.push(path);
