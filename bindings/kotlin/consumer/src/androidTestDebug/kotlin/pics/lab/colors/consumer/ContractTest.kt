@@ -19,8 +19,20 @@ private fun expectCode(code: String, block: () -> Unit) {
     try { block(); fail("expected $code") }
     catch (error: LabColorsException.Refused) { assertEquals(code, error.code) }
 }
+private fun JSONObject.outputTableRow(): List<Double> = listOf(getLong("slot").toDouble()) +
+    getJSONArray("rgb").rgb().map { (it.toInt() and 255).toDouble() } + getDouble("opacity")
+private fun assertOutputTable(table: List<Double>, rows: List<JSONObject>) {
+    assertEquals(rows.size * 5, table.size)
+    val remaining = rows.associateBy { it.getLong("slot") }.toMutableMap()
+    for (offset in table.indices step 5) {
+        val expected = requireNotNull(remaining.remove(table[offset].toLong())) { "unknown or repeated output slot" }
+        assertEquals(expected.outputTableRow(), table.subList(offset, offset + 5))
+        assertEquals(expected.getDouble("opacity").toBits(), table[offset + 4].toBits())
+    }
+    assertTrue(remaining.isEmpty())
+}
 
-private class Host : ProgramPointSinkHost {
+private class Host(private val outputSlot: UInt = 91u, private val outputOpacity: Double = 1.0) : ProgramPointSinkHost {
     var owner = WeakReference<ProgramAttachment>(null)
     var reject = false
     var fail = false
@@ -42,7 +54,7 @@ private class Host : ProgramPointSinkHost {
         when (intent.operation) {
             ProgramPointSinkOperation.SET_ALL, ProgramPointSinkOperation.CONFIRM_EXACT -> {
                 val paint = requireNotNull(intent.point)
-                assertEquals(91u, paint.slot); assertEquals(3, paint.source.size); assertEquals(1.0, paint.opacity, 0.0)
+                assertEquals(outputSlot, paint.slot); assertEquals(3, paint.source.size); assertEquals(outputOpacity, paint.opacity, 0.0)
             }
             ProgramPointSinkOperation.REVOKE_ALL -> assertNull(intent.point)
         }
@@ -68,6 +80,7 @@ class ContractTest {
         val vectors = fixture()
         compileProgramWire(hex(vectors.getString("adaptive")), UInt.MAX_VALUE).use { runtime ->
             val held = mutableListOf<ProgramSnapshot>()
+            var expectedTable: List<Double> = emptyList()
             val worker = Executors.newSingleThreadExecutor()
             try {
                 val history = vectors.getJSONArray("history")
@@ -89,7 +102,9 @@ class ContractTest {
                         assertEquals(1uL, snapshot.outputCount())
                         assertEquals(91u, snapshot.outputSlot(0u))
                         assertArrayEquals(row.getJSONArray("rgb").rgb(), snapshot.outputRgb(0u))
+                        expectedTable = listOf(91.0) + row.getJSONArray("rgb").rgb().map { (it.toInt() and 255).toDouble() } + 1.0
                     }
+                    assertEquals(expectedTable, snapshot.copyOutputTable())
                 }
                 val first = held.first()
                 first.outputRgb(0u)[0] = 123
@@ -111,6 +126,71 @@ class ContractTest {
         runtime.close(); runtime.close()
         try { runtime.updateUnknown(2uL, 7u); fail("closed native handle was usable") }
         catch (_: IllegalStateException) { }
+    }
+
+    @Test fun outputTablesPreserveExactValuesAndOutliveTheirOwners() {
+        val declaration = fixture().getJSONObject("outputTable")
+        val encodedRows = declaration.getJSONArray("rows")
+        val rows = (0 until encodedRows.length()).map { encodedRows.getJSONObject(it) }
+        var retained: List<Double> = emptyList()
+        compileProgramWire(hex(declaration.getString("wire")), 1u).use { runtime ->
+            runtime.updateUnknown(1uL, 7u).use { waiting ->
+                assertEquals("waiting", waiting.state())
+                assertEquals(0uL, waiting.outputCount())
+                assertEquals(emptyList<Double>(), waiting.copyOutputTable())
+            }
+            runtime.updateObserved(2uL, listOf(1u), rgb(255, 255, 255), 1u).use { first ->
+                val table: List<Double> = first.copyOutputTable()
+                assertEquals("ready", first.state())
+                assertEquals(rows.size.toULong(), first.outputCount())
+                assertOutputTable(table, rows)
+                for (index in rows.indices) {
+                    val offset = index * 5
+                    assertEquals(first.outputSlot(index.toUInt()).toDouble(), table[offset], 0.0)
+                    assertEquals(first.outputRgb(index.toUInt()).map { (it.toInt() and 255).toDouble() }, table.subList(offset + 1, offset + 4))
+                    assertEquals(first.outputOpacity(index.toUInt()).toBits(), table[offset + 4].toBits())
+                }
+                runtime.updateObserved(3uL, listOf(1u), rgb(0, 0, 0), 1u).use { next ->
+                    assertEquals("ready", next.state())
+                    assertEquals(table, next.copyOutputTable())
+                }
+                assertEquals(table, first.copyOutputTable())
+                retained = table
+            }
+        }
+        assertOutputTable(retained, rows)
+
+        for (row in rows) {
+            val slot = row.getLong("slot").toUInt()
+            val host = Host(slot, row.getDouble("opacity"))
+            var attachedTable: List<Double> = emptyList()
+            attachProgramWire(hex(row.getString("wire")), 1u, slot, 501u, 71u, 61u, host).use { attachment ->
+                try {
+                    attachment.updateUnknown(1uL, 7u).use { waiting ->
+                        assertEquals("waiting", waiting.state())
+                        assertEquals(0uL, waiting.outputCount())
+                        assertEquals(emptyList<Double>(), waiting.copyOutputTable())
+                    }
+                    attachment.updateObserved(2uL, listOf(1u), rgb(255, 255, 255), 1u).use { first ->
+                        val table: List<Double> = first.copyOutputTable()
+                        assertEquals("ready", first.state())
+                        assertEquals(1uL, first.outputCount())
+                        assertOutputTable(table, listOf(row))
+                        assertEquals(first.outputSlot(0u).toDouble(), table[0], 0.0)
+                        assertEquals(first.outputRgb(0u).map { (it.toInt() and 255).toDouble() }, table.subList(1, 4))
+                        assertEquals(first.outputOpacity(0u).toBits(), table[4].toBits())
+                        attachment.updateObserved(3uL, listOf(1u), rgb(0, 0, 0), 1u).use { next ->
+                            assertEquals(table, next.copyOutputTable())
+                        }
+                        attachedTable = table
+                    }
+                } finally {
+                    host.point = null
+                    attachment.dispose(true)
+                }
+            }
+            assertOutputTable(attachedTable, listOf(row))
+        }
     }
 
     @Test fun authoringIsCanonicalAndTransactional() {
@@ -196,9 +276,13 @@ class ContractTest {
 
     @Test fun hostFailureReentryRevocationAndRecovery() {
         val host = Host()
+        var firstTable: List<Double> = emptyList()
         attachProgramWire(hex(fixture().getString("adaptive")), 1u, 91u, 501u, 71u, 61u, host).use { attachment ->
             host.owner = WeakReference(attachment); host.reenter = true
-            attachment.updateObserved(1uL, listOf(1u), rgb(255, 255, 255), 1u).close()
+            attachment.updateObserved(1uL, listOf(1u), rgb(255, 255, 255), 1u).use {
+                firstTable = it.copyOutputTable()
+                assertEquals(listOf(91.0, 0.0, 0.0, 0.0, 1.0), firstTable)
+            }
             attachment.materializationAuthority().use { old ->
                 host.fail = true
                 expectCode("program_attachment_host_protocol") { attachment.updateObserved(2uL, listOf(1u), rgb(0, 0, 0), 1u).close() }
@@ -217,15 +301,22 @@ class ContractTest {
                 expectCode("program_materialization_foreign_binding_epoch") { attachment.materializationAuthorityFor(2uL, current.contentIdentity(), current.bindingEpoch() xor 1uL).close() }
                 assertEquals("unverified", current.rendererProvenance())
             }
-            attachment.updateUnknown(3uL, 7u).use { assertFalse(it.hasRender()); assertEquals("stale", it.state()) }
+            attachment.updateUnknown(3uL, 7u).use {
+                assertFalse(it.hasRender()); assertEquals("stale", it.state())
+                assertEquals(listOf(91.0, 255.0, 255.0, 255.0, 1.0), it.copyOutputTable())
+            }
             assertNull(host.point)
-            attachment.updateObserved(4uL, listOf(1u, 2u), rgb(0, 0, 0, 255, 255, 255), 1u).use { assertEquals("failed", it.state()) }
+            attachment.updateObserved(4uL, listOf(1u, 2u), rgb(0, 0, 0, 255, 255, 255), 1u).use {
+                assertEquals("failed", it.state())
+                assertEquals(listOf(91.0, 255.0, 255.0, 255.0, 1.0), it.copyOutputTable())
+            }
             assertNull(host.point)
             attachment.updateObserved(5uL, listOf(1u), rgb(255, 255, 255), 1u).use { assertEquals("ready", it.state()) }
             expectCode("program_attachment_revoke_unconfirmed") { attachment.dispose(false) }
             host.point = null; attachment.dispose(true)
             expectCode("program_attachment_already_disposed") { attachment.updateUnknown(6uL, 7u).close() }
         }
+        assertEquals(listOf(91.0, 0.0, 0.0, 0.0, 1.0), firstTable)
     }
 
     @Test fun numericalVectors() {

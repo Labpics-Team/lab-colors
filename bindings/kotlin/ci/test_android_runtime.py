@@ -81,7 +81,7 @@ class InstrumentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "capture budget"):
             runtime.verify_instrumentation(["INSTRUMENTATION_RESULT: stream=" + "x" * (1 << 20)], set())
 
-    def test_real_capture_rejects_consumer_fatal_with_successful_eight_test_protocol(self):
+    def test_real_capture_rejects_consumer_fatal_with_successful_required_test_protocol(self):
         from test_artifact import PipeProcess, PREFIX
 
         for package, fatal in (("pics.lab.colors.consumer", True), ("other.app", False)):
@@ -131,13 +131,13 @@ class InstrumentationTests(unittest.TestCase):
                 # Prove this is a fatal-capture refusal, not a malformed report
                 # or nonzero command result disguised as the counterexample.
                 with (evidence / "instrumentation.txt").open() as output:
-                    self.assertEqual(len(runtime.verify_instrumentation(output, set(DEBUG))), 8)
+                    self.assertEqual(len(runtime.verify_instrumentation(output, set(DEBUG))), len(DEBUG))
                 self.assertEqual(json.loads((evidence / "connected-exit.json").read_text())["returncode"], 0)
                 capture = json.loads((evidence / "startup-capture.json").read_text())
                 self.assertEqual(capture["exceptionFound"], fatal)
 
 
-DEBUG = ["runtimeHistoryAndThreadMigration", "authoringIsCanonicalAndTransactional",
+DEBUG = ["runtimeHistoryAndThreadMigration", "outputTablesPreserveExactValuesAndOutliveTheirOwners", "authoringIsCanonicalAndTransactional",
          "hostFailureReentryRevocationAndRecovery", "numericalVectors", "sourceIdentityAndUntrustedEnvelope",
          "compiledApiIncludesEveryNativeAndAuthoringOperation", "allCapabilityFieldsMatchTheCanonicalManifest",
          "applicationUsesTheRequestedMemoryPageSize"]

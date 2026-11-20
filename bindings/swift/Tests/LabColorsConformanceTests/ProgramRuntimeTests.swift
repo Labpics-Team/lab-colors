@@ -9,12 +9,24 @@ struct RuntimeStep: Decodable {
     let state: String
     let rgb: [UInt8]?
 }
+struct OutputTableRow: Decodable {
+    let slot: UInt32
+    let rgb: [UInt8]
+    let opacity: Double
+    let wire: String
+    var table: [Double] { [Double(slot)] + rgb.map { Double($0) } + [opacity] }
+}
+struct OutputTableFixture: Decodable {
+    let wire: String
+    let rows: [OutputTableRow]
+}
 struct RuntimeFixture: Decodable {
     let schemaVersion: Int
     let fixed: String
     let adaptive: String
     let encodingOnly: String
     let history: [RuntimeStep]
+    let outputTable: OutputTableFixture
 }
 func fixture() throws -> RuntimeFixture {
     let url = try XCTUnwrap(Bundle.module.url(forResource: "program-runtime-v1", withExtension: "json", subdirectory: "Fixtures"))
@@ -32,6 +44,18 @@ func bytes(_ hex: String) throws -> Data {
 private func assertCode(_ error: Error, _ expected: String, file: StaticString = #filePath, line: UInt = #line) {
     guard case let LabColorsError.Refused(code, _) = error else { return XCTFail("unexpected error: \(error)", file: file, line: line) }
     XCTAssertEqual(code, expected, file: file, line: line)
+}
+private func assertOutputTable(_ table: [Double], _ rows: [OutputTableRow], file: StaticString = #filePath, line: UInt = #line) throws {
+    XCTAssertEqual(table.count, rows.count * 5, file: file, line: line)
+    guard table.count == rows.count * 5 else { return }
+    var remaining = Dictionary(uniqueKeysWithValues: rows.map { ($0.slot, $0) })
+    for offset in stride(from: 0, to: table.count, by: 5) {
+        let slot = try XCTUnwrap(UInt32(exactly: table[offset]), file: file, line: line)
+        let row = try XCTUnwrap(remaining.removeValue(forKey: slot), file: file, line: line)
+        XCTAssertEqual(Array(table[offset..<offset + 5]), row.table, file: file, line: line)
+        XCTAssertEqual(table[offset + 4].bitPattern, row.opacity.bitPattern, file: file, line: line)
+    }
+    XCTAssertTrue(remaining.isEmpty, file: file, line: line)
 }
 
 // Поля сгенерированных value-records сравниваются целиком: новый metadata-field
@@ -53,6 +77,8 @@ private func reflectedJSON(_ value: Any) throws -> Any {
 // Изменяемое состояние тестового host защищено lock; callback не держит его при повторном входе.
 private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private let lock = NSLock()
+    private let outputSlot: UInt32
+    private let outputOpacity: Double
     private var rejected = false
     private var callbackFailure = false
     private var reentrant = false
@@ -60,6 +86,9 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
     private var sequence: UInt64 = 0
     private var epoch: UInt64?
     private weak var owner: ProgramAttachment?
+    init(outputSlot: UInt32 = 91, outputOpacity: Double = 1) {
+        self.outputSlot = outputSlot; self.outputOpacity = outputOpacity
+    }
     func configure(owner: ProgramAttachment, reentrant: Bool) { lock.lock(); defer { lock.unlock() }; self.owner = owner; self.reentrant = reentrant }
     func reject(_ value: Bool) { lock.lock(); defer { lock.unlock() }; rejected = value }
     func fail(_ value: Bool) { lock.lock(); defer { lock.unlock() }; callbackFailure = value }
@@ -80,9 +109,9 @@ private final class RuntimeHost: ProgramPointSinkHost, @unchecked Sendable {
         switch intent.operation {
         case .setAll, .confirmExact:
             let paint = try XCTUnwrap(intent.point)
-            XCTAssertEqual(paint.slot, 91)
+            XCTAssertEqual(paint.slot, outputSlot)
             XCTAssertEqual(paint.source.count, 3)
-            XCTAssertEqual(paint.opacity, 1)
+            XCTAssertEqual(paint.opacity, outputOpacity)
         case .revokeAll:
             XCTAssertNil(intent.point)
         }
@@ -100,6 +129,7 @@ final class ProgramRuntimeTests: XCTestCase {
         let vectors = try fixture()
         let runtime = try compileProgramWire(bytes: bytes(vectors.adaptive), streamId: 1)
         var held: [ProgramSnapshot] = []
+        var expectedTable: [Double] = []
         for step in vectors.history {
             let snapshot: ProgramSnapshot
             if let reason = step.unknownReason {
@@ -116,14 +146,80 @@ final class ProgramRuntimeTests: XCTestCase {
                 XCTAssertEqual(try snapshot.outputSlot(index: 0), 91)
                 XCTAssertEqual(try snapshot.outputRgb(index: 0), Data(rgb))
                 XCTAssertEqual(try snapshot.outputOpacity(index: 0), 1)
+                expectedTable = [91] + rgb.map { Double($0) } + [1]
             }
+            XCTAssertEqual(try snapshot.copyOutputTable(), expectedTable)
         }
         XCTAssertEqual(try held[0].outputRgb(index: 0), Data([0, 0, 0]))
         var copied = try held[0].outputRgb(index: 0); copied[0] = 200
         XCTAssertEqual(try held[0].outputRgb(index: 0), Data([0, 0, 0]))
+        var copiedTable = try held[0].copyOutputTable(); copiedTable[1] = 200
+        XCTAssertNotEqual(copiedTable, [91, 0, 0, 0, 1])
+        XCTAssertEqual(try held[0].copyOutputTable(), [91, 0, 0, 0, 1])
         XCTAssertThrowsError(try held[0].outputRgb(index: 1)) { assertCode($0, "invalid_output_index") }
         let fixed = try compileProgramWire(bytes: bytes(vectors.fixed), streamId: 2)
         XCTAssertEqual(try fixed.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1).outputRgb(index: 0), Data([20, 20, 20]))
+    }
+
+    func testOutputTablesPreserveExactValuesAndOutliveTheirOwners() throws {
+        let declaration = try fixture().outputTable
+        var retained: [Double] = []
+        do {
+            let runtime = try compileProgramWire(bytes: bytes(declaration.wire), streamId: 1)
+            let waiting = try runtime.updateUnknown(revision: 1, reasonId: 7)
+            XCTAssertEqual(waiting.state(), "waiting")
+            XCTAssertEqual(waiting.outputCount(), 0)
+            XCTAssertEqual(try waiting.copyOutputTable(), [])
+            let first = try runtime.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+            let table: [Double] = try first.copyOutputTable()
+            XCTAssertEqual(first.state(), "ready")
+            XCTAssertEqual(first.outputCount(), UInt64(declaration.rows.count))
+            try assertOutputTable(table, declaration.rows)
+            for index in declaration.rows.indices {
+                let offset = index * 5
+                XCTAssertEqual(table[offset], Double(try first.outputSlot(index: UInt32(index))))
+                XCTAssertEqual(Array(table[offset + 1..<offset + 4]), try first.outputRgb(index: UInt32(index)).map { Double($0) })
+                XCTAssertEqual(table[offset + 4].bitPattern, try first.outputOpacity(index: UInt32(index)).bitPattern)
+            }
+            var changed = try first.copyOutputTable(); changed[0] = -1
+            XCTAssertNotEqual(changed, table)
+            XCTAssertEqual(try first.copyOutputTable(), table)
+            let next = try runtime.updateObserved(revision: 3, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
+            XCTAssertEqual(next.state(), "ready")
+            XCTAssertEqual(try next.copyOutputTable(), table)
+            XCTAssertEqual(try first.copyOutputTable(), table)
+            retained = table
+        }
+        try assertOutputTable(retained, declaration.rows)
+
+        for row in declaration.rows {
+            let host = RuntimeHost(outputSlot: row.slot, outputOpacity: row.opacity)
+            var attachedTable: [Double] = []
+            do {
+                let attachment = try attachProgramWire(bytes: bytes(row.wire), streamId: 1,
+                    outputSlot: row.slot, sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: host)
+                defer { host.revoke(); XCTAssertNoThrow(try attachment.dispose(confirmed: true)) }
+                let waiting = try attachment.updateUnknown(revision: 1, reasonId: 7)
+                XCTAssertEqual(waiting.state(), "waiting")
+                XCTAssertEqual(waiting.outputCount(), 0)
+                XCTAssertEqual(try waiting.copyOutputTable(), [])
+                let first = try attachment.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+                let table: [Double] = try first.copyOutputTable()
+                XCTAssertEqual(first.state(), "ready")
+                XCTAssertEqual(first.outputCount(), 1)
+                try assertOutputTable(table, [row])
+                XCTAssertEqual(table[0], Double(try first.outputSlot(index: 0)))
+                XCTAssertEqual(Array(table[1..<4]), try first.outputRgb(index: 0).map { Double($0) })
+                XCTAssertEqual(table[4].bitPattern, try first.outputOpacity(index: 0).bitPattern)
+                var changed = try first.copyOutputTable(); changed[4] = -1
+                XCTAssertNotEqual(changed, table)
+                XCTAssertEqual(try first.copyOutputTable(), table)
+                let next = try attachment.updateObserved(revision: 3, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
+                XCTAssertEqual(try next.copyOutputTable(), table)
+                attachedTable = table
+            }
+            try assertOutputTable(attachedTable, [row])
+        }
     }
 
     func testRejectedInputsAndThreadMigration() throws {
@@ -151,6 +247,8 @@ final class ProgramRuntimeTests: XCTestCase {
             outputSlot: 91, sinkOutput: 501, presentationRoot: 71, occurrence: 61, host: host)
         host.configure(owner: attachment, reentrant: true)
         let first = try attachment.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+        let firstTable: [Double] = try first.copyOutputTable()
+        XCTAssertEqual(firstTable, [91, 0, 0, 0, 1])
         XCTAssertTrue(first.hasRender())
         let render = try XCTUnwrap(first.render())
         let authority = try attachment.materializationAuthority()
@@ -185,6 +283,7 @@ final class ProgramRuntimeTests: XCTestCase {
             contentIdentity: current.contentIdentity(), bindingEpoch: current.bindingEpoch() ^ 1)) { assertCode($0, "program_materialization_foreign_binding_epoch") }
         let unknown = try attachment.updateUnknown(revision: 3, reasonId: 7)
         XCTAssertEqual(unknown.state(), "stale")
+        XCTAssertEqual(try unknown.copyOutputTable(), [91, 255, 255, 255, 1])
         XCTAssertFalse(unknown.hasRender())
         XCTAssertNil(host.installed())
         XCTAssertThrowsError(try attachment.materializationAuthority()) { assertCode($0, "program_materialization_not_ready") }
@@ -193,11 +292,14 @@ final class ProgramRuntimeTests: XCTestCase {
         let conflict = try attachment.updateObserved(revision: 5, scenarioIds: [1, 2],
             surfaces: Data([255, 255, 255, 0, 0, 0]), surfaceCount: 1)
         XCTAssertEqual(conflict.state(), "failed")
+        XCTAssertEqual(try conflict.copyOutputTable(), [91, 0, 0, 0, 1])
         XCTAssertFalse(conflict.hasRender())
         XCTAssertNil(host.installed())
         XCTAssertEqual(try attachment.updateObserved(revision: 6, scenarioIds: [1],
             surfaces: Data([0, 0, 0]), surfaceCount: 1).state(), "ready")
         host.revoke(); try attachment.dispose(confirmed: true)
+        XCTAssertEqual(firstTable, [91, 0, 0, 0, 1])
+        XCTAssertEqual(try first.copyOutputTable(), firstTable)
         XCTAssertThrowsError(try attachment.updateUnknown(revision: 7, reasonId: 7)) { assertCode($0, "program_attachment_already_disposed") }
         XCTAssertThrowsError(try attachment.dispose(confirmed: true)) { assertCode($0, "program_attachment_already_disposed") }
     }

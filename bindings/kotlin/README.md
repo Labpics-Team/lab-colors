@@ -70,8 +70,11 @@ val wire = ProgramWireBuilderV1().apply {
 compileProgramWire(wire, 1u).use { runtime ->
     runtime.updateObserved(1uL, listOf(1u), byteArrayOf(-1, -1, -1), 1u).use { snapshot ->
         check(snapshot.state() == "ready")
-        val color = snapshot.outputRgb(0u)
-        // Byte хранит биты канала: 255 представлен как -1.
+        val outputs: List<Double> = snapshot.copyOutputTable()
+        for (offset in outputs.indices step 5) {
+            val slot = outputs[offset].toUInt()
+            println("$slot: ${outputs[offset + 1]}, ${outputs[offset + 2]}, ${outputs[offset + 3]}; opacity=${outputs[offset + 4]}")
+        }
     }
 }
 ```
@@ -81,6 +84,24 @@ compileProgramWire(wire, 1u).use { runtime ->
 Builder принадлежит одному вызывающему контексту; отказ не меняет принятую
 декларацию. Сессия допускает перенос между потоками, но одновременная запись
 и повторный вход получают явный отказ, не скрытую очередь.
+
+## Чтение всех выходов
+
+`copyOutputTable()` у `ProgramSnapshot` и `ProgramAttachedSnapshot` возвращает
+независимый `List<Double>` длиной `outputCount() * 5`. Каждая строка содержит
+`[slot, red, green, blue, opacity]` в порядке поштучных геттеров снимка.
+`slot` сохраняет полный диапазон u32; каналы sRGB8 представлены целыми
+`0..255`, opacity — исходным f64 в `0..1`. Все эти значения переносятся без
+округления. `outputSlot`, `outputRgb` и `outputOpacity` доступны для отдельного
+выхода; в `ByteArray` от `outputRgb` канал 255 по-прежнему представлен байтом -1.
+
+Применяйте цвета только при `state() == "ready"`. Таблица `failed` или `stale`
+может хранить последние проверенные значения, которые не удостоверены для
+текущего контекста. Снимок без outputs возвращает пустой список.
+Сохранённый список не зависит от следующих обновлений и остаётся доступен
+после `dispose` и `close()` native-объектов. Если Rust не может выделить таблицу,
+метод бросает `LabColorsException.Refused` с `code: "program_resource_exhausted"`
+и `operation: "copyOutputTable"`; снимок остаётся прежним.
 
 ## Привязка к интерфейсу и ресурсы
 

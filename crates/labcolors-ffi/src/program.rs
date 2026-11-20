@@ -190,6 +190,34 @@ fn output(
         .ok_or_else(|| LabColorsError::new("invalid_output_index", "readProgramOutput"))
 }
 
+fn output_table_storage(output_count: usize) -> Result<Vec<f64>, LabColorsError> {
+    let exhausted = || {
+        runtime_error(
+            core::ProgramRuntimeErrorV1::ResourceExhausted,
+            "copyOutputTable",
+        )
+    };
+    let length = output_count.checked_mul(5).ok_or_else(exhausted)?;
+    let mut table = Vec::new();
+    table.try_reserve_exact(length).map_err(|_| exhausted())?;
+    Ok(table)
+}
+
+fn copy_snapshot_outputs(snapshot: &core::ProgramSnapshotV1) -> Result<Vec<f64>, LabColorsError> {
+    let mut table = output_table_storage(snapshot.outputs().len())?;
+    for output in snapshot.outputs() {
+        let [red, green, blue] = output.source().bytes();
+        table.extend_from_slice(&[
+            f64::from(output.slot()),
+            f64::from(red),
+            f64::from(green),
+            f64::from(blue),
+            output.opacity(),
+        ]);
+    }
+    Ok(table)
+}
+
 #[uniffi::export]
 impl ProgramSnapshot {
     pub fn state(&self) -> String {
@@ -197,6 +225,11 @@ impl ProgramSnapshot {
     }
     pub fn output_count(&self) -> u64 {
         self.inner.outputs().len() as u64
+    }
+    /// Независимая таблица `[slot, red, green, blue, opacity]` в порядке
+    /// поштучных геттеров. Целые поля и исходная f64 opacity сохраняются точно.
+    pub fn copy_output_table(&self) -> Result<Vec<f64>, LabColorsError> {
+        copy_snapshot_outputs(&self.inner)
     }
     pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> {
         Ok(output(&self.inner, index)?.slot())
@@ -424,6 +457,11 @@ impl ProgramAttachedSnapshot {
     pub fn output_count(&self) -> u64 {
         self.inner.snapshot().outputs().len() as u64
     }
+    /// Независимая таблица `[slot, red, green, blue, opacity]` в порядке
+    /// поштучных геттеров. Целые поля и исходная f64 opacity сохраняются точно.
+    pub fn copy_output_table(&self) -> Result<Vec<f64>, LabColorsError> {
+        copy_snapshot_outputs(self.inner.snapshot())
+    }
     pub fn output_slot(&self, index: u32) -> Result<u32, LabColorsError> {
         Ok(output(self.inner.snapshot(), index)?.slot())
     }
@@ -562,5 +600,26 @@ impl AttachedMaterializationAuthority {
     }
     pub fn terminal_composite_rgb(&self) -> Vec<u8> {
         self.inner.terminal_composite().bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod output_table_tests {
+    use super::*;
+
+    #[test]
+    fn output_table_allocation_refuses_element_and_byte_overflow() {
+        let byte_overflow = (isize::MAX as usize / std::mem::size_of::<f64>()) / 5 + 1;
+        for count in [usize::MAX, byte_overflow] {
+            let LabColorsError::Refused { code, operation } =
+                output_table_storage(count).expect_err("impossible table must be refused");
+            assert_eq!(code, "program_resource_exhausted");
+            assert_eq!(operation, "copyOutputTable");
+        }
+        assert!(
+            output_table_storage(0)
+                .expect("empty table requires no allocation")
+                .is_empty()
+        );
     }
 }
