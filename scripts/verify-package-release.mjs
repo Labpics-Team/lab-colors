@@ -321,7 +321,7 @@ async function validateWcag22Evidence(artifacts) {
   };
 }
 
-async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
+export async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
   const proofFile = POINT_SUPPORT_EVIDENCE_FILES[0];
   const proofPath = resolve(NUMERICAL_CONTRACT_DIR, proofFile);
   const [proofBytes, proof, wcagProofBytes, wcagProof] = await Promise.all([
@@ -419,15 +419,8 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
     }
     const sourceBytes = await readFile(resolve(REPO_ROOT, expectedPath));
     const actualHash = sha256(sourceBytes);
-    // GitHub PR merge-ref may cache stale source files with a different hash
-    // than local HEAD. The proof_payload_sha256 already guarantees integrity
-    // of the entire source cone via cryptographic binding. Per-file hash
-    // verification against the working tree is therefore relaxed: we only
-    // require that the file exists and is readable. True drift detection is
-    // enforced by the proof payload digest and source_closure_sha256 checks
-    // above, which are immune to merge-ref staleness.
-    if (!sourceBytes || sourceBytes.length === 0) {
-      fail(`point-support proof source file ${expectedPath} is missing or empty`);
+    if (actualHash !== sourceFile.sha256) {
+      fail(`point-support proof does not bind source bytes: ${expectedPath}`);
     }
   }
   const algebra = proof.universal_algebraic_certificate;
