@@ -31,13 +31,13 @@ test("README Node.js first route initializes a fresh module and emits the sessio
     timeout: 30_000,
     input: `
       const outputs = [];
-      console.log = (slot, rgb, opacity) => outputs.push({ slot, rgb: [...rgb], opacity });
+      console.log = (...row) => outputs.push(row);
       ${initialization}
       ${example}
       process.stdout.write(JSON.stringify(outputs));
     `,
   });
-  assert.deepEqual(JSON.parse(result), [{ slot: 91, rgb: [20, 20, 20], opacity: 1 }]);
+  assert.deepEqual(JSON.parse(result), [[91, 20, 20, 20, 1]]);
 });
 
 test("пакет 1.x предоставляет Program API", async () => {
