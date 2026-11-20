@@ -1845,14 +1845,39 @@ impl ActiveRefinementV1 {
 
     fn finish(mut self) -> Result<EquitablePartitionV1, ProgramCompileError> {
         let mut cells = core::mem::take(&mut self.cells);
+        let mut rank_to_cell = core::mem::take(&mut self.cell_of);
         drop(self);
-        ordering::sort_by(&mut cells, |left, right| left.rank.cmp(&right.rank));
+        // Ранги — начала непересекающихся интервалов, покрывающих все вершины.
+        // Карта vertex -> cell больше не нужна: её позиции в началах интервалов
+        // связывают rank -> cell. Переход на длину клетки посещает только эти
+        // позиции и восстанавливает прежний порядок за один шаг на клетку.
+        for (index, cell) in cells.iter().enumerate() {
+            *rank_to_cell
+                .get_mut(cell.rank)
+                .ok_or(ProgramCompileError::InternalInvariant)? = index;
+        }
         let mut ordered = Vec::new();
         ordered
             .try_reserve_exact(cells.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for cell in cells {
-            ordered.push(cell.vertices);
+        let mut rank = 0;
+        for _ in 0..cells.len() {
+            let index = *rank_to_cell
+                .get(rank)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            let cell = cells
+                .get_mut(index)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if cell.rank != rank || cell.vertices.is_empty() {
+                return Err(ProgramCompileError::InternalInvariant);
+            }
+            rank = rank
+                .checked_add(cell.vertices.len())
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            ordered.push(core::mem::take(&mut cell.vertices));
+        }
+        if rank != rank_to_cell.len() {
+            return Err(ProgramCompileError::InternalInvariant);
         }
         Ok(EquitablePartitionV1(PartitionV1 { cells: ordered }))
     }
@@ -4193,6 +4218,99 @@ mod tests {
             canonical_search_impl(&graph, Some(254)).err(),
             Some(ProgramCompileError::ResourceExhausted),
         );
+        Ok(())
+    }
+
+    #[test]
+    fn interval_rank_finish_matches_comparison_order_without_extra_scratch()
+    -> Result<(), ProgramCompileError> {
+        fn check(cells: &[Vec<usize>]) -> Result<(), ProgramCompileError> {
+            let vertex_count = cells.iter().map(Vec::len).sum();
+            for permutation in 0..3 {
+                let mut state = ActiveRefinementV1::new(
+                    PartitionV1 {
+                        cells: cells.to_vec(),
+                    },
+                    vertex_count,
+                )?;
+                match permutation {
+                    0 => {}
+                    1 => state.cells.reverse(),
+                    _ if !state.cells.is_empty() => {
+                        let distance = state.cells.len() / 2;
+                        state.cells.rotate_left(distance);
+                    }
+                    _ => {}
+                }
+                // Между началами интервалов разрешён любой старый vertex map.
+                state.cell_of.fill(usize::MAX);
+                let mut expected = state.cells.iter().collect::<Vec<_>>();
+                expected.sort_unstable_by_key(|cell| cell.rank);
+                let expected = PartitionV1 {
+                    cells: expected
+                        .into_iter()
+                        .map(|cell| cell.vertices.clone())
+                        .collect(),
+                };
+                let (actual, events) =
+                    crate::test_support::measured_allocator_events(|| state.finish());
+                let actual = actual?;
+                assert_eq!(actual.0.cells, expected.cells);
+                assert_eq!(
+                    partition_cells(&actual.0, vertex_count)?,
+                    partition_cells(&expected, vertex_count)?,
+                );
+                assert_eq!(events.alloc, usize::from(!cells.is_empty()));
+                assert_eq!(events.realloc, 0);
+            }
+            Ok(())
+        }
+
+        check(&[])?;
+        // Все разбиения линейного интервала до девяти вершин: разные длины,
+        // singleton и смешанные клетки. Порядок членов также не нормализуется.
+        for vertex_count in 1..=9 {
+            for cuts in 0..(1_usize << (vertex_count - 1)) {
+                let mut cells = Vec::new();
+                let mut start = 0;
+                for end in 1..=vertex_count {
+                    if end == vertex_count || cuts & (1 << (end - 1)) != 0 {
+                        cells.push((start..end).rev().collect());
+                        start = end;
+                    }
+                }
+                check(&cells)?;
+            }
+        }
+        check(&(0..4096).map(|vertex| vec![vertex]).collect::<Vec<_>>())?;
+        check(&[(0..4096).rev().collect()])?;
+        Ok(())
+    }
+
+    #[test]
+    fn interval_rank_finish_rejects_incomplete_or_overlapping_intervals()
+    -> Result<(), ProgramCompileError> {
+        for mutation in 0..6 {
+            let mut state = ActiveRefinementV1::new(
+                PartitionV1 {
+                    cells: vec![vec![0, 1], vec![2], vec![3, 4]],
+                },
+                5,
+            )?;
+            match mutation {
+                0 => state.cells[1].rank = 0,
+                1 => state.cells[1].rank = 1,
+                2 => state.cells[1].rank = usize::MAX,
+                3 => state.cells[1].vertices.clear(),
+                4 => state.cell_of.truncate(4),
+                _ => state.cell_of.push(usize::MAX),
+            }
+            assert_eq!(
+                state.finish().err(),
+                Some(ProgramCompileError::InternalInvariant),
+                "mutation {mutation}",
+            );
+        }
         Ok(())
     }
 
