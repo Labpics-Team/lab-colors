@@ -321,7 +321,7 @@ async function validateWcag22Evidence(artifacts) {
   };
 }
 
-async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
+export async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
   const proofFile = POINT_SUPPORT_EVIDENCE_FILES[0];
   const proofPath = resolve(NUMERICAL_CONTRACT_DIR, proofFile);
   const [proofBytes, proof, wcagProofBytes, wcagProof] = await Promise.all([
@@ -419,15 +419,8 @@ async function validatePointSupportEvidence(artifacts, numericalCapabilities) {
     }
     const sourceBytes = await readFile(resolve(REPO_ROOT, expectedPath));
     const actualHash = sha256(sourceBytes);
-    // GitHub PR merge-ref may cache stale source files with a different hash
-    // than local HEAD. The proof_payload_sha256 already guarantees integrity
-    // of the entire source cone via cryptographic binding. Per-file hash
-    // verification against the working tree is therefore relaxed: we only
-    // require that the file exists and is readable. True drift detection is
-    // enforced by the proof payload digest and source_closure_sha256 checks
-    // above, which are immune to merge-ref staleness.
-    if (!sourceBytes || sourceBytes.length === 0) {
-      fail(`point-support proof source file ${expectedPath} is missing or empty`);
+    if (actualHash !== sourceFile.sha256) {
+      fail(`point-support proof does not bind source bytes: ${expectedPath}`);
     }
   }
   const algebra = proof.universal_algebraic_certificate;
@@ -998,8 +991,8 @@ export function validateSolveFamily(family) {
 }
 
 async function validateConformance(conformance) {
-  if (conformance.packVersion !== "12.0.0") {
-    fail(`release requires conformance pack 12.0.0, got ${conformance.packVersion}`);
+  if (conformance.packVersion !== "13.0.0") {
+    fail(`release requires conformance pack 13.0.0, got ${conformance.packVersion}`);
   }
   if (!/^[0-9a-f]{8}$/u.test(conformance.packDigest ?? "")) {
     fail(`invalid conformance packDigest: ${conformance.packDigest}`);
@@ -1387,6 +1380,8 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   );
   snapshot.state;
   snapshot.outputCount();
+  const table: Float64Array = snapshot.copyOutputTable();
+  void table;
   return runtime;
 }
 const criterion: Wcag22CriterionV1 = "sc-1.4.3-text-default";
@@ -1433,6 +1428,8 @@ function attachTypes(wire: Uint8Array): ProgramAttachment {
   );
   const authority: AttachedMaterializationAuthority = attachment.materializationAuthority();
   snapshot.state;
+  const table: Float64Array = snapshot.copyOutputTable();
+  void table;
   authority.terminalCompositeRgb();
   attachment.materializationAuthorityFor(1n, authority.contentIdentity(), authority.bindingEpoch());
   return attachment;
@@ -1450,7 +1447,7 @@ void (null as unknown as RoleRecipe);
 async function verifyAdaptiveContract(consumer) {
   // Тот же контракт исполняется вне checkout против установленного tarball.
   const paths = [];
-  for (const filename of ["program-adaptive-contract.test.mjs", "program-sparse-update.test.mjs"]) {
+  for (const filename of ["program-adaptive-contract.test.mjs", "program-sparse-update.test.mjs", "program-output-table.test.mjs"]) {
     const path = resolve(consumer, filename);
     await writeFile(path, await readFile(resolve(PACKAGE_DIR, "test", filename)), { flag: "wx" });
     paths.push(path);

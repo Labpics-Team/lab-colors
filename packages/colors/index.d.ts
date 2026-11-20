@@ -82,6 +82,7 @@ export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
+  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;

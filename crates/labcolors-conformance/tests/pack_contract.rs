@@ -1,4 +1,4 @@
-//! Pack 12 terminal C7c contract: recipe-ladder family and floorOverride
+//! Pack 13 terminal C7c contract: recipe-ladder family and floorOverride
 //! projection are absent; four permanent canonical families remain byte-pinned.
 
 use labcolors_conformance::{FAMILY_FILES, MANIFEST_FILE, PACK_VERSION};
@@ -28,7 +28,7 @@ const CANONICAL_FAMILY_SHA256: [(&str, &str); 4] = [
     ),
     (
         "wcag22.json",
-        "7fdcc4006dad79f246ed0a196bdafc58595e1d488bb3f123204034924f256d9f",
+        "0c1a781c3169d5c7c4097e78e55da56fa9b71c664e12ffff543c8cb5a4021b72",
     ),
 ];
 fn vectors_dir() -> PathBuf {
@@ -44,8 +44,8 @@ fn read(path: impl AsRef<Path>) -> Vec<u8> {
 }
 
 #[test]
-fn pack_v12_family_inventory_and_bytes_are_exact() {
-    assert_eq!(PACK_VERSION, "12.0.0");
+fn pack_v13_family_inventory_and_bytes_are_exact() {
+    assert_eq!(PACK_VERSION, "13.0.0");
     assert_eq!(
         FAMILY_FILES.as_slice(),
         ["contrasts.json", "alpha.json", "solve.json", "wcag22.json"].as_slice()
@@ -55,7 +55,7 @@ fn pack_v12_family_inventory_and_bytes_are_exact() {
         assert_eq!(
             sha256::digest(&read(dir.join(name))).to_hex(),
             expected,
-            "pack-12 bytes drifted: {name}"
+            "pack-13 bytes drifted: {name}"
         );
     }
     for removed in [
@@ -71,7 +71,7 @@ fn pack_v12_family_inventory_and_bytes_are_exact() {
     }
     let manifest: serde_json::Value =
         serde_json::from_slice(&read(dir.join(MANIFEST_FILE))).expect("valid manifest");
-    assert_eq!(manifest["packVersion"], "12.0.0");
+    assert_eq!(manifest["packVersion"], "13.0.0");
     assert_eq!(manifest["counts"]["total"], 61);
     assert!(manifest["counts"].get("ladders").is_none());
 }

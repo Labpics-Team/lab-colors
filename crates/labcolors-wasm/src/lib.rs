@@ -133,6 +133,7 @@ export function bindingFailure(kind, reason) {
 }
 
 const OutputRgbArray = Uint8Array;
+const OutputTableArray = Float64Array;
 
 export function copyOutputRgb(red, green, blue) {
   const bytes = new OutputRgbArray(3);
@@ -140,6 +141,10 @@ export function copyOutputRgb(red, green, blue) {
   bytes[1] = green;
   bytes[2] = blue;
   return bytes;
+}
+
+export function copyOutputTable(values) {
+  return new OutputTableArray(values);
 }
 
 export function certificateError(code, operation) {
@@ -202,6 +207,9 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = copyOutputRgb)]
     fn copy_output_rgb(red: u8, green: u8, blue: u8) -> Result<js_sys::Uint8Array, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = copyOutputTable)]
+    fn copy_output_table_to_js(values: &[f64]) -> Result<js_sys::Float64Array, JsValue>;
 
     #[wasm_bindgen(js_name = certificateError)]
     fn certificate_error(code: &str, operation: &str) -> js_sys::Error;
@@ -269,11 +277,42 @@ fn output_index_error() -> JsValue {
     .into()
 }
 
+fn copy_snapshot_outputs(
+    outputs: &[labcolors_core::program_wire::ProgramPaintOutputV1],
+) -> Result<js_sys::Float64Array, JsValue> {
+    let exhausted = || {
+        to_program_js_error(
+            labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+            ProgramOperation::CopyOutputTable,
+        )
+    };
+    let length = outputs.len().checked_mul(5).ok_or_else(exhausted)?;
+    let mut table = Vec::new();
+    table.try_reserve_exact(length).map_err(|_| exhausted())?;
+    for output in outputs {
+        let [red, green, blue] = output.source().bytes();
+        table.extend_from_slice(&[
+            f64::from(output.slot()),
+            f64::from(red),
+            f64::from(green),
+            f64::from(blue),
+            output.opacity(),
+        ]);
+    }
+    // JS заимствует таблицу только на время синхронной копии. Rust сохраняет
+    // владение и освобождает её даже при отказе JS, до проекции ошибки.
+    // u32/u8 точно представимы в f64; opacity переносится без округления.
+    let copied = copy_output_table_to_js(&table);
+    drop(table);
+    copied.map_err(|_| exhausted())
+}
+
 #[derive(Clone, Copy)]
 enum ProgramOperation {
     CompileProgramWire,
     UpdateObserved,
     UpdateUnknown,
+    CopyOutputTable,
     AttachProgramWire,
     AttachmentUpdateObserved,
     AttachmentUpdateUnknown,
@@ -287,6 +326,7 @@ impl ProgramOperation {
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
             Self::UpdateUnknown => "updateUnknown",
+            Self::CopyOutputTable => "copyOutputTable",
             Self::AttachProgramWire => "attachProgramWire",
             Self::AttachmentUpdateObserved => "attachmentUpdateObserved",
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
@@ -532,6 +572,13 @@ impl ProgramSnapshot {
     #[wasm_bindgen(js_name = outputCount)]
     pub fn output_count(&self) -> usize {
         self.inner.outputs().len()
+    }
+
+    /// Независимая JS-копия outputs: строки `[slot, red, green, blue, opacity]`
+    /// в порядке поштучных геттеров. Состояние snapshot не меняется.
+    #[wasm_bindgen(js_name = copyOutputTable)]
+    pub fn copy_output_table(&self) -> Result<js_sys::Float64Array, JsValue> {
+        copy_snapshot_outputs(self.inner.outputs())
     }
 
     #[wasm_bindgen(js_name = outputSlot)]
@@ -997,6 +1044,13 @@ impl ProgramAttachedSnapshot {
         self.inner.snapshot().outputs().len()
     }
 
+    /// Независимая JS-копия outputs: строки `[slot, red, green, blue, opacity]`
+    /// в порядке поштучных геттеров. Состояние snapshot не меняется.
+    #[wasm_bindgen(js_name = copyOutputTable)]
+    pub fn copy_output_table(&self) -> Result<js_sys::Float64Array, JsValue> {
+        copy_snapshot_outputs(self.inner.snapshot().outputs())
+    }
+
     #[wasm_bindgen(js_name = outputSlot)]
     pub fn output_slot(
         &self,
@@ -1338,6 +1392,11 @@ mod browser_tests {
             (
                 E::ResourceExhausted,
                 ProgramOperation::UpdateObserved,
+                "program_resource_exhausted",
+            ),
+            (
+                E::ResourceExhausted,
+                ProgramOperation::CopyOutputTable,
                 "program_resource_exhausted",
             ),
             (

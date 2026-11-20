@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -970,6 +971,64 @@ test("release command wrapper terminates a child that hangs past its bound", asy
     );
     assert.ok(existsSync(marker), "anti-vacuum: the hanging fixture never started");
     assert.ok(Date.now() - startedAt < 8_000, "bounded child exceeded the test deadline");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test("point-support release validator rejects one changed source byte", async () => {
+  const fixture = mkdtempSync(join(tmpdir(), "labcolors-point-source-binding-"));
+  try {
+    const scripts = copyPrepackFixture(fixture);
+    for (const file of ["verify-package-release.mjs", "point-support-release-contract.cjs"]) {
+      copyFileSync(join(root, "scripts", file), join(scripts, file));
+    }
+    const { default: { POINT_SUPPORT_SOURCE_PATHS } } = await import(
+      pathToFileURL(join(scripts, "point-support-release-contract.cjs"))
+    );
+    const { POINT_SUPPORT_EVIDENCE_FILES } = await import(
+      pathToFileURL(join(scripts, "release-evidence.mjs"))
+    );
+    const proofFile = POINT_SUPPORT_EVIDENCE_FILES[0];
+    const proofPath = join("crates", "labcolors-core", "contracts", proofFile);
+    for (const path of [...POINT_SUPPORT_SOURCE_PATHS, proofPath]) {
+      mkdirSync(dirname(join(fixture, path)), { recursive: true });
+      copyFileSync(join(root, path), join(fixture, path));
+    }
+    const proofBytes = readFileSync(join(fixture, proofPath));
+    const artifact = {
+      path: `evidence/${proofFile}`,
+      bytes: proofBytes.length,
+      sha256: createHash("sha256").update(proofBytes).digest("hex"),
+    };
+    const { numericalCapabilities } = JSON.parse(
+      readFileSync(join(root, "conformance", "vectors", "manifest.json"), "utf8"),
+    );
+    const { validatePointSupportEvidence } = await import(
+      pathToFileURL(join(scripts, "verify-package-release.mjs"))
+    );
+    const validate = () => validatePointSupportEvidence([artifact], numericalCapabilities);
+    const healthy = await validate();
+    assert.equal(healthy.proofSha256, artifact.sha256);
+
+    const sourcePath = "crates/labcolors-core/src/composition.rs";
+    assert.ok(POINT_SUPPORT_SOURCE_PATHS.includes(sourcePath));
+    const original = readFileSync(join(fixture, sourcePath));
+    const changed = Buffer.from(original);
+    const offset = original.indexOf(0x20);
+    assert.ok(offset >= 0, "the source fixture must contain a space byte");
+    changed[offset] = 0x09;
+    assert.equal(changed.length, original.length);
+    assert.equal(changed.reduce((count, byte, index) => count + (byte !== original[index]), 0), 1);
+    try {
+      writeFileSync(join(fixture, sourcePath), changed);
+      await assert.rejects(validate(), {
+        message: `point-support proof does not bind source bytes: ${sourcePath}`,
+      });
+    } finally {
+      writeFileSync(join(fixture, sourcePath), original);
+    }
+    assert.deepEqual(await validate(), healthy);
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

@@ -419,7 +419,7 @@ def run_consumer(consumer: Path, expected_page: int) -> None:
     verify_artifact(consumer)
     environment = dict(os.environ)
     expected_tests = {
-        "debug": {"runtimeHistoryAndThreadMigration", "authoringIsCanonicalAndTransactional", "hostFailureReentryRevocationAndRecovery",
+        "debug": {"runtimeHistoryAndThreadMigration", "outputTablesPreserveExactValuesAndOutliveTheirOwners", "authoringIsCanonicalAndTransactional", "hostFailureReentryRevocationAndRecovery",
                   "numericalVectors", "sourceIdentityAndUntrustedEnvelope", "compiledApiIncludesEveryNativeAndAuthoringOperation",
                   "allCapabilityFieldsMatchTheCanonicalManifest", "applicationUsesTheRequestedMemoryPageSize"},
         "release": {"optimizedApplicationExecutesTheInstalledNativePackage", "applicationUsesTheRequestedMemoryPageSize"},

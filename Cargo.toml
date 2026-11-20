@@ -23,14 +23,12 @@ proptest = "1"
 [patch.crates-io]
 askama = { git = "https://github.com/askama-rs/askama", rev = "3863808cf594054f7644979ed92caaafc878f378" }
 
-# Release profile tuned for a small WASM bundle. `opt-level = "z"` and LTO trade
-# a little speed for size; `panic = "abort"` removes the unwinding tables and
-# the formatting machinery a panic would pull in — there are no panic pages in
-# release, errors are returned as structured values (see the wasm crate). This
-# applies to every crate, but only the WASM bundle is size-sensitive; the native
-# crates are unaffected in any way that matters.
+# Release оптимизирует выполнение общего compiler/runtime пути. Размер WASM
+# отдельно сокращает закреплённый Binaryen -Oz и ограничивает измеренный budget.
+# Выбор opt-level проверяется полным compile/update/readout циклом, включая
+# холодный запуск и память, а не одной численной операцией.
 [profile.release]
-opt-level = "z"
+opt-level = 2
 lto = "fat"
 codegen-units = 1
 panic = "abort"

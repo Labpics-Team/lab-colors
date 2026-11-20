@@ -11,8 +11,22 @@ use crate::appearance::{
     AppearanceBindings, AppearanceGraphSpec, CompositionProfileV1, EncodedPointPaintValueV1,
     ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
     PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceReplayErrorV1,
-    PointOccurrenceAbsenceStepV1, SurfaceId, SurfaceInputPortId, SurfaceSpec,
+    PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1, SurfaceId, SurfaceInputPortId,
+    SurfaceSpec,
 };
+
+#[test]
+fn causal_summary_does_not_copy_a_full_certificate_step() {
+    // Каждый getter отчёта переносит эту сводку. Полные сертификаты уже
+    // принадлежат replay arena и не должны копироваться вместе с проекцией.
+    assert!(
+        size_of::<PointOccurrenceAbsenceSummaryV1>() < size_of::<PointOccurrenceAbsenceStepV1>()
+    );
+    assert_eq!(
+        PointOccurrenceAbsenceSummaryV1::from_nonempty_steps(&[]),
+        None
+    );
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReplaySummary {

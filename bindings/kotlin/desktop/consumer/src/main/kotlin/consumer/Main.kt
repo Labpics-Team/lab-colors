@@ -8,7 +8,9 @@ fun main() {
     // Only the installed Maven package is on this application's classpath.
     // No jna.library.path, Rust checkout, generated source or local native library.
     val held = mutableListOf<ProgramSnapshot>()
+    val tables = mutableListOf<List<Double>>()
     compileProgramWire(adaptiveWire.hex(), UInt.MAX_VALUE).use { runtime ->
+        var expectedTable: List<Double> = emptyList()
         try {
             for (row in history) {
                 val snapshot = if (row.reason != null) runtime.updateUnknown(row.revision, row.reason)
@@ -20,7 +22,11 @@ fun main() {
                     check(snapshot.outputSlot(0u) == 91u)
                     check(snapshot.outputRgb(0u).contentEquals(it))
                     check(snapshot.outputOpacity(0u) == 1.0)
+                    expectedTable = listOf(91.0) + it.map { channel -> (channel.toInt() and 255).toDouble() } + 1.0
                 }
+                val table: List<Double> = snapshot.copyOutputTable()
+                check(table == expectedTable)
+                tables.add(table)
             }
             val first = held.first()
             first.outputRgb(0u)[0] = 123
@@ -35,6 +41,7 @@ fun main() {
             held.forEach { it.close() }
         }
     }
+    check(tables.first() == listOf(91.0, 0.0, 0.0, 0.0, 1.0))
     val declared = ProgramWireBuilderV1().apply {
         source(11u, byteArrayOf(20, 20, 20)); fixedTarget(21u, 11u)
         surfaceInputPort(31u); solidPaint(41u, 21u); inputSurface(51u, 31u)
@@ -49,5 +56,5 @@ fun main() {
     val afterClose = runCatching { closed.updateUnknown(2uL, 7u) }
     afterClose.getOrNull()?.close()
     check(afterClose.exceptionOrNull() is IllegalStateException) { "disposed Program was usable" }
-    println("Installed desktop Program: history, RGB, opacity, retained snapshot, builder and disposal passed")
+    println("Installed desktop Program: history, RGB, opacity, owned output tables, retained snapshot, builder and disposal passed")
 }

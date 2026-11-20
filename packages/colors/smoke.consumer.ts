@@ -2,6 +2,7 @@ import init, {
   MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
+  ProgramAttachedSnapshot,
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
@@ -34,6 +35,8 @@ async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<Progr
   );
   snapshot.state;
   snapshot.outputCount();
+  const table: Float64Array = snapshot.copyOutputTable();
+  void table;
   if (snapshot.outputCount() > 0) {
     snapshot.outputSlot(0);
     snapshot.outputRgb(0);
@@ -132,6 +135,16 @@ function scalarInputTypes(
 }
 
 void scalarInputTypes;
+
+function outputTableTypes(snapshot: ProgramSnapshot | ProgramAttachedSnapshot): Float64Array {
+  const table: Float64Array = snapshot.copyOutputTable();
+  // @ts-expect-error output table retains f64 opacity and u32 slots.
+  const bytes: Uint8Array = snapshot.copyOutputTable();
+  void bytes;
+  return table;
+}
+
+void outputTableTypes;
 
 function declaredCleanSetInputTypes(builder: ProgramWireBuilderV1): void {
   const chained: ProgramWireBuilderV1 = builder.declaredSrgb8CleanSet(true, 81, 71, 61);

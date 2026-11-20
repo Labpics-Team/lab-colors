@@ -93,11 +93,12 @@ try {
   );
   try {
     if (snapshot.state === "ready") {
-      for (let index = 0; index < snapshot.outputCount(); index += 1) {
+      const outputs = snapshot.copyOutputTable();
+      for (let row = 0; row < outputs.length; row += 5) {
         console.log(
-          snapshot.outputSlot(index),
-          snapshot.outputRgb(index),
-          snapshot.outputOpacity(index),
+          outputs[row],
+          outputs[row + 1], outputs[row + 2], outputs[row + 3],
+          outputs[row + 4],
         );
       }
     }
@@ -110,6 +111,33 @@ try {
 ```
 
 Канонические `LCPW` v1 bytes создаются `ProgramWireBuilderV1` или другим реализационно-независимым энкодером того же контракта.
+
+## Чтение outputs
+
+Для чтения всех цветов используйте `snapshot.copyOutputTable()` у
+`ProgramSnapshot` и `ProgramAttachedSnapshot`. Один вызов возвращает
+`Float64Array` длиной `outputCount() * 5`; каждая строка содержит:
+
+| Смещение в строке | Значение |
+| --- | --- |
+| 0 | Непрозрачный клиентский `slot`, целое u32 |
+| 1, 2, 3 | Красный, зелёный и синий канал sRGB8, целые `0..255` |
+| 4 | Straight opacity, исходное f64 в `0..1` |
+
+Строка `i` совпадает с `outputSlot(i)`, `outputRgb(i)` и `outputOpacity(i)`.
+Слоты и каналы точно представимы в f64, opacity копируется без округления.
+Каждый вызов создаёт независимый JS-буфер: его изменение не меняет snapshot,
+другую таблицу или runtime. Таблица остаётся доступна после следующего update
+и `free()` снимка или владельца. Поштучные геттеры доступны, когда нужен один
+output.
+
+Перед применением цветов проверяйте `snapshot.state === "ready"`.
+`failed` и `stale` могут содержать последние проверенные значения, которые
+не удостоверены для текущего контекста; таблица сохраняет эту же семантику.
+Снимок без outputs возвращает пустой `Float64Array`.
+Если не удаётся выделить Rust-таблицу или создать её JS-копию, метод бросает ошибку
+`{ code: "program_resource_exhausted", operation: "copyOutputTable" }`,
+распознаваемую `isProgramError`. Снимок при отказе не меняется.
 
 ## Явная конвенция cleanliness
 

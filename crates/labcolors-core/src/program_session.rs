@@ -2976,14 +2976,15 @@ impl ProgramPresentationCacheV1 {
                 steps,
             )
             .map_err(|_| ())?;
+        let summary = replay.summary();
         if replay.release() != presentation.absence_release
-            || replay.target() != presentation.target
-            || replay.root() != presentation.terminal
+            || summary.target() != presentation.target
+            || summary.root() != presentation.terminal
             || replay.steps().len() != presentation.path.len()
         {
             return Err(());
         }
-        let domain = replay.domain();
+        let domain = summary.domain();
         let end = start.checked_add(replay.steps().len()).ok_or(())?;
         let span = NonEmptyReplaySpanV1::from_bounds(start, end).ok_or(())?;
         self.domains[presentation_ordinal] = Some(domain);

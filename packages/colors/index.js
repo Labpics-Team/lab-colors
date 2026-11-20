@@ -402,6 +402,7 @@ export function isProgramError(error) {
     if (operation === "updateObserved" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }
+    if (operation === "copyOutputTable") return code === "program_resource_exhausted";
     if (operation === "attachProgramWire") return ATTACHMENT_ERROR_CODES.has(code);
     if (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown") {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);

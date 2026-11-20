@@ -13,6 +13,9 @@ fn wire(name: &str) -> Vec<u8> {
     let hex = fixtures[name]
         .as_str()
         .expect("named wire fixture must be a hex string");
+    wire_bytes(hex)
+}
+fn wire_bytes(hex: &str) -> Vec<u8> {
     assert_eq!(hex.len() % 2, 0, "wire fixture must contain whole bytes");
     (0..hex.len())
         .step_by(2)
@@ -50,6 +53,12 @@ fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult
     assert_eq!(first.output_rgb(0)?, [0; 3]);
     assert_eq!(first.output_slot(0)?, 91);
     assert_eq!(first.output_opacity(0)?, 1.0);
+    let first_table = first.copy_output_table()?;
+    assert_eq!(first_table, [91.0, 0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        second.copy_output_table()?,
+        [91.0, 255.0, 255.0, 255.0, 1.0]
+    );
     expect_error(first.output_rgb(1), "invalid_output_index");
     for row in fixtures()["history"]
         .as_array()
@@ -90,7 +99,170 @@ fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult
             let expected: [u8; 3] = serde_json::from_value(rgb.clone())?;
             assert_eq!(snapshot.output_rgb(0)?, expected);
         }
+        let rgb = snapshot.output_rgb(0)?;
+        assert_eq!(
+            snapshot.copy_output_table()?,
+            [
+                91.0,
+                f64::from(rgb[0]),
+                f64::from(rgb[1]),
+                f64::from(rgb[2]),
+                1.0
+            ]
+        );
     }
+    drop(runtime);
+    assert_eq!(first.copy_output_table()?, first_table);
+    drop(first);
+    assert_eq!(first_table, [91.0, 0.0, 0.0, 0.0, 1.0]);
+    Ok(())
+}
+
+fn expected_output_row(row: &serde_json::Value) -> [f64; 5] {
+    let slot = u32::try_from(row["slot"].as_u64().expect("fixture slot is unsigned"))
+        .expect("fixture slot fits u32");
+    let [red, green, blue]: [u8; 3] =
+        serde_json::from_value(row["rgb"].clone()).expect("fixture RGB is three bytes");
+    [
+        f64::from(slot),
+        f64::from(red),
+        f64::from(green),
+        f64::from(blue),
+        row["opacity"].as_f64().expect("fixture opacity is f64"),
+    ]
+}
+
+struct AcceptOutput;
+impl ProgramPointSinkHost for AcceptOutput {
+    fn try_install(
+        &self,
+        _: ProgramPointSinkIntent,
+    ) -> Result<bool, ProgramPointSinkCallbackError> {
+        Ok(true)
+    }
+}
+
+#[test]
+fn output_tables_preserve_exact_fields_and_independent_native_ownership() -> TestResult {
+    let fixtures = fixtures();
+    let declaration = &fixtures["outputTable"];
+    let rows = declaration["rows"].as_array().expect("output fixture rows");
+    let runtime = compile_program_wire(
+        wire_bytes(declaration["wire"].as_str().expect("multi-output wire")),
+        1,
+    )?;
+    let waiting = runtime.update_unknown(1, 7)?;
+    assert_eq!(waiting.state(), "waiting");
+    assert!(waiting.copy_output_table()?.is_empty());
+    let snapshot = runtime.update_observed(2, vec![1], vec![255; 3], 1)?;
+    assert_eq!(snapshot.state(), "ready");
+    let (table, events) = test_support::measured_allocator_events(|| snapshot.copy_output_table());
+    let table = table?;
+    assert_eq!(events.alloc, 1, "all outputs share one owned table buffer");
+    assert_eq!(events.realloc, 0);
+    assert_eq!(table.len(), rows.len() * 5);
+    assert_eq!(snapshot.output_count(), rows.len() as u64);
+    for (index, fields) in table.chunks_exact(5).enumerate() {
+        let index = u32::try_from(index)?;
+        let slot = snapshot.output_slot(index)?;
+        let rgb = snapshot.output_rgb(index)?;
+        assert_eq!(
+            fields,
+            [
+                f64::from(slot),
+                f64::from(rgb[0]),
+                f64::from(rgb[1]),
+                f64::from(rgb[2]),
+                snapshot.output_opacity(index)?
+            ]
+        );
+        let expected = rows
+            .iter()
+            .map(expected_output_row)
+            .find(|row| row[0] == fields[0])
+            .expect("table contains only declared slots");
+        assert_eq!(fields, expected);
+        assert_eq!(fields[4].to_bits(), expected[4].to_bits());
+    }
+    let mut changed = snapshot.copy_output_table()?;
+    assert_ne!(changed.as_ptr(), table.as_ptr());
+    changed.fill(-1.0);
+    assert_eq!(snapshot.copy_output_table()?, table);
+    drop(runtime);
+    assert_eq!(snapshot.copy_output_table()?, table);
+    drop(snapshot);
+    assert!(table.iter().all(|value| value.is_finite()));
+
+    for row in rows {
+        let expected = expected_output_row(row);
+        let slot = u32::try_from(row["slot"].as_u64().expect("fixture slot"))?;
+        let attachment = attach_program_wire(
+            wire_bytes(row["wire"].as_str().expect("single-output wire")),
+            1,
+            slot,
+            501,
+            71,
+            61,
+            Box::new(AcceptOutput),
+        )?;
+        let waiting = attachment.update_unknown(1, 7)?;
+        assert_eq!(waiting.state(), "waiting");
+        assert!(waiting.copy_output_table()?.is_empty());
+        let snapshot = attachment.update_observed(2, vec![1], vec![255; 3], 1)?;
+        let table = snapshot.copy_output_table()?;
+        assert_eq!(table, expected);
+        assert_eq!(table[0], f64::from(snapshot.output_slot(0)?));
+        assert_eq!(
+            &table[1..4],
+            snapshot
+                .output_rgb(0)?
+                .into_iter()
+                .map(f64::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(table[4].to_bits(), snapshot.output_opacity(0)?.to_bits());
+        let mut changed = snapshot.copy_output_table()?;
+        assert_ne!(changed.as_ptr(), table.as_ptr());
+        changed.fill(-1.0);
+        assert_eq!(snapshot.copy_output_table()?, table);
+        let stale = attachment.update_unknown(3, 8)?;
+        assert_eq!(stale.state(), "stale");
+        assert_eq!(stale.copy_output_table()?, table);
+        attachment.dispose(true)?;
+        drop(attachment);
+        assert_eq!(snapshot.copy_output_table()?, table);
+        drop(snapshot);
+        assert_eq!(table, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn attached_output_tables_preserve_ready_failed_stale_history() -> TestResult {
+    let attachment =
+        attach_program_wire(wire("adaptive"), 1, 91, 501, 71, 61, Box::new(AcceptOutput))?;
+    let first = attachment.update_observed(1, vec![1], vec![255; 3], 1)?;
+    let first_table = first.copy_output_table()?;
+    assert_eq!(first_table, [91.0, 0.0, 0.0, 0.0, 1.0]);
+    let second = attachment.update_observed(2, vec![1], vec![0; 3], 1)?;
+    let second_table = second.copy_output_table()?;
+    assert_eq!(second_table, [91.0, 255.0, 255.0, 255.0, 1.0]);
+    let failed = attachment.update_observed(3, vec![1, 2], vec![0, 0, 0, 255, 255, 255], 1)?;
+    assert_eq!(failed.state(), "failed");
+    assert_eq!(failed.copy_output_table()?, second_table);
+    let stale = attachment.update_unknown(4, 7)?;
+    assert_eq!(stale.state(), "stale");
+    assert_eq!(stale.copy_output_table()?, second_table);
+    let recovered = attachment.update_observed(5, vec![1], vec![255; 3], 1)?;
+    assert_eq!(recovered.state(), "ready");
+    assert_eq!(recovered.copy_output_table()?, first_table);
+    attachment.dispose(true)?;
+    drop(attachment);
+    assert_eq!(first.copy_output_table()?, first_table);
+    assert_eq!(second.copy_output_table()?, second_table);
+    drop((first, second, failed, stale, recovered));
+    assert_eq!(first_table, [91.0, 0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(second_table, [91.0, 255.0, 255.0, 255.0, 1.0]);
     Ok(())
 }
 
