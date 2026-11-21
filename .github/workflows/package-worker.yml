@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           target: wasm32-unknown-unknown
           cache: false
@@ -55,8 +55,8 @@ jobs:
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # `cache: false` не поддерживается; npm-autocache выключен отдельно.
           package-manager-cache: false
@@ -395,7 +395,7 @@ jobs:
           printf 'node=%s\n' "$(node -p process.versions.node)" >> "$GITHUB_OUTPUT"
           printf 'npm=%s\n' "$(npm --version)" >> "$GITHUB_OUTPUT"
       - name: select minimum consumer runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           package-manager-cache: false
           node-version: ${{ env.NODE_CONSUMER_FLOOR }}
@@ -410,7 +410,7 @@ jobs:
           node scripts/verify-package-release.mjs --package-smoke "$VERIFIED_TARBALL"
       - name: upload verified npm tarball and manifest
         if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'colors-v')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: colors-release-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
