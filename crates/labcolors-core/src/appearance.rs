@@ -1337,12 +1337,17 @@ impl EncodedPointPaintValueV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EncodedPointPaintV1 {
     id: PaintId,
-    value: EncodedPointPaintValueV1,
+    source: Srgb8,
+    opacity: crate::composition::AdmittedOpacityV1,
 }
 
 impl EncodedPointPaintV1 {
     pub(crate) const fn from_value(id: PaintId, value: EncodedPointPaintValueV1) -> Self {
-        Self { id, value }
+        Self {
+            id,
+            source: value.source(),
+            opacity: value.opacity(),
+        }
     }
 
     pub(crate) const fn id(self) -> PaintId {
@@ -1350,19 +1355,19 @@ impl EncodedPointPaintV1 {
     }
 
     pub(crate) const fn source(self) -> Srgb8 {
-        self.value.source()
+        self.source
     }
 
     pub(crate) const fn opacity(self) -> crate::composition::AdmittedOpacityV1 {
-        self.value.opacity()
+        self.opacity
     }
 
     pub(crate) const fn opacity_bits(self) -> u64 {
-        self.value.opacity_bits()
+        self.opacity.bits()
     }
 
     pub(crate) const fn value(self) -> EncodedPointPaintValueV1 {
-        self.value
+        EncodedPointPaintValueV1::from_admitted(self.source, self.opacity)
     }
 }
 
