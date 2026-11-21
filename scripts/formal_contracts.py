@@ -101,9 +101,9 @@ MUTANTS = (
      "hex syntax must contain six hexadecimal digits only",
      "        _ => None,\n    };", "        b'+' => Some(0),\n        _ => None,\n    };"),
     ("opacity-signed-zero", "composition.rs", "composition::proofs::opacity_admission_is_exact_and_canonical",
-     "opacity must preserve every nonzero bit and canonicalize zero",
-     "        let canonical = if alpha == 0.0 { 0.0 } else { alpha };",
-     "        let canonical = alpha;"),
+     "opacity must admit exactly finite unit binary64 values",
+     "        if !(0.0..=1.0).contains(&alpha) {",
+     "        if alpha.is_sign_negative() || !(0.0..=1.0).contains(&alpha) {"),
     ("certificate-offset", "certificate.rs", "certificate::proofs::reader_bounds_and_failure_atomicity",
      "reader must reject every out-of-bounds or overflowing span",
      "            .get(self.offset..end)", "            .get(..length)"),
@@ -168,15 +168,16 @@ SOURCES += ("session.rs", "observation.rs", "program/attachment.rs")
 
 
 CONTRACTS["composition::proofs::multiply_preserves_the_entire_admitted_domain"] = (
-    {"multiplying any admitted opacities must preserve the entire canonical unit domain"},
+    {"multiplying any admitted opacities must preserve the entire canonical unit domain",
+     "opacity multiplication must preserve the literal binary64 product"},
     {"positive product underflow", "subnormal product", "opaque product"},
 )
 MUTANTS += (
     ("opacity-multiply-as-addition", "composition.rs",
      "composition::proofs::multiply_preserves_the_entire_admitted_domain",
      "multiplying any admitted opacities must preserve the entire canonical unit domain",
-     "        Self((self.value() * rhs.value()).to_bits())",
-     "        Self((self.value() + rhs.value()).to_bits())"),
+     "        Self::from_canonical_bits((self.value() * rhs.value()).to_bits())",
+     "        Self::from_canonical_bits((self.value() + rhs.value()).to_bits())"),
 )
 
 CONTRACTS["composition::proofs::source_over_is_bounded_before_quantization"] = (

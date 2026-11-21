@@ -4,6 +4,8 @@
 //! единственную физическую операцию encoded-sRGB8 source-over, чтобы proposal,
 //! appearance runtime и revision-bound recheck не могли разойтись по арифметике.
 
+use std::num::NonZeroU64;
+
 /// Typed отказ admission straight alpha. Диагностический transport-текст
 /// строится только legacy façade-ом; нижняя физика не хранит stringly error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,13 +31,26 @@ pub(crate) enum CompositionProfileV1 {
 ///
 /// Значение хранится битами: `-0.0` понижается в единственный физический `+0.0`
 /// state, а все остальные binary64 значения сохраняются точно.
+/// Внутренний sign bit установлен: у admitted-домена он всегда свободен, поэтому
+/// `Option` использует нулевой storage без отдельного discriminant. Наружу выходят
+/// только исходные канонические биты, без изменения точности или wire identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AdmittedOpacityV1(u64);
+#[repr(transparent)]
+pub(crate) struct AdmittedOpacityV1(NonZeroU64);
 
 impl AdmittedOpacityV1 {
+    const STORAGE_BIT: u64 = 1 << 63;
+
     #[cfg(any(test, kani))]
-    pub(crate) const TRANSPARENT: Self = Self(0.0f64.to_bits());
-    pub(crate) const OPAQUE: Self = Self(1.0f64.to_bits());
+    pub(crate) const TRANSPARENT: Self = Self::from_canonical_bits(0.0f64.to_bits());
+    pub(crate) const OPAQUE: Self = Self::from_canonical_bits(1.0f64.to_bits());
+
+    /// Вызывается только после admission или замкнутой операции над `[0,1]`.
+    const fn from_canonical_bits(bits: u64) -> Self {
+        // Установленный bit делает storage ненулевым для любого u64: ветка
+        // отказа expect недостижима независимо от float-значения, unsafe не нужен.
+        Self(NonZeroU64::new(bits | Self::STORAGE_BIT).expect("opacity storage bit is set"))
+    }
 
     pub(crate) fn new(alpha: f64) -> Result<Self, OpacityAdmissionErrorV1> {
         if !alpha.is_finite() {
@@ -45,31 +60,31 @@ impl AdmittedOpacityV1 {
             return Err(OpacityAdmissionErrorV1::OutsideUnitInterval);
         }
         let canonical = if alpha == 0.0 { 0.0 } else { alpha };
-        Ok(Self(canonical.to_bits()))
+        Ok(Self::from_canonical_bits(canonical.to_bits()))
     }
 
     pub(crate) const fn bits(self) -> u64 {
-        self.0
+        self.0.get() ^ Self::STORAGE_BIT
     }
 
     pub(crate) const fn value(self) -> f64 {
-        f64::from_bits(self.0)
+        f64::from_bits(self.bits())
     }
 
     /// Непосредственный binary64 predecessor внутри канонического `[0,1]`.
     #[cfg(any(test, kani))]
     pub(crate) const fn predecessor(self) -> Option<Self> {
-        if self.0 == Self::TRANSPARENT.0 {
+        if self.bits() == 0 {
             None
         } else {
-            Some(Self(self.0 - 1))
+            Some(Self::from_canonical_bits(self.bits() - 1))
         }
     }
 
     /// Композиция opacity-конструкторов замкнута в admitted `[0,1]`: два
     /// конечных неотрицательных множителя не могут создать новый invalid state.
     pub(crate) fn multiply(self, rhs: Self) -> Self {
-        Self((self.value() * rhs.value()).to_bits())
+        Self::from_canonical_bits((self.value() * rhs.value()).to_bits())
     }
 }
 
@@ -215,6 +230,82 @@ mod tests {
         AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1,
         OpacityDomainAdmissionErrorV1, OpacityDomainV1,
     };
+
+    #[test]
+    fn admitted_opacity_preserves_raw_bits_across_every_binary64_exponent() {
+        // Независимый bit-domain oracle включает оба знака, subnormal/normal
+        // швы, допустимую 1.0, значения выше неё, infinities и NaN payloads.
+        let fractions = [
+            0,
+            1,
+            (1_u64 << 51) - 1,
+            1 << 51,
+            (1 << 52) - 2,
+            (1 << 52) - 1,
+        ];
+        for sign in [0, 1_u64 << 63] {
+            for exponent in 0..=0x7ff_u64 {
+                for fraction in fractions {
+                    let bits = sign | (exponent << 52) | fraction;
+                    let actual = AdmittedOpacityV1::new(f64::from_bits(bits));
+                    if bits <= 1.0_f64.to_bits() || bits == 1_u64 << 63 {
+                        let expected = if bits == 1_u64 << 63 { 0 } else { bits };
+                        let opacity = actual.unwrap();
+                        assert_eq!(opacity.bits(), expected);
+                        assert_eq!(opacity.value().to_bits(), expected);
+                        assert_eq!(
+                            opacity.predecessor().map(|value| value.bits()),
+                            expected.checked_sub(1)
+                        );
+                    } else {
+                        let expected = if exponent == 0x7ff {
+                            OpacityAdmissionErrorV1::NonFinite
+                        } else {
+                            OpacityAdmissionErrorV1::OutsideUnitInterval
+                        };
+                        assert_eq!(actual, Err(expected));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_opacity_multiply_preserves_literal_binary64_products() {
+        // Expected приходит из исходных f64-битов, не из getters storage.
+        // Каждая binade встречается с interior, endpoint и underflow factors.
+        let fractions = [0, 1, (1_u64 << 51) - 1, 1 << 51, (1 << 52) - 1];
+        let factors = [
+            0,
+            1,
+            (1_u64 << 52) - 1,
+            1 << 52,
+            0.5_f64.to_bits() - 1,
+            0.5_f64.to_bits(),
+            0.5_f64.to_bits() + 1,
+            1.0_f64.to_bits() - 1,
+            1.0_f64.to_bits(),
+        ];
+        for exponent in 0..=0x3ff_u64 {
+            for fraction in fractions {
+                let left = (exponent << 52) | fraction;
+                if left > 1.0_f64.to_bits() {
+                    continue;
+                }
+                for right in factors {
+                    let left_value = f64::from_bits(left);
+                    let right_value = f64::from_bits(right);
+                    let product = AdmittedOpacityV1::new(left_value)
+                        .unwrap()
+                        .multiply(AdmittedOpacityV1::new(right_value).unwrap());
+                    let expected = (left_value * right_value).to_bits();
+                    assert_eq!(product.bits(), expected);
+                    assert_eq!(product.value().to_bits(), expected);
+                    assert!(product.bits() <= 1.0_f64.to_bits());
+                }
+            }
+        }
+    }
 
     #[test]
     fn source_over_endpoints_match_the_literal_law_for_every_byte_pair() {
