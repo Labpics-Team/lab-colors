@@ -1281,6 +1281,52 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
 }
 
 #[test]
+fn prepared_paints_are_scoped_to_candidate_search_and_each_fresh_phase() {
+    let compiled = finite_program([[0; 3], [255; 3]]);
+    let mut session = compiled.instantiate(STREAM).unwrap();
+    for (revision, backdrops, state_index, source, paint_nodes) in [
+        (1, [[200; 3], [220; 3], [255; 3]], 0, [0; 3], 3),
+        (2, [[0; 3], [20; 3], [40; 3]], 1, [255; 3], 4),
+        (3, [[200; 3], [220; 3], [255; 3]], 0, [0; 3], 3),
+    ] {
+        crate::appearance::reset_paint_node_evaluation_count();
+        let SessionState::Ready { current } = session
+            .commit(observed_backdrops_at(revision, &backdrops))
+            .unwrap()
+        else {
+            panic!("the opposite endpoint must pass on all three backdrops");
+        };
+        assert_eq!(current.selected_state_index(), Some(state_index));
+        assert_eq!(current.outputs()[0].paint().source().bytes(), source);
+        assert_eq!(current.report().cells().len(), 6);
+        assert_eq!(
+            current
+                .report()
+                .cells()
+                .iter()
+                .filter(|cell| cell.is_hard())
+                .count(),
+            3
+        );
+        assert_eq!(
+            current
+                .report()
+                .cells()
+                .iter()
+                .filter(|cell| cell.result().is_violation())
+                .count(),
+            if state_index == 1 { 3 } else { 0 }
+        );
+        // One node for each searched candidate, one for the fresh hard
+        // recheck, one for report-only. None is shared across those scopes.
+        assert_eq!(
+            crate::appearance::paint_node_evaluation_count(),
+            paint_nodes
+        );
+    }
+}
+
+#[test]
 fn committed_evidence_is_zero_alloc_and_repeats_no_composite_transform_or_evaluator_dispatch() {
     crate::composition::reset_source_over_evaluation_count();
     MODELED_TRISTIMULUS_DERIVATION_CALLS.with(|calls| calls.set(0));
