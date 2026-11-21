@@ -2864,9 +2864,9 @@ where
 }
 
 mod ordering {
-    //! Allocation-free ordering for cold Program identity construction.
-    //! Native builds use the faster specialized standard sort. WASM shares one
-    //! index-based engine to limit the code downloaded and compiled by SDK consumers.
+    //! Сортировка без аллокаций для построения identity Program.
+    //! Native использует специализацию стандартного алгоритма; WASM — один
+    //! индексный цикл, чтобы ограничить размер загружаемого и компилируемого кода.
     use core::cmp::Ordering;
 
     pub(crate) fn sort<T: Ord>(values: &mut [T]) {
