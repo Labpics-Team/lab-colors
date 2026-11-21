@@ -210,7 +210,7 @@ def verify_source_binding() -> tuple[str, int]:
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
-        (APPEARANCE_SOURCE, b"self.opacity\n", b"crate::composition::AdmittedOpacityV1::OPAQUE\n"),
+        (APPEARANCE_SOURCE, b"        Self { source, opacity }\n", b"        Self { source, opacity: crate::composition::AdmittedOpacityV1::OPAQUE }\n"),
         (CONSTRAINTS_SOURCE, b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();", b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();"),
         (EXACT_CONSTRAINT_SOURCE, b"if actual == *invocation", b"if actual != *invocation"),
         (WCAG22_CONSTRAINT_SOURCE, b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Pass(Wcag22PassV1(()))", b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Violation(Wcag22ViolationV1(()))"),
