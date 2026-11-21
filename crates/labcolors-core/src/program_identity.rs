@@ -1595,9 +1595,10 @@ fn refine_partition(
     graph: &CanonicalGraphV1,
     partition: PartitionV1,
 ) -> Result<EquitablePartitionV1, ProgramCompileError> {
-    refine_partition_impl(
+    refine_partition_seeded_impl(
         graph,
         partition,
+        None,
         #[cfg(test)]
         None,
     )
@@ -1623,7 +1624,11 @@ struct ActiveRefinementV1 {
 }
 
 impl ActiveRefinementV1 {
-    fn new(partition: PartitionV1, vertex_count: usize) -> Result<Self, ProgramCompileError> {
+    fn new(
+        partition: PartitionV1,
+        vertex_count: usize,
+        all_dirty: bool,
+    ) -> Result<Self, ProgramCompileError> {
         let cell_of = partition_cells(&partition, vertex_count)?;
         let mut position = Vec::new();
         position
@@ -1641,7 +1646,11 @@ impl ActiveRefinementV1 {
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         let mut active = Vec::new();
         active
-            .try_reserve_exact(partition.cells.iter().filter(|cell| cell.len() > 1).count())
+            .try_reserve_exact(if all_dirty {
+                partition.cells.iter().filter(|cell| cell.len() > 1).count()
+            } else {
+                0
+            })
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         let mut rank = 0;
         for vertices in partition.cells {
@@ -1651,12 +1660,12 @@ impl ActiveRefinementV1 {
             let mut dirty_head = vertex_count;
             for (offset, &vertex) in vertices.iter().enumerate() {
                 position[vertex] = offset;
-                if vertices.len() > 1 {
+                if all_dirty && vertices.len() > 1 {
                     dirty_next[vertex] = dirty_head;
                     dirty_head = vertex;
                 }
             }
-            if vertices.len() > 1 {
+            if all_dirty && vertices.len() > 1 {
                 active.push(cells.len());
             }
             let next_rank = rank + vertices.len();
@@ -1863,24 +1872,31 @@ impl ActiveRefinementV1 {
         for cell in first_new_cell..self.cells.len() {
             for offset in 0..self.cells[cell].vertices.len() {
                 let vertex = self.cells[cell].vertices[offset];
-                for arc in graph.adjacent(vertex)? {
-                    let neighbour = arc.neighbour;
-                    let target = self.cell_of[neighbour];
-                    if self.cells[target].vertices.len() == 1
-                        || self.dirty_next[neighbour] != usize::MAX
-                    {
-                        continue;
-                    }
-                    if self.cells[target].dirty_head == self.cell_of.len() {
-                        self.active
-                            .try_reserve(1)
-                            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-                        self.active.push(target);
-                    }
-                    self.dirty_next[neighbour] = self.cells[target].dirty_head;
-                    self.cells[target].dirty_head = neighbour;
-                }
+                self.mark_neighbours_dirty(graph, vertex)?;
             }
+        }
+        Ok(())
+    }
+
+    fn mark_neighbours_dirty(
+        &mut self,
+        graph: &CanonicalGraphV1,
+        vertex: usize,
+    ) -> Result<(), ProgramCompileError> {
+        for arc in graph.adjacent(vertex)? {
+            let neighbour = arc.neighbour;
+            let target = self.cell_of[neighbour];
+            if self.cells[target].vertices.len() == 1 || self.dirty_next[neighbour] != usize::MAX {
+                continue;
+            }
+            if self.cells[target].dirty_head == self.cell_of.len() {
+                self.active
+                    .try_reserve(1)
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                self.active.push(target);
+            }
+            self.dirty_next[neighbour] = self.cells[target].dirty_head;
+            self.cells[target].dirty_head = neighbour;
         }
         Ok(())
     }
@@ -1935,15 +1951,20 @@ impl ActiveRefinementV1 {
     }
 }
 
-fn refine_partition_impl(
+fn refine_partition_seeded_impl(
     graph: &CanonicalGraphV1,
     partition: PartitionV1,
+    individualized: Option<usize>,
     #[cfg(test)] mut trace: Option<&mut RefinementTraceV1>,
 ) -> Result<EquitablePartitionV1, ProgramCompileError> {
     if partition.is_discrete() {
         return Ok(EquitablePartitionV1(partition));
     }
-    let mut state = ActiveRefinementV1::new(partition, graph.colors.len())?;
+    let mut state =
+        ActiveRefinementV1::new(partition, graph.colors.len(), individualized.is_none())?;
+    if let Some(vertex) = individualized {
+        state.mark_neighbours_dirty(graph, vertex)?;
+    }
     let mut current = Vec::new();
     loop {
         core::mem::swap(&mut current, &mut state.active);
@@ -2047,6 +2068,24 @@ fn individualize(
         cells.push(remainder);
     }
     Ok(PartitionV1 { cells })
+}
+
+fn refine_individualization(
+    graph: &CanonicalGraphV1,
+    parent: &EquitablePartitionV1,
+    cell: usize,
+    vertex: usize,
+) -> Result<EquitablePartitionV1, ProgramCompileError> {
+    // Parent уже equitable. Выделение вершины меняет signatures только у её
+    // соседей; остальные видят монотонное переименование прежних cell ranks.
+    // Clean-представитель каждой затронутой клетки сохраняет полный порядок V9.
+    refine_partition_seeded_impl(
+        graph,
+        individualize(&parent.0, cell, vertex)?,
+        Some(vertex),
+        #[cfg(test)]
+        None,
+    )
 }
 
 struct SearchFrameV1 {
@@ -2755,10 +2794,8 @@ fn canonical_search_impl(
                                 .checked_sub(1)
                                 .ok_or(ProgramCompileError::ResourceExhausted)?;
                         }
-                        let partition = refine_partition(
-                            graph,
-                            individualize(&frame.partition.0, cell, candidate)?,
-                        )?;
+                        let partition =
+                            refine_individualization(graph, &frame.partition, cell, candidate)?;
                         Some(factor_component_twins(
                             graph,
                             partition,
@@ -4417,6 +4454,7 @@ mod tests {
                         cells: cells.to_vec(),
                     },
                     vertex_count,
+                    true,
                 )?;
                 match permutation {
                     0 => {}
@@ -4481,6 +4519,7 @@ mod tests {
                     cells: vec![vec![0, 1], vec![2], vec![3, 4]],
                 },
                 5,
+                true,
             )?;
             match mutation {
                 0 => state.cells[1].rank = 0,
@@ -4503,6 +4542,14 @@ mod tests {
         graph: &CanonicalGraphV1,
         partition: PartitionV1,
     ) -> Result<(EquitablePartitionV1, RefinementTraceV1), ProgramCompileError> {
+        assert_seeded_refinement_matches_full(graph, partition, None)
+    }
+
+    fn assert_seeded_refinement_matches_full(
+        graph: &CanonicalGraphV1,
+        partition: PartitionV1,
+        individualized: Option<usize>,
+    ) -> Result<(EquitablePartitionV1, RefinementTraceV1), ProgramCompileError> {
         let mut expected_rounds = Vec::new();
         let expected = full_refine_partition_reference(
             graph,
@@ -4512,7 +4559,8 @@ mod tests {
             &mut expected_rounds,
         )?;
         let mut trace = RefinementTraceV1::default();
-        let actual = refine_partition_impl(graph, partition, Some(&mut trace))?;
+        let actual =
+            refine_partition_seeded_impl(graph, partition, individualized, Some(&mut trace))?;
         assert_eq!(
             ordered_cell_memberships(&actual.0.cells),
             ordered_cell_memberships(&expected.0.cells),
@@ -4553,9 +4601,10 @@ mod tests {
                 continue;
             }
             for &vertex in cell {
-                assert_refinement_matches_full(
+                assert_seeded_refinement_matches_full(
                     graph,
                     individualize(&partition.0, cell_index, vertex)?,
+                    Some(vertex),
                 )?;
             }
         }
@@ -4573,6 +4622,26 @@ mod tests {
                 cell.reverse();
             }
             assert_refinement_matches_full(&graph, reversed)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn individualization_refines_only_affected_cell_members() -> Result<(), ProgramCompileError> {
+        for components in [3, 17, 1024] {
+            let graph = repeated_component_graph(components)?;
+            let parent = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
+            let cell = parent.0.first_non_singleton().unwrap();
+            let vertex = parent.0.cells[cell][0];
+            let (_, trace) = assert_seeded_refinement_matches_full(
+                &graph,
+                individualize(&parent.0, cell, vertex)?,
+                Some(vertex),
+            )?;
+            assert_eq!(
+                trace.built_signatures, 2,
+                "{components} components: only the neighbour and one clean representative",
+            );
         }
         Ok(())
     }
