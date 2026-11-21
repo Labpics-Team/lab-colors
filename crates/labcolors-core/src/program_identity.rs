@@ -4631,7 +4631,10 @@ mod tests {
         for components in [3, 17, 1024] {
             let graph = repeated_component_graph(components)?;
             let parent = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
-            let cell = parent.0.first_non_singleton().unwrap();
+            let cell = parent
+                .0
+                .first_non_singleton()
+                .expect("repeated components must leave a non-singleton equitable cell");
             let vertex = parent.0.cells[cell][0];
             let (_, trace) = assert_seeded_refinement_matches_full(
                 &graph,

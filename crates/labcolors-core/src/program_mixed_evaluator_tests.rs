@@ -1281,9 +1281,11 @@ fn public_projection_preserves_every_exposed_ready_and_conflict_field_against_co
 }
 
 #[test]
-fn prepared_paints_are_scoped_to_candidate_search_and_each_fresh_phase() {
+fn prepared_paints_are_scoped_to_candidate_search_and_each_fresh_phase() -> Result<(), String> {
     let compiled = finite_program([[0; 3], [255; 3]]);
-    let mut session = compiled.instantiate(STREAM).unwrap();
+    let mut session = compiled
+        .instantiate(STREAM)
+        .map_err(|error| format!("{error:?}"))?;
     for (revision, backdrops, state_index, source, paint_nodes) in [
         (1, [[200; 3], [220; 3], [255; 3]], 0, [0; 3], 3),
         (2, [[0; 3], [20; 3], [40; 3]], 1, [255; 3], 4),
@@ -1292,7 +1294,7 @@ fn prepared_paints_are_scoped_to_candidate_search_and_each_fresh_phase() {
         crate::appearance::reset_paint_node_evaluation_count();
         let SessionState::Ready { current } = session
             .commit(observed_backdrops_at(revision, &backdrops))
-            .unwrap()
+            .map_err(|error| format!("{error:?}"))?
         else {
             panic!("the opposite endpoint must pass on all three backdrops");
         };
@@ -1324,6 +1326,7 @@ fn prepared_paints_are_scoped_to_candidate_search_and_each_fresh_phase() {
             paint_nodes
         );
     }
+    Ok(())
 }
 
 #[test]

@@ -83,7 +83,7 @@ fn observation_shape_is_checked_without_allocating_or_reading_missing_values() {
 }
 
 #[test]
-fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() {
+fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() -> Result<(), String> {
     let mut builder = ProgramWireBuilderV1::new();
     builder
         .source(1, Srgb8::new([0; 3]))
@@ -98,10 +98,11 @@ fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() {
         .presentation_target(9, 8)
         .wcag22_visible_unary(true, 10, 8, 3)
         .output(17, 4);
-    let mut session = compile_program_wire_v1(&builder.finish().unwrap())
-        .unwrap()
-        .instantiate(100)
-        .unwrap();
+    let mut session =
+        compile_program_wire_v1(&builder.finish().map_err(|error| format!("{error:?}"))?)
+            .map_err(|error| format!("{error:?}"))?
+            .instantiate(100)
+            .map_err(|error| format!("{error:?}"))?;
     let ids = [1, 2, 3];
     let mut first = None;
     for (revision, grays, paint_nodes, expected_state) in [
@@ -118,9 +119,10 @@ fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() {
         let snapshot = session
             .update_observed_view(
                 revision,
-                ProgramObservationV1::from_rgb8(&ids, &rgb, 1).unwrap(),
+                ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                    .map_err(|error| format!("{error:?}"))?,
             )
-            .unwrap();
+            .map_err(|error| format!("{error:?}"))?;
         assert_eq!(snapshot.state(), expected_state, "revision={revision}");
         assert_eq!(
             crate::appearance::paint_node_evaluation_count(),
@@ -133,10 +135,11 @@ fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() {
             first = Some(snapshot);
         }
     }
-    let retained = first.unwrap();
+    let retained = first.ok_or("the first successful snapshot must be retained")?;
     assert_eq!(retained.state(), ProgramSnapshotStateV1::Ready);
     assert_eq!(retained.outputs()[0].source(), Srgb8::new([0; 3]));
     assert_eq!(retained.outputs()[0].opacity(), 0.5);
+    Ok(())
 }
 
 #[test]

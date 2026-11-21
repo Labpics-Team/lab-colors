@@ -369,7 +369,8 @@ mod tests {
     }
 
     #[test]
-    fn admitted_opacity_preserves_raw_bits_across_every_binary64_exponent() {
+    fn admitted_opacity_preserves_raw_bits_across_every_binary64_exponent()
+    -> Result<(), OpacityAdmissionErrorV1> {
         // Независимый bit-domain oracle включает оба знака, subnormal/normal
         // швы, допустимую 1.0, значения выше неё, infinities и NaN payloads.
         let fractions = [
@@ -387,7 +388,7 @@ mod tests {
                     let actual = AdmittedOpacityV1::new(f64::from_bits(bits));
                     if bits <= 1.0_f64.to_bits() || bits == 1_u64 << 63 {
                         let expected = if bits == 1_u64 << 63 { 0 } else { bits };
-                        let opacity = actual.unwrap();
+                        let opacity = actual?;
                         assert_eq!(opacity.bits(), expected);
                         assert_eq!(opacity.value().to_bits(), expected);
                         assert_eq!(
@@ -405,10 +406,12 @@ mod tests {
                 }
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn admitted_opacity_multiply_preserves_literal_binary64_products() {
+    fn admitted_opacity_multiply_preserves_literal_binary64_products()
+    -> Result<(), OpacityAdmissionErrorV1> {
         // Expected приходит из исходных f64-битов, не из getters storage.
         // Каждая binade встречается с interior, endpoint и underflow factors.
         let fractions = [0, 1, (1_u64 << 51) - 1, 1 << 51, (1 << 52) - 1];
@@ -432,9 +435,8 @@ mod tests {
                 for right in factors {
                     let left_value = f64::from_bits(left);
                     let right_value = f64::from_bits(right);
-                    let product = AdmittedOpacityV1::new(left_value)
-                        .unwrap()
-                        .multiply(AdmittedOpacityV1::new(right_value).unwrap());
+                    let product = AdmittedOpacityV1::new(left_value)?
+                        .multiply(AdmittedOpacityV1::new(right_value)?);
                     let expected = (left_value * right_value).to_bits();
                     assert_eq!(product.bits(), expected);
                     assert_eq!(product.value().to_bits(), expected);
@@ -442,6 +444,7 @@ mod tests {
                 }
             }
         }
+        Ok(())
     }
 
     #[test]

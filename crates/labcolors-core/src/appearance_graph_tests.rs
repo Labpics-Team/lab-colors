@@ -2038,46 +2038,63 @@ fn admitted_bindings_and_workspace_are_reused_without_storage_churn() {
 }
 
 #[test]
-fn prepared_paints_render_current_surfaces_without_repeating_paint_work() {
-    let graph = point_component(false, false).compile().unwrap();
+fn prepared_paints_render_current_surfaces_without_repeating_paint_work() -> Result<(), String> {
+    let graph = point_component(false, false)
+        .compile()
+        .map_err(|error| format!("{error:?}"))?;
     let mut admitted = graph
         .admit_bindings(&bindings([200, 80, 40], 0.5, [255; 3]))
-        .unwrap();
-    let mut workspace = graph.new_workspace().unwrap();
+        .map_err(|error| format!("{error:?}"))?;
+    let mut workspace = graph
+        .new_workspace()
+        .map_err(|error| format!("{error:?}"))?;
     let storage = workspace.storage_signature();
     crate::appearance::reset_paint_node_evaluation_count();
     crate::composition::reset_source_over_evaluation_count();
 
-    let ((), allocations) = crate::test_support::measured_allocations(|| {
-        let mut pass = graph
-            .prepare_paints_for_surface_cases(&admitted, [CONTEXT], &mut workspace)
-            .unwrap();
-        for (backdrop, expected) in [
-            ([20, 40, 60], [110, 60, 50]),
-            ([100, 100, 100], [150, 90, 70]),
-            ([1, 3, 5], [101, 42, 23]),
-        ] {
-            let evaluated = pass.evaluate_surface_inputs_canonical(|index| {
-                assert_eq!(index, 0);
-                Srgb8::new(backdrop)
-            });
-            assert_eq!(evaluated.surface_rgb(CONTEXT_SURFACE), Some(backdrop));
-            assert_eq!(evaluated.surface_rgb(DERIVED_SURFACE), Some(expected));
-            assert_eq!(
-                evaluated.occurrence(FILL_OCCURRENCE).unwrap().visible(),
-                expected
-            );
-            assert_eq!(
-                evaluated.paint(FILL_PAINT).unwrap().source().bytes(),
-                [200, 80, 40]
-            );
-            assert_eq!(
-                evaluated.paint(FILL_PAINT).unwrap().opacity_bits(),
-                0.5f64.to_bits()
-            );
-        }
-    });
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| -> Result<(), &'static str> {
+            let mut pass = graph
+                .prepare_paints_for_surface_cases(&admitted, [CONTEXT], &mut workspace)
+                .map_err(|_| "the admitted fixture must prepare a paint pass")?;
+            for (backdrop, expected) in [
+                ([20, 40, 60], [110, 60, 50]),
+                ([100, 100, 100], [150, 90, 70]),
+                ([1, 3, 5], [101, 42, 23]),
+            ] {
+                let evaluated = pass.evaluate_surface_inputs_canonical(|index| {
+                    assert_eq!(index, 0);
+                    Srgb8::new(backdrop)
+                });
+                assert_eq!(evaluated.surface_rgb(CONTEXT_SURFACE), Some(backdrop));
+                assert_eq!(evaluated.surface_rgb(DERIVED_SURFACE), Some(expected));
+                assert_eq!(
+                    evaluated
+                        .occurrence(FILL_OCCURRENCE)
+                        .ok_or("the prepared pass must contain the fill occurrence")?
+                        .visible(),
+                    expected
+                );
+                assert_eq!(
+                    evaluated
+                        .paint(FILL_PAINT)
+                        .ok_or("the prepared pass must contain the fill paint")?
+                        .source()
+                        .bytes(),
+                    [200, 80, 40]
+                );
+                assert_eq!(
+                    evaluated
+                        .paint(FILL_PAINT)
+                        .ok_or("the prepared pass must contain the fill paint")?
+                        .opacity_bits(),
+                    0.5f64.to_bits()
+                );
+            }
+            Ok(())
+        });
     assert_eq!(allocations, 0);
+    result?;
     assert_eq!(crate::appearance::paint_node_evaluation_count(), 2);
     assert_eq!(crate::composition::source_over_evaluation_count(), 3);
     assert_eq!(workspace.storage_signature(), storage);
@@ -2090,14 +2107,16 @@ fn prepared_paints_render_current_surfaces_without_repeating_paint_work() {
     // A new candidate can be written only after the prepared borrow ends.
     admitted
         .overwrite_paint_input_at(
-            graph.bind_paint_input(SOURCE).unwrap(),
+            graph
+                .bind_paint_input(SOURCE)
+                .ok_or("the fixture must declare its source paint input")?,
             opaque([16, 208, 64]),
         )
-        .unwrap();
+        .map_err(|error| format!("{error:?}"))?;
     {
         let mut pass = graph
             .prepare_paints_for_surface_cases(&admitted, [CONTEXT], &mut workspace)
-            .unwrap();
+            .map_err(|error| format!("{error:?}"))?;
         let evaluated = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new([80, 16, 192]));
         assert_eq!(evaluated.surface_rgb(DERIVED_SURFACE), Some([48, 112, 128]));
     }
@@ -2107,26 +2126,33 @@ fn prepared_paints_render_current_surfaces_without_repeating_paint_work() {
     // own bindings, including the stored Surface input.
     let evaluated = graph
         .evaluate_admitted_into(&admitted, &mut workspace)
-        .unwrap();
+        .map_err(|error| format!("{error:?}"))?;
     assert_eq!(evaluated.surface_rgb(CONTEXT_SURFACE), Some([255; 3]));
     assert_eq!(
         evaluated.surface_rgb(DERIVED_SURFACE),
         Some([136, 232, 160])
     );
     assert_eq!(crate::appearance::paint_node_evaluation_count(), 6);
+    Ok(())
 }
 
 #[test]
-fn prepared_paints_reject_schema_and_workspace_before_physical_work() {
-    let graph = point_component(false, false).compile().unwrap();
+fn prepared_paints_reject_schema_and_workspace_before_physical_work() -> Result<(), String> {
+    let graph = point_component(false, false)
+        .compile()
+        .map_err(|error| format!("{error:?}"))?;
     let admitted = graph
         .admit_bindings(&bindings([1, 2, 3], 0.5, [4, 5, 6]))
-        .unwrap();
+        .map_err(|error| format!("{error:?}"))?;
     let empty = AppearanceGraphSpec::new(vec![], vec![], vec![], vec![], vec![], vec![])
         .compile()
-        .unwrap();
-    let mut wrong_workspace = empty.new_workspace().unwrap();
-    let mut workspace = graph.new_workspace().unwrap();
+        .map_err(|error| format!("{error:?}"))?;
+    let mut wrong_workspace = empty
+        .new_workspace()
+        .map_err(|error| format!("{error:?}"))?;
+    let mut workspace = graph
+        .new_workspace()
+        .map_err(|error| format!("{error:?}"))?;
     crate::appearance::reset_paint_node_evaluation_count();
     crate::composition::reset_source_over_evaluation_count();
 
@@ -2145,7 +2171,7 @@ fn prepared_paints_reject_schema_and_workspace_before_physical_work() {
     );
     let wrong_bindings = empty
         .admit_bindings(&AppearanceBindings::new(vec![], vec![], vec![]))
-        .unwrap();
+        .map_err(|error| format!("{error:?}"))?;
     assert_eq!(
         graph
             .prepare_paints_for_surface_cases(&wrong_bindings, [], &mut workspace)
@@ -2157,10 +2183,11 @@ fn prepared_paints_reject_schema_and_workspace_before_physical_work() {
 
     let mut pass = graph
         .prepare_paints_for_surface_cases(&admitted, [CONTEXT], &mut workspace)
-        .unwrap();
+        .map_err(|error| format!("{error:?}"))?;
     let evaluated = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new([4, 5, 6]));
     assert_eq!(evaluated.surface_rgb(DERIVED_SURFACE), Some([3, 4, 5]));
     assert_eq!(crate::appearance::paint_node_evaluation_count(), 2);
+    Ok(())
 }
 
 #[test]
