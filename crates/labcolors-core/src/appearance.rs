@@ -1209,20 +1209,29 @@ impl AdmittedAppearanceBindings {
     /// any admitted value can change. After that O(N) preflight, `value_at` is
     /// called exactly once per canonical input and every destination value is
     /// overwritten exactly once. Neither pass needs lookup or allocation.
+    #[cfg(test)]
     pub(crate) fn overwrite_surface_inputs_canonical(
         &mut self,
         expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
         mut value_at: impl FnMut(usize) -> Srgb8,
+    ) -> Result<(), BindingError> {
+        self.validate_surface_input_schema(expected_inputs)?;
+
+        for (index, (_, value)) in self.surfaces.iter_mut().enumerate() {
+            *value = value_at(index);
+        }
+        Ok(())
+    }
+
+    fn validate_surface_input_schema(
+        &self,
+        expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
     ) -> Result<(), BindingError> {
         if !expected_inputs
             .into_iter()
             .eq(self.surfaces.iter().map(|(input, _)| *input))
         {
             return Err(BindingError::IncompatibleAdmittedBindings);
-        }
-
-        for (index, (_, value)) in self.surfaces.iter_mut().enumerate() {
-            *value = value_at(index);
         }
         Ok(())
     }
@@ -1799,6 +1808,40 @@ fn initialise_workspace_slots<T: Clone>(
     Ok(())
 }
 
+/// Один Paint pass для нескольких физических случаев одного input schema.
+///
+/// Заимствование bindings запрещает смену Paint и opacity до конца pass, а
+/// exclusive workspace сохраняет материализованные Paint. Surface values
+/// поступают из текущего case; старые значения в bindings не участвуют в render.
+#[derive(Debug)]
+pub(crate) struct PreparedAppearancePaints<'program, 'bindings, 'workspace> {
+    graph_instance: &'program Arc<()>,
+    program: CompiledAppearanceProgram<'program>,
+    _bindings: &'bindings AdmittedAppearanceBindings,
+    workspace: &'workspace mut AppearanceWorkspace,
+}
+
+impl<'program> PreparedAppearancePaints<'program, '_, '_> {
+    /// Полный fresh render по той canonical Surface-схеме, которая проверена
+    /// при создании pass. Каждый case перезаписывает все render slots.
+    pub(crate) fn evaluate_surface_inputs_canonical(
+        &mut self,
+        value_at: impl Fn(usize) -> Srgb8,
+    ) -> AppearanceEvaluationView<'program, '_> {
+        self.program.execute_render_into(
+            value_at,
+            &self.workspace.paints,
+            &mut self.workspace.surfaces,
+            &mut self.workspace.occurrences,
+        );
+        AppearanceEvaluationView {
+            graph_instance: self.graph_instance,
+            program: self.program,
+            workspace: self.workspace,
+        }
+    }
+}
+
 /// Borrowed allocation-free result of one workspace evaluation.
 ///
 /// The mutable workspace borrow prevents another evaluate from invalidating
@@ -2145,6 +2188,31 @@ impl CompiledAppearanceGraph {
             .evaluate_admitted_into(&self.instance, bindings, workspace)
     }
 
+    /// Prepare only after the caller has decided to evaluate a physical case.
+    /// Schema errors retain their order: observed Surface schema, complete
+    /// admitted schema, then workspace shape, all before physical execution.
+    pub(crate) fn prepare_paints_for_surface_cases<'program, 'bindings, 'workspace>(
+        &'program self,
+        bindings: &'bindings AdmittedAppearanceBindings,
+        expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
+        workspace: &'workspace mut AppearanceWorkspace,
+    ) -> Result<PreparedAppearancePaints<'program, 'bindings, 'workspace>, BindingError> {
+        bindings.validate_surface_input_schema(expected_inputs)?;
+        let program = self.program();
+        program.validate_admitted_workspace(bindings, workspace)?;
+        program.execute_paints_into(
+            |index| bindings.paint_inputs[index].1,
+            |index| bindings.opacities[index].1,
+            &mut workspace.paints,
+        );
+        Ok(PreparedAppearancePaints {
+            graph_instance: &self.instance,
+            program,
+            _bindings: bindings,
+            workspace,
+        })
+    }
+
     /// Cold convenience внутри Core для callers, которым нужен owned result.
     /// Hot Session обязан хранить admitted bindings и workspace между вызовами.
     pub(crate) fn evaluate(
@@ -2266,16 +2334,24 @@ impl<'program> CompiledAppearanceProgram<'program> {
         })
     }
 
+    fn validate_admitted_workspace(
+        self,
+        bindings: &AdmittedAppearanceBindings,
+        workspace: &AppearanceWorkspace,
+    ) -> Result<(), BindingError> {
+        if !bindings.matches_schema(self.input_schema()) {
+            return Err(BindingError::IncompatibleAdmittedBindings);
+        }
+        workspace.validate_shape(self)
+    }
+
     fn evaluate_admitted_into<'workspace>(
         self,
         graph_instance: &'program Arc<()>,
         bindings: &AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<AppearanceEvaluationView<'program, 'workspace>, BindingError> {
-        if !bindings.matches_schema(self.input_schema()) {
-            return Err(BindingError::IncompatibleAdmittedBindings);
-        }
-        workspace.validate_shape(self)?;
+        self.validate_admitted_workspace(bindings, workspace)?;
 
         let paint_inputs = &bindings.paint_inputs;
         let surfaces = &bindings.surfaces;
@@ -2299,9 +2375,9 @@ impl<'program> CompiledAppearanceProgram<'program> {
         })
     }
 
-    /// Единственное исполнение compiled IR. Scratch принадлежит caller-у:
-    /// static adapter использует stack arrays, generic admission —
-    /// владеющие buffers. Алгоритм и сертификат при этом общие.
+    /// Полный fresh pass compiled IR. Static adapter использует stack arrays,
+    /// generic admission — владеющие buffers. Подготовленный многосценарный
+    /// pass разделяет те же Paint/render операции, не владея другой физикой.
     fn execute_into<P, S, O>(
         &self,
         paint_input_value: P,
@@ -2315,11 +2391,29 @@ impl<'program> CompiledAppearanceProgram<'program> {
         S: Fn(usize) -> Srgb8,
         O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
+        self.execute_paints_into(paint_input_value, opacity_value, resolved_paints);
+        self.execute_render_into(
+            surface_value,
+            resolved_paints,
+            resolved_surfaces,
+            resolved_occurrences,
+        );
+    }
+
+    fn execute_paints_into<P, O>(
+        &self,
+        paint_input_value: P,
+        opacity_value: O,
+        resolved_paints: &mut [Option<EncodedPointPaintV1>],
+    ) where
+        P: Fn(usize) -> EncodedPointPaintValueV1,
+        O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
+    {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
-        debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
-        debug_assert_eq!(resolved_occurrences.len(), self.occurrences.len());
 
         for &index in self.paint_topo {
+            #[cfg(test)]
+            PAINT_NODE_EVALUATIONS.with(|count| count.set(count.get() + 1));
             let paint = match self.paints[index] {
                 CompiledPaintSpec::Input { id, input_index } => {
                     EncodedPointPaintV1::from_value(id, paint_input_value(input_index))
@@ -2344,6 +2438,20 @@ impl<'program> CompiledAppearanceProgram<'program> {
             };
             resolved_paints[index] = Some(paint);
         }
+    }
+
+    fn execute_render_into<S>(
+        &self,
+        surface_value: S,
+        resolved_paints: &[Option<EncodedPointPaintV1>],
+        resolved_surfaces: &mut [Option<Srgb8>],
+        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+    ) where
+        S: Fn(usize) -> Srgb8,
+    {
+        debug_assert_eq!(resolved_paints.len(), self.paints.len());
+        debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
+        debug_assert_eq!(resolved_occurrences.len(), self.occurrences.len());
 
         for node in self.render_topo {
             match *node {
@@ -2379,4 +2487,19 @@ impl<'program> CompiledAppearanceProgram<'program> {
             }
         }
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static PAINT_NODE_EVALUATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_paint_node_evaluation_count() {
+    PAINT_NODE_EVALUATIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn paint_node_evaluation_count() -> usize {
+    PAINT_NODE_EVALUATIONS.with(std::cell::Cell::get)
 }

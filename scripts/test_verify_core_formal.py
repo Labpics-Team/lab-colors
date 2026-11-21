@@ -524,6 +524,42 @@ class FormalReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_mutant(report, 1, MUTANT)
 
+    def test_opacity_addition_mutant_requires_literal_product_failure(self):
+        mutant = next(item for item in MUTANTS if item[0] == "opacity-multiply-as-addition")
+        # Kani reports the exact-product failure before any domain failure.
+        # A later property need not be falsified by the same counterexample.
+        product = json.dumps("opacity multiplication must preserve the literal binary64 product")
+        domain = json.dumps("multiplying any admitted opacities must preserve the entire canonical unit domain")
+        for later_status in ("Success", "Unreachable"):
+            with self.subTest(later_status=later_status):
+                report = {"verification_results": {
+                    "summary": {"total_harnesses": 1, "executed": 1, "successful": 0,
+                                "failed": 1, "status": "completed"},
+                    "results": [{
+                        "harness_id": "composition::proofs::multiply_preserves_the_entire_admitted_domain",
+                        "status": "Failure",
+                        "checks": [
+                            {"category": "assertion", "status": "Failure", "description": product},
+                            {"category": "assertion", "status": later_status, "description": domain},
+                            *({"category": "cover", "status": "Unsatisfiable", "description": label}
+                              for label in ("positive product underflow", "subnormal product", "opaque product")),
+                        ],
+                    }],
+                }}
+                validate_mutant(report, 1, mutant)
+
+                wrong_target = copy.deepcopy(report)
+                checks = wrong_target["verification_results"]["results"][0]["checks"]
+                checks[0]["status"] = "Success"
+                checks[1]["status"] = "Failure"
+                with self.assertRaisesRegex(ValueError, "required semantic assertion"):
+                    validate_mutant(wrong_target, 1, mutant)
+
+                missing_target = copy.deepcopy(report)
+                missing_target["verification_results"]["results"][0]["checks"].pop(0)
+                with self.assertRaisesRegex(ValueError, "required semantic assertion"):
+                    validate_mutant(missing_target, 1, mutant)
+
 
     def test_mutant_shards_cover_each_mutant_exactly_once(self):
         selected = []

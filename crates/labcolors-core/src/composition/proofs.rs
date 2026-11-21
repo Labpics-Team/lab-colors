@@ -146,7 +146,12 @@ fn multiply_preserves_the_entire_admitted_domain() {
     if left > AdmittedOpacityV1::OPAQUE.bits() || right > AdmittedOpacityV1::OPAQUE.bits() {
         return;
     }
-    let result = AdmittedOpacityV1(left).multiply(AdmittedOpacityV1(right));
+    let result = AdmittedOpacityV1::from_canonical_bits(left)
+        .multiply(AdmittedOpacityV1::from_canonical_bits(right));
+    assert!(
+        result.bits() == (f64::from_bits(left) * f64::from_bits(right)).to_bits(),
+        "opacity multiplication must preserve the literal binary64 product"
+    );
     assert!(
         result.bits() <= AdmittedOpacityV1::OPAQUE.bits(),
         "multiplying any admitted opacities must preserve the entire canonical unit domain"

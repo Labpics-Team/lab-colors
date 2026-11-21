@@ -4,18 +4,19 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { measurementProtocol, splitMeasurements } from "./measurement-protocol.mjs";
 
 const packageRoot = resolve(process.argv[2] ?? dirname(fileURLToPath(new URL("../index.js", import.meta.url))));
 const pattern = process.argv[3] ?? "repeated";
 const nodes = Number(process.argv[4] ?? 8);
-const samples = Number(process.argv[5] ?? 7);
+const protocol = measurementProtocol({ samples: process.argv[5], warmups: process.argv[7], frames: process.argv[8] });
+const { samples, warmups, frames } = protocol;
 const requestedReadout = process.argv[6] ?? "auto";
 assert.ok(["repeated", "distinct", "shared", "grouped", "ring", "sparse", "complete", "bipartite"].includes(pattern), "pattern: repeated | distinct | shared | grouped | ring | sparse | complete | bipartite");
 assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..4096");
 assert.ok(pattern !== "ring" || (nodes >= 3 && nodes <= 2048), "ring nodes: 3..2048 (two hard constraints per node)");
 assert.ok(!["complete", "bipartite"].includes(pattern) || (nodes >= 2 && nodes <= 32), "dense diagnostic nodes: 2..32");
 assert.ok(pattern !== "bipartite" || nodes % 2 === 0, "bipartite nodes must be even");
-assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
 assert.ok(["auto", "table", "getters"].includes(requestedReadout), "readout: auto | table | getters");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
 const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v1.js")));
@@ -67,7 +68,7 @@ if (pattern === "ring") {
 }
 const wire = builder.finish();
 const results = [];
-for (let sample = 0; sample <= samples; sample += 1) {
+for (let sample = 0; sample < warmups + samples; sample += 1) {
   const start = performance.now();
   const runtime = api.compileProgramWire(wire, 1);
   const compileMs = performance.now() - start;
@@ -75,7 +76,7 @@ for (let sample = 0; sample <= samples; sample += 1) {
   const updates = [];
   let checksum = 0;
   try {
-    for (let index = 0; index < 64; index += 1) {
+    for (let index = 0; index < frames; index += 1) {
       const refused = index % 4 === 2;
       const background = refused ? [0, 0, 0] : [255 - index % 2, 255, 255];
       if (sparseBackgrounds !== null) {
@@ -122,10 +123,8 @@ for (let sample = 0; sample <= samples; sample += 1) {
   }
   results.push({ compileMs, cycleMs: performance.now() - start, updatesMs: updates, checksum });
 }
-assert.ok(results.every((result) => result.checksum === results[0].checksum));
-const cold = results.shift();
 console.log(JSON.stringify({
-  node: process.version, v8: process.versions.v8, producer, pattern, nodes, samples, readout,
+  node: process.version, v8: process.versions.v8, producer, pattern, nodes, readout, ...protocol,
   wasmBytes: wasm.length, wasmSha256: createHash("sha256").update(wasm).digest("hex"),
-  initializationMs, cold, samplesAfterWarmup: results, maxRssKiB: process.resourceUsage().maxRSS,
+  initializationMs, ...splitMeasurements(results, protocol), maxRssKiB: process.resourceUsage().maxRSS,
 }));

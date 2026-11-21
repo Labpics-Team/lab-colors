@@ -4643,16 +4643,28 @@ where
         });
     let previous_strides = previous_storage
         .map(|(_, storage)| {
+            // Размер строки уже задан неизменяемой программой. Не выводим его
+            // заново делением длины отчёта на число физических сценариев.
+            let strides = [
+                epoch.constraints.len(),
+                epoch.relation_members_per_case,
+                epoch.point_presentations.len(),
+                epoch.point_presentations.steps_per_case(),
+            ];
             let lengths = [
                 storage.cells.len(),
                 storage.relation_members.len(),
                 storage.point_causal_records.len(),
                 storage.point_causal_steps.len(),
             ];
-            if lengths.into_iter().any(|length| length % case_count != 0) {
+            if lengths
+                .into_iter()
+                .zip(strides)
+                .any(|(length, stride)| stride.checked_mul(case_count) != Some(length))
+            {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
-            Ok(lengths.map(|length| length / case_count))
+            Ok(strides)
         })
         .transpose()?;
     if let (Some(outputs), Some((_, storage))) = (outputs.as_deref_mut(), previous_storage) {
@@ -4662,6 +4674,11 @@ where
     }
     let mut has_hard_violation = false;
     let mut output_mismatch = None;
+    // Paint/opacity stay fixed throughout this candidate and phase. Borrow
+    // the workspace once, but defer physical preparation until a case cannot
+    // reuse exact evidence. A fully unchanged update performs no Paint work.
+    let mut workspace = Some(&mut *runtime.workspace);
+    let mut prepared_paints = None;
     for case_index in 0..case_count {
         let values = scenario_set
             .physical_values(case_index)
@@ -4744,16 +4761,24 @@ where
                 continue;
             }
         }
-        runtime
-            .bindings
-            .overwrite_surface_inputs_canonical(schema.as_slice().iter().copied(), |index| {
-                values[index].srgb8()
-            })
-            .map_err(map_program_execution_binding_error)?;
-        let evaluation = epoch
-            .graph
-            .evaluate_admitted_into(runtime.bindings, runtime.workspace)
-            .map_err(map_program_execution_binding_error)?;
+        if prepared_paints.is_none() {
+            prepared_paints = Some(
+                epoch
+                    .graph
+                    .prepare_paints_for_surface_cases(
+                        runtime.bindings,
+                        schema.as_slice().iter().copied(),
+                        workspace
+                            .take()
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
+                    )
+                    .map_err(map_program_execution_binding_error)?,
+            );
+        }
+        let evaluation = prepared_paints
+            .as_mut()
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
+            .evaluate_surface_inputs_canonical(|index| values[index].srgb8());
         runtime.presentation_cache.begin_case(phase);
 
         if let Some(point_causal) = point_causal.as_mut() {

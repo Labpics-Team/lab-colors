@@ -4,6 +4,8 @@
 //! единственную физическую операцию encoded-sRGB8 source-over, чтобы proposal,
 //! appearance runtime и revision-bound recheck не могли разойтись по арифметике.
 
+use std::num::NonZeroU64;
+
 /// Typed отказ admission straight alpha. Диагностический transport-текст
 /// строится только legacy façade-ом; нижняя физика не хранит stringly error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,13 +31,26 @@ pub(crate) enum CompositionProfileV1 {
 ///
 /// Значение хранится битами: `-0.0` понижается в единственный физический `+0.0`
 /// state, а все остальные binary64 значения сохраняются точно.
+/// Внутренний sign bit установлен: у admitted-домена он всегда свободен, поэтому
+/// `Option` использует нулевой storage без отдельного discriminant. Наружу выходят
+/// только исходные канонические биты, без изменения точности или wire identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AdmittedOpacityV1(u64);
+#[repr(transparent)]
+pub(crate) struct AdmittedOpacityV1(NonZeroU64);
 
 impl AdmittedOpacityV1 {
+    const STORAGE_BIT: u64 = 1 << 63;
+
     #[cfg(any(test, kani))]
-    pub(crate) const TRANSPARENT: Self = Self(0.0f64.to_bits());
-    pub(crate) const OPAQUE: Self = Self(1.0f64.to_bits());
+    pub(crate) const TRANSPARENT: Self = Self::from_canonical_bits(0.0f64.to_bits());
+    pub(crate) const OPAQUE: Self = Self::from_canonical_bits(1.0f64.to_bits());
+
+    /// Вызывается только после admission или замкнутой операции над `[0,1]`.
+    const fn from_canonical_bits(bits: u64) -> Self {
+        // Установленный bit делает storage ненулевым для любого u64: ветка
+        // отказа expect недостижима независимо от float-значения, unsafe не нужен.
+        Self(NonZeroU64::new(bits | Self::STORAGE_BIT).expect("opacity storage bit is set"))
+    }
 
     pub(crate) fn new(alpha: f64) -> Result<Self, OpacityAdmissionErrorV1> {
         if !alpha.is_finite() {
@@ -45,31 +60,31 @@ impl AdmittedOpacityV1 {
             return Err(OpacityAdmissionErrorV1::OutsideUnitInterval);
         }
         let canonical = if alpha == 0.0 { 0.0 } else { alpha };
-        Ok(Self(canonical.to_bits()))
+        Ok(Self::from_canonical_bits(canonical.to_bits()))
     }
 
     pub(crate) const fn bits(self) -> u64 {
-        self.0
+        self.0.get() ^ Self::STORAGE_BIT
     }
 
     pub(crate) const fn value(self) -> f64 {
-        f64::from_bits(self.0)
+        f64::from_bits(self.bits())
     }
 
     /// Непосредственный binary64 predecessor внутри канонического `[0,1]`.
     #[cfg(any(test, kani))]
     pub(crate) const fn predecessor(self) -> Option<Self> {
-        if self.0 == Self::TRANSPARENT.0 {
+        if self.bits() == 0 {
             None
         } else {
-            Some(Self(self.0 - 1))
+            Some(Self::from_canonical_bits(self.bits() - 1))
         }
     }
 
     /// Композиция opacity-конструкторов замкнута в admitted `[0,1]`: два
     /// конечных неотрицательных множителя не могут создать новый invalid state.
     pub(crate) fn multiply(self, rhs: Self) -> Self {
-        Self((self.value() * rhs.value()).to_bits())
+        Self::from_canonical_bits((self.value() * rhs.value()).to_bits())
     }
 }
 
@@ -181,7 +196,45 @@ pub(crate) fn source_over_channel_value(tint: u8, alpha: f64, backdrop: u8) -> f
 }
 
 pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u8 {
-    source_over_channel_value(tint, alpha, backdrop).round() as u8
+    round_encoded_channel(source_over_channel_value(tint, alpha, backdrop))
+}
+
+/// Один byte-закон: nearest, half-ties away from zero, затем saturating cast.
+/// Выбор исполнения остаётся внутри физики и не меняет контракт потребителя.
+fn round_encoded_channel(value: f64) -> u8 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        round_encoded_channel_threshold(value)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        round_encoded_channel_ties_even(value)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "wasm32")))]
+    {
+        value.round() as u8
+    }
+}
+
+/// Все пороги `integer + 0.5` точно представимы в binary64. Сравнение с ними
+/// сохраняет даже непосредственных соседей каждого half-tie: в отличие от
+/// `value + 0.5`, оно не округляет исходное значение перед сравнением.
+/// Saturating cast/add сохраняют результат вне byte-диапазона, включая NaN и ±∞.
+#[cfg(any(test, target_arch = "x86_64"))]
+fn round_encoded_channel_threshold(value: f64) -> u8 {
+    let integer = value as u8;
+    integer.saturating_add(u8::from(value >= f64::from(integer) + 0.5))
+}
+
+/// На неотрицательном byte-домене nearest-even отличается только на нижнем
+/// half-tie: `value == rounded + 0.5`. Каждый такой порог точен в binary64,
+/// поэтому коррекция восстанавливает прежний half-away byte без изменения
+/// исходного value. Вне byte-домена saturating cast сохраняет прежний результат,
+/// включая отрицательные значения, signed zero, NaN и бесконечности.
+#[cfg(any(test, target_arch = "wasm32"))]
+fn round_encoded_channel_ties_even(value: f64) -> u8 {
+    let rounded = value.round_ties_even();
+    (rounded + f64::from(value == rounded + 0.5)) as u8
 }
 
 pub(crate) fn source_over_srgb8(
@@ -215,6 +268,184 @@ mod tests {
         AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1,
         OpacityDomainAdmissionErrorV1, OpacityDomainV1,
     };
+
+    fn assert_rounding_backends(value: f64, expected: u8) {
+        assert_eq!(
+            super::round_encoded_channel_threshold(value),
+            expected,
+            "threshold for {value:?}",
+        );
+        assert_eq!(
+            super::round_encoded_channel_ties_even(value),
+            expected,
+            "nearest-even correction for {value:?}",
+        );
+        assert_eq!(
+            super::round_encoded_channel(value),
+            expected,
+            "selected backend for {value:?}",
+        );
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_every_half_tie_and_its_neighbours() {
+        for integer in 0_u16..255 {
+            let halfway = (f64::from(integer) + 0.5).to_bits();
+            for bits in halfway - 4..=halfway + 4 {
+                let expected = if bits < halfway {
+                    integer as u8
+                } else {
+                    (integer + 1) as u8
+                };
+                let value = f64::from_bits(bits);
+                assert_rounding_backends(value, expected);
+                assert_rounding_backends(-value, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_saturation_and_nonfinite_casts() {
+        for value in [
+            0.0,
+            -0.0,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            -1.5,
+            -2.5,
+            255.0,
+            255.5,
+            256.0,
+            256.5,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            f64::from_bits(0x7ff0_0000_0000_0001),
+            f64::from_bits(0xfff0_0000_0000_0001),
+        ] {
+            assert_rounding_backends(value, value.round() as u8);
+        }
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_source_over_fractional_bytes() {
+        let opacities = [
+            f64::from_bits(1),
+            0.25,
+            f64::from_bits(0.5_f64.to_bits() - 1),
+            0.5,
+            f64::from_bits(0.5_f64.to_bits() + 1),
+            0.75,
+            f64::from_bits(1.0_f64.to_bits() - 1),
+        ];
+        for source in u8::MIN..=u8::MAX {
+            for backdrop in u8::MIN..=u8::MAX {
+                for alpha in opacities {
+                    let value =
+                        f64::from(backdrop) + alpha * (f64::from(source) - f64::from(backdrop));
+                    let expected = value.round() as u8;
+                    assert_rounding_backends(value, expected);
+                    assert_eq!(
+                        super::source_over_channel_srgb8(source, alpha, backdrop),
+                        expected,
+                    );
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn byte_rounding_backends_preserve_arbitrary_binary64_casts(
+            bits in proptest::prelude::any::<u64>(),
+        ) {
+            let value = f64::from_bits(bits);
+            assert_rounding_backends(value, value.round() as u8);
+        }
+    }
+
+    #[test]
+    fn admitted_opacity_preserves_raw_bits_across_every_binary64_exponent()
+    -> Result<(), OpacityAdmissionErrorV1> {
+        // Независимый bit-domain oracle включает оба знака, subnormal/normal
+        // швы, допустимую 1.0, значения выше неё, infinities и NaN payloads.
+        let fractions = [
+            0,
+            1,
+            (1_u64 << 51) - 1,
+            1 << 51,
+            (1 << 52) - 2,
+            (1 << 52) - 1,
+        ];
+        for sign in [0, 1_u64 << 63] {
+            for exponent in 0..=0x7ff_u64 {
+                for fraction in fractions {
+                    let bits = sign | (exponent << 52) | fraction;
+                    let actual = AdmittedOpacityV1::new(f64::from_bits(bits));
+                    if bits <= 1.0_f64.to_bits() || bits == 1_u64 << 63 {
+                        let expected = if bits == 1_u64 << 63 { 0 } else { bits };
+                        let opacity = actual?;
+                        assert_eq!(opacity.bits(), expected);
+                        assert_eq!(opacity.value().to_bits(), expected);
+                        assert_eq!(
+                            opacity.predecessor().map(|value| value.bits()),
+                            expected.checked_sub(1)
+                        );
+                    } else {
+                        let expected = if exponent == 0x7ff {
+                            OpacityAdmissionErrorV1::NonFinite
+                        } else {
+                            OpacityAdmissionErrorV1::OutsideUnitInterval
+                        };
+                        assert_eq!(actual, Err(expected));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_opacity_multiply_preserves_literal_binary64_products()
+    -> Result<(), OpacityAdmissionErrorV1> {
+        // Expected приходит из исходных f64-битов, не из getters storage.
+        // Каждая binade встречается с interior, endpoint и underflow factors.
+        let fractions = [0, 1, (1_u64 << 51) - 1, 1 << 51, (1 << 52) - 1];
+        let factors = [
+            0,
+            1,
+            (1_u64 << 52) - 1,
+            1 << 52,
+            0.5_f64.to_bits() - 1,
+            0.5_f64.to_bits(),
+            0.5_f64.to_bits() + 1,
+            1.0_f64.to_bits() - 1,
+            1.0_f64.to_bits(),
+        ];
+        for exponent in 0..=0x3ff_u64 {
+            for fraction in fractions {
+                let left = (exponent << 52) | fraction;
+                if left > 1.0_f64.to_bits() {
+                    continue;
+                }
+                for right in factors {
+                    let left_value = f64::from_bits(left);
+                    let right_value = f64::from_bits(right);
+                    let product = AdmittedOpacityV1::new(left_value)?
+                        .multiply(AdmittedOpacityV1::new(right_value)?);
+                    let expected = (left_value * right_value).to_bits();
+                    assert_eq!(product.bits(), expected);
+                    assert_eq!(product.value().to_bits(), expected);
+                    assert!(product.bits() <= 1.0_f64.to_bits());
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn source_over_endpoints_match_the_literal_law_for_every_byte_pair() {

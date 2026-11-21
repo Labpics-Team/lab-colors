@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path
@@ -21,17 +22,28 @@ parser.add_argument("--head-revision", required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--timeout", type=int, default=180)
 parser.add_argument("--budget", type=int, default=900)
+parser.add_argument("--samples", type=int, default=3)
+parser.add_argument("--warmups", type=int, default=1,
+                    help="cycles before retained samples, including the cold cycle")
+parser.add_argument("--frames", type=int, default=64)
 parser.add_argument("--profile", action="store_true",
                     help="retain separate CPU profiles after the latency comparison")
 args = parser.parse_args()
 if args.timeout <= 0 or args.budget <= 0:
     parser.error("timeout and budget must be positive seconds")
+if not 3 <= args.samples <= 100 or not 1 <= args.warmups <= (2**53 - 1 - args.samples):
+    parser.error("samples must be 3..100 and warmups a positive safe integer")
+if not 0 < args.frames <= 2**53 - 1 or args.frames % 4:
+    parser.error("frames must be a positive safe integer divisible by four")
 for revision in (args.baseline_revision, args.candidate_revision, args.head_revision):
     if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
         parser.error("revisions must be full lowercase Git commit IDs")
 args.harness = args.harness.resolve(strict=True)
 if not args.harness.is_file():
     parser.error("harness must be a file")
+protocol_source = args.harness.with_name("measurement-protocol.mjs")
+if not protocol_source.is_file():
+    parser.error("the harness measurement-protocol.mjs must be present")
 for root in (args.baseline, args.candidate):
     for relative in ("index.js", "program-wire/abi-v1.js", "pkg/labcolors_bg.wasm"):
         if not (root / relative).is_file():
@@ -64,10 +76,45 @@ metadata = {
     "wasmSha256": {label: hashlib.sha256((root / "pkg/labcolors_bg.wasm").read_bytes()).hexdigest()
                    for label, root in roots.items()},
     "harnessSha256": hashlib.sha256(args.harness.read_bytes()).hexdigest(),
-    "samplesAfterWarmup": 3,
+    "protocolSha256": hashlib.sha256(protocol_source.read_bytes()).hexdigest(),
+    "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    "measurementMode": "diagnostic",
+    "stabilization": "unverified",
+    "samplingUnit": "process",
+    "aggregation": "median-of-paired-process-ratios",
+    "samplesAfterWarmup": args.samples,
+    "warmups": args.warmups,
+    "frames": args.frames,
     "rounds": 2,
 }
 (args.output / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+
+def validate_measurement(measurement, pattern, nodes, label):
+    expected = {"pattern": pattern, "nodes": nodes, "samples": args.samples,
+                "warmups": args.warmups, "frames": args.frames,
+                "wasmSha256": metadata["wasmSha256"][label],
+                "measurementMode": "diagnostic", "stabilization": "unverified"}
+    if any(measurement.get(key) != value for key, value in expected.items()):
+        raise ValueError("consumer differs from the requested workload or artifact")
+    warmup = measurement["warmupSamples"]
+    retained = measurement["samplesAfterWarmup"]
+    if len(warmup) != args.warmups - 1 or len(retained) != args.samples:
+        raise ValueError("consumer omitted or added cycles")
+    samples = [measurement["cold"], *warmup, *retained]
+    for sample in samples:
+        updates = sample["updatesMs"]
+        if len(updates) != args.frames:
+            raise ValueError("consumer omitted or added frames")
+        if (any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                for value in [sample["compileMs"], sample["cycleMs"], *updates])
+                or min(sample["compileMs"], sample["cycleMs"], sum(updates)) <= 0):
+            raise ValueError("consumer returned invalid timing")
+    if len({sample["checksum"] for sample in samples}) != 1:
+        raise ValueError("consumer results changed between cycles")
+    return samples
+
+
 observations = []
 scenarios = {
     nodes: ("repeated", "distinct", "shared", "grouped", "sparse") + (("ring",) if nodes <= 1024 else ())
@@ -83,8 +130,10 @@ for nodes, patterns in scenarios.items():
             order = ("baseline", "candidate") if round_index == 0 else ("candidate", "baseline")
             for label in order:
                 started = time.monotonic()
-                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
-                record = {"variant": label, "pattern": pattern, "nodes": nodes, "round": round_index}
+                command = ["node", str(args.harness), str(roots[label]), pattern, str(nodes),
+                           str(args.samples), "auto", str(args.warmups), str(args.frames)]
+                record = {"variant": label, "pattern": pattern, "nodes": nodes,
+                          "round": round_index, "command": command}
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     record["status"] = "budget-exhausted"
@@ -96,9 +145,10 @@ for nodes, patterns in scenarios.items():
                         if process.returncode == 0:
                             try:
                                 record["measurement"] = json.loads(process.stdout)
+                                validate_measurement(record["measurement"], pattern, nodes, label)
                                 record["status"] = "completed"
-                            except ValueError:
-                                record["status"] = "invalid-output"
+                            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                                record.update(status="invalid-output", error=str(error))
                         else:
                             record["status"] = "failed"
                     except subprocess.TimeoutExpired as error:
@@ -116,29 +166,39 @@ for nodes, patterns in scenarios.items():
 summary = []
 for nodes, patterns in scenarios.items():
     for pattern in patterns:
-        row = {"pattern": pattern, "nodes": nodes}
+        row = {"pattern": pattern, "nodes": nodes, "measurementMode": "diagnostic",
+               "stabilization": "unverified", "samplingUnit": "process"}
         matching = [r for r in observations if r["pattern"] == pattern and r["nodes"] == nodes]
         for label in roots:
             records = [r for r in matching if r["variant"] == label]
             row[label] = {"statuses": [r["status"] for r in records]}
             if len(records) == 2 and all(r["status"] == "completed" for r in records):
                 measurements = [r["measurement"] for r in records]
-                samples = [s for m in measurements for s in m["samplesAfterWarmup"]]
+                process_medians = [{
+                    "round": record["round"],
+                    "compileMs": statistics.median(s["compileMs"] for s in record["measurement"]["samplesAfterWarmup"]),
+                    "updatesMs": statistics.median(sum(s["updatesMs"]) for s in record["measurement"]["samplesAfterWarmup"]),
+                    "cycleMs": statistics.median(s["cycleMs"] for s in record["measurement"]["samplesAfterWarmup"]),
+                } for record in records]
                 row[label].update(
-                    compileMedianMs=statistics.median(s["compileMs"] for s in samples),
-                    updatesMedianMs=statistics.median(sum(s["updatesMs"]) for s in samples),
-                    cycleMedianMs=statistics.median(s["cycleMs"] for s in samples),
+                    processMedians=process_medians,
+                    compileMedianMs=statistics.median(s["compileMs"] for s in process_medians),
+                    updatesMedianMs=statistics.median(s["updatesMs"] for s in process_medians),
+                    cycleMedianMs=statistics.median(s["cycleMs"] for s in process_medians),
                     coldCycleMedianMs=statistics.median(m["cold"]["cycleMs"] for m in measurements),
                     maxRssKiB=max(m["maxRssKiB"] for m in measurements),
                     wasmSha256=sorted({m["wasmSha256"] for m in measurements}),
-                    checksums=sorted({s["checksum"] for s in samples}),
+                    checksums=sorted({m["cold"]["checksum"] for m in measurements}),
                 )
         if all("compileMedianMs" in row[label] for label in roots):
             if row["baseline"]["checksums"] != row["candidate"]["checksums"]:
                 raise SystemExit(f"output checksum changed: {pattern}/{nodes}")
-            row["compileSpeedup"] = row["baseline"]["compileMedianMs"] / row["candidate"]["compileMedianMs"]
-            row["updatesSpeedup"] = row["baseline"]["updatesMedianMs"] / row["candidate"]["updatesMedianMs"]
-            row["cycleSpeedup"] = row["baseline"]["cycleMedianMs"] / row["candidate"]["cycleMedianMs"]
+            for metric in ("compile", "updates", "cycle"):
+                by_side = {label: {p["round"]: p[f"{metric}Ms"] for p in row[label]["processMedians"]}
+                           for label in roots}
+                ratios = [by_side["baseline"][index] / by_side["candidate"][index] for index in range(2)]
+                row[f"{metric}PairedSpeedups"] = ratios
+                row[f"{metric}Speedup"] = statistics.median(ratios)
         summary.append(row)
 (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 print(json.dumps(summary, indent=2), flush=True)
@@ -177,7 +237,8 @@ if args.profile:
         }
         command = ["node", "--cpu-prof", f"--cpu-prof-dir={profile_root}",
                    f"--cpu-prof-name={profile_path.name}", "--cpu-prof-interval=1000",
-                   str(args.harness), str(roots[label]), pattern, str(nodes), "3"]
+                   str(args.harness), str(roots[label]), pattern, str(nodes),
+                   str(args.samples), "auto", str(args.warmups), str(args.frames)]
         started = time.monotonic()
         remaining = profile_deadline - started
         if remaining <= 0:
@@ -191,13 +252,12 @@ if args.profile:
                 if process.returncode == 0:
                     try:
                         measurement = json.loads(process.stdout)
-                        samples = [measurement["cold"], *measurement["samplesAfterWarmup"]]
+                        samples = validate_measurement(measurement, pattern, nodes, label)
                         checksums = sorted({sample["checksum"] for sample in samples})
                         reference = next(row[label] for row in summary
                                          if row["pattern"] == pattern and row["nodes"] == nodes)
                         if (measurement["wasmSha256"] != record["wasmSha256"]
                                 or measurement["pattern"] != pattern or measurement["nodes"] != nodes
-                                or measurement["samples"] != 3 or len(samples) != 4
                                 or len(checksums) != 1
                                 or ("checksums" in reference and checksums != reference["checksums"])):
                             raise ValueError("profiled consumer differs from the measured workload")

@@ -83,6 +83,66 @@ fn observation_shape_is_checked_without_allocating_or_reading_missing_values() {
 }
 
 #[test]
+fn public_multicase_update_prepares_paints_only_for_a_fresh_candidate_pass() -> Result<(), String> {
+    let mut builder = ProgramWireBuilderV1::new();
+    builder
+        .source(1, Srgb8::new([0; 3]))
+        .fixed_target(2, 1)
+        .surface_input_port(6)
+        .opacity_input(5, 0.5)
+        .solid_paint(3, 2)
+        .opacity_paint(4, 3, 5)
+        .input_surface(7, 6)
+        .source_over_occurrence(8, 4, 7, 64.0, 0.2, 2)
+        .presentation_root(9, 8)
+        .presentation_target(9, 8)
+        .wcag22_visible_unary(true, 10, 8, 3)
+        .output(17, 4);
+    let mut session =
+        compile_program_wire_v1(&builder.finish().map_err(|error| format!("{error:?}"))?)
+            .map_err(|error| format!("{error:?}"))?
+            .instantiate(100)
+            .map_err(|error| format!("{error:?}"))?;
+    let ids = [1, 2, 3];
+    let mut first = None;
+    for (revision, grays, paint_nodes, expected_state) in [
+        (1, [200, 210, 220], 2, ProgramSnapshotStateV1::Ready),
+        (2, [200, 210, 220], 0, ProgramSnapshotStateV1::Ready),
+        (3, [200, 211, 220], 2, ProgramSnapshotStateV1::Ready),
+        (4, [200, 211, 220], 0, ProgramSnapshotStateV1::Ready),
+        (5, [202, 213, 222], 2, ProgramSnapshotStateV1::Ready),
+        (6, [0, 213, 222], 2, ProgramSnapshotStateV1::Failed),
+        (7, [204, 215, 224], 2, ProgramSnapshotStateV1::Ready),
+    ] {
+        let rgb = grays.map(|gray| [gray; 3]).concat();
+        crate::appearance::reset_paint_node_evaluation_count();
+        let snapshot = session
+            .update_observed_view(
+                revision,
+                ProgramObservationV1::from_rgb8(&ids, &rgb, 1)
+                    .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(snapshot.state(), expected_state, "revision={revision}");
+        assert_eq!(
+            crate::appearance::paint_node_evaluation_count(),
+            paint_nodes,
+            "revision={revision}"
+        );
+        assert_eq!(snapshot.outputs()[0].source(), Srgb8::new([0; 3]));
+        assert_eq!(snapshot.outputs()[0].opacity(), 0.5);
+        if first.is_none() {
+            first = Some(snapshot);
+        }
+    }
+    let retained = first.ok_or("the first successful snapshot must be retained")?;
+    assert_eq!(retained.state(), ProgramSnapshotStateV1::Ready);
+    assert_eq!(retained.outputs()[0].source(), Srgb8::new([0; 3]));
+    assert_eq!(retained.outputs()[0].opacity(), 0.5);
+    Ok(())
+}
+
+#[test]
 fn warmed_single_output_update_needs_no_heap() {
     for count in [1, 8, 32] {
         let mut session = compile_program_wire_v1(&wire())
