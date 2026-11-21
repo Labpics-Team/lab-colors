@@ -77,7 +77,7 @@ BOUND_ID = "wcag22-srgb8-outward-q55-v1"
 PROOF_ID = "wcag22-srgb8-full-domain-q55-v1"
 KERNEL_ID = "wcag22-srgb8-evaluation-kernel-v1"
 EXPECTED_KERNEL_SHA256 = (
-    "f82a1bf356141a1cd79605c889bc0f67b7b861a35de4fe18745d71eee4f36a53"
+    "aef97fdcbb2ffe0fb24af78278da57cb1e74b450f1c95ca8a9ebf55793b8fca9"
 )
 TERMINAL_EVIDENCE_ID = "wcag22-srgb8-terminal-evidence-v1"
 EXPECTED_TERMINAL_EVIDENCE_SHA256 = (
@@ -853,11 +853,14 @@ def verify_production_kernel() -> str:
     required = (
         "Wcag22CriterionV1::Sc143TextDefault => ThresholdV1::FourAndHalf",
         "Wcag22CriterionV1::Sc143TextLargeScale | Wcag22CriterionV1::Sc1411UiComponentOrState | Wcag22CriterionV1::Sc1411GraphicalObject => ThresholdV1::Three",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])]",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])]",
-        "WEIGHTED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])]",
-        "lower: red[0] + green[0] + blue[0]",
-        "upper: red[1] + green[1] + blue[1]",
+        "static PACKED_CONTRIBUTION_BOUNDS: [[u64; 256]; 3] = {",
+        "let mut packed = [[0_u64; 256]; 3]; let mut channel = 0; while channel < 3 { let mut code = 0; while code < 256 {",
+        "let [lower, upper] = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[channel][code];",
+        "assert!(lower <= upper && upper - lower <= 1);",
+        "assert!(upper <= super::q55_data::Q55_SCALE);",
+        "packed[channel][code] = (lower << 2) | (upper - lower); code += 1; } channel += 1; }",
+        "assert!(super::q55_data::Q55_SCALE <= (u64::MAX / 3 - 1) >> 2); packed };",
+        "pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 { let packed = PACKED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])] + PACKED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])] + PACKED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])]; let lower = packed >> 2; Wcag22LuminanceBoundsQ55V1 { lower, upper: lower + (packed & 3), } }",
         "10 * light_lower >= 30 * dark_upper + scale",
         "10 * light_upper < 30 * dark_lower + scale",
         "40 * light_lower >= 180 * dark_upper + 7 * scale",

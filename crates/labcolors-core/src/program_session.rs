@@ -2156,6 +2156,7 @@ where
     presentation_occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
+    relation_members_per_case: usize,
     point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
     #[expect(
@@ -3497,11 +3498,7 @@ where
         epoch.constraints.len(),
         epoch.point_presentations.len(),
         epoch.point_presentations.steps_per_case(),
-        epoch
-            .constraints
-            .iter()
-            .map(compiled_relation_member_count)
-            .try_fold(0_usize, usize::checked_add)?,
+        epoch.relation_members_per_case,
         state_count,
         can_conflict,
     )
@@ -4373,7 +4370,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut arena.cells);
+    canonicalize_program_report_cells(&mut arena.cells, epoch.constraint_phases);
 
     Ok(ProgramEvaluationOutcomeV1::Conflict {
         considered_state_count: state_count,
@@ -4541,7 +4538,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut arena.cells);
+    canonicalize_program_report_cells(&mut arena.cells, epoch.constraint_phases);
     if has_hard_violation {
         Ok(ProgramEvaluationOutcomeV1::Conflict {
             considered_state_count,
@@ -4553,13 +4550,17 @@ where
     }
 }
 
-/// Evaluation is authority-first, while the emitted contract remains
-/// `state × physical case × ConstraintId`. Sorting is in-place and therefore
-/// adds no allocation to the preflight-bounded terminal path.
-fn canonicalize_program_report_cells<Evaluation>(cells: &mut [ProgramConstraintCellV1<Evaluation>])
-where
+/// Each phase emits `state × physical case × ConstraintId` in order.
+/// Only the concatenation of both phases needs to be reordered.
+fn canonicalize_program_report_cells<Evaluation>(
+    cells: &mut [ProgramConstraintCellV1<Evaluation>],
+    phases: CompiledConstraintPhasesV1,
+) where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
+    if !(phases.hard && phases.report_only) {
+        return;
+    }
     cells.sort_unstable_by_key(|cell| {
         (cell.candidate_state_index, cell.case_index, cell.constraint)
     });
@@ -4571,9 +4572,6 @@ fn resolve_visible_relation_endpoint(
     endpoint: CompiledVisibleRelationEndpointV1,
 ) -> Option<(Srgb8, ProgramVisibleRelationBindingV1)> {
     let source = evaluation.occurrence_at(endpoint.slot)?;
-    if source.visible() != source.certificate().output_rgb() {
-        return None;
-    }
     let context = contexts.get(endpoint.occurrence_context_index)?;
     if !coordinate_pair_matches(
         &context.occurrence,
@@ -4813,9 +4811,6 @@ where
                     let source = evaluation
                         .occurrence_at(*slot)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if source.visible() != source.certificate().output_rgb() {
-                        return Err(ProgramSessionEvaluationError::InternalInvariant);
-                    }
                     let binding = epoch
                         .occurrence_contexts
                         .get(*occurrence_context_index)
@@ -5310,6 +5305,12 @@ where
         &mut dependency_scratch,
     )?;
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
+    // Арены каждой ревизии имеют ту же неизменяемую структуру отношений.
+    let relation_members_per_case = constraints
+        .iter()
+        .map(compiled_relation_member_count)
+        .try_fold(0_usize, usize::checked_add)
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
@@ -5337,6 +5338,7 @@ where
         presentation_occurrence_contexts: all_occurrence_contexts,
         constraints,
         constraint_phases,
+        relation_members_per_case,
         point_presentations,
         outputs,
         field,

@@ -2864,8 +2864,9 @@ where
 }
 
 mod ordering {
-    //! Allocation-free ordering for cold Program identity construction.
-    //! Keep the binary small without changing runtime or candidate-order sorting.
+    //! Сортировка без аллокаций для построения identity Program.
+    //! Native использует специализацию стандартного алгоритма; WASM — один
+    //! индексный цикл, чтобы ограничить размер загружаемого и компилируемого кода.
     use core::cmp::Ordering;
 
     pub(crate) fn sort<T: Ord>(values: &mut [T]) {
@@ -2878,10 +2879,18 @@ mod ordering {
 
     pub(crate) fn sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
         // Индексы и однородные клетки часто уже упорядочены. Проверка использует
-        // тот же полный порядок; heap нужен только при настоящей инверсии.
+        // тот же полный порядок; сортировка нужна только при настоящей инверсии.
         if values.is_sorted_by(|left, right| !compare(left, right).is_gt()) {
             return;
         }
+        #[cfg(not(target_family = "wasm"))]
+        values.sort_unstable_by(compare);
+        #[cfg(target_family = "wasm")]
+        shared_sort_by(values, compare);
+    }
+
+    #[cfg(any(target_family = "wasm", test))]
+    fn shared_sort_by<T>(values: &mut [T], mut compare: impl FnMut(&T, &T) -> Ordering) {
         sort_indices(values.len(), &mut |left, right, swap| {
             if swap {
                 values.swap(left, right);
@@ -2894,6 +2903,7 @@ mod ordering {
 
     // Один цикл сортировки обслуживает все типы записей холодного компилятора.
     // Передача операций по индексам сохраняет владение элементами и обходится без аллокаций.
+    #[cfg(any(target_family = "wasm", test))]
     #[inline(never)]
     fn sort_indices(n: usize, operation: &mut dyn FnMut(usize, usize, bool) -> bool) {
         fn sift(
@@ -2928,9 +2938,24 @@ mod ordering {
         use std::cell::Cell;
         use std::rc::Rc;
 
+        fn test_sort_by<T>(
+            shared: bool,
+            values: &mut [T],
+            compare: impl FnMut(&T, &T) -> Ordering,
+        ) {
+            if shared {
+                shared_sort_by(values, compare);
+            } else {
+                sort_by(values, compare);
+            }
+        }
+
         #[test]
         fn all_small_multisets_match_the_standard_library() {
-            for length in 0..=8 {
+            for (shared, length) in [false, true]
+                .into_iter()
+                .flat_map(|shared| (0..=8).map(move |length| (shared, length)))
+            {
                 for mut encoded in 0..3usize.pow(length) {
                     let mut value = Vec::new();
                     for _ in 0..length {
@@ -2939,9 +2964,9 @@ mod ordering {
                     }
                     let mut expected = value.clone();
                     expected.sort_unstable();
-                    sort(&mut value);
+                    test_sort_by(shared, &mut value, Ord::cmp);
                     assert_eq!(value, expected);
-                    sort_by(&mut value, |a, b| b.cmp(a));
+                    test_sort_by(shared, &mut value, |a, b| b.cmp(a));
                     expected.reverse();
                     assert_eq!(value, expected);
                 }
@@ -2982,7 +3007,10 @@ mod ordering {
 
         #[test]
         fn array_shapes_have_bounded_comparisons_and_no_allocator_events() {
-            for shape in 0..5 {
+            for (shared, shape) in [false, true]
+                .into_iter()
+                .flat_map(|shared| (0..5).map(move |shape| (shared, shape)))
+            {
                 let mut values = [0u32; 4096];
                 for (i, value) in values.iter_mut().enumerate() {
                     *value = match shape {
@@ -2997,7 +3025,7 @@ mod ordering {
                 expected.sort_unstable();
                 let mut comparisons = 0usize;
                 let (_, events) = crate::test_support::measured_allocator_events(|| {
-                    sort_by(&mut values, |a, b| {
+                    test_sort_by(shared, &mut values, |a, b| {
                         comparisons += 1;
                         a.cmp(b)
                     });
@@ -3006,7 +3034,7 @@ mod ordering {
                 assert_eq!(events.alloc + events.realloc + events.dealloc, 0);
                 assert!(
                     comparisons <= 4 * values.len() * 12,
-                    "comparison bound {comparisons}"
+                    "shared {shared}, comparison bound {comparisons}"
                 );
             }
         }
@@ -3034,7 +3062,10 @@ mod ordering {
                     self.drops.set(self.drops.get() + 1);
                 }
             }
-            for stop in 0..100 {
+            for (shared, stop) in [false, true]
+                .into_iter()
+                .flat_map(|shared| (0..100).map(move |stop| (shared, stop)))
+            {
                 let drops = Rc::new(Cell::new(0));
                 let mut records: Vec<_> = (0..17)
                     .rev()
@@ -3045,7 +3076,7 @@ mod ordering {
                     .collect();
                 let mut calls = 0;
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    sort_by(&mut records, |a, b| {
+                    test_sort_by(shared, &mut records, |a, b| {
                         if calls == stop {
                             panic!("controlled comparator failure");
                         }

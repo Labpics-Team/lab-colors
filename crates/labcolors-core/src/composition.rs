@@ -152,6 +152,16 @@ impl CompositionProfileV1 {
             Self::EncodedSrgb8SourceOverV1 => {
                 #[cfg(test)]
                 SOURCE_OVER_EVALUATIONS.with(|count| count.set(count.get() + 1));
+                // На byte-домене оба endpoint являются точными тождествами:
+                // при alpha = 1 целочисленные разность и сумма дают tint,
+                // при alpha = 0 остаётся backdrop. Сертификат сохраняет все
+                // входы, но преобразования каналов и округление не нужны.
+                if alpha == AdmittedOpacityV1::OPAQUE {
+                    return tint;
+                }
+                if alpha.bits() == 0 {
+                    return backdrop;
+                }
                 let alpha = alpha.value();
                 [
                     source_over_channel_srgb8(tint[0], alpha, backdrop[0]),
@@ -202,8 +212,34 @@ pub(crate) fn source_over_evaluation_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdmittedOpacityV1, OpacityAdmissionErrorV1, OpacityDomainAdmissionErrorV1, OpacityDomainV1,
+        AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1,
+        OpacityDomainAdmissionErrorV1, OpacityDomainV1,
     };
+
+    #[test]
+    fn source_over_endpoints_match_the_literal_law_for_every_byte_pair() {
+        for source in u8::MIN..=u8::MAX {
+            for backdrop in u8::MIN..=u8::MAX {
+                let source = [source, source.wrapping_add(17), source ^ 0xa5];
+                let backdrop = [backdrop, backdrop ^ 0x5a, backdrop.wrapping_sub(23)];
+                for alpha in [0.0, -0.0, 1.0] {
+                    let expected = std::array::from_fn(|i| {
+                        (f64::from(backdrop[i])
+                            + alpha * (f64::from(source[i]) - f64::from(backdrop[i])))
+                        .round() as u8
+                    });
+                    assert_eq!(
+                        CompositionProfileV1::EncodedSrgb8SourceOverV1.composite(
+                            source,
+                            AdmittedOpacityV1::new(alpha).unwrap(),
+                            backdrop,
+                        ),
+                        expected,
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn opacity_domain_rejects_invalid_or_reversed_boundaries_before_execution() {
