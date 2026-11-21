@@ -105,24 +105,6 @@ fn authority_error(error: core::ProgramMaterializationAuthorityErrorV1) -> LabCo
     )
 }
 
-fn observation<'a>(
-    ids: &'a [u32],
-    surfaces: &'a [u8],
-    count: u32,
-    operation: &str,
-) -> Result<core::ProgramObservationV1<'a>, LabColorsError> {
-    core::ProgramObservationV1::from_rgb8(ids, surfaces, count as usize).map_err(|_| {
-        LabColorsError::new(
-            if operation == "attachmentUpdateObserved" {
-                "program_attachment_update"
-            } else {
-                "program_update"
-            },
-            operation,
-        )
-    })
-}
-
 #[derive(uniffi::Object)]
 pub struct ProgramRuntime {
     inner: Mutex<core::ProgramSessionV1>,
@@ -154,9 +136,9 @@ impl ProgramRuntime {
     ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateObserved";
         let mut inner = enter(&self.inner, operation)?;
-        let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
-        inner
-            .update_observed_view(revision, values)
+        core::ProgramObservationV1::from_rgb8(&scenario_ids, &surfaces, surface_count as usize)
+            .map_err(|_| core::ProgramRuntimeErrorV1::Update)
+            .and_then(|values| inner.update_observed_view(revision, values))
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
     }
@@ -366,9 +348,9 @@ impl ProgramAttachment {
     ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateObserved";
         let mut inner = enter(&self.inner, operation)?;
-        let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
-        inner
-            .update_observed_view(revision, values)
+        core::ProgramObservationV1::from_rgb8(&scenario_ids, &surfaces, surface_count as usize)
+            .map_err(|_| core::ProgramAttachmentUpdateErrorV1::Update)
+            .and_then(|values| inner.update_observed_view(revision, values))
             .map(|inner| Arc::new(ProgramAttachedSnapshot { inner }))
             .map_err(|e| update_error(e, operation))
     }
