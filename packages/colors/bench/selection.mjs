@@ -4,12 +4,13 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { measurementProtocol, splitMeasurements } from "./measurement-protocol.mjs";
 
 const packageRoot = resolve(process.argv[2] ?? "packages/colors");
 const nodes = Number(process.argv[3] ?? 64);
-const samples = Number(process.argv[4] ?? 7);
+const protocol = measurementProtocol({ samples: process.argv[4], warmups: process.argv[5], frames: process.argv[6] });
+const { samples, warmups, frames } = protocol;
 assert.ok(Number.isInteger(nodes) && nodes >= 1 && nodes <= 4096, "nodes: 1..4096");
-assert.ok(Number.isInteger(samples) && samples >= 3 && samples <= 100, "samples: 3..100");
 const api = await import(pathToFileURL(resolve(packageRoot, "index.js")));
 const abi = await import(pathToFileURL(resolve(packageRoot, "program-wire/abi-v2.js")));
 const wasm = await readFile(resolve(packageRoot, "pkg/labcolors_bg.wasm"));
@@ -44,14 +45,14 @@ const cases = [
   { backgrounds: [0, 0, 0], scenarios: [1], state: "ready", level: 180 },
 ];
 const results = [];
-for (let sample = 0; sample <= samples; sample += 1) {
+for (let sample = 0; sample < warmups + samples; sample += 1) {
   const start = performance.now();
   const runtime = api.compileProgramWire(wire, 1);
   const compileMs = performance.now() - start;
   const updatesMs = [];
   let checksum = 0;
   try {
-    for (let index = 0; index < 64; index += 1) {
+    for (let index = 0; index < frames; index += 1) {
       const expected = cases[index % cases.length];
       const updateStart = performance.now();
       const snapshot = runtime.updateObserved(BigInt(index + 1),
@@ -88,10 +89,8 @@ for (let sample = 0; sample <= samples; sample += 1) {
   }
   results.push({ compileMs, cycleMs: performance.now() - start, updatesMs, checksum });
 }
-assert.ok(results.every(({ checksum }) => checksum === results[0].checksum));
-const cold = results.shift();
 console.log(JSON.stringify({
-  node: process.version, v8: process.versions.v8, pattern: "selection", nodes, samples,
+  node: process.version, v8: process.versions.v8, pattern: "selection", nodes, ...protocol,
   wasmBytes: wasm.length, wasmSha256: createHash("sha256").update(wasm).digest("hex"),
-  cold, samplesAfterWarmup: results, maxRssKiB: process.resourceUsage().maxRSS,
+  ...splitMeasurements(results, protocol), maxRssKiB: process.resourceUsage().maxRSS,
 }));
