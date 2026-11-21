@@ -1209,6 +1209,7 @@ impl AdmittedAppearanceBindings {
     /// any admitted value can change. After that O(N) preflight, `value_at` is
     /// called exactly once per canonical input and every destination value is
     /// overwritten exactly once. Neither pass needs lookup or allocation.
+    #[cfg(test)]
     pub(crate) fn overwrite_surface_inputs_canonical(
         &mut self,
         expected_inputs: impl IntoIterator<Item = SurfaceInputPortId>,
