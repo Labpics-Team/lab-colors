@@ -4571,9 +4571,6 @@ fn resolve_visible_relation_endpoint(
     endpoint: CompiledVisibleRelationEndpointV1,
 ) -> Option<(Srgb8, ProgramVisibleRelationBindingV1)> {
     let source = evaluation.occurrence_at(endpoint.slot)?;
-    if source.visible() != source.certificate().output_rgb() {
-        return None;
-    }
     let context = contexts.get(endpoint.occurrence_context_index)?;
     if !coordinate_pair_matches(
         &context.occurrence,
@@ -4813,9 +4810,6 @@ where
                     let source = evaluation
                         .occurrence_at(*slot)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    if source.visible() != source.certificate().output_rgb() {
-                        return Err(ProgramSessionEvaluationError::InternalInvariant);
-                    }
                     let binding = epoch
                         .occurrence_contexts
                         .get(*occurrence_context_index)

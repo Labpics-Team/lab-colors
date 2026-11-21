@@ -1581,14 +1581,14 @@ impl PointOccurrenceAbsenceReplayV1<'_> {
 }
 
 /// Разрешённое применение Paint к Surface. Сертификат структурно принадлежит
-/// occurrence; `surfaceFrom` второго сертификата не создаёт.
+/// occurrence; `surfaceFrom` второго сертификата не создаёт. Видимый результат
+/// и подложка хранятся только в сертификате: физические байты и evidence не
+/// могут разойтись между двумя независимо записываемыми копиями.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedOccurrence {
     id: OccurrenceId,
     subject: PaintId,
     against: SurfaceId,
-    backdrop: [u8; 3],
-    visible: [u8; 3],
     certificate: SourceOverCertificateV1,
 }
 
@@ -1610,17 +1610,17 @@ impl ResolvedOccurrence {
 
     #[cfg(test)]
     pub(crate) fn backdrop(&self) -> [u8; 3] {
-        self.backdrop
+        self.certificate.backdrop_rgb()
     }
 
     pub(crate) fn visible(&self) -> [u8; 3] {
-        self.visible
+        self.certificate.output_rgb()
     }
 
     pub(crate) fn modeled_srgb8_point(&self) -> ModeledSrgb8PointOccurrence {
         ModeledSrgb8PointOccurrence {
-            visible: self.visible,
-            backdrop: self.backdrop,
+            visible: self.certificate.output_rgb(),
+            backdrop: self.certificate.backdrop_rgb(),
         }
     }
 
@@ -2364,13 +2364,10 @@ impl<'program> CompiledAppearanceProgram<'program> {
                         subject.opacity(),
                         backdrop.bytes(),
                     );
-                    let visible = certificate.output_rgb();
                     resolved_occurrences[index] = Some(ResolvedOccurrence {
                         id: spec.id,
                         subject: spec.subject_id,
                         against: spec.against_id,
-                        backdrop: backdrop.bytes(),
-                        visible,
                         certificate,
                     });
                 }

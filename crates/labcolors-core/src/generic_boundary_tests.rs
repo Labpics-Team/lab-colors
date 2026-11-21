@@ -1974,7 +1974,6 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "AppearanceContextId",
         "ProgramVisiblePointPassEvidence",
         "ProgramVisiblePointViolationEvidence",
-        "source.visible() != source.certificate().output_rgb()",
         "assess_program_point_hard(",
     ] {
         assert!(
@@ -1982,6 +1981,18 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
             "Program must retain physical-source evidence and declared context; missing `{required}`",
         );
     }
+
+    let resolved_occurrence = normalized_source_scope(
+        APPEARANCE_SOURCE,
+        "pub(crate) struct ResolvedOccurrence {",
+        "impl ResolvedOccurrence",
+    );
+    assert!(
+        resolved_occurrence.contains("certificate: SourceOverCertificateV1,")
+            && !resolved_occurrence.contains("visible:")
+            && !resolved_occurrence.contains("backdrop:"),
+        "physical bytes must belong to the certificate instead of independently mutable copies",
+    );
     for forbidden in [
         "ModeledLcsOccurrenceV1::from_signal_in_context(",
         "modeled_occurrences: Vec<Option<ModeledLcsOccurrenceV1>>",
