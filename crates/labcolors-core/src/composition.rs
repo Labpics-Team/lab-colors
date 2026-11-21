@@ -196,7 +196,45 @@ pub(crate) fn source_over_channel_value(tint: u8, alpha: f64, backdrop: u8) -> f
 }
 
 pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u8 {
-    source_over_channel_value(tint, alpha, backdrop).round() as u8
+    round_encoded_channel(source_over_channel_value(tint, alpha, backdrop))
+}
+
+/// Один byte-закон: nearest, half-ties away from zero, затем saturating cast.
+/// Выбор исполнения остаётся внутри физики и не меняет контракт потребителя.
+fn round_encoded_channel(value: f64) -> u8 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        round_encoded_channel_threshold(value)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        round_encoded_channel_ties_even(value)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "wasm32")))]
+    {
+        value.round() as u8
+    }
+}
+
+/// Все пороги `integer + 0.5` точно представимы в binary64. Сравнение с ними
+/// сохраняет даже непосредственных соседей каждого half-tie: в отличие от
+/// `value + 0.5`, оно не округляет исходное значение перед сравнением.
+/// Saturating cast/add сохраняют результат вне byte-диапазона, включая NaN и ±∞.
+#[cfg(any(test, target_arch = "x86_64"))]
+fn round_encoded_channel_threshold(value: f64) -> u8 {
+    let integer = value as u8;
+    integer.saturating_add(u8::from(value >= f64::from(integer) + 0.5))
+}
+
+/// На неотрицательном byte-домене nearest-even отличается только на нижнем
+/// half-tie: `value == rounded + 0.5`. Каждый такой порог точен в binary64,
+/// поэтому коррекция восстанавливает прежний half-away byte без изменения
+/// исходного value. Вне byte-домена saturating cast сохраняет прежний результат,
+/// включая отрицательные значения, signed zero, NaN и бесконечности.
+#[cfg(any(test, target_arch = "wasm32"))]
+fn round_encoded_channel_ties_even(value: f64) -> u8 {
+    let rounded = value.round_ties_even();
+    (rounded + f64::from(value == rounded + 0.5)) as u8
 }
 
 pub(crate) fn source_over_srgb8(
@@ -230,6 +268,105 @@ mod tests {
         AdmittedOpacityV1, CompositionProfileV1, OpacityAdmissionErrorV1,
         OpacityDomainAdmissionErrorV1, OpacityDomainV1,
     };
+
+    fn assert_rounding_backends(value: f64, expected: u8) {
+        assert_eq!(
+            super::round_encoded_channel_threshold(value),
+            expected,
+            "threshold for {value:?}",
+        );
+        assert_eq!(
+            super::round_encoded_channel_ties_even(value),
+            expected,
+            "nearest-even correction for {value:?}",
+        );
+        assert_eq!(
+            super::round_encoded_channel(value),
+            expected,
+            "selected backend for {value:?}",
+        );
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_every_half_tie_and_its_neighbours() {
+        for integer in 0_u16..255 {
+            let halfway = (f64::from(integer) + 0.5).to_bits();
+            for bits in halfway - 4..=halfway + 4 {
+                let expected = if bits < halfway {
+                    integer as u8
+                } else {
+                    (integer + 1) as u8
+                };
+                let value = f64::from_bits(bits);
+                assert_rounding_backends(value, expected);
+                assert_rounding_backends(-value, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_saturation_and_nonfinite_casts() {
+        for value in [
+            0.0,
+            -0.0,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            -1.5,
+            -2.5,
+            255.0,
+            255.5,
+            256.0,
+            256.5,
+            f64::MAX,
+            f64::MIN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            f64::from_bits(0x7ff0_0000_0000_0001),
+            f64::from_bits(0xfff0_0000_0000_0001),
+        ] {
+            assert_rounding_backends(value, value.round() as u8);
+        }
+    }
+
+    #[test]
+    fn byte_rounding_backends_preserve_source_over_fractional_bytes() {
+        let opacities = [
+            f64::from_bits(1),
+            0.25,
+            f64::from_bits(0.5_f64.to_bits() - 1),
+            0.5,
+            f64::from_bits(0.5_f64.to_bits() + 1),
+            0.75,
+            f64::from_bits(1.0_f64.to_bits() - 1),
+        ];
+        for source in u8::MIN..=u8::MAX {
+            for backdrop in u8::MIN..=u8::MAX {
+                for alpha in opacities {
+                    let value =
+                        f64::from(backdrop) + alpha * (f64::from(source) - f64::from(backdrop));
+                    let expected = value.round() as u8;
+                    assert_rounding_backends(value, expected);
+                    assert_eq!(
+                        super::source_over_channel_srgb8(source, alpha, backdrop),
+                        expected,
+                    );
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn byte_rounding_backends_preserve_arbitrary_binary64_casts(
+            bits in proptest::prelude::any::<u64>(),
+        ) {
+            let value = f64::from_bits(bits);
+            assert_rounding_backends(value, value.round() as u8);
+        }
+    }
 
     #[test]
     fn admitted_opacity_preserves_raw_bits_across_every_binary64_exponent() {
