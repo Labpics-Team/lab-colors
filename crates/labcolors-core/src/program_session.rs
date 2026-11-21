@@ -2156,6 +2156,7 @@ where
     presentation_occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     constraints: Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     constraint_phases: CompiledConstraintPhasesV1,
+    relation_members_per_case: usize,
     point_presentations: CompiledPointPresentationsV1,
     outputs: Box<[CompiledOutputBinding]>,
     #[expect(
@@ -3497,11 +3498,7 @@ where
         epoch.constraints.len(),
         epoch.point_presentations.len(),
         epoch.point_presentations.steps_per_case(),
-        epoch
-            .constraints
-            .iter()
-            .map(compiled_relation_member_count)
-            .try_fold(0_usize, usize::checked_add)?,
+        epoch.relation_members_per_case,
         state_count,
         can_conflict,
     )
@@ -5304,6 +5301,12 @@ where
         &mut dependency_scratch,
     )?;
     let constraint_phases = CompiledConstraintPhasesV1::from_authored(&program.constraints);
+    // Арены каждой ревизии имеют ту же неизменяемую структуру отношений.
+    let relation_members_per_case = constraints
+        .iter()
+        .map(compiled_relation_member_count)
+        .try_fold(0_usize, usize::checked_add)
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
     let occurrence_contexts =
         compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?;
     let outputs = compile_outputs(&graph, &mut program.outputs)?;
@@ -5331,6 +5334,7 @@ where
         presentation_occurrence_contexts: all_occurrence_contexts,
         constraints,
         constraint_phases,
+        relation_members_per_case,
         point_presentations,
         outputs,
         field,
