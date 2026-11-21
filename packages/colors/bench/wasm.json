@@ -27,12 +27,12 @@
     ]
   },
   "measurement": {
-    "source": "github-actions-run-44821471798",
+    "source": "github-actions-run-44930246972",
     "platform": "linux-x64",
-    "rawBytes": 627422
+    "rawBytes": 620739
   },
   "policy": {
-    "maxRawBytes": 627422,
+    "maxRawBytes": 620739,
     "basis": "measured-reproducible-program-runtime",
     "gzip": "diagnostic-only"
   }
