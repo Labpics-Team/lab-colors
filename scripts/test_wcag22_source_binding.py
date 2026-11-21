@@ -288,6 +288,45 @@ class SourceBindingTests(unittest.TestCase):
         self.assertNotIn("trim_start_matches", clean)
         self.assertNotIn("unwrap_or(0)", clean)
 
+    def test_packed_luminance_semantics_survive_an_explicit_kernel_pin_refresh(self) -> None:
+        verifier = runpy.run_path(str(VERIFIER), run_name="wcag22_verifier_test")
+        verify_kernel = verifier["verify_production_kernel"]
+        source = KERNEL.read_text(encoding="utf-8-sig")
+        verify_kernel()
+        mutations = (
+            ("upper - lower <= 1", "upper - lower <= 2"),
+            ("assert!(upper <= super::q55_data::Q55_SCALE);", "assert!(true);"),
+            ("(lower << 2) | (upper - lower)", "(lower << 3) | (upper - lower)"),
+            ("(lower << 2) | (upper - lower)", "(lower << 2) | 0"),
+            ("(u64::MAX / 3 - 1) >> 2", "(u64::MAX / 3 - 1) >> 1"),
+            ("PACKED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])]", "PACKED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[0])]"),
+            ("+ PACKED_CONTRIBUTION_BOUNDS[1]", "^ PACKED_CONTRIBUTION_BOUNDS[1]"),
+            ("let lower = packed >> 2;", "let lower = packed >> 3;"),
+            ("lower + (packed & 3)", "lower + (packed & 1)"),
+            ("lower + (packed & 3)", "lower - (packed & 3)"),
+        )
+        globals_ = verify_kernel.__globals__
+        original_path = globals_["KERNEL_SOURCE"]
+        original_digest = globals_["EXPECTED_KERNEL_SHA256"]
+        with tempfile.TemporaryDirectory(prefix="labcolors-packed-kernel-") as temp:
+            try:
+                for index, (old, new) in enumerate(mutations):
+                    with self.subTest(old=old, new=new):
+                        self.assertEqual(source.count(old), 1)
+                        mutated = source.replace(old, new, 1)
+                        self.assertNotEqual(mutated, source)
+                        path = Path(temp) / f"kernel-{index}.rs"
+                        path.write_text(mutated, encoding="utf-8")
+                        globals_["KERNEL_SOURCE"] = path
+                        # A reviewed pin refresh must not bypass the independent
+                        # semantic guards for exact packed interval assembly.
+                        globals_["EXPECTED_KERNEL_SHA256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                        with self.assertRaisesRegex(AssertionError, "kernel semantic drift"):
+                            verify_kernel()
+            finally:
+                globals_["KERNEL_SOURCE"] = original_path
+                globals_["EXPECTED_KERNEL_SHA256"] = original_digest
+
     def test_kernel_call_redirects_are_rejected_by_exact_leaf_binding(self) -> None:
         verifier = runpy.run_path(str(VERIFIER), run_name="wcag22_verifier_test")
         verify_kernel = verifier["verify_production_kernel"]
