@@ -175,7 +175,7 @@ CONTRACTS["composition::proofs::multiply_preserves_the_entire_admitted_domain"] 
 MUTANTS += (
     ("opacity-multiply-as-addition", "composition.rs",
      "composition::proofs::multiply_preserves_the_entire_admitted_domain",
-     "multiplying any admitted opacities must preserve the entire canonical unit domain",
+     "opacity multiplication must preserve the literal binary64 product",
      "        Self::from_canonical_bits((self.value() * rhs.value()).to_bits())",
      "        Self::from_canonical_bits((self.value() + rhs.value()).to_bits())"),
 )
