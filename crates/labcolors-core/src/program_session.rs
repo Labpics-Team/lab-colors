@@ -4643,16 +4643,28 @@ where
         });
     let previous_strides = previous_storage
         .map(|(_, storage)| {
+            // Размер строки уже задан неизменяемой программой. Не выводим его
+            // заново делением длины отчёта на число физических сценариев.
+            let strides = [
+                epoch.constraints.len(),
+                epoch.relation_members_per_case,
+                epoch.point_presentations.len(),
+                epoch.point_presentations.steps_per_case(),
+            ];
             let lengths = [
                 storage.cells.len(),
                 storage.relation_members.len(),
                 storage.point_causal_records.len(),
                 storage.point_causal_steps.len(),
             ];
-            if lengths.into_iter().any(|length| length % case_count != 0) {
+            if lengths
+                .into_iter()
+                .zip(strides)
+                .any(|(length, stride)| stride.checked_mul(case_count) != Some(length))
+            {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
-            Ok(lengths.map(|length| length / case_count))
+            Ok(strides)
         })
         .transpose()?;
     if let (Some(outputs), Some((_, storage))) = (outputs.as_deref_mut(), previous_storage) {
