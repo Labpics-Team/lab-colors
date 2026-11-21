@@ -4370,7 +4370,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut arena.cells);
+    canonicalize_program_report_cells(&mut arena.cells, epoch.constraint_phases);
 
     Ok(ProgramEvaluationOutcomeV1::Conflict {
         considered_state_count: state_count,
@@ -4538,7 +4538,7 @@ where
     ) {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    canonicalize_program_report_cells(&mut arena.cells);
+    canonicalize_program_report_cells(&mut arena.cells, epoch.constraint_phases);
     if has_hard_violation {
         Ok(ProgramEvaluationOutcomeV1::Conflict {
             considered_state_count,
@@ -4550,13 +4550,17 @@ where
     }
 }
 
-/// Evaluation is authority-first, while the emitted contract remains
-/// `state × physical case × ConstraintId`. Sorting is in-place and therefore
-/// adds no allocation to the preflight-bounded terminal path.
-fn canonicalize_program_report_cells<Evaluation>(cells: &mut [ProgramConstraintCellV1<Evaluation>])
-where
+/// Each phase emits `state × physical case × ConstraintId` in order.
+/// Only the concatenation of both phases needs to be reordered.
+fn canonicalize_program_report_cells<Evaluation>(
+    cells: &mut [ProgramConstraintCellV1<Evaluation>],
+    phases: CompiledConstraintPhasesV1,
+) where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
+    if !(phases.hard && phases.report_only) {
+        return;
+    }
     cells.sort_unstable_by_key(|cell| {
         (cell.candidate_state_index, cell.case_index, cell.constraint)
     });
