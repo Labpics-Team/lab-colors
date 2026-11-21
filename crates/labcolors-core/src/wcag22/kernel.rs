@@ -24,6 +24,27 @@ enum OrientedDecisionV1 {
     Unresolved,
 }
 
+// Canonical rows remain the sole numeric artifact. Each outward interval has
+// width at most one. Two low bits hold the sum of three widths without carry,
+// so one machine word preserves both endpoints of a channel contribution.
+static PACKED_CONTRIBUTION_BOUNDS: [[u64; 256]; 3] = {
+    let mut packed = [[0_u64; 256]; 3];
+    let mut channel = 0;
+    while channel < 3 {
+        let mut code = 0;
+        while code < 256 {
+            let [lower, upper] = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[channel][code];
+            assert!(lower <= upper && upper - lower <= 1);
+            assert!(upper <= super::q55_data::Q55_SCALE);
+            packed[channel][code] = (lower << 2) | (upper - lower);
+            code += 1;
+        }
+        channel += 1;
+    }
+    assert!(super::q55_data::Q55_SCALE <= (u64::MAX / 3 - 1) >> 2);
+    packed
+};
+
 fn threshold(criterion: Wcag22CriterionV1) -> ThresholdV1 {
     match criterion {
         Wcag22CriterionV1::Sc143TextDefault => ThresholdV1::FourAndHalf,
@@ -34,12 +55,13 @@ fn threshold(criterion: Wcag22CriterionV1) -> ThresholdV1 {
 }
 
 pub(super) fn luminance_bounds(rgb: [u8; 3]) -> Wcag22LuminanceBoundsQ55V1 {
-    let red = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])];
-    let green = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])];
-    let blue = super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])];
+    let packed = PACKED_CONTRIBUTION_BOUNDS[0][usize::from(rgb[0])]
+        + PACKED_CONTRIBUTION_BOUNDS[1][usize::from(rgb[1])]
+        + PACKED_CONTRIBUTION_BOUNDS[2][usize::from(rgb[2])];
+    let lower = packed >> 2;
     Wcag22LuminanceBoundsQ55V1 {
-        lower: red[0] + green[0] + blue[0],
-        upper: red[1] + green[1] + blue[1],
+        lower,
+        upper: lower + (packed & 3),
     }
 }
 
@@ -167,6 +189,26 @@ pub fn evaluate_wcag22_hex(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_luminance_preserves_both_endpoints_for_every_rgb8() {
+        let table = &super::super::q55_data::WEIGHTED_CONTRIBUTION_BOUNDS;
+        for red in u8::MIN..=u8::MAX {
+            for green in u8::MIN..=u8::MAX {
+                for blue in u8::MIN..=u8::MAX {
+                    let expected = Wcag22LuminanceBoundsQ55V1 {
+                        lower: table[0][usize::from(red)][0]
+                            + table[1][usize::from(green)][0]
+                            + table[2][usize::from(blue)][0],
+                        upper: table[0][usize::from(red)][1]
+                            + table[1][usize::from(green)][1]
+                            + table[2][usize::from(blue)][1],
+                    };
+                    assert_eq!(luminance_bounds([red, green, blue]), expected);
+                }
+            }
+        }
+    }
 
     fn point(value: u64) -> Wcag22LuminanceBoundsQ55V1 {
         Wcag22LuminanceBoundsQ55V1 {
