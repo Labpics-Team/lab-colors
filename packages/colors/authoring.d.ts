@@ -68,27 +68,28 @@ export interface ColorFixedUsePolicy extends Omit<ColorUsePolicy, "tone"> {
   readonly tone?: never;
 }
 
-export interface ColorRole {
-  readonly [colorHandle]: "role";
+export type ColorRole = ColorAdaptiveRole | ColorFixedRole;
+
+export interface ColorAdaptiveRole {
+  readonly [colorHandle]: "adaptive-role";
   readonly id: string;
   readonly anchor: readonly [number, number, number];
   /** Новый local use в порядке предпочтений декларации; повторный handle сохраняет один paint. */
-  on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse;
+  on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse<ColorAdaptiveRole>;
 }
 
-export interface ColorFixedRole extends Omit<ColorRole, "on"> {
+export interface ColorFixedRole extends Omit<ColorAdaptiveRole, typeof colorHandle | "on"> {
+  readonly [colorHandle]: "fixed-role";
   on(surface: ColorSurface, policy?: ColorFixedUsePolicy): ColorFixedUse;
 }
 
-export interface ColorUse {
+export interface ColorUse<Role extends ColorRole = ColorRole> {
   readonly [colorHandle]: "use";
-  readonly role: ColorRole;
+  readonly role: Role;
   readonly against: ColorSurface;
 }
 
-export interface ColorFixedUse extends ColorUse {
-  readonly role: ColorFixedRole;
-}
+export type ColorFixedUse = ColorUse<ColorFixedRole>;
 
 export interface ResolvedColor {
   readonly rgb: readonly [number, number, number];
@@ -175,7 +176,7 @@ export interface ColorProgram<Name extends string = string> {
 
 export interface ColorSystem {
   surface(id: string): ColorInputSurface;
-  role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorRole;
+  role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorAdaptiveRole;
   fixed(id: string, source: AuthoredColor): ColorFixedRole;
   /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(

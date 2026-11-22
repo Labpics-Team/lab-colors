@@ -1,8 +1,8 @@
-import { colors, type ColorProgram, type ColorView, type ColorUse, type ColorRole, type ColorFixedRole, type ColorFixedUsePolicy, type ColorAttachOptions, type ColorCleanlinessAssessment } from "@labpics/colors";
+import { colors, type ColorProgram, type ColorView, type ColorUse, type ColorRole, type ColorAdaptiveRole, type ColorFixedRole, type ColorFixedUsePolicy, type ColorAttachOptions, type ColorCleanlinessAssessment } from "@labpics/colors";
 
 async function contextualProgram(element: HTMLElement): Promise<void> {
   const c = colors(), canvas = c.surface("canvas");
-  const accent = c.role("accent", "#0067F4");
+  const accent: ColorAdaptiveRole = c.role("accent", "#0067F4");
   const neutral = c.role("label", "#242424", { domain: "neutral", identity: { lightness: [0, 1] } });
   const fill = accent.on(canvas, { separation: [0.04, 0.4] });
   const label = neutral.on(fill, { contrast: "wcag22-text" });
@@ -15,6 +15,15 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   fixed.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   // @ts-expect-error a fixed use retains its fixed role's policy contract.
   fixedUse.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  const generalRole: ColorRole = fixed;
+  const generalUse: ColorUse = generalRole.on(canvas, fixedPolicy);
+  // @ts-expect-error annotating a fixed role as a general role does not enable adaptation.
+  generalRole.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  // @ts-expect-error a general use may belong to a fixed role and cannot promise tone adaptation.
+  generalUse.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  const placeRole = (role: ColorRole) => role.on(canvas, { contrast: "wcag22-ui", opacity: 0.8 });
+  placeRole(accent); placeRole(fixed);
+  pane.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   const program: ColorProgram<"fill" | "label" | "pane"> = await c.compile({ fill, label, pane });
   const frame = program.resolve({ canvas: "#e6ddd0" });
   if (frame.state === "ready") {

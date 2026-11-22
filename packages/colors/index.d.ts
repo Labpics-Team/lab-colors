@@ -4,7 +4,7 @@ export { colors, ColorAuthoringError } from "./authoring.js";
 export type {
   AuthoredColor, ColorAuthoringErrorCode, ColorIdentity, ColorRoleOptions,
   ColorInputSurface, ColorSurface, ColorTonePolicy, ColorUsePolicy, ColorRole,
-  ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
+  ColorAdaptiveRole, ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
   ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
   ColorSystemOptions, ColorCleanlinessAssessment,
