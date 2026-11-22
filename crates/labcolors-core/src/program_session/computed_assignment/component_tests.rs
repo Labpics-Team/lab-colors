@@ -338,3 +338,87 @@ fn passing_fixed_conditions_do_not_invent_an_anchor_witness_at_zero_search_budge
     assert_eq!(cause.diagnostics.search_budget, 1);
     assert!(cause.diagnostics.witness.is_none());
 }
+
+fn visible_relation(with_parent: bool) -> Program<Wcag22Srgb8V1> {
+    let mut declaration = program(
+        target(10, 150, 0, 3, 1),
+        Wcag22CriterionV1::Sc143TextDefault,
+        Wcag22Srgb8V1,
+    );
+    declaration.sources.push(Source::new(
+        SourceId::new(30),
+        ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+    ));
+    declaration
+        .targets
+        .push(Target::fixed(TargetId::new(30), SourceId::new(30)));
+    declaration.paints.push(Paint::Solid {
+        id: PaintId::new(23),
+        target: TargetId::new(30),
+    });
+    declaration.occurrences.push(Occurrence::new(
+        OccurrenceId::new(25),
+        PaintId::new(23),
+        SurfaceId::new(4),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        declaration.occurrences[0].context,
+    ));
+    declaration.constraints.hard = vec![ConstraintInvocation::exact_visible_relation_hard(
+        ConstraintId::new(6),
+        DirectedRelationV1::try_new(OccurrenceId::new(25), vec![OccurrenceId::new(5)])
+            .expect("valid relation endpoints"),
+    )];
+    if with_parent {
+        duplicate_use(&mut declaration, target(20, 150, 0, 3, 0));
+        declaration.surfaces.push(Surface::FromOccurrence {
+            id: SurfaceId::new(14),
+            occurrence: OccurrenceId::new(15),
+        });
+        declaration.occurrences[0].against = SurfaceId::new(14);
+    }
+    declaration
+}
+
+#[test]
+fn opaque_visible_relation_endpoints_do_not_depend_on_their_backdrop() {
+    let owner = compile_assignment(visible_relation(false), 3).expect("standalone relation");
+    let mut standalone = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    standalone
+        .prepare_update(update(1, 255))
+        .expect("resolve")
+        .commit();
+    let expected = standalone
+        .state()
+        .current_verified()
+        .expect("standalone ready")
+        .computed_for_test();
+    assert_eq!(expected.values[0], Srgb8::new([0; 3]));
+
+    let owner =
+        compile_assignment(visible_relation(true), 3).expect("relation over computed parent");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    session
+        .prepare_update(update(1, 255))
+        .expect("resolve")
+        .commit();
+    let current = session
+        .state()
+        .current_verified()
+        .expect("both independent solutions ready")
+        .computed_for_test();
+    assert_eq!(current.values.as_ref(), &[expected.values[0]; 2]);
+    assert_eq!(current.search.visited, expected.search.visited * 2);
+    assert_eq!(current.search.completion, CompletionV1::BudgetExhausted);
+    assert!(
+        current
+            .arena
+            .storage
+            .cells
+            .iter()
+            .all(|cell| !cell.result().is_violation())
+    );
+}

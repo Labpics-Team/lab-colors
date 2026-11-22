@@ -190,8 +190,10 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             outputs: None,
             point_causal: None,
         },
-        None,
-        context.constraint_indices,
+        context.constraint_indices.map_or(
+            ProgramCandidateScanV1::Full { previous: None },
+            ProgramCandidateScanV1::Constraints,
+        ),
     )?;
     Ok(intent_violations
         + context

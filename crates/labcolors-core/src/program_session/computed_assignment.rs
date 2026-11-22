@@ -818,8 +818,7 @@ where
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            None,
-            Some(&component.constraints),
+            ProgramCandidateScanV1::Constraints(&component.constraints),
         )? {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
@@ -978,8 +977,7 @@ where
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            None,
-            Some(&component.constraints),
+            ProgramCandidateScanV1::Constraints(&component.constraints),
         )? && (!has_best
             || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
                 == Ordering::Less)

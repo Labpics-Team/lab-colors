@@ -201,8 +201,21 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                     )?,
                 }
             }
-            // Intrinsic relations, families and causal presentations preserve
-            // their existing full dependency contract.
+            CompiledProgramConstraintBodyV1::VisibleRelation {
+                reference,
+                candidates,
+                ..
+            } => {
+                // Relation evaluators receive final RGB endpoints and immutable
+                // family artifacts. Their evidence binding also records the
+                // backdrop, but it does not enter the relation decision.
+                visible.visible(index, reference.occurrence, &mut marked)?;
+                for candidate in candidates {
+                    visible.visible(index, candidate.occurrence, &mut marked)?;
+                }
+            }
+            // Intrinsic conditions and causal presentations preserve their
+            // existing full dependency contract.
             _ => mark_constraint_coverage(program, index, scratch, constraint, &mut marked, None)?,
         }
         collect(&marked, &mut members);
@@ -340,8 +353,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            None,
-            Some(&selection.fixed_constraints),
+            ProgramCandidateScanV1::Constraints(&selection.fixed_constraints),
         )?;
         evidence.visited = 1;
         evidence.points = 1;

@@ -4884,9 +4884,16 @@ where
         candidate_state_index,
         phase,
         collection,
-        previous,
-        None,
+        ProgramCandidateScanV1::Full { previous },
     )
+}
+
+enum ProgramCandidateScanV1<'a, Evaluation: ProgramConstraintEvaluatorSetV1> {
+    Full {
+        previous: Option<&'a ProgramVerifiedV1<Evaluation>>,
+    },
+    // A component search cannot reuse a previous full-frame certificate.
+    Constraints(&'a [usize]),
 }
 
 /// Search can assess one compiled independent component. The final candidate
@@ -4898,13 +4905,16 @@ fn scan_program_candidate_scoped<Evaluation>(
     candidate_state_index: usize,
     phase: ProgramEvaluationPhaseV1,
     collection: ProgramCandidateCollectionV1<'_, Evaluation>,
-    previous: Option<&ProgramVerifiedV1<Evaluation>>,
-    constraint_indices: Option<&[usize]>,
+    scope: ProgramCandidateScanV1<'_, Evaluation>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    let (previous, constraint_indices) = match scope {
+        ProgramCandidateScanV1::Full { previous } => (previous, None),
+        ProgramCandidateScanV1::Constraints(indices) => (None, Some(indices)),
+    };
     let ProgramCandidateCollectionV1 {
         mut evidence,
         mut outputs,
@@ -4922,8 +4932,7 @@ where
     let case_count = scenario_set.len().get();
     let previous_storage = previous
         .filter(|verified| {
-            constraint_indices.is_none()
-                && Evaluation::supports_evidence_copy()
+            Evaluation::supports_evidence_copy()
                 && matches!(verified.origin, CandidateOriginV1::Fixed)
                 && !epoch
                     .constraint_phases
