@@ -52,7 +52,7 @@ impl ProgramUpdateHost for Capture {
 }
 
 #[test]
-fn native_acceptance_preserves_revision_on_false_and_error_then_returns_the_same_snapshot()
+fn native_acceptance_preserves_revision_on_false_and_error_and_retains_owned_proposals()
 -> TestResult {
     let runtime = runtime()?;
     let first = runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
@@ -70,7 +70,7 @@ fn native_acceptance_preserves_revision_on_false_and_error_then_returns_the_same
             }),
         );
         match decision {
-            Decision::Refuse => assert!(result?.is_none()),
+            Decision::Refuse => assert!(!result?),
             Decision::Error => match result {
                 Err(LabColorsError::Refused { code, operation }) => {
                     assert_eq!(code, "host_batch_rejected");
@@ -84,21 +84,20 @@ fn native_acceptance_preserves_revision_on_false_and_error_then_returns_the_same
         assert_eq!(replay.revision(), 1);
         assert_eq!(replay.copy_output_table()?, first_table);
     }
-    let accepted = runtime
-        .update_observed_with(
-            2,
-            vec![9],
-            vec![128; 3],
-            1,
-            Box::new(Capture {
-                snapshots: Arc::clone(&retained),
-                decision: Decision::Accept,
-            }),
-        )?
-        .ok_or("expected accepted snapshot")?;
+    let accepted = runtime.update_observed_with(
+        2,
+        vec![9],
+        vec![128; 3],
+        1,
+        Box::new(Capture {
+            snapshots: Arc::clone(&retained),
+            decision: Decision::Accept,
+        }),
+    )?;
+    assert!(accepted);
     let snapshots = retained.lock().expect("snapshot storage");
     assert_eq!(snapshots.len(), 3);
-    assert!(Arc::ptr_eq(&accepted, &snapshots[2]));
+    let accepted = &snapshots[2];
     assert_ne!(accepted.copy_output_table()?, first_table);
     assert_eq!(
         snapshots[0].copy_output_table()?,
@@ -107,6 +106,12 @@ fn native_acceptance_preserves_revision_on_false_and_error_then_returns_the_same
     assert_eq!(
         snapshots[1].assessment_report()?,
         accepted.assessment_report()?
+    );
+    assert_eq!(
+        runtime
+            .update_observed(2, vec![9], vec![128; 3], 1)?
+            .assessment_report()?,
+        accepted.assessment_report()?,
     );
     drop(runtime);
     assert_eq!(first.copy_output_table()?, first_table);
@@ -237,18 +242,16 @@ impl ProgramUpdateHost for Reentrant {
 fn native_callback_can_read_its_snapshot_but_cannot_reenter_its_runtime() -> TestResult {
     let runtime = runtime()?;
     runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
-    let accepted = runtime
-        .update_observed_with(
-            2,
-            vec![9],
-            vec![128; 3],
-            1,
-            Box::new(Reentrant {
-                runtime: Arc::downgrade(&runtime),
-            }),
-        )?
-        .ok_or("accepted outer update")?;
-    assert_eq!(accepted.revision(), 2);
+    let accepted = runtime.update_observed_with(
+        2,
+        vec![9],
+        vec![128; 3],
+        1,
+        Box::new(Reentrant {
+            runtime: Arc::downgrade(&runtime),
+        }),
+    )?;
+    assert!(accepted);
     assert_eq!(runtime.update_unknown(3, 17)?.revision(), 3);
     Ok(())
 }
@@ -282,6 +285,27 @@ fn native_callback_unwind_does_not_poison_or_advance_the_runtime() -> TestResult
     Ok(())
 }
 
+#[test]
+fn unexpected_foreign_exception_uses_the_real_uniffi_error_conversion_without_panicking() {
+    let error =
+        uniffi::UnexpectedUniFFICallbackError::new("foreign exception outside declared error type");
+    let result = <Result<bool, LabColorsError> as uniffi::LiftReturn<labcolors::UniFfiTag>>::handle_callback_unexpected_error(error);
+    let Err(LabColorsError::Refused { code, operation }) = result else {
+        panic!("foreign callback exception must become a typed failure");
+    };
+    assert_eq!(code, "program_host_protocol");
+    assert_eq!(operation, "updateObservedWith");
+    let point_error = <Result<bool, ProgramPointSinkCallbackError> as uniffi::LiftReturn<
+        labcolors::UniFfiTag,
+    >>::handle_callback_unexpected_error(
+        uniffi::UnexpectedUniFFICallbackError::new("foreign point callback exception"),
+    );
+    assert!(matches!(
+        point_error,
+        Err(ProgramPointSinkCallbackError::InvocationFailed)
+    ));
+}
+
 #[path = "../../labcolors-core/src/test_support.rs"]
 mod test_support;
 
@@ -297,18 +321,32 @@ impl ProgramUpdateHost for FinalCheckpoint {
 }
 
 #[test]
-fn native_commit_does_not_allocate_after_host_acceptance() -> TestResult {
+fn native_commit_and_real_uniffi_success_return_do_not_allocate_after_host_acceptance() -> TestResult
+{
     let (control, allocations) =
         test_support::measured_allocations(|| Vec::<u8>::with_capacity(64));
     assert_eq!(allocations, 1, "allocator observer must detect real work");
     drop(control);
     let runtime = runtime()?;
     runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
-    let (accepted, events) = test_support::measured_allocator_events(|| {
-        runtime.update_observed_with(2, vec![9], vec![128; 3], 1, Box::new(FinalCheckpoint))
+    let (lowered, events) = test_support::measured_allocator_events(|| {
+        let accepted =
+            runtime.update_observed_with(2, vec![9], vec![128; 3], 1, Box::new(FinalCheckpoint));
+        <Result<bool, LabColorsError> as uniffi::LowerReturn<labcolors::UniFfiTag>>::lower_return(
+            accepted,
+        )
     });
     assert_eq!(events.alloc, 0);
     assert_eq!(events.realloc, 0);
-    assert_eq!(accepted?.ok_or("accepted snapshot")?.revision(), 2);
+    assert_eq!(
+        lowered.map_err(|_| "UniFFI success return was rejected")?,
+        1
+    );
+    assert_eq!(
+        runtime
+            .update_observed(2, vec![9], vec![128; 3], 1)?
+            .revision(),
+        2
+    );
     Ok(())
 }

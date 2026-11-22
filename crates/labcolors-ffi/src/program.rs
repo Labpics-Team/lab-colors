@@ -18,6 +18,14 @@ impl LabColorsError {
     }
 }
 
+// UniFFI otherwise panics when a callback throws an undeclared foreign error.
+// The normal host transaction must abort as a value even in panic=abort builds.
+impl From<uniffi::UnexpectedUniFFICallbackError> for LabColorsError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::new("program_host_protocol", "updateObservedWith")
+    }
+}
+
 fn enter<'a, T>(
     owner: &'a Mutex<T>,
     operation: &str,
@@ -174,8 +182,9 @@ impl ProgramRuntime {
     }
 
     /// Поиск, final recheck и создание owned-снимка завершаются до callback.
-    /// true возвращает тот же Arc и принимает уже подготовленный переход;
-    /// false возвращает None, ошибка callback сохраняется без подмены.
+    /// true принимает уже подготовленный переход; false сохраняет прежний.
+    /// Host удерживает нужный ему снимок из callback. Примитивный bool проходит
+    /// UniFFI без сериализации RustBuffer после принятия внешней записи.
     pub fn update_observed_with(
         &self,
         revision: u64,
@@ -183,23 +192,20 @@ impl ProgramRuntime {
         surfaces: Vec<u8>,
         surface_count: u32,
         accept: Box<dyn ProgramUpdateHost>,
-    ) -> Result<Option<Arc<ProgramSnapshot>>, LabColorsError> {
+    ) -> Result<bool, LabColorsError> {
         let operation = "updateObservedWith";
         let mut inner = enter(&self.inner, operation, "program_busy")?;
         let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
         let prepared = inner
             .prepare_observed_view(revision, values)
             .map_err(|error| runtime_error(error, operation))?;
-        let mut snapshot = None;
-        let accepted = prepared.commit_with(|inner| {
+        prepared.commit_with(|inner| {
             let candidate = Arc::new(ProgramSnapshot { inner });
-            snapshot = Some(Arc::clone(&candidate));
-            // A Rust callback can unwind even though foreign callbacks return a
-            // typed error. Catch it before the Session mutex can be poisoned.
+            // A Rust callback can unwind in unwind-enabled builds. Foreign
+            // exceptions use typed UniFFI conversion independently of this guard.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accept.accept(candidate)))
                 .map_err(|_| LabColorsError::new("program_host_protocol", operation))?
-        })?;
-        Ok(if accepted { snapshot } else { None })
+        })
     }
 
     pub fn update_unknown(
@@ -334,6 +340,12 @@ pub struct ProgramPointSinkIntent {
 pub enum ProgramPointSinkCallbackError {
     #[error("host callback failed")]
     InvocationFailed,
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for ProgramPointSinkCallbackError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::InvocationFailed
+    }
 }
 
 /// Возвращает true только после атомарной установки всей команды. false и ошибка

@@ -56,14 +56,17 @@ surface_count, host)` принимает `ProgramUpdateHost`. Его синхр�
 `Result<bool, LabColorsError>`; в Swift и Kotlin это генерируемый callback
 интерфейс с теми же данными.
 
-`true` принимает переход и возвращает `Some` с тем же снимком, `false`
-возвращает `None`. Ошибка callback возвращается с исходными `code` и
-`operation`. Rust panic callback превращается в `program_host_protocol`
-до освобождения runtime lock, поэтому следующий update остаётся возможным.
-Все три отказа сохраняют прежнюю принятую ревизию. Повторный вызов того же
-runtime из callback возвращает `program_busy`; чтение снимка разрешено.
+Метод возвращает `Result<bool, LabColorsError>`: `true` означает принятый
+переход, `false` — отказ. Нужный снимок приложение сохраняет в callback.
+Ошибка callback возвращается с исходными `code` и
+`operation`. Неожиданное foreign-исключение другого типа преобразуется UniFFI
+в `program_host_protocol` без panic. В сборках с Rust unwinding защита также
+перехватывает panic Rust-callback до выхода из runtime lock. Все эти отказы
+сохраняют прежнюю принятую ревизию. Повторный вызов того же runtime из callback
+возвращает `program_busy`; чтение снимка разрешено.
 
 У Native-снимка ARC-владение. Callback может сохранить его, а последующие
 обновления или освобождение runtime не меняют данные. Arc-объект создаётся
 до вызова host; после `true` Rust-адаптер только принимает подготовленный
-Core-переход и возвращает уже существующий объект.
+Core-переход и возвращает boolean. UniFFI передаёт этот примитив напрямую,
+без создания сериализованного return-buffer после внешней записи.
