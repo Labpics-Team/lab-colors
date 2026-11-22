@@ -62,7 +62,7 @@ public class ProgramWireBuilderV1 {
 
     // Секция владеет единственным растущим буфером. Неудачное объявление
     // откатывает только собственный хвост; прежние снимки остаются независимыми.
-    private func append(_ index: Int, _ encode: (inout WireBytes) throws -> Void) throws {
+    fileprivate func append(_ index: Int, _ encode: (inout WireBytes) throws -> Void) throws {
         guard sections[index].count < UInt32(maximumEntries) else { throw ProgramWireError.tooManyEntries }
         let previous = sections[index].payload.bytes.count
         do {
@@ -253,6 +253,141 @@ public final class ProgramWireBuilderV2: ProgramWireBuilderV1 {
                     for choice in state.choices { b.u32(choice.target); b.u32(choice.candidate) }
                 }
             }
+        }
+        return self
+    }
+}
+
+/// Включённые границы конечного encoded-sRGB8 domain. Серая ось содержит [g, g, g].
+public enum ProgramWireDomainV3 {
+    case box(lower: [UInt8], upper: [UInt8])
+    case gray(lower: UInt8, upper: UInt8)
+}
+
+public enum ProgramWireColorDomainV3: Equatable { case srgb, neutral }
+
+/// Отсутствующая граница сохраняет пакетную политику Core; adapter её не вычисляет.
+public struct ProgramWireColorIdentityV3 {
+    public let maxHueDeviation: Double?
+    public let chroma: [Double]?
+    public let lightness: [Double]?
+    public init(maxHueDeviation: Double? = nil, chroma: [Double]? = nil, lightness: [Double]? = nil) {
+        self.maxHueDeviation = maxHueDeviation; self.chroma = chroma; self.lightness = lightness
+    }
+}
+
+public struct ProgramWireToneV3 {
+    public let from: UInt32
+    public let curve: [[Double]]
+    public init(from: UInt32, curve: [[Double]]) { self.from = from; self.curve = curve }
+}
+
+public struct ProgramWireColorOptionsV3 {
+    public let domain: ProgramWireColorDomainV3
+    public let identity: ProgramWireColorIdentityV3?
+    public let maxChange: Double
+    public let appearance: UInt32?
+    public let tone: ProgramWireToneV3?
+    public init(domain: ProgramWireColorDomainV3 = .srgb, identity: ProgramWireColorIdentityV3? = nil,
+                maxChange: Double = 2, appearance: UInt32? = nil, tone: ProgramWireToneV3? = nil) {
+        self.domain = domain; self.identity = identity; self.maxChange = maxChange
+        self.appearance = appearance; self.tone = tone
+    }
+}
+
+/// LCPW v3 передаёт domain, опоры и предпочтения. Выбор и композицию выполняет Core.
+public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
+    fileprivate override var wireVersion: UInt16 { 3 }
+
+    private func bounded(_ value: Double, maximum: Double) throws -> Double {
+        guard value.isFinite, value >= 0, value <= maximum else {
+            throw ProgramWireError.invalidDeclaration("number is outside the declared domain")
+        }
+        return value == 0 ? 0 : value
+    }
+
+    private func pair(_ values: [Double]) throws -> [Double] {
+        guard values.count == 2 else { throw ProgramWireError.invalidDeclaration("range requires two bounds") }
+        let lower = try bounded(values[0], maximum: 1), upper = try bounded(values[1], maximum: 1)
+        guard lower <= upper else { throw ProgramWireError.invalidDeclaration("range bounds must be increasing") }
+        return [lower, upper]
+    }
+
+    @discardableResult public func colorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3 = ProgramWireColorOptionsV3()) throws -> Self {
+        try append(1) { b in
+            b.u32(id); b.u8(4); try b.rgb(anchor)
+            b.u8(options.domain == .neutral ? 1 : 0)
+            let identity = options.identity
+            let flags: UInt8 = (identity?.maxHueDeviation == nil ? 0 : 1)
+                | (identity?.chroma == nil ? 0 : 2) | (identity?.lightness == nil ? 0 : 4)
+            b.u8(flags)
+            if let hue = identity?.maxHueDeviation { b.f64(try bounded(hue, maximum: 180)) }
+            if let chroma = identity?.chroma { for value in try pair(chroma) { b.f64(value) } }
+            if let lightness = identity?.lightness { for value in try pair(lightness) { b.f64(value) } }
+            b.f64(try bounded(options.maxChange, maximum: 2))
+            b.u8(options.appearance == nil ? 0 : 1)
+            if let appearance = options.appearance { b.u32(appearance) }
+            b.u8(options.tone == nil ? 0 : 1)
+            if let tone = options.tone {
+                guard tone.curve.count >= 2 else { throw ProgramWireError.invalidDeclaration("tone requires two or more stops") }
+                b.u32(tone.from); b.u32(try boundedCount(tone.curve.count))
+                var previous: Double?
+                for (index, point) in tone.curve.enumerated() {
+                    guard point.count == 2 else { throw ProgramWireError.invalidDeclaration("tone stop requires two coordinates") }
+                    let x = try bounded(point[0], maximum: 1), y = try bounded(point[1], maximum: 1)
+                    guard (index != 0 || x == 0), (index != tone.curve.count - 1 || x == 1),
+                          previous.map({ x > $0 }) ?? true else {
+                        throw ProgramWireError.invalidDeclaration("tone inputs must increase from 0 to 1")
+                    }
+                    b.f64(x); b.f64(y); previous = x
+                }
+            }
+        }
+        return self
+    }
+
+    @discardableResult public func pointOccurrence(_ id: UInt32, paint: UInt32, surface: UInt32) throws -> Self {
+        try append(8) { b in
+            b.u32(id); b.u32(paint); b.u32(surface); b.f64(0); b.f64(0); b.u8(0)
+        }
+        return self
+    }
+
+    @discardableResult public func visibleSeparationHard(_ id: UInt32, occurrence: UInt32, minimum: Double, maximum: Double) throws -> Self {
+        let lower = try bounded(minimum, maximum: 2), upper = try bounded(maximum, maximum: 2)
+        guard lower <= upper else { throw ProgramWireError.invalidDeclaration("separation bounds must be increasing") }
+        try append(11) { b in
+            b.u32(id); b.u8(11); b.u32(occurrence); b.f64(lower); b.f64(upper)
+        }
+        return self
+    }
+
+    @discardableResult public func computedTarget(_ id: UInt32, domain: ProgramWireDomainV3, anchor: [UInt8], maxDelta: Double) throws -> Self {
+        guard maxDelta.isFinite, maxDelta >= 0, (maxDelta * maxDelta).isFinite else {
+            throw ProgramWireError.invalidDeclaration("maxDelta must be nonnegative with a finite square")
+        }
+        try append(1) { b in
+            b.u32(id); b.u8(3)
+            switch domain {
+            case let .box(lower, upper):
+                guard lower.count == 3, upper.count == 3, zip(lower, upper).allSatisfy({ $0.0 <= $0.1 }) else {
+                    throw ProgramWireError.invalidDeclaration("box requires ordered RGB bounds")
+                }
+                b.u8(1); try b.rgb(lower); try b.rgb(upper)
+            case let .gray(lower, upper):
+                guard lower <= upper else { throw ProgramWireError.invalidDeclaration("gray bounds must be increasing") }
+                b.u8(2); b.u8(lower); b.u8(upper)
+            }
+            try b.rgb(anchor); b.f64(maxDelta == 0 ? 0 : maxDelta)
+        }
+        return self
+    }
+
+    @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32]) throws -> Self {
+        guard targetsInPreferenceOrder.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
+        try selection { b in
+            b.u8(3); b.u8(0); b.u32(UInt32(targetsInPreferenceOrder.count))
+            for target in targetsInPreferenceOrder { b.u32(target) }
         }
         return self
     }

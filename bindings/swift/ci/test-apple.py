@@ -140,6 +140,7 @@ public func makeRuntime(_ bytes: Data) throws -> ProgramRuntime {
     for path in sorted((ROOT / "conformance/vectors").glob("*.json")):
         shutil.copy2(path, fixtures)
     shutil.copy2(ROOT / "conformance/program-runtime-v1.json", fixtures)
+    shutil.copy2(ROOT / "conformance/program-authoring-v3.json", fixtures)
     (fixtures / "build-identity.json").write_text(json.dumps({"coreTree": manifest["coreTree"]}) + "\n")
     # Сборка потребителя не видит Cargo/Rust и ничего не загружает из исходного repo.
     previous_path = os.environ["PATH"]
