@@ -4,8 +4,13 @@
 use super::*;
 use crate::color_intent::color_at_lightness;
 
+// Performance policy: an initial repair and a final repair each receive at
+// most one quarter of the existing synchronous budget. At least half remains
+// for unrestricted domain search; mathematical acceptance never uses this split.
+const COORDINATE_BUDGET_DIVISOR: u64 = 4;
+
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v8.independent-components.local-context-seeds.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v9.independent-components.local-context-seeds.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -617,7 +622,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     // parent обменивать одно нарушение на другое до приспособления child.
     // Обратный проход остаётся эвристикой поиска, а не семантикой порядка
     // графа или условием приёмки.
-    let seed_limit = (selection.budget / 4).max(evidence.visited);
+    let seed_limit = (selection.budget / COORDINATE_BUDGET_DIVISOR).max(evidence.visited);
     let distinct_origins = preferred_seed
         .iter()
         .zip(targets.iter())
@@ -753,20 +758,21 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     stack
         .try_reserve_exact(stack_limit)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let Some(root) = region_node(
+    let reserve = refinement::reserved_work(&context, selection.budget);
+    let mut search_limit = selection.budget - if has_best { reserve } else { 0 };
+    let mut complete = true;
+    if let Some(root) = region_node(
         0,
         context.domains[0],
-        selection,
+        search_limit,
         context.preferred[seed_case * count],
         &mut evidence,
-    ) else {
-        return Ok(SearchResultV1 {
-            evidence,
-            values: has_best.then_some(best_values),
-        });
-    };
+    ) {
+        stack.push(root);
+    } else {
+        complete = false;
+    }
     values.copy_from_slice(&current_values);
-    stack.push(root);
     while let Some(mut node) = stack.pop() {
         let depth = node.depth;
         let volume = node
@@ -793,26 +799,22 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 let Some(left) = region_node(
                     depth,
                     left,
-                    selection,
+                    search_limit,
                     context.preferred[seed_case * count + depth],
                     &mut evidence,
                 ) else {
-                    return Ok(SearchResultV1 {
-                        evidence,
-                        values: has_best.then_some(best_values),
-                    });
+                    complete = false;
+                    break;
                 };
                 let Some(right) = region_node(
                     depth,
                     right,
-                    selection,
+                    search_limit,
                     context.preferred[seed_case * count + depth],
                     &mut evidence,
                 ) else {
-                    return Ok(SearchResultV1 {
-                        evidence,
-                        values: has_best.then_some(best_values),
-                    });
+                    complete = false;
+                    break;
                 };
                 let (first, second) = if left.lower_score <= right.lower_score {
                     (left, right)
@@ -830,11 +832,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             continue;
         }
-        if evidence.visited == selection.budget {
-            return Ok(SearchResultV1 {
-                evidence,
-                values: has_best.then_some(best_values),
-            });
+        if evidence.visited >= search_limit {
+            complete = false;
+            break;
         }
         evidence.visited += 1;
         evidence.points += 1;
@@ -856,14 +856,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             let Some(next) = region_node(
                 depth + 1,
                 context.domains[depth + 1],
-                selection,
+                search_limit,
                 context.preferred[seed_case * count + depth + 1],
                 &mut evidence,
             ) else {
-                return Ok(SearchResultV1 {
-                    evidence,
-                    values: has_best.then_some(best_values),
-                });
+                complete = false;
+                break;
             };
             stack.push(next);
             continue;
@@ -883,16 +881,40 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     == Ordering::Less)
         {
             has_best = true;
+            search_limit = selection.budget - reserve;
             best_scores.copy_from_slice(&scores);
             best_values.copy_from_slice(&values);
         }
     }
-    if evidence.open_regions != 0 {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    if complete {
+        if evidence.open_regions != 0 {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
+        evidence.completion = CompletionV1::Complete;
+    } else if has_best && reserve != 0 {
+        refinement::improve(
+            &context,
+            runtime,
+            epoch,
+            scenarios,
+            arena,
+            refinement::StateV1 {
+                best_values: &mut best_values,
+                best_scores: &mut best_scores,
+                values: &mut values,
+                scores: &mut scores,
+                current_values: &mut current_values,
+                current_scores: &mut current_scores,
+                pool: &mut preferred_seed,
+                evidence: &mut evidence,
+                budget: selection.budget,
+            },
+        )?;
     }
-    evidence.completion = CompletionV1::Complete;
     Ok(SearchResultV1 {
         evidence,
         values: has_best.then_some(best_values),
     })
 }
+
+mod refinement;

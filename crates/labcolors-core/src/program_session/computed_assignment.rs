@@ -548,11 +548,11 @@ struct RegionNodeV1 {
 fn region_node(
     depth: usize,
     domain: AssignmentDomainV1,
-    selection: &ComputedSelectionV1,
+    budget: u64,
     preference: [f64; 3],
     evidence: &mut SearchEvidenceV1,
 ) -> Option<RegionNodeV1> {
-    if evidence.visited == selection.budget {
+    if evidence.visited >= budget {
         return None;
     }
     evidence.visited += 1;
@@ -854,7 +854,7 @@ where
     let Some(root) = region_node(
         0,
         targets[0].declaration.domain,
-        selection,
+        selection.budget,
         targets[0].anchor_lab,
         &mut evidence,
     ) else {
@@ -889,17 +889,25 @@ where
             }
             if volume > 64 {
                 let (left, right) = node.domain.split();
-                let Some(left) =
-                    region_node(depth, left, selection, target.anchor_lab, &mut evidence)
-                else {
+                let Some(left) = region_node(
+                    depth,
+                    left,
+                    selection.budget,
+                    target.anchor_lab,
+                    &mut evidence,
+                ) else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
                     });
                 };
-                let Some(right) =
-                    region_node(depth, right, selection, target.anchor_lab, &mut evidence)
-                else {
+                let Some(right) = region_node(
+                    depth,
+                    right,
+                    selection.budget,
+                    target.anchor_lab,
+                    &mut evidence,
+                ) else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
@@ -957,7 +965,7 @@ where
             let Some(next) = region_node(
                 depth + 1,
                 targets[depth + 1].declaration.domain,
-                selection,
+                selection.budget,
                 targets[depth + 1].anchor_lab,
                 &mut evidence,
             ) else {
@@ -1279,3 +1287,6 @@ mod reuse_tests;
 
 #[cfg(test)]
 mod component_tests;
+
+#[cfg(test)]
+mod refinement_tests;
