@@ -75,7 +75,8 @@ a { color: var(--link); }
 поиск лучшего варианта сохраняет уже найденное пригодное решение.
 
 [Настройки и жизненный цикл](packages/colors/README.md) ·
-[Модель цветовой системы](docs/explanation/color-system.md).
+[Модель цветовой системы](docs/explanation/color-system.md) ·
+[Характер цвета и исследования](docs/explanation/color-quality.md).
 
 ## Документация
 
