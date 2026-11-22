@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { observeChildErrors, releaseChild, waitForDriver } from "./browser-child-lifecycle.mjs";
+import { authoringBrowserCases, verifyBrowserAuthoring } from "./browser-authoring-scenarios.mjs";
 import { expectedPackedFiles } from "./verify-package-release.mjs";
 import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
 
@@ -762,7 +763,7 @@ export async function runBrowserAttachmentProof(options) {
   return runBrowserProof({ ...options, scenario: browserAttachmentScenario }, {});
 }
 
-export async function runBrowserProof({ tarball, timeout, chrome, driver, scenario = browserScenario }, fault) {
+export async function runBrowserProof({ tarball, timeout, chrome, driver, scenario = browserScenario, fixture }, fault) {
   const resources = [];
   const evidence = { acquired: [], released: [], readback: {} };
   let primary, result, root, child, childErrors, server, base;
@@ -815,8 +816,20 @@ export async function runBrowserProof({ tarball, timeout, chrome, driver, scenar
     };
     server = createServer((req, res) => {
       const pathname = new URL(req.url ?? "/", `http://${LOOPBACK}`).pathname;
-      if (pathname === "/") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><style>#proof{color:var(--consumer-color)}</style><div id=proof></div>"); return; }
-      const bytes = files.get(pathname);
+      if (pathname === "/") {
+        const headers = { "content-type": "text/html; charset=utf-8" };
+        if (fixture?.contentSecurityPolicy) headers["content-security-policy"] = fixture.contentSecurityPolicy;
+        res.writeHead(200, headers);
+        res.end(fixture?.html ?? "<!doctype html><style>#proof{color:var(--consumer-color)}</style><div id=proof></div>");
+        return;
+      }
+      if (pathname === "/browser-fixture.css" && fixture?.stylesheet !== undefined) {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8" }).end(fixture.stylesheet);
+        return;
+      }
+      const packagePath = fixture?.packageAlias && pathname.startsWith(fixture.packageAlias + "/")
+        ? pathname.slice(fixture.packageAlias.length) : pathname;
+      const bytes = files.get(packagePath);
       if (!bytes) { res.writeHead(404).end(); return; }
       const contentType = pathname.endsWith(".wasm")
         ? "application/wasm"
@@ -1167,6 +1180,11 @@ async function main() {
   const selection = await runBrowserProof({ tarball, timeout, chrome, driver, scenario: browserSelectionScenario });
   verifyBrowserSelection(selection);
   console.log('LAB_COLORS_PROGRAM_SELECTION_BROWSER_RESULT ' + JSON.stringify(selection));
+  for (const { name, scenario, fixture } of authoringBrowserCases(browserCleanup)) {
+    const authoring = await runBrowserProof({ tarball, timeout, chrome, driver, scenario, fixture });
+    verifyBrowserAuthoring(authoring, name);
+    console.log(`LAB_COLORS_AUTHORING_BROWSER_RESULT ${JSON.stringify(authoring)}`);
+  }
   const reports = await verifyCleanupFaultMatrix(run);
   for (const report of reports) console.log(`LAB_COLORS_PROGRAM_BROWSER_FAULT ${JSON.stringify(report)}`);
   console.log(`LAB_COLORS_PROGRAM_BROWSER_PASS sha256=${digest}`);
