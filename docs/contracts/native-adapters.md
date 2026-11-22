@@ -44,10 +44,32 @@ output с индексом `i`; эти геттеры сохраняются д�
 возвращает пустую таблицу.
 
 Чтение не меняет lifecycle: только `ready` удостоверяет значения для текущего
-контекста. `failed` и `stale` могут сохранять предыдущие outputs для просмотра.
+контекста. Legacy V1/V2 могут сохранять предыдущие outputs в `failed` и `stale`
+для просмотра; computed V3 возвращает outputs только для текущего `ready`.
 Переполнение размера таблицы или отказ её выделения на Rust-стороне возвращает
 `LabColorsError.Refused` с `code: "program_resource_exhausted"` и
 `operation: "copyOutputTable"`. Отказ не меняет снимок.
+
+## Computed snapshots и совместное обновление
+
+`ProgramSnapshot` отдаёт `snapshot_version`, `revision`, `state`, `reason` и
+`optimality` из Core. Для V3 версия снимка равна 2; `optimality` имеет значения
+`exact` или `unfinished` только у уже допустимого `ready`. `reason` равен
+`limit` у `incomplete`, иначе отсутствует.
+
+`assessment_report()` возвращает `Option<ProgramAssessmentReport>` с identity,
+ревизией, provenance сценариев и типизированными оценками ограничений.
+`diagnostics()` возвращает `Option<ProgramDiagnostics>` с search budget,
+числом посещений и [witness конкретного attempt](../reference/program-diagnostics.md).
+Эти owned-records копируются с проверкой выделения памяти. Изменение своей копии
+не меняет снимок. `ProgramRgb8` передаёт три u8-канала без отдельной аллокации
+на каждый цвет; численные поля оценок переносятся без повторного вычисления.
+
+`update_observed_with` предоставляет тот же
+[атомарный host-путь](program-transaction.md#native--uniffi), что и WASM.
+Он подготавливает снимок, вызывает `ProgramUpdateHost.accept`, затем принимает
+переход только при `true`. Снимок и runtime остаются разными ARC-владельцами;
+runtime не отзывает сохранённые снимки.
 
 ## Условие поддержки
 

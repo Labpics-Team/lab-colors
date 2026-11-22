@@ -47,3 +47,23 @@ Rust-потребитель использует `ProgramSessionV1::prepare_obse
 `PreparedProgramUpdateV1::commit_with`. Drop подготовленного обновления отменяет
 предложение. `commit` применяет уже вычисленное обновление, когда внешнего
 согласования не требуется.
+
+## Native / UniFFI
+
+`ProgramRuntime.update_observed_with(revision, scenario_ids, surfaces,
+surface_count, host)` принимает `ProgramUpdateHost`. Его синхронный метод
+`accept(snapshot)` получает `Arc<ProgramSnapshot>` и возвращает
+`Result<bool, LabColorsError>`; в Swift и Kotlin это генерируемый callback
+интерфейс с теми же данными.
+
+`true` принимает переход и возвращает `Some` с тем же снимком, `false`
+возвращает `None`. Ошибка callback возвращается с исходными `code` и
+`operation`. Rust panic callback превращается в `program_host_protocol`
+до освобождения runtime lock, поэтому следующий update остаётся возможным.
+Все три отказа сохраняют прежнюю принятую ревизию. Повторный вызов того же
+runtime из callback возвращает `program_busy`; чтение снимка разрешено.
+
+У Native-снимка ARC-владение. Callback может сохранить его, а последующие
+обновления или освобождение runtime не меняют данные. Arc-объект создаётся
+до вызова host; после `true` Rust-адаптер только принимает подготовленный
+Core-переход и возвращает уже существующий объект.
