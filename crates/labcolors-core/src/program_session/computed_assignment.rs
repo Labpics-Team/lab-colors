@@ -372,6 +372,13 @@ pub(super) fn compile_selection(
         if !delta.is_finite() || delta < 0.0 || !(delta * delta).is_finite() {
             return Err(invalid(ComputedAdmissionErrorV1::InvalidTolerance));
         }
+        if declaration
+            .intent
+            .as_ref()
+            .is_some_and(|intent| intent.identity.source() != declaration.anchor)
+        {
+            return Err(invalid(ComputedAdmissionErrorV1::InvalidColorIntent));
+        }
         compiled.push(CompiledComputedTargetV1 {
             binding: graph
                 .bind_paint_input(target_paint_input_id(target.id))
@@ -515,12 +522,54 @@ enum RegionConstraintV1 {
         slot: CompiledOccurrenceSlotV1,
         expected: Srgb8,
     },
+    Separation {
+        slot: CompiledOccurrenceSlotV1,
+        bounds: crate::constraints::VisibleSeparationBoundsV1,
+    },
 }
 
 impl RegionConstraintV1 {
     fn slot(self) -> CompiledOccurrenceSlotV1 {
         match self {
-            Self::Wcag { slot, .. } | Self::Exact { slot, .. } => slot,
+            Self::Wcag { slot, .. } | Self::Exact { slot, .. } | Self::Separation { slot, .. } => {
+                slot
+            }
+        }
+    }
+
+    fn may_pass(
+        self,
+        visible: ([u8; 3], [u8; 3]),
+        backdrop: ([u8; 3], [u8; 3]),
+    ) -> Result<bool, ()> {
+        match self {
+            Self::Wcag { criterion, .. } => {
+                crate::wcag22::rgb_boxes_may_pass(visible, backdrop, criterion).map_err(|_| ())
+            }
+            Self::Exact { expected, .. } => Ok(expected
+                .bytes()
+                .iter()
+                .enumerate()
+                .all(|(i, value)| visible.0[i] <= *value && *value <= visible.1[i])),
+            Self::Separation { bounds, .. } => {
+                let (left_lo, left_hi) =
+                    crate::spaces::oklab::srgb8_box_oklab_bounds(visible.0, visible.1);
+                let (right_lo, right_hi) =
+                    crate::spaces::oklab::srgb8_box_oklab_bounds(backdrop.0, backdrop.1);
+                let lower = std::array::from_fn::<_, 3, _>(|i| {
+                    (left_lo[i] - right_hi[i])
+                        .max(right_lo[i] - left_hi[i])
+                        .max(0.0)
+                });
+                let upper = std::array::from_fn::<_, 3, _>(|i| {
+                    (left_hi[i] - right_lo[i])
+                        .abs()
+                        .max((right_hi[i] - left_lo[i]).abs())
+                });
+                let minimum = squared_distance(lower, [0.0; 3]).sqrt();
+                let maximum = squared_distance(upper, [0.0; 3]).sqrt();
+                Ok(minimum <= bounds.maximum() && maximum >= bounds.minimum())
+            }
         }
     }
 }
@@ -551,6 +600,9 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
             }
             ProgramConstraintContentV1::ExactSrgb8 { expected, .. } => {
                 result.push(RegionConstraintV1::Exact { slot, expected })
+            }
+            ProgramConstraintContentV1::VisibleSeparation { bounds, .. } => {
+                result.push(RegionConstraintV1::Separation { slot, bounds })
             }
             _ => {}
         }
@@ -625,21 +677,12 @@ impl RegionPruningV1 {
                         continue;
                     }
                     let (visible, backdrop) = self.lower[index];
-                    let possible = match constraint {
-                        RegionConstraintV1::Wcag { criterion, .. } => {
-                            crate::wcag22::rgb_boxes_may_pass(
-                                (visible, point.visible()),
-                                (backdrop, point.certificate().backdrop_rgb()),
-                                *criterion,
-                            )
-                            .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
-                        }
-                        RegionConstraintV1::Exact { expected, .. } => {
-                            expected.bytes().iter().enumerate().all(|(i, value)| {
-                                visible[i] <= *value && *value <= point.visible()[i]
-                            })
-                        }
-                    };
+                    let possible = constraint
+                        .may_pass(
+                            (visible, point.visible()),
+                            (backdrop, point.certificate().backdrop_rgb()),
+                        )
+                        .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
                     if !possible {
                         return Ok(false);
                     }

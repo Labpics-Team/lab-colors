@@ -1231,17 +1231,16 @@ fn full_rgb_product_budget_limits_search_instead_of_admission() {
 }
 
 #[test]
-fn computed_independent_groups_preserve_target_and_output_coverage() {
+fn computed_domain_and_preference_do_not_need_an_additional_constraint() {
     let declaration = || cube_product([FULL_RGB; 3], [0, 96, 48], 1.0, None);
     assert!(compile_assignment(declaration(), EXECUTION_NODE_LIMIT_V1).is_ok());
 
     let mut missing_target = declaration();
     missing_target.constraints.hard.pop();
-    assert!(matches!(
-        compile_assignment(missing_target, EXECUTION_NODE_LIMIT_V1),
-        Err(ProgramCompileError::UnconstrainedFiniteTarget { target })
-            if target == TargetId::new(30)
-    ));
+    let owner = compile_assignment(missing_target, EXECUTION_NODE_LIMIT_V1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    assert!(session.state().current_verified().is_some());
 
     let mut missing_output = declaration();
     missing_output.sources.push(Source::new(
@@ -1258,11 +1257,23 @@ fn computed_independent_groups_preserve_target_and_output_coverage() {
     missing_output
         .outputs
         .push(OutputBinding::new(OutputSlotId::new(40), PaintId::new(40)));
-    assert!(matches!(
-        compile_assignment(missing_output, EXECUTION_NODE_LIMIT_V1),
-        Err(ProgramCompileError::UnassessedOutput { output, paint })
-            if output == OutputSlotId::new(40) && paint == PaintId::new(40)
-    ));
+    let owner = compile_assignment(missing_output, EXECUTION_NODE_LIMIT_V1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let outputs = &session
+        .state()
+        .current_verified()
+        .unwrap()
+        .computed_for_test()
+        .arena
+        .storage
+        .outputs;
+    assert!(
+        outputs
+            .iter()
+            .any(|output| output.output == OutputSlotId::new(40)
+                && output.paint.source() == Srgb8::new([255; 3]))
+    );
 }
 
 #[test]

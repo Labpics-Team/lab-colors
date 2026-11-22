@@ -35,30 +35,29 @@ impl ContextV1 {
         let mut preferred_rgb = buffer(cells, Srgb8::new([0; 3])).map_err(allocation)?;
         let mut opaque = buffer(count, true).map_err(allocation)?;
         let schema = epoch.observation_group.schema.as_slice();
+        let mut paints = epoch
+            .graph
+            .prepare_paints_for_surface_cases(
+                runtime.bindings,
+                schema.iter().copied(),
+                runtime.workspace,
+            )
+            .map_err(map_program_execution_binding_error)?;
         for case in 0..scenarios.len().get() {
             let inputs = scenarios
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            let mut paints = epoch
-                .graph
-                .prepare_paints_for_surface_cases(
-                    runtime.bindings,
-                    schema.iter().copied(),
-                    runtime.workspace,
-                )
-                .map_err(map_program_execution_binding_error)?;
             let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
             for (index, target) in selection.targets.iter().enumerate() {
                 let mut rgb = target.declaration.anchor;
                 if let Some(intent) = &target.declaration.intent {
                     if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
-                        let lightness = curve.preferred_lightness(inputs[input].srgb8());
                         let source = if intent.identity.neutral() {
                             Srgb8::new([128; 3])
                         } else {
                             rgb
                         };
-                        rgb = color_at_lightness(source, lightness);
+                        rgb = curve.preferred_color(source, inputs[input].srgb8());
                     }
                 }
                 let cell = case * count + index;
@@ -117,18 +116,18 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     let count = selection.targets.len();
     let schema = epoch.observation_group.schema.as_slice();
     let mut violations = 0;
+    let mut paints = epoch
+        .graph
+        .prepare_paints_for_surface_cases(
+            runtime.bindings,
+            schema.iter().copied(),
+            runtime.workspace,
+        )
+        .map_err(map_program_execution_binding_error)?;
     for case in 0..scenarios.len().get() {
         let inputs = scenarios
             .physical_values(case)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        let mut paints = epoch
-            .graph
-            .prepare_paints_for_surface_cases(
-                runtime.bindings,
-                schema.iter().copied(),
-                runtime.workspace,
-            )
-            .map_err(map_program_execution_binding_error)?;
         let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
         for (index, target) in selection.targets.iter().enumerate() {
             let rgb = if let Some(slot) = target.appearance {
@@ -298,6 +297,8 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
 
 struct BoundsV1 {
     lower: Vec<[u8; 3]>,
+    constraints: Vec<RegionConstraintV1>,
+    constraint_lower: Vec<([u8; 3], [u8; 3])>,
     scores: Vec<f64>,
     tuple_min: Vec<Srgb8>,
     evaluations: u64,
@@ -361,6 +362,26 @@ impl BoundsV1 {
                     .map_err(map_program_execution_binding_error)?;
                 let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
                 self.evaluations += 1;
+                for (index, constraint) in self.constraints.iter().enumerate() {
+                    let point = evaluation
+                        .occurrence_at(constraint.slot())
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    if !high {
+                        self.constraint_lower[index] =
+                            (point.visible(), point.certificate().backdrop_rgb());
+                    } else {
+                        let (visible, backdrop) = self.constraint_lower[index];
+                        if !constraint
+                            .may_pass(
+                                (visible, point.visible()),
+                                (backdrop, point.certificate().backdrop_rgb()),
+                            )
+                            .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
                 for (index, target) in selection.targets.iter().enumerate() {
                     let rgb = if let Some(slot) = target.appearance {
                         evaluation
@@ -602,12 +623,9 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
 
     // Полный RGB8/gray domain остаётся доступен после приближений.
     let constraints = region_constraints(epoch).map_err(allocation)?;
-    let mut pruning = RegionPruningV1 {
-        lower: buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocation)?,
-        constraints,
-        endpoint_evaluations: 0,
-    };
     let mut bounds = BoundsV1 {
+        constraint_lower: buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocation)?,
+        constraints,
         lower: buffer(count, [0; 3]).map_err(allocation)?,
         scores: buffer(count, 0.0).map_err(allocation)?,
         tuple_min: buffer(count, Srgb8::new([0; 3])).map_err(allocation)?,
@@ -639,11 +657,10 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             .cardinality()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         if node.ordinal.is_none() {
-            let possible = pruning.may_pass(selection, runtime, epoch, scenarios, node, &values)?
-                && bounds.may_pass(
-                    selection, &context, runtime, epoch, scenarios, node, &values,
-                )?;
-            evidence.endpoint_evaluations = pruning.endpoint_evaluations + bounds.evaluations;
+            let possible = bounds.may_pass(
+                selection, &context, runtime, epoch, scenarios, node, &values,
+            )?;
+            evidence.endpoint_evaluations = bounds.evaluations;
             let worse = has_best
                 && match compare_scores(&bounds.scores, &best_scores) {
                     Ordering::Greater => true,
