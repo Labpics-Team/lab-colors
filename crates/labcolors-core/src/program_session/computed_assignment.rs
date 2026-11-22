@@ -498,6 +498,7 @@ fn region_node(
     depth: usize,
     domain: AssignmentDomainV1,
     selection: &ComputedSelectionV1,
+    preference: [f64; 3],
     evidence: &mut SearchEvidenceV1,
 ) -> Option<RegionNodeV1> {
     if evidence.visited == selection.budget {
@@ -509,7 +510,7 @@ fn region_node(
     Some(RegionNodeV1 {
         depth,
         domain,
-        lower_score: domain.lower_score(selection.targets[depth].anchor_lab),
+        lower_score: domain.lower_score(preference),
         ordinal: None,
     })
 }
@@ -812,6 +813,7 @@ where
         0,
         selection.targets[0].declaration.domain,
         selection,
+        selection.targets[0].anchor_lab,
         &mut evidence,
     ) else {
         return Ok(SearchResultV1 {
@@ -845,13 +847,17 @@ where
             }
             if volume > 64 {
                 let (left, right) = node.domain.split();
-                let Some(left) = region_node(depth, left, selection, &mut evidence) else {
+                let Some(left) =
+                    region_node(depth, left, selection, target.anchor_lab, &mut evidence)
+                else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
                     });
                 };
-                let Some(right) = region_node(depth, right, selection, &mut evidence) else {
+                let Some(right) =
+                    region_node(depth, right, selection, target.anchor_lab, &mut evidence)
+                else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
@@ -910,6 +916,7 @@ where
                 depth + 1,
                 selection.targets[depth + 1].declaration.domain,
                 selection,
+                selection.targets[depth + 1].anchor_lab,
                 &mut evidence,
             ) else {
                 return Ok(SearchResultV1 {

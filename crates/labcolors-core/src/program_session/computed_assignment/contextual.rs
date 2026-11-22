@@ -670,7 +670,13 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     stack
         .try_reserve_exact(stack_limit)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let Some(root) = region_node(0, context.domains[0], selection, &mut evidence) else {
+    let Some(root) = region_node(
+        0,
+        context.domains[0],
+        selection,
+        context.preferred[0],
+        &mut evidence,
+    ) else {
         return Ok(SearchResultV1 {
             evidence,
             values: has_best.then_some(best_values),
@@ -701,21 +707,31 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             }
             if volume > 64 {
                 let (left, right) = node.domain.split();
-                let Some(left) = region_node(depth, left, selection, &mut evidence) else {
+                let Some(left) = region_node(
+                    depth,
+                    left,
+                    selection,
+                    context.preferred[depth],
+                    &mut evidence,
+                ) else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
                     });
                 };
-                let Some(right) = region_node(depth, right, selection, &mut evidence) else {
+                let Some(right) = region_node(
+                    depth,
+                    right,
+                    selection,
+                    context.preferred[depth],
+                    &mut evidence,
+                ) else {
                     return Ok(SearchResultV1 {
                         evidence,
                         values: has_best.then_some(best_values),
                     });
                 };
-                let (first, second) = if left.domain.lower_score(context.preferred[depth])
-                    <= right.domain.lower_score(context.preferred[depth])
-                {
+                let (first, second) = if left.lower_score <= right.lower_score {
                     (left, right)
                 } else {
                     (right, left)
@@ -758,6 +774,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
                 depth + 1,
                 context.domains[depth + 1],
                 selection,
+                context.preferred[depth + 1],
                 &mut evidence,
             ) else {
                 return Ok(SearchResultV1 {
