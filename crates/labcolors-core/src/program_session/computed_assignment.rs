@@ -1125,3 +1125,6 @@ mod qualification_tests;
 
 #[cfg(test)]
 mod color_tests;
+
+#[cfg(test)]
+mod color_context_oracle;
