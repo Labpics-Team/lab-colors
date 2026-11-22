@@ -12,16 +12,17 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     *crate::sha256::digest(&bytes).as_bytes()
 }
 
-struct ContextV1 {
+struct ContextV1<'a> {
+    selection: &'a ComputedSelectionV1,
     domains: Vec<AssignmentDomainV1>,
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
     opaque: bool,
 }
 
-impl ContextV1 {
+impl<'a> ContextV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(
-        selection: &ComputedSelectionV1,
+        selection: &'a ComputedSelectionV1,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
@@ -95,6 +96,7 @@ impl ContextV1 {
             );
         }
         Ok(Self {
+            selection,
             domains,
             preferred,
             preferred_rgb,
@@ -104,7 +106,6 @@ impl ContextV1 {
 }
 
 fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
-    selection: &ComputedSelectionV1,
     context: &ContextV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
@@ -112,6 +113,7 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     values: &[Srgb8],
     scores: &mut [f64],
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let selection = context.selection;
     scores.fill(0.0);
     let count = selection.targets.len();
     let schema = epoch.observation_group.schema.as_slice();
@@ -160,7 +162,6 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 fn assess<E: ProgramConstraintEvaluatorSetV1>(
-    selection: &ComputedSelectionV1,
     context: &ContextV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
@@ -169,10 +170,9 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
     scores: &mut [f64],
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let selection = context.selection;
     apply::<E>(selection, runtime, values)?;
-    let intent_violations = intent_scores(
-        selection, context, runtime, epoch, scenarios, values, scores,
-    )?;
+    let intent_violations = intent_scores(context, runtime, epoch, scenarios, values, scores)?;
     arena.clear();
     scan_program_candidate(
         runtime,
@@ -280,15 +280,7 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
         .iter()
         .zip(values)
         .any(|(domain, value)| !domain.contains(*value))
-        || intent_scores(
-            selection,
-            &context,
-            runtime,
-            epoch,
-            scenarios,
-            values,
-            &mut scores,
-        )? != 0
+        || intent_scores(&context, runtime, epoch, scenarios, values, &mut scores)? != 0
     {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
@@ -307,7 +299,6 @@ struct BoundsV1 {
 impl BoundsV1 {
     fn may_pass<E: ProgramConstraintEvaluatorSetV1>(
         &mut self,
-        selection: &ComputedSelectionV1,
         context: &ContextV1,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
@@ -315,6 +306,7 @@ impl BoundsV1 {
         node: RegionNodeV1,
         values: &[Srgb8],
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let selection = context.selection;
         let count = selection.targets.len();
         self.scores.fill(0.0);
         for (index, domain) in context.domains.iter().enumerate() {
@@ -466,7 +458,6 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     // Сначала вся согласованная опора. Для opaque она единственна при нулевой
     // дистанции; при alpha продолжаем поиск, поскольку source может быть не один.
     let mut current_failures = assess(
-        selection,
         &context,
         runtime,
         epoch,
@@ -505,7 +496,6 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             values[index] = inverse_hint(context.preferred_rgb[index], backdrop, alpha);
         }
         let failures = assess(
-            selection,
             &context,
             runtime,
             epoch,
@@ -580,7 +570,6 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
                     values.copy_from_slice(&current_values);
                     values[index] = candidate;
                     let failures = assess(
-                        selection,
                         &context,
                         runtime,
                         epoch,
@@ -657,9 +646,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             .cardinality()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         if node.ordinal.is_none() {
-            let possible = bounds.may_pass(
-                selection, &context, runtime, epoch, scenarios, node, &values,
-            )?;
+            let possible = bounds.may_pass(&context, runtime, epoch, scenarios, node, &values)?;
             evidence.endpoint_evaluations = bounds.evaluations;
             let worse = has_best
                 && match compare_scores(&bounds.scores, &best_scores) {
@@ -744,7 +731,6 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         }
         evidence.examined += 1;
         if assess(
-            selection,
             &context,
             runtime,
             epoch,

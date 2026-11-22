@@ -20,7 +20,7 @@ const REQUIRED: [u8; 3] = [119, 126, 135];
 // transcribed published 2021 Oklab matrices, complete 64×64 source product.
 // It does not call Core composition, Lab projection, score ordering or bounds.
 fn half_over(source: [u8; 3], backdrop: [u8; 3]) -> [u8; 3] {
-    std::array::from_fn(|i| ((u16::from(source[i]) + u16::from(backdrop[i]) + 1) / 2) as u8)
+    std::array::from_fn(|i| (u16::from(source[i]) + u16::from(backdrop[i])).div_ceil(2) as u8)
 }
 
 fn oracle_lab(rgb: [u8; 3]) -> [f64; 3] {

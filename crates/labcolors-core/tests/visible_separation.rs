@@ -21,7 +21,7 @@ fn oracle(backgrounds: &[u8]) -> Option<u8> {
     (0..=255_u8)
         .filter(|&source| {
             backgrounds.iter().all(|&background| {
-                let visible = ((u16::from(source) + u16::from(background) + 1) / 2) as u8;
+                let visible = (u16::from(source) + u16::from(background)).div_ceil(2) as u8;
                 let distance = (gray_lightness(visible) - gray_lightness(background)).abs();
                 (0.18..=0.21).contains(&distance)
             })
