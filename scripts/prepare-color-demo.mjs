@@ -25,7 +25,7 @@ const runtime = metadata.wasm?.find((entry) => entry.role === "runtime");
 if (runtime?.path !== "pkg/labcolors_bg.wasm" || runtime.bytes !== wasm.length || runtime.sha256 !== sha256) {
   throw new Error("Installed demo WASM does not match its package metadata");
 }
-for (const file of ["index.html", "style.css", "main.js", "declaration.js"]) {
+for (const file of ["index.html", "style.css", "main.js", "declaration.js", "interaction.js"]) {
   await copyFile(resolve(root, "examples/contextual-colors", file), resolve(site, file));
 }
 await writeFile(resolve(site, ".nojekyll"), "");
