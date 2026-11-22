@@ -19,24 +19,22 @@ export function lowerColorSystem(entries) {
   const builder = new ProgramWireBuilderV3();
   let nextId = 1;
   const id = () => nextId++;
-  const explicitUses = new Set(entries.map((entry) => entry.node));
-  const inputs = [], useOrder = [...explicitUses], postOrder = [];
-  const visited = new Set();
+  const inputs = [], reachable = new Set();
+  const pending = entries.map((entry) => entry.node);
   // Iterative traversal also admits deeply nested client graphs without a JS call-stack limit.
-  for (const entry of entries) {
-    const stack = [{ node: entry.node, finish: false }];
-    while (stack.length > 0) {
-      const { node, finish } = stack.pop();
-      if (finish) { postOrder.push(node); continue; }
-      if (visited.has(node)) continue;
-      visited.add(node);
-      if (node.kind === "input") { postOrder.push(node); continue; }
-      if (!explicitUses.has(node)) useOrder.push(node);
-      stack.push({ node, finish: true });
-      if (node.policy.tone !== undefined) stack.push({ node: node.policy.tone.from, finish: false });
-      stack.push({ node: node.against, finish: false });
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (reachable.has(node)) continue;
+    reachable.add(node);
+    if (node.kind === "use") {
+      pending.push(node.against);
+      if (node.policy.tone !== undefined) pending.push(node.policy.tone.from);
     }
   }
+  // A use can only refer to already-created handles. Declaration order is therefore
+  // topological and keeps graph IDs and preferences independent of exported aliases.
+  const declaredOrder = (a, b) => a.ordinal - b.ordinal;
+  const declaredNodes = [...reachable].sort(declaredOrder);
 
   const nodes = new Map(), sources = new Map(), constraints = new Map(), targets = new Map();
   const asSurface = (node) => {
@@ -47,7 +45,7 @@ export function lowerColorSystem(entries) {
     }
     return compiled.surface;
   };
-  for (const node of postOrder) {
+  for (const node of declaredNodes) {
     if (node.kind === "input") {
       const input = { name: node.id, port: id(), surface: id() };
       inputs.push(input);
@@ -97,20 +95,19 @@ export function lowerColorSystem(entries) {
     }
   }
   // Even an all-fixed declaration gets one complete tuple check under V3.
-  builder.assignment(useOrder.filter((node) => node.role.adaptive).map((node) => nodes.get(node).target));
+  builder.assignment(declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
+    .map((node) => nodes.get(node).target));
 
   const outputNodes = new Map();
+  for (const node of [...new Set(entries.map((entry) => entry.node))].sort(declaredOrder)) {
+    const use = nodes.get(node), slot = id();
+    // Intermediate paints are legitimate values. This path does not request terminal sink authority.
+    builder.output(slot, use.paint);
+    outputNodes.set(node, { slot, node });
+  }
   const outputs = entries.map(({ name, node }) => {
     if (inputs.some((input) => input.name === name)) authoringError(`compile.outputs.${name}`, "output aliases must not shadow input names");
-    let compiled = outputNodes.get(node);
-    if (compiled === undefined) {
-      const use = nodes.get(node), slot = id();
-      // Intermediate paints are legitimate values. This path does not request terminal sink authority.
-      builder.output(slot, use.paint);
-      compiled = { slot, node };
-      outputNodes.set(node, compiled);
-    }
-    return Object.freeze({ name, ...compiled });
+    return Object.freeze({ name, ...outputNodes.get(node) });
   });
   return {
     wire: builder.finish(),

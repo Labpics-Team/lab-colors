@@ -58,7 +58,7 @@ export interface ColorRole {
   readonly [colorHandle]: "role";
   readonly id: string;
   readonly anchor: readonly [number, number, number];
-  /** Новый local use; повторно переданный ColorUse сохраняет один общий paint. */
+  /** Новый local use в порядке предпочтений декларации; повторный handle сохраняет один paint. */
   on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse;
 }
 
@@ -149,7 +149,7 @@ export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorRole;
   fixed(id: string, source: AuthoredColor): ColorRole;
-  /** Порядок output keys объявляет приоритет предпочтений; render-зависимости остаются общими. */
+  /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,
   ): Promise<ColorProgram<Extract<keyof Outputs, string>>>;

@@ -158,6 +158,7 @@ export function colors() {
   const owner = {};
   const roleNames = new Set();
   const surfaceNames = new Set();
+  let nextOrdinal = 0;
 
   const declareRole = (id, anchor, options, adaptive) => {
     const checkedId = roleId(id);
@@ -173,7 +174,8 @@ export function colors() {
         const copiedPolicy = usePolicy(policy, owner);
         if (!adaptive && copiedPolicy.tone !== undefined) authoringError("role.on.policy.tone", "a fixed role cannot adapt its tone");
         const use = Object.freeze({ role: handle, against });
-        uses.set(use, Object.freeze({ kind: "use", owner, handle: use, role: roles.get(handle), against: parent, policy: copiedPolicy }));
+        uses.set(use, Object.freeze({ kind: "use", owner, ordinal: nextOrdinal++, handle: use,
+          role: roles.get(handle), against: parent, policy: copiedPolicy }));
         return use;
       },
     });
@@ -187,7 +189,7 @@ export function colors() {
       const checkedId = name(id, "surface.id");
       if (surfaceNames.has(checkedId)) authoringError("surface.id", "duplicate surface id");
       const handle = Object.freeze({ id: checkedId });
-      surfaces.set(handle, Object.freeze({ kind: "input", owner, id: checkedId }));
+      surfaces.set(handle, Object.freeze({ kind: "input", owner, ordinal: nextOrdinal++, id: checkedId }));
       surfaceNames.add(checkedId);
       return handle;
     },

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import init, { colors, evaluateWcag22 } from "../index.js";
 
+
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
 const hex = (rgb) => "#" + rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("");
 const textPasses = (rgb, background) => evaluateWcag22(hex(rgb), hex(background), "sc-1.4.3-text-default").decision === "pass";
@@ -64,4 +65,32 @@ test("fixed declarations still validate constraints and never expose historical 
     assert.equal(unknown.diagnostics.some((item) => item.kind === "unknown-input" && item.input === "canvas"), true);
     assert.equal("values" in unknown, false);
   } finally { program.dispose(); }
+});
+
+test("output order, aliases and an unexported backdrop do not change graph preferences", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const panel = c.role("paper", "#aaaaaa").on(canvas, {
+    tone: { from: canvas, curve: [[0, 0.15], [1, 0.95]] },
+  });
+  const label = c.role("ink", "#242424").on(panel, { contrast: "wcag22-text" });
+  const maps = [{ panel, label }, { label, panel }, { alias: label, panel, label }, { label }];
+  const frames = [];
+  for (const outputs of maps) {
+    const program = await c.compile(outputs);
+    try {
+      const frame = program.resolve({ canvas: "#283548" });
+      assert.equal(frame.state, "ready");
+      assert.equal(frame.optimality, "exact", "the bounded neutral domains complete this preference comparison");
+      assert.deepEqual(Object.keys(frame.values), Object.keys(outputs), "export order remains a readout property");
+      frames.push(frame);
+    } finally { program.dispose(); }
+  }
+  const first = frames[0];
+  assert.equal(textPasses(first.values.label.rgb, first.values.panel.rgb), true);
+  assert.notDeepEqual(first.values.label.rgb, [36, 36, 36], "the earlier panel preference can require changing its later label");
+  for (const frame of frames.slice(1)) {
+    assert.deepEqual(frame.values.label, first.values.label);
+    if (frame.values.panel !== undefined) assert.deepEqual(frame.values.panel, first.values.panel);
+  }
+  assert.equal(frames[2].values.alias, frames[2].values.label);
 });
