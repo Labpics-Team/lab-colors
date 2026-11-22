@@ -81,6 +81,40 @@ fn opaque_blue_changes_locally_and_keeps_color_character() -> Result<(), String>
 }
 
 #[test]
+fn repeated_context_reuses_blue_selection_with_fresh_physical_verification() -> Result<(), String> {
+    let evaluator = crate::constraints::CountingProgramWcag22Srgb8V1::default();
+    let owner = compile_assignment(
+        program(
+            color([0, 103, 244], 2.0, None)?,
+            Wcag22CriterionV1::Sc143TextDefault,
+            evaluator.clone(),
+        ),
+        65_536,
+    )
+    .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 0))
+        .map_err(|error| format!("initial dark context: {error:?}"))?
+        .commit();
+    let selected = rgb(&session);
+    let calls = evaluator.calls().len();
+    assert!(
+        calls > 1,
+        "the initial blue needs search and final verification"
+    );
+    session
+        .prepare_update(update(2, 0))
+        .map_err(|error| format!("repeated dark context: {error:?}"))?
+        .commit();
+    assert_eq!(rgb(&session), selected);
+    assert_eq!(evaluator.calls().len(), calls + 1);
+    Ok(())
+}
+
+#[test]
 fn client_tone_curve_changes_the_whole_gray_surface_without_theme_names() -> Result<(), String> {
     let curve = ToneCurveV1::new(2, vec![[0.0, 0.15], [1.0, 0.96]])
         .map_err(|error| format!("tone curve: {error:?}"))?;

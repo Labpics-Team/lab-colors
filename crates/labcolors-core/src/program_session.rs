@@ -4350,7 +4350,15 @@ where
             owner.0.target_selection,
             CompiledTargetSelectionV1::Computed(_)
         ) {
-            computed_assignment::evaluate(self, &owner.0, observation)
+            computed_assignment::evaluate(
+                self,
+                &owner.0,
+                observation,
+                previous.and_then(|value| match value {
+                    ProgramVerifiedOutcomeV1::Computed(value) => Some(value),
+                    ProgramVerifiedOutcomeV1::Legacy(_) => None,
+                }),
+            )
         } else {
             evaluate_program_session(
                 self,

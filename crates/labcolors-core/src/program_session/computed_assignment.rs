@@ -1031,6 +1031,7 @@ pub(super) fn evaluate<Evaluation>(
     plan: &mut ProgramSessionPlan<Evaluation>,
     epoch: &ProgramEpochV1<Evaluation>,
     observation: RevisionBoundObservationV1,
+    previous: Option<&ComputedVerifiedV1<Evaluation>>,
 ) -> ProgramSessionEvaluationResult<Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -1055,7 +1056,34 @@ where
     let scenarios = NonEmptyScenarioSetV1::from_admitted(&observation)
         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
     let counts = prepare_program_evaluation_arena(epoch, scenarios, arena.storage_mut())?;
-    let selected = if selection
+    let reusable = previous.filter(|previous| {
+        previous.identity == identity
+            && previous.execution_profile == selection.execution_profile
+            && previous.values.len() == selection.targets.len()
+            && previous
+                .observation
+                .shares_schema_backing_with(&epoch.observation_group.schema)
+            && observation.shares_schema_backing_with(&epoch.observation_group.schema)
+            && previous.observation.physical_case_count() == scenarios.len().get()
+            && (0..scenarios.len().get()).all(|index| {
+                previous.observation.physical_values(index) == observation.physical_values(index)
+            })
+    });
+    let selected = if let Some(previous) = reusable {
+        // Selection depends on ordered physical inputs, not scenario names or
+        // revision. Reuse only the selected tuple and its original search
+        // completion; apply and certify it again below against this observation.
+        // In particular, a discarded prospective update may have changed bindings.
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(previous.values.len())
+            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        values.extend_from_slice(&previous.values);
+        SearchResultV1 {
+            evidence: previous.search,
+            values: Some(values),
+        }
+    } else if selection
         .targets
         .iter()
         .any(|target| target.declaration.intent.is_some())
@@ -1182,3 +1210,6 @@ mod color_tests;
 
 #[cfg(test)]
 mod color_context_oracle;
+
+#[cfg(test)]
+mod reuse_tests;

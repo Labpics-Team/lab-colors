@@ -967,12 +967,14 @@ fn computed_revisions_recheck_all_support_and_never_reuse_fixed_evidence() {
         .prepare_update(both(2))
         .expect("наблюдение допускает подготовку перехода")
         .commit();
-    assert_eq!(evaluator.calls().len(), 8);
+    // The same physical input reuses only selection. Both physical cells are
+    // evaluated again and bound to revision 2; the search itself is unnecessary.
+    assert_eq!(evaluator.calls().len(), 6);
     session
         .prepare_update(both(2))
         .expect("наблюдение допускает подготовку перехода")
         .commit();
-    assert_eq!(evaluator.calls().len(), 8);
+    assert_eq!(evaluator.calls().len(), 6);
     assert_eq!(
         session
             .state()
