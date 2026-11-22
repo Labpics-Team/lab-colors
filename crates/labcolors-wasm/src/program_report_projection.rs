@@ -1,13 +1,15 @@
 //! Структурная JS-проекция owned-отчёта. Ни классификатора, ни solver здесь нет.
 
 use labcolors_core::program_wire::{
-    ProgramAssessmentReportV1, ProgramAssessmentVerdictV1, ProgramConstraintAssessmentV1,
+    ProgramAssessmentReportV1, ProgramAssessmentVerdictV1, ProgramCleanlinessAssessmentV1,
+    ProgramCleanlinessStatusV1, ProgramConstraintAssessmentV1,
 };
 use wasm_bindgen::prelude::*;
 
 use super::{
-    report_accepted, report_array, report_array_push, report_cell, report_domain_absent,
-    report_projection, report_rejected, report_scenario, report_separation, report_summary,
+    report_accepted, report_array, report_array_push, report_cell, report_cleanliness,
+    report_domain_absent, report_projection, report_rejected, report_scenario, report_separation,
+    report_summary,
 };
 
 /// Неудачное чтение не изменяет Rust snapshot и не имеет sink-эффекта.
@@ -31,12 +33,38 @@ pub(super) fn project(report: Option<&ProgramAssessmentReportV1>) -> Result<JsVa
         )?;
         report_array_push(&cells, &record)?;
     }
+    let cleanliness = project_cleanliness(Some(report.cleanliness()))?;
     report_projection(
         &report.content_identity(),
         report.stream_id(),
         report.revision(),
         &scenario_provenance,
         &cells,
+        &cleanliness,
+    )
+}
+
+/// Одна плоская immutable запись; полный массив клеток для обычного UI не копируется.
+pub(super) fn project_cleanliness(
+    assessment: Option<ProgramCleanlinessAssessmentV1>,
+) -> Result<JsValue, JsValue> {
+    let Some(assessment) = assessment else {
+        return Ok(JsValue::NULL);
+    };
+    let status = match assessment.status() {
+        ProgramCleanlinessStatusV1::NotAssessed => "not-assessed",
+        ProgramCleanlinessStatusV1::Conforms => "conforms",
+        ProgramCleanlinessStatusV1::Violates => "violates",
+        ProgramCleanlinessStatusV1::Unavailable => "unavailable",
+    };
+    report_cleanliness(
+        status,
+        ProgramCleanlinessAssessmentV1::PROFILE_ID,
+        ProgramCleanlinessAssessmentV1::BASIS,
+        ProgramCleanlinessAssessmentV1::SCOPE,
+        assessment.accepted(),
+        assessment.rejected(),
+        assessment.unavailable(),
     )
 }
 
@@ -47,6 +75,18 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
         ProgramAssessmentVerdictV1::Violation => "violation",
     };
     match assessment {
+        Assessment::NominalSrgb8VisiblePass { visible } => {
+            let [red, green, blue] = visible.bytes();
+            report_accepted("nominal-srgb8-visible", red, green, blue)
+        }
+        Assessment::NominalSrgb8VisibleRejected {
+            visible,
+            rejected_blue_interval,
+        } => {
+            let [red, green, blue] = visible.bytes();
+            let [lower, upper] = rejected_blue_interval;
+            report_rejected("nominal-srgb8-visible", red, green, blue, lower, upper)
+        }
         Assessment::VisibleSeparation {
             verdict,
             measurement,
@@ -76,7 +116,7 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
         Assessment::Relation { verdict } => report_summary("relation", verdict_key(verdict)),
         Assessment::DeclaredSrgb8CleanSetPass { visible } => {
             let [red, green, blue] = visible.bytes();
-            report_accepted(red, green, blue)
+            report_accepted("declared-srgb8-clean-set", red, green, blue)
         }
         Assessment::DeclaredSrgb8CleanSetRejected {
             visible,
@@ -84,7 +124,7 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
         } => {
             let [red, green, blue] = visible.bytes();
             let [lower, upper] = rejected_blue_interval;
-            report_rejected(red, green, blue, lower, upper)
+            report_rejected("declared-srgb8-clean-set", red, green, blue, lower, upper)
         }
         Assessment::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent => report_domain_absent(),
     }

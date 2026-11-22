@@ -214,7 +214,9 @@ class ContractTest {
             presentationRoot(71u, 61u); presentationTarget(71u, 61u)
             exactVisibleUnary(true, 81u, 61u, rgb(1, 2, 3))
             wcag22VisibleUnary(false, 82u, 61u, Wcag22Criterion.SC1411_UI_COMPONENT_OR_STATE)
-            declaredSrgb8CleanSet(true, 83u, 71u, 61u); exactIntrinsicRelationHard(84u, 11u, listOf(11u)); output(91u, 42u)
+            declaredSrgb8CleanSet(true, 83u, 71u, 61u)
+            nominalSrgb8Visible(true, 85u, 61u); nominalSrgb8Visible(false, 86u, 61u)
+            exactIntrinsicRelationHard(84u, 11u, listOf(11u)); output(91u, 42u)
         }
         assertArrayEquals(hex(vectors.getString("encodingOnly")), all.finish())
         val before = all.finish()

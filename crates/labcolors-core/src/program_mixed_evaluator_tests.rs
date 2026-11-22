@@ -325,6 +325,7 @@ fn assert_public_binding_matches_core(
     let core_program_occurrence = core_physical.program_occurrence();
     assert_eq!(core_program_occurrence.occurrence(), expected_occurrence);
     let public_binding = match public {
+        AssessmentV1::NominalSrgb8Visible(evidence) => evidence.binding(),
         AssessmentV1::VisibleSeparation(evidence) => evidence.binding(),
         AssessmentV1::ExactSrgb8(evidence) => evidence.binding(),
         AssessmentV1::Wcag22Srgb8(evidence) => evidence.binding(),
@@ -656,6 +657,13 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut EvidenceP
         VerdictV1::Violation => 2,
     });
     let binding = match assessment {
+        AssessmentV1::NominalSrgb8Visible(evidence) => {
+            probe.mix_srgb8(evidence.visible());
+            if let Some(interval) = evidence.rejected_blue_interval() {
+                probe.mix_bytes(&interval);
+            }
+            Some(evidence.binding())
+        }
         AssessmentV1::VisibleSeparation(evidence) => {
             let measurement = evidence.measurement();
             probe.mix_srgb8(measurement.visible());

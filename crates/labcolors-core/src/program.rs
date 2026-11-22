@@ -1648,6 +1648,36 @@ impl DraftV1 {
         self
     }
 
+    /// Проверяет nominal v2 membership видимого результата без требования вклада.
+    pub(crate) fn push_nominal_srgb8_visible_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::NominalSrgb8Visible(()),
+            ));
+        self
+    }
+
+    /// Сохраняет ту же nominal v2 оценку без влияния на допустимость выбора.
+    pub(crate) fn push_nominal_srgb8_visible_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::NominalSrgb8Visible(()),
+            ));
+        self
+    }
+
     /// Добавляет обязательное точное сравнение видимого sRGB8 результата.
     pub(crate) fn push_exact_visible_unary_hard(
         &mut self,
@@ -3112,6 +3142,24 @@ fn project_assessment<'a>(
 ) -> AssessmentV1<'a> {
     match cell.result() {
         ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::NominalSrgb8Visible(evidence),
+        )) => AssessmentV1::NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1 {
+            verdict: VerdictV1::Pass,
+            binding: evidence.binding(),
+            visible: *evidence.measurement().value(),
+            rejected_blue_interval: None,
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::NominalSrgb8Visible(evidence),
+            ),
+        ) => AssessmentV1::NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1 {
+            verdict: VerdictV1::Violation,
+            binding: evidence.binding(),
+            visible: *evidence.measurement().value(),
+            rejected_blue_interval: Some(evidence.measurement().classification().endpoints()),
+        }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::VisibleSeparation(evidence),
         )) => AssessmentV1::VisibleSeparation(VisibleSeparationEvidenceV1 {
             verdict: VerdictV1::Pass,
@@ -3193,6 +3241,8 @@ fn project_assessment<'a>(
 /// Закрытое семейство сохранённого evaluator evidence.
 #[derive(Clone, Copy)]
 pub(crate) enum AssessmentV1<'a> {
+    /// Nominal membership видимого цвета; не доказательство causal contribution.
+    NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1<'a>),
     /// Прямое расстояние Oklab по двум окончательным encoded цветам.
     VisibleSeparation(VisibleSeparationEvidenceV1<'a>),
     /// Evidence точного сравнения encoded sRGB8.
@@ -3210,6 +3260,7 @@ impl AssessmentV1<'_> {
     /// Возвращает несовместимый с противоположным исход классификатора.
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self {
+            Self::NominalSrgb8Visible(value) => value.verdict(),
             Self::VisibleSeparation(value) => value.verdict(),
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
@@ -3828,6 +3879,35 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.binding(),
         };
         PointBindingV1 { inner: value }
+    }
+}
+
+/// Сохранённый nominal verdict и физическая привязка видимого результата.
+#[derive(Clone, Copy)]
+pub(crate) struct NominalSrgb8VisibleEvidenceV1<'a> {
+    verdict: VerdictV1,
+    binding: &'a ProgramVisiblePointBindingV1,
+    visible: Srgb8,
+    rejected_blue_interval: Option<[u8; 2]>,
+}
+
+impl<'a> NominalSrgb8VisibleEvidenceV1<'a> {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        self.verdict
+    }
+
+    pub(crate) const fn visible(self) -> Srgb8 {
+        self.visible
+    }
+
+    pub(crate) const fn rejected_blue_interval(self) -> Option<[u8; 2]> {
+        self.rejected_blue_interval
+    }
+
+    pub(crate) const fn binding(self) -> PointBindingV1<'a> {
+        PointBindingV1 {
+            inner: self.binding,
+        }
     }
 }
 
@@ -4891,6 +4971,7 @@ fn map_evaluator_error(
     error: CoreProgramEvaluatorErrorV1,
 ) -> Result<EvaluatorFailureV1, EvaluatorProtocolFailureV1> {
     match error {
+        CoreProgramEvaluatorErrorV1::NominalSrgb8Visible(source) => match source {},
         CoreProgramEvaluatorErrorV1::VisibleSeparation(source) => match source {},
         CoreProgramEvaluatorErrorV1::ExactSrgb8(source) => match source {},
         CoreProgramEvaluatorErrorV1::Wcag22Srgb8(source) => {

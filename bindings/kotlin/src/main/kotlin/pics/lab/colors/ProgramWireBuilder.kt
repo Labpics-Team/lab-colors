@@ -148,6 +148,9 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
     fun declaredSrgb8CleanSet(hard: Boolean, id: UInt, root: UInt, occurrence: UInt) = entry(if (hard) 11 else 12) {
         it.u32(id); it.u8(10); it.u32(root); it.u32(occurrence)
     }
+    fun nominalSrgb8Visible(hard: Boolean, id: UInt, occurrence: UInt) = entry(if (hard) 11 else 12) {
+        it.u32(id); it.u8(12); it.u32(occurrence)
+    }
     fun exactIntrinsicRelationHard(id: UInt, reference: UInt, candidates: List<UInt>) = entry(11) {
         val size = count(candidates.size).toInt()
         it.u32(id); it.u8(4); it.u32(reference); it.u32(size.toUInt())

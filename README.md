@@ -4,6 +4,12 @@
 Вы задаёте характер ролей, их применения и правила поверхностей. Lab Colors
 вычисляет цвета в текущем контексте и согласованно обновляет весь результат.
 
+Cleanliness — одна из основных целей: полезно улучшать конечную композицию,
+сохраняя замысел, цветовую идентичность, различимость и материал. Направление,
+реализованные возможности и остающиеся задачи разделены в
+[контракте качества](docs/explanation/color-quality.md). Исследовательская база
+и история планов доступны оттуда; контраст покрывает отдельное условие.
+
 [![npm](https://img.shields.io/npm/v/%40labpics%2Fcolors)](https://www.npmjs.com/package/@labpics/colors)
 [![CI](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml/badge.svg)](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
 [![Код: MIT](https://img.shields.io/badge/code-MIT-blue)](LICENSE)

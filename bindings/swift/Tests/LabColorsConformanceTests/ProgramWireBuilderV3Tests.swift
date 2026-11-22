@@ -75,6 +75,9 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             XCTAssertEqual(Set(rgb).count, 1)
             let report = try XCTUnwrap(try snapshot.assessmentReport())
             XCTAssertEqual(report.cells.count, 1)
+            XCTAssertEqual(report.cleanliness.status, .notAssessed)
+            XCTAssertNil(report.cleanliness.profile)
+            XCTAssertEqual(try snapshot.cleanlinessAssessment(), report.cleanliness)
             let cell = try XCTUnwrap(report.cells.first)
             XCTAssertTrue(cell.hard)
             guard case let .wcag22Srgb8(verdict) = cell.assessment else { return XCTFail("expected the declared WCAG assessment") }
@@ -110,7 +113,39 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         let rejected = try runtime.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
         XCTAssertEqual(rejected.state(), "unsatisfied")
         XCTAssertNotNil(try rejected.diagnostics())
+        XCTAssertNil(try rejected.cleanlinessAssessment())
         XCTAssertEqual(try valid.outputRgb(index: 0), Data([0, 0, 0]))
+    }
+
+    func testNominalVisibleReportsAndSummaryCrossTheNativeBoundary() throws {
+        let wire = try ProgramWireBuilderV3().source(1, rgb: [255, 255, 255]).fixedTarget(2, source: 1)
+            .surfaceInputPort(6).opacityInput(5, value: 0.5)
+            .solidPaint(3, target: 2).opacityPaint(4, source: 3, opacity: 5).inputSurface(7, input: 6)
+            .pointOccurrence(8, paint: 4, surface: 7).nominalSrgb8Visible(false, id: 10, occurrence: 8)
+            .output(17, paint: 4).assignment([]).finish()
+        let runtime = try compileProgramWire(bytes: wire, streamId: 1)
+        let first = try runtime.updateObserved(revision: 1, scenarioIds: [9], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+        let summary = try XCTUnwrap(try first.cleanlinessAssessment())
+        XCTAssertEqual(summary.status, .conforms)
+        XCTAssertEqual(summary.profile, "nominal-srgb8-v2")
+        XCTAssertEqual(summary.basis, "declared-convention")
+        XCTAssertEqual(summary.scope, "declared-final-points")
+        XCTAssertEqual(summary.accepted, 1)
+        XCTAssertEqual(summary.rejected, 0)
+        XCTAssertEqual(summary.unavailable, 0)
+        XCTAssertEqual(try first.assessmentReport()?.cleanliness, summary)
+        let changed = try runtime.updateObserved(revision: 2, scenarioIds: [9], surfaces: Data([1, 1, 3]), surfaceCount: 1)
+        XCTAssertEqual(changed.state(), "ready")
+        let report = try XCTUnwrap(try changed.assessmentReport())
+        XCTAssertEqual(try changed.cleanlinessAssessment(), report.cleanliness)
+        XCTAssertEqual(report.cleanliness.status, .violates)
+        XCTAssertEqual(report.cleanliness.rejected, 1)
+        guard case let .nominalSrgb8VisibleRejected(visible, lower, upper) = try XCTUnwrap(report.cells.first).assessment else {
+            return XCTFail("expected the final visible rejection")
+        }
+        XCTAssertEqual([visible.red, visible.green, visible.blue], [128, 128, 129])
+        XCTAssertTrue((lower...upper).contains(129))
+        XCTAssertEqual(try first.cleanlinessAssessment(), summary)
     }
 
     func testV3FailuresRollBackCompleteEntriesAndAllowContinuation() throws {

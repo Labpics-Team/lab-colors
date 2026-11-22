@@ -20,6 +20,85 @@ fn rgb(gray: u8) -> ProgramRgb8 {
     }
 }
 
+#[test]
+fn native_nominal_visible_reports_preserve_the_final_color_and_typed_rejection() -> TestResult {
+    // Public JS V3 builder: fixed white at opacity 0.5 over one input, with a
+    // report-only nominal-visible constraint and an empty assignment.
+    let bytes =
+        include_bytes!("../../labcolors-core/tests/fixtures/nominal-visible-report.lcpw").to_vec();
+    let runtime = compile_program_wire(bytes, 1)?;
+    let first = runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
+    let first_report = first.assessment_report()?.ok_or("first nominal report")?;
+    assert_eq!(first.state(), "ready");
+    assert_eq!(first_report.cells.len(), 1);
+    assert_eq!(
+        first.cleanliness_assessment()?,
+        Some(first_report.cleanliness.clone())
+    );
+    assert_eq!(
+        first_report.cleanliness,
+        ProgramCleanlinessAssessment {
+            status: ProgramCleanlinessStatus::Conforms,
+            profile: Some("nominal-srgb8-v2".into()),
+            basis: Some("declared-convention".into()),
+            scope: Some("declared-final-points".into()),
+            accepted: 1,
+            rejected: 0,
+            unavailable: 0,
+        }
+    );
+    assert_eq!(
+        first_report.cells[0].assessment,
+        ProgramConstraintAssessment::NominalSrgb8VisiblePass { visible: rgb(255) },
+    );
+
+    let changed = runtime.update_observed(2, vec![9], vec![1, 1, 3], 1)?;
+    assert_eq!(
+        changed.state(),
+        "ready",
+        "a report-only rejection does not gate the frame"
+    );
+    let report = changed
+        .assessment_report()?
+        .ok_or("changed nominal report")?;
+    assert_eq!(
+        changed.cleanliness_assessment()?,
+        Some(report.cleanliness.clone())
+    );
+    assert_eq!(
+        report.cleanliness.status,
+        ProgramCleanlinessStatus::Violates
+    );
+    assert_eq!(
+        (
+            report.cleanliness.accepted,
+            report.cleanliness.rejected,
+            report.cleanliness.unavailable
+        ),
+        (0, 1, 0)
+    );
+    let ProgramConstraintAssessment::NominalSrgb8VisibleRejected {
+        visible,
+        rejected_blue_lower,
+        rejected_blue_upper,
+    } = report.cells[0].assessment
+    else {
+        return Err("a visible nominal rejection must retain its own assessment kind".into());
+    };
+    assert_eq!(
+        visible,
+        ProgramRgb8 {
+            red: 128,
+            green: 128,
+            blue: 129
+        }
+    );
+    assert!((rejected_blue_lower..=rejected_blue_upper).contains(&129));
+    drop(runtime);
+    assert_eq!(first.assessment_report()?, Some(first_report));
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum Decision {
     Accept,
@@ -129,6 +208,22 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
     assert_eq!(ready.optimality().as_deref(), Some("exact"));
     assert_eq!(ready.diagnostics()?, None);
     let report = ready.assessment_report()?.ok_or("ready report")?;
+    assert_eq!(
+        ready.cleanliness_assessment()?,
+        Some(report.cleanliness.clone())
+    );
+    assert_eq!(
+        report.cleanliness,
+        ProgramCleanlinessAssessment {
+            status: ProgramCleanlinessStatus::NotAssessed,
+            profile: None,
+            basis: None,
+            scope: None,
+            accepted: 0,
+            rejected: 0,
+            unavailable: 0,
+        }
+    );
     assert_eq!(report.content_identity.len(), 32);
     assert_eq!(report.stream_id, 8);
     assert_eq!(report.revision, 1);
@@ -175,6 +270,7 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
     assert_eq!(conflict.optimality(), None);
     assert_eq!(conflict.reason(), None);
     assert_eq!(conflict.assessment_report()?, None);
+    assert_eq!(conflict.cleanliness_assessment()?, None);
     let diagnostics = conflict.diagnostics()?.ok_or("conflict diagnostics")?;
     assert!(diagnostics.search_visited <= diagnostics.search_budget);
     let witness = diagnostics
@@ -211,6 +307,7 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
     assert_eq!(unknown.revision(), 3);
     assert_eq!(unknown.diagnostics()?, None);
     assert_eq!(unknown.assessment_report()?, None);
+    assert_eq!(unknown.cleanliness_assessment()?, None);
     assert_eq!(unknown.output_count(), 0);
     let recovered = runtime.update_observed(4, vec![9], vec![255; 3], 1)?;
     assert_eq!(recovered.state(), "ready");

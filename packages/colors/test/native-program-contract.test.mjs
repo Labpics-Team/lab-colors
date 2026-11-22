@@ -44,6 +44,7 @@ test("native authoring fixtures match both real Web builders byte for byte", () 
     .solidPaint(41, 21).opacityPaint(42, 41, 32).inputSurface(51, 31).occurrenceSurface(52, 61)
     .sourceOverOccurrence(61, 42, 51, 64, .2, 2).presentationRoot(71, 61).presentationTarget(71, 61)
     .exactVisibleUnary(true, 81, 61, [1, 2, 3]).wcag22VisibleUnary(false, 82, 61, 3)
-    .declaredSrgb8CleanSet(true, 83, 71, 61).exactIntrinsicRelationHard(84, 11, [11]).output(91, 42);
+    .declaredSrgb8CleanSet(true, 83, 71, 61).nominalSrgb8Visible(true, 85, 61).nominalSrgb8Visible(false, 86, 61)
+    .exactIntrinsicRelationHard(84, 11, [11]).output(91, 42);
   assert.deepEqual(all.finish(), bytes("encodingOnly"));
 });

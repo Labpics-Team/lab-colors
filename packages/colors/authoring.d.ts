@@ -1,4 +1,14 @@
+import type { ProgramCleanlinessAssessmentV1 } from "./pkg/labcolors.js";
+
 declare const colorHandle: unique symbol;
+
+/** Итог применённой модели; конвенция не является человеческой оценкой всей композиции. */
+export type ColorCleanlinessAssessment = ProgramCleanlinessAssessmentV1;
+
+export interface ColorSystemOptions {
+  /** Явная ограниченная конвенция; Core ищет соответствующий ей результат для всех reachable uses. */
+  readonly cleanliness?: "nominal-srgb8-v2";
+}
 
 /** Исходный encoded sRGB: HEX без alpha или три целых канала [0, 255]. */
 export type AuthoredColor = string | readonly [number, number, number];
@@ -80,7 +90,7 @@ export type ColorDiagnostic =
       role: string;
       use: ColorUse;
       outputs: readonly string[];
-      requirement: "contrast" | "identity" | "max-change" | "output-domain" | "separation";
+      requirement: "contrast" | "identity" | "max-change" | "output-domain" | "separation" | "cleanliness";
       /** Проверенный нарушивший кандидат; это не минимальное конфликтное множество. */
       evidence: "candidate-witness";
       caseIndex?: number;
@@ -103,6 +113,7 @@ export type ColorResolution<Name extends string = string> =
       state: "ready";
       revision: bigint;
       optimality: "exact" | "unfinished";
+      readonly cleanliness: ColorCleanlinessAssessment;
       context: Readonly<Record<string, readonly [number, number, number]>>;
       values: Readonly<Record<Name, ResolvedColor>>;
     }>
@@ -156,4 +167,4 @@ export interface ColorSystem {
 }
 
 /** Краткая декларация Program; вычисления, constraints и selection выполняет Core. */
-export function colors(): ColorSystem;
+export function colors(options?: ColorSystemOptions): ColorSystem;

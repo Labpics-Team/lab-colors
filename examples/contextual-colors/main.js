@@ -31,6 +31,9 @@ function show(outcome) {
   byId("completion").textContent = frame.optimality === "exact"
     ? "Обязательные условия выполнены; поиск предпочтительного результата завершён."
     : "Обязательные условия выполнены. Поиск ещё более предпочтительного результата не завершён.";
+  byId("quality").textContent = frame.cleanliness.status === "not-assessed"
+    ? "Cleanliness композиции ещё не оценена. Этот пример проверяет сохранение характера, связанные цвета и материал."
+    : "Проверена выбранная номинальная конвенция для конечных точек. Общая Cleanliness композиции остаётся отдельной задачей.";
   const rows = Object.entries(frame.values).map(([name, value]) => {
     const row = document.createElement("tr");
     for (const text of [name, value.rgb.join(", "), String(value.opacity)]) {

@@ -158,6 +158,11 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                 let assessment = cell.assessment();
                 let _: VerdictV1 = assessment.verdict();
                 let binding = match assessment {
+                    AssessmentV1::NominalSrgb8Visible(evidence) => {
+                        let _ = evidence.visible();
+                        let _ = evidence.rejected_blue_interval();
+                        Some(evidence.binding())
+                    }
                     AssessmentV1::VisibleSeparation(evidence) => {
                         let _ = evidence.measurement();
                         Some(evidence.binding())

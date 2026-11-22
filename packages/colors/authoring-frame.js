@@ -45,6 +45,10 @@ export function copyReadyColorFrame(snapshot, graph, context) {
   if (optimality !== "exact" && optimality !== "unfinished") {
     authoringError("resolution.optimality", "Core did not report selection completion", "color_core_contract");
   }
+  const cleanliness = snapshot.cleanlinessAssessment();
+  if (cleanliness === null) {
+    authoringError("resolution.cleanliness", "Core omitted the current quality assessment", "color_core_contract");
+  }
   const table = snapshot.copyOutputTable();
   const bySlot = new Map();
   for (let i = 0; i < table.length; i += 5) {
@@ -56,7 +60,7 @@ export function copyReadyColorFrame(snapshot, graph, context) {
     if (value === undefined) authoringError(`resolution.${name}`, "Core omitted a declared output", "color_core_contract");
     return [name, value];
   });
-  return Object.freeze({ state: "ready", revision: snapshot.revision, optimality,
+  return Object.freeze({ state: "ready", revision: snapshot.revision, optimality, cleanliness,
     context: Object.freeze(Object.fromEntries(context.colors.map(({ name, rgb }) => [name, rgb]))),
     values: Object.freeze(Object.fromEntries(pairs)) });
 }

@@ -74,6 +74,8 @@ export class ProgramWireBuilderV1 {
     root: number,
     occurrence: number,
   ): this;
+  /** Nominal v2 membership of the final visible point; no owned-contribution requirement. */
+  nominalSrgb8Visible(hard: boolean, id: number, occurrence: number): this;
   exactIntrinsicRelationHard(
     id: number,
     reference: number,

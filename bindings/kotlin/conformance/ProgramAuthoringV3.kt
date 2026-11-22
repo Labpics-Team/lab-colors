@@ -115,7 +115,11 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
                 check(channels.distinct().size == 1)
                 val foreground = "#" + channels.joinToString("") { it.toString(16).padStart(2, '0') }
                 check(evaluateWcag22(foreground, background, Wcag22Criterion.SC143_TEXT_DEFAULT).decision == Wcag22Decision.PASS)
-                val cell = requireNotNull(snapshot.assessmentReport()).cells.single()
+                val report = requireNotNull(snapshot.assessmentReport())
+                check(report.cleanliness.status == ProgramCleanlinessStatus.NOT_ASSESSED)
+                check(report.cleanliness.profile == null)
+                check(snapshot.cleanlinessAssessment() == report.cleanliness)
+                val cell = report.cells.single()
                 check(cell.hard && cell.constraintId == 81u)
                 check((cell.assessment as ProgramConstraintAssessment.Wcag22Srgb8).verdict == ProgramAssessmentVerdict.PASS)
             }
@@ -183,6 +187,34 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         runtime.updateObserved(2uL, listOf(1u), rgb(0, 0, 0), 1u).use {
             check(it.state() == "unsatisfied")
             check(requireNotNull(it.diagnostics()).witness?.violations?.isNotEmpty() == true)
+            check(it.cleanlinessAssessment() == null)
+        }
+    }
+    val nominal = ProgramWireBuilderV3().apply {
+        source(1u, rgb(255, 255, 255)); fixedTarget(2u, 1u)
+        surfaceInputPort(6u); opacityInput(5u, 0.5)
+        solidPaint(3u, 2u); opacityPaint(4u, 3u, 5u); inputSurface(7u, 6u)
+        pointOccurrence(8u, 4u, 7u); nominalSrgb8Visible(false, 10u, 8u)
+        output(17u, 4u); assignment(emptyList())
+    }.finish()
+    compileProgramWire(nominal, 1u).use { runtime ->
+        runtime.updateObserved(1uL, listOf(9u), rgb(255, 255, 255), 1u).use { first ->
+            val summary = requireNotNull(first.cleanlinessAssessment())
+            check(summary.status == ProgramCleanlinessStatus.CONFORMS)
+            check(summary.profile == "nominal-srgb8-v2" && summary.basis == "declared-convention")
+            check(summary.scope == "declared-final-points")
+            check(summary.accepted == 1uL && summary.rejected == 0uL && summary.unavailable == 0uL)
+            check(requireNotNull(first.assessmentReport()).cleanliness == summary)
+            runtime.updateObserved(2uL, listOf(9u), rgb(1, 1, 3), 1u).use { changed ->
+                check(changed.state() == "ready")
+                val report = requireNotNull(changed.assessmentReport())
+                check(changed.cleanlinessAssessment() == report.cleanliness)
+                check(report.cleanliness.status == ProgramCleanlinessStatus.VIOLATES && report.cleanliness.rejected == 1uL)
+                val rejection = report.cells.single().assessment as ProgramConstraintAssessment.NominalSrgb8VisibleRejected
+                check(listOf(rejection.visible.red, rejection.visible.green, rejection.visible.blue) == listOf<UByte>(128u, 128u, 129u))
+                check(129 in rejection.rejectedBlueLower.toInt()..rejection.rejectedBlueUpper.toInt())
+            }
+            check(first.cleanlinessAssessment() == summary)
         }
     }
 }

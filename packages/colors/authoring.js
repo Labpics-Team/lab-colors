@@ -154,7 +154,13 @@ function usePolicy(value = {}, owner) {
     separation: separation === undefined ? undefined : range(separation, `${path}.separation`, 0, 2) });
 }
 
-export function colors() {
+export function colors(options = {}) {
+  allowedKeys(options, ["cleanliness"], "colors.options");
+  const cleanliness = read(options, "cleanliness", "colors.options.cleanliness");
+  if (cleanliness !== undefined && cleanliness !== "nominal-srgb8-v2") {
+    authoringError("colors.options.cleanliness", "unknown cleanliness profile");
+  }
+  const systemOptions = Object.freeze({ cleanliness });
   const owner = {};
   const roleNames = new Set();
   const surfaceNames = new Set();
@@ -204,7 +210,7 @@ export function colors() {
       });
       if (entries.length === 0 || entries.length > MAX_SECTION_ENTRIES_V1) authoringError("compile.outputs", "expected a bounded non-empty output map");
       const { compileColorSystem } = await import("./authoring-program.js");
-      return compileColorSystem(Object.freeze(entries));
+      return compileColorSystem(Object.freeze(entries), systemOptions);
     },
   });
 }

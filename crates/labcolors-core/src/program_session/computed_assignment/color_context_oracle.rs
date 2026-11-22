@@ -90,6 +90,11 @@ fn oracle(intrinsic: bool) -> (usize, [[u8; 3]; 2]) {
                 scores[0]
                     .total_cmp(&old_scores[0])
                     .then_with(|| scores[1].total_cmp(&old_scores[1]))
+                    .then_with(|| {
+                        (0..2)
+                            .map(|i| tuple[i] != ANCHORS[i])
+                            .cmp((0..2).map(|i| old_tuple[i] != ANCHORS[i]))
+                    })
                     .then_with(|| tuple.cmp(old_tuple))
                     == Ordering::Less
             }) {

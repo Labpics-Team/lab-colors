@@ -67,12 +67,31 @@ pub enum ProgramConstraintAssessment {
         rejected_blue_upper: u8,
     },
     DeclaredSrgb8CleanSetFinalOwnedDomainAbsent,
+    NominalSrgb8VisiblePass {
+        visible: ProgramRgb8,
+    },
+    NominalSrgb8VisibleRejected {
+        visible: ProgramRgb8,
+        rejected_blue_lower: u8,
+        rejected_blue_upper: u8,
+    },
 }
 
 impl From<core::ProgramConstraintAssessmentV1> for ProgramConstraintAssessment {
     fn from(value: core::ProgramConstraintAssessmentV1) -> Self {
         use core::ProgramConstraintAssessmentV1 as C;
         match value {
+            C::NominalSrgb8VisiblePass { visible } => Self::NominalSrgb8VisiblePass {
+                visible: visible.into(),
+            },
+            C::NominalSrgb8VisibleRejected {
+                visible,
+                rejected_blue_interval,
+            } => Self::NominalSrgb8VisibleRejected {
+                visible: visible.into(),
+                rejected_blue_lower: rejected_blue_interval[0],
+                rejected_blue_upper: rejected_blue_interval[1],
+            },
             C::VisibleSeparation {
                 verdict,
                 measurement,
@@ -130,6 +149,27 @@ pub struct ProgramScenarioProvenance {
     pub scenario_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramCleanlinessStatus {
+    NotAssessed,
+    Conforms,
+    Violates,
+    Unavailable,
+}
+
+/// Сводка уже сохранённых Core-оценок; счётчики не являются оценкой качества.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramCleanlinessAssessment {
+    pub status: ProgramCleanlinessStatus,
+    /// Отсутствует при NotAssessed: профиль не объявлен.
+    pub profile: Option<String>,
+    pub basis: Option<String>,
+    pub scope: Option<String>,
+    pub accepted: u64,
+    pub rejected: u64,
+    pub unavailable: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ProgramAssessmentReport {
     pub content_identity: Vec<u8>,
@@ -137,6 +177,7 @@ pub struct ProgramAssessmentReport {
     pub revision: u64,
     pub scenario_provenance: Vec<ProgramScenarioProvenance>,
     pub cells: Vec<ProgramAssessmentCell>,
+    pub cleanliness: ProgramCleanlinessAssessment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -297,6 +338,41 @@ fn copy_slice<T: Copy>(source: &[T], operation: &str) -> Result<Vec<T>, LabColor
     Ok(output)
 }
 
+fn copy_text(source: &str, operation: &str) -> Result<String, LabColorsError> {
+    let mut output = String::new();
+    output
+        .try_reserve_exact(source.len())
+        .map_err(|_| LabColorsError::new("program_resource_exhausted", operation))?;
+    output.push_str(source);
+    Ok(output)
+}
+
+pub(crate) fn cleanliness_assessment(
+    assessment: core::ProgramCleanlinessAssessmentV1,
+    operation: &str,
+) -> Result<ProgramCleanlinessAssessment, LabColorsError> {
+    use core::{
+        ProgramCleanlinessAssessmentV1 as Assessment, ProgramCleanlinessStatusV1 as Status,
+    };
+    let status = match assessment.status() {
+        Status::NotAssessed => ProgramCleanlinessStatus::NotAssessed,
+        Status::Conforms => ProgramCleanlinessStatus::Conforms,
+        Status::Violates => ProgramCleanlinessStatus::Violates,
+        Status::Unavailable => ProgramCleanlinessStatus::Unavailable,
+    };
+    let declared = status != ProgramCleanlinessStatus::NotAssessed;
+    let metadata = |value| declared.then(|| copy_text(value, operation)).transpose();
+    Ok(ProgramCleanlinessAssessment {
+        status,
+        profile: metadata(Assessment::PROFILE_ID)?,
+        basis: metadata(Assessment::BASIS)?,
+        scope: metadata(Assessment::SCOPE)?,
+        accepted: assessment.accepted() as u64,
+        rejected: assessment.rejected() as u64,
+        unavailable: assessment.unavailable() as u64,
+    })
+}
+
 pub(crate) fn assessment_report(
     report: Option<&core::ProgramAssessmentReportV1>,
 ) -> Result<Option<ProgramAssessmentReport>, LabColorsError> {
@@ -324,6 +400,7 @@ pub(crate) fn assessment_report(
         revision: report.revision(),
         scenario_provenance,
         cells,
+        cleanliness: cleanliness_assessment(report.cleanliness(), operation)?,
     }))
 }
 

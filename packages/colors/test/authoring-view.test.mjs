@@ -51,6 +51,27 @@ async function fixedProgram(name, source = "#808080", options = { separation: [0
   return c.compile({ [name]: c.fixed(name, source).on(canvas, options) });
 }
 
+test("a cleanliness conflict retains the entire previously accepted material and context", async () => {
+  const h = host(), c = colors({ cleanliness: "nominal-srgb8-v2" }), canvas = c.surface("canvas");
+  const program = await c.compile({ material: c.fixed("material", "#ffffff").on(canvas, { opacity: 0.5 }) });
+  const view = program.attach(h.root, { canvas: "#000000" });
+  try {
+    assert.equal(view.lastUpdate.state, "committed");
+    assert.equal(view.current.cleanliness.status, "conforms");
+    const current = view.current, sheet = h.sheet, writes = h.state.writes.length;
+    const update = view.set({ canvas: "#010103" });
+    assert.equal(update.state, "rejected");
+    assert.equal(update.proposed.state, "conflict");
+    assert.ok(update.proposed.diagnostics.some((item) => item.requirement === "cleanliness"));
+    assert.equal(view.current, current);
+    assert.equal(h.sheet, sheet);
+    assert.equal(h.state.writes.length, writes);
+    assert.equal(view.set({ canvas: "#040404" }).state, "committed");
+    assert.equal(view.current.values.material.opacity, 0.5);
+    assert.deepEqual(current.context.canvas, [0, 0, 0]);
+  } finally { view.dispose(); program.dispose(); }
+});
+
 test("controlled context and all values commit once; conflict and unknown keep the accepted frame", async () => {
   const h = host(), program = await fixedProgram("ink");
   const view = program.attach(h.root, { canvas: "#e6ddd0" });

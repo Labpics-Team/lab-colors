@@ -638,6 +638,7 @@ const KIND_FAMILY_CATEGORY_RELATION: u8 = 8;
 const KIND_WCAG22_VISIBLE_UNARY: u8 = 9;
 const KIND_CLEAN_SET: u8 = 10;
 const KIND_VISIBLE_SEPARATION: u8 = 11;
+const KIND_NOMINAL_SRGB8_VISIBLE: u8 = 12;
 
 fn decode_constraint(
     reader: &mut WireReader<'_>,
@@ -650,6 +651,14 @@ fn decode_constraint(
     let kind = reader.read_u8()?;
     let hard = matches!(mode, ConstraintModeV1::Hard);
     match kind {
+        KIND_NOMINAL_SRGB8_VISIBLE => {
+            let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
+            if hard {
+                draft.push_nominal_srgb8_visible_hard(id, occurrence);
+            } else {
+                draft.push_nominal_srgb8_visible_report_only(id, occurrence);
+            }
+        }
         KIND_VISIBLE_SEPARATION if version == PROGRAM_WIRE_VERSION_V3 => {
             let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
             let minimum = reader.read_f64_bits()?;
@@ -1432,6 +1441,19 @@ impl ProgramWireBuilderV1 {
         }
     }
 
+    pub(crate) fn nominal_srgb8_visible(
+        &mut self,
+        hard: bool,
+        id: u32,
+        occurrence: u32,
+    ) -> &mut Self {
+        let section = self.constraint_section(hard);
+        push_u32(section, id);
+        section.push(KIND_NOMINAL_SRGB8_VISIBLE);
+        push_u32(section, occurrence);
+        self
+    }
+
     pub(crate) fn exact_visible_unary(
         &mut self,
         hard: bool,
@@ -1558,6 +1580,10 @@ mod proofs;
 #[cfg(test)]
 #[path = "visible_separation_tests.rs"]
 mod visible_separation_tests;
+
+#[cfg(test)]
+#[path = "nominal_visible_tests.rs"]
+mod nominal_visible_tests;
 
 #[cfg(test)]
 #[path = "material_emission_tests.rs"]

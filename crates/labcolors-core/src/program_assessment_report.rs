@@ -1,6 +1,7 @@
 //! Owned-проекция финальных оценок Program. Вычисление остаётся у Core evaluator.
 
 use crate::Srgb8;
+use crate::cleanliness::assessment::ProgramCleanlinessAssessmentV1;
 use crate::program::VerifiedOutputV1;
 use crate::program_session::{
     CoreProgramEvaluatorsV1, CoreProgramPassEvidenceV1, CoreProgramViolationEvidenceV1,
@@ -19,6 +20,13 @@ pub enum ProgramAssessmentVerdictV1 {
 /// становятся обязанностью клиента; Clean Set описывает только точную конвенцию.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramConstraintAssessmentV1 {
+    NominalSrgb8VisiblePass {
+        visible: Srgb8,
+    },
+    NominalSrgb8VisibleRejected {
+        visible: Srgb8,
+        rejected_blue_interval: [u8; 2],
+    },
     VisibleSeparation {
         verdict: ProgramAssessmentVerdictV1,
         measurement: crate::constraints::ProgramVisibleSeparationMeasurementV1,
@@ -104,6 +112,7 @@ pub struct ProgramAssessmentReportV1 {
     revision: u64,
     scenario_provenance: Vec<ProgramScenarioProvenanceV1>,
     cells: Vec<ProgramAssessmentCellV1>,
+    cleanliness: ProgramCleanlinessAssessmentV1,
 }
 
 impl ProgramAssessmentReportV1 {
@@ -130,6 +139,12 @@ impl ProgramAssessmentReportV1 {
     #[must_use]
     pub fn cells(&self) -> &[ProgramAssessmentCellV1] {
         &self.cells
+    }
+
+    /// Сводка тех же конечных оценок, без повторного обхода или классификации.
+    #[must_use]
+    pub const fn cleanliness(&self) -> ProgramCleanlinessAssessmentV1 {
+        self.cleanliness
     }
 }
 
@@ -171,19 +186,37 @@ impl ProgramAssessmentReportScratchV1 {
                         }),
                 );
         }
-        self.cells
-            .extend(verified.cells().map(|cell| ProgramAssessmentCellV1 {
+        let mut cleanliness = ProgramCleanlinessAssessmentV1::default();
+        self.cells.extend(verified.cells().map(|cell| {
+            let assessment = copy_assessment(cell.result());
+            match assessment {
+                ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass { .. }
+                | ProgramConstraintAssessmentV1::NominalSrgb8VisiblePass { .. } => {
+                    cleanliness.accept();
+                }
+                ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetRejected { .. }
+                | ProgramConstraintAssessmentV1::NominalSrgb8VisibleRejected { .. } => {
+                    cleanliness.reject();
+                }
+                ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent => {
+                    cleanliness.omit_domain();
+                }
+                _ => {}
+            }
+            ProgramAssessmentCellV1 {
                 constraint_id: cell.constraint().value(),
                 case_index: cell.case_index(),
                 hard: cell.is_hard(),
-                assessment: copy_assessment(cell.result()),
-            }));
+                assessment,
+            }
+        }));
         ProgramAssessmentReportV1 {
             content_identity: *verified.content_identity().as_bytes(),
             stream_id: observation.stream().value(),
             revision: observation.revision(),
             scenario_provenance: std::mem::take(&mut self.scenario_provenance),
             cells: std::mem::take(&mut self.cells),
+            cleanliness,
         }
     }
 }
@@ -197,6 +230,19 @@ fn copy_assessment(
         ProgramAssessmentVerdictV1::Pass
     };
     match assessment {
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::NominalSrgb8Visible(evidence),
+        )) => ProgramConstraintAssessmentV1::NominalSrgb8VisiblePass {
+            visible: *evidence.measurement().value(),
+        },
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::NominalSrgb8Visible(evidence),
+            ),
+        ) => ProgramConstraintAssessmentV1::NominalSrgb8VisibleRejected {
+            visible: *evidence.measurement().value(),
+            rejected_blue_interval: evidence.measurement().classification().endpoints(),
+        },
         ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::VisibleSeparation(evidence),
         )) => ProgramConstraintAssessmentV1::VisibleSeparation {
@@ -256,5 +302,136 @@ fn copy_assessment(
                 DeclaredSrgb8CleanSetViolationV1::FinalOwnedDomainAbsent,
             ),
         ) => ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetFinalOwnedDomainAbsent,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cleanliness::assessment::ProgramCleanlinessStatusV1;
+    use crate::program;
+    use crate::program_wire::{
+        CompiledProgramV1, ProgramScenarioV1, ProgramSessionV1, ProgramSnapshotStateV1,
+    };
+
+    fn runtime(nominal_profile: bool) -> ProgramSessionV1 {
+        let source = program::SourceIdV1::new(1);
+        let target = program::TargetIdV1::new(2);
+        let port = program::SurfaceInputPortIdV1::new(3);
+        let opacity = program::OpacityInputIdV1::new(4);
+        let solid = program::PaintIdV1::new(5);
+        let material = program::PaintIdV1::new(6);
+        let surface = program::SurfaceIdV1::new(7);
+        let occurrence = program::OccurrenceIdV1::new(8);
+        let root = program::PresentationRootIdV1::new(9);
+        let context =
+            program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average).unwrap();
+        let white = Srgb8::new([255; 3]);
+        let mut draft = program::DraftV1::new();
+        draft.push_source(source, white);
+        draft.push_fixed_target(target, source);
+        draft.push_surface_input_port(port);
+        draft.push_opacity_input(opacity, 0.5);
+        draft.push_solid_paint(solid, target);
+        draft.push_opacity_paint(material, solid, opacity);
+        draft.push_input_surface(surface, port);
+        draft.push_source_over_occurrence(occurrence, material, surface, context);
+        draft.push_point_presentation_root(root, occurrence);
+        draft.push_point_presentation_target(root, occurrence);
+        draft.push_exact_intrinsic_unary_hard(program::ConstraintIdV1::new(10), target, white);
+        if nominal_profile {
+            draft.push_declared_srgb8_clean_set_report_only(
+                program::ConstraintIdV1::new(11),
+                root,
+                occurrence,
+            );
+        }
+        draft.push_output(program::OutputSlotIdV1::new(12), material);
+        draft.set_assignment(Vec::new());
+        CompiledProgramV1 {
+            owner: draft.compile().unwrap(),
+        }
+        .instantiate(1)
+        .unwrap()
+    }
+
+    fn scenario(id: u32, rgb: [u8; 3]) -> ProgramScenarioV1 {
+        ProgramScenarioV1::new(id, vec![Srgb8::new(rgb)])
+    }
+
+    #[test]
+    fn cleanliness_summary_never_promotes_other_conditions_to_conformance() {
+        let mut session = runtime(false);
+        let snapshot = session.update_observed(1, &[scenario(1, [1; 3])]).unwrap();
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        let summary = snapshot.cleanliness_assessment().unwrap();
+        assert_eq!(summary.status(), ProgramCleanlinessStatusV1::NotAssessed);
+        assert_eq!(
+            (
+                summary.accepted(),
+                summary.rejected(),
+                summary.unavailable()
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(snapshot.assessment_report().unwrap().cleanliness(), summary);
+    }
+
+    #[test]
+    fn cleanliness_summary_retains_all_final_cases_and_unavailable_domains() {
+        let mut session = runtime(true);
+        // One physical material yields accepted gray, rejected tinted gray and
+        // no owned contribution. Its white source alone cannot establish these.
+        let snapshot = session
+            .update_observed(
+                1,
+                &[
+                    scenario(1, [1; 3]),
+                    scenario(2, [1, 1, 3]),
+                    scenario(3, [255; 3]),
+                ],
+            )
+            .unwrap();
+        assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+        let summary = snapshot.cleanliness_assessment().unwrap();
+        assert_eq!(summary.status(), ProgramCleanlinessStatusV1::Violates);
+        assert_eq!(
+            (
+                summary.accepted(),
+                summary.rejected(),
+                summary.unavailable()
+            ),
+            (1, 1, 1)
+        );
+
+        let absent = session
+            .update_observed(2, &[scenario(4, [255; 3])])
+            .unwrap();
+        let unavailable = absent.cleanliness_assessment().unwrap();
+        assert_eq!(
+            unavailable.status(),
+            ProgramCleanlinessStatusV1::Unavailable
+        );
+        assert_eq!(unavailable.unavailable(), 1);
+
+        let accepted = session
+            .update_observed(3, &[scenario(5, [1; 3]), scenario(6, [1; 3])])
+            .unwrap();
+        let conforms = accepted.cleanliness_assessment().unwrap();
+        assert_eq!(conforms.status(), ProgramCleanlinessStatusV1::Conforms);
+        assert_eq!(
+            conforms.accepted(),
+            1,
+            "duplicate scenarios share one physical case"
+        );
+        assert_eq!(
+            accepted
+                .assessment_report()
+                .unwrap()
+                .scenario_provenance()
+                .len(),
+            2
+        );
+        assert_eq!(snapshot.cleanliness_assessment(), Some(summary));
     }
 }

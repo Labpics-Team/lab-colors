@@ -7,6 +7,7 @@ import {
   KIND_EXACT_INTRINSIC_RELATION,
   KIND_WCAG22_VISIBLE_UNARY,
   KIND_CLEAN_SET,
+  KIND_NOMINAL_SRGB8_VISIBLE,
   ProgramWireError,
   PROGRAM_WIRE_TOO_MANY_ENTRIES,
   invalid,
@@ -249,6 +250,16 @@ export class ProgramWireBuilderV1 {
     sink.u32(checkedId);
     sink.u8(KIND_CLEAN_SET);
     sink.u32(checkedRoot);
+    sink.u32(checkedOccurrence);
+    return this;
+  }
+
+  nominalSrgb8Visible(hard, id, occurrence) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
+    const sink = this.constraintEntry(hard);
+    sink.u32(checkedId);
+    sink.u8(KIND_NOMINAL_SRGB8_VISIBLE);
     sink.u32(checkedOccurrence);
     return this;
   }

@@ -15,7 +15,7 @@ const criteria = Object.freeze({
 });
 
 /** Only topology, identity maps and encoding: numerical work belongs to Program. */
-export function lowerColorSystem(entries) {
+export function lowerColorSystem(entries, options) {
   const builder = new ProgramWireBuilderV3();
   let nextId = 1;
   const id = () => nextId++;
@@ -92,6 +92,14 @@ export function lowerColorSystem(entries) {
       const constraint = id();
       builder.visibleSeparationHard(constraint, occurrence, ...policy.separation);
       constraints.set(constraint, { node, requirement: "separation" });
+    }
+    if (options.cleanliness !== undefined) {
+      // Each declared use is an observable point on its actual backdrop. The
+      // appearance may equal its backdrop; conformance does not require a
+      // causal change to that pixel or terminal materialization authority.
+      const constraint = id();
+      builder.nominalSrgb8Visible(true, constraint, occurrence);
+      constraints.set(constraint, { node, requirement: "cleanliness" });
     }
   }
   // Even an all-fixed declaration gets one complete tuple check under V3.

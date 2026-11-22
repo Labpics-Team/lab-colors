@@ -14,8 +14,8 @@ export function colorProgramSource(program) {
   return source;
 }
 
-export async function compileColorSystem(entries) {
-  const graph = lowerColorSystem(entries);
+export async function compileColorSystem(entries, options) {
+  const graph = lowerColorSystem(entries, options);
   await init();
   // Compilation validates Core once. The first independent owner consumes this session.
   let reserved = compileProgramWire(graph.wire, 1), headless;

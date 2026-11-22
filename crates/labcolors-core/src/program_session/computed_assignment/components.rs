@@ -176,7 +176,8 @@ impl VisibleDependenciesV1 {
                 ..
             } => {
                 match program.evaluator.constraint_content(*invocation) {
-                    ProgramConstraintContentV1::ExactSrgb8 { .. } => {
+                    ProgramConstraintContentV1::ExactSrgb8 { .. }
+                    | ProgramConstraintContentV1::NominalSrgb8Visible { .. } => {
                         self.visible(index, *occurrence, targets)?;
                     }
                     ProgramConstraintContentV1::Wcag22Srgb8 { .. }

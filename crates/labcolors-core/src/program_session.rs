@@ -1049,6 +1049,10 @@ macro_rules! define_core_program_evaluators_v1 {
 }
 
 define_core_program_evaluators_v1! {
+    NominalSrgb8Visible {
+        evaluator: crate::constraints::NominalSrgb8VisibleV2 = crate::constraints::NominalSrgb8VisibleV2,
+        invocation: ()
+    },
     VisibleSeparation {
         evaluator: VisibleSeparationV1 = VisibleSeparationV1,
         invocation: VisibleSeparationBoundsV1

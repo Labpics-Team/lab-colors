@@ -58,7 +58,17 @@ output с индексом `i`; эти геттеры сохраняются д�
 `limit` у `incomplete`, иначе отсутствует.
 
 `assessment_report()` возвращает `Option<ProgramAssessmentReport>` с identity,
-ревизией, provenance сценариев и типизированными оценками ограничений.
+ревизией, provenance сценариев, типизированными оценками ограничений и сводкой
+`cleanliness`. Узкий `cleanliness_assessment()` получает ту же сохранённую сводку
+без копирования всех клеток. Отсутствие текущего `ready` возвращает `None`;
+отсутствие объявленной модели в готовом кадре имеет отдельный статус `NotAssessed`.
+Соответствие `nominal-srgb8-v2` описывает только объявленные конечные точки
+и не означает `Cleaner` / `NotDirtier` всей композиции.
+
+`nominalSrgb8Visible` в Swift и Kotlin кодирует то же ограничение конечного
+видимого цвета, что и JS builder. Прежний `declaredSrgb8CleanSet` сохраняет
+свой отдельный контракт причинного вклада. Оба варианта оценивает Rust Core.
+
 `diagnostics()` возвращает `Option<ProgramDiagnostics>` с search budget,
 числом посещений и [witness конкретного attempt](../reference/program-diagnostics.md).
 Эти owned-records копируются с проверкой выделения памяти. Изменение своей копии

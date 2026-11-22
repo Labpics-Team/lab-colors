@@ -37,15 +37,6 @@ pub(super) struct StateV1<'a> {
     pub(super) budget: u64,
 }
 
-fn tuple_order(
-    scores: &[f64],
-    values: &[Srgb8],
-    other_scores: &[f64],
-    other_values: &[Srgb8],
-) -> Ordering {
-    compare_scores(scores, other_scores).then_with(|| values.cmp(other_values))
-}
-
 impl StateV1<'_> {
     fn assess<E: ProgramConstraintEvaluatorSetV1>(
         &mut self,
@@ -73,10 +64,15 @@ impl StateV1<'_> {
         Ok(Some(failures))
     }
 
-    fn retain(&mut self, failures: usize) {
+    fn retain(&mut self, context: &ContextV1, failures: usize) {
         if failures == 0
-            && tuple_order(self.scores, self.values, self.best_scores, self.best_values)
-                == Ordering::Less
+            && compare_tuples(
+                context,
+                self.scores,
+                self.values,
+                self.best_scores,
+                self.best_values,
+            ) == Ordering::Less
         {
             self.best_scores.copy_from_slice(self.scores);
             self.best_values.copy_from_slice(self.values);
@@ -117,7 +113,7 @@ impl StateV1<'_> {
                 let Some(failures) = self.assess(context, runtime, epoch, scenarios, arena)? else {
                     return Ok(());
                 };
-                self.retain(failures);
+                self.retain(context, failures);
             }
         }
         Ok(())
@@ -156,7 +152,7 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
             break;
         };
         if failures == 0 {
-            state.retain(failures);
+            state.retain(context, failures);
             continue;
         }
         if compare_scores(&state.scores[..=fixed], &state.best_scores[..=fixed])
@@ -208,7 +204,8 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
                         };
                         if next_failures < failures
                             || next_failures == failures
-                                && tuple_order(
+                                && compare_tuples(
+                                    context,
                                     state.scores,
                                     state.values,
                                     state.current_scores,
@@ -220,7 +217,7 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
                             state.current_scores.copy_from_slice(state.scores);
                             changed = true;
                         }
-                        state.retain(next_failures);
+                        state.retain(context, next_failures);
                     }
                 }
             }

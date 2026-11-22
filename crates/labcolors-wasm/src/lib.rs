@@ -75,11 +75,11 @@ export type ProgramConstraintAssessmentV1 =
       verdict: ProgramAssessmentVerdictV1;
     }>
   | Readonly<{
-      kind: "declared-srgb8-clean-set"; verdict: "pass";
+      kind: "declared-srgb8-clean-set" | "nominal-srgb8-visible"; verdict: "pass";
       visible: readonly [number, number, number];
     }>
   | Readonly<{
-      kind: "declared-srgb8-clean-set"; verdict: "violation"; reason: "rejected";
+      kind: "declared-srgb8-clean-set" | "nominal-srgb8-visible"; verdict: "violation"; reason: "rejected";
       visible: readonly [number, number, number];
       rejectedBlueInterval: readonly [number, number];
     }>
@@ -97,6 +97,17 @@ export interface ProgramScenarioProvenanceV1 {
   readonly caseIndex: number;
   readonly scenarioId: number;
 }
+/** Соответствие ограниченному профилю; не scalar score или человеческая оценка поля. */
+export type ProgramCleanlinessAssessmentV1 =
+  | Readonly<{status: "not-assessed"; reason: "no-declared-profile"}>
+  | Readonly<{
+      status: "conforms" | "violates" | "unavailable";
+      profile: "nominal-srgb8-v2";
+      basis: "declared-convention";
+      scope: "declared-final-points";
+      /** Количества клеток case × constraint, не пикселей или quality points. */
+      accepted: number; rejected: number; unavailable: number;
+    }>;
 /** Историческое свидетельство одного Ready-снимка; без права публикации. */
 export interface ProgramAssessmentReportV1 {
   /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
@@ -105,6 +116,7 @@ export interface ProgramAssessmentReportV1 {
   readonly revision: bigint;
   readonly scenarioProvenance: ReadonlyArray<ProgramScenarioProvenanceV1>;
   readonly cells: ReadonlyArray<ProgramAssessmentCellV1>;
+  readonly cleanliness: ProgramCleanlinessAssessmentV1;
 }
 
 export type Wcag22CriterionV1 =
@@ -312,15 +324,15 @@ export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, dist
     distance, distanceBounds: reportFreeze([distanceLower, distanceUpper]), minimum, maximum,
   });
 }
-export function reportAccepted(red, green, blue) {
+export function reportAccepted(kind, red, green, blue) {
   return reportFreeze({
-    kind: "declared-srgb8-clean-set", verdict: "pass",
+    kind, verdict: "pass",
     visible: reportFreeze([red, green, blue]),
   });
 }
-export function reportRejected(red, green, blue, lower, upper) {
+export function reportRejected(kind, red, green, blue, lower, upper) {
   return reportFreeze({
-    kind: "declared-srgb8-clean-set", verdict: "violation", reason: "rejected",
+    kind, verdict: "violation", reason: "rejected",
     visible: reportFreeze([red, green, blue]),
     rejectedBlueInterval: reportFreeze([lower, upper]),
   });
@@ -334,12 +346,17 @@ export function reportDomainAbsent() {
 export function reportCell(constraintId, caseIndex, hard, assessment) {
   return reportFreeze({ constraintId, caseIndex, hard, assessment });
 }
-export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells) {
+export function reportCleanliness(status, profile, basis, scope, accepted, rejected, unavailable) {
+  if (status === "not-assessed") return reportFreeze({status, reason: "no-declared-profile"});
+  return reportFreeze({status, profile, basis, scope, accepted, rejected, unavailable});
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness) {
   return reportFreeze({
     contentIdentity: new ReportBytes(contentIdentity),
     streamId, revision,
     scenarioProvenance: reportFreeze(scenarioProvenance),
     cells: reportFreeze(cells),
+    cleanliness,
   });
 }
 "#)]
@@ -445,9 +462,10 @@ extern "C" {
         maximum: f64,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportAccepted)]
-    fn report_accepted(red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    fn report_accepted(kind: &str, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportRejected)]
     fn report_rejected(
+        kind: &str,
         red: u8,
         green: u8,
         blue: u8,
@@ -463,6 +481,16 @@ extern "C" {
         hard: bool,
         assessment: &JsValue,
     ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportCleanliness)]
+    fn report_cleanliness(
+        status: &str,
+        profile: &str,
+        basis: &str,
+        scope: &str,
+        accepted: usize,
+        rejected: usize,
+        unavailable: usize,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportProjection)]
     fn report_projection(
         content_identity: &[u8],
@@ -470,6 +498,7 @@ extern "C" {
         revision: u64,
         scenario_provenance: &js_sys::Array,
         cells: &js_sys::Array,
+        cleanliness: &JsValue,
     ) -> Result<JsValue, JsValue>;
 }
 
@@ -560,6 +589,7 @@ enum ProgramOperation {
     AttachmentDispose,
     MaterializationAuthority,
     AssessmentReport,
+    CleanlinessAssessment,
 }
 
 impl ProgramOperation {
@@ -577,6 +607,7 @@ impl ProgramOperation {
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
             Self::AssessmentReport => "assessmentReport",
+            Self::CleanlinessAssessment => "cleanlinessAssessment",
         }
     }
 }
@@ -828,6 +859,19 @@ impl ProgramSnapshot {
                 ProgramOperation::AssessmentReport,
             )
         })
+    }
+
+    /// Копирует только сводку профиля; отсутствие текущего Ready даёт null.
+    #[wasm_bindgen(js_name = cleanlinessAssessment, unchecked_return_type = "ProgramCleanlinessAssessmentV1 | null")]
+    pub fn cleanliness_assessment(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project_cleanliness(self.inner.cleanliness_assessment()).map_err(
+            |_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::CleanlinessAssessment,
+                )
+            },
+        )
     }
 
     #[wasm_bindgen(getter, js_name = snapshotVersion)]

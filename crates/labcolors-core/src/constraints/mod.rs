@@ -45,6 +45,9 @@ pub(crate) use relation::{
 
 mod wcag22;
 
+mod nominal_srgb8;
+pub(crate) use nominal_srgb8::NominalSrgb8VisibleV2;
+
 mod visible_separation;
 pub use visible_separation::ProgramVisibleSeparationMeasurementV1;
 pub(crate) use visible_separation::{
@@ -229,6 +232,10 @@ impl<Measurement, Classification> ClassifiedMeasurement<Measurement, Classificat
 
     pub(crate) fn value(&self) -> &Measurement {
         &self.measurement
+    }
+
+    pub(crate) fn classification(&self) -> &Classification {
+        &self.classification
     }
 }
 
@@ -528,6 +535,9 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
 /// изменение production evaluator-а остаётся явной сменой схемы.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ProgramConstraintContentV1 {
+    NominalSrgb8Visible {
+        release: [u8; 32],
+    },
     VisibleSeparation {
         identity: VisibleSeparationIdentityV1,
         release: VisibleSeparationReleaseV1,

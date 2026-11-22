@@ -10,7 +10,7 @@ use crate::color_intent::color_at_lightness;
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v9.independent-components.local-context-seeds.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v10.independent-components.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -172,6 +172,43 @@ impl<'a> ContextV1<'a> {
     fn represents_case(&self, case: usize) -> bool {
         self.local_cases.representatives.is_empty() || self.local_cases.representatives[case]
     }
+
+    fn exact_optimum(&self, values: &[Srgb8], scores: &[f64]) -> bool {
+        scores.iter().all(|score| *score == 0.0)
+            && (self.opaque
+                || self
+                    .targets
+                    .iter()
+                    .zip(values)
+                    .all(|(target, &value)| value == target.declaration.anchor))
+    }
+}
+
+// An unchanged authored source wins only when every visible objective ties.
+// The flags follow authored target priority; they add no perceptual metric.
+fn compare_tuples(
+    context: &ContextV1,
+    scores: &[f64],
+    values: &[Srgb8],
+    other_scores: &[f64],
+    other_values: &[Srgb8],
+) -> Ordering {
+    compare_scores(scores, other_scores)
+        .then_with(|| {
+            context
+                .targets
+                .iter()
+                .zip(values)
+                .map(|(target, &value)| value != target.declaration.anchor)
+                .cmp(
+                    context
+                        .targets
+                        .iter()
+                        .zip(other_values)
+                        .map(|(target, &value)| value != target.declaration.anchor),
+                )
+        })
+        .then_with(|| values.cmp(other_values))
 }
 
 fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
@@ -367,6 +404,7 @@ struct BoundsV1 {
     constraints: Vec<RegionConstraintV1>,
     constraint_lower: Vec<([u8; 3], [u8; 3])>,
     scores: Vec<f64>,
+    changes_min: Vec<bool>,
     tuple_min: Vec<Srgb8>,
     evaluations: u64,
 }
@@ -392,6 +430,14 @@ impl BoundsV1 {
                 domain.bounds().0
             };
             self.tuple_min[index] = Srgb8::new(lo);
+            let anchor = context.targets[index].declaration.anchor;
+            self.changes_min[index] = if index < node.depth {
+                values[index] != anchor
+            } else if index == node.depth {
+                !node.domain.contains(anchor)
+            } else {
+                !domain.contains(anchor)
+            };
         }
         for case in 0..scenarios.len().get() {
             let inputs = scenarios
@@ -537,8 +583,8 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     let mut preferred_seed = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     let mut has_best = false;
 
-    // Сначала вся согласованная опора. Для opaque она единственна при нулевой
-    // дистанции; при alpha продолжаем поиск, поскольку source может быть не один.
+    // Нулевая visible distance и сохранённые authored sources достигают
+    // наименьшего возможного objective при любой прозрачности.
     let authored_failures = assess(
         &context,
         runtime,
@@ -557,7 +603,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         best_scores.copy_from_slice(&scores);
         best_values.copy_from_slice(&values);
         has_best = true;
-        if context.opaque && scores.iter().all(|score| *score == 0.0) {
+        if context.exact_optimum(&values, &scores) {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
                 evidence,
@@ -598,14 +644,14 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         evidence.examined += 1;
         if failures == 0
             && (!has_best
-                || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
+                || compare_tuples(&context, &scores, &values, &best_scores, &best_values)
                     == Ordering::Less)
         {
             has_best = true;
             best_scores.copy_from_slice(&scores);
             best_values.copy_from_slice(&values);
         }
-        if failures == 0 && context.opaque && scores.iter().all(|score| *score == 0.0) {
+        if failures == 0 && context.exact_optimum(&values, &scores) {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
                 evidence,
@@ -709,9 +755,13 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         evidence.examined += 1;
                         if failures < current_failures
                             || failures == current_failures
-                                && compare_scores(&scores, &current_scores)
-                                    .then_with(|| values.cmp(&current_values))
-                                    == Ordering::Less
+                                && compare_tuples(
+                                    &context,
+                                    &scores,
+                                    &values,
+                                    &current_scores,
+                                    &current_values,
+                                ) == Ordering::Less
                         {
                             current_failures = failures;
                             current_scores.copy_from_slice(&scores);
@@ -720,9 +770,13 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         }
                         if failures == 0
                             && (!has_best
-                                || compare_scores(&scores, &best_scores)
-                                    .then_with(|| values.cmp(&best_values))
-                                    == Ordering::Less)
+                                || compare_tuples(
+                                    &context,
+                                    &scores,
+                                    &values,
+                                    &best_scores,
+                                    &best_values,
+                                ) == Ordering::Less)
                         {
                             has_best = true;
                             best_scores.copy_from_slice(&scores);
@@ -744,6 +798,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         constraints,
         lower: buffer(count, [0; 3]).map_err(allocation)?,
         scores: buffer(count, 0.0).map_err(allocation)?,
+        changes_min: buffer(count, false).map_err(allocation)?,
         tuple_min: buffer(count, Srgb8::new([0; 3])).map_err(allocation)?,
         evaluations: 0,
     };
@@ -785,7 +840,21 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             let worse = has_best
                 && match compare_scores(&bounds.scores, &best_scores) {
                     Ordering::Greater => true,
-                    Ordering::Equal => bounds.tuple_min >= best_values,
+                    Ordering::Equal => {
+                        bounds
+                            .changes_min
+                            .iter()
+                            .copied()
+                            .cmp(
+                                context
+                                    .targets
+                                    .iter()
+                                    .zip(&best_values)
+                                    .map(|(target, &value)| value != target.declaration.anchor),
+                            )
+                            .then_with(|| bounds.tuple_min.cmp(&best_values))
+                            != Ordering::Less
+                    }
                     Ordering::Less => false,
                 };
             if !possible || worse {
@@ -877,7 +946,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             arena,
         )? == 0
             && (!has_best
-                || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
+                || compare_tuples(&context, &scores, &values, &best_scores, &best_values)
                     == Ordering::Less)
         {
             has_best = true;

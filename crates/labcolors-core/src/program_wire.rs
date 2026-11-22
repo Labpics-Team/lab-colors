@@ -570,6 +570,9 @@ mod fv01_red_tests {
 /// разделить владельца с другим.
 #[path = "program_assessment_report.rs"]
 mod assessment_report;
+pub use crate::cleanliness::assessment::{
+    ProgramCleanlinessAssessmentV1, ProgramCleanlinessStatusV1,
+};
 use assessment_report::ProgramAssessmentReportScratchV1;
 pub use assessment_report::{
     ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
@@ -838,6 +841,14 @@ impl ProgramSnapshotV1 {
     #[must_use]
     pub fn assessment_report(&self) -> Option<&ProgramAssessmentReportV1> {
         self.assessment_report.as_ref()
+    }
+
+    /// Узкая сводка текущего Ready-результата без копирования клеток отчёта.
+    #[must_use]
+    pub fn cleanliness_assessment(&self) -> Option<ProgramCleanlinessAssessmentV1> {
+        self.assessment_report
+            .as_ref()
+            .map(ProgramAssessmentReportV1::cleanliness)
     }
 
     #[must_use]

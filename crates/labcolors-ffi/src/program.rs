@@ -285,6 +285,17 @@ impl ProgramSnapshot {
     ) -> Result<Option<crate::ProgramAssessmentReport>, LabColorsError> {
         crate::program_reports::assessment_report(self.inner.assessment_report())
     }
+    /// Та же Core-сводка без копирования полного массива оценок.
+    pub fn cleanliness_assessment(
+        &self,
+    ) -> Result<Option<crate::ProgramCleanlinessAssessment>, LabColorsError> {
+        self.inner
+            .cleanliness_assessment()
+            .map(|assessment| {
+                crate::program_reports::cleanliness_assessment(assessment, "cleanlinessAssessment")
+            })
+            .transpose()
+    }
     /// Независимая типизированная копия witness текущего отказа или поиска.
     pub fn diagnostics(&self) -> Result<Option<crate::ProgramDiagnostics>, LabColorsError> {
         crate::program_reports::diagnostics(self.inner.diagnostics())

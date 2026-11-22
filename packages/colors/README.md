@@ -6,6 +6,11 @@
 подбираются вместе. При смене контекста приложение передаёт новые входы,
 а Lab Colors пересчитывает связанный граф.
 
+Cleanliness входит в замысел системы как самостоятельное качество конечной
+композиции. [Контракт качества и карта исследований](https://github.com/Labpics-Team/lab-colors/blob/main/docs/explanation/color-quality.md)
+разделяют реализованные возможности, ограниченные модели и обязательное
+направление развития.
+
 [![npm](https://img.shields.io/npm/v/%40labpics%2Fcolors)](https://www.npmjs.com/package/@labpics/colors)
 [![CI](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml/badge.svg)](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
 [![Код: MIT](https://img.shields.io/badge/code-MIT-blue)](https://github.com/Labpics-Team/lab-colors/blob/main/LICENSE)
@@ -134,12 +139,48 @@ await init({ module_or_path: wasmUrl });
 | `opacity` | `.on` | Прозрачность самого paint, `0..1`; по умолчанию `1`. Текст поверх слоя не становится прозрачным вместе с ним. |
 | `contrast` | `.on` | `"wcag22-text"`, `"wcag22-large-text"`, `"wcag22-ui"` или `"wcag22-graphic"`: обязательная оценка финальной композиции по выбранному критерию. |
 | `fixed(id, color)` | Вместо `role` | Фиксирует исходный RGB. Opacity, contrast и separation по-прежнему учитываются; tone для fixed не допускается. |
+| `cleanliness: "nominal-srgb8-v2"` | `colors(options)` | Явная версия ограниченной конвенции для конечных точек всех участвующих применений. Core подбирает соответствующий ей результат вместе с остальными условиями. |
 
 Hue-граница — `0..180` градусов, диапазоны chroma и lightness — `0..1`.
 Это явная геометрическая политика, а не универсальная человеческая категория
 «синий» или «чистый». Контраст, идентичность, различие слоёв и предпочтение
 оцениваются отдельно. `tone` меняет предпочтение, но не переносит границу
 `maxChange` относительно исходного цвета.
+
+### Cleanliness в рабочем пути
+
+Каждый готовый кадр содержит `frame.cleanliness`. Обычная декларация без
+применимой модели возвращает `status: "not-assessed"`: успешный подбор по
+идентичности и контрасту не выдаётся за оценку Cleanliness.
+
+Если дизайн-система выбирает опубликованную номинальную конвенцию sRGB8,
+она подключается одной настройкой и участвует в обычном автоматическом поиске:
+
+```js
+const c = colors({ cleanliness: "nominal-srgb8-v2" });
+const canvas = c.surface("canvas");
+const material = c.role("material", "#00c740", { maxChange: 0.01 }).on(canvas);
+const program = await c.compile({ material });
+const frame = program.resolve({ canvas: "#ffffff" });
+if (frame.state === "ready") {
+  console.log(frame.values.material, frame.cleanliness);
+}
+program.dispose();
+```
+
+Профиль проверяет конечный цвет после наложения, включая участвующие
+промежуточные поверхности. Core пересекает его с `identity`, `maxChange`,
+контрастом и другими обязательствами, затем перепроверяет результат. Исходные
+опоры и `fixed` сохраняются. Противоречие даёт обычную диагностику
+`requirement: "cleanliness"`; `attach` сохраняет прежнюю композицию при отказе.
+
+Оценка содержит `profile`, `basis: "declared-convention"`,
+`scope: "declared-final-points"` и числа принятых, отвергнутых и недоступных
+клеток. Это объём покрытия, не балл качества. Профиль не является общим
+человеческим отношением `Cleaner`/`NotDirtier`, не оценивает пространственное
+поле целиком и не включается скрыто: его границы могут исключать нужные
+тёмные и приглушённые оттенки. Общая контекстная Cleanliness остаётся
+обязательной незавершённой способностью продукта.
 
 ### Одно правило для разных композиций
 

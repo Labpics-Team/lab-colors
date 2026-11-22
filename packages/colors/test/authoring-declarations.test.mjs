@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ColorAuthoringError, colors } from "../authoring.js";
 
+test("cleanliness profiles are admitted explicitly without accepting invented ratings", () => {
+  assert.doesNotThrow(() => colors({ cleanliness: "nominal-srgb8-v2" }));
+  for (const cleanliness of [null, true, false, 0.8, "auto", "whole-field", {}, []]) {
+    assert.throws(() => colors({ cleanliness }),
+      (error) => error instanceof ColorAuthoringError && error.path === "colors.options.cleanliness");
+  }
+  assert.throws(() => colors({ qualityScore: 1 }), ColorAuthoringError);
+  const hostile = { get cleanliness() { throw new Error("caller getter"); } };
+  assert.throws(() => colors(hostile), (error) => error.code === "color_invalid_definition");
+});
+
 test("one immutable role creates local uses and can share a use explicitly", () => {
   const c = colors();
   const canvas = c.surface("canvas"), island = c.surface("island");

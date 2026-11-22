@@ -209,6 +209,12 @@ public class ProgramWireBuilderV1 {
         }
         return self
     }
+    @discardableResult public func nominalSrgb8Visible(_ hard: Bool, id: UInt32, occurrence: UInt32) throws -> Self {
+        try append(hard ? 11 : 12) { b in
+            b.u32(id); b.u8(12); b.u32(occurrence)
+        }
+        return self
+    }
     @discardableResult public func exactIntrinsicRelationHard(_ id: UInt32, reference: UInt32, candidates: [UInt32]) throws -> Self {
         try append(11) { b in
             b.u32(id); b.u8(4); b.u32(reference); b.u32(try boundedCount(candidates.count))

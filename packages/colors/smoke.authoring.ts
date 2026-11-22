@@ -1,4 +1,4 @@
-import { colors, type ColorProgram, type ColorView, type ColorUse, type ColorRole } from "@labpics/colors";
+import { colors, type ColorProgram, type ColorView, type ColorUse, type ColorRole, type ColorCleanlinessAssessment } from "@labpics/colors";
 
 async function contextualProgram(element: HTMLElement): Promise<void> {
   const c = colors(), canvas = c.surface("canvas");
@@ -12,6 +12,8 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   if (frame.state === "ready") {
     const rgb: readonly [number, number, number] = frame.values.fill.rgb;
     const completed: "exact" | "unfinished" = frame.optimality;
+    const quality: ColorCleanlinessAssessment = frame.cleanliness;
+    void quality;
     void rgb; void completed;
     // @ts-expect-error only declared aliases exist on a ready headless result.
     frame.values.missing;
@@ -40,6 +42,9 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   accent.on(canvas, { tone: { from: fill, curve: [[0, 0.2], [1, 0.95]] } });
   // @ts-expect-error custom scalars are not a universal quality score.
   accent.on(canvas, { cleanliness: 0.8 });
+  colors({ cleanliness: "nominal-srgb8-v2" });
+  // @ts-expect-error an unimplemented universal profile cannot silently compile.
+  colors({ cleanliness: "universal-cleanliness" });
   // @ts-expect-error role handles cannot be fabricated.
   const fakeRole: ColorRole = { id: "fake", anchor: [0, 0, 0], on: () => fill };
   // @ts-expect-error use handles cannot be fabricated.

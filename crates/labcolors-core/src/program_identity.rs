@@ -82,6 +82,7 @@ mod release_tag {
     pub(super) const FAMILY_CATEGORY_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_CAPABILITY_V1: u8 = 1;
     pub(super) const VISIBLE_SEPARATION_FAMILY_V1: u8 = 10;
+    pub(super) const NOMINAL_SRGB8_VISIBLE_FAMILY_V1: u8 = 11;
     pub(super) const VISIBLE_SEPARATION_IDENTITY_V1: u8 = 1;
     pub(super) const VISIBLE_SEPARATION_RELEASE_V1: u8 = 1;
     pub(super) const VISIBLE_SEPARATION_CAPABILITY_V1: u8 = 1;
@@ -699,6 +700,12 @@ fn constraint_color(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(mode_tag);
     match content {
+        ProgramConstraintContentV1::NominalSrgb8Visible { release } => {
+            // The distinct family binds visible membership rather than owned
+            // contribution. The full existing classifier release remains pinned.
+            color.push_u8(release_tag::NOMINAL_SRGB8_VISIBLE_FAMILY_V1)?;
+            color.push_bytes(&release)?;
+        }
         ProgramConstraintContentV1::VisibleSeparation {
             identity,
             release,
@@ -3763,6 +3770,38 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn nominal_visible_identity_separates_owned_domain_and_binds_all_release_bytes() {
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
+        let baseline = constraint_color(
+            vertex_tag::CONSTRAINT_HARD,
+            ProgramConstraintContentV1::NominalSrgb8Visible { release },
+        )
+        .unwrap();
+        assert_ne!(
+            baseline,
+            declared_srgb8_clean_set_constraint_color_for_release(
+                vertex_tag::CONSTRAINT_HARD,
+                release,
+            )
+            .unwrap(),
+            "visible membership and owned-domain membership have different obligations",
+        );
+        for byte_index in 0..release.len() {
+            let mut mutant = release;
+            mutant[byte_index] ^= 1;
+            assert_ne!(
+                baseline,
+                constraint_color(
+                    vertex_tag::CONSTRAINT_HARD,
+                    ProgramConstraintContentV1::NominalSrgb8Visible { release: mutant },
+                )
+                .unwrap(),
+                "nominal release digest byte {byte_index} escaped identity",
+            );
+        }
+    }
+
     use proptest::prelude::*;
 
     #[test]

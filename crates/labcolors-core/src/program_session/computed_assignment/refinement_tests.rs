@@ -1,6 +1,24 @@
 use super::tests::{compile_assignment, program, update};
 use super::*;
 use crate::color_intent::IdentityOptionsV1;
+use crate::observation::{
+    ObservationPayloadInput, ObservationUpdateInput, ObservedScenarioSetInput, ScenarioId,
+    ScenarioInput, SurfaceInputBinding,
+};
+
+fn observed(rgb: [u8; 3]) -> ObservationUpdateInput {
+    let mut result = update(1, 0);
+    result.payload = ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+        scenarios: vec![ScenarioInput {
+            id: ScenarioId::new(9),
+            bindings: vec![SurfaceInputBinding::new(
+                SurfaceInputPortId::new(2),
+                ColorSignal::from_srgb8(Srgb8::new(rgb)),
+            )],
+        }],
+    });
+    result
+}
 
 fn role(id: u32, occurrence: u32, preference: u64, source: [u8; 3]) -> Target {
     let source = Srgb8::new(source);
@@ -160,4 +178,95 @@ fn different_downstream_conditions_keep_distinct_uses_free_to_differ() {
             .iter()
             .all(|cell| !cell.result().is_violation())
     );
+}
+
+#[test]
+fn an_already_optimal_visible_color_keeps_its_authored_source() {
+    for source in [[255; 3], [0, 103, 244]] {
+        for opacity in [0.0, 0.5, 1.0] {
+            let mut declaration = program(
+                role(10, 5, 0, source),
+                Wcag22CriterionV1::Sc143TextDefault,
+                Wcag22Srgb8V1,
+            );
+            declaration.constraints = ConstraintSet::new(vec![], vec![]);
+            declaration
+                .opacities
+                .push(OpacityInput::new(OpacityInputId::new(11), opacity));
+            declaration.paints.push(Paint::Opacity {
+                id: PaintId::new(13),
+                source: PaintId::new(3),
+                opacity: OpacityInputId::new(11),
+            });
+            declaration.occurrences[0].subject = PaintId::new(13);
+            declaration.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(13));
+            let owner =
+                compile_assignment(declaration, 65_536).expect("valid unchanged appearance");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            session
+                .prepare_update(observed(source))
+                .expect("resolve")
+                .commit();
+            let current = session
+                .state()
+                .current_verified()
+                .expect("valid authored color")
+                .computed_for_test();
+            assert_eq!(current.values[0], Srgb8::new(source));
+            assert_eq!(current.search.completion, CompletionV1::AuthoredExact);
+            assert_eq!(
+                current.search.visited, 1,
+                "no search is needed after proving the least possible objective and unchanged source"
+            );
+        }
+    }
+}
+
+#[test]
+fn equal_visible_candidates_preserve_source_even_away_from_the_preferred_color() {
+    let source = [0, 103, 244];
+    let mut target = role(10, 5, 0, source);
+    let TargetIntentV1::Computed(declaration) = &mut target.intent else {
+        unreachable!()
+    };
+    declaration.domain = AssignmentDomainV1::Cube {
+        lower: [0, 102, 243],
+        upper: source,
+    };
+    let mut declaration = program(target, Wcag22CriterionV1::Sc143TextDefault, Wcag22Srgb8V1);
+    declaration.constraints = ConstraintSet::new(vec![], vec![]);
+    declaration
+        .opacities
+        .push(OpacityInput::new(OpacityInputId::new(11), 0.5));
+    declaration.paints.push(Paint::Opacity {
+        id: PaintId::new(13),
+        source: PaintId::new(3),
+        opacity: OpacityInputId::new(11),
+    });
+    declaration.occurrences[0].subject = PaintId::new(13);
+    let owner = compile_assignment(declaration, 512).expect("finite visible tie");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    session
+        .prepare_update(observed([0, 101, 242]))
+        .expect("resolve")
+        .commit();
+    let current = session
+        .state()
+        .current_verified()
+        .expect("bounded material ready")
+        .computed_for_test();
+    // Independent integer source-over: all four candidates round to [0,102,243].
+    // None has zero visible distance to the blue anchor; source flags break the tie.
+    for green in 102..=103_u16 {
+        for blue in 243..=244_u16 {
+            assert_eq!((green + 101).div_ceil(2), 102);
+            assert_eq!((blue + 242).div_ceil(2), 243);
+        }
+    }
+    assert_eq!(current.values[0], Srgb8::new(source));
+    assert_eq!(current.search.completion, CompletionV1::Complete);
 }
