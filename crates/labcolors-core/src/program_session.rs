@@ -4877,6 +4877,34 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    scan_program_candidate_scoped(
+        runtime,
+        epoch,
+        scenario_set,
+        candidate_state_index,
+        phase,
+        collection,
+        previous,
+        None,
+    )
+}
+
+/// Search can assess one compiled independent component. The final candidate
+/// still uses the unfiltered scan above, including every required constraint.
+fn scan_program_candidate_scoped<Evaluation>(
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<Evaluation>,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
+    candidate_state_index: usize,
+    phase: ProgramEvaluationPhaseV1,
+    collection: ProgramCandidateCollectionV1<'_, Evaluation>,
+    previous: Option<&ProgramVerifiedV1<Evaluation>>,
+    constraint_indices: Option<&[usize]>,
+) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
     let ProgramCandidateCollectionV1 {
         mut evidence,
         mut outputs,
@@ -4894,7 +4922,8 @@ where
     let case_count = scenario_set.len().get();
     let previous_storage = previous
         .filter(|verified| {
-            Evaluation::supports_evidence_copy()
+            constraint_indices.is_none()
+                && Evaluation::supports_evidence_copy()
                 && matches!(verified.origin, CandidateOriginV1::Fixed)
                 && !epoch
                     .constraint_phases
@@ -5095,11 +5124,13 @@ where
             }
         }
 
-        for constraint in epoch
-            .constraints
-            .iter()
-            .filter(|constraint| phase.includes(constraint.mode))
-        {
+        let constraint_count = constraint_indices.map_or(epoch.constraints.len(), <[usize]>::len);
+        for ordinal in 0..constraint_count {
+            let index = constraint_indices.map_or(ordinal, |indices| indices[ordinal]);
+            let constraint = &epoch.constraints[index];
+            if !phase.includes(constraint.mode) {
+                continue;
+            }
             let (subject, result, is_violation) = match &constraint.body {
                 CompiledProgramConstraintBodyV1::VisibleUnary {
                     occurrence,
@@ -5582,7 +5613,7 @@ where
         .map_err(map_observation_schema_compile_error)?;
 
     let computed_budget = program.assignment_budget();
-    let target_selection = compile_targets(
+    let mut target_selection = compile_targets(
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
@@ -5606,6 +5637,17 @@ where
         &point_presentations,
         &program.constraints,
     )?;
+    if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
+        computed_assignment::compile_components(
+            selection,
+            &program,
+            &graph,
+            &binding_template,
+            &constraints,
+            &dependency_index,
+            &mut dependency_scratch,
+        )?;
+    }
     validate_compiled_family_usage(&program.families, &constraints)?;
     validate_terminal_dependency_cone(
         &program,

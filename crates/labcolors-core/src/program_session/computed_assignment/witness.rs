@@ -15,10 +15,12 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     arena: &mut ProgramEvaluationArenaV1<E>,
     search: SearchEvidenceV1,
 ) -> Result<ProgramDiagnosticsV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    if search.visited == 0 {
+    if search.visited == 0
+        || selection.budget == 0 && search.completion == CompletionV1::BudgetExhausted
+    {
         return Ok(ProgramDiagnosticsV1 {
-            search_visited: 0,
-            search_budget: selection.budget,
+            search_visited: search.visited,
+            search_budget: selection.total_budget,
             witness: None,
         });
     }
@@ -164,7 +166,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     }
     Ok(ProgramDiagnosticsV1 {
         search_visited: search.visited,
-        search_budget: selection.budget,
+        search_budget: selection.total_budget,
         witness: Some(ProgramAttemptWitnessV1 {
             case_scenario_ids,
             targets,

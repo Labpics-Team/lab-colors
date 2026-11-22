@@ -99,8 +99,10 @@ impl ProgramAttemptWitnessV1 {
     }
 }
 
-/// Диагностика Unsatisfied/Incomplete. При нулевом бюджете попыток нет и witness
-/// отсутствует. Дополнительная проверка witness не считается search visit.
+/// Диагностика Unsatisfied/Incomplete. До первой попытки вычисляемого tuple
+/// witness отсутствует. Условия без вычисляемых зависимостей проверяются
+/// отдельно и могут дать свидетельство конфликта даже при нулевом бюджете
+/// поиска. Дополнительная проверка witness не считается search visit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramDiagnosticsV1 {
     pub(crate) search_visited: u64,

@@ -168,12 +168,12 @@ pub(crate) enum ComputedAdmissionErrorV1 {
     MissingToneInput,
 }
 
-// Предел экспериментального синхронного профиля; не клиентская политика.
+// Предел одной связанной задачи синхронного профиля; не клиентская политика.
 pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] =
-        b"labcolors.assignment-execution.v3.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
+        b"labcolors.assignment-execution.v4.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -301,8 +301,52 @@ struct CompiledComputedTargetV1 {
 
 pub(super) struct ComputedSelectionV1 {
     targets: Box<[CompiledComputedTargetV1]>,
+    components: Box<[ComputedComponentV1]>,
+    fixed_constraints: Box<[usize]>,
     budget: u64,
+    total_budget: u64,
     execution_profile: [u8; 32],
+}
+
+/// Indices preserve the authored preference order inside each connected task.
+struct ComputedComponentV1 {
+    targets: Box<[usize]>,
+    constraints: Box<[usize]>,
+}
+
+/// Borrowed projections keep one owner of target declarations and bindings.
+#[derive(Clone, Copy)]
+struct ComputedTargetsV1<'a> {
+    all: &'a [CompiledComputedTargetV1],
+    indices: Option<&'a [usize]>,
+}
+
+impl<'a> ComputedTargetsV1<'a> {
+    fn new(selection: &'a ComputedSelectionV1, component: Option<&'a ComputedComponentV1>) -> Self {
+        Self {
+            all: &selection.targets,
+            indices: component.map(|component| component.targets.as_ref()),
+        }
+    }
+
+    fn len(self) -> usize {
+        self.indices.map_or(self.all.len(), <[usize]>::len)
+    }
+
+    fn iter(
+        self,
+    ) -> impl ExactSizeIterator<Item = &'a CompiledComputedTargetV1> + DoubleEndedIterator {
+        (0..self.len())
+            .map(move |index| &self.all[self.indices.map_or(index, |indices| indices[index])])
+    }
+}
+
+impl core::ops::Index<usize> for ComputedTargetsV1<'_> {
+    type Output = CompiledComputedTargetV1;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.all[self.indices.map_or(index, |indices| indices[index])]
+    }
 }
 
 pub(super) fn assign_preference(
@@ -439,7 +483,10 @@ pub(super) fn compile_selection(
         .any(|target| target.declaration.intent.is_some());
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
+        components: Box::new([]),
+        fixed_constraints: Box::new([]),
         budget,
+        total_budget: budget,
         execution_profile: if contextual {
             contextual::execution_profile_identity(budget)
         } else {
@@ -590,15 +637,17 @@ fn rgb_boxes_may_pass(
 
 fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
     epoch: &ProgramEpochV1<Evaluation>,
+    constraint_indices: Option<&[usize]>,
 ) -> Result<Vec<RegionConstraintV1>, ()> {
     let mut result = Vec::new();
     if !epoch.graph.supports_rgb_box_endpoints() {
         return Ok(result);
     }
-    result
-        .try_reserve_exact(epoch.constraints.len())
-        .map_err(|_| ())?;
-    for constraint in &epoch.constraints {
+    let count = constraint_indices.map_or(epoch.constraints.len(), <[usize]>::len);
+    result.try_reserve_exact(count).map_err(|_| ())?;
+    for ordinal in 0..count {
+        let index = constraint_indices.map_or(ordinal, |indices| indices[ordinal]);
+        let constraint = &epoch.constraints[index];
         if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
             continue;
         }
@@ -633,7 +682,7 @@ struct RegionPruningV1 {
 impl RegionPruningV1 {
     fn may_pass<Evaluation: ProgramConstraintEvaluatorSetV1>(
         &mut self,
-        selection: &ComputedSelectionV1,
+        targets: ComputedTargetsV1<'_>,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<Evaluation>,
         scenario_set: NonEmptyScenarioSetV1<'_>,
@@ -652,7 +701,7 @@ impl RegionPruningV1 {
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
             for high in [false, true] {
-                for (i, target) in selection.targets.iter().enumerate() {
+                for (i, target) in targets.iter().enumerate() {
                     let value = if i < node.depth {
                         values[i]
                     } else {
@@ -719,8 +768,9 @@ fn buffer<T: Clone>(len: usize, value: T) -> Result<Vec<T>, ()> {
     Ok(result)
 }
 
-fn select<Evaluation>(
+fn select_component<Evaluation>(
     selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<Evaluation>,
     scenario_set: NonEmptyScenarioSetV1<'_>,
@@ -729,7 +779,8 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let count = selection.targets.len();
+    let targets = ComputedTargetsV1::new(selection, Some(component));
+    let count = targets.len();
     let allocate = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
     let mut evidence = SearchEvidenceV1 {
@@ -747,40 +798,20 @@ where
             values: None,
         });
     }
-    if count == 0 {
-        evidence.visited = 1;
-        evidence.points = 1;
-        evidence.examined = 1;
-        evidence.completion = CompletionV1::Complete;
-        let failed = scan_program_candidate(
-            runtime,
-            epoch,
-            scenario_set,
-            0,
-            ProgramEvaluationPhaseV1::Hard,
-            ProgramCandidateCollectionV1::none(),
-            None,
-        )?;
-        return Ok(SearchResultV1 {
-            evidence,
-            values: (!failed).then_some(values),
-        });
-    }
     values
         .iter_mut()
-        .zip(selection.targets.iter())
+        .zip(targets.iter())
         .for_each(|(value, target)| *value = target.declaration.anchor);
     evidence.visited += 1;
     evidence.points += 1;
-    if selection
-        .targets
+    if targets
         .iter()
         .zip(&values)
         .all(|(target, &value)| target.declaration.domain.contains(value))
     {
         evidence.examined += 1;
-        apply::<Evaluation>(selection, runtime, &values)?;
-        if !scan_program_candidate(
+        apply_targets::<Evaluation>(targets, runtime, &values)?;
+        if !scan_program_candidate_scoped(
             runtime,
             epoch,
             scenario_set,
@@ -788,6 +819,7 @@ where
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
             None,
+            Some(&component.constraints),
         )? {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
@@ -799,7 +831,7 @@ where
     let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
     let mut scores = buffer(count, 0.0).map_err(allocate)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
-    let constraints = region_constraints(epoch).map_err(allocate)?;
+    let constraints = region_constraints(epoch, Some(&component.constraints)).map_err(allocate)?;
     let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
     let mut pruning = RegionPruningV1 {
         constraints,
@@ -809,8 +841,7 @@ where
     let mut stack = Vec::new();
     // DFS хранит не более одной второй ветви на каждый шаг деления и одного
     // продолжения листа на target. Граница следует длинам осей, не произведению.
-    let stack_limit = selection
-        .targets
+    let stack_limit = targets
         .iter()
         .try_fold(1_usize, |capacity, target| {
             capacity.checked_add(target.declaration.domain.split_depth() + 1)
@@ -822,9 +853,9 @@ where
     let mut has_best = false;
     let Some(root) = region_node(
         0,
-        selection.targets[0].declaration.domain,
+        targets[0].declaration.domain,
         selection,
-        selection.targets[0].anchor_lab,
+        targets[0].anchor_lab,
         &mut evidence,
     ) else {
         return Ok(SearchResultV1 {
@@ -835,7 +866,7 @@ where
     stack.push(root);
     while let Some(mut node) = stack.pop() {
         let depth = node.depth;
-        let target = &selection.targets[depth];
+        let target = &targets[depth];
         let volume = node
             .domain
             .cardinality()
@@ -847,8 +878,8 @@ where
                 || has_best
                     && compare_scores(&scores[..=depth], &best_scores[..=depth])
                         == Ordering::Greater;
-            let possible = !worse
-                && pruning.may_pass(selection, runtime, epoch, scenario_set, node, &values)?;
+            let possible =
+                !worse && pruning.may_pass(targets, runtime, epoch, scenario_set, node, &values)?;
             evidence.endpoint_evaluations = pruning.endpoint_evaluations;
             if !possible {
                 evidence
@@ -925,9 +956,9 @@ where
         if depth + 1 < count {
             let Some(next) = region_node(
                 depth + 1,
-                selection.targets[depth + 1].declaration.domain,
+                targets[depth + 1].declaration.domain,
                 selection,
-                selection.targets[depth + 1].anchor_lab,
+                targets[depth + 1].anchor_lab,
                 &mut evidence,
             ) else {
                 return Ok(SearchResultV1 {
@@ -939,8 +970,8 @@ where
             continue;
         }
         evidence.examined += 1;
-        apply::<Evaluation>(selection, runtime, &values)?;
-        if !scan_program_candidate(
+        apply_targets::<Evaluation>(targets, runtime, &values)?;
+        if !scan_program_candidate_scoped(
             runtime,
             epoch,
             scenario_set,
@@ -948,6 +979,7 @@ where
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
             None,
+            Some(&component.constraints),
         )? && (!has_best
             || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
                 == Ordering::Less)
@@ -984,10 +1016,21 @@ fn apply<Evaluation>(
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
-    if values.len() != selection.targets.len() {
+    apply_targets::<Evaluation>(ComputedTargetsV1::new(selection, None), runtime, values)
+}
+
+fn apply_targets<Evaluation>(
+    targets: ComputedTargetsV1<'_>,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    values: &[Srgb8],
+) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<Evaluation>>>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+{
+    if values.len() != targets.len() {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    for (target, &value) in selection.targets.iter().zip(values) {
+    for (target, &value) in targets.iter().zip(values) {
         runtime
             .bindings
             .overwrite_paint_input_at(target.binding, EncodedPointPaintValueV1::opaque(value))
@@ -1108,20 +1151,14 @@ where
             evidence: previous.search,
             values: Some(values),
         }
-    } else if selection
-        .targets
-        .iter()
-        .any(|target| target.declaration.intent.is_some())
-    {
-        contextual::select_contextual(
+    } else {
+        components::select(
             selection,
             &mut runtime,
             epoch,
             scenarios,
             arena.storage_mut(),
         )?
-    } else {
-        select(selection, &mut runtime, epoch, scenarios)?
     };
     arena.storage_mut().clear();
     match selected.values {
@@ -1221,7 +1258,9 @@ where
     }
 }
 
+mod components;
 mod contextual;
+pub(super) use components::compile_components;
 mod witness;
 
 #[cfg(test)]
@@ -1238,3 +1277,6 @@ mod color_context_oracle;
 
 #[cfg(test)]
 mod reuse_tests;
+
+#[cfg(test)]
+mod component_tests;

@@ -32,6 +32,51 @@ test("one source identity produces independent local colors through the public a
   } finally { program.dispose(); }
 });
 
+test("equivalent local uses keep the same color when resolved together", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const accent = c.role("accent", "#0067f4");
+  const first = accent.on(canvas, { contrast: "wcag22-text" });
+  const second = accent.on(canvas, { contrast: "wcag22-text" });
+  const combined = await c.compile({ first, second });
+  const isolated = await c.compile({ first });
+  try {
+    for (const canvas of ["#f4eadb", "#e6ddd0", "#000000"]) {
+      const frame = combined.resolve({ canvas });
+      const local = isolated.resolve({ canvas });
+      assert.equal(frame.state, "ready");
+      assert.equal(local.state, "ready");
+      assert.deepEqual(frame.values.first, local.values.first);
+      assert.deepEqual(frame.values.second, local.values.first,
+        "equal roles and contexts must not compete for the quality of their result");
+    }
+  } finally { combined.dispose(); isolated.dispose(); }
+});
+
+test("an independent local surface keeps its colors when another context changes", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const accent = c.role("accent", "#0067f4");
+  const changing = accent.on(canvas, { contrast: "wcag22-text" });
+  const island = c.fixed("paper", "#f4eadb").on(canvas);
+  const stable = accent.on(island, { contrast: "wcag22-text" });
+  const combined = await c.compile({ changing, island, stable });
+  const isolated = await c.compile({ island, stable });
+  let first;
+  try {
+    for (const canvas of ["#ffffff", "#e6ddd0", "#000000", "#ffffff"]) {
+      const frame = combined.resolve({ canvas });
+      const local = isolated.resolve({ canvas });
+      assert.equal(frame.state, "ready");
+      assert.equal(local.state, "ready");
+      first ??= local.values.stable;
+      assert.deepEqual(frame.values.island, local.values.island);
+      assert.deepEqual(frame.values.stable, first,
+        "changing an unrelated backdrop must not dull the accent on a fixed surface");
+      assert.deepEqual(frame.values.stable, local.values.stable);
+      assert.equal(textPasses(frame.values.stable.rgb, frame.values.island.rgb), true);
+    }
+  } finally { combined.dispose(); isolated.dispose(); }
+});
+
 test("intermediate fill and its label compile and satisfy the final pair together", async () => {
   const c = colors(), canvas = c.surface("canvas");
   const fill = c.role("accent", "#0067f4").on(canvas);

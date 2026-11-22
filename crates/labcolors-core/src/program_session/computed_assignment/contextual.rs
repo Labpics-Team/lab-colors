@@ -5,7 +5,7 @@ use super::*;
 use crate::color_intent::color_at_lightness;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v6.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v7.independent-components.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -13,7 +13,8 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 struct ContextV1<'a> {
-    selection: &'a ComputedSelectionV1,
+    targets: ComputedTargetsV1<'a>,
+    constraint_indices: Option<&'a [usize]>,
     domains: Vec<AssignmentDomainV1>,
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
@@ -23,11 +24,13 @@ struct ContextV1<'a> {
 impl<'a> ContextV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(
         selection: &'a ComputedSelectionV1,
+        component: Option<&'a ComputedComponentV1>,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let count = selection.targets.len();
+        let targets = ComputedTargetsV1::new(selection, component);
+        let count = targets.len();
         let cells = count
             .checked_mul(scenarios.len().get())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
@@ -49,7 +52,7 @@ impl<'a> ContextV1<'a> {
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
-            for (index, target) in selection.targets.iter().enumerate() {
+            for (index, target) in targets.iter().enumerate() {
                 let mut rgb = target.declaration.anchor;
                 if let Some(intent) = &target.declaration.intent {
                     if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
@@ -76,7 +79,7 @@ impl<'a> ContextV1<'a> {
         domains
             .try_reserve_exact(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-        for (index, target) in selection.targets.iter().enumerate() {
+        for (index, target) in targets.iter().enumerate() {
             domains.push(
                 if opaque[index]
                     && target
@@ -96,7 +99,8 @@ impl<'a> ContextV1<'a> {
             );
         }
         Ok(Self {
-            selection,
+            targets,
+            constraint_indices: component.map(|component| component.constraints.as_ref()),
             domains,
             preferred,
             preferred_rgb,
@@ -113,9 +117,8 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     values: &[Srgb8],
     scores: &mut [f64],
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let selection = context.selection;
     scores.fill(0.0);
-    let count = selection.targets.len();
+    let count = context.targets.len();
     let schema = epoch.observation_group.schema.as_slice();
     let mut violations = 0;
     let mut paints = epoch
@@ -131,7 +134,7 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
             .physical_values(case)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
-        for (index, target) in selection.targets.iter().enumerate() {
+        for (index, target) in context.targets.iter().enumerate() {
             let rgb = if let Some(slot) = target.appearance {
                 Srgb8::new(
                     evaluation
@@ -170,11 +173,10 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
     scores: &mut [f64],
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let selection = context.selection;
-    apply::<E>(selection, runtime, values)?;
+    apply_targets::<E>(context.targets, runtime, values)?;
     let intent_violations = intent_scores(context, runtime, epoch, scenarios, values, scores)?;
     arena.clear();
-    scan_program_candidate(
+    scan_program_candidate_scoped(
         runtime,
         epoch,
         scenarios,
@@ -189,6 +191,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             point_causal: None,
         },
         None,
+        context.constraint_indices,
     )?;
     Ok(intent_violations
         + context
@@ -272,7 +275,7 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     values: &[Srgb8],
 ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let context = ContextV1::new(selection, runtime, epoch, scenarios)?;
+    let context = ContextV1::new(selection, None, runtime, epoch, scenarios)?;
     let mut scores =
         buffer(values.len(), 0.0).map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     if context
@@ -306,8 +309,7 @@ impl BoundsV1 {
         node: RegionNodeV1,
         values: &[Srgb8],
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let selection = context.selection;
-        let count = selection.targets.len();
+        let count = context.targets.len();
         self.scores.fill(0.0);
         for (index, domain) in context.domains.iter().enumerate() {
             let lo = if index < node.depth {
@@ -324,7 +326,7 @@ impl BoundsV1 {
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             for high in [false, true] {
-                for (index, target) in selection.targets.iter().enumerate() {
+                for (index, target) in context.targets.iter().enumerate() {
                     let rgb = if index < node.depth {
                         values[index]
                     } else {
@@ -374,7 +376,7 @@ impl BoundsV1 {
                         }
                     }
                 }
-                for (index, target) in selection.targets.iter().enumerate() {
+                for (index, target) in context.targets.iter().enumerate() {
                     let rgb = if let Some(slot) = target.appearance {
                         evaluation
                             .occurrence_at(slot)
@@ -418,17 +420,19 @@ impl BoundsV1 {
     }
 }
 
-pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let count = selection.targets.len();
+    let targets = ComputedTargetsV1::new(selection, Some(component));
+    let count = targets.len();
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
-    for (value, target) in values.iter_mut().zip(selection.targets.iter()) {
+    for (value, target) in values.iter_mut().zip(targets.iter()) {
         *value = target.declaration.anchor;
     }
     let mut evidence = SearchEvidenceV1 {
@@ -446,8 +450,8 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             values: None,
         });
     }
-    apply::<E>(selection, runtime, &values)?;
-    let context = ContextV1::new(selection, runtime, epoch, scenarios)?;
+    apply_targets::<E>(targets, runtime, &values)?;
+    let context = ContextV1::new(selection, Some(component), runtime, epoch, scenarios)?;
     let mut scores = buffer(count, 0.0).map_err(allocation)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocation)?;
     let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
@@ -490,11 +494,11 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     // Контекстные опоры строятся внутри Core. Изменение parent учитывается
     // физическим графом перед приготовлением source следующего применения.
     if evidence.visited < selection.budget {
-        for (index, target) in selection.targets.iter().enumerate() {
+        for (index, target) in targets.iter().enumerate() {
             if target.declaration.intent.is_none() {
                 continue;
             }
-            apply::<E>(selection, runtime, &values)?;
+            apply_targets::<E>(targets, runtime, &values)?;
             let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, 0)?;
             values[index] = inverse_hint(context.preferred_rgb[index], backdrop, alpha);
         }
@@ -540,7 +544,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     let seed_limit = (selection.budget / 4).max(evidence.visited);
     let distinct_origins = preferred_seed
         .iter()
-        .zip(selection.targets.iter())
+        .zip(targets.iter())
         .any(|(value, target)| *value != target.declaration.anchor);
     let origin_count = if distinct_origins { 2 } else { 1 };
     let origin_budget = (seed_limit - evidence.visited) / origin_count;
@@ -556,7 +560,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         if origin == 0 {
             current_values.copy_from_slice(&preferred_seed);
         } else {
-            for (value, target) in current_values.iter_mut().zip(selection.targets.iter()) {
+            for (value, target) in current_values.iter_mut().zip(targets.iter()) {
                 *value = target.declaration.anchor;
             }
         }
@@ -580,7 +584,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
                 } else {
                     position
                 };
-                let target = &selection.targets[index];
+                let target = &targets[index];
                 let Some(intent) = &target.declaration.intent else {
                     continue;
                 };
@@ -589,7 +593,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
                         break;
                     }
                     values.copy_from_slice(&current_values);
-                    apply::<E>(selection, runtime, &values)?;
+                    apply_targets::<E>(targets, runtime, &values)?;
                     let (backdrop, alpha) =
                         physical_context(target, runtime, epoch, scenarios, case)?;
                     let source = if intent.identity.neutral() {
@@ -653,7 +657,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     }
 
     // Полный RGB8/gray domain остаётся доступен после приближений.
-    let constraints = region_constraints(epoch).map_err(allocation)?;
+    let constraints = region_constraints(epoch, context.constraint_indices).map_err(allocation)?;
     let mut bounds = BoundsV1 {
         constraint_lower: buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocation)?,
         constraints,
