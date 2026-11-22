@@ -80,6 +80,10 @@ mod release_tag {
     pub(super) const FAMILY_CATEGORY_RELATION_IDENTITY_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_CAPABILITY_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_FAMILY_V1: u8 = 10;
+    pub(super) const VISIBLE_SEPARATION_IDENTITY_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_RELEASE_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_CAPABILITY_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
     pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
     #[cfg(test)]
@@ -693,6 +697,31 @@ fn constraint_color(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(mode_tag);
     match content {
+        ProgramConstraintContentV1::VisibleSeparation {
+            identity,
+            release,
+            capability,
+            bounds,
+        } => {
+            color.push_u8(release_tag::VISIBLE_SEPARATION_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::VisibleSeparationIdentityV1 => {
+                    release_tag::VISIBLE_SEPARATION_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::VisibleSeparationReleaseV1 => {
+                    release_tag::VISIBLE_SEPARATION_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::VisibleSeparationCapabilityV1 => {
+                    release_tag::VISIBLE_SEPARATION_CAPABILITY_V1
+                }
+            })?;
+            color.push_u64(bounds.minimum().to_bits())?;
+            color.push_u64(bounds.maximum().to_bits())?;
+        }
         ProgramConstraintContentV1::ExactSrgb8 {
             identity,
             release,

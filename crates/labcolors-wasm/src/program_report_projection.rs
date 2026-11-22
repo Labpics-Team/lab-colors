@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 
 use super::{
     report_accepted, report_array, report_array_push, report_cell, report_domain_absent,
-    report_projection, report_rejected, report_scenario, report_summary,
+    report_projection, report_rejected, report_scenario, report_separation, report_summary,
 };
 
 /// Неудачное чтение не изменяет Rust snapshot и не имеет sink-эффекта.
@@ -47,6 +47,25 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
         ProgramAssessmentVerdictV1::Violation => "violation",
     };
     match assessment {
+        Assessment::VisibleSeparation {
+            verdict,
+            measurement,
+        } => {
+            let [vr, vg, vb] = measurement.visible().bytes();
+            let [br, bg, bb] = measurement.backdrop().bytes();
+            report_separation(
+                verdict_key(verdict),
+                vr,
+                vg,
+                vb,
+                br,
+                bg,
+                bb,
+                measurement.distance(),
+                measurement.minimum(),
+                measurement.maximum(),
+            )
+        }
         Assessment::ExactSrgb8 { verdict } => report_summary("exact-srgb8", verdict_key(verdict)),
         Assessment::Wcag22Srgb8 { verdict } => report_summary("wcag22-srgb8", verdict_key(verdict)),
         Assessment::IntrinsicUnary { verdict } => {

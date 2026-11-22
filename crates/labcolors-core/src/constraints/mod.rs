@@ -45,6 +45,13 @@ pub(crate) use relation::{
 
 mod wcag22;
 
+mod visible_separation;
+pub use visible_separation::ProgramVisibleSeparationMeasurementV1;
+pub(crate) use visible_separation::{
+    VisibleSeparationBoundsV1, VisibleSeparationCapabilityV1, VisibleSeparationIdentityV1,
+    VisibleSeparationReleaseV1, VisibleSeparationV1,
+};
+
 pub(crate) use wcag22::{
     ApplicableWcag22EvaluationErrorV1, Wcag22Srgb8CapabilityV1, Wcag22Srgb8EvaluatorIdentityV1,
     Wcag22Srgb8V1,
@@ -510,6 +517,12 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
 /// изменение production evaluator-а остаётся явной сменой схемы.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ProgramConstraintContentV1 {
+    VisibleSeparation {
+        identity: VisibleSeparationIdentityV1,
+        release: VisibleSeparationReleaseV1,
+        capability: VisibleSeparationCapabilityV1,
+        bounds: VisibleSeparationBoundsV1,
+    },
     ExactSrgb8 {
         identity: ExactConstraintIdentityV1,
         release: ExactIdentityReleaseV1,

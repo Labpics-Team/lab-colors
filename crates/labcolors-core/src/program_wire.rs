@@ -9,6 +9,7 @@
 //! они не превращаются в отказ пользовательского графа или observation.
 
 use crate::Srgb8;
+pub use crate::constraints::ProgramVisibleSeparationMeasurementV1;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 

@@ -39,6 +39,12 @@ export interface NumericalCapabilityManifestV2 {
 export type ProgramAssessmentVerdictV1 = "pass" | "violation";
 export type ProgramConstraintAssessmentV1 =
   | Readonly<{
+      kind: "visible-separation"; verdict: ProgramAssessmentVerdictV1;
+      visible: readonly [number, number, number];
+      backdrop: readonly [number, number, number];
+      distance: number; minimum: number; maximum: number;
+    }>
+  | Readonly<{
       kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
       verdict: ProgramAssessmentVerdictV1;
     }>
@@ -243,6 +249,14 @@ export function reportScenario(caseIndex, scenarioId) {
   return reportFreeze({ caseIndex, scenarioId });
 }
 export function reportSummary(kind, verdict) { return reportFreeze({ kind, verdict }); }
+export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, minimum, maximum) {
+  return reportFreeze({
+    kind: "visible-separation", verdict,
+    visible: reportFreeze([vr, vg, vb]),
+    backdrop: reportFreeze([br, bg, bb]),
+    distance, minimum, maximum,
+  });
+}
 export function reportAccepted(red, green, blue) {
   return reportFreeze({
     kind: "declared-srgb8-clean-set", verdict: "pass",
@@ -319,6 +333,19 @@ extern "C" {
     fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSummary)]
     fn report_summary(kind: &str, verdict: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSeparation)]
+    fn report_separation(
+        verdict: &str,
+        visible_red: u8,
+        visible_green: u8,
+        visible_blue: u8,
+        backdrop_red: u8,
+        backdrop_green: u8,
+        backdrop_blue: u8,
+        distance: f64,
+        minimum: f64,
+        maximum: f64,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportAccepted)]
     fn report_accepted(red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportRejected)]

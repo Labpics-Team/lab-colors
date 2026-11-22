@@ -158,6 +158,10 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                 let assessment = cell.assessment();
                 let _: VerdictV1 = assessment.verdict();
                 let binding = match assessment {
+                    AssessmentV1::VisibleSeparation(evidence) => {
+                        let _ = evidence.measurement();
+                        Some(evidence.binding())
+                    }
                     AssessmentV1::ExactSrgb8(evidence) => {
                         let _: Srgb8 = evidence.expected();
                         Some(evidence.binding())

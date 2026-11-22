@@ -19,6 +19,10 @@ pub enum ProgramAssessmentVerdictV1 {
 /// становятся обязанностью клиента; Clean Set описывает только точную конвенцию.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramConstraintAssessmentV1 {
+    VisibleSeparation {
+        verdict: ProgramAssessmentVerdictV1,
+        measurement: crate::constraints::ProgramVisibleSeparationMeasurementV1,
+    },
     ExactSrgb8 {
         verdict: ProgramAssessmentVerdictV1,
     },
@@ -193,6 +197,20 @@ fn copy_assessment(
         ProgramAssessmentVerdictV1::Pass
     };
     match assessment {
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::VisibleSeparation(evidence),
+        )) => ProgramConstraintAssessmentV1::VisibleSeparation {
+            verdict,
+            measurement: *evidence.measurement().value(),
+        },
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::VisibleSeparation(evidence),
+            ),
+        ) => ProgramConstraintAssessmentV1::VisibleSeparation {
+            verdict,
+            measurement: *evidence.measurement().value(),
+        },
         ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::ExactSrgb8(_),
         ))

@@ -47,7 +47,8 @@ use crate::constraints::{
     FamilyCategoryRelationMeasurementV1 as CoreFamilyCategoryRelationMeasurementV1,
     FamilyCategoryRelationViolationV1 as CoreFamilyCategoryRelationViolationV1,
     ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
-    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+    ProgramVisiblePointViolationEvidence, ProgramVisibleSeparationMeasurementV1,
+    VisibleSeparationBoundsV1, Wcag22Srgb8V1,
 };
 use crate::family::{
     FamilyDeclarationV2, FamilyId,
@@ -1817,6 +1818,38 @@ impl DraftV1 {
         self
     }
 
+    /// Ограничивает расстояние Oklab итогового visible до фактического backdrop.
+    pub(crate) fn push_visible_separation_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> &mut Self {
+        self.inner
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::VisibleSeparation(bounds),
+            ));
+        self
+    }
+
+    /// Измеряет ту же клиентскую policy, не влияя на выбор.
+    pub(crate) fn push_visible_separation_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> &mut Self {
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::VisibleSeparation(bounds),
+            ));
+        self
+    }
+
     /// Требует принадлежности непустого финального вклада точной цели
     /// представления к закреплённому пакетом множеству encoded sRGB8.
     pub(crate) fn push_declared_srgb8_clean_set_hard(
@@ -3040,6 +3073,22 @@ fn project_assessment<'a>(
 ) -> AssessmentV1<'a> {
     match cell.result() {
         ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::VisibleSeparation(evidence),
+        )) => AssessmentV1::VisibleSeparation(VisibleSeparationEvidenceV1 {
+            verdict: VerdictV1::Pass,
+            binding: evidence.binding(),
+            measurement: *evidence.measurement().value(),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::VisibleSeparation(evidence),
+            ),
+        ) => AssessmentV1::VisibleSeparation(VisibleSeparationEvidenceV1 {
+            verdict: VerdictV1::Violation,
+            binding: evidence.binding(),
+            measurement: *evidence.measurement().value(),
+        }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
         )) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
             inner: ExactSrgb8EvidenceRefV1::Pass(evidence),
@@ -3105,6 +3154,8 @@ fn project_assessment<'a>(
 /// Закрытое семейство сохранённого evaluator evidence.
 #[derive(Clone, Copy)]
 pub(crate) enum AssessmentV1<'a> {
+    /// Прямое расстояние Oklab по двум окончательным encoded цветам.
+    VisibleSeparation(VisibleSeparationEvidenceV1<'a>),
     /// Evidence точного сравнения encoded sRGB8.
     ExactSrgb8(ExactSrgb8EvidenceV1<'a>),
     /// Evidence применимого критерия WCAG 2.2.
@@ -3120,6 +3171,7 @@ impl AssessmentV1<'_> {
     /// Возвращает несовместимый с противоположным исход классификатора.
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self {
+            Self::VisibleSeparation(value) => value.verdict(),
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
             Self::IntrinsicUnary(value) => value.verdict(),
@@ -3737,6 +3789,33 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.binding(),
         };
         PointBindingV1 { inner: value }
+    }
+}
+
+/// Сохранённое измерение и physical binding клиентской separation policy.
+#[derive(Clone, Copy)]
+pub(crate) struct VisibleSeparationEvidenceV1<'a> {
+    verdict: VerdictV1,
+    binding: &'a ProgramVisiblePointBindingV1,
+    measurement: ProgramVisibleSeparationMeasurementV1,
+}
+
+impl<'a> VisibleSeparationEvidenceV1<'a> {
+    /// Сохранённое решение по включённым границам клиента.
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        self.verdict
+    }
+
+    /// Сохранённые encoded цвета, distance и оба порога.
+    pub(crate) const fn measurement(self) -> ProgramVisibleSeparationMeasurementV1 {
+        self.measurement
+    }
+
+    /// Физическая occurrence, на которой выполнено измерение.
+    pub(crate) const fn binding(self) -> PointBindingV1<'a> {
+        PointBindingV1 {
+            inner: self.binding,
+        }
     }
 }
 
@@ -4773,6 +4852,7 @@ fn map_evaluator_error(
     error: CoreProgramEvaluatorErrorV1,
 ) -> Result<EvaluatorFailureV1, EvaluatorProtocolFailureV1> {
     match error {
+        CoreProgramEvaluatorErrorV1::VisibleSeparation(source) => match source {},
         CoreProgramEvaluatorErrorV1::ExactSrgb8(source) => match source {},
         CoreProgramEvaluatorErrorV1::Wcag22Srgb8(source) => {
             let profile_id = wcag22_profile_v1().profile_id;

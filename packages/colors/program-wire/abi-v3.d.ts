@@ -26,6 +26,8 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   colorTarget(id: number, anchor: ProgramWireRgbV1, options?: ProgramWireColorOptionsV3): this;
   /** Точечное source-over применение со стандартным пакетным контекстом. */
   pointOccurrence(id: number, paint: number, surface: number): this;
+  /** Включённые границы 0..2 расстояния Oklab: final visible против actual backdrop. Порог задаёт клиент. */
+  visibleSeparationHard(id: number, occurrence: number, minimum: number, maximum: number): this;
   /** Опора может лежать вне domain; конечный неотрицательный допуск имеет конечный квадрат. */
   computedTarget(id: number, domain: ProgramWireDomainV3, anchor: ProgramWireRgbV1, maxDelta: number): this;
   /** Лексикографический приоритет: каждый computed target ровно один раз; граф проверяет Core. */

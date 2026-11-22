@@ -74,6 +74,24 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     return this;
   }
 
+  /** Inclusive client-owned Oklab distance from the final visible colour to its actual backdrop. */
+  visibleSeparationHard(id, occurrence, minimum, maximum) {
+    const checkedId = u32Value(id, "constraint id");
+    const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
+    const lower = f64Value(minimum, "visible separation minimum");
+    const upper = f64Value(maximum, "visible separation maximum");
+    if (lower < 0 || upper > 2 || lower > upper) {
+      invalid("visible separation bounds must satisfy 0 <= minimum <= maximum <= 2");
+    }
+    const sink = this.constraintEntry(true);
+    sink.u32(checkedId);
+    sink.u8(11);
+    sink.u32(checkedOccurrence);
+    sink.f64Bits(lower === 0 ? 0 : lower);
+    sink.f64Bits(upper === 0 ? 0 : upper);
+    return this;
+  }
+
   computedTarget(id, domain, anchor, maxDelta) {
     const checkedId = u32Value(id, "target id");
     const kind = inputProperty(domain, "kind", "computed domain");

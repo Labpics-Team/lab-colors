@@ -50,7 +50,8 @@ use crate::constraints::{
     ProgramConstraintContentV1, ProgramPointAssessmentErrorV1, ProgramPointEvaluatorContentV1,
     ProgramPointEvaluatorV1, ProgramPointInvocation, ProgramPointOccurrenceV1,
     ProgramPointTargetV1, ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
-    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1, assess_program_point_hard,
+    ProgramVisiblePointViolationEvidence, VisibleSeparationBoundsV1, VisibleSeparationV1,
+    Wcag22Srgb8V1, assess_program_point_hard,
 };
 use crate::family::{FamilyDeclarationV2, FamilyId};
 use crate::family_artifact::{
@@ -1046,6 +1047,10 @@ macro_rules! define_core_program_evaluators_v1 {
 }
 
 define_core_program_evaluators_v1! {
+    VisibleSeparation {
+        evaluator: VisibleSeparationV1 = VisibleSeparationV1,
+        invocation: VisibleSeparationBoundsV1
+    },
     ExactSrgb8 {
         evaluator: ExactSrgb8IdentityV1 = ExactSrgb8IdentityV1,
         invocation: Srgb8

@@ -590,11 +590,11 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
     // разный режим. Report-грамматика допускает только report-able виды.
     reader.enter(WireSectionV1::HardConstraints);
     for _ in 0..reader.read_count()? {
-        decode_constraint(reader, &mut draft, ConstraintModeV1::Hard)?;
+        decode_constraint(reader, &mut draft, ConstraintModeV1::Hard, version)?;
     }
     reader.enter(WireSectionV1::ReportConstraints);
     for _ in 0..reader.read_count()? {
-        decode_constraint(reader, &mut draft, ConstraintModeV1::ReportOnly)?;
+        decode_constraint(reader, &mut draft, ConstraintModeV1::ReportOnly, version)?;
     }
 
     // Outputs: slot + paint.
@@ -628,17 +628,31 @@ const KIND_VISIBLE_DISTINCTION: u8 = 7;
 const KIND_FAMILY_CATEGORY_RELATION: u8 = 8;
 const KIND_WCAG22_VISIBLE_UNARY: u8 = 9;
 const KIND_CLEAN_SET: u8 = 10;
+const KIND_VISIBLE_SEPARATION: u8 = 11;
 
 fn decode_constraint(
     reader: &mut WireReader<'_>,
     draft: &mut DraftV1,
     mode: ConstraintModeV1,
+    version: u16,
 ) -> Result<(), ProgramWireErrorV1> {
     let entry_offset = reader.offset;
     let id = ConstraintIdV1::new(reader.read_u32()?);
     let kind = reader.read_u8()?;
     let hard = matches!(mode, ConstraintModeV1::Hard);
     match kind {
+        KIND_VISIBLE_SEPARATION if version == PROGRAM_WIRE_VERSION_V3 => {
+            let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
+            let minimum = reader.read_f64_bits()?;
+            let maximum = reader.read_f64_bits()?;
+            let bounds = crate::constraints::VisibleSeparationBoundsV1::new(minimum, maximum)
+                .ok_or_else(|| reader.declaration_error(entry_offset))?;
+            if hard {
+                draft.push_visible_separation_hard(id, occurrence, bounds);
+            } else {
+                draft.push_visible_separation_report_only(id, occurrence, bounds);
+            }
+        }
         KIND_EXACT_VISIBLE_UNARY => {
             let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
             let expected = reader.read_rgb()?;
@@ -1463,6 +1477,33 @@ impl ProgramWireBuilderV1 {
         self
     }
 
+    /// Test encoder пропускает raw bounds, чтобы проверять admission decoder-а.
+    #[cfg(test)]
+    pub(crate) fn visible_separation(
+        &mut self,
+        hard: bool,
+        id: u32,
+        occurrence: u32,
+        minimum: f64,
+        maximum: f64,
+    ) -> &mut Self {
+        let (bytes, count) = if hard {
+            (&mut self.hard_constraints, &mut self.hard_constraints_count)
+        } else {
+            (
+                &mut self.report_constraints,
+                &mut self.report_constraints_count,
+            )
+        };
+        push_u32(bytes, id);
+        bytes.push(KIND_VISIBLE_SEPARATION);
+        push_u32(bytes, occurrence);
+        push_f64_bits(bytes, minimum);
+        push_f64_bits(bytes, maximum);
+        *count += 1;
+        self
+    }
+
     /// Эмитирует единственные канонические байты объявленного графа.
     pub(crate) fn finish(self) -> Result<Vec<u8>, ProgramWireEncodeErrorV1> {
         let mut bytes = Vec::new();
@@ -1504,6 +1545,10 @@ impl ProgramWireBuilderV1 {
 
 #[cfg(kani)]
 mod proofs;
+
+#[cfg(test)]
+#[path = "visible_separation_tests.rs"]
+mod visible_separation_tests;
 
 #[cfg(test)]
 mod assignment_v3_tests {
