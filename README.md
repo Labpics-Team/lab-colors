@@ -15,7 +15,7 @@ npm install @labpics/colors@^1.2
 ```
 
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
-[Первый запуск в браузере и Node.js](packages/colors/README.md#первый-запуск).
+[Первый запуск в браузере и Node.js](packages/colors/README.md#первый-запуск-в-браузере).
 
 ## Одна роль — разные применения
 
