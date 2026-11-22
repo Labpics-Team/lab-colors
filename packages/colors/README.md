@@ -129,6 +129,39 @@ await init({ module_or_path: wasmUrl });
 В [готовом примере](https://github.com/Labpics-Team/lab-colors/tree/main/examples/contextual-colors)
 есть import map и небольшой dev server; отдельный bundler не требуется.
 
+## Node.js
+
+В Node.js 22.11 или новее используйте ESM и передайте байты WASM до объявления
+программы. Node.js не загружает `file:` URL через `fetch`.
+
+```js
+import { readFileSync } from "node:fs";
+import init from "@labpics/colors";
+
+await init({
+  module_or_path: readFileSync(
+    new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm")),
+  ),
+});
+```
+
+Затем выполните [объявление ролей](#объявление-ролей) выше. Без DOM готовые
+значения читаются через `resolve`:
+
+### Результат без DOM
+
+```js
+for (const canvas of ["#e6ddd0", "#283548"]) {
+  const frame = program.resolve({ canvas });
+  console.log(frame);
+}
+program.dispose();
+```
+
+Пропущенный вход, `null` или `undefined` означает неизвестный контекст.
+Лишнее имя или некорректный цвет — ошибка входа. Передавайте весь набор
+поверхностей при каждом обновлении.
+
 ## Настройки
 
 Обычная роль адаптируется по умолчанию. Core сохраняет её характер и пересекает
@@ -244,39 +277,6 @@ if (replacement.state === "committed") {
 результата нет. Допустимость результата и завершённость поиска лучшего значения
 различаются. [Справка состояний и диагностики](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md#результат-и-диагностика)
 описывает `ready`, `conflict`, `unresolved`, `unknown`, `stale` и типизированные ошибки.
-
-## Node.js
-
-В Node.js 22.11 или новее используйте ESM и передайте байты WASM до объявления
-программы. Node.js не загружает `file:` URL через `fetch`.
-
-```js
-import { readFileSync } from "node:fs";
-import init from "@labpics/colors";
-
-await init({
-  module_or_path: readFileSync(
-    new URL(import.meta.resolve("@labpics/colors/pkg/labcolors_bg.wasm")),
-  ),
-});
-```
-
-Затем выполните [объявление ролей](#объявление-ролей) выше. Без DOM готовые
-значения читаются через `resolve`:
-
-### Результат без DOM
-
-```js
-for (const canvas of ["#e6ddd0", "#283548"]) {
-  const frame = program.resolve({ canvas });
-  console.log(frame);
-}
-program.dispose();
-```
-
-Пропущенный вход, `null` или `undefined` означает неизвестный контекст.
-Лишнее имя или некорректный цвет — ошибка входа. Передавайте весь набор
-поверхностей при каждом обновлении.
 
 ## Низкоуровневый Program API
 

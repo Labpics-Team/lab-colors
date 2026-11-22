@@ -11,7 +11,9 @@ const textPasses = (foreground, background) =>
   evaluateWcag22(hex(foreground), hex(background), "sc-1.4.3-text-default").decision === "pass";
 
 function exampleUnder(heading) {
-  const section = read("README.md").split(`### ${heading}\n`)[1]?.split(/\n#{1,3} /u)[0];
+  const section = read("README.md")
+    .split(/^#{2,3} /mu)
+    .find((section) => section.split(/\r?\n/u, 1)[0] === heading);
   const example = section?.match(/```js\r?\n([\s\S]*?)\r?\n```/u)?.[1];
   assert.equal(typeof example, "string", `README example: ${heading}`);
   return example;
