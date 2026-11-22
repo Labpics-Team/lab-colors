@@ -220,6 +220,7 @@ fn attachment_snapshot_is_inline_and_independent() {
                 .expect("the valid update must return an owned snapshot")
             });
             assert_eq!(snapshot.snapshot().state(), ProgramSnapshotStateV1::Ready);
+            assert_eq!(snapshot.snapshot().revision(), revision);
             assert_eq!(
                 snapshot
                     .render()
@@ -234,7 +235,6 @@ fn attachment_snapshot_is_inline_and_independent() {
             if let Some(old) = previous.as_ref() {
                 assert_eq!(old.outputs(), snapshot.snapshot().outputs());
                 assert_eq!(old.state(), snapshot.snapshot().state());
-                assert!(old.revision() < snapshot.snapshot().revision());
             }
             previous = Some(snapshot.snapshot().clone());
         }
