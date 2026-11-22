@@ -2,6 +2,54 @@ use super::*;
 use crate::program_wire::{ProgramScenarioV1, ProgramSnapshotStateV1, compile_program_wire};
 
 #[test]
+fn deep_material_does_not_invent_distance_outside_the_srgb_gamut() -> Result<(), String> {
+    let mut builder = ProgramWireBuilderV1::new();
+    builder
+        .source(1, Srgb8::new([128; 3]))
+        .fixed_target(2, 1)
+        .solid_paint(3, 2)
+        .opacity_input(4, 0.01)
+        .opacity_paint(5, 3, 4)
+        .surface_input_port(6)
+        .input_surface(7, 6);
+    let mut surface = 7;
+    let mut terminal = 0;
+    for index in 0..100 {
+        terminal = 1000 + 2 * index;
+        builder
+            .source_over_occurrence(terminal, 5, surface, 0.0, 0.0, 0)
+            .occurrence_surface(terminal + 1, terminal);
+        surface = terminal + 1;
+    }
+    builder
+        .visible_separation(true, 8, terminal, 0.0, 2.0)
+        .output(9, 5);
+    let bytes = builder
+        .finish_assignment(&[])
+        .map_err(|error| format!("wire: {error:?}"))?;
+    let owner = compile_program_wire(&bytes).map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(1)
+        .map_err(|error| format!("session: {error:?}"))?;
+    let snapshot = session
+        .update_observed(1, &[ProgramScenarioV1::new(1, vec![Srgb8::new([207; 3])])])
+        .map_err(|error| format!("update: {error:?}"))?;
+    assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
+    let report = snapshot.assessment_report().ok_or("report")?;
+    let crate::program_wire::ProgramConstraintAssessmentV1::VisibleSeparation {
+        measurement, ..
+    } = report.cells().first().ok_or("cell")?.assessment()
+    else {
+        return Err("separation report".into());
+    };
+    assert_eq!(measurement.visible(), Srgb8::new([178; 3]));
+    assert_eq!(measurement.distance(), 0.0);
+    assert!(measurement.distance_bounds()[1] < 2.0);
+    assert_eq!(snapshot.outputs()[0].opacity(), 0.01);
+    Ok(())
+}
+
+#[test]
 fn transparent_use_has_exact_zero_separation_from_an_uncertain_material() -> Result<(), String> {
     let mut builder = ProgramWireBuilderV1::new();
     builder

@@ -1,81 +1,87 @@
-# Material colour and output precision
+# Материал и точность вывода
 
-Colors keeps a role's source and the appearance of each use separate. An
-opaque use emits its resolved RGB. A translucent use emits resolved RGB and
-its authored alpha; its surface remains part of the composition.
+Colors разделяет источник роли и видимый результат её применения. Непрозрачное
+применение выводит вычисленный RGB. Полупрозрачное — вычисленный RGB и заданную
+автором alpha; поверхность под ним участвует в композиции.
 
-The reference appearance is encoded-sRGB source-over, rounded to an RGB8
-point after each layer. Hue, chroma, neutrality, tone preference and
-`maxChange` refer to that appearance. The output path also carries the
-numeric precision of rendering the material. Requirements such as text
-contrast and surface separation cover this range before a frame is accepted.
-The normal `colors()` API applies both parts automatically.
+Опорный результат получается по encoded-sRGB source-over с округлением до
+RGB8 после каждого слоя. К нему относятся оттенок, chroma, нейтральность,
+тональное предпочтение и `maxChange`. При проверке обязательных свойств движок
+также учитывает точность растрового вывода материала. Обычный `colors()`
+применяет оба расчёта автоматически.
 
-## Why a range is necessary
+## Зачем нужен диапазон
 
-An interior pixel in the browser can differ from the reference by a channel
-unit because alpha and premultiplied RGB are rounded at different stages.
-For example, RGB `[246,107,57]` at alpha `.72` over `[107,127,114]` has reference
-appearance `[207,113,73]`. Edge 158 rendered `[207,112,73]`. Ink `[36,36,36]`
-passes the text threshold on the reference and falls below it on that pixel.
-Changing from `rgba()` to `color(srgb …)` did not remove the discrepancy.
+Внутренний пиксель браузерной заливки может отличаться от опорного результата
+на единицу канала: alpha и premultiplied RGB округляются на разных этапах.
+Например, RGB `[246,107,57]` с alpha `.72` над `[107,127,114]` даёт опорный
+`[207,113,73]`, а Edge 158 отрисовал `[207,112,73]`. Текст `[36,36,36]` проходит
+заданный порог на первом значении и не проходит на втором. Замена `rgba()` на
+`color(srgb …)` не устранила расхождение.
 
-The solver therefore chooses ink and material together with enough room
-for numeric emission. It keeps the material's alpha and can adjust the ink;
-it does not replace the material with a precomposited opaque colour.
+Поэтому движок подбирает материал и надпись совместно, учитывая точность
+вывода. Он сохраняет alpha материала и может изменить надпись. Материал
+остаётся полупрозрачным и продолжает взаимодействовать со своей поверхностью.
 
-## Transfer through layers
+## Перенос погрешности через слои
 
-The package owns one allowance for the normal encoded-byte raster path:
+Обычный путь encoded-sRGB8 использует следующие правила:
 
-* An opaque input surface starts with radius zero.
-* Opaque paint replaces the backdrop and resets its visible radius to zero.
-* Fully transparent paint preserves the backdrop, including its radius and
-  the fact that both pixels are the same.
-* For other alpha values, a layer carries the backdrop error and adds a
-  local allowance of three encoded channel units.
+- Непрозрачная входная поверхность имеет нулевой радиус погрешности.
+- Непрозрачная заливка заменяет фон и обнуляет радиус своего видимого цвета.
+- Полностью прозрачная заливка сохраняет фон, его радиус и тождество обоих
+  пикселей.
+- При промежуточной alpha слой переносит погрешность фона и добавляет локальный
+  допуск в три единицы encoded-канала.
 
-For an integer backdrop radius `r` and alpha `a`, the next radius is
-`floor((1-a)*r+3)`, capped at 255. The implementation computes the equivalent
-`r+3-ceil(a*r)` with the product rounded outward. A deep chain accumulates
-its allowance; it does not reuse a fixed ±1 for the whole scene.
+Для целого радиуса фона `r` и alpha `a` следующий радиус равен
+`floor((1-a)*r+3)` с верхней границей 255. Реализация вычисляет эквивалентное
+`r+3-ceil(a*r)`, округляя произведение наружу. Глубокая цепочка накапливает
+погрешность; фиксированный допуск ±1 на всю композицию для неё недостаточен.
 
-The local bound follows the published nearest-alpha, nearest-premultiplied
-and integer-residual paths in Skia. Premultiplication contributes at most
-0.5 channel unit; the shared alpha contributes at most 0.5; the residual
-shortcuts contribute less than 1; rounding the reference contributes at
-most 0.5. Three units cover their sum and floating arithmetic. Independent
-integer checks cover all 65,536 byte-alpha/backdrop pairs for each residual
-law. The observed browser patches provide an additional check of this path.
+Локальная граница выведена для опубликованных путей Skia с округлением alpha,
+premultiplied-каналов и целочисленного остатка. Premultiplication добавляет
+не более 0,5 единицы, общая alpha — не более 0,5, целочисленные сокращения
+остатка — менее 1, округление опорного результата — не более 0,5. Три единицы
+покрывают сумму и вычисления с плавающей точкой. Независимая целочисленная
+проверка охватывает все 65 536 пар byte-alpha и фона для каждого закона
+остатка; браузерные образцы дополнительно проверяют реальный вывод.
 
-This is the package's encoded-sRGB8 material contract. Other output spaces
-or extra compositing operations need their own corresponding transfer law.
+Это закон точности для encoded-sRGB8. Другие пространства вывода и дополнительные
+операции композиции требуют соответствующего закона переноса.
 
-## How requirements use it
+## Как учитываются требования
 
-WCAG checks the closest luminance endpoints after establishing one
-foreground/background orientation for the whole range. Overlapping
-luminance ranges cannot pass a positive contrast threshold. The threshold
-decision uses the same exact WCAG kernel as ordinary opaque colours.
+WCAG проверяется на ближайших концах luminance-диапазонов после установления
+единой полярности foreground/background для всего диапазона. Пересекающиеся
+диапазоны не проходят положительный порог. Решение использует то же точное
+ядро WCAG, что и обычные непрозрачные цвета.
 
-Surface separation uses Oklab bounds for both RGB ranges. Its report keeps
-the reference `distance` and also exposes `distanceBounds`; both bounds of
-the authored requirement must hold. A fully transparent use has separation
-zero from its backdrop, even when that backdrop itself has a range.
+Отделение поверхностей использует Oklab-границы обоих RGB-диапазонов. Отчёт
+сохраняет опорный `distance` и добавляет `distanceBounds`; обе границы
+авторского требования должны выполняться. Полностью прозрачное применение
+имеет нулевое отделение от своего фона, даже если у фона ненулевой радиус.
 
-Role character stays a reference-colour intention. A neutral translucent
-use can compensate for a coloured surface; numeric emission does not turn
-that intention into an impossible demand for identical RGB channels in
-every renderer intermediate.
+Границы дополнительно пересекаются с общей областью sRGB8. Она вычисляется
+однократно как объединение границ 512 непересекающихся RGB-областей размером
+32 × 32 × 32. Эти области покрывают весь конечный gamut. Такое уточнение
+сохраняет включение всех цветов и не даёт широкой оценке промежуточных LMS
+создавать недостижимые Oklab-расстояния. Размер разбиения управляет стоимостью
+однократного уточнения и не вводит новый порог цвета.
 
-The V3 `pointOccurrence` encoder selects this material contract. The explicit
-V1/V2 `sourceOverOccurrence` retains its mathematical point contract. Their
-program identities differ. A mixed graph carries inherited uncertainty
-through reference-only nodes until an opaque paint actually replaces it.
+Характер роли остаётся намерением относительно опорного цвета. Нейтральный
+полупрозрачный слой может компенсировать цветной фон своим исходником;
+численная погрешность не превращает нейтральность в требование одинаковых
+каналов на каждом промежуточном этапе растеризации.
 
-## Sources
+V3 `pointOccurrence` выбирает этот закон точности. Явный V1/V2
+`sourceOverOccurrence` сохраняет математическую точечную композицию.
+Идентичности таких программ различаются. Смешанный граф переносит унаследованную
+погрешность через точечные узлы до замены непрозрачной заливкой.
 
-* [W3C source-over composition](https://www.w3.org/TR/compositing-1/)
-* [Skia uniform colour quantization](https://skia.googlesource.com/skia/+/eec27f3c3b3728be278d3945b78502d321ed4a8c/src/core/SkRasterPipeline.cpp)
-* [Skia low- and high-precision raster operations](https://skia.googlesource.com/skia/+/8c87efbae9c59ec2b8e799f0088614c76097c4ec/src/opts/SkRasterPipeline_opts.h)
-* [Skia byte alpha and packed source-over](https://skia.googlesource.com/skia/+/c6e63919c318/src/core/SkColorPriv.h)
+## Источники
+
+- [W3C: композиция source-over](https://www.w3.org/TR/compositing-1/)
+- [Skia: квантование uniform colour](https://skia.googlesource.com/skia/+/eec27f3c3b3728be278d3945b78502d321ed4a8c/src/core/SkRasterPipeline.cpp)
+- [Skia: растровые операции низкой и высокой точности](https://skia.googlesource.com/skia/+/8c87efbae9c59ec2b8e799f0088614c76097c4ec/src/opts/SkRasterPipeline_opts.h)
+- [Skia: byte alpha и packed source-over](https://skia.googlesource.com/skia/+/c6e63919c318/src/core/SkColorPriv.h)
