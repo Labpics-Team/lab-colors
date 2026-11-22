@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { copyRuntimeFixture } from "./helpers/runtime-fixture.mjs";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 const witness = "client preference preserves atomic opacity and report-only constraints";
@@ -33,10 +34,7 @@ function run(mutation) {
   const consumer = mkdtempSync(join(tmpdir(), "labcolors-adaptive-mutation-"));
   try {
     const installed = join(consumer, "node_modules/@labpics/colors");
-    mkdirSync(installed, { recursive: true });
-    for (const path of ["package.json", "index.js", "program-wire", "pkg"]) {
-      cpSync(join(packageRoot, path), join(installed, path), { recursive: true });
-    }
+    copyRuntimeFixture(installed);
     const contract = join(consumer, "contract.test.mjs");
     cpSync(join(packageRoot, "test/program-adaptive-contract.test.mjs"), contract);
     if (mutation) {

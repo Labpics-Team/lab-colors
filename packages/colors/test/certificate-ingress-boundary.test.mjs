@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { ENVELOPE_LIMIT, referencePacket } from "./helpers/certificate-wire-reference.mjs";
+import { copyRuntimeFixture } from "./helpers/runtime-fixture.mjs";
 
 // Подменяется только импорт generated binding. Facade копируется byte-exact;
 // счётчик фиксирует вход до места, где wasm-bindgen копирует argument в WASM.
@@ -42,12 +43,7 @@ test("certificate size refusal precedes entry into the generated WASM copier", a
   const directory = await mkdtemp(join(tmpdir(), "labcolors-certificate-ingress-"));
   // Node сохраняет primary assertion и возможную отдельную ошибку after-hook.
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await mkdir(join(directory, "pkg"));
-  await Promise.all([
-    writeFile(join(directory, "package.json"), '{"type":"module"}\n'),
-    writeFile(join(directory, "index.js"), await readFile(new URL("../index.js", import.meta.url))),
-    writeFile(join(directory, "pkg/labcolors.js"), instrumentedBinding),
-  ]);
+  copyRuntimeFixture(directory, { generatedBinding: instrumentedBinding });
   const api = await import(pathToFileURL(join(directory, "index.js")).href);
   const generated = await import(pathToFileURL(join(directory, "pkg/labcolors.js")).href);
   const { copierEntries } = generated;

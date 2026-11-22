@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { copyRuntimeFixture } from "./helpers/runtime-fixture.mjs";
 
 // Счётчик различает отказ snapshot allocation и вход в generated copier.
 const binding = `
@@ -32,12 +33,7 @@ export class AttachedMaterializationAuthority {}
 test("snapshot allocation failures keep operation-specific codes before the copier", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "labcolors-storage-allocation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await mkdir(join(directory, "pkg"));
-  await Promise.all([
-    writeFile(join(directory, "package.json"), '{"type":"module"}\n'),
-    writeFile(join(directory, "index.js"), await readFile(new URL("../index.js", import.meta.url))),
-    writeFile(join(directory, "pkg/labcolors.js"), binding),
-  ]);
+  copyRuntimeFixture(directory, { generatedBinding: binding });
 
   const NativeBytes = Uint8Array;
   const NativeIds = Uint32Array;
