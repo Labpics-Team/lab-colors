@@ -5,7 +5,7 @@ use super::*;
 use crate::color_intent::color_at_lightness;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v5.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.alternating-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v6.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -532,8 +532,11 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     // Независимые исходные точки не отбрасывают контекстный замысел из-за
     // большего числа временных нарушений. Сначала меняются менее приоритетные
     // применения: надпись может приспособиться к панели, прежде чем панель
-    // потеряет желаемый тон ради прежней надписи. Обратный проход остаётся
-    // эвристикой поиска, а не семантикой порядка графа или условием приёмки.
+    // потеряет желаемый тон ради прежней надписи. Это направление одинаково
+    // для каждой исходной точки: её порядковый номер не должен заставлять
+    // parent обменивать одно нарушение на другое до приспособления child.
+    // Обратный проход остаётся эвристикой поиска, а не семантикой порядка
+    // графа или условием приёмки.
     let seed_limit = (selection.budget / 4).max(evidence.visited);
     let distinct_origins = preferred_seed
         .iter()
@@ -572,7 +575,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         for pass in 0..2 {
             let mut changed = false;
             for position in 0..count {
-                let index = if (origin + pass) % 2 == 0 {
+                let index = if pass % 2 == 0 {
                     count - 1 - position
                 } else {
                     position
