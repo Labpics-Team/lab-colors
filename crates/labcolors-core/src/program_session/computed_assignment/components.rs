@@ -7,6 +7,9 @@ struct VisibleDependenciesV1 {
     opacity: Vec<f64>,
     seen: Vec<bool>,
     queue: Vec<usize>,
+    surface_inputs: Vec<Option<usize>>,
+    input_seen: Vec<bool>,
+    inputs: Vec<usize>,
 }
 
 impl VisibleDependenciesV1 {
@@ -38,11 +41,57 @@ impl VisibleDependenciesV1 {
         queue
             .try_reserve_exact(program.occurrences.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        let input_count = graph.surface_input_ports().len();
+        let mut surface_inputs = Vec::new();
+        surface_inputs
+            .try_reserve_exact(program.surfaces.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for surface in &program.surfaces {
+            surface_inputs.push(match surface {
+                Surface::Input { input, .. } => Some(
+                    graph
+                        .surface_input_ports()
+                        .position(|candidate| candidate == *input)
+                        .ok_or(ProgramCompileError::InternalInvariant)?,
+                ),
+                Surface::FromOccurrence { .. } => None,
+            });
+        }
+        let mut inputs = Vec::new();
+        inputs
+            .try_reserve_exact(input_count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         Ok(Self {
             opacity,
             seen: false_slots(program.occurrences.len())?,
             queue,
+            surface_inputs,
+            input_seen: false_slots(input_count)?,
+            inputs,
         })
+    }
+
+    fn clear_inputs(&mut self) {
+        for input in self.inputs.drain(..) {
+            self.input_seen[input] = false;
+        }
+    }
+
+    fn input(&mut self, input: usize) {
+        if !self.input_seen[input] {
+            self.input_seen[input] = true;
+            self.inputs.push(input);
+        }
+    }
+
+    fn declared_inputs(&mut self, scratch: &ProgramDependencyScratchV1) {
+        for node in &scratch.queue {
+            if let IndexedDependencyNodeV1::Surface(surface) = node {
+                if let Some(input) = self.surface_inputs[*surface] {
+                    self.input(input);
+                }
+            }
+        }
     }
 
     fn visit(&mut self, index: &IndexedProgramDependenciesV1, root: usize, targets: &mut [bool]) {
@@ -74,6 +123,8 @@ impl VisibleDependenciesV1 {
                         self.seen[parent] = true;
                         self.queue.push(parent);
                     }
+                } else if let Some(input) = self.surface_inputs[surface] {
+                    self.input(input);
                 }
             }
         }
@@ -101,8 +152,68 @@ impl VisibleDependenciesV1 {
         let root = index
             .occurrence(occurrence)
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        if let Some(parent) = index.surface_occurrences[index.occurrence_surfaces[root]] {
+        let surface = index.occurrence_surfaces[root];
+        if let Some(parent) = index.surface_occurrences[surface] {
             self.visit(index, parent, targets);
+        } else if let Some(input) = self.surface_inputs[surface] {
+            self.input(input);
+        }
+        Ok(())
+    }
+
+    fn constraint<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        program: &Program<E>,
+        index: &IndexedProgramDependenciesV1,
+        scratch: &mut ProgramDependencyScratchV1,
+        constraint: &CompiledPointConstraint<ProgramConstraintInvocationOf<E>>,
+        targets: &mut [bool],
+    ) -> Result<(), ProgramCompileError> {
+        match &constraint.body {
+            CompiledProgramConstraintBodyV1::VisibleUnary {
+                occurrence,
+                invocation,
+                ..
+            } => {
+                match program.evaluator.constraint_content(*invocation) {
+                    ProgramConstraintContentV1::ExactSrgb8 { .. } => {
+                        self.visible(index, *occurrence, targets)?;
+                    }
+                    ProgramConstraintContentV1::Wcag22Srgb8 { .. }
+                    | ProgramConstraintContentV1::VisibleSeparation { .. } => {
+                        self.visible(index, *occurrence, targets)?;
+                        self.backdrop(index, *occurrence, targets)?;
+                    }
+                    // An unrecognised evaluator keeps the complete declared
+                    // physical dependency cone. It is never dropped or guessed.
+                    _ => {
+                        mark_constraint_coverage(
+                            program, index, scratch, constraint, targets, None,
+                        )?;
+                        self.declared_inputs(scratch);
+                    }
+                }
+            }
+            CompiledProgramConstraintBodyV1::VisibleRelation {
+                reference,
+                candidates,
+                ..
+            } => {
+                // Relation evaluators receive final RGB endpoints and immutable
+                // family artifacts. The backdrop remains only in evidence.
+                self.visible(index, reference.occurrence, targets)?;
+                for candidate in candidates {
+                    self.visible(index, candidate.occurrence, targets)?;
+                }
+            }
+            CompiledProgramConstraintBodyV1::PointPresentation { .. } => {
+                mark_constraint_coverage(program, index, scratch, constraint, targets, None)?;
+                self.declared_inputs(scratch);
+            }
+            CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
+            | CompiledProgramConstraintBodyV1::IntrinsicRelation { .. } => {
+                mark_constraint_coverage(program, index, scratch, constraint, targets, None)?;
+            }
         }
         Ok(())
     }
@@ -174,50 +285,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             continue;
         }
         marked.fill(false);
-        match &constraint.body {
-            CompiledProgramConstraintBodyV1::VisibleUnary {
-                occurrence,
-                invocation,
-                ..
-            } => {
-                match program.evaluator.constraint_content(*invocation) {
-                    ProgramConstraintContentV1::ExactSrgb8 { .. } => {
-                        visible.visible(index, *occurrence, &mut marked)?;
-                    }
-                    ProgramConstraintContentV1::Wcag22Srgb8 { .. }
-                    | ProgramConstraintContentV1::VisibleSeparation { .. } => {
-                        visible.visible(index, *occurrence, &mut marked)?;
-                        visible.backdrop(index, *occurrence, &mut marked)?;
-                    }
-                    // An unrecognised evaluator keeps the complete declared
-                    // physical dependency cone. It is never dropped or guessed.
-                    _ => mark_constraint_coverage(
-                        program,
-                        index,
-                        scratch,
-                        constraint,
-                        &mut marked,
-                        None,
-                    )?,
-                }
-            }
-            CompiledProgramConstraintBodyV1::VisibleRelation {
-                reference,
-                candidates,
-                ..
-            } => {
-                // Relation evaluators receive final RGB endpoints and immutable
-                // family artifacts. Their evidence binding also records the
-                // backdrop, but it does not enter the relation decision.
-                visible.visible(index, reference.occurrence, &mut marked)?;
-                for candidate in candidates {
-                    visible.visible(index, candidate.occurrence, &mut marked)?;
-                }
-            }
-            // Intrinsic conditions and causal presentations preserve their
-            // existing full dependency contract.
-            _ => mark_constraint_coverage(program, index, scratch, constraint, &mut marked, None)?,
-        }
+        visible.constraint(program, index, scratch, constraint, &mut marked)?;
         collect(&marked, &mut members);
         join(&mut parents, &members);
         constraint_members.push((ordinal, members.first().copied()));
@@ -281,10 +349,77 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     components
         .try_reserve_exact(grouped_targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for (targets, constraints) in grouped_targets.into_iter().zip(grouped_constraints) {
+    let mut required_inputs = false_slots(visible.input_seen.len())?;
+    for (targets, constraint_indices) in grouped_targets.into_iter().zip(grouped_constraints) {
+        visible.clear_inputs();
+        for &target in &targets {
+            let target = &selection.targets[target];
+            if let Some(appearance) = target
+                .declaration
+                .intent
+                .as_ref()
+                .and_then(|v| v.appearance)
+            {
+                visible.visible(index, appearance, &mut marked)?;
+            }
+            if let Some(input) = target.tone_input {
+                visible.input(input);
+            }
+        }
+        for &constraint in &constraint_indices {
+            visible.constraint(
+                program,
+                index,
+                scratch,
+                &constraints[constraint],
+                &mut marked,
+            )?;
+        }
+        for &input in &visible.inputs {
+            required_inputs[input] = true;
+        }
+        // Rank relevant ports by authored target/context traversal, never by
+        // their numeric schema names. Extra declared ancestry is filtered out
+        // by the precise cone above, including behind opaque barriers.
+        visible.clear_inputs();
+        for &target in &targets {
+            let target = &selection.targets[target];
+            if let Some(appearance) = target
+                .declaration
+                .intent
+                .as_ref()
+                .and_then(|v| v.appearance)
+            {
+                scratch.scan(index, [appearance])?;
+                visible.declared_inputs(scratch);
+            }
+            if let Some(input) = target.tone_input {
+                visible.input(input);
+            }
+        }
+        for &constraint in &constraint_indices {
+            visible.constraint(
+                program,
+                index,
+                scratch,
+                &constraints[constraint],
+                &mut marked,
+            )?;
+        }
+        let mut inputs = Vec::new();
+        inputs
+            .try_reserve_exact(visible.inputs.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for &input in &visible.inputs {
+            if required_inputs[input] {
+                inputs.push(input);
+                required_inputs[input] = false;
+            }
+        }
         components.push(ComputedComponentV1 {
             targets: targets.into_boxed_slice(),
-            constraints: constraints.into_boxed_slice(),
+            constraints: constraint_indices.into_boxed_slice(),
+            inputs: inputs.into_boxed_slice(),
         });
     }
     let constant_check = u64::from(!fixed.is_empty() || components.is_empty());

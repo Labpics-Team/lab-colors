@@ -422,3 +422,125 @@ fn opaque_visible_relation_endpoints_do_not_depend_on_their_backdrop() {
             .all(|cell| !cell.result().is_violation())
     );
 }
+
+fn local_scenarios(relevant: u32, foreign: u32) -> Program<Wcag22Srgb8V1> {
+    let mut target = blue(10, 5, 0);
+    let TargetIntentV1::Computed(value) = &mut target.intent else {
+        unreachable!()
+    };
+    value.intent.as_mut().expect("color intent").tone = Some(
+        ToneCurveV1::new(relevant, vec![[0.0, 0.22], [0.5, 0.58], [1.0, 0.97]])
+            .expect("valid tone curve"),
+    );
+    let mut declaration = program(
+        target,
+        Wcag22CriterionV1::Sc1411UiComponentOrState,
+        Wcag22Srgb8V1,
+    );
+    declaration.observation_group.surface_input_ports = vec![
+        SurfaceInputPortId::new(relevant),
+        SurfaceInputPortId::new(foreign),
+    ];
+    declaration.surfaces[0] = Surface::Input {
+        id: SurfaceId::new(4),
+        input: SurfaceInputPortId::new(relevant),
+    };
+    declaration.surfaces.push(Surface::Input {
+        id: SurfaceId::new(24),
+        input: SurfaceInputPortId::new(foreign),
+    });
+    declaration.sources.push(Source::new(
+        SourceId::new(30),
+        ColorSignal::from_srgb8(Srgb8::new([244, 234, 219])),
+    ));
+    declaration
+        .targets
+        .push(Target::fixed(TargetId::new(30), SourceId::new(30)));
+    declaration.paints.push(Paint::Solid {
+        id: PaintId::new(23),
+        target: TargetId::new(30),
+    });
+    declaration.occurrences.push(Occurrence::new(
+        OccurrenceId::new(25),
+        PaintId::new(23),
+        SurfaceId::new(24),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        declaration.occurrences[0].context,
+    ));
+    declaration
+        .outputs
+        .push(OutputBinding::new(OutputSlotId::new(27), PaintId::new(23)));
+    declaration
+}
+
+#[test]
+fn foreign_inputs_cannot_reorder_or_duplicate_the_local_search_contexts() {
+    let backgrounds = [[244, 234, 219], [230, 221, 208]];
+    let mut expected = None;
+    for (relevant, foreign) in [(2, 1), (1, 2)] {
+        let owner = compile_assignment(local_scenarios(relevant, foreign), 65_536)
+            .expect("independent observed inputs");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        let variants = [
+            vec![(0, 0), (255, 1)],
+            vec![(255, 0), (0, 1)],
+            vec![(255, 0), (0, 1), (128, 0)],
+        ];
+        for (revision, cases) in variants.into_iter().enumerate() {
+            let mut observed = update(revision as u64 + 1, 0);
+            observed.payload = ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
+                scenarios: cases
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &(other, local))| ScenarioInput {
+                        id: ScenarioId::new(50 - index as u32),
+                        bindings: vec![
+                            SurfaceInputBinding::new(
+                                SurfaceInputPortId::new(relevant),
+                                ColorSignal::from_srgb8(Srgb8::new(backgrounds[local])),
+                            ),
+                            SurfaceInputBinding::new(
+                                SurfaceInputPortId::new(foreign),
+                                ColorSignal::from_srgb8(Srgb8::new([other; 3])),
+                            ),
+                        ],
+                    })
+                    .collect(),
+            });
+            session
+                .prepare_update(observed)
+                .expect("resolve all cases")
+                .commit();
+            let current = session
+                .state()
+                .current_verified()
+                .expect("usable shared color")
+                .computed_for_test();
+            let result = (
+                current.values[0],
+                current.search.completion,
+                current.search.visited,
+            );
+            if let Some(expected) = expected {
+                assert_eq!(result, expected, "only the local contexts may guide search");
+            } else {
+                expected = Some(result);
+            }
+            assert_eq!(
+                current.arena.storage.cells.len(),
+                cases.len(),
+                "all original physical cases remain in the final hard assessment"
+            );
+            assert!(
+                current
+                    .arena
+                    .storage
+                    .cells
+                    .iter()
+                    .all(|cell| !cell.result().is_violation())
+            );
+        }
+    }
+}

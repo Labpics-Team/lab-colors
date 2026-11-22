@@ -5,7 +5,7 @@ use super::*;
 use crate::color_intent::color_at_lightness;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v7.independent-components.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v8.independent-components.local-context-seeds.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -18,7 +18,57 @@ struct ContextV1<'a> {
     domains: Vec<AssignmentDomainV1>,
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
+    local_cases: LocalCasesV1,
     opaque: bool,
+}
+
+#[derive(Default)]
+struct LocalCasesV1 {
+    order: Vec<usize>,
+    representatives: Vec<bool>,
+}
+
+fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
+    component: &ComputedComponentV1,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let count = scenarios.len().get();
+    let mut cases = Vec::new();
+    cases
+        .try_reserve_exact(count)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    for case in 0..count {
+        let values = scenarios
+            .physical_values(case)
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        if component.inputs.iter().any(|&input| input >= values.len()) {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
+        cases.push((case, values));
+    }
+    let compare = |left: &[ColorSignal], right: &[ColorSignal]| {
+        component
+            .inputs
+            .iter()
+            .map(|&input| left[input])
+            .cmp(component.inputs.iter().map(|&input| right[input]))
+    };
+    cases.sort_unstable_by(|left, right| compare(left.1, right.1));
+    cases.dedup_by(|left, right| compare(left.1, right.1) == Ordering::Equal);
+    let mut order = Vec::new();
+    order
+        .try_reserve_exact(cases.len())
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let mut representatives =
+        buffer(count, false).map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    for (case, _) in cases {
+        order.push(case);
+        representatives[case] = true;
+    }
+    Ok(LocalCasesV1 {
+        order,
+        representatives,
+    })
 }
 
 impl<'a> ContextV1<'a> {
@@ -98,14 +148,24 @@ impl<'a> ContextV1<'a> {
                 },
             );
         }
+        let local_cases = if let Some(component) = component {
+            local_cases::<E>(component, scenarios)?
+        } else {
+            LocalCasesV1::default()
+        };
         Ok(Self {
             targets,
             constraint_indices: component.map(|component| component.constraints.as_ref()),
             domains,
             preferred,
             preferred_rgb,
+            local_cases,
             opaque: opaque.into_iter().all(|v| v),
         })
+    }
+
+    fn represents_case(&self, case: usize) -> bool {
+        self.local_cases.representatives.is_empty() || self.local_cases.representatives[case]
     }
 }
 
@@ -121,6 +181,7 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     let count = context.targets.len();
     let schema = epoch.observation_group.schema.as_slice();
     let mut violations = 0;
+    let mut has_violation = false;
     let mut paints = epoch
         .graph
         .prepare_paints_for_surface_cases(
@@ -153,7 +214,8 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
                 .as_ref()
                 .is_some_and(|intent| !intent.identity.contains(rgb));
             if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
-                violations += 1;
+                has_violation = true;
+                violations += usize::from(context.represents_case(case));
             }
             scores[index] = scores[index].max(squared_distance(
                 point_lab,
@@ -161,7 +223,9 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
             ));
         }
     }
-    Ok(violations)
+    // Every original case is assessed. Representatives only normalize the
+    // heuristic count; a failure outside them can never become a valid tuple.
+    Ok(violations.max(usize::from(has_violation)))
 }
 
 fn assess<E: ProgramConstraintEvaluatorSetV1>(
@@ -176,7 +240,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
     apply_targets::<E>(context.targets, runtime, values)?;
     let intent_violations = intent_scores(context, runtime, epoch, scenarios, values, scores)?;
     arena.clear();
-    scan_program_candidate_scoped(
+    let hard_failed = scan_program_candidate_scoped(
         runtime,
         epoch,
         scenarios,
@@ -195,6 +259,11 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             ProgramCandidateScanV1::Constraints,
         ),
     )?;
+    let hard_violations = arena
+        .cells
+        .iter()
+        .filter(|cell| context.represents_case(cell.case_index()) && cell.result().is_violation())
+        .count();
     Ok(intent_violations
         + context
             .domains
@@ -202,11 +271,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             .zip(values)
             .filter(|(domain, value)| !domain.contains(**value))
             .count()
-        + arena
-            .cells
-            .iter()
-            .filter(|cell| cell.result().is_violation())
-            .count())
+        + hard_violations.max(usize::from(hard_failed)))
 }
 
 /// Ближайший source по каждому encoded каналу — только начальное приближение.
@@ -454,6 +519,11 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     }
     apply_targets::<E>(targets, runtime, &values)?;
     let context = ContextV1::new(selection, Some(component), runtime, epoch, scenarios)?;
+    let seed_case = *context
+        .local_cases
+        .order
+        .first()
+        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
     let mut scores = buffer(count, 0.0).map_err(allocation)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocation)?;
     let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
@@ -501,8 +571,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 continue;
             }
             apply_targets::<E>(targets, runtime, &values)?;
-            let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, 0)?;
-            values[index] = inverse_hint(context.preferred_rgb[index], backdrop, alpha);
+            let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, seed_case)?;
+            values[index] = inverse_hint(
+                context.preferred_rgb[seed_case * count + index],
+                backdrop,
+                alpha,
+            );
         }
         preferred_seed.copy_from_slice(&values);
         let failures = assess(
@@ -590,7 +664,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 let Some(intent) = &target.declaration.intent else {
                     continue;
                 };
-                for case in 0..scenarios.len().get() {
+                for &case in &context.local_cases.order {
                     if evidence.visited >= origin_limit {
                         break;
                     }
@@ -683,7 +757,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         0,
         context.domains[0],
         selection,
-        context.preferred[0],
+        context.preferred[seed_case * count],
         &mut evidence,
     ) else {
         return Ok(SearchResultV1 {
@@ -720,7 +794,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     depth,
                     left,
                     selection,
-                    context.preferred[depth],
+                    context.preferred[seed_case * count + depth],
                     &mut evidence,
                 ) else {
                     return Ok(SearchResultV1 {
@@ -732,7 +806,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     depth,
                     right,
                     selection,
-                    context.preferred[depth],
+                    context.preferred[seed_case * count + depth],
                     &mut evidence,
                 ) else {
                     return Ok(SearchResultV1 {
@@ -783,7 +857,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 depth + 1,
                 context.domains[depth + 1],
                 selection,
-                context.preferred[depth + 1],
+                context.preferred[seed_case * count + depth + 1],
                 &mut evidence,
             ) else {
                 return Ok(SearchResultV1 {

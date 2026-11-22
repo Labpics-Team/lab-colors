@@ -312,6 +312,7 @@ pub(super) struct ComputedSelectionV1 {
 struct ComputedComponentV1 {
     targets: Box<[usize]>,
     constraints: Box<[usize]>,
+    inputs: Box<[usize]>,
 }
 
 /// Borrowed projections keep one owner of target declarations and bindings.
