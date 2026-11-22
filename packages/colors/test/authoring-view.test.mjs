@@ -64,7 +64,11 @@ test("a missing own context property rejects a view update without reading its p
   const view = program.attach(h.root, { toString: "#e6ddd0" });
   try {
     const current = view.current, sheet = h.sheet, writes = h.state.writes.length;
-    for (const context of [{}, Object.create({ toString: "#283548" })]) {
+    let inheritedReads = 0;
+    const inherited = Object.create({
+      get toString() { inheritedReads += 1; return "#283548"; },
+    });
+    for (const context of [{}, inherited]) {
       const update = view.set(context);
       assert.equal(update.state, "rejected");
       assert.equal(update.proposed.state, "unknown");
@@ -73,6 +77,7 @@ test("a missing own context property rejects a view update without reading its p
       assert.equal(h.sheet, sheet);
       assert.equal(h.state.writes.length, writes);
     }
+    assert.equal(inheritedReads, 0);
     assert.equal(view.set({ toString: "#283548" }).state, "committed");
     assert.deepEqual(view.current.context.toString, [40, 53, 72]);
   } finally { view.dispose(); program.dispose(); }
