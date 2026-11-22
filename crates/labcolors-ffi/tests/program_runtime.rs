@@ -269,9 +269,13 @@ fn attached_output_tables_preserve_ready_failed_stale_history() -> TestResult {
 #[test]
 fn malformed_conflicting_and_old_observations_do_not_consume_a_revision() -> TestResult {
     let runtime = compile_program_wire(wire("adaptive"), 1)?;
-    expect_error(
-        runtime.update_observed(1, vec![1], vec![255; 2], 1),
-        "program_update",
+    let LabColorsError::Refused { code, operation } = runtime
+        .update_observed(1, vec![1], vec![255; 2], 1)
+        .err()
+        .expect("incomplete RGB input must be refused");
+    assert_eq!(
+        (code.as_str(), operation.as_str()),
+        ("program_update", "updateObserved"),
     );
     assert_eq!(
         runtime
@@ -331,6 +335,10 @@ impl ProgramPointSinkHost for Host {
                 .upgrade()
                 .expect("test attachment must remain alive during callback");
             expect_error(owner.update_unknown(99, 7), "program_attachment_busy");
+            expect_error(
+                owner.update_observed(99, vec![1], vec![0; 2], 1),
+                "program_attachment_busy",
+            );
             expect_error(owner.materialization_authority(), "program_attachment_busy");
             expect_error(owner.dispose(false), "program_attachment_busy");
         }
@@ -367,6 +375,21 @@ fn host_rejection_reentry_authority_and_dispose_preserve_one_committed_head() ->
         }),
     )?;
     *owner.lock().expect("test owner lock must not be poisoned") = Arc::downgrade(&attachment);
+    let LabColorsError::Refused { code, operation } = attachment
+        .update_observed(1, vec![1], vec![255; 2], 1)
+        .err()
+        .expect("incomplete RGB input must be refused before calling the host");
+    assert_eq!(
+        (code.as_str(), operation.as_str()),
+        ("program_attachment_update", "attachmentUpdateObserved"),
+    );
+    assert_eq!(
+        state
+            .lock()
+            .expect("test host lock must not be poisoned")
+            .calls,
+        0,
+    );
     state
         .lock()
         .expect("test host lock must not be poisoned")
