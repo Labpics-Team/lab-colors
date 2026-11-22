@@ -1,8 +1,9 @@
 // Terminal C7c public entry for @labpics/colors.
 //
-// One runtime root: canonical Program wire -> ProgramRuntime -> ProgramSnapshot.
-// Retired recipe engines and browser helper
-// roots are intentionally not exported.
+// One numerical root: authoring lowers to canonical Program wire and ProgramRuntime.
+// Retired recipe engines remain absent.
+
+export { colors, ColorAuthoringError } from "./authoring.js";
 
 import initWasm, {
   initSync as initWasmSync,

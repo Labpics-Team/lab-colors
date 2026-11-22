@@ -1,7 +1,15 @@
 /// <reference lib="esnext.disposable" />
 
-// Terminal C7c public surface: canonical Program wire is the sole authoring
-// and runtime root. Recipe DTOs and legacy theme helpers are not re-exported.
+export { colors, ColorAuthoringError } from "./authoring.js";
+export type {
+  AuthoredColor, ColorAuthoringErrorCode, ColorIdentity, ColorRoleOptions,
+  ColorInputSurface, ColorSurface, ColorTonePolicy, ColorUsePolicy, ColorRole,
+  ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
+  ColorContext, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
+} from "./authoring.js";
+
+// Authoring declarations and low-level wire share one Program runtime.
+// Recipe DTOs and legacy theme helpers are not re-exported.
 
 import type { Wcag22AssessmentV1 } from "./pkg/labcolors.js";
 import type { ProgramAttachment } from "./pkg/labcolors.js";

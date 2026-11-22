@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "packageManager": "npm@11.9.0",
   "description": "Библиотека адаптивных цветов для интерфейсов и дизайн-систем.",
   "type": "module",
@@ -28,6 +28,10 @@
     "./program-wire/abi-v2.js": {
       "types": "./program-wire/abi-v2.d.ts",
       "default": "./program-wire/abi-v2.js"
+    },
+    "./program-wire/abi-v3.js": {
+      "types": "./program-wire/abi-v3.d.ts",
+      "default": "./program-wire/abi-v3.js"
     }
   },
   "files": [
@@ -38,12 +42,21 @@
     "build-metadata.json",
     "index.js",
     "index.d.ts",
+    "authoring.js",
+    "authoring.d.ts",
+    "authoring-graph.js",
+    "authoring-frame.js",
+    "authoring-program.js",
+    "authoring-css.js",
+    "authoring-view.js",
     "wcag22.d.ts",
     "program-wire/abi-v1.js",
     "program-wire/abi-v1.d.ts",
     "program-wire/encoding.js",
     "program-wire/abi-v2.js",
     "program-wire/abi-v2.d.ts",
+    "program-wire/abi-v3.js",
+    "program-wire/abi-v3.d.ts",
     "evidence/wcag22-srgb8-v1.json",
     "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
