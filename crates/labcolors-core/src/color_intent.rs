@@ -28,11 +28,11 @@ pub(crate) enum ColorIntentErrorV1 {
 /// Версия авторской политики, а не порог именования цветов человеком.
 ///
 /// При отсутствии overrides источник сохраняет геометрическое направление
-/// оттенка с окном ±12° и не менее 10% своей chroma. Пределы настраиваются
+/// оттенка с окном ±18° и не менее 10% своей chroma. Пределы настраиваются
 /// отдельно от требований к конкретному применению. Точная серая ось остаётся
 /// серой; почти нейтральный цвет сохраняет намеренно заданный цветовой оттенок.
 const IDENTITY_POLICY_VERSION_V1: u8 = 1;
-const DEFAULT_HUE_DEVIATION_DEGREES: f64 = 12.0;
+const DEFAULT_HUE_DEVIATION_DEGREES: f64 = 18.0;
 const DEFAULT_MINIMUM_CHROMA_FRACTION: f64 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
