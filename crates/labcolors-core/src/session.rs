@@ -7,6 +7,7 @@
 //! lifecycle across compiled plans adds neither a runtime tag nor a trait
 //! object.
 
+use std::convert::Infallible;
 use std::mem;
 
 use crate::observation::{
@@ -50,27 +51,47 @@ impl SessionObservationBindingPermitV1 {
 
 /// Complete result of evaluating one admitted observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionDecision<Verified, Violation> {
+pub(crate) enum SessionDecision<Verified, Violation, Incomplete = Infallible> {
     Verified(Verified),
     Violation(Violation),
+    Incomplete(Incomplete),
 }
 
 pub(crate) trait SessionEvidenceV1: private::EvidenceSealed {
     fn observation(&self) -> &RevisionBoundObservationV1;
 }
 
-impl<Verified, Violation> SessionDecision<Verified, Violation>
+impl<Verified, Violation, Incomplete> SessionDecision<Verified, Violation, Incomplete>
 where
     Verified: SessionEvidenceV1,
     Violation: SessionEvidenceV1,
+    Incomplete: SessionEvidenceV1,
 {
     fn observation(&self) -> &RevisionBoundObservationV1 {
         match self {
             Self::Verified(evidence) => evidence.observation(),
             Self::Violation(evidence) => evidence.observation(),
+            Self::Incomplete(evidence) => evidence.observation(),
         }
     }
 }
+
+impl private::EvidenceSealed for Infallible {}
+
+impl SessionEvidenceV1 for Infallible {
+    fn observation(&self) -> &RevisionBoundObservationV1 {
+        match *self {}
+    }
+}
+
+type SessionEvaluationResultV1<Plan> = Result<
+    SessionDecision<
+        <Plan as SessionPlanV1>::Verified,
+        <Plan as SessionPlanV1>::Violation,
+        <Plan as SessionPlanV1>::Incomplete,
+    >,
+    <Plan as SessionPlanV1>::Error,
+>;
 
 /// A compiled, statically dispatched evaluator used by the sole [`Session`]
 /// lifecycle. Implementations own their per-Session scratch directly.
@@ -81,6 +102,7 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
     type OwnerLease;
     type Verified: SessionEvidenceV1;
     type Violation: SessionEvidenceV1;
+    type Incomplete: SessionEvidenceV1;
     type Error;
 
     fn try_acquire_owner(&self) -> Option<Self::OwnerLease>;
@@ -99,7 +121,7 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
         observation: RevisionBoundObservationV1,
         previous: Option<&Self::Verified>,
         permit: SessionObservationBindingPermitV1,
-    ) -> Result<SessionDecision<Self::Verified, Self::Violation>, Self::Error>;
+    ) -> SessionEvaluationResultV1<Self>;
 
     /// Возвращает хранилище retired evidence в точный план этой Session.
     /// План без reusable evidence storage сохраняет обычный owning drop.
@@ -111,13 +133,18 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
     fn retire_violation(&mut self, evidence: Self::Violation) {
         drop(evidence);
     }
+
+    /// Незавершённое решение принадлежит тому же владельцу retirement.
+    fn retire_incomplete(&mut self, evidence: Self::Incomplete) {
+        drop(evidence);
+    }
 }
 
 /// Evaluator lifecycle. The current raw payload is deliberately not embedded
 /// here: `Unknown` carries no evidence, while `Stale` retains at most one
 /// previous verified witness.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SessionState<Verified, Violation> {
+pub(crate) enum SessionState<Verified, Violation, Incomplete = Infallible> {
     Waiting,
     Ready {
         current: Verified,
@@ -129,14 +156,20 @@ pub(crate) enum SessionState<Verified, Violation> {
         cause: Violation,
         previous: Option<Verified>,
     },
+    Incomplete {
+        cause: Incomplete,
+        previous: Option<Verified>,
+    },
 }
 
-impl<Verified, Violation> SessionState<Verified, Violation> {
+impl<Verified, Violation, Incomplete> SessionState<Verified, Violation, Incomplete> {
     /// Только действующее evidence: last_verified может быть историческим.
     pub(crate) fn current_verified(&self) -> Option<&Verified> {
         match self {
             Self::Ready { current } => Some(current),
-            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } => None,
+            Self::Waiting | Self::Stale { .. } | Self::Failed { .. } | Self::Incomplete { .. } => {
+                None
+            }
         }
     }
 
@@ -145,7 +178,7 @@ impl<Verified, Violation> SessionState<Verified, Violation> {
             Self::Waiting => None,
             Self::Ready { current } => Some(current),
             Self::Stale { previous } => Some(previous),
-            Self::Failed { previous, .. } => previous.as_ref(),
+            Self::Failed { previous, .. } | Self::Incomplete { previous, .. } => previous.as_ref(),
         }
     }
 }
@@ -187,7 +220,7 @@ type SessionPrepareResult<'session, Plan> = Result<
 /// [`PreparedSessionTransition::commit`].
 pub(crate) struct SessionView<'session, Plan: SessionPlanV1> {
     raw_head: ObservationHeadViewV1<'session>,
-    state: &'session SessionState<Plan::Verified, Plan::Violation>,
+    state: &'session SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
 }
 
 impl<Plan: SessionPlanV1> Copy for SessionView<'_, Plan> {}
@@ -203,17 +236,19 @@ impl<'session, Plan: SessionPlanV1> SessionView<'session, Plan> {
         self.raw_head
     }
 
-    pub(crate) const fn state(self) -> &'session SessionState<Plan::Verified, Plan::Violation> {
+    pub(crate) const fn state(
+        self,
+    ) -> &'session SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete> {
         self.state
     }
 }
 
-enum PendingSessionTransition<Verified, Violation> {
+enum PendingSessionTransition<Verified, Violation, Incomplete> {
     Idempotent,
     Unknown(RevisionBoundUnknownV1),
     Observed {
         raw_observation: RevisionBoundObservationV1,
-        decision: SessionDecision<Verified, Violation>,
+        decision: SessionDecision<Verified, Violation, Incomplete>,
     },
 }
 
@@ -225,16 +260,18 @@ enum PendingSessionTransition<Verified, Violation> {
 pub(crate) enum PreparedSessionDispositionV1<'a, Plan: SessionPlanV1> {
     Idempotent {
         raw_head: ObservationHeadViewV1<'a>,
-        state: &'a SessionState<Plan::Verified, Plan::Violation>,
+        state: &'a SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     },
     Unknown(&'a RevisionBoundUnknownV1),
     Verified(&'a Plan::Verified),
     Violation(&'a Plan::Violation),
+    Incomplete(&'a Plan::Incomplete),
 }
 
-struct DisplacedSessionState<Verified, Violation> {
+struct DisplacedSessionState<Verified, Violation, Incomplete> {
     last_verified: Option<Verified>,
     discarded_violation: Option<Violation>,
+    discarded_incomplete: Option<Incomplete>,
 }
 
 /// Вытесненные значения уже опубликованного перехода, чьё уничтожение
@@ -246,7 +283,8 @@ pub(crate) struct DeferredSessionRetirement<Plan: SessionPlanV1> {
     retired_raw_head: Option<SessionObservationHeadV1>,
     retired_verified: Option<Plan::Verified>,
     retired_violation: Option<Plan::Violation>,
-    displaced_placeholder: SessionState<Plan::Verified, Plan::Violation>,
+    retired_incomplete: Option<Plan::Incomplete>,
+    displaced_placeholder: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     _owner: Plan::OwnerLease,
 }
 
@@ -262,6 +300,9 @@ impl<Plan: SessionPlanV1> DeferredSessionRetirement<Plan> {
         if let Some(violation) = self.retired_violation.take() {
             plan.retire_violation(violation);
         }
+        if let Some(incomplete) = self.retired_incomplete.take() {
+            plan.retire_incomplete(incomplete);
+        }
         drop(mem::replace(
             &mut self.displaced_placeholder,
             SessionState::Waiting,
@@ -274,17 +315,21 @@ impl<Plan: SessionPlanV1> DeferredSessionRetirement<Plan> {
 /// exact owner lease ещё жив. Сам Prepared token поэтому не нуждается в Drop.
 struct PendingSessionTransitionGuard<'session, Plan: SessionPlanV1> {
     plan: &'session mut Plan,
-    pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation>>,
+    pending: Option<PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>>,
     owner: Option<Plan::OwnerLease>,
 }
 
+type PendingSessionTransitionPartsV1<Plan> = (
+    PendingSessionTransition<
+        <Plan as SessionPlanV1>::Verified,
+        <Plan as SessionPlanV1>::Violation,
+        <Plan as SessionPlanV1>::Incomplete,
+    >,
+    <Plan as SessionPlanV1>::OwnerLease,
+);
+
 impl<Plan: SessionPlanV1> PendingSessionTransitionGuard<'_, Plan> {
-    fn take_parts(
-        &mut self,
-    ) -> (
-        PendingSessionTransition<Plan::Verified, Plan::Violation>,
-        Plan::OwnerLease,
-    ) {
+    fn take_parts(&mut self) -> PendingSessionTransitionPartsV1<Plan> {
         let pending = self
             .pending
             .take()
@@ -314,7 +359,7 @@ impl<Plan: SessionPlanV1> Drop for PendingSessionTransitionGuard<'_, Plan> {
 #[must_use = "commit the prepared transition or drop it intentionally"]
 pub(crate) struct PreparedSessionTransition<'session, Plan: SessionPlanV1> {
     raw_head: &'session mut SessionObservationHeadV1,
-    state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
+    state: &'session mut SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     deferred_retirement: &'session mut Option<DeferredSessionRetirement<Plan>>,
     guard: PendingSessionTransitionGuard<'session, Plan>,
 }
@@ -341,6 +386,9 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
                 }
                 SessionDecision::Violation(violation) => {
                     PreparedSessionDispositionV1::Violation(violation)
+                }
+                SessionDecision::Incomplete(incomplete) => {
+                    PreparedSessionDispositionV1::Incomplete(incomplete)
                 }
             },
         }
@@ -391,65 +439,81 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
 
 fn publish_session_transition<'session, Plan: SessionPlanV1>(
     raw_head: &'session mut SessionObservationHeadV1,
-    state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
-    pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,
+    state: &'session mut SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
+    pending: PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     owner: Plan::OwnerLease,
 ) -> (SessionView<'session, Plan>, DeferredSessionRetirement<Plan>) {
-    let (retired_raw_head, retired_verified, retired_violation, displaced_placeholder) =
-        match pending {
-            PendingSessionTransition::Idempotent => (None, None, None, SessionState::Waiting),
-            PendingSessionTransition::Unknown(unknown) => {
-                let DisplacedSessionState {
-                    last_verified,
-                    discarded_violation,
-                } = displace_session_state(state);
-                let next_state = match last_verified {
-                    Some(previous) => SessionState::Stale { previous },
-                    None => SessionState::Waiting,
-                };
-                let retired_raw_head =
-                    mem::replace(raw_head, SessionObservationHeadV1::Unknown(unknown));
-                let displaced_placeholder = mem::replace(state, next_state);
-                (
-                    Some(retired_raw_head),
+    let (
+        retired_raw_head,
+        retired_verified,
+        retired_violation,
+        retired_incomplete,
+        displaced_placeholder,
+    ) = match pending {
+        PendingSessionTransition::Idempotent => (None, None, None, None, SessionState::Waiting),
+        PendingSessionTransition::Unknown(unknown) => {
+            let DisplacedSessionState {
+                last_verified,
+                discarded_violation,
+                discarded_incomplete,
+            } = displace_session_state(state);
+            let next_state = match last_verified {
+                Some(previous) => SessionState::Stale { previous },
+                None => SessionState::Waiting,
+            };
+            let retired_raw_head =
+                mem::replace(raw_head, SessionObservationHeadV1::Unknown(unknown));
+            let displaced_placeholder = mem::replace(state, next_state);
+            (
+                Some(retired_raw_head),
+                None,
+                discarded_violation,
+                discarded_incomplete,
+                displaced_placeholder,
+            )
+        }
+        PendingSessionTransition::Observed {
+            raw_observation,
+            decision,
+        } => {
+            let DisplacedSessionState {
+                last_verified,
+                discarded_violation,
+                discarded_incomplete,
+            } = displace_session_state(state);
+            let (next_state, retired_verified) = match decision {
+                SessionDecision::Verified(current) => {
+                    (SessionState::Ready { current }, last_verified)
+                }
+                SessionDecision::Violation(cause) => (
+                    SessionState::Failed {
+                        cause,
+                        previous: last_verified,
+                    },
                     None,
-                    discarded_violation,
-                    displaced_placeholder,
-                )
-            }
-            PendingSessionTransition::Observed {
-                raw_observation,
-                decision,
-            } => {
-                let DisplacedSessionState {
-                    last_verified,
-                    discarded_violation,
-                } = displace_session_state(state);
-                let (next_state, retired_verified) = match decision {
-                    SessionDecision::Verified(current) => {
-                        (SessionState::Ready { current }, last_verified)
-                    }
-                    SessionDecision::Violation(cause) => (
-                        SessionState::Failed {
-                            cause,
-                            previous: last_verified,
-                        },
-                        None,
-                    ),
-                };
-                let retired_raw_head = mem::replace(
-                    raw_head,
-                    SessionObservationHeadV1::Observed(raw_observation),
-                );
-                let displaced_placeholder = mem::replace(state, next_state);
-                (
-                    Some(retired_raw_head),
-                    retired_verified,
-                    discarded_violation,
-                    displaced_placeholder,
-                )
-            }
-        };
+                ),
+                SessionDecision::Incomplete(cause) => (
+                    SessionState::Incomplete {
+                        cause,
+                        previous: last_verified,
+                    },
+                    None,
+                ),
+            };
+            let retired_raw_head = mem::replace(
+                raw_head,
+                SessionObservationHeadV1::Observed(raw_observation),
+            );
+            let displaced_placeholder = mem::replace(state, next_state);
+            (
+                Some(retired_raw_head),
+                retired_verified,
+                discarded_violation,
+                discarded_incomplete,
+                displaced_placeholder,
+            )
+        }
+    };
 
     let view = SessionView {
         raw_head: raw_head.observation_head(),
@@ -459,6 +523,7 @@ fn publish_session_transition<'session, Plan: SessionPlanV1>(
         retired_raw_head,
         retired_verified,
         retired_violation,
+        retired_incomplete,
         displaced_placeholder,
         _owner: owner,
     };
@@ -474,7 +539,7 @@ pub(crate) struct Session<Plan: SessionPlanV1> {
     stream: ObservationStreamId,
     observation_arenas: ObservationArenaPoolV1,
     raw_head: SessionObservationHeadV1,
-    state: SessionState<Plan::Verified, Plan::Violation>,
+    state: SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     deferred_retirement: Option<DeferredSessionRetirement<Plan>>,
     // Plan может владеть большим executable artifact storage. Evidence и
     // retirement должны освободиться раньше него, поэтому Plan всегда последний.
@@ -506,7 +571,9 @@ impl<Plan: SessionPlanV1> Session<Plan> {
         }
     }
 
-    pub(crate) const fn state(&self) -> &SessionState<Plan::Verified, Plan::Violation> {
+    pub(crate) const fn state(
+        &self,
+    ) -> &SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete> {
         &self.state
     }
 
@@ -611,7 +678,7 @@ impl<Plan: SessionPlanV1> Session<Plan> {
 
 fn prepare_session_transition<'session, Plan: SessionPlanV1>(
     plan: &'session mut Plan,
-    state: &'session mut SessionState<Plan::Verified, Plan::Violation>,
+    state: &'session mut SessionState<Plan::Verified, Plan::Violation, Plan::Incomplete>,
     deferred_retirement: &'session mut Option<DeferredSessionRetirement<Plan>>,
     owner: Plan::OwnerLease,
     prepared: PreparedObservationUpdateV1<'session, SessionObservationHeadV1>,
@@ -662,7 +729,7 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
 
 fn retire_pending_transition<Plan: SessionPlanV1>(
     plan: &mut Plan,
-    pending: PendingSessionTransition<Plan::Verified, Plan::Violation>,
+    pending: PendingSessionTransition<Plan::Verified, Plan::Violation, Plan::Incomplete>,
 ) {
     match pending {
         PendingSessionTransition::Idempotent | PendingSessionTransition::Unknown(_) => {}
@@ -678,35 +745,45 @@ fn retire_pending_transition<Plan: SessionPlanV1>(
 
 fn retire_session_decision<Plan: SessionPlanV1>(
     plan: &mut Plan,
-    decision: SessionDecision<Plan::Verified, Plan::Violation>,
+    decision: SessionDecision<Plan::Verified, Plan::Violation, Plan::Incomplete>,
 ) {
     match decision {
         SessionDecision::Verified(verified) => plan.retire_verified(verified),
         SessionDecision::Violation(violation) => plan.retire_violation(violation),
+        SessionDecision::Incomplete(incomplete) => plan.retire_incomplete(incomplete),
     }
 }
 
 /// Вытесняет старый lifecycle, не уничтожая evidence до установки следующей
 /// пары raw-head/state.
-fn displace_session_state<Verified, Violation>(
-    state: &mut SessionState<Verified, Violation>,
-) -> DisplacedSessionState<Verified, Violation> {
+fn displace_session_state<Verified, Violation, Incomplete>(
+    state: &mut SessionState<Verified, Violation, Incomplete>,
+) -> DisplacedSessionState<Verified, Violation, Incomplete> {
     match mem::replace(state, SessionState::Waiting) {
         SessionState::Waiting => DisplacedSessionState {
             last_verified: None,
             discarded_violation: None,
+            discarded_incomplete: None,
         },
         SessionState::Ready { current } => DisplacedSessionState {
             last_verified: Some(current),
             discarded_violation: None,
+            discarded_incomplete: None,
         },
         SessionState::Stale { previous } => DisplacedSessionState {
             last_verified: Some(previous),
             discarded_violation: None,
+            discarded_incomplete: None,
         },
         SessionState::Failed { cause, previous } => DisplacedSessionState {
             last_verified: previous,
             discarded_violation: Some(cause),
+            discarded_incomplete: None,
+        },
+        SessionState::Incomplete { cause, previous } => DisplacedSessionState {
+            last_verified: previous,
+            discarded_violation: None,
+            discarded_incomplete: Some(cause),
         },
     }
 }

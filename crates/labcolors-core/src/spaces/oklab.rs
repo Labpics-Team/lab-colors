@@ -60,9 +60,32 @@ fn mat_vec_mul(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
 }
 
 pub(crate) fn srgb_linear_to_oklab(rgb: [f64; 3]) -> [f64; 3] {
+    mat_vec_mul(LMS_TO_OKLAB, srgb_linear_to_lms_root(rgb))
+}
+
+pub(crate) fn srgb_linear_to_lms_root(rgb: [f64; 3]) -> [f64; 3] {
     let lms = mat_vec_mul(SRGB_TO_LMS, rgb);
-    let lms_ = [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()];
-    mat_vec_mul(LMS_TO_OKLAB, lms_)
+    [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()]
+}
+
+/// Границы машинного Oklab для RGB8-box. Предпосылка профиля — конечность и
+/// монотонность фактического decode → LMS → cbrt на всех соседних RGB8-рёбрах.
+/// Знаки коэффициентов и порядок операций совпадают с point-проекцией.
+pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3], [f64; 3]) {
+    use crate::Srgb8;
+    use crate::spaces::srgb::srgb_linear_from_srgb8;
+
+    let lo = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(lower)));
+    let hi = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(upper)));
+    let mut minimum = [0.0; 3];
+    let mut maximum = [0.0; 3];
+    for (index, row) in LMS_TO_OKLAB.iter().enumerate() {
+        let low: [f64; 3] = std::array::from_fn(|i| if row[i] < 0.0 { hi[i] } else { lo[i] });
+        let high: [f64; 3] = std::array::from_fn(|i| if row[i] < 0.0 { lo[i] } else { hi[i] });
+        minimum[index] = row[0] * low[0] + row[1] * low[1] + row[2] * low[2];
+        maximum[index] = row[0] * high[0] + row[1] * high[1] + row[2] * high[2];
+    }
+    (minimum, maximum)
 }
 
 /// Direct 2021 Oklab projection of one relative XYZ(D65) stimulus.

@@ -223,6 +223,28 @@ pub(crate) fn measure_wcag22_srgb8(
     }
 }
 
+/// Консервативное исключение двух RGB8-box. Монотонная Q55 luminance достигает
+/// крайних значений в RGB endpoints; проверяем обе возможные полярности через
+/// тот же точный point-kernel. `true` не удостоверяет допустимость всего box.
+pub(crate) fn rgb_boxes_may_pass(
+    foreground: ([u8; 3], [u8; 3]),
+    background: ([u8; 3], [u8; 3]),
+    criterion: Wcag22CriterionV1,
+) -> Result<bool, Wcag22EvaluationErrorV1> {
+    for (light, dark) in [(foreground.1, background.0), (background.1, foreground.0)] {
+        if matches!(
+            evaluate_wcag22_srgb8(light, dark, criterion)?,
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Total production decision for the admitted final-sRGB8 domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

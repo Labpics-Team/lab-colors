@@ -205,7 +205,7 @@ fn attachment_snapshot_is_inline_and_independent() {
                 .update_observed(revision, &input)
                 .expect("the valid update must return an owned snapshot");
         }
-        let mut previous = None;
+        let mut previous: Option<crate::program_wire::ProgramSnapshotV1> = None;
         for revision in [5, 5, 6, 7] {
             let (snapshot, events) = measured_allocator_events(|| {
                 if borrowed {
@@ -232,7 +232,9 @@ fn attachment_snapshot_is_inline_and_independent() {
                 "borrowed={borrowed}, revision={revision}"
             );
             if let Some(old) = previous.as_ref() {
-                assert_eq!(old, snapshot.snapshot());
+                assert_eq!(old.outputs(), snapshot.snapshot().outputs());
+                assert_eq!(old.state(), snapshot.snapshot().state());
+                assert!(old.revision() < snapshot.snapshot().revision());
             }
             previous = Some(snapshot.snapshot().clone());
         }
@@ -404,7 +406,9 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
         let second = session
             .update_observed_view(6, input)
             .expect("the valid update must return an owned snapshot");
-        assert_eq!(snapshot, second);
+        assert_eq!(snapshot.outputs(), second.outputs());
+        assert_eq!(snapshot.state(), second.state());
+        assert_eq!((snapshot.revision(), second.revision()), (5, 6));
         drop(session);
         for (index, output) in snapshot.outputs().iter().enumerate() {
             assert_eq!(output.slot(), 17 + index as u32);

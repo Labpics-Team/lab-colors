@@ -70,7 +70,8 @@ fn section_name(error: &ProgramWireErrorV1) -> (ProgramWireSectionNameV1, usize)
             },
             *offset,
         ),
-        ProgramWireErrorV1::ResourceExhausted { section } => (
+        ProgramWireErrorV1::ResourceExhausted { section }
+        | ProgramWireErrorV1::AssignmentResourceExhausted { section } => (
             match section {
                 Section::Sources => "sources",
                 Section::Targets => "targets",
@@ -123,6 +124,12 @@ fn checked_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<[u8; 32], ProgramWireCheckErrorV1> {
     let draft = decoded.map_err(|error| {
+        if matches!(
+            error,
+            ProgramWireErrorV1::AssignmentResourceExhausted { .. }
+        ) {
+            return ProgramWireCheckErrorV1::ResourceExhausted;
+        }
         let (section, offset) = section_name(&error);
         ProgramWireCheckErrorV1::Wire { section, offset }
     })?;
@@ -556,6 +563,14 @@ mod fv01_red_tests {
 /// Владеет immutable графом и content identity; Session появляется только
 /// через consuming [`Self::instantiate`], поэтому один runtime не может молча
 /// разделить владельца с другим.
+#[path = "program_assessment_report.rs"]
+mod assessment_report;
+use assessment_report::ProgramAssessmentReportScratchV1;
+pub use assessment_report::{
+    ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
+    ProgramConstraintAssessmentV1, ProgramScenarioProvenanceV1,
+};
+
 pub struct CompiledProgramV1 {
     owner: crate::program::OwnerV1,
 }
@@ -565,6 +580,7 @@ pub struct ProgramSessionV1 {
     owner: crate::program::OwnerV1,
     session: crate::program::SessionV1,
     outputs_scratch: Vec<ProgramPaintOutputV1>,
+    assessment_scratch: ProgramAssessmentReportScratchV1,
 }
 
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
@@ -652,6 +668,8 @@ pub enum ProgramSnapshotStateV1 {
     Ready,
     Stale,
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Один сертифицированный Paint output.
@@ -682,9 +700,32 @@ impl ProgramPaintOutputV1 {
     }
 }
 
+/// Доказанность предпочтительности уже проверенного допустимого назначения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramOptimalityV1 {
+    /// Авторская опора допустима либо весь объявленный domain исследован.
+    Exact,
+    /// Все обязательные ограничения выполнены; поиск более предпочтительного решения остановлен.
+    Unfinished,
+}
+
+impl ProgramOptimalityV1 {
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Unfinished => "unfinished",
+        }
+    }
+}
+
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
+    snapshot_version: u32,
+    revision: u64,
+    assessment_report: Option<ProgramAssessmentReportV1>,
+    optimality: Option<ProgramOptimalityV1>,
     state: ProgramSnapshotStateV1,
     outputs: ProgramSnapshotOutputsV1,
 }
@@ -708,6 +749,37 @@ fn reserve_snapshot_outputs(
 }
 
 impl ProgramSnapshotV1 {
+    /// Отдельна от Ready: оба варианта уже прошли final hard recheck.
+    #[must_use]
+    pub const fn optimality(&self) -> Option<ProgramOptimalityV1> {
+        self.optimality
+    }
+
+    /// Version 1 retains historical V1/V2 outputs; version 2 exposes only current computed outputs.
+    #[must_use]
+    pub const fn snapshot_version(&self) -> u32 {
+        self.snapshot_version
+    }
+    /// Revision of the admitted observation.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// Search stopped without a complete feasible tuple.
+    #[must_use]
+    pub const fn reason(&self) -> Option<&'static str> {
+        if matches!(self.state, ProgramSnapshotStateV1::Incomplete) {
+            Some("limit")
+        } else {
+            None
+        }
+    }
+    /// Final hard and report-only assessments for the current computed result.
+    #[must_use]
+    pub fn assessment_report(&self) -> Option<&ProgramAssessmentReportV1> {
+        self.assessment_report.as_ref()
+    }
+
     #[must_use]
     pub const fn state(&self) -> ProgramSnapshotStateV1 {
         self.state
@@ -1371,6 +1443,11 @@ impl CompiledProgramV1 {
     where
         H: ProgramPointSinkHostV1,
     {
+        // This scalar attachment carries the legacy causal-certificate contract.
+        // Computed outputs are obtained from the revision-bound Program Session.
+        if self.owner.snapshot_version() != 1 {
+            return Err(ProgramAttachErrorV1::Binding);
+        }
         let output_count = self.owner.output_slots().count();
         if output_count != 1 {
             return Err(ProgramAttachErrorV1::Binding);
@@ -1710,9 +1787,9 @@ pub fn compile_program_wire_v1(bytes: &[u8]) -> Result<CompiledProgramV1, Progra
 
 /// Compile a supported Program envelope into the existing immutable runtime owner.
 ///
-/// A V2 selection release orders the complete finite candidate space. Every
-/// observation still passes all hard constraints before the shared Session
-/// selects, rechecks and publishes a result. No scientific profile is implied.
+/// V2 declares the complete finite candidate order. V3 computes a tuple within
+/// authored domains and preferences. Every published tuple passes a fresh final
+/// hard recheck; `optimality` separately records whether preference search finished.
 ///
 /// # Errors
 /// Returns the same typed format, graph, resource and family admission failures
@@ -1724,7 +1801,12 @@ pub fn compile_program_wire(bytes: &[u8]) -> Result<CompiledProgramV1, ProgramRu
 fn compile_draft(
     decoded: Result<crate::program::DraftV1, ProgramWireErrorV1>,
 ) -> Result<CompiledProgramV1, ProgramRuntimeErrorV1> {
-    let draft = decoded.map_err(|_| ProgramRuntimeErrorV1::Wire)?;
+    let draft = decoded.map_err(|error| match error {
+        ProgramWireErrorV1::AssignmentResourceExhausted { .. } => {
+            ProgramRuntimeErrorV1::ResourceExhausted
+        }
+        _ => ProgramRuntimeErrorV1::Wire,
+    })?;
     let owner = draft.compile().map_err(|error| match error {
         crate::program::CompileErrorV1::ResourceExhausted => {
             ProgramRuntimeErrorV1::ResourceExhausted
@@ -1765,6 +1847,7 @@ impl CompiledProgramV1 {
             owner: self.owner,
             session,
             outputs_scratch: Vec::new(),
+            assessment_scratch: ProgramAssessmentReportScratchV1::default(),
         })
     }
 }
@@ -1797,6 +1880,17 @@ impl ProgramSessionV1 {
         revision: u64,
         source: &dyn SchemaOrderedScenarioSourceV1,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        let computed = self.owner.snapshot_version() == 2;
+        if computed {
+            let cell_count = self
+                .owner
+                .evidence_cell_bounds(source.scenario_count())
+                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
+                .verified_cells();
+            self.assessment_scratch
+                .reserve(cell_count, source.scenario_count())
+                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+        }
         reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         let transition = self
@@ -1804,8 +1898,16 @@ impl ProgramSessionV1 {
             .prepare_schema_ordered_update(&mut self.session, revision, source)
             .map_err(map_runtime_update_error)?;
         let evidence = transition.commit();
-        snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        if computed {
+            snapshot_from_computed_evidence_into(
+                evidence,
+                &mut self.outputs_scratch,
+                &mut self.assessment_scratch,
+            )
+        } else {
+            snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
+                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        }
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -1826,8 +1928,17 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(map_runtime_update_error)?;
-        snapshot_from_evidence_into(transition.commit(), &mut self.outputs_scratch)
-            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        let evidence = transition.commit();
+        if self.owner.snapshot_version() == 2 {
+            snapshot_from_computed_evidence_into(
+                evidence,
+                &mut self.outputs_scratch,
+                &mut self.assessment_scratch,
+            )
+        } else {
+            snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
+                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
+        }
     }
 }
 
@@ -1873,6 +1984,8 @@ fn snapshot_from_evidence_into(
         StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
         StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
         StateKindV1::Failed => ProgramSnapshotStateV1::Failed,
+        StateKindV1::Unsatisfied => ProgramSnapshotStateV1::Unsatisfied,
+        StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
     };
     outputs_scratch.clear();
     if let Some(verified) = evidence
@@ -1891,6 +2004,10 @@ fn snapshot_from_evidence_into(
             if let Some(output) = outputs.next() {
                 return Ok(ProgramSnapshotV1 {
                     state,
+                    snapshot_version: 1,
+                    revision: evidence_revision(evidence),
+                    assessment_report: None,
+                    optimality: None,
                     outputs: ProgramSnapshotOutputsV1::One(output),
                 });
             }
@@ -1902,7 +2019,78 @@ fn snapshot_from_evidence_into(
     }
     Ok(ProgramSnapshotV1 {
         state,
+        snapshot_version: 1,
+        revision: evidence_revision(evidence),
+        assessment_report: None,
+        optimality: None,
         outputs: ProgramSnapshotOutputsV1::Many(std::mem::take(outputs_scratch)),
+    })
+}
+
+fn evidence_revision(evidence: crate::program::EvidenceViewV1<'_>) -> u64 {
+    use crate::program::ObservationHeadV1;
+    match evidence.observation_head() {
+        ObservationHeadV1::Empty => 0,
+        ObservationHeadV1::Observed { revision, .. }
+        | ObservationHeadV1::Unknown { revision, .. } => revision,
+    }
+}
+
+fn snapshot_from_computed_evidence_into(
+    evidence: crate::program::EvidenceViewV1<'_>,
+    outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
+    assessment_scratch: &mut ProgramAssessmentReportScratchV1,
+) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+    use crate::program::StateKindV1;
+    let state = match evidence.kind() {
+        StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
+        StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
+        StateKindV1::Stale => ProgramSnapshotStateV1::Stale,
+        StateKindV1::Unsatisfied => ProgramSnapshotStateV1::Unsatisfied,
+        StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
+        StateKindV1::Failed => return Err(ProgramRuntimeErrorV1::InternalInvariant),
+    };
+    outputs_scratch.clear();
+    assessment_scratch.clear();
+    let mut outputs = ProgramSnapshotOutputsV1::Many(Vec::new());
+    let mut assessment_report = None;
+    let mut optimality = None;
+    if let Some(verified) = evidence.current_verified() {
+        let mut values = verified.outputs().map(|output| ProgramPaintOutputV1 {
+            slot: output.output_slot().value(),
+            source: output.source(),
+            opacity: output.opacity(),
+        });
+        outputs = if values.len() == 1 {
+            ProgramSnapshotOutputsV1::One(
+                values
+                    .next()
+                    .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?,
+            )
+        } else {
+            if values.len() > outputs_scratch.capacity() {
+                return Err(ProgramRuntimeErrorV1::InternalInvariant);
+            }
+            outputs_scratch.extend(values);
+            ProgramSnapshotOutputsV1::Many(std::mem::take(outputs_scratch))
+        };
+        optimality = verified.optimality().map(|value| match value {
+            crate::program_session::computed_assignment::ComputedOptimalityV1::Exact => {
+                ProgramOptimalityV1::Exact
+            }
+            crate::program_session::computed_assignment::ComputedOptimalityV1::Unfinished => {
+                ProgramOptimalityV1::Unfinished
+            }
+        });
+        assessment_report = Some(assessment_scratch.copy_verified(verified));
+    }
+    Ok(ProgramSnapshotV1 {
+        snapshot_version: 2,
+        revision: evidence_revision(evidence),
+        state,
+        outputs,
+        assessment_report,
+        optimality,
     })
 }
 
@@ -2125,6 +2313,8 @@ impl ProgramSnapshotStateV1 {
             Self::Ready => "ready",
             Self::Stale => "stale",
             Self::Failed => "failed",
+            Self::Unsatisfied => "unsatisfied",
+            Self::Incomplete => "incomplete",
         }
     }
 }
