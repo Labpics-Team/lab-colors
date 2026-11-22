@@ -79,5 +79,8 @@ byId("open-project").addEventListener("click", (event) => {
   event.currentTarget.setAttribute("aria-expanded", String(!expanded));
   byId("project-detail").hidden = expanded;
 });
-window.addEventListener("pagehide", () => interaction.dispose());
+window.addEventListener("pagehide", (event) => {
+  // A cached page resumes with the same DOM and its existing color owner.
+  if (!event.persisted) interaction.dispose();
+});
 scheduleControls();
