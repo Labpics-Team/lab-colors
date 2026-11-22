@@ -57,9 +57,12 @@ test("malformed physical policies fail before compilation", () => {
   for (const curve of curves) {
     assert.throws(() => role.on(canvas, { tone: { from: canvas, curve } }), ColorAuthoringError);
   }
-  for (const opacity of [-0.1, 1.1, Infinity, "0.8"]) {
-    assert.throws(() => role.on(canvas, { opacity }), ColorAuthoringError);
+  for (const opacity of [null, false, -0.1, 1.1, Infinity, Number.NaN, "0.8"]) {
+    assert.throws(() => role.on(canvas, { opacity }),
+      (error) => error instanceof ColorAuthoringError && error.path === "role.on.policy.opacity");
   }
+  assert.doesNotThrow(() => role.on(canvas, { opacity: 0 }));
+  assert.doesNotThrow(() => role.on(canvas, { opacity: undefined }));
   assert.throws(() => role.on(canvas, { contrast: "automatic-human-readability" }), ColorAuthoringError);
   assert.throws(() => c.role("unsafe", "#112233", { identity: { maxHueDeviation: 181 } }), ColorAuthoringError);
   assert.throws(() => c.role("unsafe", "#112233", { identity: { chroma: [0, 1.1] } }), ColorAuthoringError);

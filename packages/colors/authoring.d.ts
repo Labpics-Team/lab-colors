@@ -64,6 +64,10 @@ export interface ColorUsePolicy {
   readonly separation?: readonly [number, number];
 }
 
+export interface ColorFixedUsePolicy extends Omit<ColorUsePolicy, "tone"> {
+  readonly tone?: never;
+}
+
 export interface ColorRole {
   readonly [colorHandle]: "role";
   readonly id: string;
@@ -72,10 +76,18 @@ export interface ColorRole {
   on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse;
 }
 
+export interface ColorFixedRole extends Omit<ColorRole, "on"> {
+  on(surface: ColorSurface, policy?: ColorFixedUsePolicy): ColorFixedUse;
+}
+
 export interface ColorUse {
   readonly [colorHandle]: "use";
   readonly role: ColorRole;
   readonly against: ColorSurface;
+}
+
+export interface ColorFixedUse extends ColorUse {
+  readonly role: ColorFixedRole;
 }
 
 export interface ResolvedColor {
@@ -125,6 +137,11 @@ export type ColorViewUpdate<Name extends string = string> =
 
 export type ColorContext = Readonly<Record<string, AuthoredColor | null | undefined>>;
 
+export interface ColorAttachOptions {
+  /** Доверенный nonce приложения для принадлежащего view stylesheet при CSP. */
+  readonly nonce?: string;
+}
+
 export type ColorViewReplacement<Name extends string = string> =
   | Readonly<{
       state: "committed";
@@ -152,14 +169,14 @@ export interface ColorProgram<Name extends string = string> {
   /** Явные данные контекста; non-ready не предоставляет сохранённые outputs как свежие. */
   resolve(surfaces: ColorContext): ColorResolution<Name>;
   /** Владеет CSS custom properties входов и outputs на одном element. */
-  attach(element: HTMLElement, surfaces?: ColorContext): ColorView<Name>;
+  attach(element: HTMLElement, surfaces?: ColorContext, options?: ColorAttachOptions): ColorView<Name>;
   dispose(): void;
 }
 
 export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorRole;
-  fixed(id: string, source: AuthoredColor): ColorRole;
+  fixed(id: string, source: AuthoredColor): ColorFixedRole;
   /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,

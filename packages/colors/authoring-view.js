@@ -94,11 +94,11 @@ function createView(source, runtime, sink, active) {
   return { view, state };
 }
 
-export function attachColorView(source, element, values) {
+export function attachColorView(source, element, values, options) {
   const runtime = source.createRuntime();
   let sink, result;
   try {
-    sink = createCssScope(element);
+    sink = createCssScope(element, options);
     result = createView(source, runtime, sink, true);
     if (values !== undefined) result.view.set(values);
     return result.view;

@@ -56,11 +56,16 @@ const invalidDeclaration = new ProgramWireError(
 const invalidCode: ProgramWireError["code"] = invalidDeclaration.code;
 const readProgramFailure = (error: unknown): readonly [ProgramErrorCode, ProgramOperation] | undefined =>
   isProgramError(error) ? [error.code, error.operation] : undefined;
+const readDiagnosticsFailure = (error: unknown): "program_resource_exhausted" | undefined => {
+  if (isProgramError(error) && error.operation === "diagnostics") return error.code;
+  return undefined;
+};
 
 void boot;
 void wire;
 void invalidCode;
 void readProgramFailure;
+void readDiagnosticsFailure;
 void evaluateWcag22("#000000", "#FFFFFF", "sc-1.4.3-text-default");
 void numericalCapabilityManifest();
 void MAX_CERTIFICATE_ENVELOPE_BYTES;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import init, { compileProgramWire } from "../index.js";
+import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 import { ProgramWireBuilderV3 } from "../program-wire/abi-v3.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
@@ -26,6 +27,32 @@ function observe(owner, revision, backdrops) {
 const nominal = (status, accepted, rejected, unavailable) => ({
   status, profile: "nominal-srgb8-v2", basis: "declared-convention",
   scope: "declared-final-points", accepted, rejected, unavailable,
+});
+
+test("fixed V1 preserves its result while explicit V3 provides a current assessment", () => {
+  const snapshots = [], owners = [];
+  try {
+    for (const Builder of [ProgramWireBuilderV1, ProgramWireBuilderV3]) {
+      const builder = new Builder()
+        .source(1, [255, 255, 255]).fixedTarget(2, 1).surfaceInputPort(3)
+        .opacityInput(4, 0.5).solidPaint(5, 2).opacityPaint(6, 5, 4)
+        .inputSurface(7, 3).sourceOverOccurrence(8, 6, 7, 64, 0.2, 1)
+        .nominalSrgb8Visible(true, 11, 8).output(12, 6);
+      if (Builder === ProgramWireBuilderV3) builder.assignment([]);
+      const owner = compileProgramWire(builder.finish(), 1); owners.push(owner);
+      const snapshot = observe(owner, 1n, [[0, 0, 0]]); snapshots.push(snapshot);
+      assert.equal(snapshot.state, "ready");
+    }
+    const [legacy, current] = snapshots;
+    assert.deepEqual(legacy.copyOutputTable(), current.copyOutputTable());
+    assert.equal(legacy.assessmentReport(), null);
+    assert.equal(legacy.cleanlinessAssessment(), null);
+    assert.deepEqual(current.cleanlinessAssessment(), nominal("conforms", 1, 0, 0));
+    assert.deepEqual(current.assessmentReport().cleanliness, current.cleanlinessAssessment());
+  } finally {
+    for (const snapshot of snapshots.reverse()) snapshot.free();
+    for (const owner of owners.reverse()) owner.free();
+  }
 });
 
 test("current readiness without a declared profile does not imply cleanliness conformance", () => {

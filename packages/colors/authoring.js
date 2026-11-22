@@ -134,7 +134,8 @@ function usePolicy(value = {}, owner) {
   allowedKeys(value, ["contrast", "opacity", "tone", "separation"], path);
   const contrast = read(value, "contrast", path);
   if (contrast !== undefined && !contrastCriteria.has(contrast)) authoringError(`${path}.contrast`, "unknown contrast criterion");
-  const opacity = number(read(value, "opacity", path) ?? 1, `${path}.opacity`, 0, 1);
+  const authoredOpacity = read(value, "opacity", path);
+  const opacity = number(authoredOpacity === undefined ? 1 : authoredOpacity, `${path}.opacity`, 0, 1);
   const tone = read(value, "tone", path);
   const separation = read(value, "separation", path);
   let copiedTone;

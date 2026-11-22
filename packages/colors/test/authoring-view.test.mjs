@@ -8,7 +8,7 @@ await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", im
 // A deterministic DOM boundary: real Core sessions, with observable stylesheet commits.
 // Browser rendering and CSS consumption are exercised by the installed example separately.
 function host() {
-  const state = { writes: [], failure: null };
+  const state = { writes: [], failure: null, blocked: false, disabled: false, cascade: new Map() };
   class Node {
     constructor() { this.parentNode = null; this.children = []; this.text = ""; }
     get textContent() { return this.text; }
@@ -34,11 +34,18 @@ function host() {
   }
   class HTMLElement extends Element {
     getRootNode() { return this.ownerDocument; }
+    get sheet() { return state.blocked ? null : { disabled: state.disabled }; }
     isConnected = true;
   }
   const document = {
     head: new Node(),
-    defaultView: { Node, Element, HTMLElement },
+    defaultView: { Node, Element, HTMLElement, getComputedStyle(element) {
+      const token = element.getAttribute("data-lab-colors-scope");
+      const sheet = document.head.children.find((item) => item.getAttribute("data-lab-colors") === token);
+      const values = new Map([...sheet.textContent.matchAll(/--([\w-]+):([^;]+);/gu)]
+        .map((match) => [`--${match[1]}`, match[2]]));
+      return { getPropertyValue: (name) => state.cascade.get(name) ?? values.get(name) ?? "" };
+    } },
     createElement() { const element = new HTMLElement(); element.ownerDocument = document; return element; },
   };
   const root = document.createElement("main");
@@ -50,6 +57,26 @@ async function fixedProgram(name, source = "#808080", options = { separation: [0
   const c = colors(), canvas = c.surface("canvas");
   return c.compile({ [name]: c.fixed(name, source).on(canvas, options) });
 }
+
+test("a missing own context property rejects a view update without reading its prototype", async () => {
+  const h = host(), c = colors(), surface = c.surface("toString");
+  const program = await c.compile({ ink: c.fixed("ink", "#242424").on(surface) });
+  const view = program.attach(h.root, { toString: "#e6ddd0" });
+  try {
+    const current = view.current, sheet = h.sheet, writes = h.state.writes.length;
+    for (const context of [{}, Object.create({ toString: "#283548" })]) {
+      const update = view.set(context);
+      assert.equal(update.state, "rejected");
+      assert.equal(update.proposed.state, "unknown");
+      assert.deepEqual(update.proposed.diagnostics, [{ kind: "unknown-input", input: "toString" }]);
+      assert.equal(view.current, current);
+      assert.equal(h.sheet, sheet);
+      assert.equal(h.state.writes.length, writes);
+    }
+    assert.equal(view.set({ toString: "#283548" }).state, "committed");
+    assert.deepEqual(view.current.context.toString, [40, 53, 72]);
+  } finally { view.dispose(); program.dispose(); }
+});
 
 test("a cleanliness conflict retains the entire previously accepted material and context", async () => {
   const h = host(), c = colors({ cleanliness: "nominal-srgb8-v2" }), canvas = c.surface("canvas");
@@ -188,4 +215,65 @@ test("foreign changes to the owned CSS are detected before any runtime or style 
     assert.throws(() => program.attach(h.root), { code: "color_host_changed" });
     assert.equal(h.document.head.children.length, 1);
   } finally { view.dispose(); program.dispose(); }
+});
+
+test("separate module copies allocate distinct selectors in the same document", async () => {
+  const h = host(), program = await fixedProgram("ink");
+  const view = program.attach(h.root, { canvas: "#e6ddd0" });
+  const copy = await import("../authoring-css.js?independent-module-copy");
+  const secondRoot = h.document.createElement("main"), second = copy.createCssScope(secondRoot);
+  try {
+    assert.notEqual(h.root.getAttribute("data-lab-colors-scope"), secondRoot.getAttribute("data-lab-colors-scope"));
+    second.install(second.prepare({ colors: [] }, { values: { accent: { css: "rgb(0 103 244 / 1)" } } }));
+    assert.equal(h.document.defaultView.getComputedStyle(secondRoot).getPropertyValue("--accent"), "rgb(0 103 244 / 1)");
+    assert.equal(h.document.defaultView.getComputedStyle(h.root).getPropertyValue("--accent"), "");
+    assert.throws(() => copy.createCssScope(h.root), { code: "color_host_changed" });
+    view.dispose();
+    assert.equal(h.document.head.children.length, 1);
+    assert.equal(h.document.defaultView.getComputedStyle(secondRoot).getPropertyValue("--accent"), "rgb(0 103 244 / 1)");
+  } finally { second.dispose(); view.dispose(); program.dispose(); }
+});
+
+test("blocked stylesheets refuse acceptance and leave no scope after failed attach", async () => {
+  const h = host(), program = await fixedProgram("ink");
+  try {
+    h.state.blocked = true;
+    assert.throws(() => program.attach(h.root, { canvas: "#e6ddd0" }), { code: "color_host_changed" });
+    assert.equal(h.document.head.children.length, 0);
+    assert.equal(h.root.hasAttribute("data-lab-colors-scope"), false);
+    h.state.blocked = false;
+    const view = program.attach(h.root, { canvas: "#e6ddd0" }, { nonce: "trusted-by-the-application" });
+    try {
+      assert.equal(h.document.head.children[0].nonce, "trusted-by-the-application");
+      assert.equal(view.lastUpdate.state, "committed");
+    } finally { view.dispose(); }
+  } finally { program.dispose(); }
+});
+
+test("a cascade conflict rolls back the CSS proposal and preserves the accepted Core frame", async () => {
+  const h = host(), program = await fixedProgram("ink");
+  const view = program.attach(h.root, { canvas: "#e6ddd0" });
+  try {
+    const current = view.current, accepted = view.lastUpdate, sheet = h.sheet;
+    h.state.cascade.set("--canvas", "rgb(34 34 34 / 1)");
+    assert.throws(() => view.set({ canvas: "#283548" }), { code: "color_host_changed", path: "view.--canvas" });
+    assert.equal(view.current, current);
+    assert.equal(view.lastUpdate, accepted);
+    assert.equal(h.sheet, sheet);
+    h.state.cascade.clear();
+    assert.equal(view.set({ canvas: "#283548" }).state, "committed");
+    assert.deepEqual(view.current.context.canvas, [40, 53, 72]);
+  } finally { view.dispose(); program.dispose(); }
+});
+
+test("attach validates nonce options before taking ownership of the element", async () => {
+  const h = host(), program = await fixedProgram("ink");
+  try {
+    for (const options of [null, [], 1, { nonce: null }, { nonce: "" }, { nonce: 1 }, { unexpected: true },
+      { get nonce() { throw new Error("unreadable"); } }]) {
+      assert.throws(() => program.attach(h.root, undefined, options), { code: "color_invalid_context" });
+      assert.equal(h.document.head.children.length, 0);
+      assert.equal(h.root.hasAttribute("data-lab-colors-scope"), false);
+    }
+  } finally { program.dispose(); }
 });

@@ -4,8 +4,9 @@ export { colors, ColorAuthoringError } from "./authoring.js";
 export type {
   AuthoredColor, ColorAuthoringErrorCode, ColorIdentity, ColorRoleOptions,
   ColorInputSurface, ColorSurface, ColorTonePolicy, ColorUsePolicy, ColorRole,
+  ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
-  ColorContext, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
+  ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
   ColorSystemOptions, ColorCleanlinessAssessment,
 } from "./authoring.js";
 
@@ -94,7 +95,7 @@ export type ProgramError = Error & (
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" }>
   | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
-  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" }>
+  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "diagnostics" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;

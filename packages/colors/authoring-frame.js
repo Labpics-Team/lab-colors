@@ -13,7 +13,7 @@ export function parseColorContext(graph, values) {
   for (let index = 0; index < graph.inputs.length; index++) {
     const { name } = graph.inputs[index];
     let value;
-    try { value = values[name]; }
+    try { value = Object.hasOwn(values, name) ? values[name] : undefined; }
     catch { authoringError(`context.${name}`, "input could not be read", "color_invalid_context"); }
     if (value === undefined || value === null) {
       unknown.push(name);

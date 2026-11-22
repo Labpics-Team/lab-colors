@@ -8,6 +8,40 @@ await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", im
 const hex = (rgb) => "#" + rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("");
 const textPasses = (rgb, background) => evaluateWcag22(hex(rgb), hex(background), "sc-1.4.3-text-default").decision === "pass";
 
+test("context inputs require own properties even when their names exist on the prototype", async () => {
+  for (const name of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+    const c = colors(), surface = c.surface(name);
+    const program = await c.compile({ ink: c.fixed("ink", "#242424").on(surface) });
+    try {
+      const inherited = Object.create({ [name]: "#ffffff" });
+      const hostile = Object.create(Object.defineProperty({}, name, {
+        get() { throw new Error("inherited input must not be read"); },
+      }));
+      for (const context of [{}, inherited, hostile]) {
+        const frame = program.resolve(context);
+        assert.equal(frame.state, "unknown");
+        assert.deepEqual(frame.diagnostics, [{ kind: "unknown-input", input: name }]);
+      }
+      const ready = program.resolve({ [name]: "#e6ddd0" });
+      assert.equal(ready.state, "ready");
+      assert.deepEqual(ready.context[name], [230, 221, 208]);
+      assert.throws(() => program.resolve({ [name]: "not-a-color" }),
+        { code: "color_invalid_context", path: `context.${name}` });
+    } finally { program.dispose(); }
+  }
+});
+
+test("omitted opacity is opaque and explicit zero remains transparent", async () => {
+  const c = colors(), canvas = c.surface("canvas"), role = c.fixed("ink", "#242424");
+  const program = await c.compile({ opaque: role.on(canvas), transparent: role.on(canvas, { opacity: 0 }) });
+  try {
+    const frame = program.resolve({ canvas: "#e6ddd0" });
+    assert.equal(frame.state, "ready");
+    assert.equal(frame.values.opaque.opacity, 1);
+    assert.equal(frame.values.transparent.opacity, 0);
+  } finally { program.dispose(); }
+});
+
 test("one source identity produces independent local colors through the public authoring path", async () => {
   const c = colors(), first = c.surface("first"), second = c.surface("second");
   const source = [0, 103, 244];
