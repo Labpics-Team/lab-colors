@@ -12,6 +12,10 @@ use crate::Srgb8;
 pub use crate::constraints::ProgramVisibleSeparationMeasurementV1;
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
+pub use crate::program_diagnostics::{
+    ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramDiagnosticSubjectV1,
+    ProgramDiagnosticV1, ProgramDiagnosticsV1,
+};
 
 /// Имя wire-секции в публичной диагностике.
 ///
@@ -771,6 +775,7 @@ impl ProgramOptimalityV1 {
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
+    diagnostics: Option<ProgramDiagnosticsV1>,
     snapshot_version: u32,
     revision: u64,
     assessment_report: Option<ProgramAssessmentReportV1>,
@@ -798,6 +803,12 @@ fn reserve_snapshot_outputs(
 }
 
 impl ProgramSnapshotV1 {
+    /// Конкретные нарушения авторского attempt для текущего Unsatisfied/Incomplete.
+    /// Это исторические данные; они не являются минимальным конфликтом или outputs.
+    #[must_use]
+    pub fn diagnostics(&self) -> Option<&ProgramDiagnosticsV1> {
+        self.diagnostics.as_ref()
+    }
     /// Отдельна от Ready: оба варианта уже прошли final hard recheck.
     #[must_use]
     pub const fn optimality(&self) -> Option<ProgramOptimalityV1> {
@@ -2077,6 +2088,7 @@ fn snapshot_from_evidence_into(
         if outputs.len() == 1 {
             if let Some(output) = outputs.next() {
                 return Ok(ProgramSnapshotV1 {
+                    diagnostics: None,
                     state,
                     snapshot_version: 1,
                     revision: evidence.revision(),
@@ -2092,6 +2104,7 @@ fn snapshot_from_evidence_into(
         outputs_scratch.extend(outputs);
     }
     Ok(ProgramSnapshotV1 {
+        diagnostics: None,
         state,
         snapshot_version: 1,
         revision: evidence.revision(),
@@ -2150,6 +2163,11 @@ fn snapshot_from_computed_evidence_into(
         assessment_report = Some(assessment_scratch.copy_verified(verified));
     }
     Ok(ProgramSnapshotV1 {
+        diagnostics: evidence
+            .diagnostics()
+            .map(ProgramDiagnosticsV1::try_copy)
+            .transpose()
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?,
         snapshot_version: 2,
         revision: evidence.revision(),
         state,

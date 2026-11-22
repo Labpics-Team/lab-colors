@@ -5,6 +5,7 @@
 //! effects принадлежат npm-приложению, не WASM.
 
 mod error;
+mod program_diagnostics_projection;
 mod program_report_projection;
 mod terminal_projection;
 
@@ -37,6 +38,31 @@ export interface NumericalCapabilityManifestV2 {
 }
 
 export type ProgramAssessmentVerdictV1 = "pass" | "violation";
+export type ProgramDiagnosticSubjectV1 =
+  | Readonly<{kind: "target"; targetId: number}>
+  | Readonly<{kind: "occurrence"; occurrenceId: number}>
+  | Readonly<{kind: "intrinsic-relation"; referenceTargetId: number}>
+  | Readonly<{kind: "visible-relation"; referenceOccurrenceId: number}>
+  | Readonly<{kind: "presentation"; rootId: number; occurrenceId: number; terminalId: number}>;
+export type ProgramDiagnosticV1 =
+  | Readonly<{kind: "hard-constraint"; constraintId: number; caseIndex: number; subject: ProgramDiagnosticSubjectV1}>
+  | Readonly<{kind: "target-domain"; targetId: number; source: readonly [number, number, number]}>
+  | Readonly<{kind: "color-identity"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      actual: readonly [number, number, number]}>
+  | Readonly<{kind: "max-change"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      actual: readonly [number, number, number]; distanceSquared: number; maximumDistance: number}>;
+export interface ProgramAttemptWitnessV1 {
+  readonly kind: "authored-tuple";
+  readonly caseScenarioIds: ReadonlyArray<ReadonlyArray<number>>;
+  readonly targets: ReadonlyArray<Readonly<{targetId: number; source: readonly [number, number, number]}>>;
+  readonly violations: ReadonlyArray<ProgramDiagnosticV1>;
+}
+/** Данные текущего отказа. Witness относится к одному attempt, не к minimal unsat core. */
+export interface ProgramDiagnosticsV1 {
+  readonly searchVisited: bigint;
+  readonly searchBudget: bigint;
+  readonly witness: ProgramAttemptWitnessV1 | null;
+}
 export type ProgramConstraintAssessmentV1 =
   | Readonly<{
       kind: "visible-separation"; verdict: ProgramAssessmentVerdictV1;
@@ -249,6 +275,35 @@ export function reportScenario(caseIndex, scenarioId) {
   return reportFreeze({ caseIndex, scenarioId });
 }
 export function reportSummary(kind, verdict) { return reportFreeze({ kind, verdict }); }
+export function diagnosticSubject(kind, first, second, third) {
+  if (kind === "target") return reportFreeze({kind, targetId: first});
+  if (kind === "occurrence") return reportFreeze({kind, occurrenceId: first});
+  if (kind === "intrinsic-relation") return reportFreeze({kind, referenceTargetId: first});
+  if (kind === "visible-relation") return reportFreeze({kind, referenceOccurrenceId: first});
+  return reportFreeze({kind, rootId: first, occurrenceId: second, terminalId: third});
+}
+export function diagnosticConstraint(constraintId, caseIndex, subject) {
+  return reportFreeze({kind: "hard-constraint", constraintId, caseIndex, subject});
+}
+export function diagnosticDomain(targetId, red, green, blue) {
+  return reportFreeze({kind: "target-domain", targetId, source: reportFreeze([red, green, blue])});
+}
+export function diagnosticColor(kind, targetId, caseIndex, occurrenceId, red, green, blue, distanceSquared, maximumDistance) {
+  const base = {kind, targetId, caseIndex, occurrenceId: occurrenceId ?? null, actual: reportFreeze([red, green, blue])};
+  if (kind === "max-change") { base.distanceSquared = distanceSquared; base.maximumDistance = maximumDistance; }
+  return reportFreeze(base);
+}
+export function diagnosticTarget(targetId, red, green, blue) {
+  return reportFreeze({targetId, source: reportFreeze([red, green, blue])});
+}
+export function diagnosticWitness(caseScenarioIds, targets, violations) {
+  for (let index = 0; index < caseScenarioIds.length; index += 1) reportFreeze(caseScenarioIds[index]);
+  return reportFreeze({kind: "authored-tuple", caseScenarioIds: reportFreeze(caseScenarioIds),
+    targets: reportFreeze(targets), violations: reportFreeze(violations)});
+}
+export function diagnosticsProjection(searchVisited, searchBudget, witness) {
+  return reportFreeze({searchVisited, searchBudget, witness});
+}
 export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, minimum, maximum) {
   return reportFreeze({
     kind: "visible-separation", verdict,
@@ -333,6 +388,47 @@ extern "C" {
     fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSummary)]
     fn report_summary(kind: &str, verdict: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticSubject)]
+    fn diagnostic_subject(
+        kind: &str,
+        first: u32,
+        second: u32,
+        third: u32,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticConstraint)]
+    fn diagnostic_constraint(
+        constraint: u32,
+        case: usize,
+        subject: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticDomain)]
+    fn diagnostic_domain(target: u32, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticColor)]
+    fn diagnostic_color(
+        kind: &str,
+        target: u32,
+        case: usize,
+        occurrence: Option<u32>,
+        red: u8,
+        green: u8,
+        blue: u8,
+        distance_squared: f64,
+        maximum_distance: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticTarget)]
+    fn diagnostic_target(target: u32, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticWitness)]
+    fn diagnostic_witness(
+        cases: &js_sys::Array,
+        targets: &js_sys::Array,
+        violations: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticsProjection)]
+    fn diagnostics_projection(
+        visited: u64,
+        budget: u64,
+        witness: &JsValue,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSeparation)]
     fn report_separation(
         verdict: &str,
@@ -450,6 +546,7 @@ fn copy_snapshot_outputs(
 
 #[derive(Clone, Copy)]
 enum ProgramOperation {
+    Diagnostics,
     CompileProgramWire,
     UpdateObserved,
     UpdateObservedWith,
@@ -466,6 +563,7 @@ enum ProgramOperation {
 impl ProgramOperation {
     const fn key(self) -> &'static str {
         match self {
+            Self::Diagnostics => "diagnostics",
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
             Self::UpdateObservedWith => "updateObservedWith",
@@ -708,6 +806,17 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    /// Копирует typed attempt witness текущего Unsatisfied/Incomplete; иначе null.
+    #[wasm_bindgen(unchecked_return_type = "ProgramDiagnosticsV1 | null")]
+    pub fn diagnostics(&self) -> Result<JsValue, JsValue> {
+        program_diagnostics_projection::project(self.inner.diagnostics()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::Diagnostics,
+            )
+        })
+    }
+
     /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
     #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
     pub fn assessment_report(&self) -> Result<JsValue, JsValue> {

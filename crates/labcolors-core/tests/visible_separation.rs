@@ -1,7 +1,8 @@
 use labcolors_core::Srgb8;
 use labcolors_core::program_wire::{
-    ProgramAssessmentVerdictV1, ProgramConstraintAssessmentV1, ProgramScenarioV1,
-    ProgramSnapshotStateV1, compile_program_wire,
+    ProgramAssessmentVerdictV1, ProgramConstraintAssessmentV1, ProgramDiagnosticSubjectV1,
+    ProgramDiagnosticV1, ProgramObservationV1, ProgramScenarioV1, ProgramSnapshotStateV1,
+    compile_program_wire,
 };
 
 // Независимый neutral-ray oracle: linear sRGB gray имеет L = cbrt(linear).
@@ -89,7 +90,90 @@ fn visible_separation_uses_final_composition_and_adapts_to_actual_backdrop() -> 
         .map_err(|error| format!("joint support: {error:?}"))?;
     assert_eq!(conflict.state(), ProgramSnapshotStateV1::Unsatisfied);
     assert!(conflict.outputs().is_empty());
+    let diagnostics = conflict
+        .diagnostics()
+        .ok_or("unsatisfied requires typed diagnostics")?;
+    let witness = diagnostics
+        .witness()
+        .ok_or("authored attempt was evaluated")?;
+    assert!(!witness.violations().is_empty());
+    assert!(diagnostics.search_visited() <= diagnostics.search_budget());
+    assert_eq!(witness.case_scenario_ids(), &[vec![10], vec![9]]);
+    assert!(
+        witness
+            .violations()
+            .contains(&ProgramDiagnosticV1::HardConstraint {
+                constraint_id: 6,
+                case_index: 0,
+                subject: ProgramDiagnosticSubjectV1::Occurrence { occurrence_id: 5 },
+            })
+    );
     assert_eq!(ready.outputs()[0].source(), Srgb8::new([128; 3]));
+    Ok(())
+}
+
+#[test]
+fn diagnostic_candidate_can_be_refused_atomically_and_never_becomes_a_fresh_output()
+-> Result<(), String> {
+    let owner = compile_program_wire(include_bytes!("fixtures/visible-separation.lcpw"))
+        .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(8)
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    let white = [ProgramScenarioV1::new(9, vec![Srgb8::new([255; 3])])];
+    let initial = session
+        .update_observed(1, &white)
+        .map_err(|error| format!("initial: {error:?}"))?;
+    assert!(initial.diagnostics().is_none());
+    let ids = [9, 10];
+    let samples = [255, 255, 255, 128, 128, 128];
+    let observation = ProgramObservationV1::from_rgb8(&ids, &samples, 1)
+        .map_err(|error| format!("observation: {error:?}"))?;
+    let mut refused = None;
+    let accepted = session
+        .prepare_observed_view(2, observation)
+        .map_err(|error| format!("prepare: {error:?}"))?
+        .commit_with(|snapshot| {
+            assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Unsatisfied);
+            assert!(snapshot.outputs().is_empty());
+            assert!(
+                snapshot
+                    .diagnostics()
+                    .and_then(|value| value.witness())
+                    .is_some()
+            );
+            refused = Some(snapshot);
+            Ok::<_, String>(false)
+        })?;
+    assert!(!accepted);
+    assert_eq!(
+        session
+            .update_observed(1, &white)
+            .map_err(|error| format!("replay: {error:?}"))?,
+        initial
+    );
+    let conflict = session
+        .prepare_observed_view(2, observation)
+        .map_err(|error| format!("retry: {error:?}"))?
+        .commit();
+    assert_eq!(Some(&conflict), refused.as_ref());
+    let unknown = session
+        .update_unknown(3, 17)
+        .map_err(|error| format!("unknown: {error:?}"))?;
+    assert!(unknown.outputs().is_empty());
+    assert!(unknown.diagnostics().is_none());
+    assert_eq!(unknown.reason(), None);
+    let recovered = session
+        .update_observed(4, &white)
+        .map_err(|error| format!("recover: {error:?}"))?;
+    assert_eq!(recovered.state(), ProgramSnapshotStateV1::Ready);
+    assert!(recovered.diagnostics().is_none());
+    assert!(
+        conflict
+            .diagnostics()
+            .and_then(|value| value.witness())
+            .is_some()
+    );
     Ok(())
 }
 

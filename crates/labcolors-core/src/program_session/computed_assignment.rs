@@ -288,6 +288,7 @@ impl ComputedTargetV1 {
 }
 
 struct CompiledComputedTargetV1 {
+    id: TargetId,
     binding: CompiledPaintInputSlotV1,
     declaration: ComputedTargetV1,
     anchor_lab: [f64; 3],
@@ -380,6 +381,7 @@ pub(super) fn compile_selection(
             return Err(invalid(ComputedAdmissionErrorV1::InvalidColorIntent));
         }
         compiled.push(CompiledComputedTargetV1 {
+            id: target.id,
             binding: graph
                 .bind_paint_input(target_paint_input_id(target.id))
                 .ok_or(ProgramCompileError::InternalInvariant)?,
@@ -977,6 +979,7 @@ where
 }
 
 pub(crate) struct ComputedStoppedV1 {
+    pub(super) diagnostics: crate::program_diagnostics::ProgramDiagnosticsV1,
     pub(super) identity: ComputedIdentityV1,
     pub(super) observation: RevisionBoundObservationV1,
     search: SearchEvidenceV1,
@@ -984,6 +987,11 @@ pub(crate) struct ComputedStoppedV1 {
 }
 
 impl session_private::EvidenceSealed for ComputedStoppedV1 {}
+impl ComputedStoppedV1 {
+    pub(crate) const fn diagnostics(&self) -> &crate::program_diagnostics::ProgramDiagnosticsV1 {
+        &self.diagnostics
+    }
+}
 impl SessionEvidenceV1 for ComputedStoppedV1 {
     fn observation(&self) -> &RevisionBoundObservationV1 {
         &self.observation
@@ -1141,7 +1149,16 @@ where
             ))
         }
         None => {
+            let diagnostics = witness::capture(
+                selection,
+                &mut runtime,
+                epoch,
+                scenarios,
+                arena.storage_mut(),
+                selected.evidence,
+            )?;
             let evidence = ComputedStoppedV1 {
+                diagnostics,
                 identity,
                 execution_profile: selection.execution_profile,
                 observation,
@@ -1159,6 +1176,7 @@ where
 }
 
 mod contextual;
+mod witness;
 
 #[cfg(test)]
 mod tests;

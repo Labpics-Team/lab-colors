@@ -2499,6 +2499,7 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                 raw_head.revision().map_or(0, |value| value.value()),
             ),
             D::Unknown(unknown) => SnapshotEvidenceV1 {
+                diagnostics: None,
                 kind: if previous.is_some() {
                     StateKindV1::Stale
                 } else {
@@ -2511,12 +2512,17 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                     .map(|inner| VerifiedCertificateV1 { inner }),
             },
             D::Verified(inner) => SnapshotEvidenceV1 {
+                diagnostics: None,
                 kind: StateKindV1::Ready,
                 revision: inner.observation().revision().value(),
                 current_verified: Some(VerifiedOutputV1 { inner }),
                 legacy_verified: inner.legacy().map(|inner| VerifiedCertificateV1 { inner }),
             },
             D::Violation(cause) => SnapshotEvidenceV1 {
+                diagnostics: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => None,
+                    ProgramViolationOutcomeV1::Computed(stopped) => Some(stopped.diagnostics()),
+                },
                 kind: match cause {
                     ProgramViolationOutcomeV1::Legacy(_) => StateKindV1::Failed,
                     ProgramViolationOutcomeV1::Computed(_) => StateKindV1::Unsatisfied,
@@ -2531,6 +2537,7 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                 },
             },
             D::Incomplete(cause) => SnapshotEvidenceV1 {
+                diagnostics: Some(cause.diagnostics()),
                 kind: StateKindV1::Incomplete,
                 revision: cause.observation().revision().value(),
                 current_verified: None,
@@ -2552,6 +2559,7 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// описывать ещё не принятый переход; lifecycle Session от её чтения не меняется.
 #[derive(Clone, Copy)]
 pub(crate) struct SnapshotEvidenceV1<'a> {
+    diagnostics: Option<&'a crate::program_diagnostics::ProgramDiagnosticsV1>,
     kind: StateKindV1,
     revision: u64,
     current_verified: Option<VerifiedOutputV1<'a>>,
@@ -2586,6 +2594,14 @@ impl<'a> SnapshotEvidenceV1<'a> {
             StateKindV1::Waiting | StateKindV1::Unsatisfied | StateKindV1::Incomplete => None,
         };
         Self {
+            diagnostics: match state {
+                SessionState::Failed {
+                    cause: ProgramViolationOutcomeV1::Computed(cause),
+                    ..
+                }
+                | SessionState::Incomplete { cause, .. } => Some(cause.diagnostics()),
+                _ => None,
+            },
             kind,
             revision,
             current_verified: state
@@ -2603,6 +2619,11 @@ impl<'a> SnapshotEvidenceV1<'a> {
     }
     pub(crate) const fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
         self.current_verified
+    }
+    pub(crate) const fn diagnostics(
+        self,
+    ) -> Option<&'a crate::program_diagnostics::ProgramDiagnosticsV1> {
+        self.diagnostics
     }
     pub(crate) const fn legacy_verified(self) -> Option<VerifiedCertificateV1<'a>> {
         self.legacy_verified
