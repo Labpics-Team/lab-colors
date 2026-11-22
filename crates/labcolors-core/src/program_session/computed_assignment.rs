@@ -3,6 +3,9 @@
 
 use super::*;
 use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1};
+use crate::wcag22::{
+    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22EvaluationErrorV1, evaluate_wcag22_srgb8,
+};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -547,7 +550,7 @@ impl RegionConstraintV1 {
     ) -> Result<bool, ()> {
         match self {
             Self::Wcag { criterion, .. } => {
-                crate::wcag22::rgb_boxes_may_pass(visible, backdrop, criterion).map_err(|_| ())
+                rgb_boxes_may_pass(visible, backdrop, criterion).map_err(|_| ())
             }
             Self::Exact { expected, .. } => Ok(expected
                 .bytes()
@@ -561,6 +564,28 @@ impl RegionConstraintV1 {
             }
         }
     }
+}
+
+/// Консервативное исключение двух RGB8-box. Монотонная Q55 luminance достигает
+/// крайних значений в RGB endpoints; проверяем обе возможные полярности через
+/// тот же точный point-kernel. `true` не удостоверяет допустимость всего box.
+fn rgb_boxes_may_pass(
+    foreground: ([u8; 3], [u8; 3]),
+    background: ([u8; 3], [u8; 3]),
+    criterion: Wcag22CriterionV1,
+) -> Result<bool, Wcag22EvaluationErrorV1> {
+    for (light, dark) in [(foreground.1, background.0), (background.1, foreground.0)] {
+        if matches!(
+            evaluate_wcag22_srgb8(light, dark, criterion)?,
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            }
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
