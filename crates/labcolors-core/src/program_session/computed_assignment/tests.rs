@@ -1151,7 +1151,9 @@ fn full_rgb_products_admit_authored_exact_and_singleton_control() {
                 .computed_for_test();
             assert_eq!(&*current.values, &anchors.map(|gray| Srgb8::new([gray; 3])));
             assert_eq!(current.search.completion, CompletionV1::AuthoredExact);
-            assert_eq!(current.search.visited, 1);
+            // Three independent colors each inspect their authored value once;
+            // the immutable shared input does not turn them into one search.
+            assert_eq!(current.search.visited, anchors.len() as u64);
             assert_eq!(current.search.regions, 0);
         }
     }
