@@ -1146,6 +1146,7 @@ const colors = await import("@labpics/colors");
 const wireApi = await import("@labpics/colors/program-wire/abi-v1.js");
 assert.deepEqual(Object.keys(colors).sort(), [
   "AttachedMaterializationAuthority",
+  "ColorAuthoringError",
   "MAX_CERTIFICATE_ENVELOPE_BYTES",
   "ProgramAttachedRender",
   "ProgramAttachedSnapshot",
@@ -1153,6 +1154,7 @@ assert.deepEqual(Object.keys(colors).sort(), [
   "ProgramRuntime",
   "ProgramSnapshot",
   "attachProgramWire",
+  "colors",
   "compileProgramWire",
   "decodeCertificateEnvelope",
   "default",
@@ -1197,6 +1199,29 @@ assert.throws(
   (error) => colors.isBindingError(error) &&
     error.operation === "evaluateWcag22" && error.code === "invalid_color",
 );
+
+const colorSystem = colors.colors(), canvas = colorSystem.surface("canvas");
+assert.throws(
+  () => colorSystem.role("invalid", "#GGGGGG"),
+  (error) => error instanceof colors.ColorAuthoringError && error.code === "color_invalid_definition",
+);
+const fill = colorSystem.role("warm", "#ce7332").on(canvas, { opacity: .72, separation: [.02, .6] });
+const label = colorSystem.role("ink", "#242424").on(fill, { contrast: "wcag22-text" });
+const link = colorSystem.role("blue", "#0067f4").on(canvas, { contrast: "wcag22-text" });
+const authoredProgram = await colorSystem.compile({ fill, label, link });
+try {
+  const frames = ["#ffffff", "#000000", "#6b7f72"].map((background) => authoredProgram.resolve({ canvas: background }));
+  for (const frame of frames) {
+    assert.equal(frame.state, "ready");
+    assert.equal(frame.values.fill.opacity, .72);
+    assert.equal(frame.values.label.opacity, 1);
+    assert.equal(frame.values.link.opacity, 1);
+  }
+  assert.notDeepEqual(frames[0].values.fill.rgb, frames[1].values.fill.rgb);
+  assert.notDeepEqual(frames[0].values.link.rgb, frames[1].values.link.rgb);
+} finally {
+  authoredProgram.dispose();
+}
 
 assert.equal(colors.MAX_CERTIFICATE_ENVELOPE_BYTES, 2_097_152);
 const issuedSource = colors.issueSourceCertificateEnvelope();
@@ -1341,6 +1366,7 @@ assert.equal(attachmentIntents.length, 1);
 export function typeSmokeSource() {
   return String.raw`
 import init, {
+  ColorAuthoringError,
   MAX_CERTIFICATE_ENVELOPE_BYTES,
   ProgramRuntime,
   ProgramSnapshot,
@@ -1348,6 +1374,7 @@ import init, {
   ProgramAttachedSnapshot,
   AttachedMaterializationAuthority,
   attachProgramWire,
+  colors,
   compileProgramWire,
   decodeCertificateEnvelope,
   evaluateWcag22,
@@ -1357,6 +1384,8 @@ import init, {
   issueSourceCertificateEnvelope,
   numericalCapabilityManifest,
   type BindingError,
+  type ColorProgram,
+  type ColorResolution,
   type CertificateDecodeErrorCode,
   type CertificateErrorCode,
   type CertificateProducerErrorCode,
@@ -1368,6 +1397,21 @@ import init, {
   type Wcag22CriterionV1,
   type ProgramPointSinkHost,
 } from "@labpics/colors";
+
+async function authoredTypes(): Promise<ColorProgram<"ink">> {
+  const system = colors(), canvas = system.surface("canvas");
+  const ink = system.role("ink", "#0067f4").on(canvas, { contrast: "wcag22-text" });
+  const program: ColorProgram<"ink"> = await system.compile({ ink });
+  const result: ColorResolution<"ink"> = program.resolve({ canvas: "#ffffff" });
+  if (result.state === "ready") {
+    const rgb: readonly [number, number, number] = result.values.ink.rgb;
+    void rgb;
+  }
+  return program;
+}
+const colorFailure = (error: unknown) => error instanceof ColorAuthoringError ? error.code : undefined;
+void authoredTypes;
+void colorFailure;
 
 async function boot(module: WebAssembly.Module, wire: Uint8Array): Promise<ProgramRuntime> {
   await init({ module_or_path: module });
