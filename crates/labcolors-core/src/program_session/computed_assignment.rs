@@ -320,7 +320,22 @@ struct ComputedComponentV1 {
 struct ComputedFactorV1 {
     targets: Box<[usize]>,
     inputs: Box<[usize]>,
-    constraint: Option<usize>,
+    kind: ComputedFactorKindV1,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComputedFactorKindV1 {
+    Constraint(usize),
+    Objective(usize),
+}
+
+impl ComputedFactorV1 {
+    fn constraint(&self) -> Option<usize> {
+        match self.kind {
+            ComputedFactorKindV1::Constraint(index) => Some(index),
+            ComputedFactorKindV1::Objective(_) => None,
+        }
+    }
 }
 
 /// Borrowed projections keep one owner of target declarations and bindings.

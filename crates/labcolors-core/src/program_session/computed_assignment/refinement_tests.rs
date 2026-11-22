@@ -80,7 +80,9 @@ fn twins(criterion: Wcag22CriterionV1) -> Program<Wcag22Srgb8V1> {
 #[test]
 fn distinct_identical_uses_stay_consistent_on_the_same_computed_parent() -> Result<(), String> {
     for opacity in [1.0, 0.5] {
-        identical_material_uses(opacity)?;
+        for background in [[244, 234, 219], [230, 221, 208], [0; 3], [255; 3]] {
+            identical_material_uses(opacity, background)?;
+        }
     }
     Ok(())
 }
@@ -102,7 +104,7 @@ fn material_parent(
     declaration
 }
 
-fn identical_material_uses(opacity: f64) -> Result<(), String> {
+fn identical_material_uses(opacity: f64, background: [u8; 3]) -> Result<(), String> {
     let owner = compile_assignment(
         material_parent(twins(Wcag22CriterionV1::Sc143TextDefault), opacity),
         65_536,
@@ -120,7 +122,7 @@ fn identical_material_uses(opacity: f64) -> Result<(), String> {
         .instantiate(ObservationStreamId::new(8))
         .map_err(|error| format!("local session: {error:?}"))?;
     local
-        .prepare_update(observed([244, 234, 219]))
+        .prepare_update(observed(background))
         .map_err(|error| format!("local resolve: {error:?}"))?
         .commit();
     let local = local
@@ -132,7 +134,7 @@ fn identical_material_uses(opacity: f64) -> Result<(), String> {
         .instantiate(ObservationStreamId::new(8))
         .map_err(|error| format!("session: {error:?}"))?;
     session
-        .prepare_update(observed([244, 234, 219]))
+        .prepare_update(observed(background))
         .map_err(|error| format!("resolve: {error:?}"))?
         .commit();
     let current = session
@@ -140,10 +142,9 @@ fn identical_material_uses(opacity: f64) -> Result<(), String> {
         .current_verified()
         .ok_or("whole composition ready")?
         .computed_for_test();
-    assert_eq!(current.values[0], Srgb8::new([244, 234, 219]));
     assert_eq!(
         current.values[0], local.values[0],
-        "the selected parent must be the same"
+        "the selected parent must be the same at opacity {opacity}, background {background:?}"
     );
     assert_eq!(
         current.values[1], local.values[1],
@@ -153,16 +154,59 @@ fn identical_material_uses(opacity: f64) -> Result<(), String> {
         current.values[1], current.values[2],
         "equivalent uses must not disagree because DFS ended between them"
     );
-    let anchor = lab(Srgb8::new([0, 103, 244]));
-    assert!(
-        squared_distance(lab(current.values[1]), anchor)
-            < squared_distance(lab(Srgb8::new([53, 95, 127])), anchor),
-        "restore the role's character instead of copying the washed-out incumbent"
-    );
+    if opacity == 1.0 || background == [244, 234, 219] {
+        assert_eq!(current.values[0], Srgb8::new([244, 234, 219]));
+        let anchor = lab(Srgb8::new([0, 103, 244]));
+        assert!(
+            squared_distance(lab(current.values[1]), anchor)
+                < squared_distance(lab(Srgb8::new([53, 95, 127])), anchor),
+            "restore the role's character instead of copying the washed-out incumbent"
+        );
+    }
+    if opacity == 0.5 && background == [0; 3] {
+        // The light visible anchor is unreachable through this material. Its
+        // best local source nevertheless permits the complete composition;
+        // adding an equivalent child must not consume that prefix's search.
+        let mut prefix = twins(Wcag22CriterionV1::Sc143TextDefault);
+        prefix.targets.truncate(1);
+        prefix.paints.truncate(1);
+        prefix.occurrences.truncate(1);
+        prefix.outputs.truncate(1);
+        prefix.constraints.hard.clear();
+        let prefix = compile_assignment(material_parent(prefix, opacity), 65_536)
+            .map_err(|error| format!("parent only: {error:?}"))?;
+        let mut prefix_session = prefix
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(|error| format!("parent session: {error:?}"))?;
+        prefix_session
+            .prepare_update(observed(background))
+            .map_err(|error| format!("parent resolve: {error:?}"))?
+            .commit();
+        let prefix = prefix_session
+            .state()
+            .current_verified()
+            .ok_or("parent-only result must be ready")?
+            .computed_for_test();
+        assert_eq!(prefix.search.completion, CompletionV1::Complete);
+        let anchor = lab(Srgb8::new([244, 234, 219]));
+        let first_score = |source: Srgb8| {
+            let visible =
+                Srgb8::new(source.bytes().map(|channel| {
+                    crate::composition::source_over_channel_srgb8(channel, opacity, 0)
+                }));
+            squared_distance(lab(visible), anchor)
+        };
+        assert_eq!(
+            first_score(current.values[0]),
+            first_score(prefix.values[0]),
+            "the feasible local prefix optimum remains available to the whole composition"
+        );
+    }
     if opacity == 1.0 {
         assert_eq!(current.search.completion, CompletionV1::Complete);
     }
-    assert!(current.search.visited <= 3 * 65_536);
+    assert!(current.search.visited <= 4 * 65_536);
+    assert!(local.search.visited <= 3 * 65_536);
     assert!(
         current
             .arena
@@ -228,7 +272,7 @@ fn different_downstream_conditions_keep_distinct_uses_free_to_differ() {
         "one shared role does not impose an equality constraint on distinct uses"
     );
     assert_eq!(current.values[2], Srgb8::new([0, 103, 244]));
-    assert!(current.search.visited <= 3 * 65_536);
+    assert!(current.search.visited <= 4 * 65_536);
     assert!(
         current
             .arena

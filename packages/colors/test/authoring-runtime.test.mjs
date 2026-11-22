@@ -91,9 +91,9 @@ for (const opacity of [1, 0.5]) {
         const frame = combined.resolve({ canvas }), local = isolated.resolve({ canvas });
         assert.equal(frame.state, "ready");
         assert.equal(local.state, "ready");
-        assert.deepEqual(frame.values.paper, local.values.paper);
-        assert.deepEqual(frame.values.first, local.values.first);
-        assert.deepEqual(frame.values.second, local.values.first);
+        assert.deepEqual(frame.values.paper, local.values.paper, `parent on ${canvas}`);
+        assert.deepEqual(frame.values.first, local.values.first, `first use on ${canvas}`);
+        assert.deepEqual(frame.values.second, local.values.first, `second use on ${canvas}`);
       }
     } finally { combined.dispose(); isolated.dispose(); }
   });

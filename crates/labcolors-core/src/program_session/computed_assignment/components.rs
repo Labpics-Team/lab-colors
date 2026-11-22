@@ -242,7 +242,7 @@ fn join(parents: &mut [usize], members: &[usize]) {
 fn copy_factor(
     targets: &[usize],
     inputs: &[usize],
-    constraint: Option<usize>,
+    kind: ComputedFactorKindV1,
 ) -> Result<ComputedFactorV1, ProgramCompileError> {
     let copy = |source: &[usize]| -> Result<Box<[usize]>, ProgramCompileError> {
         let mut result = Vec::new();
@@ -255,7 +255,7 @@ fn copy_factor(
     Ok(ComputedFactorV1 {
         targets: copy(targets)?,
         inputs: copy(inputs)?,
-        constraint,
+        kind,
     })
 }
 
@@ -318,7 +318,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         visible.clear_inputs();
         visible.constraint(program, index, scratch, constraint, &mut marked)?;
         collect(&marked, &mut members);
-        factors.push(copy_factor(&members, &visible.inputs, Some(ordinal))?);
+        factors.push(copy_factor(
+            &members,
+            &visible.inputs,
+            ComputedFactorKindV1::Constraint(ordinal),
+        )?);
         join(&mut parents, &members);
         constraint_members.push((ordinal, members.first().copied()));
     }
@@ -342,7 +346,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         if !members.contains(&ordinal) {
             members.push(ordinal);
         }
-        factors.push(copy_factor(&members, &visible.inputs, None)?);
+        factors.push(copy_factor(
+            &members,
+            &visible.inputs,
+            ComputedFactorKindV1::Objective(ordinal),
+        )?);
         join(&mut parents, &members);
     }
     let mut component_of =
@@ -459,9 +467,9 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         });
     }
     let constant_check = u64::from(!fixed.is_empty() || components.is_empty());
-    // A contextual task may make one conditional attempt after fixing a
-    // unique zero-distance prefix. At most n-1 residual tasks and its original
-    // bounded search can run; neither work nor fallback is hidden from reports.
+    // A contextual task may run one local prefix search and at most n-1
+    // residual searches. Its original budget still covers the full fallback
+    // and whole checks. Singleton tasks need no conditional search.
     let search_units = components
         .iter()
         .try_fold(0_u64, |total, component| {
@@ -469,8 +477,8 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .targets
                 .iter()
                 .any(|&target| selection.targets[target].declaration.intent.is_some());
-            let units = if contextual {
-                component.targets.len()
+            let units = if contextual && component.targets.len() > 1 {
+                component.targets.len().checked_add(1)?
             } else {
                 1
             };
@@ -493,7 +501,7 @@ pub(super) struct ConditionalComponentsV1 {
     pub(super) fixed_constraints: Vec<usize>,
 }
 
-/// Removing a proven fixed prefix changes factor connectivity, not any law.
+/// Fixing a candidate prefix changes factor connectivity, not any law.
 pub(super) fn conditioned(
     selection: &ComputedSelectionV1,
     component: &ComputedComponentV1,
@@ -548,7 +556,7 @@ pub(super) fn conditioned(
         .map_err(|_| ())?;
     for (index, factor) in selection.factors.iter().enumerate() {
         if factor
-            .constraint
+            .constraint()
             .is_some_and(|constraint| component.constraints.binary_search(&constraint).is_err())
         {
             continue;
@@ -557,11 +565,11 @@ pub(super) fn conditioned(
             let group = component_of[target];
             grouped_factors[group].try_reserve(1).map_err(|_| ())?;
             grouped_factors[group].push(index);
-            if let Some(constraint) = factor.constraint {
+            if let Some(constraint) = factor.constraint() {
                 grouped_constraints[group].try_reserve(1).map_err(|_| ())?;
                 grouped_constraints[group].push(constraint);
             }
-        } else if let Some(constraint) = factor.constraint {
+        } else if let Some(constraint) = factor.constraint() {
             fixed_constraints.push(constraint);
         }
     }
@@ -585,11 +593,11 @@ pub(super) fn conditioned(
         // Target contexts precede conditions, retaining authored local order.
         for &index in factors
             .iter()
-            .filter(|&&index| selection.factors[index].constraint.is_none())
+            .filter(|&&index| selection.factors[index].constraint().is_none())
             .chain(
                 factors
                     .iter()
-                    .filter(|&&index| selection.factors[index].constraint.is_some()),
+                    .filter(|&&index| selection.factors[index].constraint().is_some()),
             )
         {
             for &input in &selection.factors[index].inputs {
@@ -612,6 +620,57 @@ pub(super) fn conditioned(
         components,
         fixed_constraints,
     })
+}
+
+/// The first objective may be solved locally only when its physical context
+/// does not depend on the remaining variables. Hard factors follow the same
+/// dependency boundary, irrespective of which occurrence declared them.
+pub(super) fn leading(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    input_count: usize,
+) -> Result<Option<ComputedComponentV1>, ()> {
+    let &first = component.targets.first().ok_or(())?;
+    let objective = selection
+        .factors
+        .iter()
+        .find(|factor| factor.kind == ComputedFactorKindV1::Objective(first))
+        .ok_or(())?;
+    if objective.targets.iter().any(|&target| target != first) {
+        return Ok(None);
+    }
+    let mut inputs = Vec::new();
+    inputs.try_reserve_exact(input_count).map_err(|_| ())?;
+    let mut seen = buffer(input_count, false)?;
+    let mut collect_inputs = |factor: &ComputedFactorV1| {
+        for &input in &factor.inputs {
+            if !seen[input] {
+                seen[input] = true;
+                inputs.push(input);
+            }
+        }
+    };
+    collect_inputs(objective);
+    let mut constraints = Vec::new();
+    constraints
+        .try_reserve_exact(component.constraints.len())
+        .map_err(|_| ())?;
+    for factor in &selection.factors {
+        if factor.targets.as_ref() != [first] {
+            continue;
+        }
+        if let Some(constraint) = factor.constraint() {
+            if component.constraints.binary_search(&constraint).is_ok() {
+                constraints.push(constraint);
+                collect_inputs(factor);
+            }
+        }
+    }
+    Ok(Some(ComputedComponentV1 {
+        targets: buffer(1, first)?.into_boxed_slice(),
+        constraints: constraints.into_boxed_slice(),
+        inputs: inputs.into_boxed_slice(),
+    }))
 }
 
 pub(super) fn merge_evidence(

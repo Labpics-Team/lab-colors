@@ -10,7 +10,7 @@ use crate::color_intent::color_at_lightness;
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v12.independent-components.unique-zero-prefix.selected-parent-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v13.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -1045,7 +1045,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                 values: &mut best_values,
                 scores: &mut best_scores,
                 evidence: &mut evidence,
-                mode: conditional::ModeV1::SelectedParent,
+                mode: conditional::ModeV1::LocalPrefix,
             },
         )?;
     }
