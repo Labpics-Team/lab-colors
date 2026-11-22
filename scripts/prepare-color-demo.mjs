@@ -28,10 +28,10 @@ if (runtime?.path !== "pkg/labcolors_bg.wasm" || runtime.bytes !== wasm.length |
 for (const file of ["index.html", "style.css", "main.js", "declaration.js", "interaction.js"]) {
   await copyFile(resolve(root, "examples/contextual-colors", file), resolve(site, file));
 }
-await writeFile(resolve(site, ".nojekyll"), "");
 await writeFile(resolve(site, "release.json"), `${JSON.stringify({
   package: manifest.name, version, sourceSha, wasm: { bytes: wasm.length, sha256 },
 }, null, 2)}\n`);
 // npm's install-only manifest is not part of the browser example.
 await rm(resolve(site, "package.json"), { force: true });
+await rm(resolve(site, "node_modules/.package-lock.json"), { force: true });
 console.log(JSON.stringify({ version, sourceSha, wasmBytes: wasm.length, wasmSha256: sha256 }));
