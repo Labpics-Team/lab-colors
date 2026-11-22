@@ -88,6 +88,7 @@ jobs:
           test -f "$binaryen/wasm-opt.wasm"
           echo "BINARYEN_ROOT=$binaryen" >> "$GITHUB_ENV"
       - name: repeat runtime WASM build in one toolchain-pinned CI job
+        id: runtime-build
         env:
           PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
           PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
@@ -132,6 +133,7 @@ jobs:
             fi
           done
           sha256sum packages/colors/pkg/labcolors_bg.wasm
+          node scripts/record-wasm-measurement.mjs "$first/pkg" "$RUNNER_TEMP/wasm-measurement-$GITHUB_JOB"
           if [[ "$PROGRAM_BENCHMARK" == true ]]; then
             [[ "$PROGRAM_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$PROGRAM_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -158,6 +160,16 @@ jobs:
               --profile \
               --output "$results"
           fi
+      - name: upload canonical WASM measurement
+        # Review consumes these exact bytes when a feature changes the size baseline.
+        # A later benchmark or size failure does not invalidate an already reproduced build.
+        if: ${{ !cancelled() && steps.runtime-build.outputs.measurement-ready == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: colors-wasm-measurement-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wasm-measurement-${{ github.job }}
+          if-no-files-found: error
+          retention-days: 3
       - name: retain source-bound point-support evidence
         if: ${{ always() && inputs.program-benchmark }}
         run: |
