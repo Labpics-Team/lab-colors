@@ -1,15 +1,9 @@
 import { declareInterface } from "./declaration.js";
+import { createColorInteraction } from "./interaction.js";
 
 const byId = (id) => document.getElementById(id);
 const preview = byId("preview"), status = byId("status"), diagnostics = byId("diagnostics");
 const controls = { surface: byId("surface"), blue: byId("blue"), warm: byId("warm"), opacity: byId("opacity") };
-let program, view, authoredRevision = 0, pendingFrame = 0;
-
-
-function settings() {
-  return { blue: controls.blue.value, warm: controls.warm.value, opacity: Number(controls.opacity.value) / 100 };
-}
-
 function setStatus(message, state) {
   status.textContent = message;
   status.parentElement.dataset.state = state;
@@ -18,7 +12,7 @@ function setStatus(message, state) {
 function show(outcome) {
   if (outcome.state === "rejected") {
     const frame = outcome.proposed;
-    const retained = view?.current ? "Сохранён предыдущий интерфейс." : "Новый интерфейс пока не опубликован.";
+    const retained = interaction.current ? "Сохранён предыдущий интерфейс." : "Новый интерфейс пока не опубликован.";
     const messages = {
       conflict: `Изменение не применено: связанные условия несовместимы. ${retained}`,
       unresolved: `Поиск ещё не нашёл допустимый вариант. ${retained}`,
@@ -60,57 +54,30 @@ function report(error) {
   diagnostics.textContent = `${error.code ?? error.name}: ${error.message}`;
 }
 
-function applySurface() {
-  pendingFrame = 0;
-  if (!view) return;
-  try { show(view.set({ canvas: controls.surface.value })); }
-  catch (error) { report(error); }
-}
+const interaction = createColorInteraction({
+  compile: declareInterface,
+  attach: (program) => program.attach(preview),
+  onOutcome: show,
+  onError: report,
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (frame) => cancelAnimationFrame(frame),
+});
 
-function scheduleSurface() {
-  if (!pendingFrame) pendingFrame = requestAnimationFrame(applySurface);
-}
-
-async function applyAuthoredRevision() {
-  const generation = ++authoredRevision;
+function scheduleControls() {
   byId("opacity-value").value = `${controls.opacity.value}%`;
-  const next = await declareInterface(settings());
-  if (generation !== authoredRevision) { next.dispose(); return; }
-  try {
-    if (!view) {
-      view = next.attach(preview);
-      const outcome = view.set({ canvas: controls.surface.value });
-      program = next;
-      show(outcome);
-      return;
-    }
-    const outcome = view.replace(next, { canvas: controls.surface.value });
-    if (outcome.state === "committed") {
-      view = outcome.view;
-      program.dispose();
-      program = next;
-    } else next.dispose();
-    show(outcome);
-  } catch (error) { next.dispose(); throw error; }
+  interaction.schedule({ canvas: controls.surface.value, blue: controls.blue.value,
+    warm: controls.warm.value, opacity: Number(controls.opacity.value) / 100 });
 }
 
 for (const button of document.querySelectorAll("[data-surface]")) {
-  button.addEventListener("click", () => { controls.surface.value = button.dataset.surface; scheduleSurface(); });
+  button.addEventListener("click", () => { controls.surface.value = button.dataset.surface; scheduleControls(); });
 }
 document.querySelector("form").addEventListener("submit", (event) => event.preventDefault());
-controls.surface.addEventListener("input", scheduleSurface);
-for (const control of [controls.blue, controls.warm, controls.opacity]) {
-  control.addEventListener("input", () => applyAuthoredRevision().catch(report));
-}
+for (const control of Object.values(controls)) control.addEventListener("input", scheduleControls);
 byId("open-project").addEventListener("click", (event) => {
   const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
   event.currentTarget.setAttribute("aria-expanded", String(!expanded));
   byId("project-detail").hidden = expanded;
 });
-window.addEventListener("pagehide", () => {
-  authoredRevision += 1;
-  cancelAnimationFrame(pendingFrame);
-  view?.dispose();
-  program?.dispose();
-});
-await applyAuthoredRevision().catch(report);
+window.addEventListener("pagehide", () => interaction.dispose());
+scheduleControls();
