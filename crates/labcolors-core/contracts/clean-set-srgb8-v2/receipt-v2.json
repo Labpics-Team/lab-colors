@@ -6,11 +6,11 @@
   },
   "artifacts": [
     {
-      "bytes": 95814,
+      "bytes": 97657,
       "license": "MIT",
       "path": "crates/labcolors-core/src/appearance.rs",
       "role": "appearance_executor_source",
-      "sha256": "a7e3faa547e970770d917c74c5cf4f2a1980c28175098ee9044c066c5203a4ed"
+      "sha256": "c6a1e8ea9f47431a706c4bb615b0df288f1d877e97e979528d29aff6be61a3e0"
     },
     {
       "bytes": 6528,
@@ -48,11 +48,11 @@
       "sha256": "4bb505186198527498c45e4c26e70d91e5378b6cbfbd75c501bf508aac001796"
     },
     {
-      "bytes": 12508,
+      "bytes": 12522,
       "license": "MIT",
       "path": "crates/labcolors-core/src/lib.rs",
       "role": "module_registration_source",
-      "sha256": "b48a7103ab5f9b2b023412a2817934b0da00213a0d1831b703325a43a55dfd59"
+      "sha256": "212385ff0a3dd6b08bd2f4493e85007e12d103ac50edc076586c3e0e48de35ce"
     },
     {
       "bytes": 39506,
@@ -90,25 +90,25 @@
       "sha256": "444dfc35de1ea05414a1435318f62f89602cde7161b987f7fe7b93a1a391b16e"
     },
     {
-      "bytes": 221898,
+      "bytes": 222486,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program.rs",
       "role": "program_facade_source",
-      "sha256": "5c2929f6ae7494fa8025055caef16e3daadf6cb54e2e444f22324fe54cf0dd77"
+      "sha256": "82ad2b0ecf4ecee16b938106fa8315556cfe43ad6988511ba171162ba4511eb1"
     },
     {
-      "bytes": 205375,
+      "bytes": 205530,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_identity.rs",
       "role": "program_identity_source",
-      "sha256": "4eea396cee885d478b1cb2c56a23475309bf6451bb9db8eeb1ad1cfb5f86b8b0"
+      "sha256": "4752c0818ea71e8b69e607a92f0c048da1847351359b30dbfb0e2c32c986dd36"
     },
     {
-      "bytes": 261194,
+      "bytes": 261643,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session.rs",
       "role": "program_source",
-      "sha256": "260577e3cda917ff556ba21b6b26e26cdb3abccc4ef932b6435814387cad9526"
+      "sha256": "909780ad75ea32b1abb4517c4ac45f8e0073ed99e33a4204a33c0c31286f8ea6"
     },
     {
       "bytes": 21892,

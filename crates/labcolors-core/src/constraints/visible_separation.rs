@@ -51,6 +51,7 @@ pub struct ProgramVisibleSeparationMeasurementV1 {
     visible: Srgb8,
     backdrop: Srgb8,
     distance_bits: u64,
+    distance_bounds_bits: [u64; 2],
     bounds: VisibleSeparationBoundsV1,
 }
 
@@ -67,10 +68,20 @@ impl ProgramVisibleSeparationMeasurementV1 {
         self.backdrop
     }
 
-    /// Машинное f64-расстояние, которым принят сохранённый verdict.
+    /// Расстояние между reference-цветами.
     #[must_use]
     pub const fn distance(self) -> f64 {
         f64::from_bits(self.distance_bits)
+    }
+
+    /// Диапазон расстояний с учётом точности вывода материала. Для точечного
+    /// reference-контракта обе границы равны `distance()`.
+    #[must_use]
+    pub const fn distance_bounds(self) -> [f64; 2] {
+        [
+            f64::from_bits(self.distance_bounds_bits[0]),
+            f64::from_bits(self.distance_bounds_bits[1]),
+        ]
     }
 
     /// Включённая нижняя граница клиента.
@@ -116,6 +127,7 @@ fn measure(
         visible,
         backdrop,
         distance_bits: distance.to_bits(),
+        distance_bounds_bits: [distance.to_bits(); 2],
         bounds,
     }
 }
@@ -144,11 +156,22 @@ impl Evaluator<ProgramPointTargetV1> for VisibleSeparationV1 {
         invocation: &Self::Invocation,
     ) -> Result<Self::Measurement, Self::Error> {
         let encoded = target.encoded();
-        Ok(measure(
+        let mut measurement = measure(
             Srgb8::new(encoded.visible()),
             Srgb8::new(encoded.backdrop()),
             *invocation,
-        ))
+        );
+        if target.emission().same_as_backdrop {
+            measurement.distance_bounds_bits = [0.0_f64.to_bits(); 2];
+        } else if !target.emission().exact() {
+            let emission = target.emission();
+            let range = crate::spaces::oklab::srgb8_boxes_distance_bounds(
+                crate::emission::rgb_bounds(encoded.visible(), emission.visible_radius),
+                crate::emission::rgb_bounds(encoded.backdrop(), emission.backdrop_radius),
+            );
+            measurement.distance_bounds_bits = range.map(f64::to_bits);
+        }
+        Ok(measurement)
     }
 }
 
@@ -177,10 +200,9 @@ impl HardClassifier<VisibleSeparationBoundsV1, ProgramVisibleSeparationMeasureme
         invocation: &VisibleSeparationBoundsV1,
         measurement: &ProgramVisibleSeparationMeasurementV1,
     ) -> HardDecision<Self::Pass, Self::Violation> {
-        // Решение использует именно опубликованное distance, без скрытого
-        // epsilon и без иной округлённой границы в squared-distance пространстве.
-        let distance = measurement.distance();
-        if distance >= invocation.minimum() && distance <= invocation.maximum() {
+        // Both authored bounds must hold over the material's emission range.
+        let [lower, upper] = measurement.distance_bounds();
+        if lower >= invocation.minimum() && upper <= invocation.maximum() {
             HardDecision::Pass(VisibleSeparationPassV1)
         } else {
             HardDecision::Violation(VisibleSeparationViolationV1)

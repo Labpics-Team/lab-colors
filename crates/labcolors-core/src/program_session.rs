@@ -414,6 +414,8 @@ pub enum Surface {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompositionProfile {
     EncodedSrgb8SourceOverV1,
+    /// Reference source-over with the package's encoded-byte raster allowance.
+    RasterSrgb8SourceOverV1,
 }
 
 /// The canonical application of one Paint to one Surface.
@@ -5541,9 +5543,16 @@ where
     canonicalize_families(&mut program.families)?;
     let required_family_releases = canonical_required_family_releases(&program.families)?;
 
-    let graph = lower_graph(&program)?
+    let mut graph = lower_graph(&program)?
         .compile()
         .map_err(map_compile_error)?;
+    for occurrence in &program.occurrences {
+        if occurrence.composition == CompositionProfile::RasterSrgb8SourceOverV1
+            && !graph.set_raster_precision(occurrence.id)
+        {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+    }
     validate_surface_input_bijection(&program)?;
     let binding_template = graph
         .admit_bindings(&lower_bindings(&program)?)
@@ -7201,7 +7210,8 @@ where
             subject: occurrence.subject,
             against: occurrence.against,
             profile: match occurrence.composition {
-                CompositionProfile::EncodedSrgb8SourceOverV1 => {
+                CompositionProfile::EncodedSrgb8SourceOverV1
+                | CompositionProfile::RasterSrgb8SourceOverV1 => {
                     CompositionProfileV1::EncodedSrgb8SourceOverV1
                 }
             },

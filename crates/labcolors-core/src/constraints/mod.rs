@@ -272,15 +272,23 @@ pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProgramPointTargetV1 {
     encoded: ModeledSrgb8PointOccurrence,
+    emission: crate::emission::PointEmissionV1,
 }
 
 impl ProgramPointTargetV1 {
-    pub(crate) const fn new(encoded: ModeledSrgb8PointOccurrence) -> Self {
-        Self { encoded }
+    pub(crate) const fn new(
+        encoded: ModeledSrgb8PointOccurrence,
+        emission: crate::emission::PointEmissionV1,
+    ) -> Self {
+        Self { encoded, emission }
     }
 
     pub(crate) const fn encoded(self) -> ModeledSrgb8PointOccurrence {
         self.encoded
+    }
+
+    pub(crate) const fn emission(self) -> crate::emission::PointEmissionV1 {
+        self.emission
     }
 }
 
@@ -292,6 +300,7 @@ pub(crate) struct ProgramPointOccurrenceV1 {
     encoded: ModeledSrgb8PointOccurrence,
     physical: VisiblePointBindingV1,
     context: AppearanceContextId,
+    emission: crate::emission::PointEmissionV1,
 }
 
 impl ProgramPointOccurrenceV1 {
@@ -300,17 +309,19 @@ impl ProgramPointOccurrenceV1 {
             encoded: source.modeled_srgb8_point(),
             physical: source.visible_point_binding(),
             context,
+            emission: source.emission(),
         }
     }
 
     pub(crate) const fn target(self) -> ProgramPointTargetV1 {
-        ProgramPointTargetV1::new(self.encoded)
+        ProgramPointTargetV1::new(self.encoded, self.emission)
     }
 
     pub(crate) const fn binding(self) -> ProgramVisiblePointBindingV1 {
         ProgramVisiblePointBindingV1 {
             physical: self.physical,
             context: self.context,
+            emission: self.emission,
         }
     }
 }
@@ -755,6 +766,7 @@ impl HardClassifier<Srgb8, Srgb8> for FinalRecheckMutantProgramEvaluatorV1 {
 pub(crate) struct ProgramVisiblePointBindingV1 {
     physical: VisiblePointBindingV1,
     context: AppearanceContextId,
+    emission: crate::emission::PointEmissionV1,
 }
 
 impl ProgramVisiblePointBindingV1 {

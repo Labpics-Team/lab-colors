@@ -44,6 +44,7 @@ mod release_tag {
     pub(super) const MUTATION_SENTINEL_FRAME_V1: u8 = 2;
     pub(super) const CIECAM16_VIEWING_INPUTS_V1: u8 = 1;
     pub(super) const ENCODED_SRGB8_SOURCE_OVER_V1: u8 = 1;
+    pub(super) const RASTER_SRGB8_SOURCE_OVER_V1: u8 = 2;
     pub(super) const SURROUND_AVERAGE_V1: u8 = 1;
     pub(super) const SURROUND_DIM_V1: u8 = 2;
     pub(super) const SURROUND_DARK_V1: u8 = 3;
@@ -600,6 +601,7 @@ fn occurrence_color(occurrence: Occurrence) -> Result<VertexColorV1, ProgramComp
     let mut color = VertexColorV1::new(vertex_tag::OCCURRENCE);
     color.push_u8(match occurrence.composition() {
         CompositionProfile::EncodedSrgb8SourceOverV1 => release_tag::ENCODED_SRGB8_SOURCE_OVER_V1,
+        CompositionProfile::RasterSrgb8SourceOverV1 => release_tag::RASTER_SRGB8_SOURCE_OVER_V1,
     })?;
     write_context(&mut color, occurrence.context())?;
     Ok(color)

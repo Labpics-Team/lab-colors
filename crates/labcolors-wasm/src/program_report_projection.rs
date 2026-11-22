@@ -62,6 +62,8 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
                 bg,
                 bb,
                 measurement.distance(),
+                measurement.distance_bounds()[0],
+                measurement.distance_bounds()[1],
                 measurement.minimum(),
                 measurement.maximum(),
             )

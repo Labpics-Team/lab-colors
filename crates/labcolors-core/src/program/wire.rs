@@ -556,12 +556,21 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 reader.declaration_error(entry_offset)
             },
         )?;
-        draft.push_source_over_occurrence(
-            OccurrenceIdV1::new(id),
-            PaintIdV1::new(subject),
-            SurfaceIdV1::new(against),
-            context,
-        );
+        if surround_tag == 0 {
+            draft.push_raster_occurrence(
+                OccurrenceIdV1::new(id),
+                PaintIdV1::new(subject),
+                SurfaceIdV1::new(against),
+                context,
+            );
+        } else {
+            draft.push_source_over_occurrence(
+                OccurrenceIdV1::new(id),
+                PaintIdV1::new(subject),
+                SurfaceIdV1::new(against),
+                context,
+            );
+        }
     }
 
     // Presentation roots: id + terminal occurrence.
@@ -1549,6 +1558,10 @@ mod proofs;
 #[cfg(test)]
 #[path = "visible_separation_tests.rs"]
 mod visible_separation_tests;
+
+#[cfg(test)]
+#[path = "material_emission_tests.rs"]
+mod material_emission_tests;
 
 #[cfg(test)]
 mod assignment_v3_tests {

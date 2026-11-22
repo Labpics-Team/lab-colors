@@ -1600,6 +1600,24 @@ impl DraftV1 {
         self
     }
 
+    /// Объявляет материал с общим контрактом точности encoded-sRGB8 вывода.
+    pub(crate) fn push_raster_occurrence(
+        &mut self,
+        id: OccurrenceIdV1,
+        subject: PaintIdV1,
+        against: SurfaceIdV1,
+        context: AppearanceContextV1,
+    ) -> &mut Self {
+        self.inner.push_occurrence(Occurrence::new(
+            id.into_core(),
+            subject.into_core(),
+            against.into_core(),
+            CompositionProfile::RasterSrgb8SourceOverV1,
+            context.0,
+        ));
+        self
+    }
+
     /// Объявляет один терминальный корень моделируемого точечного графа.
     pub(crate) fn push_point_presentation_root(
         &mut self,

@@ -616,6 +616,7 @@ impl AppearanceGraphSpec {
                 against: surface_index(occurrence.against)
                     .unwrap_or_else(|| unreachable!("surface links were validated")),
                 profile: occurrence.profile,
+                raster_precision: false,
                 consumed_downstream: false,
             })
             .collect();
@@ -791,6 +792,7 @@ struct CompiledOccurrenceSpec {
     against_id: SurfaceId,
     against: usize,
     profile: CompositionProfileV1,
+    raster_precision: bool,
     consumed_downstream: bool,
 }
 
@@ -1014,6 +1016,7 @@ const POINT_OCCURRENCES: [CompiledOccurrenceSpec; 1] = [CompiledOccurrenceSpec {
     against_id: POINT_CONTEXT_SURFACE,
     against: 0,
     profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+    raster_precision: false,
     consumed_downstream: false,
 }];
 const POINT_PAINT_TOPO: [usize; 2] = [0, 1];
@@ -1604,6 +1607,7 @@ pub(crate) struct ResolvedOccurrence {
     subject: PaintId,
     against: SurfaceId,
     certificate: SourceOverCertificateV1,
+    emission: crate::emission::PointEmissionV1,
 }
 
 impl ResolvedOccurrence {
@@ -1655,6 +1659,10 @@ impl ResolvedOccurrence {
 
     pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
         &self.certificate
+    }
+
+    pub(crate) const fn emission(&self) -> crate::emission::PointEmissionV1 {
+        self.emission
     }
 }
 
@@ -2170,6 +2178,16 @@ impl CompiledAppearanceGraph {
         self.occurrences.iter().map(|occurrence| occurrence.id)
     }
 
+    /// Admission-only selection of the material emission contract. The
+    /// reference composition certificate keeps its original mathematical law.
+    pub(crate) fn set_raster_precision(&mut self, id: OccurrenceId) -> bool {
+        let Ok(index) = self.occurrences.binary_search_by_key(&id, |point| point.id) else {
+            return false;
+        };
+        self.occurrences[index].raster_precision = true;
+        true
+    }
+
     /// Canonical physical Surface-input schema accepted by this program.
     pub(crate) fn surface_input_ports(
         &self,
@@ -2510,11 +2528,33 @@ impl<'program> CompiledAppearanceProgram<'program> {
                         subject.opacity(),
                         backdrop.bytes(),
                     );
+                    let backdrop_radius = match self.surfaces[spec.against] {
+                        CompiledSurfaceSpec::Input { .. } => 0,
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => {
+                            resolved_occurrences[occurrence]
+                                .unwrap_or_else(|| unreachable!("render order is compiled"))
+                                .emission
+                                .visible_radius
+                        }
+                    };
+                    let emission = crate::emission::PointEmissionV1 {
+                        visible_radius: crate::emission::radius_after(
+                            spec.raster_precision,
+                            subject.source().bytes(),
+                            subject.opacity(),
+                            backdrop.bytes(),
+                            certificate.output_rgb(),
+                            backdrop_radius,
+                        ),
+                        backdrop_radius,
+                        same_as_backdrop: subject.opacity().bits() == 0,
+                    };
                     resolved_occurrences[index] = Some(ResolvedOccurrence {
                         id: spec.id,
                         subject: spec.subject_id,
                         against: spec.against_id,
                         certificate,
+                        emission,
                     });
                 }
             }

@@ -68,7 +68,7 @@ export type ProgramConstraintAssessmentV1 =
       kind: "visible-separation"; verdict: ProgramAssessmentVerdictV1;
       visible: readonly [number, number, number];
       backdrop: readonly [number, number, number];
-      distance: number; minimum: number; maximum: number;
+      distance: number; distanceBounds: readonly [number, number]; minimum: number; maximum: number;
     }>
   | Readonly<{
       kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
@@ -304,12 +304,12 @@ export function diagnosticWitness(caseScenarioIds, targets, violations) {
 export function diagnosticsProjection(searchVisited, searchBudget, witness) {
   return reportFreeze({searchVisited, searchBudget, witness});
 }
-export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, minimum, maximum) {
+export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, distanceLower, distanceUpper, minimum, maximum) {
   return reportFreeze({
     kind: "visible-separation", verdict,
     visible: reportFreeze([vr, vg, vb]),
     backdrop: reportFreeze([br, bg, bb]),
-    distance, minimum, maximum,
+    distance, distanceBounds: reportFreeze([distanceLower, distanceUpper]), minimum, maximum,
   });
 }
 export function reportAccepted(red, green, blue) {
@@ -439,6 +439,8 @@ extern "C" {
         backdrop_green: u8,
         backdrop_blue: u8,
         distance: f64,
+        distance_lower: f64,
+        distance_upper: f64,
         minimum: f64,
         maximum: f64,
     ) -> Result<JsValue, JsValue>;

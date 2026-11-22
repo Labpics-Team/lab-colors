@@ -555,22 +555,8 @@ impl RegionConstraintV1 {
                 .enumerate()
                 .all(|(i, value)| visible.0[i] <= *value && *value <= visible.1[i])),
             Self::Separation { bounds, .. } => {
-                let (left_lo, left_hi) =
-                    crate::spaces::oklab::srgb8_box_oklab_bounds(visible.0, visible.1);
-                let (right_lo, right_hi) =
-                    crate::spaces::oklab::srgb8_box_oklab_bounds(backdrop.0, backdrop.1);
-                let lower = std::array::from_fn::<_, 3, _>(|i| {
-                    (left_lo[i] - right_hi[i])
-                        .max(right_lo[i] - left_hi[i])
-                        .max(0.0)
-                });
-                let upper = std::array::from_fn::<_, 3, _>(|i| {
-                    (left_hi[i] - right_lo[i])
-                        .abs()
-                        .max((right_hi[i] - left_lo[i]).abs())
-                });
-                let minimum = squared_distance(lower, [0.0; 3]).sqrt();
-                let maximum = squared_distance(upper, [0.0; 3]).sqrt();
+                let [minimum, maximum] =
+                    crate::spaces::oklab::srgb8_boxes_distance_bounds(visible, backdrop);
                 Ok(minimum <= bounds.maximum() && maximum >= bounds.minimum())
             }
         }

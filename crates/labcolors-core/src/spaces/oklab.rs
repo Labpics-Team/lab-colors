@@ -88,6 +88,27 @@ pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3
     (minimum, maximum)
 }
 
+/// Conservative distance range shared by search pruning and material admission.
+pub(crate) fn srgb8_boxes_distance_bounds(
+    left: ([u8; 3], [u8; 3]),
+    right: ([u8; 3], [u8; 3]),
+) -> [f64; 2] {
+    let (left_lo, left_hi) = srgb8_box_oklab_bounds(left.0, left.1);
+    let (right_lo, right_hi) = srgb8_box_oklab_bounds(right.0, right.1);
+    let lower = std::array::from_fn::<_, 3, _>(|i| {
+        (left_lo[i] - right_hi[i])
+            .max(right_lo[i] - left_hi[i])
+            .max(0.0)
+    });
+    let upper = std::array::from_fn::<_, 3, _>(|i| {
+        (left_hi[i] - right_lo[i])
+            .abs()
+            .max((right_hi[i] - left_lo[i]).abs())
+    });
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [norm(lower), norm(upper)]
+}
+
 /// Direct 2021 Oklab projection of one relative XYZ(D65) stimulus.
 ///
 /// The caller owns frame admission. This kernel does not perform chromatic

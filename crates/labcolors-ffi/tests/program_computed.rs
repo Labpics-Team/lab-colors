@@ -149,6 +149,8 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
         visible,
         backdrop,
         distance,
+        distance_lower,
+        distance_upper,
         minimum,
         maximum,
     } = cell.assessment
@@ -160,6 +162,7 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
     assert_eq!(backdrop, rgb(255));
     assert_eq!((minimum, maximum), (0.18, 0.21));
     assert!((minimum..=maximum).contains(&distance));
+    assert_eq!((distance_lower, distance_upper), (distance, distance));
     let mut changed = ready.assessment_report()?.ok_or("independent report")?;
     changed.cells.clear();
     changed.content_identity.fill(0);
