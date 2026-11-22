@@ -239,6 +239,26 @@ fn join(parents: &mut [usize], members: &[usize]) {
     }
 }
 
+fn copy_factor(
+    targets: &[usize],
+    inputs: &[usize],
+    constraint: Option<usize>,
+) -> Result<ComputedFactorV1, ProgramCompileError> {
+    let copy = |source: &[usize]| -> Result<Box<[usize]>, ProgramCompileError> {
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(source.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        result.extend_from_slice(source);
+        Ok(result.into_boxed_slice())
+    };
+    Ok(ComputedFactorV1 {
+        targets: copy(targets)?,
+        inputs: copy(inputs)?,
+        constraint,
+    })
+}
+
 pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluatorSetV1>(
     selection: &mut ComputedSelectionV1,
     program: &Program<E>,
@@ -281,33 +301,48 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     constraint_members
         .try_reserve_exact(constraints.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    let mut factors = Vec::new();
+    factors
+        .try_reserve_exact(
+            constraints
+                .len()
+                .checked_add(count)
+                .ok_or(ProgramCompileError::ResourceExhausted)?,
+        )
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for (ordinal, constraint) in constraints.iter().enumerate() {
         if !constraint.mode.rejects_candidate() {
             continue;
         }
         marked.fill(false);
+        visible.clear_inputs();
         visible.constraint(program, index, scratch, constraint, &mut marked)?;
         collect(&marked, &mut members);
+        factors.push(copy_factor(&members, &visible.inputs, Some(ordinal))?);
         join(&mut parents, &members);
         constraint_members.push((ordinal, members.first().copied()));
     }
     // A visible identity/recourse can couple sources even without a separate
     // contrast constraint. Its own variable remains in the same task.
     for (ordinal, target) in selection.targets.iter().enumerate() {
-        let Some(appearance) = target
+        let appearance = target
             .declaration
             .intent
             .as_ref()
-            .and_then(|intent| intent.appearance)
-        else {
-            continue;
-        };
+            .and_then(|intent| intent.appearance);
         marked.fill(false);
-        visible.visible(index, appearance, &mut marked)?;
+        visible.clear_inputs();
+        if let Some(appearance) = appearance {
+            visible.visible(index, appearance, &mut marked)?;
+        }
+        if let Some(input) = target.tone_input {
+            visible.input(input);
+        }
         collect(&marked, &mut members);
         if !members.contains(&ordinal) {
             members.push(ordinal);
         }
+        factors.push(copy_factor(&members, &visible.inputs, None)?);
         join(&mut parents, &members);
     }
     let mut component_of =
@@ -424,19 +459,165 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         });
     }
     let constant_check = u64::from(!fixed.is_empty() || components.is_empty());
+    // A contextual task may make one conditional attempt after fixing a
+    // unique zero-distance prefix. At most n-1 residual tasks and its original
+    // bounded search can run; neither work nor fallback is hidden from reports.
+    let search_units = components
+        .iter()
+        .try_fold(0_u64, |total, component| {
+            let contextual = component
+                .targets
+                .iter()
+                .any(|&target| selection.targets[target].declaration.intent.is_some());
+            let units = if contextual {
+                component.targets.len()
+            } else {
+                1
+            };
+            total.checked_add(u64::try_from(units).ok()?)
+        })
+        .ok_or(ProgramCompileError::ResourceExhausted)?;
     selection.total_budget = selection
         .budget
-        .checked_mul(
-            u64::try_from(components.len()).map_err(|_| ProgramCompileError::ResourceExhausted)?,
-        )
+        .checked_mul(search_units)
         .and_then(|budget| budget.checked_add(constant_check))
         .ok_or(ProgramCompileError::ResourceExhausted)?;
     selection.components = components.into_boxed_slice();
+    selection.factors = factors.into_boxed_slice();
     selection.fixed_constraints = fixed.into_boxed_slice();
     Ok(())
 }
 
-fn merge_evidence(left: &mut SearchEvidenceV1, right: SearchEvidenceV1) -> Result<(), ()> {
+pub(super) struct ConditionalComponentsV1 {
+    pub(super) components: Vec<ComputedComponentV1>,
+    pub(super) fixed_constraints: Vec<usize>,
+}
+
+/// Removing a proven fixed prefix changes factor connectivity, not any law.
+pub(super) fn conditioned(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    prefix: usize,
+    input_count: usize,
+) -> Result<ConditionalComponentsV1, ()> {
+    let count = selection.targets.len();
+    let mut active = buffer(count, false)?;
+    for &target in &component.targets[prefix..] {
+        active[target] = true;
+    }
+    let mut parents = buffer(count, 0)?;
+    for (index, parent) in parents.iter_mut().enumerate() {
+        *parent = index;
+    }
+    let mut members = Vec::new();
+    members
+        .try_reserve_exact(component.targets.len())
+        .map_err(|_| ())?;
+    for factor in &selection.factors {
+        members.clear();
+        members.extend(
+            factor
+                .targets
+                .iter()
+                .copied()
+                .filter(|&target| active[target]),
+        );
+        join(&mut parents, &members);
+    }
+    let mut component_of = buffer(count, usize::MAX)?;
+    let mut grouped_targets: Vec<Vec<usize>> = Vec::new();
+    grouped_targets
+        .try_reserve_exact(component.targets.len() - prefix)
+        .map_err(|_| ())?;
+    for &target in &component.targets[prefix..] {
+        let representative = root(&mut parents, target);
+        if component_of[representative] == usize::MAX {
+            component_of[representative] = grouped_targets.len();
+            grouped_targets.push(Vec::new());
+        }
+        let group = component_of[representative];
+        component_of[target] = group;
+        grouped_targets[group].try_reserve(1).map_err(|_| ())?;
+        grouped_targets[group].push(target);
+    }
+    let mut grouped_constraints = buffer(grouped_targets.len(), Vec::new())?;
+    let mut grouped_factors = buffer(grouped_targets.len(), Vec::new())?;
+    let mut fixed_constraints = Vec::new();
+    fixed_constraints
+        .try_reserve_exact(component.constraints.len())
+        .map_err(|_| ())?;
+    for (index, factor) in selection.factors.iter().enumerate() {
+        if factor
+            .constraint
+            .is_some_and(|constraint| component.constraints.binary_search(&constraint).is_err())
+        {
+            continue;
+        }
+        if let Some(&target) = factor.targets.iter().find(|&&target| active[target]) {
+            let group = component_of[target];
+            grouped_factors[group].try_reserve(1).map_err(|_| ())?;
+            grouped_factors[group].push(index);
+            if let Some(constraint) = factor.constraint {
+                grouped_constraints[group].try_reserve(1).map_err(|_| ())?;
+                grouped_constraints[group].push(constraint);
+            }
+        } else if let Some(constraint) = factor.constraint {
+            fixed_constraints.push(constraint);
+        }
+    }
+    let mut seen_inputs = buffer(input_count, false)?;
+    let mut components = Vec::new();
+    components
+        .try_reserve_exact(grouped_targets.len())
+        .map_err(|_| ())?;
+    for ((targets, constraints), factors) in grouped_targets
+        .into_iter()
+        .zip(grouped_constraints)
+        .zip(grouped_factors)
+    {
+        let mut inputs = Vec::new();
+        let capacity = factors.iter().fold(0_usize, |total, &index| {
+            total
+                .saturating_add(selection.factors[index].inputs.len())
+                .min(input_count)
+        });
+        inputs.try_reserve_exact(capacity).map_err(|_| ())?;
+        // Target contexts precede conditions, retaining authored local order.
+        for &index in factors
+            .iter()
+            .filter(|&&index| selection.factors[index].constraint.is_none())
+            .chain(
+                factors
+                    .iter()
+                    .filter(|&&index| selection.factors[index].constraint.is_some()),
+            )
+        {
+            for &input in &selection.factors[index].inputs {
+                if !seen_inputs[input] {
+                    seen_inputs[input] = true;
+                    inputs.push(input);
+                }
+            }
+        }
+        for &input in &inputs {
+            seen_inputs[input] = false;
+        }
+        components.push(ComputedComponentV1 {
+            targets: targets.into_boxed_slice(),
+            constraints: constraints.into_boxed_slice(),
+            inputs: inputs.into_boxed_slice(),
+        });
+    }
+    Ok(ConditionalComponentsV1 {
+        components,
+        fixed_constraints,
+    })
+}
+
+pub(super) fn merge_evidence(
+    left: &mut SearchEvidenceV1,
+    right: SearchEvidenceV1,
+) -> Result<(), ()> {
     for (left, right) in [
         (&mut left.visited, right.visited),
         (&mut left.regions, right.regions),

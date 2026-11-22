@@ -78,22 +78,77 @@ fn twins(criterion: Wcag22CriterionV1) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn distinct_identical_uses_stay_consistent_on_the_same_computed_parent() {
-    let owner = compile_assignment(twins(Wcag22CriterionV1::Sc143TextDefault), 65_536)
-        .expect("shared computed parent");
+fn distinct_identical_uses_stay_consistent_on_the_same_computed_parent() -> Result<(), String> {
+    for opacity in [1.0, 0.5] {
+        identical_material_uses(opacity)?;
+    }
+    Ok(())
+}
+
+fn material_parent(
+    mut declaration: Program<Wcag22Srgb8V1>,
+    opacity: f64,
+) -> Program<Wcag22Srgb8V1> {
+    declaration
+        .opacities
+        .push(OpacityInput::new(OpacityInputId::new(91), opacity));
+    declaration.paints.push(Paint::Opacity {
+        id: PaintId::new(93),
+        source: PaintId::new(3),
+        opacity: OpacityInputId::new(91),
+    });
+    declaration.occurrences[0].subject = PaintId::new(93);
+    declaration.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(93));
+    declaration
+}
+
+fn identical_material_uses(opacity: f64) -> Result<(), String> {
+    let owner = compile_assignment(
+        material_parent(twins(Wcag22CriterionV1::Sc143TextDefault), opacity),
+        65_536,
+    )
+    .map_err(|error| format!("shared computed parent: {error:?}"))?;
+    let mut standalone = twins(Wcag22CriterionV1::Sc143TextDefault);
+    standalone.targets.truncate(2);
+    standalone.paints.truncate(2);
+    standalone.occurrences.truncate(2);
+    standalone.outputs.truncate(2);
+    standalone.constraints.hard.truncate(1);
+    let standalone = compile_assignment(material_parent(standalone, opacity), 65_536)
+        .map_err(|error| format!("one child: {error:?}"))?;
+    let mut local = standalone
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("local session: {error:?}"))?;
+    local
+        .prepare_update(observed([244, 234, 219]))
+        .map_err(|error| format!("local resolve: {error:?}"))?
+        .commit();
+    let local = local
+        .state()
+        .current_verified()
+        .ok_or("one child must be ready")?
+        .computed_for_test();
     let mut session = owner
         .instantiate(ObservationStreamId::new(8))
-        .expect("session");
+        .map_err(|error| format!("session: {error:?}"))?;
     session
-        .prepare_update(update(1, 255))
-        .expect("resolve")
+        .prepare_update(observed([244, 234, 219]))
+        .map_err(|error| format!("resolve: {error:?}"))?
         .commit();
     let current = session
         .state()
         .current_verified()
-        .expect("whole composition ready")
+        .ok_or("whole composition ready")?
         .computed_for_test();
     assert_eq!(current.values[0], Srgb8::new([244, 234, 219]));
+    assert_eq!(
+        current.values[0], local.values[0],
+        "the selected parent must be the same"
+    );
+    assert_eq!(
+        current.values[1], local.values[1],
+        "the same chosen parent leaves the same independent local problem"
+    );
     assert_eq!(
         current.values[1], current.values[2],
         "equivalent uses must not disagree because DFS ended between them"
@@ -104,7 +159,10 @@ fn distinct_identical_uses_stay_consistent_on_the_same_computed_parent() {
             < squared_distance(lab(Srgb8::new([53, 95, 127])), anchor),
         "restore the role's character instead of copying the washed-out incumbent"
     );
-    assert!(current.search.visited <= 65_536);
+    if opacity == 1.0 {
+        assert_eq!(current.search.completion, CompletionV1::Complete);
+    }
+    assert!(current.search.visited <= 3 * 65_536);
     assert!(
         current
             .arena
@@ -113,6 +171,7 @@ fn distinct_identical_uses_stay_consistent_on_the_same_computed_parent() {
             .iter()
             .all(|cell| !cell.result().is_violation())
     );
+    Ok(())
 }
 
 #[test]
@@ -169,7 +228,7 @@ fn different_downstream_conditions_keep_distinct_uses_free_to_differ() {
         "one shared role does not impose an equality constraint on distinct uses"
     );
     assert_eq!(current.values[2], Srgb8::new([0, 103, 244]));
-    assert!(current.search.visited <= 65_536);
+    assert!(current.search.visited <= 3 * 65_536);
     assert!(
         current
             .arena

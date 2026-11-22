@@ -314,7 +314,7 @@ mod tests {
         CompiledProgramV1, ProgramScenarioV1, ProgramSessionV1, ProgramSnapshotStateV1,
     };
 
-    fn runtime(nominal_profile: bool) -> ProgramSessionV1 {
+    fn runtime(nominal_profile: bool) -> Result<ProgramSessionV1, String> {
         let source = program::SourceIdV1::new(1);
         let target = program::TargetIdV1::new(2);
         let port = program::SurfaceInputPortIdV1::new(3);
@@ -325,7 +325,8 @@ mod tests {
         let occurrence = program::OccurrenceIdV1::new(8);
         let root = program::PresentationRootIdV1::new(9);
         let context =
-            program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average).unwrap();
+            program::AppearanceContextV1::try_new(64.0, 0.2, program::SurroundV1::Average)
+                .map_err(|error| format!("appearance context: {error:?}"))?;
         let white = Srgb8::new([255; 3]);
         let mut draft = program::DraftV1::new();
         draft.push_source(source, white);
@@ -349,10 +350,12 @@ mod tests {
         draft.push_output(program::OutputSlotIdV1::new(12), material);
         draft.set_assignment(Vec::new());
         CompiledProgramV1 {
-            owner: draft.compile().unwrap(),
+            owner: draft
+                .compile()
+                .map_err(|error| format!("compile: {error:?}"))?,
         }
         .instantiate(1)
-        .unwrap()
+        .map_err(|error| format!("instantiate: {error:?}"))
     }
 
     fn scenario(id: u32, rgb: [u8; 3]) -> ProgramScenarioV1 {
@@ -360,11 +363,13 @@ mod tests {
     }
 
     #[test]
-    fn cleanliness_summary_never_promotes_other_conditions_to_conformance() {
-        let mut session = runtime(false);
-        let snapshot = session.update_observed(1, &[scenario(1, [1; 3])]).unwrap();
+    fn cleanliness_summary_never_promotes_other_conditions_to_conformance() -> Result<(), String> {
+        let mut session = runtime(false)?;
+        let snapshot = session
+            .update_observed(1, &[scenario(1, [1; 3])])
+            .map_err(|error| format!("observe: {error:?}"))?;
         assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
-        let summary = snapshot.cleanliness_assessment().unwrap();
+        let summary = snapshot.cleanliness_assessment().ok_or("current summary")?;
         assert_eq!(summary.status(), ProgramCleanlinessStatusV1::NotAssessed);
         assert_eq!(
             (
@@ -374,12 +379,19 @@ mod tests {
             ),
             (0, 0, 0)
         );
-        assert_eq!(snapshot.assessment_report().unwrap().cleanliness(), summary);
+        assert_eq!(
+            snapshot
+                .assessment_report()
+                .ok_or("current report")?
+                .cleanliness(),
+            summary
+        );
+        Ok(())
     }
 
     #[test]
-    fn cleanliness_summary_retains_all_final_cases_and_unavailable_domains() {
-        let mut session = runtime(true);
+    fn cleanliness_summary_retains_all_final_cases_and_unavailable_domains() -> Result<(), String> {
+        let mut session = runtime(true)?;
         // One physical material yields accepted gray, rejected tinted gray and
         // no owned contribution. Its white source alone cannot establish these.
         let snapshot = session
@@ -391,9 +403,9 @@ mod tests {
                     scenario(3, [255; 3]),
                 ],
             )
-            .unwrap();
+            .map_err(|error| format!("observe initial material: {error:?}"))?;
         assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
-        let summary = snapshot.cleanliness_assessment().unwrap();
+        let summary = snapshot.cleanliness_assessment().ok_or("current summary")?;
         assert_eq!(summary.status(), ProgramCleanlinessStatusV1::Violates);
         assert_eq!(
             (
@@ -406,8 +418,10 @@ mod tests {
 
         let absent = session
             .update_observed(2, &[scenario(4, [255; 3])])
-            .unwrap();
-        let unavailable = absent.cleanliness_assessment().unwrap();
+            .map_err(|error| format!("observe absent contribution: {error:?}"))?;
+        let unavailable = absent
+            .cleanliness_assessment()
+            .ok_or("unavailable summary")?;
         assert_eq!(
             unavailable.status(),
             ProgramCleanlinessStatusV1::Unavailable
@@ -416,8 +430,10 @@ mod tests {
 
         let accepted = session
             .update_observed(3, &[scenario(5, [1; 3]), scenario(6, [1; 3])])
-            .unwrap();
-        let conforms = accepted.cleanliness_assessment().unwrap();
+            .map_err(|error| format!("observe conforming material: {error:?}"))?;
+        let conforms = accepted
+            .cleanliness_assessment()
+            .ok_or("conforming summary")?;
         assert_eq!(conforms.status(), ProgramCleanlinessStatusV1::Conforms);
         assert_eq!(
             conforms.accepted(),
@@ -427,11 +443,12 @@ mod tests {
         assert_eq!(
             accepted
                 .assessment_report()
-                .unwrap()
+                .ok_or("conforming report")?
                 .scenario_provenance()
                 .len(),
             2
         );
         assert_eq!(snapshot.cleanliness_assessment(), Some(summary));
+        Ok(())
     }
 }

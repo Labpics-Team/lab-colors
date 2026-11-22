@@ -10,7 +10,7 @@ use crate::color_intent::color_at_lightness;
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v10.independent-components.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v12.independent-components.unique-zero-prefix.selected-parent-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -24,7 +24,7 @@ struct ContextV1<'a> {
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
     local_cases: LocalCasesV1,
-    opaque: bool,
+    opaque: Vec<bool>,
 }
 
 #[derive(Default)]
@@ -165,7 +165,7 @@ impl<'a> ContextV1<'a> {
             preferred,
             preferred_rgb,
             local_cases,
-            opaque: opaque.into_iter().all(|v| v),
+            opaque,
         })
     }
 
@@ -175,7 +175,7 @@ impl<'a> ContextV1<'a> {
 
     fn exact_optimum(&self, values: &[Srgb8], scores: &[f64]) -> bool {
         scores.iter().all(|score| *score == 0.0)
-            && (self.opaque
+            && (self.opaque.iter().all(|value| *value)
                 || self
                     .targets
                     .iter()
@@ -546,6 +546,18 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    select_component_inner(selection, component, runtime, epoch, scenarios, arena, true)
+}
+
+fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    arena: &mut ProgramEvaluationArenaV1<E>,
+    allow_conditional: bool,
+) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let targets = ComputedTargetsV1::new(selection, Some(component));
     let count = targets.len();
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
@@ -791,6 +803,37 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
 
+    let mut conditional_evidence = if allow_conditional && has_best {
+        conditional::attempt(
+            selection,
+            component,
+            runtime,
+            epoch,
+            scenarios,
+            arena,
+            conditional::CandidateV1 {
+                context: &context,
+                values: &mut best_values,
+                scores: &mut best_scores,
+                evidence: &mut evidence,
+                mode: conditional::ModeV1::PreferredMinimum,
+            },
+        )?
+    } else {
+        None
+    };
+    if let Some(extra) = conditional_evidence {
+        if extra.completion != CompletionV1::BudgetExhausted {
+            components::merge_evidence(&mut evidence, extra).map_err(allocation)?;
+            evidence.completion = CompletionV1::Complete;
+            evidence.open_regions = 0;
+            return Ok(SearchResultV1 {
+                evidence,
+                values: Some(best_values),
+            });
+        }
+    }
+
     // Полный RGB8/gray domain остаётся доступен после приближений.
     let constraints = region_constraints(epoch, context.constraint_indices).map_err(allocation)?;
     let mut bounds = BoundsV1 {
@@ -814,7 +857,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         .try_reserve_exact(stack_limit)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let reserve = refinement::reserved_work(&context, selection.budget);
-    let mut search_limit = selection.budget - if has_best { reserve } else { 0 };
+    let may_polish = allow_conditional && count > 1 && conditional_evidence.is_none();
+    // Reserve one whole-tuple check only once a feasible result exists. If
+    // search never finds one, its entire original budget stays available.
+    let mut work_budget =
+        selection.budget - u64::from(may_polish && has_best && evidence.visited < selection.budget);
+    let mut search_limit = work_budget - if has_best { reserve } else { 0 };
     let mut complete = true;
     if let Some(root) = region_node(
         0,
@@ -950,7 +998,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     == Ordering::Less)
         {
             has_best = true;
-            search_limit = selection.budget - reserve;
+            work_budget =
+                selection.budget - u64::from(may_polish && evidence.visited < selection.budget);
+            search_limit = work_budget - reserve;
             best_scores.copy_from_slice(&scores);
             best_values.copy_from_slice(&values);
         }
@@ -976,9 +1026,37 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 current_scores: &mut current_scores,
                 pool: &mut preferred_seed,
                 evidence: &mut evidence,
-                budget: selection.budget,
+                budget: work_budget,
             },
         )?;
+    }
+    // If the first feasible point consumes the very last visit, keep it.
+    // No conditional move may evade its accounted whole-tuple recheck.
+    if !complete && has_best && may_polish && evidence.visited < selection.budget {
+        conditional_evidence = conditional::attempt(
+            selection,
+            component,
+            runtime,
+            epoch,
+            scenarios,
+            arena,
+            conditional::CandidateV1 {
+                context: &context,
+                values: &mut best_values,
+                scores: &mut best_scores,
+                evidence: &mut evidence,
+                mode: conditional::ModeV1::SelectedParent,
+            },
+        )?;
+    }
+    if let Some(extra) = conditional_evidence {
+        // The full fallback owns completion. Its proof also closes any open
+        // conditional regions, while every attempted visit remains accounted.
+        let completion = evidence.completion;
+        let open_regions = evidence.open_regions;
+        components::merge_evidence(&mut evidence, extra).map_err(allocation)?;
+        evidence.completion = completion;
+        evidence.open_regions = open_regions;
     }
     Ok(SearchResultV1 {
         evidence,
@@ -986,4 +1064,5 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     })
 }
 
+mod conditional;
 mod refinement;

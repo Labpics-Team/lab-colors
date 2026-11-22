@@ -28,10 +28,11 @@ pub(crate) enum ColorIntentErrorV1 {
 /// Версия авторской политики, а не порог именования цветов человеком.
 ///
 /// При отсутствии overrides источник сохраняет геометрическое направление
-/// оттенка с окном ±18° и не менее 10% своей chroma. Пределы настраиваются
-/// отдельно от требований к конкретному применению. Точная серая ось остаётся
-/// серой; почти нейтральный цвет сохраняет намеренно заданный цветовой оттенок.
-const IDENTITY_POLICY_VERSION_V1: u8 = 1;
+/// оттенка с окном ±18° и от 10% до 100% своей chroma. Округлённый RGB может
+/// превысить верхнюю границу, только если её соблюдение до кодирования даёт
+/// ровно те же bytes. Явный chroma override задаёт строгие encoded границы.
+/// Точная серая ось остаётся серой; почти нейтральный цвет сохраняет оттенок.
+const IDENTITY_POLICY_VERSION: u8 = 2;
 const DEFAULT_HUE_DEVIATION_DEGREES: f64 = 18.0;
 const DEFAULT_MINIMUM_CHROMA_FRACTION: f64 = 0.1;
 
@@ -97,7 +98,7 @@ impl ColorIdentityDomainV1 {
             options.chroma.unwrap_or(if neutral {
                 [0.0, 0.0]
             } else {
-                [chroma(lab) * DEFAULT_MINIMUM_CHROMA_FRACTION, 1.0]
+                [chroma(lab) * DEFAULT_MINIMUM_CHROMA_FRACTION, chroma(lab)]
             }),
             1.0,
         )?;
@@ -148,9 +149,22 @@ impl ColorIdentityDomainV1 {
             return self.chroma[0] == 0.0;
         }
         let c = chroma(lab);
-        self.chroma[0] <= c
-            && c <= self.chroma[1]
-            && hue_distance(hue(lab), self.hue) <= self.hue_deviation
+        if c < self.chroma[0] || hue_distance(hue(lab), self.hue) > self.hue_deviation {
+            return false;
+        }
+        if c <= self.chroma[1] {
+            return true;
+        }
+        if self.options.chroma.is_some() {
+            return false;
+        }
+        // A weak authored tint must not become a stronger tint to pay for a
+        // smaller lightness error. Preserve representable rounding: this same
+        // RGB has a concrete, in-gamut source with no added authored chroma.
+        // This witness is sufficient, not a full inverse-quantization search.
+        let scale = self.chroma[1] / c;
+        let bounded = oklab_to_srgb_linear([lab[0], lab[1] * scale, lab[2] * scale]);
+        in_gamut(bounded) && srgb8_from_linear(bounded) == rgb
     }
 
     /// Консервативный ранний отказ; точный predicate остаётся у point-проверки.
@@ -174,7 +188,7 @@ impl ColorIdentityDomainV1 {
     /// Только авторские данные и версия политики; derived floats не задают ID.
     pub(crate) fn identity_bytes(&self) -> [u8; 46] {
         let mut bytes = [0; 46];
-        bytes[0] = IDENTITY_POLICY_VERSION_V1;
+        bytes[0] = IDENTITY_POLICY_VERSION;
         bytes[1] = u8::from(self.neutral);
         bytes[2..5].copy_from_slice(&self.source.bytes());
         bytes[5] = u8::from(self.options.hue_deviation.is_some())
@@ -328,6 +342,52 @@ mod tests {
     }
 
     #[test]
+    fn identity_does_not_amplify_a_tint_without_an_authored_override() -> Result<(), String> {
+        let source = Srgb8::new([239, 230, 216]);
+        let expanded = Srgb8::new([222, 216, 189]);
+        let identity = ColorIdentityDomainV1::new(source, false, Default::default())
+            .map_err(|error| format!("authored tint: {error:?}"))?;
+        assert!(identity.contains(source));
+        assert!(identity.contains(Srgb8::new([222, 215, 202])));
+        assert!(!identity.contains(expanded));
+        let explicit = ColorIdentityDomainV1::new(
+            source,
+            false,
+            IdentityOptionsV1 {
+                chroma: Some([0.0, 1.0]),
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("expanded authored domain: {error:?}"))?;
+        assert!(explicit.contains(expanded));
+        Ok(())
+    }
+
+    #[test]
+    fn non_expansion_keeps_representable_dark_tints_without_a_numeric_slack() -> Result<(), String>
+    {
+        let source = Srgb8::new([250, 250, 251]);
+        let identity = ColorIdentityDomainV1::new(source, false, Default::default())
+            .map_err(|error| format!("weak tint: {error:?}"))?;
+        let strict = ColorIdentityDomainV1::new(
+            source,
+            false,
+            IdentityOptionsV1 {
+                chroma: Some([0.0, chroma(oklab(source))]),
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("strict encoded chroma: {error:?}"))?;
+        for rgb in [[6, 6, 7], [10, 10, 11], [63, 63, 64], [128, 128, 129]] {
+            let candidate = Srgb8::new(rgb);
+            assert!(identity.contains(candidate), "{rgb:?}");
+            assert!(!strict.contains(candidate), "{rgb:?}");
+        }
+        assert!(!identity.contains(Srgb8::new([63; 3])));
+        Ok(())
+    }
+
+    #[test]
     fn neutral_is_an_exact_gray_locus_not_a_noisy_angle() -> Result<(), String> {
         let neutral =
             ColorIdentityDomainV1::new(Srgb8::new([128; 3]), false, IdentityOptionsV1::default())
@@ -462,8 +522,22 @@ mod tests {
     #[test]
     fn tonal_seeds_are_opaque_bytes_and_keep_a_useful_blue_path() -> Result<(), String> {
         let source = Srgb8::new([0, 103, 244]);
-        let identity = ColorIdentityDomainV1::new(source, false, Default::default())
-            .map_err(|error| format!("blue identity: {error:?}"))?;
+        let default_identity = ColorIdentityDomainV1::new(source, false, Default::default())
+            .map_err(|error| format!("default blue identity: {error:?}"))?;
+        assert!(!default_identity.contains(Srgb8::new([16, 111, 253])));
+        assert!(default_identity.contains(Srgb8::new([16, 111, 252])));
+        // A tonal hint is not an admitted result. Its encoded chroma can
+        // exceed the source after quantization; the selector checks the
+        // declared domain and can choose an adjacent, admissible RGB instead.
+        let identity = ColorIdentityDomainV1::new(
+            source,
+            false,
+            IdentityOptionsV1 {
+                chroma: Some([0.0, 1.0]),
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("blue identity: {error:?}"))?;
         let mut previous = 0.0;
         for step in 1..255 {
             let candidate = color_at_lightness(source, f64::from(step) / 255.0);

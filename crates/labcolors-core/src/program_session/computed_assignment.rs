@@ -302,6 +302,7 @@ struct CompiledComputedTargetV1 {
 pub(super) struct ComputedSelectionV1 {
     targets: Box<[CompiledComputedTargetV1]>,
     components: Box<[ComputedComponentV1]>,
+    factors: Box<[ComputedFactorV1]>,
     fixed_constraints: Box<[usize]>,
     budget: u64,
     total_budget: u64,
@@ -313,6 +314,13 @@ struct ComputedComponentV1 {
     targets: Box<[usize]>,
     constraints: Box<[usize]>,
     inputs: Box<[usize]>,
+}
+
+/// The same compiled cone supports both initial and conditional independence.
+struct ComputedFactorV1 {
+    targets: Box<[usize]>,
+    inputs: Box<[usize]>,
+    constraint: Option<usize>,
 }
 
 /// Borrowed projections keep one owner of target declarations and bindings.
@@ -485,6 +493,7 @@ pub(super) fn compile_selection(
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
         components: Box::new([]),
+        factors: Box::new([]),
         fixed_constraints: Box::new([]),
         budget,
         total_budget: budget,

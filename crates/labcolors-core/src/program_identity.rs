@@ -3771,20 +3771,21 @@ mod tests {
         }
     }
     #[test]
-    fn nominal_visible_identity_separates_owned_domain_and_binds_all_release_bytes() {
+    fn nominal_visible_identity_separates_owned_domain_and_binds_all_release_bytes()
+    -> Result<(), String> {
         let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
         let baseline = constraint_color(
             vertex_tag::CONSTRAINT_HARD,
             ProgramConstraintContentV1::NominalSrgb8Visible { release },
         )
-        .unwrap();
+        .map_err(|error| format!("visible identity: {error:?}"))?;
         assert_ne!(
             baseline,
             declared_srgb8_clean_set_constraint_color_for_release(
                 vertex_tag::CONSTRAINT_HARD,
                 release,
             )
-            .unwrap(),
+            .map_err(|error| format!("owned identity: {error:?}"))?,
             "visible membership and owned-domain membership have different obligations",
         );
         for byte_index in 0..release.len() {
@@ -3796,10 +3797,11 @@ mod tests {
                     vertex_tag::CONSTRAINT_HARD,
                     ProgramConstraintContentV1::NominalSrgb8Visible { release: mutant },
                 )
-                .unwrap(),
+                .map_err(|error| format!("mutated identity byte {byte_index}: {error:?}"))?,
                 "nominal release digest byte {byte_index} escaped identity",
             );
         }
+        Ok(())
     }
 
     use proptest::prelude::*;
