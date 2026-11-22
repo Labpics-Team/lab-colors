@@ -12,6 +12,7 @@ import initWasm, {
   issueSourceCertificateEnvelope as issueSourceCertificateEnvelopeWasm,
   ProgramAttachment,
   ProgramRuntime,
+  ProgramSnapshot,
 } from "./pkg/labcolors.js";
 
 let initState = "idle";
@@ -182,7 +183,7 @@ function copyProgramInput(value, storage, operation, code, requiredLength, inspe
 // The two arrays describe one observation matrix. Admit both shapes before
 // either snapshot allocation or the generated WASM copier can run.
 function copyObservedInputs(scenarioIds, surfaces, surfaceCount, operation) {
-  const code = operation === "updateObserved" ? "program_update" : "program_attachment_update";
+  const code = operation === "attachmentUpdateObserved" ? "program_attachment_update" : "program_update";
   const invalid = () => programIngressError(operation, code);
   if (
     typeof surfaceCount !== "number" ||
@@ -210,11 +211,62 @@ export function compileProgramWire(bytes, streamId) {
   ), streamId);
 }
 
-const runtimeUpdateObserved = ProgramRuntime.prototype.updateObserved;
-ProgramRuntime.prototype.updateObserved = function updateObserved(revision, scenarioIds, surfaces, surfaceCount) {
-  const [ownedIds, ownedSurfaces] = copyObservedInputs(scenarioIds, surfaces, surfaceCount, "updateObserved");
-  return runtimeUpdateObserved.call(this, revision, ownedIds, ownedSurfaces, surfaceCount);
+const busyRuntimes = new WeakSet();
+const borrowedSnapshots = new WeakSet();
+
+function runtimeBusyError(operation) {
+  const error = new Error("Program transaction is already in progress");
+  error.code = "program_busy";
+  error.operation = operation;
+  return error;
+}
+
+function withRuntimeOperation(runtime, operation, callback) {
+  if (busyRuntimes.has(runtime)) throw runtimeBusyError(operation);
+  busyRuntimes.add(runtime);
+  try {
+    return callback();
+  } finally {
+    busyRuntimes.delete(runtime);
+  }
+}
+
+for (const method of ["updateObserved", "updateObservedWith", "updateUnknown", "free"]) {
+  const original = ProgramRuntime.prototype[method];
+  ProgramRuntime.prototype[method] = function guardedRuntimeOperation(...args) {
+    const operation = method === "free" ? "runtimeFree" : method;
+    return withRuntimeOperation(this, operation, () => {
+      if (method === "updateObserved" || method === "updateObservedWith") {
+        if (method === "updateObservedWith" && typeof args[4] !== "function") {
+          throw programIngressError(operation, "program_update");
+        }
+        [args[1], args[2]] = copyObservedInputs(args[1], args[2], args[3], operation);
+      }
+      if (method === "updateObservedWith") {
+        const accept = args[4];
+        args[4] = snapshot => {
+          borrowedSnapshots.add(snapshot);
+          try {
+            return accept(snapshot);
+          } finally {
+            borrowedSnapshots.delete(snapshot);
+          }
+        };
+      }
+      return original.apply(this, args);
+    });
+  };
+}
+
+const snapshotFree = ProgramSnapshot.prototype.free;
+ProgramSnapshot.prototype.free = function guardedSnapshotFree(...args) {
+  if (borrowedSnapshots.has(this)) throw runtimeBusyError("snapshotFree");
+  return snapshotFree.apply(this, args);
 };
+if (Symbol.dispose) {
+  ProgramRuntime.prototype[Symbol.dispose] = ProgramRuntime.prototype.free;
+  ProgramSnapshot.prototype[Symbol.dispose] = ProgramSnapshot.prototype.free;
+}
 
 // Идентичность и тело принадлежат Core; аргументы вызывающего кода не передаются.
 export function issueSourceCertificateEnvelope() {
@@ -340,6 +392,7 @@ const COMPILE_PROGRAM_ERROR_CODES = new Set([
 ]);
 const UPDATE_PROGRAM_ERROR_CODES = new Set([
   "program_update",
+  "program_busy",
   ...PROGRAM_INFRASTRUCTURE_ERROR_CODES,
 ]);
 const ATTACHMENT_ERROR_CODES = new Set([
@@ -402,7 +455,11 @@ export function isProgramError(error) {
     if (operation === "updateObserved" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }
-    if (operation === "copyOutputTable") return code === "program_resource_exhausted";
+    if (operation === "updateObservedWith") {
+      return UPDATE_PROGRAM_ERROR_CODES.has(code) || code === "program_host_protocol";
+    }
+    if (operation === "runtimeFree" || operation === "snapshotFree") return code === "program_busy";
+    if (operation === "copyOutputTable" || operation === "assessmentReport") return code === "program_resource_exhausted";
     if (operation === "attachProgramWire") return ATTACHMENT_ERROR_CODES.has(code);
     if (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown") {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);

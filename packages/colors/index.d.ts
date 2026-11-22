@@ -36,7 +36,8 @@ export type ProgramCompileErrorCode =
   | "program_compile"
   | "program_family_artifacts_required"
   | "program_instantiate";
-export type ProgramUpdateErrorCode = "program_update" | ProgramInfrastructureErrorCode;
+export type ProgramUpdateErrorCode = "program_update" | "program_busy" | ProgramInfrastructureErrorCode;
+export type ProgramTransactionErrorCode = ProgramUpdateErrorCode | "program_host_protocol";
 export type ProgramAttachmentErrorCode =
   | ProgramCompileErrorCode
   | "program_attachment_binding"
@@ -78,11 +79,13 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_missing_point_absence_proof"
   | "program_materialization_ambiguous_observation_cases"
   | "program_attachment_busy";
-export type ProgramUpdateOperation = "updateObserved" | "updateUnknown";
+export type ProgramUpdateOperation = "updateObserved" | "updateUnknown" | "updateObservedWith";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
-  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" }>
+  | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" }>
+  | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
+  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;

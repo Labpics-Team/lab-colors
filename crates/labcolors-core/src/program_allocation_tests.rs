@@ -416,3 +416,40 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
         }
     }
 }
+
+#[test]
+fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() {
+    let mut session = crate::program_wire::compile_program_wire(include_bytes!(
+        "../tests/fixtures/computed-coupled.lcpw"
+    ))
+    .expect("the computed fixture must compile")
+    .instantiate(100)
+    .expect("the computed fixture must instantiate");
+    let input = ProgramObservationV1::from_rgb8(&[7], &[255; 3], 1).unwrap();
+    let prepared = session.prepare_observed_view(1, input).unwrap();
+    assert_eq!(prepared.snapshot().state(), ProgramSnapshotStateV1::Ready);
+    assert_eq!(prepared.snapshot().outputs().len(), 2);
+    let mut retained = None;
+    let failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
+    crate::appearance::reset_paint_node_evaluation_count();
+    let (accepted, events) = measured_allocator_events(|| {
+        prepared.commit_with(|snapshot| {
+            retained = Some(snapshot);
+            Ok::<_, ()>(true)
+        })
+    });
+    assert_eq!(accepted, Ok(true));
+    assert_eq!(events.alloc, 0);
+    assert_eq!(events.realloc, 0);
+    assert_eq!(crate::appearance::paint_node_evaluation_count(), 0);
+    assert_eq!(
+        crate::program_session::program_preflight_failure_remaining_for_test(),
+        Some(0),
+        "commit must not enter preparation again"
+    );
+    drop(failure);
+    assert_eq!(
+        session.update_observed_view(1, input).unwrap(),
+        retained.unwrap()
+    );
+}

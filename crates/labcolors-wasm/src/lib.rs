@@ -425,6 +425,7 @@ fn copy_snapshot_outputs(
 enum ProgramOperation {
     CompileProgramWire,
     UpdateObserved,
+    UpdateObservedWith,
     UpdateUnknown,
     CopyOutputTable,
     AttachProgramWire,
@@ -440,6 +441,7 @@ impl ProgramOperation {
         match self {
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
+            Self::UpdateObservedWith => "updateObservedWith",
             Self::UpdateUnknown => "updateUnknown",
             Self::CopyOutputTable => "copyOutputTable",
             Self::AttachProgramWire => "attachProgramWire",
@@ -819,6 +821,61 @@ impl ProgramRuntime {
             .update_observed_view(revision, observation)
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateObserved))
+    }
+
+    /// Готовит один owned-снимок, затем синхронно вызывает `accept(snapshot)`.
+    /// `true` принимает ревизию и возвращает тот же снимок; `false` возвращает
+    /// undefined. Ошибка callback оставляет прежнюю ревизию и пробрасывается.
+    /// Callback владеет переданным снимком и атомарностью своих внешних записей.
+    #[wasm_bindgen(js_name = updateObservedWith, unchecked_return_type = "ProgramSnapshot | undefined")]
+    pub fn update_observed_with(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        scenario_ids: &[u32],
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] surface_count: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "(snapshot: ProgramSnapshot) => boolean")]
+        accept: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let operation = ProgramOperation::UpdateObservedWith;
+        let revision =
+            u64::try_from(revision).map_err(|_| to_program_js_error(E::Update, operation))?;
+        let surface_count = checked_u32(surface_count)
+            .ok_or_else(|| to_program_js_error(E::Update, operation))?
+            as usize;
+        let observation = labcolors_core::program_wire::ProgramObservationV1::from_rgb8(
+            scenario_ids,
+            surfaces,
+            surface_count,
+        )
+        .map_err(|_| to_program_js_error(E::Update, operation))?;
+        let prepared = self
+            .inner
+            .prepare_observed_view(revision, observation)
+            .map_err(|error| to_program_js_error(error, operation))?;
+        let mut snapshot = JsValue::UNDEFINED;
+        let accepted = prepared.commit_with(|inner| -> Result<bool, JsValue> {
+            // The JS wrapper is allocated before host acceptance. After true,
+            // only the already prepared Core transition is published.
+            snapshot = ProgramSnapshot { inner }.into();
+            accept
+                .call1(&JsValue::UNDEFINED, &snapshot)?
+                .as_bool()
+                .ok_or_else(|| {
+                    program_error(
+                        "Program acceptance callback must return a boolean",
+                        "program_host_protocol",
+                        operation.key(),
+                    )
+                    .into()
+                })
+        })?;
+        Ok(if accepted {
+            snapshot
+        } else {
+            JsValue::UNDEFINED
+        })
     }
 
     #[wasm_bindgen(js_name = updateUnknown)]

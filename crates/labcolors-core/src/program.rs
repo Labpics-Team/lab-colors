@@ -2359,6 +2359,16 @@ pub(crate) struct EvidenceViewV1<'a> {
 }
 
 impl<'a> EvidenceViewV1<'a> {
+    pub(crate) fn snapshot_evidence(self) -> SnapshotEvidenceV1<'a> {
+        SnapshotEvidenceV1::from_state(
+            self.state(),
+            self.session
+                .raw_head()
+                .revision()
+                .map_or(0, |value| value.value()),
+        )
+    }
+
     pub(crate) fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
         self.state()
             .current_verified()
@@ -2370,20 +2380,7 @@ impl<'a> EvidenceViewV1<'a> {
 
     /// Возвращает lifecycle-класс текущего состояния.
     pub(crate) const fn kind(self) -> StateKindV1 {
-        match self.state() {
-            SessionState::Waiting => StateKindV1::Waiting,
-            SessionState::Ready { .. } => StateKindV1::Ready,
-            SessionState::Stale { .. } => StateKindV1::Stale,
-            SessionState::Failed {
-                cause: ProgramViolationOutcomeV1::Legacy(_),
-                ..
-            } => StateKindV1::Failed,
-            SessionState::Failed {
-                cause: ProgramViolationOutcomeV1::Computed(_),
-                ..
-            } => StateKindV1::Unsatisfied,
-            SessionState::Incomplete { .. } => StateKindV1::Incomplete,
-        }
+        SnapshotEvidenceV1::state_kind(self.state())
     }
 
     /// Возвращает сырую голову наблюдений вместе с provenance.
@@ -2458,12 +2455,124 @@ pub(crate) struct PreparedSessionTransitionV1<'session> {
 }
 
 impl<'session> PreparedSessionTransitionV1<'session> {
+    /// Копируемые данные для снимка будущего результата. Они не обозначают
+    /// принятую ревизию и не дают полномочий записи во внешний sink.
+    pub(crate) fn snapshot_evidence(&self) -> SnapshotEvidenceV1<'_> {
+        use crate::session::{PreparedSessionDispositionV1 as D, SessionEvidenceV1};
+        let previous = self.transition.previous_verified();
+        match self.transition.disposition() {
+            D::Idempotent { raw_head, state } => SnapshotEvidenceV1::from_state(
+                state,
+                raw_head.revision().map_or(0, |value| value.value()),
+            ),
+            D::Unknown(unknown) => SnapshotEvidenceV1 {
+                kind: if previous.is_some() {
+                    StateKindV1::Stale
+                } else {
+                    StateKindV1::Waiting
+                },
+                revision: unknown.revision().value(),
+                current_verified: None,
+                legacy_verified: previous
+                    .and_then(|value| value.legacy())
+                    .map(|inner| VerifiedCertificateV1 { inner }),
+            },
+            D::Verified(inner) => SnapshotEvidenceV1 {
+                kind: StateKindV1::Ready,
+                revision: inner.observation().revision().value(),
+                current_verified: Some(VerifiedOutputV1 { inner }),
+                legacy_verified: inner.legacy().map(|inner| VerifiedCertificateV1 { inner }),
+            },
+            D::Violation(cause) => SnapshotEvidenceV1 {
+                kind: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => StateKindV1::Failed,
+                    ProgramViolationOutcomeV1::Computed(_) => StateKindV1::Unsatisfied,
+                },
+                revision: cause.observation().revision().value(),
+                current_verified: None,
+                legacy_verified: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => previous
+                        .and_then(|value| value.legacy())
+                        .map(|inner| VerifiedCertificateV1 { inner }),
+                    ProgramViolationOutcomeV1::Computed(_) => None,
+                },
+            },
+            D::Incomplete(cause) => SnapshotEvidenceV1 {
+                kind: StateKindV1::Incomplete,
+                revision: cause.observation().revision().value(),
+                current_verified: None,
+                legacy_verified: None,
+            },
+        }
+    }
+
     /// Публикует только уже подготовленные raw head и lifecycle Session и
     /// возвращает exact evidence-only snapshot без sink-authority.
     pub(crate) fn commit(self) -> EvidenceViewV1<'session> {
         EvidenceViewV1 {
             session: self.transition.commit(),
         }
+    }
+}
+
+/// Data-only проекция для owned-снимка. В отличие от EvidenceView она может
+/// описывать ещё не принятый переход; lifecycle Session от её чтения не меняется.
+#[derive(Clone, Copy)]
+pub(crate) struct SnapshotEvidenceV1<'a> {
+    kind: StateKindV1,
+    revision: u64,
+    current_verified: Option<VerifiedOutputV1<'a>>,
+    legacy_verified: Option<VerifiedCertificateV1<'a>>,
+}
+
+impl<'a> SnapshotEvidenceV1<'a> {
+    const fn state_kind(state: &CoreProgramStateV1) -> StateKindV1 {
+        match state {
+            SessionState::Waiting => StateKindV1::Waiting,
+            SessionState::Ready { .. } => StateKindV1::Ready,
+            SessionState::Stale { .. } => StateKindV1::Stale,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => StateKindV1::Unsatisfied,
+            SessionState::Incomplete { .. } => StateKindV1::Incomplete,
+        }
+    }
+
+    fn from_state(state: &'a CoreProgramStateV1, revision: u64) -> Self {
+        let kind = Self::state_kind(state);
+        let legacy_verified = match kind {
+            StateKindV1::Ready | StateKindV1::Stale | StateKindV1::Failed => state
+                .last_verified()
+                .and_then(|value| value.legacy())
+                .map(|inner| VerifiedCertificateV1 { inner }),
+            StateKindV1::Waiting | StateKindV1::Unsatisfied | StateKindV1::Incomplete => None,
+        };
+        Self {
+            kind,
+            revision,
+            current_verified: state
+                .current_verified()
+                .map(|inner| VerifiedOutputV1 { inner }),
+            legacy_verified,
+        }
+    }
+
+    pub(crate) const fn kind(self) -> StateKindV1 {
+        self.kind
+    }
+    pub(crate) const fn revision(self) -> u64 {
+        self.revision
+    }
+    pub(crate) const fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
+        self.current_verified
+    }
+    pub(crate) const fn legacy_verified(self) -> Option<VerifiedCertificateV1<'a>> {
+        self.legacy_verified
     }
 }
 

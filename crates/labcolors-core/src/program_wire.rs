@@ -583,6 +583,54 @@ pub struct ProgramSessionV1 {
     assessment_scratch: ProgramAssessmentReportScratchV1,
 }
 
+/// Полностью вычисленное предложение обновить значения. Drop оставляет
+/// прежнюю ревизию; снимок и все его хранилища подготовлены до внешнего эффекта.
+#[must_use = "commit the prepared update or drop it intentionally"]
+pub struct PreparedProgramUpdateV1<'session> {
+    transition: crate::program::PreparedSessionTransitionV1<'session>,
+    snapshot: ProgramSnapshotV1,
+}
+
+impl PreparedProgramUpdateV1<'_> {
+    /// Исторические данные предложения, не подтверждение его применения.
+    #[must_use]
+    pub const fn snapshot(&self) -> &ProgramSnapshotV1 {
+        &self.snapshot
+    }
+
+    /// Применяет уже вычисленное обновление без повторного поиска и аллокаций.
+    pub fn commit(self) -> ProgramSnapshotV1 {
+        let Self {
+            transition,
+            snapshot,
+        } = self;
+        transition.commit();
+        snapshot
+    }
+
+    /// Передаёт owned-снимок shell до commit. Только точный `Ok(true)` принимает
+    /// переход; `Ok(false)`, ошибка или panic callback сохраняют прежний Session.
+    /// Callback отвечает за атомарность принадлежащего ему внешнего эффекта.
+    ///
+    /// # Errors
+    /// Возвращает исходную ошибку callback без публикации обновления.
+    pub fn commit_with<E>(
+        self,
+        accept: impl FnOnce(ProgramSnapshotV1) -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        let Self {
+            transition,
+            snapshot,
+        } = self;
+        if accept(snapshot)? {
+            transition.commit();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
 /// Один сценарий наблюдаемой среды: непрозрачный ID и значения surface inputs
 /// в каноническом порядке, объявленном Program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1696,8 +1744,9 @@ fn attachment_snapshot_from_commit(
     >,
 ) -> Result<ProgramAttachedSnapshotV1, ProgramAttachmentUpdateErrorV1> {
     // attach допускает ровно один output; snapshot хранит его inline.
-    let snapshot = snapshot_from_evidence_into(commit.evidence(), &mut Vec::new())
-        .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
+    let snapshot =
+        snapshot_from_evidence_into(commit.evidence().snapshot_evidence(), &mut Vec::new())
+            .map_err(|_| ProgramAttachmentUpdateErrorV1::ResourceExhausted)?;
     let render = commit.render_outputs().next().map(|render| {
         let mut terminal_composite = None;
         let mut saw_matching_certificate = false;
@@ -1880,6 +1929,30 @@ impl ProgramSessionV1 {
         revision: u64,
         source: &dyn SchemaOrderedScenarioSourceV1,
     ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
+        self.prepare_observed_source(revision, source)
+            .map(PreparedProgramUpdateV1::commit)
+    }
+
+    /// Готовит заимствованное наблюдение для атомарного применения shell.
+    /// Поиск и копирование снимка завершаются до возврата. Отказ от предложения
+    /// позволяет повторить ту же ревизию с другими входами.
+    ///
+    /// # Errors
+    /// Возвращает ошибки формы, ревизии, ресурса или внутреннего инварианта;
+    /// ни одна из них не изменяет принятую ревизию Session.
+    pub fn prepare_observed_view(
+        &mut self,
+        revision: u64,
+        observation: ProgramObservationV1<'_>,
+    ) -> Result<PreparedProgramUpdateV1<'_>, ProgramRuntimeErrorV1> {
+        self.prepare_observed_source(revision, &observation)
+    }
+
+    fn prepare_observed_source(
+        &mut self,
+        revision: u64,
+        source: &dyn SchemaOrderedScenarioSourceV1,
+    ) -> Result<PreparedProgramUpdateV1<'_>, ProgramRuntimeErrorV1> {
         let computed = self.owner.snapshot_version() == 2;
         if computed {
             let cell_count = self
@@ -1897,8 +1970,8 @@ impl ProgramSessionV1 {
             .owner
             .prepare_schema_ordered_update(&mut self.session, revision, source)
             .map_err(map_runtime_update_error)?;
-        let evidence = transition.commit();
-        if computed {
+        let evidence = transition.snapshot_evidence();
+        let snapshot = if computed {
             snapshot_from_computed_evidence_into(
                 evidence,
                 &mut self.outputs_scratch,
@@ -1907,7 +1980,11 @@ impl ProgramSessionV1 {
         } else {
             snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
                 .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
-        }
+        }?;
+        Ok(PreparedProgramUpdateV1 {
+            transition,
+            snapshot,
+        })
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -1928,8 +2005,8 @@ impl ProgramSessionV1 {
                 },
             )
             .map_err(map_runtime_update_error)?;
-        let evidence = transition.commit();
-        if self.owner.snapshot_version() == 2 {
+        let evidence = transition.snapshot_evidence();
+        let snapshot = if self.owner.snapshot_version() == 2 {
             snapshot_from_computed_evidence_into(
                 evidence,
                 &mut self.outputs_scratch,
@@ -1938,7 +2015,9 @@ impl ProgramSessionV1 {
         } else {
             snapshot_from_evidence_into(evidence, &mut self.outputs_scratch)
                 .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
-        }
+        }?;
+        transition.commit();
+        Ok(snapshot)
     }
 }
 
@@ -1975,10 +2054,10 @@ impl SchemaOrderedScenarioSourceV1 for ProgramScenarioSourceV1<'_> {
 }
 
 fn snapshot_from_evidence_into(
-    evidence: crate::program::EvidenceViewV1<'_>,
+    evidence: crate::program::SnapshotEvidenceV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
 ) -> Result<ProgramSnapshotV1, ()> {
-    use crate::program::{CertificateV1, StateKindV1};
+    use crate::program::StateKindV1;
     let state = match evidence.kind() {
         StateKindV1::Waiting => ProgramSnapshotStateV1::Waiting,
         StateKindV1::Ready => ProgramSnapshotStateV1::Ready,
@@ -1988,13 +2067,7 @@ fn snapshot_from_evidence_into(
         StateKindV1::Incomplete => ProgramSnapshotStateV1::Incomplete,
     };
     outputs_scratch.clear();
-    if let Some(verified) = evidence
-        .certificates()
-        .find_map(|certificate| match certificate {
-            CertificateV1::Verified(verified) => Some(verified),
-            CertificateV1::Conflict(_) => None,
-        })
-    {
+    if let Some(verified) = evidence.legacy_verified() {
         let mut outputs = verified.outputs().map(|output| ProgramPaintOutputV1 {
             slot: output.output_slot().value(),
             source: output.source(),
@@ -2005,7 +2078,7 @@ fn snapshot_from_evidence_into(
                 return Ok(ProgramSnapshotV1 {
                     state,
                     snapshot_version: 1,
-                    revision: evidence_revision(evidence),
+                    revision: evidence.revision(),
                     assessment_report: None,
                     optimality: None,
                     outputs: ProgramSnapshotOutputsV1::One(output),
@@ -2020,24 +2093,15 @@ fn snapshot_from_evidence_into(
     Ok(ProgramSnapshotV1 {
         state,
         snapshot_version: 1,
-        revision: evidence_revision(evidence),
+        revision: evidence.revision(),
         assessment_report: None,
         optimality: None,
         outputs: ProgramSnapshotOutputsV1::Many(std::mem::take(outputs_scratch)),
     })
 }
 
-fn evidence_revision(evidence: crate::program::EvidenceViewV1<'_>) -> u64 {
-    use crate::program::ObservationHeadV1;
-    match evidence.observation_head() {
-        ObservationHeadV1::Empty => 0,
-        ObservationHeadV1::Observed { revision, .. }
-        | ObservationHeadV1::Unknown { revision, .. } => revision,
-    }
-}
-
 fn snapshot_from_computed_evidence_into(
-    evidence: crate::program::EvidenceViewV1<'_>,
+    evidence: crate::program::SnapshotEvidenceV1<'_>,
     outputs_scratch: &mut Vec<ProgramPaintOutputV1>,
     assessment_scratch: &mut ProgramAssessmentReportScratchV1,
 ) -> Result<ProgramSnapshotV1, ProgramRuntimeErrorV1> {
@@ -2086,7 +2150,7 @@ fn snapshot_from_computed_evidence_into(
     }
     Ok(ProgramSnapshotV1 {
         snapshot_version: 2,
-        revision: evidence_revision(evidence),
+        revision: evidence.revision(),
         state,
         outputs,
         assessment_report,

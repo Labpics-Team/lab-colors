@@ -365,6 +365,12 @@ pub(crate) struct PreparedSessionTransition<'session, Plan: SessionPlanV1> {
 }
 
 impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
+    /// Исторический результат до предлагаемого перехода. Данные доступны shell
+    /// только до commit или Drop; это не публикация prospective состояния.
+    pub(crate) fn previous_verified(&self) -> Option<&Plan::Verified> {
+        self.state.last_verified()
+    }
+
     /// Возвращает fully evaluated prospective disposition без публикации.
     pub(crate) fn disposition(&self) -> PreparedSessionDispositionV1<'_, Plan> {
         match self
