@@ -46,6 +46,10 @@ def main(distribution: Path, consumer: Path) -> None:
     for path in (ROOT / "conformance/vectors").glob("*.json"):
         shutil.copy2(path, assets)
     shutil.copy2(ROOT / "conformance/program-runtime-v1.json", assets)
+    shutil.copy2(ROOT / "conformance/program-authoring-v3.json", assets)
+    authoring_tests = consumer / "src/androidTestDebug/kotlin/pics/lab/colors/conformance"
+    authoring_tests.mkdir(parents=True)
+    shutil.copy2(ROOT / "bindings/kotlin/conformance/ProgramAuthoringV3.kt", authoring_tests)
     for name in ["native-surface.json", "authoring-surface.json"]:
         shutil.copy2(distribution / name, assets)
     (assets / "build-metadata.json").write_text(json.dumps(manifest) + "\n")

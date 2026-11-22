@@ -325,6 +325,8 @@ fn assert_public_binding_matches_core(
     let core_program_occurrence = core_physical.program_occurrence();
     assert_eq!(core_program_occurrence.occurrence(), expected_occurrence);
     let public_binding = match public {
+        AssessmentV1::NominalSrgb8Visible(evidence) => evidence.binding(),
+        AssessmentV1::VisibleSeparation(evidence) => evidence.binding(),
         AssessmentV1::ExactSrgb8(evidence) => evidence.binding(),
         AssessmentV1::Wcag22Srgb8(evidence) => evidence.binding(),
         AssessmentV1::DeclaredSrgb8CleanSet(_) => {
@@ -655,6 +657,22 @@ fn consume_public_assessment(assessment: AssessmentV1<'_>, probe: &mut EvidenceP
         VerdictV1::Violation => 2,
     });
     let binding = match assessment {
+        AssessmentV1::NominalSrgb8Visible(evidence) => {
+            probe.mix_srgb8(evidence.visible());
+            if let Some(interval) = evidence.rejected_blue_interval() {
+                probe.mix_bytes(&interval);
+            }
+            Some(evidence.binding())
+        }
+        AssessmentV1::VisibleSeparation(evidence) => {
+            let measurement = evidence.measurement();
+            probe.mix_srgb8(measurement.visible());
+            probe.mix_srgb8(measurement.backdrop());
+            probe.mix(measurement.distance().to_bits());
+            probe.mix(measurement.minimum().to_bits());
+            probe.mix(measurement.maximum().to_bits());
+            Some(evidence.binding())
+        }
         AssessmentV1::ExactSrgb8(evidence) => {
             probe.exact_assessments += 1;
             probe.mix_srgb8(evidence.expected());
@@ -768,6 +786,9 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
         StateKindV1::Ready => 2,
         StateKindV1::Failed => 3,
         StateKindV1::Stale => 4,
+        StateKindV1::Unsatisfied | StateKindV1::Incomplete => {
+            panic!("legacy graph cannot produce assignment outcomes")
+        }
     });
     match view.observation_head() {
         ObservationHeadV1::Empty => probe.mix(0),
@@ -2557,6 +2578,9 @@ fn retired_production_slots_retain_high_water_capacity_without_reallocation() {
                 .commit(update)
                 .expect("the second N+1 pass must reuse retained capacity");
             match state {
+                SessionState::Incomplete { .. } => {
+                    panic!("legacy graph cannot exhaust assignment search")
+                }
                 SessionState::Ready { current } => {
                     current.report().observation().arena_slot().index()
                 }

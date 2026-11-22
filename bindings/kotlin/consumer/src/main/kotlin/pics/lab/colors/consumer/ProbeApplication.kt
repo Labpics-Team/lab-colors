@@ -41,6 +41,29 @@ class ProbeApplication : Application() {
             attachment.updateUnknown(3uL, 7u).close(); check(installed == null)
             attachment.dispose(true)
         }
+        val computed = ProgramWireBuilderV3().apply {
+            colorTarget(21u, byteArrayOf(-128, -128, -128), ProgramWireColorOptionsV3(
+                domain = ProgramWireColorDomainV3.NEUTRAL, appearance = 61u))
+            surfaceInputPort(31u); solidPaint(41u, 21u); inputSurface(51u, 31u)
+            pointOccurrence(61u, 41u, 51u)
+            wcag22VisibleUnary(true, 81u, 61u, Wcag22Criterion.SC143_TEXT_DEFAULT)
+            output(91u, 41u); assignment(listOf(21u))
+        }.finish()
+        compileProgramWire(computed, 1u).use { runtime ->
+            runtime.updateObserved(1uL, listOf(1u), byteArrayOf(-1, -1, -1), 1u).use { light ->
+                check(light.state() == "ready" && light.snapshotVersion() == 2u)
+                val update = object : ProgramUpdateHost {
+                    override fun accept(snapshot: ProgramSnapshot): Boolean = snapshot.use {
+                        check(it.state() == "ready")
+                        check(!light.outputRgb(0u).contentEquals(it.outputRgb(0u)))
+                        check((requireNotNull(it.assessmentReport()).cells.single().assessment as
+                            ProgramConstraintAssessment.Wcag22Srgb8).verdict == ProgramAssessmentVerdict.PASS)
+                        true
+                    }
+                }
+                check(runtime.updateObservedWith(2uL, listOf(1u), byteArrayOf(0, 0, 0), 1u, update))
+            }
+        }
         check(evaluateWcag22("#000000", "#FFFFFF", Wcag22Criterion.SC143_TEXT_DEFAULT).decision == Wcag22Decision.PASS)
         check(numericalCapabilityManifest().sites.isNotEmpty())
         check(decodeCertificateEnvelope(issueSourceCertificateEnvelope()).producerContentIdentity.size == 32)

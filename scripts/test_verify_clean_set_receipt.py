@@ -37,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CANONICAL_CODEC = (REPO_ROOT / CODEC_PATH).read_bytes()
 TRANSITIVE_EXECUTOR_ROLES = (
     "appearance_executor_source",
+    "appearance_execution_cone_source",
     "composition_executor_source",
     "content_digest_source",
     "joint_selection_source",

@@ -9,8 +9,11 @@ const pkg = JSON.parse(read("package.json"));
 test("terminal tar inventory is exact and excludes retired roots", () => {
   const required = new Set([
     "LICENSE", "NOTICE.md", "LICENSES/CC-BY-4.0.txt", "LICENSES/CC-BY-SA-4.0.txt", "build-metadata.json", "index.js", "index.d.ts", "wcag22.d.ts",
+    "authoring.js", "authoring.d.ts", "authoring-graph.js", "authoring-frame.js",
+    "authoring-program.js", "authoring-css.js", "authoring-view.js",
     "program-wire/abi-v1.js", "program-wire/abi-v1.d.ts",
     "program-wire/encoding.js", "program-wire/abi-v2.js", "program-wire/abi-v2.d.ts",
+    "program-wire/abi-v3.js", "program-wire/abi-v3.d.ts",
     "evidence/wcag22-srgb8-v1.json", "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
@@ -30,11 +33,14 @@ test("terminal package has one root and no legacy subpath", () => {
   assert.equal(pkg.version, lock.packages[""].version);
   assert.deepEqual(Object.keys(pkg.exports).sort(), [
     ".", "./build-metadata.json", "./package.json", "./pkg/labcolors_bg.wasm",
-    "./program-wire/abi-v1.js", "./program-wire/abi-v2.js",
+    "./program-wire/abi-v1.js", "./program-wire/abi-v2.js", "./program-wire/abi-v3.js",
   ]);
   assert.equal(Object.hasOwn(pkg.exports, "./program-wire/encoding.js"), false);
   assert.deepEqual(pkg.exports["./program-wire/abi-v2.js"], {
     types: "./program-wire/abi-v2.d.ts", default: "./program-wire/abi-v2.js",
+  });
+  assert.deepEqual(pkg.exports["./program-wire/abi-v3.js"], {
+    types: "./program-wire/abi-v3.d.ts", default: "./program-wire/abi-v3.js",
   });
   assert.deepEqual(pkg.exports["./program-wire/abi-v1.js"], {
     types: "./program-wire/abi-v1.d.ts",
@@ -42,9 +48,9 @@ test("terminal package has one root and no legacy subpath", () => {
   });
 });
 
-test("root source exports Program runtime and permanent capabilities only", () => {
+test("root source exports color authoring, Program runtime and permanent capabilities", () => {
   const index = read("index.js");
-  for (const required of ["compileProgramWire", "ProgramRuntime", "ProgramSnapshot", "evaluateWcag22", "numericalCapabilityManifest"]) {
+  for (const required of ["colors", "ColorAuthoringError", "compileProgramWire", "ProgramRuntime", "ProgramSnapshot", "evaluateWcag22", "numericalCapabilityManifest"]) {
     assert.match(index, new RegExp(`\\b${required}\\b`, "u"));
   }
   for (const retired of ["LabColors", "applyTheme", "watchTheme", "adaptTheme"]) {

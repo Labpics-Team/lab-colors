@@ -1,8 +1,9 @@
 # Lab Colors для Android
 
-Kotlin вызывает общий Rust Core через сгенерированный UniFFI API. Builder
-кодирует ProgramWire v1/v2 без JavaScript. Цветовая математика и выбор
-результата не дублируются.
+Kotlin вызывает общий Rust Core через сгенерированный UniFFI API. Описание
+характера цвета, связей с поверхностями и предпочтений передаётся через
+`ProgramWireBuilderV3`. Core вычисляет связанные значения заново при изменении
+контекста. Builder кодирует декларации без собственной цветовой математики.
 
 ## Подключение
 
@@ -55,35 +56,66 @@ CI исполняет внешний debug-потребитель и прило�
 ```kotlin
 import pics.lab.colors.*
 
-val wire = ProgramWireBuilderV1().apply {
-    source(11u, byteArrayOf(20, 20, 20))
-    fixedTarget(21u, 11u)
+val wire = ProgramWireBuilderV3().apply {
+    colorTarget(21u, byteArrayOf(0, 103, 244.toByte()),
+        ProgramWireColorOptionsV3(appearance = 61u))
     surfaceInputPort(31u)
     solidPaint(41u, 21u)
     inputSurface(51u, 31u)
-    sourceOverOccurrence(61u, 41u, 51u, 64.0, 0.2, ProgramSurround.AVERAGE)
-    presentationRoot(71u, 61u)
-    presentationTarget(71u, 61u)
+    pointOccurrence(61u, 41u, 51u)
     wcag22VisibleUnary(true, 81u, 61u, Wcag22Criterion.SC143_TEXT_DEFAULT)
     output(91u, 41u)
+    assignment(listOf(21u))
 }.finish()
 compileProgramWire(wire, 1u).use { runtime ->
-    runtime.updateObserved(1uL, listOf(1u), byteArrayOf(-1, -1, -1), 1u).use { snapshot ->
-        check(snapshot.state() == "ready")
-        val outputs: List<Double> = snapshot.copyOutputTable()
-        for (offset in outputs.indices step 5) {
-            val slot = outputs[offset].toUInt()
-            println("$slot: ${outputs[offset + 1]}, ${outputs[offset + 2]}, ${outputs[offset + 3]}; opacity=${outputs[offset + 4]}")
+    val backgrounds = listOf(byteArrayOf(-1, -1, -1), byteArrayOf(0, 0, 0))
+    for ((index, background) in backgrounds.withIndex()) {
+        runtime.updateObserved((index + 1).toULong(), listOf(1u), background, 1u).use { snapshot ->
+            check(snapshot.state() == "ready")
+            val channels = snapshot.outputRgb(0u).map { it.toInt() and 255 }
+            println("${snapshot.outputSlot(0u)}: $channels; ${snapshot.optimality()}")
         }
     }
 }
 ```
+
+Один синий источник здесь связан с местом использования. Смена фона меняет
+вычисленное значение, сохраняя объявленный характер и требование для текста.
+Числовые ID задаёт приложение; Core не назначает им роли дизайн-системы.
 
 `UInt` и `ULong` сохраняют полный диапазон идентификаторов и ревизий.
 `ByteArray` содержит необработанные байты, а `finish()` выдаёт независимую копию.
 Builder принадлежит одному вызывающему контексту; отказ не меняет принятую
 декларацию. Сессия допускает перенос между потоками, но одновременная запись
 и повторный вход получают явный отказ, не скрытую очередь.
+
+## Настройки цвета и связи
+
+`colorTarget(id, anchor, options)` принимает исходный sRGB8 и
+`ProgramWireColorOptionsV3`. Неуказанные поля `identity` передаются как
+неуказанные; значения по умолчанию определяет общий Core.
+
+| Поле | Значение |
+| --- | --- |
+| `domain` | `SRGB` или `NEUTRAL` для нейтрального видимого цвета. |
+| `identity.maxHueDeviation` | Допустимое отклонение тона Oklab в градусах, `0..180`. |
+| `identity.chroma`, `identity.lightness` | Пара упорядоченных границ в `0..1`. |
+| `maxChange` | Максимальное расстояние Oklab от исходного цвета, `0..2`; по умолчанию `2`. |
+| `appearance` | ID occurrence, на котором оценивается характер видимого цвета. |
+| `tone` | `ProgramWireToneV3(from, curve)`: предпочтительная светлота относительно входной поверхности. Кривая содержит минимум две пары, начинается с входа `0`, заканчивается `1`; входы строго возрастают, обе координаты в `0..1`. |
+
+`pointOccurrence(id, paint, surface)` связывает краску с поверхностью.
+`occurrenceSurface` позволяет использовать результат слоя как следующую
+поверхность. `visibleSeparationHard(id, occurrence, minimum, maximum)` задаёт
+интервал расстояния Oklab от видимого цвета до его подложки, `0..2`.
+
+Для собственной конечной области поиска есть
+`computedTarget(id, ProgramWireDomainV3.Box(lower, upper), anchor, maxDelta)`
+и `ProgramWireDomainV3.Gray(lower, upper)`. `maxDelta` неотрицателен, его квадрат
+должен быть конечным. `assignment(targetsInPreferenceOrder)` объявляется один
+раз и задаёт порядок предпочтений вычисляемых targets; для графа только с
+фиксированными цветами список пуст. Семантическую совместимость деклараций
+проверяет `compileProgramWire`.
 
 ## Чтение всех выходов
 
@@ -95,9 +127,12 @@ Builder принадлежит одному вызывающему контек�
 округления. `outputSlot`, `outputRgb` и `outputOpacity` доступны для отдельного
 выхода; в `ByteArray` от `outputRgb` канал 255 по-прежнему представлен байтом -1.
 
-Применяйте цвета только при `state() == "ready"`. Таблица `failed` или `stale`
-может хранить последние проверенные значения, которые не удостоверены для
-текущего контекста. Снимок без outputs возвращает пустой список.
+Применяйте цвета при `state() == "ready"`. Для V3 `optimality()` показывает,
+завершён ли поиск предпочтительного результата (`exact` или `unfinished`);
+обязательные условия выполнены в обоих случаях. `assessmentReport()` содержит
+проверки по связям, `diagnostics()` — диагностику поиска и нарушения конкретной
+проверенной попытки. Таблица состояния, отличного от `ready`, может хранить прошлые значения.
+Снимок без outputs возвращает пустой список.
 Сохранённый список не зависит от следующих обновлений и остаётся доступен
 после `dispose` и `close()` native-объектов. Если Rust не может выделить таблицу,
 метод бросает `LabColorsException.Refused` с `code: "program_resource_exhausted"`
@@ -105,11 +140,26 @@ Builder принадлежит одному вызывающему контек�
 
 ## Привязка к интерфейсу и ресурсы
 
+`runtime.updateObservedWith(revision, scenarioIds, surfaces, surfaceCount, host)`
+передаёт готовый независимый `ProgramSnapshot` в `ProgramUpdateHost.accept`.
+В обработчике скопируйте нужные значения, подготовьте обновление поверхности
+и всех цветов, затем установите их одной операцией. Возврат `true` принимает
+новую ревизию Core; `false` или исключение до установки сохраняют предыдущую
+ревизию. Снимок принадлежит обработчику: его можно сохранить или закрыть через
+`use` прямо в `accept`. Повторный вход в тот же runtime получает `program_busy`.
+
+`updateObserved` принимает уже наблюдённые внешние факты. Для управляемого
+приложением изменения поверхности вместе с цветами используйте
+`updateObservedWith`. Обработчик выполняется синхронно на вызывающем потоке;
+Android main thread выбирает приложение.
+
 `attachProgramWire` принимает `ProgramPointSinkHost`. `tryInstall` выполняется
 синхронно на вызывающем потоке и подтверждает целиком установленную команду.
 `false` или исключение допустимы только до внешнего эффекта. Android main thread
 выбирает приложение, движок не делает скрытый dispatch. Compose/UI-kit остаются
 внешними потребителями; подтверждение рендера не выводится из расчёта цвета.
+Эта точечная привязка принимает ProgramWire v1/v2; связанные выходы V3
+устанавливаются через `ProgramUpdateHost`.
 
 Объекты UniFFI освобождаются через `use`/`close`. Для attachment сначала отзовите
 внешнюю привязку и вызовите `dispose(true)`, затем `close()`. Освобождение памяти

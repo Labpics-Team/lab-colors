@@ -2137,6 +2137,215 @@ fn prepared_paints_render_current_surfaces_without_repeating_paint_work() -> Res
 }
 
 #[test]
+fn scoped_physical_views_reject_foreign_cones_and_hide_untouched_slots() -> Result<(), String> {
+    use crate::appearance::AppearanceConeCompilerV1;
+    let graph = terminal_chain()
+        .compile()
+        .map_err(|error| format!("compile: {error:?}"))?;
+    let admitted = graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(SOURCE, opaque([200, 80, 40]))],
+            vec![(CONTEXT, Srgb8::new([255; 3]))],
+            vec![],
+        ))
+        .map_err(|error| format!("bindings: {error:?}"))?;
+    let mut workspace = graph
+        .new_workspace()
+        .map_err(|error| format!("workspace: {error:?}"))?;
+    let full = graph
+        .evaluate_admitted_into(&admitted, &mut workspace)
+        .map_err(|error| format!("full: {error:?}"))?;
+    let expected = *full.occurrence(FILL_OCCURRENCE).ok_or("full occurrence")?;
+    assert!(full.occurrence(OTHER_OCCURRENCE).is_some());
+    assert!(full.surface_rgb(DERIVED_SURFACE).is_some());
+    let mut compiler = AppearanceConeCompilerV1::new(&graph)
+        .map_err(|error| format!("cone compiler: {error:?}"))?;
+    compiler
+        .occurrence(FILL_OCCURRENCE)
+        .map_err(|error| format!("root: {error:?}"))?;
+    let cone = compiler
+        .finish()
+        .map_err(|error| format!("cone: {error:?}"))?;
+    let mut pass = graph
+        .prepare_scoped_surface_cases(&cone, &admitted, &mut workspace)
+        .map_err(|error| format!("prepare: {error:?}"))?;
+    let local = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new([255; 3]));
+    assert_eq!(local.occurrence(FILL_OCCURRENCE), Some(&expected));
+    assert!(local.occurrence(OTHER_OCCURRENCE).is_none());
+    assert!(
+        local
+            .occurrence_at(
+                graph
+                    .bind_occurrence(OTHER_OCCURRENCE)
+                    .ok_or("other slot")?
+            )
+            .is_none()
+    );
+    assert!(local.surface_rgb(DERIVED_SURFACE).is_none());
+    assert_eq!(local.occurrences().count(), 1);
+
+    let other = terminal_chain()
+        .compile()
+        .map_err(|error| format!("foreign compile: {error:?}"))?;
+    let mut compiler = AppearanceConeCompilerV1::new(&other)
+        .map_err(|error| format!("foreign compiler: {error:?}"))?;
+    compiler
+        .occurrence(FILL_OCCURRENCE)
+        .map_err(|error| format!("foreign root: {error:?}"))?;
+    let foreign = compiler
+        .finish()
+        .map_err(|error| format!("foreign cone: {error:?}"))?;
+    assert!(matches!(
+        graph.prepare_scoped_surface_cases(&foreign, &admitted, &mut workspace),
+        Err(BindingError::IncompatibleEvaluationCone)
+    ));
+
+    let different = AppearanceGraphSpec::new(
+        vec![OTHER_SOURCE],
+        vec![CONTEXT],
+        vec![],
+        vec![PaintSpec::Input {
+            id: SOLID_PAINT,
+            input: OTHER_SOURCE,
+        }],
+        vec![SurfaceSpec::Input {
+            id: CONTEXT_SURFACE,
+            port: CONTEXT,
+        }],
+        vec![OccurrenceSpec {
+            id: FILL_OCCURRENCE,
+            subject: SOLID_PAINT,
+            against: CONTEXT_SURFACE,
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        }],
+    )
+    .compile()
+    .map_err(|error| format!("different schema: {error:?}"))?;
+    let wrong_bindings = different
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(OTHER_SOURCE, opaque([200, 80, 40]))],
+            vec![(CONTEXT, Srgb8::new([255; 3]))],
+            vec![],
+        ))
+        .map_err(|error| format!("foreign bindings: {error:?}"))?;
+    assert!(matches!(
+        graph.prepare_scoped_surface_cases(&cone, &wrong_bindings, &mut workspace),
+        Err(BindingError::IncompatibleAdmittedBindings)
+    ));
+    Ok(())
+}
+
+#[test]
+fn nested_scopes_retain_roots_and_reuse_one_allocation_free_workspace() -> Result<(), String> {
+    use crate::appearance::AppearanceConeCompilerV1;
+    const COUNT: u32 = 1000;
+    let surfaces = (0..COUNT)
+        .map(|index| {
+            if index == 0 {
+                SurfaceSpec::Input {
+                    id: SurfaceId::new(10_000),
+                    port: CONTEXT,
+                }
+            } else {
+                SurfaceSpec::FromOccurrence {
+                    id: SurfaceId::new(10_000 + index),
+                    occurrence: OccurrenceId::new(20_000 + index - 1),
+                }
+            }
+        })
+        .collect();
+    let occurrences = (0..COUNT)
+        .map(|index| OccurrenceSpec {
+            id: OccurrenceId::new(20_000 + index),
+            subject: SOLID_PAINT,
+            against: SurfaceId::new(10_000 + index),
+            profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+        })
+        .collect();
+    let graph = AppearanceGraphSpec::new(
+        vec![SOURCE],
+        vec![CONTEXT],
+        vec![],
+        vec![PaintSpec::Input {
+            id: SOLID_PAINT,
+            input: SOURCE,
+        }],
+        surfaces,
+        occurrences,
+    )
+    .compile()
+    .map_err(|error| format!("compile chain: {error:?}"))?;
+    let mut compiler =
+        AppearanceConeCompilerV1::new(&graph).map_err(|error| format!("compiler: {error:?}"))?;
+    let mut cones = Vec::new();
+    for index in 0..COUNT {
+        compiler
+            .occurrence(OccurrenceId::new(20_000 + index))
+            .map_err(|error| format!("root: {error:?}"))?;
+        cones.push(
+            compiler
+                .finish()
+                .map_err(|error| format!("cone: {error:?}"))?,
+        );
+    }
+    assert_eq!(
+        cones
+            .iter()
+            .map(|cone| cone.retained_root_count())
+            .sum::<usize>(),
+        COUNT as usize
+    );
+    let admitted = graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(SOURCE, opaque([200; 3]))],
+            vec![(CONTEXT, Srgb8::new([255; 3]))],
+            vec![],
+        ))
+        .map_err(|error| format!("bindings: {error:?}"))?;
+    let mut workspace = graph
+        .new_workspace()
+        .map_err(|error| format!("workspace: {error:?}"))?;
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| -> Result<(), &'static str> {
+            for index in [0, COUNT - 1, 0] {
+                let mut pass = graph
+                    .prepare_scoped_surface_cases(&cones[index as usize], &admitted, &mut workspace)
+                    .map_err(|_| "prepare scope")?;
+                let view = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new([255; 3]));
+                assert_eq!(view.occurrences().count(), index as usize + 1);
+                assert_eq!(
+                    view.occurrence(OccurrenceId::new(20_000 + index))
+                        .ok_or("current root")?
+                        .visible(),
+                    [200; 3]
+                );
+                if index + 1 < COUNT {
+                    assert!(
+                        view.occurrence(OccurrenceId::new(20_000 + index + 1))
+                            .is_none()
+                    );
+                }
+            }
+            let full = graph
+                .evaluate_admitted_into(&admitted, &mut workspace)
+                .map_err(|_| "full evaluation")?;
+            assert_eq!(full.occurrences().count(), COUNT as usize);
+            let mut pass = graph
+                .prepare_scoped_surface_cases(&cones[0], &admitted, &mut workspace)
+                .map_err(|_| "scope after full")?;
+            let view = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new([255; 3]));
+            assert!(
+                view.occurrence(OccurrenceId::new(20_000 + COUNT - 1))
+                    .is_none()
+            );
+            Ok(())
+        });
+    result?;
+    assert_eq!(allocations, 0);
+    Ok(())
+}
+
+#[test]
 fn prepared_paints_reject_schema_and_workspace_before_physical_work() -> Result<(), String> {
     let graph = point_component(false, false)
         .compile()

@@ -28,6 +28,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+mod execution_cone;
+pub(crate) use execution_cone::{AppearanceConeCompilerV1, CompiledAppearanceConeV1};
+use execution_cone::{AppearanceConeWorkspaceV1, AppearanceExecutionOrderV1};
+
 use crate::Srgb8;
 pub(crate) use crate::composition::CompositionProfileV1;
 
@@ -209,6 +213,7 @@ pub(crate) struct OccurrenceSpec {
 /// Ошибки атомарной AOT-компиляции физической декларации.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompileError {
+    ResourceExhausted,
     DuplicatePaintInput {
         input: PaintInputId,
     },
@@ -306,6 +311,8 @@ pub(crate) enum BindingError {
     /// Scratch belongs to a different physical graph shape. Reusing storage is
     /// allowed only when every typed output domain has the same cardinality.
     IncompatibleWorkspace,
+    /// The physical subset belongs to another compiled graph generation.
+    IncompatibleEvaluationCone,
     /// A fallible allocation needed to prepare bindings, scratch or an owned
     /// result could not be satisfied. No numeric policy limit is implied.
     ResourceExhausted,
@@ -543,7 +550,7 @@ impl AppearanceGraphSpec {
                     occurrences: cyclic_occurrences,
                 }
             })?;
-        let render_topo = render_topo_indices
+        let render_topo: Vec<_> = render_topo_indices
             .into_iter()
             .map(|index| {
                 if index < surface_count {
@@ -616,6 +623,7 @@ impl AppearanceGraphSpec {
                 against: surface_index(occurrence.against)
                     .unwrap_or_else(|| unreachable!("surface links were validated")),
                 profile: occurrence.profile,
+                raster_precision: false,
                 consumed_downstream: false,
             })
             .collect();
@@ -630,7 +638,17 @@ impl AppearanceGraphSpec {
             }
         }
 
-        Ok(CompiledAppearanceGraph {
+        let execution_order = AppearanceExecutionOrderV1::new(
+            &paint_topo,
+            &render_topo,
+            AppearanceWorkspaceShape {
+                paints: compiled_paints.len(),
+                surfaces: compiled_surfaces.len(),
+                occurrences: compiled_occurrences.len(),
+            },
+        )
+        .map_err(|_| CompileError::ResourceExhausted)?;
+        let mut graph = CompiledAppearanceGraph {
             instance: Arc::new(()),
             paint_inputs,
             surface_input_ports,
@@ -640,7 +658,11 @@ impl AppearanceGraphSpec {
             occurrences: compiled_occurrences,
             paint_topo,
             render_topo,
-        })
+            rgb_box_endpoints: false,
+            execution_order,
+        };
+        graph.rgb_box_endpoints = graph.calculate_rgb_box_endpoint_support();
+        Ok(graph)
     }
 }
 
@@ -791,6 +813,7 @@ struct CompiledOccurrenceSpec {
     against_id: SurfaceId,
     against: usize,
     profile: CompositionProfileV1,
+    raster_precision: bool,
     consumed_downstream: bool,
 }
 
@@ -911,6 +934,8 @@ pub(crate) struct CompiledAppearanceGraph {
     occurrences: Vec<CompiledOccurrenceSpec>,
     paint_topo: Vec<usize>,
     render_topo: Vec<RenderNode>,
+    rgb_box_endpoints: bool,
+    execution_order: AppearanceExecutionOrderV1,
 }
 
 /// Borrowed runtime-представление уже проверенного compiled IR. Оно отделяет
@@ -1014,6 +1039,7 @@ const POINT_OCCURRENCES: [CompiledOccurrenceSpec; 1] = [CompiledOccurrenceSpec {
     against_id: POINT_CONTEXT_SURFACE,
     against: 0,
     profile: CompositionProfileV1::EncodedSrgb8SourceOverV1,
+    raster_precision: false,
     consumed_downstream: false,
 }];
 const POINT_PAINT_TOPO: [usize; 2] = [0, 1];
@@ -1172,12 +1198,23 @@ impl AppearanceBindings {
 /// случайное применение bindings к другому compiled input schema. Значения
 /// alpha уже представлены [`crate::composition::AdmittedOpacityV1`], поэтому
 /// steady-state evaluate не повторяет numeric admission.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct AdmittedAppearanceBindings {
+    graph_instance: Option<Arc<()>>,
     paint_inputs: Vec<(PaintInputId, EncodedPointPaintValueV1)>,
     surfaces: Vec<(SurfaceInputPortId, Srgb8)>,
     opacities: Vec<(OpacityInputId, crate::composition::AdmittedOpacityV1)>,
 }
+
+impl PartialEq for AdmittedAppearanceBindings {
+    fn eq(&self, other: &Self) -> bool {
+        self.paint_inputs == other.paint_inputs
+            && self.surfaces == other.surfaces
+            && self.opacities == other.opacities
+    }
+}
+
+impl Eq for AdmittedAppearanceBindings {}
 
 impl AdmittedAppearanceBindings {
     /// Fallibly duplicate one fully admitted value for an independent Session.
@@ -1196,6 +1233,7 @@ impl AdmittedAppearanceBindings {
         }
 
         Ok(Self {
+            graph_instance: self.graph_instance.clone(),
             paint_inputs: copy_vec(&self.paint_inputs)?,
             surfaces: copy_vec(&self.surfaces)?,
             opacities: copy_vec(&self.opacities)?,
@@ -1604,6 +1642,7 @@ pub(crate) struct ResolvedOccurrence {
     subject: PaintId,
     against: SurfaceId,
     certificate: SourceOverCertificateV1,
+    emission: crate::emission::PointEmissionV1,
 }
 
 impl ResolvedOccurrence {
@@ -1655,6 +1694,10 @@ impl ResolvedOccurrence {
 
     pub(crate) fn certificate(&self) -> &SourceOverCertificateV1 {
         &self.certificate
+    }
+
+    pub(crate) const fn emission(&self) -> crate::emission::PointEmissionV1 {
+        self.emission
     }
 }
 
@@ -1733,8 +1776,9 @@ impl AppearanceEvaluation {
 
 /// Reusable scratch для одного compiled physical graph.
 ///
-/// После первого fallible sizing повторные evaluate того же shape полностью
-/// перезаписывают slots; capacity и backing allocations остаются неизменными.
+/// После первого fallible sizing каждый pass перезаписывает все slots своей
+/// области; scoped view скрывает остальные. Capacity и backing allocations
+/// остаются неизменными.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AppearanceWorkspaceShape {
     paints: usize,
@@ -1758,6 +1802,7 @@ pub(crate) struct AppearanceWorkspace {
     paints: Vec<Option<EncodedPointPaintV1>>,
     surfaces: Vec<Option<Srgb8>>,
     occurrences: Vec<Option<ResolvedOccurrence>>,
+    cone: AppearanceConeWorkspaceV1,
 }
 
 impl AppearanceWorkspace {
@@ -1768,6 +1813,7 @@ impl AppearanceWorkspace {
             paints: Vec::new(),
             surfaces: Vec::new(),
             occurrences: Vec::new(),
+            cone: AppearanceConeWorkspaceV1::new(shape)?,
         };
         initialise_workspace_slots(&mut workspace.paints, shape.paints)?;
         initialise_workspace_slots(&mut workspace.surfaces, shape.surfaces)?;
@@ -1779,8 +1825,8 @@ impl AppearanceWorkspace {
         if self.shape != AppearanceWorkspaceShape::of(program) {
             return Err(BindingError::IncompatibleWorkspace);
         }
-        // Оба topo покрывают все узлы. execute_into перезаписывает каждый slot
-        // до его чтения зависимыми узлами и не имеет частичного выхода.
+        // Полный topo и замкнутый scoped topo перезаписывают каждый включённый
+        // slot до его чтения зависимыми узлами и не имеют частичного выхода.
         Ok(())
     }
 
@@ -1819,16 +1865,23 @@ pub(crate) struct PreparedAppearancePaints<'program, 'bindings, 'workspace> {
     program: CompiledAppearanceProgram<'program>,
     _bindings: &'bindings AdmittedAppearanceBindings,
     workspace: &'workspace mut AppearanceWorkspace,
+    scope: Option<&'program CompiledAppearanceConeV1>,
 }
 
 impl<'program> PreparedAppearancePaints<'program, '_, '_> {
-    /// Полный fresh render по той canonical Surface-схеме, которая проверена
-    /// при создании pass. Каждый case перезаписывает все render slots.
+    /// Свежий render полной либо замкнутой scoped области по canonical
+    /// Surface-схеме. Каждый case перезаписывает все включённые render slots.
     pub(crate) fn evaluate_surface_inputs_canonical(
         &mut self,
         value_at: impl Fn(usize) -> Srgb8,
     ) -> AppearanceEvaluationView<'program, '_> {
-        self.program.execute_render_into(
+        let order = if self.scope.is_some() {
+            self.workspace.cone.render.as_slice()
+        } else {
+            self.program.render_topo
+        };
+        self.program.execute_render_in_order(
+            order,
             value_at,
             &self.workspace.paints,
             &mut self.workspace.surfaces,
@@ -1838,6 +1891,7 @@ impl<'program> PreparedAppearancePaints<'program, '_, '_> {
             graph_instance: self.graph_instance,
             program: self.program,
             workspace: self.workspace,
+            scope: self.scope,
         }
     }
 }
@@ -1851,6 +1905,7 @@ pub(crate) struct AppearanceEvaluationView<'program, 'workspace> {
     graph_instance: &'program Arc<()>,
     program: CompiledAppearanceProgram<'program>,
     workspace: &'workspace AppearanceWorkspace,
+    scope: Option<&'program CompiledAppearanceConeV1>,
 }
 
 impl AppearanceEvaluationView<'_, '_> {
@@ -1860,6 +1915,9 @@ impl AppearanceEvaluationView<'_, '_> {
             .paints
             .binary_search_by_key(&id, CompiledPaintSpec::id)
             .ok()?;
+        if self.scope.is_some() && !self.workspace.cone.paint_seen[index] {
+            return None;
+        }
         self.workspace.paints[index].as_ref()
     }
 
@@ -1868,6 +1926,16 @@ impl AppearanceEvaluationView<'_, '_> {
     /// A slot from a graph whose canonical ordinal names another Paint is
     /// rejected before returning workspace data. No fallback ID lookup occurs.
     pub(crate) fn paint_at(&self, slot: CompiledPaintSlotV1) -> Option<&EncodedPointPaintV1> {
+        if self.scope.is_some()
+            && self
+                .workspace
+                .cone
+                .paint_seen
+                .get(slot.index)
+                .is_none_or(|seen| !*seen)
+        {
+            return None;
+        }
         let spec = self.program.paints.get(slot.index)?;
         if spec.id() != slot.id {
             return None;
@@ -1882,6 +1950,9 @@ impl AppearanceEvaluationView<'_, '_> {
             .surfaces
             .binary_search_by_key(&id, CompiledSurfaceSpec::id)
             .ok()?;
+        if self.scope.is_some() && !self.workspace.cone.surface_seen[index] {
+            return None;
+        }
         self.workspace.surfaces[index].map(Srgb8::bytes)
     }
 
@@ -1891,6 +1962,9 @@ impl AppearanceEvaluationView<'_, '_> {
             .occurrences
             .binary_search_by_key(&id, |occurrence| occurrence.id)
             .ok()?;
+        if self.scope.is_some() && !self.workspace.cone.occurrence_seen[index] {
+            return None;
+        }
         self.workspace.occurrences[index].as_ref()
     }
 
@@ -1900,6 +1974,16 @@ impl AppearanceEvaluationView<'_, '_> {
         &self,
         slot: CompiledOccurrenceSlotV1,
     ) -> Option<&ResolvedOccurrence> {
+        if self.scope.is_some()
+            && self
+                .workspace
+                .cone
+                .occurrence_seen
+                .get(slot.index)
+                .is_none_or(|seen| !*seen)
+        {
+            return None;
+        }
         let spec = self.program.occurrences.get(slot.index)?;
         if spec.id != slot.id {
             return None;
@@ -1909,8 +1993,14 @@ impl AppearanceEvaluationView<'_, '_> {
     }
 
     pub(crate) fn occurrences(&self) -> impl ExactSizeIterator<Item = &ResolvedOccurrence> + '_ {
-        self.workspace.occurrences.iter().map(|occurrence| {
-            occurrence
+        let count = self.scope.map_or(self.workspace.occurrences.len(), |_| {
+            self.workspace.cone.occurrences.len()
+        });
+        (0..count).map(|index| {
+            let index = self
+                .scope
+                .map_or(index, |_| self.workspace.cone.occurrences[index]);
+            self.workspace.occurrences[index]
                 .as_ref()
                 .unwrap_or_else(|| unreachable!("render topo covers every Occurrence"))
         })
@@ -1929,7 +2019,16 @@ impl AppearanceEvaluationView<'_, '_> {
         release: PointOccurrenceAbsenceReleaseV1,
         steps: &'steps mut Vec<PointOccurrenceAbsenceStepV1>,
     ) -> Result<PointOccurrenceAbsenceReplayV1<'steps>, PointOccurrenceAbsenceReplayErrorV1> {
-        if !Arc::ptr_eq(self.graph_instance, &path.graph_instance) {
+        if !Arc::ptr_eq(self.graph_instance, &path.graph_instance)
+            || self.scope.is_some()
+                && path.occurrences.iter().any(|slot| {
+                    self.workspace
+                        .cone
+                        .occurrence_seen
+                        .get(slot.index)
+                        .is_none_or(|seen| !*seen)
+                })
+        {
             return Err(PointOccurrenceAbsenceReplayErrorV1::IncompatibleEvaluation);
         }
         // Новый вариант release обязан сломать компиляцию здесь, а не молча
@@ -1978,6 +2077,9 @@ impl AppearanceEvaluationView<'_, '_> {
     }
 
     fn try_to_owned(&self) -> Result<AppearanceEvaluation, BindingError> {
+        if self.scope.is_some() {
+            return Err(BindingError::IncompatibleEvaluationCone);
+        }
         let mut paints = Vec::new();
         paints
             .try_reserve_exact(self.workspace.paints.len())
@@ -2077,6 +2179,20 @@ impl CompiledAppearanceGraph {
         Some(self.occurrences[index].subject_id)
     }
 
+    /// Единственный исходный paint input цепочки opacity данного применения.
+    pub(crate) fn occurrence_source_input(&self, id: OccurrenceId) -> Option<PaintInputId> {
+        let occurrence = self.occurrences.binary_search_by_key(&id, |v| v.id).ok()?;
+        let mut paint = self.occurrences[occurrence].subject;
+        loop {
+            match self.paints.get(paint)? {
+                CompiledPaintSpec::Input { input_index, .. } => {
+                    return self.paint_inputs.get(*input_index).copied();
+                }
+                CompiledPaintSpec::Opacity { source, .. } => paint = *source,
+            }
+        }
+    }
+
     /// Создаёт полномочие только для `Occurrence`, который не потребляется
     /// другим `Occurrence` этого точечного графа: промежуточный слой нельзя
     /// принять за финальный моделируемый результат.
@@ -2156,6 +2272,16 @@ impl CompiledAppearanceGraph {
         self.occurrences.iter().map(|occurrence| occurrence.id)
     }
 
+    /// Admission-only selection of the material emission contract. The
+    /// reference composition certificate keeps its original mathematical law.
+    pub(crate) fn set_raster_precision(&mut self, id: OccurrenceId) -> bool {
+        let Ok(index) = self.occurrences.binary_search_by_key(&id, |point| point.id) else {
+            return false;
+        };
+        self.occurrences[index].raster_precision = true;
+        true
+    }
+
     /// Canonical physical Surface-input schema accepted by this program.
     pub(crate) fn surface_input_ports(
         &self,
@@ -2170,7 +2296,9 @@ impl CompiledAppearanceGraph {
         &self,
         bindings: &AppearanceBindings,
     ) -> Result<AdmittedAppearanceBindings, BindingError> {
-        self.program().admit_bindings(bindings)
+        let mut admitted = self.program().admit_bindings(bindings)?;
+        admitted.graph_instance = Some(self.instance.clone());
+        Ok(admitted)
     }
 
     /// Fallible one-time allocation of scratch for this exact physical shape.
@@ -2179,6 +2307,11 @@ impl CompiledAppearanceGraph {
     }
 
     /// Allocation-free steady-state execution over already admitted bindings.
+    ///
+    /// При неизменных opacities покомпонентный порядок RGB-входов сохраняется:
+    /// Input копирует значение; Opacity меняет только alpha; FromOccurrence
+    /// копирует результат; exact source-over с alpha в [0,1] и округление
+    /// монотонны по обоим цветам. Поэтому два endpoint-вызова охватывают box.
     pub(crate) fn evaluate_admitted_into<'workspace>(
         &self,
         bindings: &AdmittedAppearanceBindings,
@@ -2186,6 +2319,24 @@ impl CompiledAppearanceGraph {
     ) -> Result<AppearanceEvaluationView<'_, 'workspace>, BindingError> {
         self.program()
             .evaluate_admitted_into(&self.instance, bindings, workspace)
+    }
+
+    pub(crate) fn supports_rgb_box_endpoints(&self) -> bool {
+        self.rgb_box_endpoints
+    }
+
+    fn calculate_rgb_box_endpoint_support(&self) -> bool {
+        let program = self.program();
+        program.paints.iter().all(|paint| match paint {
+            CompiledPaintSpec::Input { .. } | CompiledPaintSpec::Opacity { .. } => true,
+        }) && program.surfaces.iter().all(|surface| match surface {
+            CompiledSurfaceSpec::Input { .. } | CompiledSurfaceSpec::FromOccurrence { .. } => true,
+        }) && program
+            .occurrences
+            .iter()
+            .all(|occurrence| match occurrence.profile {
+                CompositionProfileV1::EncodedSrgb8SourceOverV1 => true,
+            })
     }
 
     /// Prepare only after the caller has decided to evaluate a physical case.
@@ -2210,6 +2361,7 @@ impl CompiledAppearanceGraph {
             program,
             _bindings: bindings,
             workspace,
+            scope: None,
         })
     }
 
@@ -2328,6 +2480,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
         }
 
         Ok(AdmittedAppearanceBindings {
+            graph_instance: None,
             paint_inputs: admitted_paint_inputs,
             surfaces: admitted_surfaces,
             opacities: admitted_opacities,
@@ -2372,6 +2525,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
             graph_instance,
             program: self,
             workspace,
+            scope: None,
         })
     }
 
@@ -2409,9 +2563,27 @@ impl<'program> CompiledAppearanceProgram<'program> {
         P: Fn(usize) -> EncodedPointPaintValueV1,
         O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
+        self.execute_paints_in_order(
+            self.paint_topo,
+            paint_input_value,
+            opacity_value,
+            resolved_paints,
+        );
+    }
+
+    fn execute_paints_in_order<P, O>(
+        &self,
+        order: &[usize],
+        paint_input_value: P,
+        opacity_value: O,
+        resolved_paints: &mut [Option<EncodedPointPaintV1>],
+    ) where
+        P: Fn(usize) -> EncodedPointPaintValueV1,
+        O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
+    {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
 
-        for &index in self.paint_topo {
+        for &index in order {
             #[cfg(test)]
             PAINT_NODE_EVALUATIONS.with(|count| count.set(count.get() + 1));
             let paint = match self.paints[index] {
@@ -2449,11 +2621,30 @@ impl<'program> CompiledAppearanceProgram<'program> {
     ) where
         S: Fn(usize) -> Srgb8,
     {
+        self.execute_render_in_order(
+            self.render_topo,
+            surface_value,
+            resolved_paints,
+            resolved_surfaces,
+            resolved_occurrences,
+        );
+    }
+
+    fn execute_render_in_order<S>(
+        &self,
+        order: &[RenderNode],
+        surface_value: S,
+        resolved_paints: &[Option<EncodedPointPaintV1>],
+        resolved_surfaces: &mut [Option<Srgb8>],
+        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+    ) where
+        S: Fn(usize) -> Srgb8,
+    {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
         debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
         debug_assert_eq!(resolved_occurrences.len(), self.occurrences.len());
 
-        for node in self.render_topo {
+        for node in order {
             match *node {
                 RenderNode::Surface(index) => {
                     let value = match self.surfaces[index] {
@@ -2477,11 +2668,33 @@ impl<'program> CompiledAppearanceProgram<'program> {
                         subject.opacity(),
                         backdrop.bytes(),
                     );
+                    let backdrop_radius = match self.surfaces[spec.against] {
+                        CompiledSurfaceSpec::Input { .. } => 0,
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => {
+                            resolved_occurrences[occurrence]
+                                .unwrap_or_else(|| unreachable!("render order is compiled"))
+                                .emission
+                                .visible_radius
+                        }
+                    };
+                    let emission = crate::emission::PointEmissionV1 {
+                        visible_radius: crate::emission::radius_after(
+                            spec.raster_precision,
+                            subject.source().bytes(),
+                            subject.opacity(),
+                            backdrop.bytes(),
+                            certificate.output_rgb(),
+                            backdrop_radius,
+                        ),
+                        backdrop_radius,
+                        same_as_backdrop: subject.opacity().bits() == 0,
+                    };
                     resolved_occurrences[index] = Some(ResolvedOccurrence {
                         id: spec.id,
                         subject: spec.subject_id,
                         against: spec.against_id,
                         certificate,
+                        emission,
                     });
                 }
             }

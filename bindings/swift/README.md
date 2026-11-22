@@ -48,6 +48,11 @@ worker вызывает [Native conformance](../../.github/workflows/native-conf
 с обоими языковыми builders. Тесты также проверяют отказы, повтор ревизии,
 сохранение предыдущего состояния, повторный вход, смену потока и отзыв scope.
 
+[Wire-векторы V3](../../conformance/program-authoring-v3.json) независимо
+задают байты computed domains, visible identity, tone, separation и пустого
+assignment. Swift, Kotlin и JavaScript сравнивают полные декларации с ними;
+нативный потребитель также компилирует их и проверяет результат Core.
+
 Четыре численных семейства [conformance-пака](../../conformance/README.md)
 сохраняют собственные правила сравнения: численные поля с `driftTol`, композит
 побайтно, HEX решателя в пределах ±1 единицы 8-битного канала.

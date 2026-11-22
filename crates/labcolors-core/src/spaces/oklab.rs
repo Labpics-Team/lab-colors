@@ -60,9 +60,88 @@ fn mat_vec_mul(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
 }
 
 pub(crate) fn srgb_linear_to_oklab(rgb: [f64; 3]) -> [f64; 3] {
+    mat_vec_mul(LMS_TO_OKLAB, srgb_linear_to_lms_root(rgb))
+}
+
+pub(crate) fn srgb_linear_to_lms_root(rgb: [f64; 3]) -> [f64; 3] {
     let lms = mat_vec_mul(SRGB_TO_LMS, rgb);
-    let lms_ = [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()];
-    mat_vec_mul(LMS_TO_OKLAB, lms_)
+    [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()]
+}
+
+/// Границы машинного Oklab для RGB8-box. Предпосылка профиля — конечность и
+/// монотонность фактического decode → LMS → cbrt на всех соседних RGB8-рёбрах.
+/// Знаки коэффициентов и порядок операций совпадают с point-проекцией.
+pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3], [f64; 3]) {
+    use crate::Srgb8;
+    use crate::spaces::srgb::srgb_linear_from_srgb8;
+
+    let lo = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(lower)));
+    let hi = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(upper)));
+    let mut minimum = [0.0; 3];
+    let mut maximum = [0.0; 3];
+    for (index, row) in LMS_TO_OKLAB.iter().enumerate() {
+        let low: [f64; 3] = std::array::from_fn(|i| if row[i] < 0.0 { hi[i] } else { lo[i] });
+        let high: [f64; 3] = std::array::from_fn(|i| if row[i] < 0.0 { lo[i] } else { hi[i] });
+        minimum[index] = row[0] * low[0] + row[1] * low[1] + row[2] * low[2];
+        maximum[index] = row[0] * high[0] + row[1] * high[1] + row[2] * high[2];
+    }
+    (minimum, maximum)
+}
+
+fn srgb8_gamut_oklab_bounds() -> ([f64; 3], [f64; 3]) {
+    static BOUNDS: std::sync::OnceLock<([f64; 3], [f64; 3])> = std::sync::OnceLock::new();
+    *BOUNDS.get_or_init(|| {
+        // Cover every RGB8 point by 512 disjoint 32×32×32 cells. Each cell uses
+        // the same machine-operation enclosure as a query box. Their union
+        // bounds the whole gamut without pretending the three LMS roots are
+        // independent over the entire cube. This one-time refinement changes
+        // no color policy and requires no stored platform-dependent constants.
+        let mut minimum = [f64::INFINITY; 3];
+        let mut maximum = [f64::NEG_INFINITY; 3];
+        for r in 0_u8..8 {
+            for g in 0_u8..8 {
+                for b in 0_u8..8 {
+                    let lower = [r, g, b].map(|cell| cell * 32);
+                    let upper = lower.map(|channel| channel + 31);
+                    let (lo, hi) = srgb8_box_oklab_bounds(lower, upper);
+                    for axis in 0..3 {
+                        minimum[axis] = minimum[axis].min(lo[axis]);
+                        maximum[axis] = maximum[axis].max(hi[axis]);
+                    }
+                }
+            }
+        }
+        (minimum, maximum)
+    })
+}
+
+/// Conservative distance range shared by search pruning and material admission.
+pub(crate) fn srgb8_boxes_distance_bounds(
+    left: ([u8; 3], [u8; 3]),
+    right: ([u8; 3], [u8; 3]),
+) -> [f64; 2] {
+    let (gamut_lo, gamut_hi) = srgb8_gamut_oklab_bounds();
+    let bounded = |rgb: ([u8; 3], [u8; 3])| {
+        let (lo, hi) = srgb8_box_oklab_bounds(rgb.0, rgb.1);
+        (
+            std::array::from_fn::<_, 3, _>(|axis| lo[axis].max(gamut_lo[axis])),
+            std::array::from_fn::<_, 3, _>(|axis| hi[axis].min(gamut_hi[axis])),
+        )
+    };
+    let (left_lo, left_hi) = bounded(left);
+    let (right_lo, right_hi) = bounded(right);
+    let lower = std::array::from_fn::<_, 3, _>(|i| {
+        (left_lo[i] - right_hi[i])
+            .max(right_lo[i] - left_hi[i])
+            .max(0.0)
+    });
+    let upper = std::array::from_fn::<_, 3, _>(|i| {
+        (left_hi[i] - right_lo[i])
+            .abs()
+            .max((right_hi[i] - left_lo[i]).abs())
+    });
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [norm(lower), norm(upper)]
 }
 
 /// Direct 2021 Oklab projection of one relative XYZ(D65) stimulus.
@@ -122,6 +201,41 @@ pub(crate) fn oklab_hue(rgb: [f64; 3]) -> f64 {
 mod tests {
     use super::*;
     use crate::spaces::srgb::srgb_from_hex;
+
+    #[test]
+    fn gamut_bound_contains_cell_boundaries_and_rgb_axis_crossings() {
+        let (lower, upper) = srgb8_gamut_oklab_bounds();
+        let endpoints = [
+            0, 31, 32, 63, 64, 95, 96, 127, 128, 159, 160, 191, 192, 223, 224, 255,
+        ];
+        for first in endpoints {
+            for second in endpoints {
+                for varying in 0..=255_u8 {
+                    for rgb in [
+                        [first, second, varying],
+                        [first, varying, second],
+                        [varying, first, second],
+                    ] {
+                        let point = srgb_linear_to_oklab(
+                            crate::spaces::srgb::srgb_linear_from_srgb8(crate::Srgb8::new(rgb)),
+                        );
+                        assert!(
+                            (0..3).all(
+                                |axis| lower[axis] <= point[axis] && point[axis] <= upper[axis]
+                            ),
+                            "{rgb:?}: {point:?}"
+                        );
+                    }
+                }
+            }
+        }
+        let distance = srgb8_boxes_distance_bounds(([27; 3], [255; 3]), ([28; 3], [255; 3]));
+        assert_eq!(distance[0], 0.0);
+        assert!(
+            distance[1] < 2.0,
+            "RGB uncertainty cannot invent an out-of-gamut distance"
+        );
+    }
 
     #[test]
     fn white_gives_l1_a0_b0() {

@@ -12,7 +12,7 @@ use crate::appearance::EncodedPointPaintV1;
 use crate::family_artifact::{FamilyArtifactBundleV2, FamilyExecutionBindingsV2};
 use crate::program_session::{
     CompiledPointOutputPresentationV1, CoreProgramEvaluatorsV1, PointOutputPresentationBindErrorV1,
-    ProgramOwnerLeaseV1, ProgramPaintOutputV1,
+    ProgramOwnerLeaseV1, ProgramPaintOutputV1, ProgramVerifiedOutcomeV1,
 };
 use crate::session::PreparedSessionDispositionV1;
 
@@ -671,12 +671,23 @@ fn prepared_disposition<'prepared>(
             revision: unknown.revision().value(),
         }),
         PreparedSessionDispositionV1::Verified(verified) => Ok(PreparedDispositionV1::SetAll {
-            revision: verified.report().observation().revision().value(),
+            revision: crate::session::SessionEvidenceV1::observation(verified)
+                .revision()
+                .value(),
             outputs: verified.outputs(),
         }),
+        PreparedSessionDispositionV1::Incomplete(incomplete) => {
+            Ok(PreparedDispositionV1::RevokeAll {
+                revision: crate::session::SessionEvidenceV1::observation(incomplete)
+                    .revision()
+                    .value(),
+            })
+        }
         PreparedSessionDispositionV1::Violation(violation) => {
             Ok(PreparedDispositionV1::RevokeAll {
-                revision: violation.report().observation().revision().value(),
+                revision: crate::session::SessionEvidenceV1::observation(violation)
+                    .revision()
+                    .value(),
             })
         }
     }
@@ -798,6 +809,7 @@ impl<'a, SinkOutputId: Copy> AttachmentCommitV1<'a, SinkOutputId> {
             .evidence
             .state()
             .current_verified()
+            .and_then(ProgramVerifiedOutcomeV1::legacy)
             .map(|current| VerifiedCertificateV1 { inner: current });
         AttachedRenderOutputsV1 {
             certificate,

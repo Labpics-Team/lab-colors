@@ -26,6 +26,7 @@ export const KIND_EXACT_VISIBLE_UNARY = 1;
 export const KIND_EXACT_INTRINSIC_RELATION = 4;
 export const KIND_WCAG22_VISIBLE_UNARY = 9;
 export const KIND_CLEAN_SET = 10;
+export const KIND_NOMINAL_SRGB8_VISIBLE = 12;
 
 export const SURROUND_AVERAGE_V1 = 1;
 export const SURROUND_DIM_V1 = 2;

@@ -141,7 +141,10 @@ impl RelationCorpusV1 {
     /// ловится как InconsistentMatrix, эта проверка — транзитивные пути.
     fn would_conflict_with_incomparable(&self, candidate: &CorpusEntryV1) -> bool {
         if candidate.relation == CleanRelationV1::Incomparable {
-            return false;
+            // Admission must be independent of insertion order: an explicit
+            // incomparable pair cannot contradict an already admitted path.
+            return self.reaches(candidate.context, candidate.a, candidate.b)
+                || self.reaches(candidate.context, candidate.b, candidate.a);
         }
         // Путь проверяется в графе «существующие рёбра + само новое ребро»:
         // обход стартует с candidate, поэтому учитывает и пути через него.
@@ -492,6 +495,42 @@ mod tests {
             CleanRelationV1::Incomparable
         );
         assert_eq!(corpus.relation(none_ctx, V0, V1), CleanRelationV1::Cleaner);
+    }
+
+    #[test]
+    fn incomparable_pairs_cannot_contradict_a_cleaner_path_in_any_insertion_order() {
+        let edges = [
+            (V0, V1, CleanRelationV1::Cleaner),
+            (V1, V2, CleanRelationV1::Cleaner),
+            (V0, V2, CleanRelationV1::Incomparable),
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let mut corpus = RelationCorpusV1::new();
+            for (position, index) in order.into_iter().enumerate() {
+                let (from, to, relation) = edges[index];
+                let result = corpus.insert(ctx(Some(1.0), 0), from, to, relation);
+                if position < 2 {
+                    assert_eq!(result, Ok(()));
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(RelationCorpusErrorV1::TransitiveIncomparableConflict)
+                    );
+                    assert_eq!(
+                        corpus.entries.len(),
+                        2,
+                        "rejection must retain the admitted corpus"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,533 @@
+# JavaScript Program API
+
+Для первого подключения используйте [роли и локальные контексты](../../packages/colors/README.md).
+Эта справка описывает `colors()`, wire, прямые Session-операции и явный renderer-sink.
+Все эти пути используют одно ядро; низкоуровневые операции доступны рядом с authoring API.
+Перед примерами инициализируйте WASM по [инструкции для браузера и Node.js](../../packages/colors/README.md#загрузка-wasm).
+
+## Роли и локальные применения
+
+`colors(options)` создаёт декларацию, `role` — адаптивный источник, `fixed` —
+источник с закреплённым RGB. Вызов `.on(surface, policy)` создаёт отдельное
+применение роли. `compile(outputs)` сохраняет все участвующие подложки и их
+условия, включая неэкспортированные применения. Порядок предпочтений — порядок
+создания применений; имена и порядок outputs его не меняют.
+
+### Настройки
+
+Обычная роль адаптируется по умолчанию. Сначала Core пересекает обязательные
+условия, затем ищет допустимый результат с минимальным изменением относительно
+предпочтительной опоры. Политика идентичности относится к конечному видимому
+цвету, в том числе при прозрачности.
+
+| Настройка | Где задаётся | Что означает |
+| --- | --- | --- |
+| `identity` | `role(id, color, options)` | Границы hue в градусах и диапазонов Oklch chroma/lightness. Переопределяет геометрическую политику сохранения характера цвета. |
+| `domain: "neutral"` | `role` | Конечный видимый результат должен быть серым. Точный серый источник выбирает эту политику автоматически. |
+| `maxChange` | `role` | Максимальное прямое расстояние Oklab от исходного цвета роли до конечного видимого результата, `0..2`. |
+| `tone` | `.on(surface, policy)` | Предпочтительная светлота по объявленной кривой от отдельного входа контекста. |
+| `separation: [min, max]` | `.on` | Обязательный диапазон расстояния Oklab до фактической подложки, `0..2`. Это геометрическое различие, не порог читаемости. |
+| `opacity` | `.on` | Прозрачность самого paint, `0..1`; по умолчанию `1`. Текст поверх слоя не становится прозрачным вместе с ним. |
+| `contrast` | `.on` | `"wcag22-text"`, `"wcag22-large-text"`, `"wcag22-ui"` или `"wcag22-graphic"`: обязательная оценка финальной композиции по выбранному критерию. |
+| `fixed(id, color)` | Вместо `role` | Фиксирует исходный RGB. Opacity, contrast и separation по-прежнему учитываются; tone для fixed не допускается. |
+| `cleanliness: "nominal-srgb8-v2"` | `colors(options)` | Явная версия ограниченной конвенции для конечных точек всех участвующих применений. Core подбирает соответствующий ей результат вместе с остальными условиями. |
+
+По умолчанию Core сохраняет hue в окне ±18°, не менее 10% исходной chroma
+и не усиливает её. Учитывается округление sRGB8: цвет на верхней границе
+должен кодироваться в тот же конечный RGB. Явный `identity.chroma` заменяет
+эту политику строгим диапазоном конечной chroma.
+
+Hue-граница — `0..180` градусов, диапазоны chroma и lightness — `0..1`.
+Это явная геометрическая политика, а не универсальная человеческая категория
+«синий» или «чистый». Контраст, идентичность, различие слоёв и предпочтение
+оцениваются отдельно. `tone` меняет предпочтение, но не переносит границу
+`maxChange` относительно исходного цвета.
+
+Для `fixed()` типы и runtime запрещают `tone`; `opacity`, `contrast` и
+`separation` остаются доступными. Пропущенная `opacity` или `undefined` означает
+`1`, значение `0` сохраняет полную прозрачность. `null`, строки и нечисловые
+значения отвергаются как ошибочная декларация.
+
+`ColorRole` объединяет адаптивную и фиксированную роли; общий тип допускает
+только общую для них policy. `role()` возвращает `ColorAdaptiveRole` с `tone`,
+а `fixed()` — `ColorFixedRole`. `ColorUse` сохраняет вид своей роли, поэтому
+обычная аннотация типа не включает адаптацию для фиксированного источника.
+
+### Входной контекст
+
+`program.resolve(context)`, `program.attach(element, context)` и `view.set(context)`
+получают полный набор входных поверхностей. Учитываются только собственные
+свойства объекта: имя вроде `toString` или `constructor` допустимо и не читает
+одноимённое свойство прототипа. Пропущенный вход, `null` или `undefined`
+означает неизвестный контекст. Лишнее имя или некорректный RGB вызывает
+`ColorAuthoringError` с `code: "color_invalid_context"` и путём входа.
+
+### CSS-подключение
+
+`program.attach(element, context?, options?)` создаёт независимый `ColorView`
+для подключённого `HTMLElement`. `options.nonce` — необязательная непустая
+строка с CSP nonce, разрешённым приложением для этого stylesheet. Пакет не
+заимствует nonce из других элементов. Без разрешения на динамический `style`
+подключение или последующий `set` получает `color_host_changed`.
+
+Scope владеет обычными CSS custom properties всех входов и outputs на этом
+элементе. Имена scope уникальны внутри документа, в том числе при загрузке
+нескольких копий пакета. Один элемент может иметь только одного владельца;
+`replace` передаёт существующий scope новой программе после принятия кадра.
+
+Успешное обновление заменяет текст одной таблицы CSS. Перед подтверждением
+Core-транзакции адаптер проверяет наличие активного stylesheet и computed
+значения всех принадлежащих ему переменных. Конфликт с более сильным правилом
+откатывает CSS-предложение в той же синхронной операции и бросает
+`ColorAuthoringError` с кодом `color_host_changed` и путём переменной.
+Прежние `current` и `lastUpdate` сохраняются; после устранения конфликта
+можно повторить `set`. Ошибка начального `attach` освобождает scope полностью.
+
+Не регистрируйте принадлежащие scope имена через `@property` и не
+переопределяйте их стилями, анимацией или переходом. Проверка сравнивает
+вычисленные значения обычных custom properties с опубликованными значениями,
+чью [сериализацию сохраняет CSS](https://www.w3.org/TR/css-variables/#serializing-custom-props).
+Это проверка принятых переменных на корневом элементе: потребитель отвечает
+за их использование в свойствах нужных элементов, вложенную разметку и
+соответствие фактических поверхностей объявленному графу. Внешнее изменение
+DOM или CSS после принятия кадра не входит в управляемую транзакцию.
+
+### Результат и диагностика
+
+| Состояние `resolve` | Значение |
+| --- | --- |
+| `ready` | Все обязательные условия выполнены. `values` и `context` — независимые неизменяемые копии. |
+| `conflict` | Для объявленного конечного домена допустимого решения нет. |
+| `unresolved` | Бюджет поиска исчерпан до нахождения допустимого решения. Это не доказательство конфликта. |
+| `unknown` | Не хватает входных поверхностей. |
+| `stale` | Прежний результат не удостоверен для текущего наблюдения. |
+
+У `ready` отдельно указан `optimality`: `exact` — поиск предпочтительного
+результата завершён, `unfinished` — готовый результат допустим, но более
+предпочтительный ещё может существовать. Возврат `unfinished` не запускает
+фоновый поиск автоматически.
+
+У остальных состояний нет свежих `values`. Диагностика ссылается на конкретные
+роль, local use, output aliases, требование или отсутствующий вход. Нарушение
+авторского кандидата помечено `candidate-witness`; это не обещание минимального
+конфликтного множества. Для `unresolved` отдельно доступны посещённые состояния
+и бюджет поиска.
+
+Ошибочная декларация или операция бросает `ColorAuthoringError` с `code` и
+`path`. Низкоуровневые ошибки ядра распознаются `isProgramError`. Недопустимые
+входы не подменяются запасной палитрой.
+
+Отказ выделения памяти в `snapshot.diagnostics()` — `ProgramError` с
+`operation: "diagnostics"` и `code: "program_resource_exhausted"`.
+`isProgramError` распознаёт именно эту пару; другие коды для `diagnostics`
+не входят в контракт.
+
+## Фиксированный граф V1 и чтение результата
+
+```ts
+import { compileProgramWire } from "@labpics/colors";
+import {
+  ProgramWireBuilderV1,
+  SURROUND_AVERAGE_V1,
+  WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1,
+} from "@labpics/colors/program-wire/abi-v1.js";
+
+const programBytes = new ProgramWireBuilderV1()
+  .source(11, [20, 20, 20])
+  .fixedTarget(21, 11)
+  .surfaceInputPort(31)
+  .solidPaint(41, 21)
+  .inputSurface(51, 31)
+  .sourceOverOccurrence(61, 41, 51, 64, 0.2, SURROUND_AVERAGE_V1)
+  .presentationRoot(71, 61)
+  .presentationTarget(71, 61)
+  .wcag22VisibleUnary(true, 81, 61, WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1)
+  .output(91, 41)
+  .finish();
+const runtime = compileProgramWire(programBytes, 1);
+try {
+  const snapshot = runtime.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+    1,
+  );
+  try {
+    if (snapshot.state === "ready") {
+      const outputs = snapshot.copyOutputTable();
+      for (let row = 0; row < outputs.length; row += 5) {
+        console.log(
+          outputs[row],
+          outputs[row + 1], outputs[row + 2], outputs[row + 3],
+          outputs[row + 4],
+        );
+      }
+    }
+  } finally {
+    snapshot.free();
+  }
+} finally {
+  runtime.free();
+}
+```
+
+Канонические `LCPW` v1 bytes создаются `ProgramWireBuilderV1` или другим реализационно-независимым энкодером того же контракта.
+
+## Чтение outputs
+
+Для чтения всех цветов используйте `snapshot.copyOutputTable()` у
+`ProgramSnapshot` и `ProgramAttachedSnapshot`. Один вызов возвращает
+`Float64Array` длиной `outputCount() * 5`; каждая строка содержит:
+
+| Смещение в строке | Значение |
+| --- | --- |
+| 0 | Непрозрачный клиентский `slot`, целое u32 |
+| 1, 2, 3 | Красный, зелёный и синий канал sRGB8, целые `0..255` |
+| 4 | Straight opacity, исходное f64 в `0..1` |
+
+Строка `i` совпадает с `outputSlot(i)`, `outputRgb(i)` и `outputOpacity(i)`.
+Слоты и каналы точно представимы в f64, opacity копируется без округления.
+Каждый вызов создаёт независимый JS-буфер: его изменение не меняет snapshot,
+другую таблицу или runtime. Таблица остаётся доступна после следующего update
+и `free()` снимка или владельца. Поштучные геттеры доступны, когда нужен один
+output.
+
+Перед применением цветов проверяйте `snapshot.state === "ready"`.
+`failed` и `stale` могут содержать последние проверенные значения, которые
+не удостоверены для текущего контекста; таблица сохраняет эту же семантику.
+Снимок без outputs возвращает пустой `Float64Array`.
+Если не удаётся выделить Rust-таблицу или создать её JS-копию, метод бросает ошибку
+`{ code: "program_resource_exhausted", operation: "copyOutputTable" }`,
+распознаваемую `isProgramError`. Снимок при отказе не меняется.
+
+## Явная конвенция cleanliness
+
+Для оценки конечного видимого цвета известного применения используйте
+`.nominalSrgb8Visible(true, 82, 61)`: `82` — ID ограничения, `61` — occurrence.
+Этот путь исполняет закреплённый классификатор в обычном поиске Core после
+наложения над опорным encoded-sRGB8 цветом. Растровый диапазон погрешности не
+входит в область этого классификатора. Совпадение результата с фоном допустимо;
+создавать причинное отличие или собирать presentation authority для такой оценки не требуется. Его же
+использует `colors({ cleanliness: "nominal-srgb8-v2" })`.
+
+В программах с конечным выбором V2 или `assignment` V3 метод
+`snapshot.cleanlinessAssessment()` возвращает узкую неизменяемую сводку
+актуального Ready-снимка. Та же запись находится в
+`snapshot.assessmentReport().cleanliness`. Без объявленного профиля её статус —
+`not-assessed`; для номинальной конвенции сохраняются `profile`,
+`basis: "declared-convention"`, `scope: "declared-final-points"` и покрытие
+проверок. Сводка не вычисляет человеческое отношение Cleaner/NotDirtier.
+Вне актуального готового результата отдельный метод возвращает `null`.
+Фиксированный V1 проверяет ограничение и сохраняет прежний контракт чтения:
+`assessmentReport()` и `cleanlinessAssessment()` возвращают `null`, в том числе при `ready`.
+Для сводки фиксированного графа используйте V3 с `assignment([])`; набор
+выдаваемых цветов от этого не меняется. Обычный `colors()` всегда компилирует V3
+и предоставляет `frame.cleanliness` в каждом готовом кадре.
+
+Фиксированный граф с текущей оценкой объявляется явно:
+
+```js
+import { ProgramWireBuilderV3 } from "@labpics/colors/program-wire/abi-v3.js";
+
+const fixedBytes = new ProgramWireBuilderV3()
+  .source(1, [255, 255, 255]).fixedTarget(2, 1).surfaceInputPort(3)
+  .opacityInput(4, 0.5).solidPaint(5, 2).opacityPaint(6, 5, 4)
+  .inputSurface(7, 3).pointOccurrence(8, 6, 7)
+  .nominalSrgb8Visible(true, 11, 8).output(12, 6)
+  .assignment([]).finish();
+```
+
+`compileProgramWire`, наблюдение контекста и освобождение снимка остаются теми же,
+что в примере V1. После готового update сводка читается через
+`snapshot.cleanlinessAssessment()`.
+
+### Проверка конечного причинного вклада
+
+Чтобы выбранный результат удовлетворял встроенной конвенции sRGB8, добавьте
+`.declaredSrgb8CleanSet(true, 82, 71, 61)` в цепочку примера перед `.finish()`.
+Здесь `82` — ID ограничения, `71` — presentation root, `61` — occurrence.
+Проверяется финальный encoded-sRGB8 результат этой точки с учётом композиции,
+а не только исходный цвет. `true` задаёт обязательное ограничение; `false`
+не ограничивает выдачу outputs. Готовый снимок V2/V3 раскрывает результаты ограничений через `assessmentReport()`;
+report-only остаётся оценкой и не становится обязательным условием.
+
+Этот отдельный низкоуровневый контракт требует непустой конечный owned domain.
+Он проверяет собственный причинный вклад относительно объявления presentation,
+поэтому не заменяет обычную оценку известного видимого цвета. Нулевая прозрачность
+или совпадение с результатом удаления вклада могут оставить такой domain пустым.
+
+Это явно выбранная, закреплённая версией пакета конвенция. Она не включается
+автоматически и не подтверждает человеческое восприятие, фактическую отрисовку
+или универсальную «чистоту» цвета.
+
+Контракт использует закреплённый в пакете выпуск
+`exact-nominal-srgb8-point-clean-set-v2`; его точная SHA-256 указана в `NOTICE.md`
+пакета (в репозитории — `crates/labcolors-core/NOTICE.md`).
+Это условная дискретная nominal-модель с воспроизводимым выводом, а не гарантия
+человеческого восприятия. При обновлении пакета сохранённый wire следует заново
+компилировать и оценивать: семантическая идентичность Program включает выпуск
+конвенции, поэтому старые сертификаты не удостоверяют новый набор.
+
+## Подключение к внешнему sink
+
+Для сценария, где приложение само владеет DOM или другим renderer-surface,
+используйте `attachProgramWire`. Синхронный `host` получает полный typed intent
+(`setAll`, `revokeAll` или `confirmExact`) и должен вернуть `true` только после
+атомарной установки всего принадлежащего ему scope; `false` отклоняет update.
+Этот низкоуровневый attachment не пишет DOM и не выдаёт authority из исходного
+или промежуточного Paint. Обычный `ColorProgram.attach` из README отдельно
+владеет полным CSS-кадром и не выдаёт materialization authority.
+В примере `applyOwnedPointIntent` и `revokeOwnedPointScope` реализует приложение:
+первая функция атомарно применяет intent и возвращает `boolean`, вторая
+возвращает управление только после отзыва всего принадлежащего sink scope.
+
+```ts
+import { attachProgramWire } from "@labpics/colors";
+
+const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
+  // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
+  // затем одним действием обновляет собственный renderer-surface.
+  return applyOwnedPointIntent(intent);
+});
+try {
+  const snapshot = attachment.updateObserved(
+    1n,
+    new Uint32Array([1]),
+    new Uint8Array([255, 255, 255]),
+    1,
+  );
+  try {
+    if (snapshot.state === "ready") {
+      const authority = attachment.materializationAuthority();
+      try {
+        console.log(authority.terminalCompositeRgb());
+      } finally {
+        authority.free();
+      }
+    }
+  } finally {
+    snapshot.free();
+  }
+} finally {
+  revokeOwnedPointScope();
+  attachment.dispose(true);
+  attachment.free();
+}
+```
+
+`materializationAuthority()` читает только успешно установленный
+attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —
+модельная terminal materialization с проверенными identity, revision, sink stamp,
+binding epoch и отсутствием downstream point, а не доказательство browser paint
+или человеческого восприятия. При отказе host предыдущий head сохраняется.
+Пока host callback исполняется синхронно, повторный вызов любой операции attachment,
+включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
+из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
+пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
+отзывается владельцем host до `dispose(true)`. Подтверждением служит только
+примитивный `true`; числа, строки и объекты не приводятся к boolean и получают
+`program_attachment_revoke_unconfirmed`.
+
+`Symbol.dispose` и TypeScript `using` выполняют тот же защищённый `free()`.
+До выхода из `using` приложение должно отозвать scope и вызвать `dispose(true)`;
+автоматическое освобождение не подтверждает отзыв за внешнего владельца.
+
+## Создание и инспекция certificate envelope
+
+После инициализации WASM `issueSourceCertificateEnvelope()` возвращает новый
+`Uint8Array` с envelope встроенного source producer Core. Функция не принимает
+payload или identity. Например, после `await init()`:
+
+```ts
+import {
+  decodeCertificateEnvelope,
+  issueSourceCertificateEnvelope,
+} from "@labpics/colors";
+
+const bytes = issueSourceCertificateEnvelope();
+const metadata = decodeCertificateEnvelope(bytes);
+```
+
+Обе функции импортируются из `@labpics/colors`. `metadata.producerRevision` —
+полный Git tree object ID исходников Core, а content identity адресует встроенный
+source descriptor. Эти данные не утверждают равенство исполняемых файлов,
+аутентичность удалённого отправителя или научные свойства цвета.
+
+Если при сборке проверенный source descriptor недоступен, issuance бросает
+ошибку с `operation: "issueSourceCertificateEnvelope"` и
+`code: "certificate_producer_identity_unavailable"`. Её распознаёт
+`isCertificateError`; untrusted decode и остальные операции остаются доступны.
+
+`decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
+transport envelope и возвращает замороженный metadata-object
+`UntrustedCertificateEnvelopeV1`. Результат — метаданные framing и проверенные digest,
+а не authority result и не доказательство
+истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
+
+До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array` и создаёт
+собственный snapshot по правилам [допуска массивов](#массивы-на-границе-wasm).
+Размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
+(`2097152`) отвергается до копирования, поскольку `wasm-bindgen` копирует typed array
+в linear memory до входа Rust. Неизвестная schema, authority,
+operation, payload type/version, неканоничные строки, trailing bytes и digest
+mismatch дают typed error; `isCertificateError(value)` проверяет только
+допустимую пару `operation`/`code`.
+
+Заморожен внешний metadata-object; его три byte-поля — отдельные detached snapshots,
+поэтому изменение буфера результата не меняет состояние WASM или следующий decode.
+
+Создать envelope из произвольных JS-байтов, `ProgramSnapshot`, Paint, CSS, DOM или
+materialization authority нельзя. Producer capability и admission ledger остаются
+владением Rust Core. Эти функции не публикуют registry и не передают authority по сети.
+
+## Контракт
+
+- `colors()` компилирует тот же Program; прямой путь — `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
+- Обновление атомарно: отказ не публикует частичный state.
+- Свежие outputs появляются только при выполненных всех обязательных (`hard: true`) ограничениях. Сохранённая таблица `failed` или `stale` не является свежим результатом. Это внутренняя проверка в рамках Session, а не публичный переносимый сертификат или гарантия конечного видимого результата приложения.
+- Канонические байты имеют одну `ContentIdentity`.
+- Невалидные wire-байты, графы, observation и resource bounds возвращают typed-отказы; fallback отсутствует.
+- DOM и CSS не входят в ядро. SDK может владеть атомарным CSS-кадром; другой renderer принимает значения через собственный адаптер.
+
+## Числовые входы
+
+ID потока и причины, число подложек и индекс output принимаются только как
+конечные целые `number` в диапазоне `0..4294967295`. Ревизия принимается как
+`bigint` в диапазоне `0n..18446744073709551615n`. Строки, нечисловые значения,
+дроби и выход за диапазон не приводятся к допустимому значению. Допуск входа
+предшествует изменению Session; после отказа корректную ревизию можно повторить.
+Допустимость конкретного индекса, формы observations и порядка ревизий
+по-прежнему проверяет соответствующий контракт runtime.
+
+## Массивы на границе WASM
+
+Program wire, поверхности и content identity принимают реальный `Uint8Array`,
+ID сценариев — `Uint32Array`. Обычные массивы, другие виды typed array,
+Proxy-обёртки, detached storage и собственные свойства `length`/`byteLength`
+дают типизированный отказ до generated copier. Числа не оборачиваются и не
+округляются неявно.
+
+Допустимы `Buffer`, subclasses, subarray и массивы из другого realm, если их
+внутренний тип соответствует аргументу. Фасад использует intrinsic storage,
+не читает пользовательские getters и не обходит цепочку прототипов. Унаследованные
+свойства размеров не участвуют в копировании; WASM получает отдельный snapshot.
+Отказ observations сохраняет предыдущий head и допускает повтор той же ревизии.
+Для `materializationAuthorityFor` identity должна содержать ровно 32 байта;
+неверная длина отвергается до выделения snapshot.
+
+## Распознавание ошибок
+
+`isProgramError(value)` распознаёт ошибки Program по принадлежности текущему
+`Error` и допустимой паре `operation`/`code`. Неизвестное значение, чужая пара
+или исключение при чтении возвращают `false`, не заменяя исходную ошибку
+новым исключением. Каждое поле читается не более одного раза, без преобразования
+его значения; читаемые унаследованные поля и getters допустимы.
+
+Нехватка ресурсов при compile/instantiate/update возвращает
+`program_resource_exhausted`, внутренний сбой — `program_internal_invariant`.
+Attachment сохраняет те же классы в `program_attachment_resource_exhausted`
+и `program_attachment_internal_invariant`. Эти причины не означают, что
+пользовательский граф или observation семантически недопустимы; отказ update
+сохраняет предыдущий committed head и допускает повтор той же ревизии.
+Нехватка памяти при подготовке identity для `materializationAuthorityFor`
+также возвращает `program_attachment_resource_exhausted` с операцией
+`materializationAuthority`.
+
+Проверка описывает только наблюдённые значения. Она не удостоверяет происхождение
+ошибки, не замораживает объект и не гарантирует неизменность следующих чтений
+пользовательских getters. Непознанная ошибка остаётся у вызывающего приложения.
+
+## Дополнительные функции
+
+- `evaluateWcag22` — точная оценка WCAG 2.2 в finite sRGB8/Q55-профиле.
+- `numericalCapabilityManifest` — манифест численных возможностей и доказательств сборки.
+
+## Снимок входных массивов
+
+Program wire, scenario IDs, surface bytes и certificate envelope принимают
+типизированные массивы на обычном `ArrayBuffer`. Buffer, срезы и массивы из
+другого JavaScript realm поддерживаются. Пакет делает собственную копию до
+передачи в WASM и сохраняет прежнее состояние при отказе входа.
+
+Массивы на `SharedArrayBuffer`, включая growable storage, получают штатный
+typed-отказ входа: параллельный писатель может менять данные во время копирования.
+Производитель наблюдения должен завершить запись и передать принадлежащий ему
+обычный буфер. Это правило общее для компиляции, обновлений и идентичностей.
+
+## Конечные варианты и явный порядок выбора
+
+Для графа с `finiteTarget` используйте `ProgramWireBuilderV2` из
+`@labpics/colors/program-wire/abi-v2.js`. Остальные методы описания графа
+совпадают с V1. Готовые байты принимает прежний `compileProgramWire` или
+`attachProgramWire`; второй решатель или отдельный lifecycle не нужны.
+
+```js
+builder.selectionRelease(1n, [
+  [{ id: 1, choices: [{ target: 21, candidate: 201 }] }],
+  [{ id: 2, choices: [{ target: 21, candidate: 202 }] }],
+]);
+```
+
+Группы расположены от предпочтительной к следующей. Каждое состояние описывает
+одновременно все конечные цели. Перечень должен покрывать полное произведение
+доменов без повторов. Внутри одной группы порядок списка не влияет на решение:
+ничья разрешается каноническими байтами непрозрачного ID состояния. Ревизия и
+группы входят в идентичность выпуска выбора.
+
+Core проверяет каждое состояние на всех наблюдаемых сценариях и выбирает первое,
+которое прошло все обязательные ограничения. Неизвестный вход и конфликт
+сохраняют существующие состояния Session и отзыв установленного результата.
+Порядок задаёт предпочтения клиента; он не определяет cleanliness, не подбирает
+научные коэффициенты и не ослабляет ограничения.
+
+V2 допускает один выпуск выбора, до 4096 состояний и 4096 назначений суммарно.
+V1 сохраняет прежние байты и отказывается от конечного графа без доступного ему
+выпуска выбора. Нативные функции с суффиксом `_v1` остаются строго V1; функции
+`check_program_wire` и `compile_program_wire` распознают V1, V2 и V3.
+
+
+### Ошибки оценки и чтения результата
+
+`isBindingError(error)` распознаёт `Error` по паре `operation` и `code`.
+Для `evaluateWcag22` причины: `invalid_color`, `unknown_wcag22_criterion`,
+`internal_error`. Для `numericalCapabilityManifest` доступен `internal_error`.
+Неверный индекс в `outputSlot`, `outputRgb` или `outputOpacity` возвращает
+`invalid_output_index` с операцией `readProgramOutput`; snapshot сохраняется.
+
+Текст `message` служит диагностикой. Проверка читает каждое поле один раз,
+не преобразует значения и возвращает `false` для неизвестной пары или ошибки
+чтения. Контракт принадлежит также прямым WASM-входам.
+
+## Вычисляемые цели V3
+
+`ProgramWireBuilderV3` из `@labpics/colors/program-wire/abi-v3.js` добавляет
+вычисляемый sRGB8-domain, `colorTarget`, стандартный `pointOccurrence` и
+`visibleSeparationHard`. `assignment(targetIds)` объявляет лексикографический
+порядок предпочтений; пустой список допустим для полностью фиксированного графа.
+В `colors()` эти детали формируются из роли, локального применения и порядка
+создания uses. Имена и порядок экспортируемых outputs не меняют предпочтения.
+Матрицы кандидатов в JavaScript не нужны.
+
+Готовый снимок V3 сообщает `optimality`: `exact` означает завершённый выбор,
+`unfinished` — найденный и полностью проверенный допустимый результат при
+незавершённом поиске более предпочтительного. Состояние `incomplete` отдельно
+означает, что в пределах бюджета допустимый результат не найден.
+`assessmentReport()` раскрывает оценки готового результата; `diagnostics()`
+даёт [типизированную диагностику остановленного поиска](program-diagnostics.md).
+Её witness проверяет авторский tuple и не является минимальным конфликтным множеством.
+
+## Подготовка обновления с синхронным принятием
+
+`runtime.updateObservedWith(revision, scenarioIds, surfaceRgb, surfaceCount, accept)`
+готовит полный свежий `ProgramSnapshot`, затем вызывает `accept(snapshot)`.
+Примитивный `true` принимает Session transition и возвращает тот же снимок.
+`false` возвращает `undefined` и сохраняет предыдущий runtime state. Исключение
+callback также отменяет переход и передаётся вызывающему коду без замены.
+Остальные возвращаемые значения дают `program_host_protocol`.
+
+Callback синхронный. Нельзя обновлять или освобождать этот runtime и освобождать
+переданный снимок изнутри callback: такие операции получают `program_busy`.
+Сохраните candidate, если он нужен после отказа, и вызовите `free()` после
+возврата метода; принятый и переданный в callback объекты — один owned snapshot.
+Этот метод — транзакция данных. Адаптер сам обеспечивает атомарность своего
+renderer-эффекта и не должен начинать его до подготовки всего кадра.

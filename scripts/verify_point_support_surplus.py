@@ -28,6 +28,7 @@ NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
 SESSION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/session.rs"
 COMPOSITION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/composition.rs"
 APPEARANCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance.rs"
+APPEARANCE_CONE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance/execution_cone.rs"
 CONSTRAINTS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/mod.rs"
 EXACT_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/exact.rs"
 WCAG22_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/wcag22.rs"
@@ -96,6 +97,7 @@ SOURCE_CONE_PATHS = (
     NUMERICS_SOURCE,
     COMPOSITION_SOURCE,
     APPEARANCE_SOURCE,
+    APPEARANCE_CONE_SOURCE,
     CONSTRAINTS_SOURCE,
     EXACT_CONSTRAINT_SOURCE,
     WCAG22_CONSTRAINT_SOURCE,
@@ -202,18 +204,18 @@ def verify_source_binding() -> tuple[str, int]:
         (LCS_OCCURRENCE_SOURCE, b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }", b"    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }"),
         (SESSION_SOURCE, b"            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n", b"            Self::Observed(_) => ObservationHeadViewV1::Empty,\n"),
         (SESSION_SOURCE, b"            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n", b"            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n"),
-        (SESSION_SOURCE, b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Observed(raw_observation),\n                );\n", b"                let retired_raw_head = mem::replace(\n                    raw_head,\n                    SessionObservationHeadV1::Empty,\n                );\n"),
+        (SESSION_SOURCE, b"            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Observed(raw_observation),\n            );\n", b"            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Empty,\n            );\n"),
         (SESSION_SOURCE, b"                Some(previous) => SessionState::Stale { previous },", b"                Some(_) => SessionState::Waiting,"),
         (SESSION_SOURCE, b"            let permit = SessionObservationBindingPermitV1::mint(&observation);", b"            let permit = SessionObservationBindingPermitV1::for_test();"),
-        (SESSION_SOURCE, b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Ready { current }, last_verified)\n                    }\n", b"                    SessionDecision::Verified(current) => {\n                        (SessionState::Stale { previous: current }, last_verified)\n                    }\n"),
-        (SESSION_SOURCE, b"                    SessionDecision::Violation(cause) => (\n                        SessionState::Failed {\n                            cause,\n                            previous: last_verified,\n                        },\n                        None,\n                    ),\n", b"                    SessionDecision::Violation(_) => (\n                        SessionState::Waiting,\n                        last_verified,\n                    ),\n"),
+        (SESSION_SOURCE, b"                SessionDecision::Verified(current) => {\n                    (SessionState::Ready { current }, last_verified)\n                }\n", b"                SessionDecision::Verified(current) => {\n                    (SessionState::Stale { previous: current }, last_verified)\n                }\n"),
+        (SESSION_SOURCE, b"                SessionDecision::Violation(cause) => (\n                    SessionState::Failed {\n                        cause,\n                        previous: last_verified,\n                    },\n                    None,\n                ),\n", b"                SessionDecision::Violation(_) => (\n                    SessionState::Waiting,\n                    last_verified,\n                ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable"),
         (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
         (APPEARANCE_SOURCE, b"        Self { source, opacity }\n", b"        Self { source, opacity: crate::composition::AdmittedOpacityV1::OPAQUE }\n"),
         (CONSTRAINTS_SOURCE, b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();", b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();"),
         (EXACT_CONSTRAINT_SOURCE, b"if actual == *invocation", b"if actual != *invocation"),
-        (WCAG22_CONSTRAINT_SOURCE, b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Pass(Wcag22PassV1(()))", b"Wcag22ApplicableDecisionV1::Pass => HardDecision::Violation(Wcag22ViolationV1(()))"),
+        (WCAG22_CONSTRAINT_SOURCE, b"HardDecision::Pass(Wcag22PassV1(()))", b"HardDecision::Violation(Wcag22ViolationV1(()))"),
         (WCAG22_SOURCE, b"foreground_luminance: kernel::luminance_bounds(foreground),", b"foreground_luminance: kernel::luminance_bounds(background),"),
         (WCAG22_KERNEL_SOURCE, b"10 * light_lower >= 30 * dark_upper + scale", b"10 * light_lower > 30 * dark_upper + scale"),
         (WCAG22_Q55_DATA_SOURCE, b"pub(crate) const Q55_SCALE: u64 = 36028797018963968;", b"pub(crate) const Q55_SCALE: u64 = 36028797018963967;"),

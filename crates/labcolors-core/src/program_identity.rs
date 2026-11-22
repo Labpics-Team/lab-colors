@@ -44,6 +44,7 @@ mod release_tag {
     pub(super) const MUTATION_SENTINEL_FRAME_V1: u8 = 2;
     pub(super) const CIECAM16_VIEWING_INPUTS_V1: u8 = 1;
     pub(super) const ENCODED_SRGB8_SOURCE_OVER_V1: u8 = 1;
+    pub(super) const RASTER_SRGB8_SOURCE_OVER_V1: u8 = 2;
     pub(super) const SURROUND_AVERAGE_V1: u8 = 1;
     pub(super) const SURROUND_DIM_V1: u8 = 2;
     pub(super) const SURROUND_DARK_V1: u8 = 3;
@@ -80,6 +81,11 @@ mod release_tag {
     pub(super) const FAMILY_CATEGORY_RELATION_IDENTITY_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_CAPABILITY_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_FAMILY_V1: u8 = 10;
+    pub(super) const NOMINAL_SRGB8_VISIBLE_FAMILY_V1: u8 = 11;
+    pub(super) const VISIBLE_SEPARATION_IDENTITY_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_RELEASE_V1: u8 = 1;
+    pub(super) const VISIBLE_SEPARATION_CAPABILITY_V1: u8 = 1;
     pub(super) const FAMILY_MEMBERSHIP_FAMILY_V1: u8 = 6;
     pub(super) const FAMILY_MEMBERSHIP_IDENTITY_V1: u8 = 1;
     #[cfg(test)]
@@ -204,6 +210,8 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SOURCE_OVER: u8 = 27;
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
+    pub(super) const TARGET_COMPUTED: u8 = 30;
+    pub(super) const TARGET_COLOR: u8 = 31;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -257,6 +265,8 @@ declare_edge_roles_v1! {
     FieldLighterSource = 35,
     FieldLighterDestination = 36,
     FieldOutputOperator = 37,
+    TargetToneInput = 38,
+    TargetAppearance = 39,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -592,6 +602,7 @@ fn occurrence_color(occurrence: Occurrence) -> Result<VertexColorV1, ProgramComp
     let mut color = VertexColorV1::new(vertex_tag::OCCURRENCE);
     color.push_u8(match occurrence.composition() {
         CompositionProfile::EncodedSrgb8SourceOverV1 => release_tag::ENCODED_SRGB8_SOURCE_OVER_V1,
+        CompositionProfile::RasterSrgb8SourceOverV1 => release_tag::RASTER_SRGB8_SOURCE_OVER_V1,
     })?;
     write_context(&mut color, occurrence.context())?;
     Ok(color)
@@ -689,6 +700,37 @@ fn constraint_color(
 ) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(mode_tag);
     match content {
+        ProgramConstraintContentV1::NominalSrgb8Visible { release } => {
+            // The distinct family binds visible membership rather than owned
+            // contribution. The full existing classifier release remains pinned.
+            color.push_u8(release_tag::NOMINAL_SRGB8_VISIBLE_FAMILY_V1)?;
+            color.push_bytes(&release)?;
+        }
+        ProgramConstraintContentV1::VisibleSeparation {
+            identity,
+            release,
+            capability,
+            bounds,
+        } => {
+            color.push_u8(release_tag::VISIBLE_SEPARATION_FAMILY_V1)?;
+            color.push_u8(match identity {
+                crate::constraints::VisibleSeparationIdentityV1 => {
+                    release_tag::VISIBLE_SEPARATION_IDENTITY_V1
+                }
+            })?;
+            color.push_u8(match release {
+                crate::constraints::VisibleSeparationReleaseV1 => {
+                    release_tag::VISIBLE_SEPARATION_RELEASE_V1
+                }
+            })?;
+            color.push_u8(match capability {
+                crate::constraints::VisibleSeparationCapabilityV1 => {
+                    release_tag::VISIBLE_SEPARATION_CAPABILITY_V1
+                }
+            })?;
+            color.push_u64(bounds.minimum().to_bits())?;
+            color.push_u64(bounds.maximum().to_bits())?;
+        }
         ProgramConstraintContentV1::ExactSrgb8 {
             identity,
             release,
@@ -1133,6 +1175,19 @@ where
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
+            TargetIntentV1::Computed(target) => {
+                let mut color = VertexColorV1::new(if target.color_intent().is_some() {
+                    vertex_tag::TARGET_COLOR
+                } else {
+                    vertex_tag::TARGET_COMPUTED
+                });
+                if target.color_intent().is_some() {
+                    color.push_bytes(&target.color_identity_hash()?)?;
+                } else {
+                    color.push_bytes(&target.identity_bytes())?;
+                }
+                color
+            }
         };
         let target_vertex = graph.add_member(target_color)?;
         targets.insert(target.id(), target_vertex)?;
@@ -1218,6 +1273,24 @@ where
 
     for target in &program.targets {
         let target_vertex = targets.get(target.id())?;
+        if let TargetIntentV1::Computed(value) = target.intent() {
+            if let Some(intent) = value.color_intent() {
+                if let Some(tone) = &intent.tone {
+                    graph.add_edge(
+                        target_vertex,
+                        ports.get(SurfaceInputPortId::new(tone.input()))?,
+                        EdgeRoleV1::TargetToneInput,
+                    )?;
+                }
+                if let Some(appearance) = intent.appearance {
+                    graph.add_edge(
+                        target_vertex,
+                        occurrences.get(appearance)?,
+                        EdgeRoleV1::TargetAppearance,
+                    )?;
+                }
+            }
+        }
         if let TargetIntentV1::FixedSource(source) = target.intent() {
             graph.add_edge(
                 target_vertex,
@@ -2894,6 +2967,14 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    if program.assignment.is_some()
+        || program
+            .targets
+            .iter()
+            .any(|target| matches!(target.intent(), TargetIntentV1::Computed(_)))
+    {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
     let graph = build_graph(program)?;
     let preimage = canonical_preimage(&graph)?;
     let digest = crate::sha256::digest(&preimage);
@@ -3130,6 +3211,42 @@ mod ordering {
             }
         }
     }
+}
+
+pub(super) fn compile_owner_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<ProgramOwnerIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    if program.assignment.is_some() {
+        return compile_computed_identity(program).map(ProgramOwnerIdentityV1::Computed);
+    }
+    compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
+}
+
+fn compile_computed_identity<Evaluation>(
+    program: &Program<Evaluation>,
+) -> Result<computed_assignment::ComputedIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let graph = build_graph(program)?;
+    let canonical = canonical_preimage(&graph)?;
+    // Semantic identity связывает объявленную политику и граф. Предел работы
+    // принадлежит отдельному execution profile; старый V9 preimage не изменён.
+    let domain = b"labcolors.computed-program.v3.anytime.direct-oklab-f64.lex-rgb.full-recheck\0";
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(domain.len() + canonical.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    bytes.extend_from_slice(domain);
+    bytes.extend_from_slice(&canonical);
+    Ok(computed_assignment::ComputedIdentityV1(
+        *crate::sha256::digest(&bytes).as_bytes(),
+    ))
 }
 
 #[cfg(test)]
@@ -3653,6 +3770,40 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn nominal_visible_identity_separates_owned_domain_and_binds_all_release_bytes()
+    -> Result<(), String> {
+        let release = crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2;
+        let baseline = constraint_color(
+            vertex_tag::CONSTRAINT_HARD,
+            ProgramConstraintContentV1::NominalSrgb8Visible { release },
+        )
+        .map_err(|error| format!("visible identity: {error:?}"))?;
+        assert_ne!(
+            baseline,
+            declared_srgb8_clean_set_constraint_color_for_release(
+                vertex_tag::CONSTRAINT_HARD,
+                release,
+            )
+            .map_err(|error| format!("owned identity: {error:?}"))?,
+            "visible membership and owned-domain membership have different obligations",
+        );
+        for byte_index in 0..release.len() {
+            let mut mutant = release;
+            mutant[byte_index] ^= 1;
+            assert_ne!(
+                baseline,
+                constraint_color(
+                    vertex_tag::CONSTRAINT_HARD,
+                    ProgramConstraintContentV1::NominalSrgb8Visible { release: mutant },
+                )
+                .map_err(|error| format!("mutated identity byte {byte_index}: {error:?}"))?,
+                "nominal release digest byte {byte_index} escaped identity",
+            );
+        }
+        Ok(())
+    }
+
     use proptest::prelude::*;
 
     #[test]

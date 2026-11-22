@@ -48,7 +48,7 @@ cp "$work_root/generated/labcolorsFFI.modulemap" "$consumer/Sources/labcolorsFFI
 cp target/debug/liblabcolors.so "$consumer/lib/"
 cp bindings/swift/Tests/LabColorsConformanceTests/*.swift "$consumer/Tests/LabColorsConformanceTests/"
 readonly fixtures="$consumer/Tests/LabColorsConformanceTests/Fixtures"
-cp conformance/vectors/*.json conformance/program-runtime-v1.json "$fixtures/"
+cp conformance/vectors/*.json conformance/program-runtime-v1.json conformance/program-authoring-v3.json "$fixtures/"
 printf '{"coreTree":"%s"}\n' "$(git rev-parse HEAD:crates/labcolors-core)" > "$fixtures/build-identity.json"
 
 # Noble-производитель и Noble-потребитель используют один Linux ABI.

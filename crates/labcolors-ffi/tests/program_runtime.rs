@@ -44,6 +44,12 @@ fn portable_history_and_owned_snapshots_survive_thread_migration() -> TestResult
     let runtime = compile_program_wire(wire("adaptive"), 1)?;
     let first = runtime.update_observed(1, vec![1], vec![255; 3], 1)?;
     assert_eq!(first.state(), "ready");
+    assert_eq!(first.snapshot_version(), 1);
+    assert_eq!(first.revision(), 1);
+    assert_eq!(first.reason(), None);
+    assert_eq!(first.optimality(), None);
+    assert_eq!(first.assessment_report()?, None);
+    assert_eq!(first.diagnostics()?, None);
     assert_eq!(first.output_rgb(0)?, [0; 3]);
     let worker = runtime.clone();
     let second = std::thread::spawn(move || worker.update_observed(2, vec![1], vec![0; 3], 1))

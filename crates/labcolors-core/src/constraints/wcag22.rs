@@ -27,6 +27,9 @@ pub(crate) struct ApplicableWcag22MeasurementV1 {
     criterion: Wcag22CriterionV1,
     measurement: Wcag22MeasurementV1,
     decision: Wcag22ApplicableDecisionV1,
+    // The nominal measurement and its proof remain an exact point result.
+    // Material admission additionally covers the range bound by the target.
+    emission_decision: Option<Wcag22ApplicableDecisionV1>,
     evidence: NumericalDecisionEvidenceV1,
 }
 
@@ -92,6 +95,7 @@ fn refine_applicable_measurement(
                 criterion,
                 measurement,
                 decision,
+                emission_decision: None,
                 evidence,
             })
         }
@@ -170,12 +174,46 @@ impl Evaluator<ProgramPointTargetV1> for Wcag22Srgb8V1 {
         target: &ProgramPointTargetV1,
         invocation: &Self::Invocation,
     ) -> Result<Self::Measurement, Self::Error> {
-        <Self as Evaluator<ModeledSrgb8PointOccurrence>>::evaluate(
+        let mut measurement = <Self as Evaluator<ModeledSrgb8PointOccurrence>>::evaluate(
             self,
             &target.encoded(),
             invocation,
-        )
+        )?;
+        if !target.emission().exact() && measurement.decision == Wcag22ApplicableDecisionV1::Pass {
+            let encoded = target.encoded();
+            let visible =
+                crate::emission::rgb_bounds(encoded.visible(), target.emission().visible_radius);
+            let backdrop =
+                crate::emission::rgb_bounds(encoded.backdrop(), target.emission().backdrop_radius);
+            measurement.emission_decision =
+                Some(emission_decision(visible, backdrop, *invocation)?);
+        }
+        Ok(measurement)
     }
+}
+
+fn emission_decision(
+    visible: ([u8; 3], [u8; 3]),
+    backdrop: ([u8; 3], [u8; 3]),
+    criterion: Wcag22CriterionV1,
+) -> Result<Wcag22ApplicableDecisionV1, ApplicableWcag22EvaluationErrorV1> {
+    use crate::wcag22::measure_wcag22_srgb8;
+    // Establish one luminance orientation for the entire range first.
+    // Testing only extreme ratios would admit [black, white] against itself.
+    let forward = measure_wcag22_srgb8(visible.0, backdrop.1);
+    let pair = if forward.foreground_luminance.lower() > forward.background_luminance.upper() {
+        Some((visible.0, backdrop.1))
+    } else {
+        let reverse = measure_wcag22_srgb8(visible.1, backdrop.0);
+        (reverse.background_luminance.lower() > reverse.foreground_luminance.upper())
+            .then_some((visible.1, backdrop.0))
+    };
+    let Some((foreground, background)) = pair else {
+        return Ok(Wcag22ApplicableDecisionV1::Fail);
+    };
+    let assessment = evaluate_wcag22_srgb8(foreground, background, criterion)
+        .map_err(ApplicableWcag22EvaluationErrorV1::Kernel)?;
+    Ok(refine_applicable_measurement(criterion, assessment)?.decision)
 }
 
 impl ProgramPointEvaluatorContentV1 for Wcag22Srgb8V1 {
@@ -204,9 +242,11 @@ impl HardClassifier<Wcag22CriterionV1, ApplicableWcag22MeasurementV1> for Wcag22
         _invocation: &Wcag22CriterionV1,
         measurement: &ApplicableWcag22MeasurementV1,
     ) -> HardDecision<Self::Pass, Self::Violation> {
-        match measurement.decision {
-            Wcag22ApplicableDecisionV1::Pass => HardDecision::Pass(Wcag22PassV1(())),
-            Wcag22ApplicableDecisionV1::Fail => HardDecision::Violation(Wcag22ViolationV1(())),
+        match (measurement.decision, measurement.emission_decision) {
+            (Wcag22ApplicableDecisionV1::Pass, None | Some(Wcag22ApplicableDecisionV1::Pass)) => {
+                HardDecision::Pass(Wcag22PassV1(()))
+            }
+            _ => HardDecision::Violation(Wcag22ViolationV1(())),
         }
     }
 }
@@ -214,6 +254,18 @@ impl HardClassifier<Wcag22CriterionV1, ApplicableWcag22MeasurementV1> for Wcag22
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_emission_ranges_cannot_pass_by_opposite_extreme_ratios() -> Result<(), String> {
+        let result = emission_decision(
+            ([0; 3], [255; 3]),
+            ([0; 3], [255; 3]),
+            Wcag22CriterionV1::Sc143TextDefault,
+        )
+        .map_err(|error| format!("emission: {error:?}"))?;
+        assert_eq!(result, Wcag22ApplicableDecisionV1::Fail);
+        Ok(())
+    }
 
     #[test]
     fn genuine_not_evaluated_is_rejected_before_classification() {

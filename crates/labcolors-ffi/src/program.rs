@@ -18,11 +18,23 @@ impl LabColorsError {
     }
 }
 
-fn enter<'a, T>(owner: &'a Mutex<T>, operation: &str) -> Result<MutexGuard<'a, T>, LabColorsError> {
+// UniFFI otherwise panics when a callback throws an undeclared foreign error.
+// The normal host transaction must abort as a value even in panic=abort builds.
+impl From<uniffi::UnexpectedUniFFICallbackError> for LabColorsError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::new("program_host_protocol", "updateObservedWith")
+    }
+}
+
+fn enter<'a, T>(
+    owner: &'a Mutex<T>,
+    operation: &str,
+    busy_code: &str,
+) -> Result<MutexGuard<'a, T>, LabColorsError> {
     owner.try_lock().map_err(|error| {
         LabColorsError::new(
             match error {
-                TryLockError::WouldBlock => "program_attachment_busy",
+                TryLockError::WouldBlock => busy_code,
                 TryLockError::Poisoned(_) => "program_internal_invariant",
             },
             operation,
@@ -128,6 +140,14 @@ pub struct ProgramRuntime {
     inner: Mutex<core::ProgramSessionV1>,
 }
 
+/// Принимает подготовленный снимок после атомарного изменения принадлежащего
+/// приложению контекста. false/Err сохраняют прежнюю принятую ревизию runtime.
+/// Callback вызывается синхронно на потоке update и может сохранить снимок.
+#[uniffi::export(callback_interface)]
+pub trait ProgramUpdateHost: Send + Sync {
+    fn accept(&self, snapshot: Arc<ProgramSnapshot>) -> Result<bool, LabColorsError>;
+}
+
 #[uniffi::export]
 pub fn compile_program_wire(
     bytes: Vec<u8>,
@@ -153,12 +173,39 @@ impl ProgramRuntime {
         surface_count: u32,
     ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateObserved";
-        let mut inner = enter(&self.inner, operation)?;
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
         let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
         inner
             .update_observed_view(revision, values)
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
+    }
+
+    /// Поиск, final recheck и создание owned-снимка завершаются до callback.
+    /// true принимает уже подготовленный переход; false сохраняет прежний.
+    /// Host удерживает нужный ему снимок из callback. Примитивный bool проходит
+    /// UniFFI без сериализации RustBuffer после принятия внешней записи.
+    pub fn update_observed_with(
+        &self,
+        revision: u64,
+        scenario_ids: Vec<u32>,
+        surfaces: Vec<u8>,
+        surface_count: u32,
+        accept: Box<dyn ProgramUpdateHost>,
+    ) -> Result<bool, LabColorsError> {
+        let operation = "updateObservedWith";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
+        let prepared = inner
+            .prepare_observed_view(revision, values)
+            .map_err(|error| runtime_error(error, operation))?;
+        prepared.commit_with(|inner| {
+            let candidate = Arc::new(ProgramSnapshot { inner });
+            // A Rust callback can unwind in unwind-enabled builds. Foreign
+            // exceptions use typed UniFFI conversion independently of this guard.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accept.accept(candidate)))
+                .map_err(|_| LabColorsError::new("program_host_protocol", operation))?
+        })
     }
 
     pub fn update_unknown(
@@ -167,7 +214,7 @@ impl ProgramRuntime {
         reason_id: u32,
     ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateUnknown";
-        enter(&self.inner, operation)?
+        enter(&self.inner, operation, "program_busy")?
             .update_unknown(revision, reason_id)
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|e| runtime_error(e, operation))
@@ -220,6 +267,39 @@ fn copy_snapshot_outputs(snapshot: &core::ProgramSnapshotV1) -> Result<Vec<f64>,
 
 #[uniffi::export]
 impl ProgramSnapshot {
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
+    pub fn optimality(&self) -> Option<String> {
+        self.inner.optimality().map(|value| value.key().to_owned())
+    }
+    /// Независимая типизированная копия финальных оценок текущего Ready.
+    pub fn assessment_report(
+        &self,
+    ) -> Result<Option<crate::ProgramAssessmentReport>, LabColorsError> {
+        crate::program_reports::assessment_report(self.inner.assessment_report())
+    }
+    /// Та же Core-сводка без копирования полного массива оценок.
+    pub fn cleanliness_assessment(
+        &self,
+    ) -> Result<Option<crate::ProgramCleanlinessAssessment>, LabColorsError> {
+        self.inner
+            .cleanliness_assessment()
+            .map(|assessment| {
+                crate::program_reports::cleanliness_assessment(assessment, "cleanlinessAssessment")
+            })
+            .transpose()
+    }
+    /// Независимая типизированная копия witness текущего отказа или поиска.
+    pub fn diagnostics(&self) -> Result<Option<crate::ProgramDiagnostics>, LabColorsError> {
+        crate::program_reports::diagnostics(self.inner.diagnostics())
+    }
     pub fn state(&self) -> String {
         self.inner.state().key().into()
     }
@@ -271,6 +351,12 @@ pub struct ProgramPointSinkIntent {
 pub enum ProgramPointSinkCallbackError {
     #[error("host callback failed")]
     InvocationFailed,
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for ProgramPointSinkCallbackError {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::InvocationFailed
+    }
 }
 
 /// Возвращает true только после атомарной установки всей команды. false и ошибка
@@ -365,7 +451,7 @@ impl ProgramAttachment {
         surface_count: u32,
     ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateObserved";
-        let mut inner = enter(&self.inner, operation)?;
+        let mut inner = enter(&self.inner, operation, "program_attachment_busy")?;
         let values = observation(&scenario_ids, &surfaces, surface_count, operation)?;
         inner
             .update_observed_view(revision, values)
@@ -379,7 +465,7 @@ impl ProgramAttachment {
         reason_id: u32,
     ) -> Result<Arc<ProgramAttachedSnapshot>, LabColorsError> {
         let operation = "attachmentUpdateUnknown";
-        enter(&self.inner, operation)?
+        enter(&self.inner, operation, "program_attachment_busy")?
             .update_unknown(revision, reason_id)
             .map(|inner| Arc::new(ProgramAttachedSnapshot { inner }))
             .map_err(|e| update_error(e, operation))
@@ -388,10 +474,14 @@ impl ProgramAttachment {
     pub fn materialization_authority(
         &self,
     ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
-        enter(&self.inner, "materializationAuthority")?
-            .current_materialization_authority()
-            .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
-            .map_err(authority_error)
+        enter(
+            &self.inner,
+            "materializationAuthority",
+            "program_attachment_busy",
+        )?
+        .current_materialization_authority()
+        .map(|inner| Arc::new(AttachedMaterializationAuthority { inner }))
+        .map_err(authority_error)
     }
 
     pub fn materialization_authority_for(
@@ -400,7 +490,11 @@ impl ProgramAttachment {
         content_identity: Vec<u8>,
         binding_epoch: u64,
     ) -> Result<Arc<AttachedMaterializationAuthority>, LabColorsError> {
-        let inner = enter(&self.inner, "materializationAuthority")?;
+        let inner = enter(
+            &self.inner,
+            "materializationAuthority",
+            "program_attachment_busy",
+        )?;
         let render = inner.current_render().ok_or_else(|| {
             authority_error(core::ProgramMaterializationAuthorityErrorV1::NotReady)
         })?;
@@ -425,7 +519,7 @@ impl ProgramAttachment {
     /// сначала отзывает scope, затем передаёт true; false сохраняет attachment.
     pub fn dispose(&self, confirmed: bool) -> Result<(), LabColorsError> {
         let operation = "attachmentDispose";
-        enter(&self.inner, operation)?
+        enter(&self.inner, operation, "program_attachment_busy")?
             .dispose(|| if confirmed { Ok(()) } else { Err(()) })
             .map_err(|error| {
                 LabColorsError::new(

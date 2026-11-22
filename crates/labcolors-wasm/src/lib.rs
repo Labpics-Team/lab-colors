@@ -5,6 +5,8 @@
 //! effects принадлежат npm-приложению, не WASM.
 
 mod error;
+mod program_diagnostics_projection;
+mod program_report_projection;
 mod terminal_projection;
 
 use std::cell::{Cell, RefCell};
@@ -33,6 +35,88 @@ export interface NumericalCapabilityManifestV2 {
   readonly coverage: string;
   readonly sites: ReadonlyArray<NumericalCapabilitySiteV2>;
   readonly checksum: string;
+}
+
+export type ProgramAssessmentVerdictV1 = "pass" | "violation";
+export type ProgramDiagnosticSubjectV1 =
+  | Readonly<{kind: "target"; targetId: number}>
+  | Readonly<{kind: "occurrence"; occurrenceId: number}>
+  | Readonly<{kind: "intrinsic-relation"; referenceTargetId: number}>
+  | Readonly<{kind: "visible-relation"; referenceOccurrenceId: number}>
+  | Readonly<{kind: "presentation"; rootId: number; occurrenceId: number; terminalId: number}>;
+export type ProgramDiagnosticV1 =
+  | Readonly<{kind: "hard-constraint"; constraintId: number; caseIndex: number; subject: ProgramDiagnosticSubjectV1}>
+  | Readonly<{kind: "target-domain"; targetId: number; source: readonly [number, number, number]}>
+  | Readonly<{kind: "color-identity"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      actual: readonly [number, number, number]}>
+  | Readonly<{kind: "max-change"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      actual: readonly [number, number, number]; distanceSquared: number; maximumDistance: number}>;
+export interface ProgramAttemptWitnessV1 {
+  readonly kind: "authored-tuple";
+  readonly caseScenarioIds: ReadonlyArray<ReadonlyArray<number>>;
+  readonly targets: ReadonlyArray<Readonly<{targetId: number; source: readonly [number, number, number]}>>;
+  readonly violations: ReadonlyArray<ProgramDiagnosticV1>;
+}
+/** Данные текущего отказа. Witness относится к одному attempt, не к minimal unsat core. */
+export interface ProgramDiagnosticsV1 {
+  readonly searchVisited: bigint;
+  readonly searchBudget: bigint;
+  readonly witness: ProgramAttemptWitnessV1 | null;
+}
+export type ProgramConstraintAssessmentV1 =
+  | Readonly<{
+      kind: "visible-separation"; verdict: ProgramAssessmentVerdictV1;
+      visible: readonly [number, number, number];
+      backdrop: readonly [number, number, number];
+      distance: number; distanceBounds: readonly [number, number]; minimum: number; maximum: number;
+    }>
+  | Readonly<{
+      kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
+      verdict: ProgramAssessmentVerdictV1;
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set" | "nominal-srgb8-visible"; verdict: "pass";
+      visible: readonly [number, number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set" | "nominal-srgb8-visible"; verdict: "violation"; reason: "rejected";
+      visible: readonly [number, number, number];
+      rejectedBlueInterval: readonly [number, number];
+    }>
+  | Readonly<{
+      kind: "declared-srgb8-clean-set"; verdict: "violation";
+      reason: "final-owned-domain-absent";
+    }>;
+export interface ProgramAssessmentCellV1 {
+  readonly constraintId: number;
+  readonly caseIndex: number;
+  readonly hard: boolean;
+  readonly assessment: ProgramConstraintAssessmentV1;
+}
+export interface ProgramScenarioProvenanceV1 {
+  readonly caseIndex: number;
+  readonly scenarioId: number;
+}
+/** Соответствие ограниченному профилю; не scalar score или человеческая оценка поля. */
+export type ProgramCleanlinessAssessmentV1 =
+  | Readonly<{status: "not-assessed"; reason: "no-declared-profile"}>
+  | Readonly<{
+      status: "conforms" | "violates" | "unavailable";
+      profile: "nominal-srgb8-v2";
+      basis: "declared-convention";
+      scope: "declared-final-points";
+      /** Количества клеток case × constraint, не пикселей или quality points. */
+      accepted: number; rejected: number; unavailable: number;
+    }>;
+/** Историческое свидетельство одного Ready-снимка; без права публикации. */
+export interface ProgramAssessmentReportV1 {
+  /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
+  readonly contentIdentity: Uint8Array;
+  readonly streamId: number;
+  readonly revision: bigint;
+  readonly scenarioProvenance: ReadonlyArray<ProgramScenarioProvenanceV1>;
+  readonly cells: ReadonlyArray<ProgramAssessmentCellV1>;
+  readonly cleanliness: ProgramCleanlinessAssessmentV1;
 }
 
 export type Wcag22CriterionV1 =
@@ -194,6 +278,87 @@ export function certificateProjection(
     bindingSha256: Uint8Array.from(bindingSha256),
   });
 }
+const reportFreeze = Object.freeze;
+const ReportBytes = Uint8Array;
+const reportPush = Array.prototype.push;
+export function reportArray() { return []; }
+export function reportArrayPush(array, value) { reportPush.call(array, value); }
+export function reportScenario(caseIndex, scenarioId) {
+  return reportFreeze({ caseIndex, scenarioId });
+}
+export function reportSummary(kind, verdict) { return reportFreeze({ kind, verdict }); }
+export function diagnosticSubject(kind, first, second, third) {
+  if (kind === "target") return reportFreeze({kind, targetId: first});
+  if (kind === "occurrence") return reportFreeze({kind, occurrenceId: first});
+  if (kind === "intrinsic-relation") return reportFreeze({kind, referenceTargetId: first});
+  if (kind === "visible-relation") return reportFreeze({kind, referenceOccurrenceId: first});
+  return reportFreeze({kind, rootId: first, occurrenceId: second, terminalId: third});
+}
+export function diagnosticConstraint(constraintId, caseIndex, subject) {
+  return reportFreeze({kind: "hard-constraint", constraintId, caseIndex, subject});
+}
+export function diagnosticDomain(targetId, red, green, blue) {
+  return reportFreeze({kind: "target-domain", targetId, source: reportFreeze([red, green, blue])});
+}
+export function diagnosticColor(kind, targetId, caseIndex, occurrenceId, red, green, blue, distanceSquared, maximumDistance) {
+  const base = {kind, targetId, caseIndex, occurrenceId: occurrenceId ?? null, actual: reportFreeze([red, green, blue])};
+  if (kind === "max-change") { base.distanceSquared = distanceSquared; base.maximumDistance = maximumDistance; }
+  return reportFreeze(base);
+}
+export function diagnosticTarget(targetId, red, green, blue) {
+  return reportFreeze({targetId, source: reportFreeze([red, green, blue])});
+}
+export function diagnosticWitness(caseScenarioIds, targets, violations) {
+  for (let index = 0; index < caseScenarioIds.length; index += 1) reportFreeze(caseScenarioIds[index]);
+  return reportFreeze({kind: "authored-tuple", caseScenarioIds: reportFreeze(caseScenarioIds),
+    targets: reportFreeze(targets), violations: reportFreeze(violations)});
+}
+export function diagnosticsProjection(searchVisited, searchBudget, witness) {
+  return reportFreeze({searchVisited, searchBudget, witness});
+}
+export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, distanceLower, distanceUpper, minimum, maximum) {
+  return reportFreeze({
+    kind: "visible-separation", verdict,
+    visible: reportFreeze([vr, vg, vb]),
+    backdrop: reportFreeze([br, bg, bb]),
+    distance, distanceBounds: reportFreeze([distanceLower, distanceUpper]), minimum, maximum,
+  });
+}
+export function reportAccepted(kind, red, green, blue) {
+  return reportFreeze({
+    kind, verdict: "pass",
+    visible: reportFreeze([red, green, blue]),
+  });
+}
+export function reportRejected(kind, red, green, blue, lower, upper) {
+  return reportFreeze({
+    kind, verdict: "violation", reason: "rejected",
+    visible: reportFreeze([red, green, blue]),
+    rejectedBlueInterval: reportFreeze([lower, upper]),
+  });
+}
+export function reportDomainAbsent() {
+  return reportFreeze({
+    kind: "declared-srgb8-clean-set", verdict: "violation",
+    reason: "final-owned-domain-absent",
+  });
+}
+export function reportCell(constraintId, caseIndex, hard, assessment) {
+  return reportFreeze({ constraintId, caseIndex, hard, assessment });
+}
+export function reportCleanliness(status, profile, basis, scope, accepted, rejected, unavailable) {
+  if (status === "not-assessed") return reportFreeze({status, reason: "no-declared-profile"});
+  return reportFreeze({status, profile, basis, scope, accepted, rejected, unavailable});
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness) {
+  return reportFreeze({
+    contentIdentity: new ReportBytes(contentIdentity),
+    streamId, revision,
+    scenarioProvenance: reportFreeze(scenarioProvenance),
+    cells: reportFreeze(cells),
+    cleanliness,
+  });
+}
 "#)]
 extern "C" {
     #[wasm_bindgen(js_name = programError)]
@@ -232,6 +397,109 @@ extern "C" {
         payload_sha256: &[u8],
         binding_sha256: &[u8],
     ) -> JsValue;
+    #[wasm_bindgen(catch, js_name = reportArray)]
+    fn report_array() -> Result<js_sys::Array, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportArrayPush)]
+    fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = reportScenario)]
+    fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSummary)]
+    fn report_summary(kind: &str, verdict: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticSubject)]
+    fn diagnostic_subject(
+        kind: &str,
+        first: u32,
+        second: u32,
+        third: u32,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticConstraint)]
+    fn diagnostic_constraint(
+        constraint: u32,
+        case: usize,
+        subject: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticDomain)]
+    fn diagnostic_domain(target: u32, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticColor)]
+    fn diagnostic_color(
+        kind: &str,
+        target: u32,
+        case: usize,
+        occurrence: Option<u32>,
+        red: u8,
+        green: u8,
+        blue: u8,
+        distance_squared: f64,
+        maximum_distance: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticTarget)]
+    fn diagnostic_target(target: u32, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticWitness)]
+    fn diagnostic_witness(
+        cases: &js_sys::Array,
+        targets: &js_sys::Array,
+        violations: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticsProjection)]
+    fn diagnostics_projection(
+        visited: u64,
+        budget: u64,
+        witness: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSeparation)]
+    fn report_separation(
+        verdict: &str,
+        visible_red: u8,
+        visible_green: u8,
+        visible_blue: u8,
+        backdrop_red: u8,
+        backdrop_green: u8,
+        backdrop_blue: u8,
+        distance: f64,
+        distance_lower: f64,
+        distance_upper: f64,
+        minimum: f64,
+        maximum: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportAccepted)]
+    fn report_accepted(kind: &str, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportRejected)]
+    fn report_rejected(
+        kind: &str,
+        red: u8,
+        green: u8,
+        blue: u8,
+        lower: u8,
+        upper: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportDomainAbsent)]
+    fn report_domain_absent() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportCell)]
+    fn report_cell(
+        constraint_id: u32,
+        case_index: usize,
+        hard: bool,
+        assessment: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportCleanliness)]
+    fn report_cleanliness(
+        status: &str,
+        profile: &str,
+        basis: &str,
+        scope: &str,
+        accepted: usize,
+        rejected: usize,
+        unavailable: usize,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportProjection)]
+    fn report_projection(
+        content_identity: &[u8],
+        stream_id: u32,
+        revision: u64,
+        scenario_provenance: &js_sys::Array,
+        cells: &js_sys::Array,
+        cleanliness: &JsValue,
+    ) -> Result<JsValue, JsValue>;
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
@@ -309,8 +577,10 @@ fn copy_snapshot_outputs(
 
 #[derive(Clone, Copy)]
 enum ProgramOperation {
+    Diagnostics,
     CompileProgramWire,
     UpdateObserved,
+    UpdateObservedWith,
     UpdateUnknown,
     CopyOutputTable,
     AttachProgramWire,
@@ -318,13 +588,17 @@ enum ProgramOperation {
     AttachmentUpdateUnknown,
     AttachmentDispose,
     MaterializationAuthority,
+    AssessmentReport,
+    CleanlinessAssessment,
 }
 
 impl ProgramOperation {
     const fn key(self) -> &'static str {
         match self {
+            Self::Diagnostics => "diagnostics",
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
+            Self::UpdateObservedWith => "updateObservedWith",
             Self::UpdateUnknown => "updateUnknown",
             Self::CopyOutputTable => "copyOutputTable",
             Self::AttachProgramWire => "attachProgramWire",
@@ -332,6 +606,8 @@ impl ProgramOperation {
             Self::AttachmentUpdateUnknown => "attachmentUpdateUnknown",
             Self::AttachmentDispose => "attachmentDispose",
             Self::MaterializationAuthority => "materializationAuthority",
+            Self::AssessmentReport => "assessmentReport",
+            Self::CleanlinessAssessment => "cleanlinessAssessment",
         }
     }
 }
@@ -563,7 +839,66 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
-    /// Stable lifecycle key: waiting|ready|stale|failed.
+    /// Копирует typed attempt witness текущего Unsatisfied/Incomplete; иначе null.
+    #[wasm_bindgen(unchecked_return_type = "ProgramDiagnosticsV1 | null")]
+    pub fn diagnostics(&self) -> Result<JsValue, JsValue> {
+        program_diagnostics_projection::project(self.inner.diagnostics()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::Diagnostics,
+            )
+        })
+    }
+
+    /// Копирует финальный отчёт Ready-снимка; вне Ready возвращает null.
+    #[wasm_bindgen(js_name = assessmentReport, unchecked_return_type = "ProgramAssessmentReportV1 | null")]
+    pub fn assessment_report(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project(self.inner.assessment_report()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::AssessmentReport,
+            )
+        })
+    }
+
+    /// Копирует только сводку профиля; отсутствие текущего Ready даёт null.
+    #[wasm_bindgen(js_name = cleanlinessAssessment, unchecked_return_type = "ProgramCleanlinessAssessmentV1 | null")]
+    pub fn cleanliness_assessment(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project_cleanliness(self.inner.cleanliness_assessment()).map_err(
+            |_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::CleanlinessAssessment,
+                )
+            },
+        )
+    }
+
+    #[wasm_bindgen(getter, js_name = snapshotVersion)]
+    pub fn snapshot_version(&self) -> u32 {
+        self.inner.snapshot_version()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn revision(&self) -> u64 {
+        self.inner.revision()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> Option<String> {
+        self.inner.reason().map(str::to_owned)
+    }
+
+    /// A hard-valid assignment can be ready while optimization remains unfinished.
+    #[wasm_bindgen(
+        getter,
+        unchecked_return_type = "\"exact\" | \"unfinished\" | undefined"
+    )]
+    pub fn optimality(&self) -> Option<String> {
+        self.inner.optimality().map(|value| value.key().to_owned())
+    }
+
+    /// Lifecycle key; computed programs add unsatisfied and incomplete.
     #[wasm_bindgen(getter)]
     pub fn state(&self) -> String {
         self.inner.state().key().to_string()
@@ -668,6 +1003,61 @@ impl ProgramRuntime {
             .update_observed_view(revision, observation)
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateObserved))
+    }
+
+    /// Готовит один owned-снимок, затем синхронно вызывает `accept(snapshot)`.
+    /// `true` принимает ревизию и возвращает тот же снимок; `false` возвращает
+    /// undefined. Ошибка callback оставляет прежнюю ревизию и пробрасывается.
+    /// Callback владеет переданным снимком и атомарностью своих внешних записей.
+    #[wasm_bindgen(js_name = updateObservedWith, unchecked_return_type = "ProgramSnapshot | undefined")]
+    pub fn update_observed_with(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        scenario_ids: &[u32],
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] surface_count: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "(snapshot: ProgramSnapshot) => boolean")]
+        accept: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let operation = ProgramOperation::UpdateObservedWith;
+        let revision =
+            u64::try_from(revision).map_err(|_| to_program_js_error(E::Update, operation))?;
+        let surface_count = checked_u32(surface_count)
+            .ok_or_else(|| to_program_js_error(E::Update, operation))?
+            as usize;
+        let observation = labcolors_core::program_wire::ProgramObservationV1::from_rgb8(
+            scenario_ids,
+            surfaces,
+            surface_count,
+        )
+        .map_err(|_| to_program_js_error(E::Update, operation))?;
+        let prepared = self
+            .inner
+            .prepare_observed_view(revision, observation)
+            .map_err(|error| to_program_js_error(error, operation))?;
+        let mut snapshot = JsValue::UNDEFINED;
+        let accepted = prepared.commit_with(|inner| -> Result<bool, JsValue> {
+            // The JS wrapper is allocated before host acceptance. After true,
+            // only the already prepared Core transition is published.
+            snapshot = ProgramSnapshot { inner }.into();
+            accept
+                .call1(&JsValue::UNDEFINED, &snapshot)?
+                .as_bool()
+                .ok_or_else(|| {
+                    program_error(
+                        "Program acceptance callback must return a boolean",
+                        "program_host_protocol",
+                        operation.key(),
+                    )
+                    .into()
+                })
+        })?;
+        Ok(if accepted {
+            snapshot
+        } else {
+            JsValue::UNDEFINED
+        })
     }
 
     #[wasm_bindgen(js_name = updateUnknown)]

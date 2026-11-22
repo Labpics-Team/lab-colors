@@ -23,6 +23,7 @@ def validate(ci, package, release):
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
     for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
+                    "node scripts/record-wasm-measurement.mjs", "node scripts/check-wasm-size-budget.mjs",
                     "npm run typecheck", "npm test", "npm run release:verify",
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
                     'test "$(node -p process.versions.node)" = "$NODE_CONSUMER_FLOOR"',
@@ -40,8 +41,28 @@ def validate(ci, package, release):
     upload_conditions = re.findall(r"(?m)^        if: ([^\r\n]+)$", uploads[0])
     if upload_conditions != [expected_guard] or re.search(r"(?m)^        continue-on-error:", uploads[0]):
         raise AssertionError("release handoff became optional or lost its exact release guard")
-    if owner.count("uses: actions/upload-artifact@") != 1:
-        raise AssertionError("package diagnostics must not use remote artifact storage")
+    measurements = [block for block in blocks
+                    if block.startswith("      - name: upload canonical WASM measurement\n")]
+    if len(measurements) != 1:
+        raise AssertionError("canonical WASM measurement needs one review handoff")
+    measurement = measurements[0]
+    required = [
+        "        if: ${{ !cancelled() && steps.runtime-build.outputs.measurement-ready == 'true' }}\n",
+        "          name: colors-wasm-measurement-${{ github.sha }}-attempt-${{ github.run_attempt }}\n",
+        "          path: ${{ runner.temp }}/wasm-measurement-${{ github.job }}\n",
+        "          if-no-files-found: error\n",
+        "          retention-days: 3\n",
+    ]
+    if any(value not in measurement for value in required) or "continue-on-error:" in measurement:
+        raise AssertionError("canonical measurement lost its reproduced source or bounded lifetime")
+    build = next(block for block in blocks if "node scripts/record-wasm-measurement.mjs" in block)
+    if ("        id: runtime-build\n" not in build
+            or build.index("node scripts/record-wasm-measurement.mjs") < build.index("diff --no-dereference --recursive")
+            or owner.index(measurement) < owner.index(build)
+            or owner.index(measurement) > owner.index("node scripts/check-wasm-size-budget.mjs")):
+        raise AssertionError("measurement must follow reproduction and precede the mandatory size gate")
+    if owner.count("uses: actions/upload-artifact@") != 2:
+        raise AssertionError("package storage is limited to release and measurement consumers")
     publisher=job(release,"publish")
     if "    needs: prepare\n" not in publisher or "    environment: npm-publish\n" not in publisher:
         raise AssertionError("publish bypasses isolated verification")
@@ -54,7 +75,7 @@ class CiStorageTests(unittest.TestCase):
         self.sources=[(ROOT/".github/workflows"/name).read_text() for name in
                       ["ci-worker.yml","package-worker.yml","publish-worker.yml"]]
 
-    def test_current_package_graph_retains_only_the_release_handoff(self):
+    def test_current_package_graph_retains_release_and_canonical_measurement_handoffs(self):
         validate(*self.sources)
 
     def test_skipped_floor_external_input_and_changed_permissions_are_rejected(self):
@@ -68,6 +89,9 @@ class CiStorageTests(unittest.TestCase):
             (1,"if: github.event_name == 'push'", "if: false && github.event_name == 'push'"),
             (1,"retention-days: 1", "retention-days: 1\n        continue-on-error: true"),
             (1,'retention-days: 1','retention-days: 90'),
+            (1,'node scripts/check-wasm-size-budget.mjs','node --version'),
+            (1,"steps.runtime-build.outputs.measurement-ready == 'true'", "true"),
+            (1,"retention-days: 3", "retention-days: 90"),
             (2,'    needs: prepare','    needs: ignored'),
             (2,'    environment: npm-publish','    environment: other'),
         ]:
@@ -80,6 +104,15 @@ class CiStorageTests(unittest.TestCase):
         values=list(self.sources)
         values[1]+='\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000\n'
         with self.assertRaises(AssertionError):
+            validate(*values)
+
+    def test_measurement_cannot_be_moved_after_the_failing_size_gate(self):
+        values = list(self.sources)
+        source = values[1]
+        transfer = next(block for block in re.findall(r"(?ms)^      - .*?(?=^      - |\Z)", source)
+                        if block.startswith("      - name: upload canonical WASM measurement\n"))
+        values[1] = source.replace(transfer, "") + transfer
+        with self.assertRaisesRegex(AssertionError, "precede the mandatory size gate"):
             validate(*values)
 
 

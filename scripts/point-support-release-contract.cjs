@@ -16,6 +16,7 @@ const POINT_SUPPORT_SOURCE_PATHS = Object.freeze(
     "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
     "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
     "crates/labcolors-core/src/appearance.rs",
+    "crates/labcolors-core/src/appearance/execution_cone.rs",
     "crates/labcolors-core/src/composition.rs",
     "crates/labcolors-core/src/constraints/exact.rs",
     "crates/labcolors-core/src/constraints/mod.rs",

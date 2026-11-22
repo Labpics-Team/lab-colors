@@ -9,15 +9,16 @@ repositories { maven { url = uri("path/to/extracted/repository") }; mavenCentral
 dependencies { implementation("pics.lab:colors-desktop:<version>") }
 ```
 
-API совпадает с Android: `compileProgramWire`, `ProgramWireBuilderV1/V2`, `updateObserved`, `outputRgb`, `outputOpacity`. Program и snapshot освобождаются через `use`/`close`; возвращённые массивы принадлежат caller. Одна библиотека содержит все платформы, но JNA загружает только библиотеку текущего процесса.
+API совпадает с Android: `ProgramWireBuilderV3` описывает характер цвета, поверхности и предпочтения, `compileProgramWire` передаёт вычисления общему Core. [Пример и настройки](../README.md#использование) одинаковы для Android и JVM. `updateObservedWith` принимает новую поверхность и связанные выходы через один `ProgramUpdateHost`; обычный `updateObserved` принимает уже наблюдённый контекст. Program и snapshot освобождаются через `use`/`close`; возвращённые массивы принадлежат caller. Одна библиотека содержит все платформы, но JNA загружает только библиотеку текущего процесса.
 
 ```kotlin
 compileProgramWire(wire, 1024u).use { program ->
     program.updateObserved(1uL, listOf(31u), byteArrayOf(-1, -1, -1), 1u).use { snapshot ->
+        check(snapshot.state() == "ready")
         val rgb = snapshot.outputRgb(0u)
         val opacity = snapshot.outputOpacity(0u)
     }
 }
 ```
 
-`desktop/ci/build_native.py` компилирует библиотеки и проверяет предел glibc 2.31. `package.py` объединяет только одинаковую ревизию и одинаковый сгенерированный API. `test_consumer.py` запускает отдельное приложение на точном архиве: история Program, RGB/opacity, сохранённый snapshot, builder и освобождение ресурсов.
+`desktop/ci/build_native.py` компилирует библиотеки и проверяет предел glibc 2.31. `package.py` объединяет только одинаковую ревизию и одинаковый сгенерированный API. `test_consumer.py` запускает отдельное приложение на точном архиве: история Program, общий байтовый V3-эталон, изменение вычисленных цветов на разных фонах, отчёты, атомарный отказ/исключение обработчика, повторный вход и освобождение ресурсов.

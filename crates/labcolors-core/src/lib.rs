@@ -8,6 +8,8 @@ pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1
 
 pub(crate) mod clean_set;
+mod color_intent;
+mod emission;
 
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) mod composition;
@@ -79,6 +81,7 @@ mod private_fixture;
 )]
 #[deny(missing_docs)]
 pub(crate) mod program;
+mod program_diagnostics;
 #[cfg_attr(
     not(test),
     expect(

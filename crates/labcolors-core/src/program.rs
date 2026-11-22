@@ -47,7 +47,8 @@ use crate::constraints::{
     FamilyCategoryRelationMeasurementV1 as CoreFamilyCategoryRelationMeasurementV1,
     FamilyCategoryRelationViolationV1 as CoreFamilyCategoryRelationViolationV1,
     ProgramVisiblePointBindingV1, ProgramVisiblePointPassEvidence,
-    ProgramVisiblePointViolationEvidence, Wcag22Srgb8V1,
+    ProgramVisiblePointViolationEvidence, ProgramVisibleSeparationMeasurementV1,
+    VisibleSeparationBoundsV1, Wcag22Srgb8V1,
 };
 use crate::family::{
     FamilyDeclarationV2, FamilyId,
@@ -83,10 +84,11 @@ use crate::program_session::{
     ProgramConstraintPassEvidenceV1, ProgramConstraintResultV1, ProgramConstraintSubjectV1,
     ProgramConstraintViolationEvidenceV1, ProgramContentIdentityV9, ProgramIntrinsicPaintBindingV1,
     ProgramIntrinsicUnaryPassEvidenceV1, ProgramIntrinsicUnaryViolationEvidenceV1,
-    ProgramPaintOutputV1, ProgramRelationMemberDecisionV1, ProgramRelationMemberEvidenceV1,
-    ProgramReportV1, ProgramSessionEvaluationError, ProgramSessionInstantiateError,
-    ProgramSessionPlan, ProgramVerifiedV1, ProgramVisibleRelationBindingV1, Source, SourceId,
-    Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
+    ProgramOwnerIdentityV1, ProgramPaintOutputV1, ProgramRelationMemberDecisionV1,
+    ProgramRelationMemberEvidenceV1, ProgramReportV1, ProgramSessionEvaluationError,
+    ProgramSessionInstantiateError, ProgramSessionPlan, ProgramVerifiedOutcomeV1,
+    ProgramVerifiedV1, ProgramViolationOutcomeV1, ProgramVisibleRelationBindingV1, Source,
+    SourceId, Surface, Target, TargetCandidateChoiceV1, TargetCandidateId,
     TargetCandidateV1 as CoreTargetCandidateV1, TargetId,
 };
 #[cfg(test)]
@@ -105,7 +107,13 @@ type CoreVerifiedV1 = ProgramVerifiedV1<CoreProgramEvaluatorsV1>;
 type CoreConflictV1 = ProgramConflictV1<CoreProgramEvaluatorsV1>;
 type CoreProgramPlanV1 = ProgramSessionPlan<CoreProgramEvaluatorsV1>;
 type CoreProgramSessionV1 = Session<CoreProgramPlanV1>;
-type CoreProgramStateV1 = SessionState<CoreVerifiedV1, CoreConflictV1>;
+type CoreVerifiedOutcomeV1 = ProgramVerifiedOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreViolationOutcomeV1 = ProgramViolationOutcomeV1<CoreProgramEvaluatorsV1>;
+type CoreProgramStateV1 = SessionState<
+    CoreVerifiedOutcomeV1,
+    CoreViolationOutcomeV1,
+    crate::program_session::computed_assignment::ComputedStoppedV1,
+>;
 type CoreProgramSessionViewV1<'a> = SessionView<'a, CoreProgramPlanV1>;
 type CorePreparedSessionTransitionV1<'a> = PreparedSessionTransition<'a, CoreProgramPlanV1>;
 type CoreProgramPlanErrorV1 = ProgramSessionEvaluationError<CoreProgramEvaluatorErrorV1>;
@@ -541,6 +549,8 @@ impl AppearanceContextV1 {
 /// Закрытая классификация ошибки компиляции.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompileErrorKindV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource,
     /// Повторно объявлена цель.
@@ -800,6 +810,8 @@ pub(crate) enum JointOrderErrorV1 {
 /// [`Self::related_handle`] — только удобные проекции полного payload.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CompileErrorV1 {
+    Unsupported,
+    InvalidAssignment,
     /// Повторно объявлен исходный сигнал.
     DuplicateSource {
         /// Повторный ID.
@@ -1200,6 +1212,8 @@ impl CompileErrorV1 {
             Self::UnconstrainedFiniteTarget { .. } => Kind::UnconstrainedFiniteTarget,
             Self::DisconnectedFiniteTargets => Kind::DisconnectedFiniteTargets,
             Self::UnassessedOutput { .. } => Kind::UnassessedOutput,
+            Self::Unsupported => Kind::Unsupported,
+            Self::InvalidAssignment => Kind::InvalidAssignment,
             Self::MissingJointSelection => Kind::MissingJointSelection,
             Self::JointSelectionWithoutTargets => Kind::JointSelectionWithoutTargets,
             Self::JointStateDuplicateTarget { .. } => Kind::JointStateDuplicateTarget,
@@ -1316,6 +1330,8 @@ impl CompileErrorV1 {
             | Self::EmptyOutputSet
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1409,6 +1425,8 @@ impl CompileErrorV1 {
             | Self::DuplicateOutputSlot { .. }
             | Self::Field(_)
             | Self::ResourceExhausted
+            | Self::Unsupported
+            | Self::InvalidAssignment
             | Self::InternalInvariant => None,
         }
     }
@@ -1582,6 +1600,24 @@ impl DraftV1 {
         self
     }
 
+    /// Объявляет материал с общим контрактом точности encoded-sRGB8 вывода.
+    pub(crate) fn push_raster_occurrence(
+        &mut self,
+        id: OccurrenceIdV1,
+        subject: PaintIdV1,
+        against: SurfaceIdV1,
+        context: AppearanceContextV1,
+    ) -> &mut Self {
+        self.inner.push_occurrence(Occurrence::new(
+            id.into_core(),
+            subject.into_core(),
+            against.into_core(),
+            CompositionProfile::RasterSrgb8SourceOverV1,
+            context.0,
+        ));
+        self
+    }
+
     /// Объявляет один терминальный корень моделируемого точечного графа.
     pub(crate) fn push_point_presentation_root(
         &mut self,
@@ -1608,6 +1644,36 @@ impl DraftV1 {
             .push_point_presentation_target(PointPresentationTargetV1::new(
                 root.into_core(),
                 occurrence.into_core(),
+            ));
+        self
+    }
+
+    /// Проверяет nominal v2 membership видимого результата без требования вклада.
+    pub(crate) fn push_nominal_srgb8_visible_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::NominalSrgb8Visible(()),
+            ));
+        self
+    }
+
+    /// Сохраняет ту же nominal v2 оценку без влияния на допустимость выбора.
+    pub(crate) fn push_nominal_srgb8_visible_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+    ) -> &mut Self {
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::NominalSrgb8Visible(()),
             ));
         self
     }
@@ -1800,6 +1866,38 @@ impl DraftV1 {
         self
     }
 
+    /// Ограничивает расстояние Oklab итогового visible до фактического backdrop.
+    pub(crate) fn push_visible_separation_hard(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> &mut Self {
+        self.inner
+            .push_hard_constraint(ConstraintInvocation::visible_unary_hard(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::VisibleSeparation(bounds),
+            ));
+        self
+    }
+
+    /// Измеряет ту же клиентскую policy, не влияя на выбор.
+    pub(crate) fn push_visible_separation_report_only(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrence: OccurrenceIdV1,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> &mut Self {
+        self.inner
+            .push_report_constraint(ConstraintInvocation::visible_unary_report_only(
+                id.into_core(),
+                occurrence.into_core(),
+                CoreProgramConstraintInvocationV1::VisibleSeparation(bounds),
+            ));
+        self
+    }
+
     /// Требует принадлежности непустого финального вклада точной цели
     /// представления к закреплённому пакетом множеству encoded sRGB8.
     pub(crate) fn push_declared_srgb8_clean_set_hard(
@@ -1842,6 +1940,50 @@ impl DraftV1 {
                 PointPresentationTargetV1::new(root.into_core(), occurrence.into_core()),
             );
         self
+    }
+
+    pub(crate) fn push_computed_target(
+        &mut self,
+        id: TargetIdV1,
+        domain: crate::program_session::computed_assignment::AssignmentDomainV1,
+        anchor: Srgb8,
+        max_delta: f64,
+    ) {
+        self.inner.push_target(Target::new(
+            id.into_core(),
+            crate::program_session::TargetIntentV1::Computed(
+                crate::program_session::computed_assignment::ComputedTargetV1::declared(
+                    domain, anchor, max_delta,
+                ),
+            ),
+        ));
+    }
+    pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
+        self.inner.set_assignment(order);
+    }
+
+    pub(crate) fn push_color_target(
+        &mut self,
+        id: TargetIdV1,
+        anchor: Srgb8,
+        max_delta: f64,
+        identity: crate::color_intent::ColorIdentityDomainV1,
+        appearance: Option<OccurrenceIdV1>,
+        tone: Option<crate::color_intent::ToneCurveV1>,
+    ) {
+        use crate::program_session::computed_assignment::{ColorUseIntentV1, ComputedTargetV1};
+        self.inner.push_target(Target::new(
+            id.into_core(),
+            crate::program_session::TargetIntentV1::Computed(ComputedTargetV1::color(
+                anchor,
+                max_delta,
+                ColorUseIntentV1 {
+                    identity,
+                    appearance: appearance.map(OccurrenceIdV1::into_core),
+                    tone,
+                },
+            )),
+        ));
     }
 
     /// Связывает клиентский output slot с выбранным encoded Paint.
@@ -1915,8 +2057,12 @@ impl OwnerV1 {
     ///
     /// Identity доступна до первого update, но не заменяет полномочия этой
     /// конкретной owner-эпохи.
-    pub(crate) fn content_identity(&self) -> ContentIdentityV9 {
-        ContentIdentityV9::from_core(self.compiled.content_identity())
+    pub(crate) fn content_identity(&self) -> ProgramOwnerIdentityV1 {
+        self.compiled.content_identity()
+    }
+
+    pub(crate) fn snapshot_version(&self) -> u32 {
+        self.content_identity().snapshot_version()
     }
 
     /// Точный авторский `SelectionRelease` конечного Program; у fixed-only
@@ -2258,6 +2404,8 @@ pub(crate) enum StateKindV1 {
     Stale,
     /// Текущая ревизия имеет исчерпывающий конфликт.
     Failed,
+    Unsatisfied,
+    Incomplete,
 }
 
 /// Текущая сырая голова наблюдений независимо от evaluator lifecycle.
@@ -2292,18 +2440,28 @@ pub(crate) struct EvidenceViewV1<'a> {
 }
 
 impl<'a> EvidenceViewV1<'a> {
+    pub(crate) fn snapshot_evidence(self) -> SnapshotEvidenceV1<'a> {
+        SnapshotEvidenceV1::from_state(
+            self.state(),
+            self.session
+                .raw_head()
+                .revision()
+                .map_or(0, |value| value.value()),
+        )
+    }
+
+    pub(crate) fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
+        self.state()
+            .current_verified()
+            .map(|inner| VerifiedOutputV1 { inner })
+    }
     const fn state(self) -> &'a CoreProgramStateV1 {
         self.session.state()
     }
 
     /// Возвращает lifecycle-класс текущего состояния.
     pub(crate) const fn kind(self) -> StateKindV1 {
-        match self.state() {
-            SessionState::Waiting => StateKindV1::Waiting,
-            SessionState::Ready { .. } => StateKindV1::Ready,
-            SessionState::Stale { .. } => StateKindV1::Stale,
-            SessionState::Failed { .. } => StateKindV1::Failed,
-        }
+        SnapshotEvidenceV1::state_kind(self.state())
     }
 
     /// Возвращает сырую голову наблюдений вместе с provenance.
@@ -2325,7 +2483,15 @@ impl<'a> EvidenceViewV1<'a> {
     /// Индекс cause-сертификата в [`Self::certificates`] для `Failed`.
     pub(crate) const fn cause_certificate_index(self) -> Option<usize> {
         match self.state() {
-            SessionState::Failed { .. } => Some(0),
+            SessionState::Incomplete { .. }
+            | SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => None,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => Some(0),
             SessionState::Waiting | SessionState::Ready { .. } | SessionState::Stale { .. } => None,
         }
     }
@@ -2334,15 +2500,25 @@ impl<'a> EvidenceViewV1<'a> {
     pub(crate) fn certificates(
         self,
     ) -> impl ExactSizeIterator<Item = CertificateV1<'a>> + FusedIterator + 'a {
+        let legacy =
+            |current: &'a CoreVerifiedOutcomeV1| current.legacy().map(CertificateV1::verified);
         let (first, second) = match self.state() {
             SessionState::Waiting => (None, None),
             SessionState::Ready { current } | SessionState::Stale { previous: current } => {
-                (Some(CertificateV1::verified(current)), None)
+                (legacy(current), None)
             }
-            SessionState::Failed { cause, previous } => (
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(cause),
+                previous,
+            } => (
                 Some(CertificateV1::conflict(cause)),
-                previous.as_ref().map(CertificateV1::verified),
+                previous.as_ref().and_then(legacy),
             ),
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            }
+            | SessionState::Incomplete { .. } => (None, None),
         };
         CertificatesV1::new(first, second)
     }
@@ -2360,12 +2536,145 @@ pub(crate) struct PreparedSessionTransitionV1<'session> {
 }
 
 impl<'session> PreparedSessionTransitionV1<'session> {
+    /// Копируемые данные для снимка будущего результата. Они не обозначают
+    /// принятую ревизию и не дают полномочий записи во внешний sink.
+    pub(crate) fn snapshot_evidence(&self) -> SnapshotEvidenceV1<'_> {
+        use crate::session::{PreparedSessionDispositionV1 as D, SessionEvidenceV1};
+        let previous = self.transition.previous_verified();
+        match self.transition.disposition() {
+            D::Idempotent { raw_head, state } => SnapshotEvidenceV1::from_state(
+                state,
+                raw_head.revision().map_or(0, |value| value.value()),
+            ),
+            D::Unknown(unknown) => SnapshotEvidenceV1 {
+                diagnostics: None,
+                kind: if previous.is_some() {
+                    StateKindV1::Stale
+                } else {
+                    StateKindV1::Waiting
+                },
+                revision: unknown.revision().value(),
+                current_verified: None,
+                legacy_verified: previous
+                    .and_then(|value| value.legacy())
+                    .map(|inner| VerifiedCertificateV1 { inner }),
+            },
+            D::Verified(inner) => SnapshotEvidenceV1 {
+                diagnostics: None,
+                kind: StateKindV1::Ready,
+                revision: inner.observation().revision().value(),
+                current_verified: Some(VerifiedOutputV1 { inner }),
+                legacy_verified: inner.legacy().map(|inner| VerifiedCertificateV1 { inner }),
+            },
+            D::Violation(cause) => SnapshotEvidenceV1 {
+                diagnostics: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => None,
+                    ProgramViolationOutcomeV1::Computed(stopped) => Some(stopped.diagnostics()),
+                },
+                kind: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => StateKindV1::Failed,
+                    ProgramViolationOutcomeV1::Computed(_) => StateKindV1::Unsatisfied,
+                },
+                revision: cause.observation().revision().value(),
+                current_verified: None,
+                legacy_verified: match cause {
+                    ProgramViolationOutcomeV1::Legacy(_) => previous
+                        .and_then(|value| value.legacy())
+                        .map(|inner| VerifiedCertificateV1 { inner }),
+                    ProgramViolationOutcomeV1::Computed(_) => None,
+                },
+            },
+            D::Incomplete(cause) => SnapshotEvidenceV1 {
+                diagnostics: Some(cause.diagnostics()),
+                kind: StateKindV1::Incomplete,
+                revision: cause.observation().revision().value(),
+                current_verified: None,
+                legacy_verified: None,
+            },
+        }
+    }
+
     /// Публикует только уже подготовленные raw head и lifecycle Session и
     /// возвращает exact evidence-only snapshot без sink-authority.
     pub(crate) fn commit(self) -> EvidenceViewV1<'session> {
         EvidenceViewV1 {
             session: self.transition.commit(),
         }
+    }
+}
+
+/// Data-only проекция для owned-снимка. В отличие от EvidenceView она может
+/// описывать ещё не принятый переход; lifecycle Session от её чтения не меняется.
+#[derive(Clone, Copy)]
+pub(crate) struct SnapshotEvidenceV1<'a> {
+    diagnostics: Option<&'a crate::program_diagnostics::ProgramDiagnosticsV1>,
+    kind: StateKindV1,
+    revision: u64,
+    current_verified: Option<VerifiedOutputV1<'a>>,
+    legacy_verified: Option<VerifiedCertificateV1<'a>>,
+}
+
+impl<'a> SnapshotEvidenceV1<'a> {
+    const fn state_kind(state: &CoreProgramStateV1) -> StateKindV1 {
+        match state {
+            SessionState::Waiting => StateKindV1::Waiting,
+            SessionState::Ready { .. } => StateKindV1::Ready,
+            SessionState::Stale { .. } => StateKindV1::Stale,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Legacy(_),
+                ..
+            } => StateKindV1::Failed,
+            SessionState::Failed {
+                cause: ProgramViolationOutcomeV1::Computed(_),
+                ..
+            } => StateKindV1::Unsatisfied,
+            SessionState::Incomplete { .. } => StateKindV1::Incomplete,
+        }
+    }
+
+    fn from_state(state: &'a CoreProgramStateV1, revision: u64) -> Self {
+        let kind = Self::state_kind(state);
+        let legacy_verified = match kind {
+            StateKindV1::Ready | StateKindV1::Stale | StateKindV1::Failed => state
+                .last_verified()
+                .and_then(|value| value.legacy())
+                .map(|inner| VerifiedCertificateV1 { inner }),
+            StateKindV1::Waiting | StateKindV1::Unsatisfied | StateKindV1::Incomplete => None,
+        };
+        Self {
+            diagnostics: match state {
+                SessionState::Failed {
+                    cause: ProgramViolationOutcomeV1::Computed(cause),
+                    ..
+                }
+                | SessionState::Incomplete { cause, .. } => Some(cause.diagnostics()),
+                _ => None,
+            },
+            kind,
+            revision,
+            current_verified: state
+                .current_verified()
+                .map(|inner| VerifiedOutputV1 { inner }),
+            legacy_verified,
+        }
+    }
+
+    pub(crate) const fn kind(self) -> StateKindV1 {
+        self.kind
+    }
+    pub(crate) const fn revision(self) -> u64 {
+        self.revision
+    }
+    pub(crate) const fn current_verified(self) -> Option<VerifiedOutputV1<'a>> {
+        self.current_verified
+    }
+    pub(crate) const fn diagnostics(
+        self,
+    ) -> Option<&'a crate::program_diagnostics::ProgramDiagnosticsV1> {
+        self.diagnostics
+    }
+    pub(crate) const fn legacy_verified(self) -> Option<VerifiedCertificateV1<'a>> {
+        self.legacy_verified
     }
 }
 
@@ -2384,6 +2693,40 @@ impl ContentIdentityV9 {
     /// Возвращает 256-битное каноническое представление identity.
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct VerifiedOutputV1<'a> {
+    inner: &'a CoreVerifiedOutcomeV1,
+}
+
+impl<'a> VerifiedOutputV1<'a> {
+    pub(crate) fn optimality(
+        self,
+    ) -> Option<crate::program_session::computed_assignment::ComputedOptimalityV1> {
+        self.inner.optimality()
+    }
+    pub(crate) fn observation(self) -> ObservationV1<'a> {
+        ObservationV1 {
+            inner: crate::session::SessionEvidenceV1::observation(self.inner),
+        }
+    }
+    pub(crate) fn content_identity(self) -> ProgramOwnerIdentityV1 {
+        self.inner.content_identity()
+    }
+    pub(crate) fn cells(
+        self,
+    ) -> impl ExactSizeIterator<Item = &'a CoreProgramConstraintCellV1> + FusedIterator + 'a {
+        self.inner.cells().iter()
+    }
+    pub(crate) fn outputs(
+        self,
+    ) -> impl ExactSizeIterator<Item = CertifiedPaintOutputV1<'a>> + FusedIterator + 'a {
+        self.inner
+            .outputs()
+            .iter()
+            .map(CertifiedPaintOutputV1::from_core)
     }
 }
 
@@ -2799,6 +3142,40 @@ fn project_assessment<'a>(
 ) -> AssessmentV1<'a> {
     match cell.result() {
         ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::NominalSrgb8Visible(evidence),
+        )) => AssessmentV1::NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1 {
+            verdict: VerdictV1::Pass,
+            binding: evidence.binding(),
+            visible: *evidence.measurement().value(),
+            rejected_blue_interval: None,
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::NominalSrgb8Visible(evidence),
+            ),
+        ) => AssessmentV1::NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1 {
+            verdict: VerdictV1::Violation,
+            binding: evidence.binding(),
+            visible: *evidence.measurement().value(),
+            rejected_blue_interval: Some(evidence.measurement().classification().endpoints()),
+        }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+            CoreProgramPassEvidenceV1::VisibleSeparation(evidence),
+        )) => AssessmentV1::VisibleSeparation(VisibleSeparationEvidenceV1 {
+            verdict: VerdictV1::Pass,
+            binding: evidence.binding(),
+            measurement: *evidence.measurement().value(),
+        }),
+        ProgramConstraintResultV1::Violation(
+            ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                CoreProgramViolationEvidenceV1::VisibleSeparation(evidence),
+            ),
+        ) => AssessmentV1::VisibleSeparation(VisibleSeparationEvidenceV1 {
+            verdict: VerdictV1::Violation,
+            binding: evidence.binding(),
+            measurement: *evidence.measurement().value(),
+        }),
+        ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
             CoreProgramPassEvidenceV1::ExactSrgb8(evidence),
         )) => AssessmentV1::ExactSrgb8(ExactSrgb8EvidenceV1 {
             inner: ExactSrgb8EvidenceRefV1::Pass(evidence),
@@ -2864,6 +3241,10 @@ fn project_assessment<'a>(
 /// Закрытое семейство сохранённого evaluator evidence.
 #[derive(Clone, Copy)]
 pub(crate) enum AssessmentV1<'a> {
+    /// Nominal membership видимого цвета; не доказательство causal contribution.
+    NominalSrgb8Visible(NominalSrgb8VisibleEvidenceV1<'a>),
+    /// Прямое расстояние Oklab по двум окончательным encoded цветам.
+    VisibleSeparation(VisibleSeparationEvidenceV1<'a>),
     /// Evidence точного сравнения encoded sRGB8.
     ExactSrgb8(ExactSrgb8EvidenceV1<'a>),
     /// Evidence применимого критерия WCAG 2.2.
@@ -2879,6 +3260,8 @@ impl AssessmentV1<'_> {
     /// Возвращает несовместимый с противоположным исход классификатора.
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self {
+            Self::NominalSrgb8Visible(value) => value.verdict(),
+            Self::VisibleSeparation(value) => value.verdict(),
             Self::ExactSrgb8(value) => value.verdict(),
             Self::Wcag22Srgb8(value) => value.verdict(),
             Self::IntrinsicUnary(value) => value.verdict(),
@@ -3330,6 +3713,15 @@ pub(crate) struct DeclaredSrgb8CleanSetEvidenceV1<'a> {
 }
 
 impl DeclaredSrgb8CleanSetEvidenceV1<'_> {
+    /// Копирует сохранённый исход, сохраняя обязательные payload каждого варианта.
+    /// Это проекция свидетельства; повторного вычисления предиката здесь нет.
+    pub(crate) const fn outcome(self) -> Result<Srgb8, CoreDeclaredSrgb8CleanSetViolationV1> {
+        match self.inner {
+            DeclaredSrgb8CleanSetEvidenceRefV1::Pass(evidence) => Ok(evidence.visible()),
+            DeclaredSrgb8CleanSetEvidenceRefV1::Violation(evidence) => Err(*evidence),
+        }
+    }
+
     pub(crate) const fn verdict(self) -> VerdictV1 {
         match self.inner {
             DeclaredSrgb8CleanSetEvidenceRefV1::Pass(_) => VerdictV1::Pass,
@@ -3487,6 +3879,62 @@ impl<'a> Wcag22Srgb8EvidenceV1<'a> {
             Wcag22Srgb8EvidenceRefV1::Violation(value) => value.binding(),
         };
         PointBindingV1 { inner: value }
+    }
+}
+
+/// Сохранённый nominal verdict и физическая привязка видимого результата.
+#[derive(Clone, Copy)]
+pub(crate) struct NominalSrgb8VisibleEvidenceV1<'a> {
+    verdict: VerdictV1,
+    binding: &'a ProgramVisiblePointBindingV1,
+    visible: Srgb8,
+    rejected_blue_interval: Option<[u8; 2]>,
+}
+
+impl<'a> NominalSrgb8VisibleEvidenceV1<'a> {
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        self.verdict
+    }
+
+    pub(crate) const fn visible(self) -> Srgb8 {
+        self.visible
+    }
+
+    pub(crate) const fn rejected_blue_interval(self) -> Option<[u8; 2]> {
+        self.rejected_blue_interval
+    }
+
+    pub(crate) const fn binding(self) -> PointBindingV1<'a> {
+        PointBindingV1 {
+            inner: self.binding,
+        }
+    }
+}
+
+/// Сохранённое измерение и physical binding клиентской separation policy.
+#[derive(Clone, Copy)]
+pub(crate) struct VisibleSeparationEvidenceV1<'a> {
+    verdict: VerdictV1,
+    binding: &'a ProgramVisiblePointBindingV1,
+    measurement: ProgramVisibleSeparationMeasurementV1,
+}
+
+impl<'a> VisibleSeparationEvidenceV1<'a> {
+    /// Сохранённое решение по включённым границам клиента.
+    pub(crate) const fn verdict(self) -> VerdictV1 {
+        self.verdict
+    }
+
+    /// Сохранённые encoded цвета, distance и оба порога.
+    pub(crate) const fn measurement(self) -> ProgramVisibleSeparationMeasurementV1 {
+        self.measurement
+    }
+
+    /// Физическая occurrence, на которой выполнено измерение.
+    pub(crate) const fn binding(self) -> PointBindingV1<'a> {
+        PointBindingV1 {
+            inner: self.binding,
+        }
     }
 }
 
@@ -4332,6 +4780,10 @@ fn map_program_compile_error(error: ProgramCompileError) -> CompileErrorV1 {
         ProgramCompileError::Field(error) => CompileErrorV1::Field(error),
         ProgramCompileError::ResourceExhausted => CompileErrorV1::ResourceExhausted,
         ProgramCompileError::InternalInvariant => CompileErrorV1::InternalInvariant,
+        ProgramCompileError::InvalidComputedAssignment(error) => match error {
+            crate::program_session::computed_assignment::ComputedAdmissionErrorV1::MixedSelection => CompileErrorV1::Unsupported,
+            _ => CompileErrorV1::InvalidAssignment,
+        },
     }
 }
 
@@ -4519,6 +4971,8 @@ fn map_evaluator_error(
     error: CoreProgramEvaluatorErrorV1,
 ) -> Result<EvaluatorFailureV1, EvaluatorProtocolFailureV1> {
     match error {
+        CoreProgramEvaluatorErrorV1::NominalSrgb8Visible(source) => match source {},
+        CoreProgramEvaluatorErrorV1::VisibleSeparation(source) => match source {},
         CoreProgramEvaluatorErrorV1::ExactSrgb8(source) => match source {},
         CoreProgramEvaluatorErrorV1::Wcag22Srgb8(source) => {
             let profile_id = wcag22_profile_v1().profile_id;

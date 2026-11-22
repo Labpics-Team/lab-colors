@@ -37,6 +37,7 @@ final class ProgramWireBuilderTests: XCTestCase {
             .exactVisibleUnary(true, id: 81, occurrence: 61, expectedRgb: [1, 2, 3])
             .wcag22VisibleUnary(false, id: 82, occurrence: 61, criterion: .sc1411UiComponentOrState)
             .declaredSrgb8CleanSet(true, id: 83, root: 71, occurrence: 61)
+            .nominalSrgb8Visible(true, id: 85, occurrence: 61).nominalSrgb8Visible(false, id: 86, occurrence: 61)
             .exactIntrinsicRelationHard(84, reference: 11, candidates: [11]).output(91, paint: 42)
         XCTAssertEqual(try all.finish(), try bytes(expected.encodingOnly))
     }

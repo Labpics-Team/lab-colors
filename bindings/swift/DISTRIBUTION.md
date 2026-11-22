@@ -60,9 +60,56 @@ if snapshot.state() == "ready" {
 `waiting`, `stale` и `failed` явно, не подменяя их успешной проверкой.
 Снимок владеет своими данными и не изменяется после следующего обновления.
 
+## Вычислять цвет из авторской опоры
+
+V3 позволяет объявить характер цвета и получить новое значение без списка
+кандидатов. Опора и условия относятся к конечному видимому применению:
+
+```swift
+let computed = try ProgramWireBuilderV3()
+    .colorTarget(21, anchor: [0, 103, 244],
+        options: ProgramWireColorOptionsV3(appearance: 61))
+    .surfaceInputPort(31)
+    .solidPaint(41, target: 21)
+    .inputSurface(51, input: 31)
+    .pointOccurrence(61, paint: 41, surface: 51)
+    .wcag22VisibleUnary(true, id: 81, occurrence: 61, criterion: .sc143TextDefault)
+    .assignment([21])
+    .output(91, paint: 41)
+    .finish()
+let runtime = try compileProgramWire(bytes: computed, streamId: 1)
+let frame = try runtime.updateObserved(revision: 1, scenarioIds: [1],
+    surfaces: Data([255, 255, 255]), surfaceCount: 1)
+if frame.state() == "ready" {
+    print(try frame.copyOutputTable())
+    print(frame.optimality() as Any)
+}
+```
+
+`ProgramWireColorIdentityV3` задаёт необязательные hue/chroma/lightness-границы,
+`ProgramWireToneV3` — кривую предпочтительной светлоты от входной поверхности.
+Пропущенные настройки сохраняют пакетные дефолты Core. `computedTarget`
+отдельно принимает явный RGB-box или серую ось, а `visibleSeparationHard`
+ограничивает расстояние Oklab от итогового цвета до его подложки.
+`assignment` перечисляет вычисляемые targets в порядке предпочтений; пустой
+список проверяет единственный authored tuple графа из фиксированных цветов.
+
+`ready` означает соблюдение обязательных условий; `optimality()` отдельно
+возвращает `exact` или `unfinished`. `unsatisfied` доказывает отсутствие
+допустимого решения в объявленном домене, `incomplete` означает исчерпание
+бюджета до найденного допустимого результата. `assessmentReport()` и
+`diagnostics()` возвращают типизированные данные этого снимка. Нативный
+builder кодирует декларацию; он не выполняет цветовые расчёты.
+
 ## Связать результат с отображением
 
-`attachProgramWire` принимает `ProgramPointSinkHost`. Его `tryInstall` получает
+Для V3 `runtime.updateObservedWith` подготавливает снимок и передаёт его
+в `ProgramUpdateHost.accept`. Обработчик устанавливает поверхность и связанные
+цвета целиком; `true` принимает ревизию, `false` или исключение до установки
+сохраняют предыдущую. Метод возвращает `Bool`, а нужный снимок обработчик
+сохраняет сам. [Контракт обновления](../../docs/contracts/swift-binding.md#связь-с-отображением).
+
+`attachProgramWire` принимает программы V1/V2 и `ProgramPointSinkHost`. Его `tryInstall` получает
 полную команду `setAll`, `revokeAll` или `confirmExact` с ревизией и ожидаемым
 состоянием. `true` означает, что вся команда установлена атомарно; при `false`
 или ошибке внешний приёмник обязан сохранить прежнее состояние.

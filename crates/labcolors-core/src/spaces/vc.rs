@@ -43,6 +43,10 @@ const Z_OFFSET: f64 = 1.48;
 const T_INNER_OFFSET: f64 = 1.64;
 const ADAPTATION_DECAY_DIVISOR: f64 = 3.6;
 
+/// Общая пакетная опора для точечного Program и стандартного CAM16 контекста.
+pub(crate) const SRGB_ADAPTING_LUMINANCE_CD_M2: f64 = 64.0;
+pub(crate) const SRGB_BACKGROUND_LUMINANCE_RATIO: f64 = 0.2;
+
 /// Точные числовые владельцы, используемые artifact-ом contextual-region.
 ///
 /// Повторяющиеся имена намеренно сверяют общие с CAM16 коэффициенты: потребитель
@@ -229,7 +233,13 @@ impl ViewingConditions {
     /// colour-science in `golden_tests`.
     pub fn srgb() -> Self {
         // colour-science / colorjs.io surroundMap["average"] = [1.0, 0.69, 1.0]
-        Self::build(64.0, TWENTY, ONE, SURROUND_AVERAGE_C, ONE)
+        Self::build(
+            SRGB_ADAPTING_LUMINANCE_CD_M2,
+            SRGB_BACKGROUND_LUMINANCE_RATIO * HUNDRED,
+            ONE,
+            SURROUND_AVERAGE_C,
+            ONE,
+        )
     }
 
     /// Standard sRGB viewing conditions with Increased Contrast (IC).

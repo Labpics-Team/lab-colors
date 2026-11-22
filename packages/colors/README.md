@@ -1,9 +1,15 @@
 # Lab Colors
 
 Библиотека адаптивных цветов для интерфейсов и дизайн-систем.
-Вы задаёте цвета, фоны и ограничения, например контраст текста.
-Lab Colors выбирает подходящие значения с учётом наложения слоёв
-и пересчитывает результат, когда приложение передаёт изменения фона.
+Объявите исходные цвета, места применения и связи между ними. Одна акцентная
+роль получает подходящий цвет на каждой поверхности; заливка и её текст
+подбираются вместе. При смене контекста приложение передаёт новые входы,
+а Lab Colors пересчитывает связанный граф.
+
+Cleanliness входит в замысел системы как самостоятельное качество конечной
+композиции. [Контракт качества и карта исследований](https://github.com/Labpics-Team/lab-colors/blob/main/docs/explanation/color-quality.md)
+разделяют реализованные возможности, ограниченные модели и обязательное
+направление развития.
 
 [![npm](https://img.shields.io/npm/v/%40labpics%2Fcolors)](https://www.npmjs.com/package/@labpics/colors)
 [![CI](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml/badge.svg)](https://github.com/Labpics-Team/lab-colors/actions/workflows/ci.yml)
@@ -12,45 +18,123 @@ Lab Colors выбирает подходящие значения с учёто�
 ## Установка
 
 ```sh
-npm install @labpics/colors@^1
+npm install @labpics/colors@^1.2
 ```
 
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
 Сохраните lockfile, чтобы закрепить версию.
 
-[Пример подбора цвета под фон](https://github.com/Labpics-Team/lab-colors/blob/main/docs/how-to/adapt-contrast.md)
-выбирает чёрный или белый текст по требованию контраста WCAG 2.2
-и показывает отказ, когда ни один вариант не подходит.
+[Самостоятельный пример интерфейса](https://github.com/Labpics-Team/lab-colors/tree/main/examples/contextual-colors)
+показывает связанные заливку и текст, локальный лист с фиксированным фоном и
+полупрозрачный слой. В нём можно менять фон, исходные акценты и материал.
 
 <a id="первый-маршрут"></a>
 
-## Первый запуск
+## Первый запуск в браузере
 
-Инициализируйте WASM один раз выбранным способом, затем выполните общий пример
-ниже в том же модуле.
+### Объявление ролей
 
-### Браузер
+```js
+import { colors } from "@labpics/colors";
 
-В ESM-проекте с настройкой разрешения npm-импортов:
+const c = colors();
+const canvas = c.surface("canvas");
+const accent = c.role("accent", "#0067f4");
+const ink = c.role("ink", "#242424");
 
-```ts
-import init from "@labpics/colors";
+const fill = accent.on(canvas, { separation: [0.1, 2] });
+const label = ink.on(fill, { contrast: "wcag22-text" });
+const link = accent.on(canvas, { contrast: "wcag22-text" });
+const text = ink.on(canvas, { contrast: "wcag22-text" });
 
-await init();
+const program = await c.compile({ fill, label, link, text });
 ```
 
-Сборщик или сервер должен публиковать `pkg/labcolors_bg.wasm` рядом с
-сгенерированным `pkg/labcolors.js`; `init()` загружает файл относительно этого
-модуля. Если сборщик переносит WASM, передайте его URL явно через
-`init({ module_or_path: wasmUrl })`.
+`role` хранит неизменяемый исходный цвет и его идентичность. Каждый вызов
+`.on(surface)` создаёт локальное применение: кнопка и ссылка используют одну
+акцентную роль, но могут получить разные RGB. Повторная передача того же
+handle `fill` означает одну общую заливку, в том числе при нескольких aliases.
+Имена и смысл ролей принадлежат приложению.
 
-### Node.js
+`compile` проверяет граф и инициализирует WASM. Приоритет предпочтений задаётся
+порядком создания локальных применений через `.on`: подложка объявлена раньше
+зависимого текста. Порядок outputs и дополнительные aliases не меняют выбор.
+Даже `compile({ label })` сохраняет участвующую в его композиции заливку и её
+условия. Обязательные условия проверяются для всего результата. Исходные
+массивы копируются при объявлении роли и не меняют её после создания.
 
-В Node.js 22.11 или новее используйте ESM (`.mjs` или `"type": "module"` в
-`package.json`) и передайте байты файла. Node.js не загружает `file:` URL через
-`fetch`, поэтому браузерный вызов без аргументов здесь не подходит.
+### Подключение к интерфейсу
 
-```ts
+```html
+<section id="project">
+  <button>Открыть проект</button>
+  <a href="#project-details">Все материалы</a>
+  <p id="project-details">Документы и решения команды.</p>
+</section>
+```
+
+```css
+#project { background: var(--canvas); color: var(--text); padding: 24px; }
+#project button { background: var(--fill); color: var(--label); }
+#project a { color: var(--link); }
+```
+
+```js
+const root = document.querySelector("#project");
+const view = program.attach(root, { canvas: "#e6ddd0" });
+
+// Например, при изменении поверхности рабочего пространства:
+const update = view.set({ canvas: "#283548" });
+if (update.state === "rejected") {
+  console.log(update.proposed.state, update.proposed.diagnostics);
+}
+```
+
+`attach` владеет CSS custom properties входов и outputs на подключённом
+элементе. `set` получает полный новый контекст и атомарно заменяет одну
+принадлежащую пакету таблицу CSS: фон и все цвета появляются вместе.
+Если предложение не принято, прежняя поверхность и её готовые цвета остаются
+на месте. `view.current` — принятый кадр, `view.lastUpdate` — исход последней
+попытки.
+
+Используйте эти переменные для фактических поверхностей соответствующих
+элементов. Не переопределяйте их другими CSS-правилами и не меняйте принадлежащий
+пакету stylesheet. До принятия кадра пакет проверяет применённые значения:
+конфликт каскада или заблокированный stylesheet вызывает `color_host_changed`
+и сохраняет прежний кадр. Если CSP требует nonce, передайте разрешённое
+приложением значение: `program.attach(root, context, { nonce })`.
+[Контракт CSS-подключения](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md#css-подключение)
+описывает границы этой проверки.
+
+`set` предназначен для контекста, которым владеет
+приложение: если фон уже изменил другой renderer, прежние значения нельзя
+считать проверенными для нового фона.
+
+При удалении интерфейса вызовите `view.dispose()`, затем `program.dispose()`.
+Программа может создавать независимые views; освобождение программы не
+освобождает уже подключённые views.
+
+### Загрузка WASM
+
+В браузере без сборщика нужен import map, разрешающий `@labpics/colors` в
+установленный ESM-пакет. Сервер или сборщик должен публиковать
+`pkg/labcolors_bg.wasm` рядом с `pkg/labcolors.js`.
+Если WASM перенесён, до `compile` задайте его URL:
+
+```js
+import init from "@labpics/colors";
+await init({ module_or_path: wasmUrl });
+```
+
+В [готовом примере](https://github.com/Labpics-Team/lab-colors/tree/main/examples/contextual-colors)
+есть import map и небольшой dev server; отдельный bundler не требуется.
+
+## Node.js
+
+В Node.js 22.11 или новее используйте ESM и передайте байты WASM до объявления
+программы. Node.js не загружает `file:` URL через `fetch`.
+
+```js
 import { readFileSync } from "node:fs";
 import init from "@labpics/colors";
 
@@ -61,331 +145,147 @@ await init({
 });
 ```
 
-### Объявление графа и чтение результата
+Затем выполните [объявление ролей](#объявление-ролей) выше. Без DOM готовые
+значения читаются через `resolve`:
 
-```ts
-import { compileProgramWire } from "@labpics/colors";
-import {
-  ProgramWireBuilderV1,
-  SURROUND_AVERAGE_V1,
-  WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1,
-} from "@labpics/colors/program-wire/abi-v1.js";
-
-const programBytes = new ProgramWireBuilderV1()
-  .source(11, [20, 20, 20])
-  .fixedTarget(21, 11)
-  .surfaceInputPort(31)
-  .solidPaint(41, 21)
-  .inputSurface(51, 31)
-  .sourceOverOccurrence(61, 41, 51, 64, 0.2, SURROUND_AVERAGE_V1)
-  .presentationRoot(71, 61)
-  .presentationTarget(71, 61)
-  .wcag22VisibleUnary(true, 81, 61, WCAG22_SC1411_UI_COMPONENT_OR_STATE_V1)
-  .output(91, 41)
-  .finish();
-const runtime = compileProgramWire(programBytes, 1);
-try {
-  const snapshot = runtime.updateObserved(
-    1n,
-    new Uint32Array([1]),
-    new Uint8Array([255, 255, 255]),
-    1,
-  );
-  try {
-    if (snapshot.state === "ready") {
-      const outputs = snapshot.copyOutputTable();
-      for (let row = 0; row < outputs.length; row += 5) {
-        console.log(
-          outputs[row],
-          outputs[row + 1], outputs[row + 2], outputs[row + 3],
-          outputs[row + 4],
-        );
-      }
-    }
-  } finally {
-    snapshot.free();
-  }
-} finally {
-  runtime.free();
-}
-```
-
-Канонические `LCPW` v1 bytes создаются `ProgramWireBuilderV1` или другим реализационно-независимым энкодером того же контракта.
-
-## Чтение outputs
-
-Для чтения всех цветов используйте `snapshot.copyOutputTable()` у
-`ProgramSnapshot` и `ProgramAttachedSnapshot`. Один вызов возвращает
-`Float64Array` длиной `outputCount() * 5`; каждая строка содержит:
-
-| Смещение в строке | Значение |
-| --- | --- |
-| 0 | Непрозрачный клиентский `slot`, целое u32 |
-| 1, 2, 3 | Красный, зелёный и синий канал sRGB8, целые `0..255` |
-| 4 | Straight opacity, исходное f64 в `0..1` |
-
-Строка `i` совпадает с `outputSlot(i)`, `outputRgb(i)` и `outputOpacity(i)`.
-Слоты и каналы точно представимы в f64, opacity копируется без округления.
-Каждый вызов создаёт независимый JS-буфер: его изменение не меняет snapshot,
-другую таблицу или runtime. Таблица остаётся доступна после следующего update
-и `free()` снимка или владельца. Поштучные геттеры доступны, когда нужен один
-output.
-
-Перед применением цветов проверяйте `snapshot.state === "ready"`.
-`failed` и `stale` могут содержать последние проверенные значения, которые
-не удостоверены для текущего контекста; таблица сохраняет эту же семантику.
-Снимок без outputs возвращает пустой `Float64Array`.
-Если не удаётся выделить Rust-таблицу или создать её JS-копию, метод бросает ошибку
-`{ code: "program_resource_exhausted", operation: "copyOutputTable" }`,
-распознаваемую `isProgramError`. Снимок при отказе не меняется.
-
-## Явная конвенция cleanliness
-
-Чтобы выбранный результат удовлетворял встроенной конвенции sRGB8, добавьте
-`.declaredSrgb8CleanSet(true, 82, 71, 61)` в цепочку примера перед `.finish()`.
-Здесь `82` — ID ограничения, `71` — presentation root, `61` — occurrence.
-Проверяется финальный encoded-sRGB8 результат этой точки с учётом композиции,
-а не только исходный цвет. `true` задаёт обязательное ограничение; `false`
-не ограничивает выдачу outputs. Результаты отдельных report-only ограничений
-публичный `ProgramSnapshot` не раскрывает.
-
-Это явно выбранная, закреплённая версией пакета конвенция. Она не включается
-автоматически и не подтверждает человеческое восприятие, фактическую отрисовку
-или универсальную «чистоту» цвета.
-
-Контракт использует закреплённый в пакете выпуск
-`exact-nominal-srgb8-point-clean-set-v2`; его точная SHA-256 указана в `NOTICE.md`
-пакета (в репозитории — `crates/labcolors-core/NOTICE.md`).
-Это условная дискретная nominal-модель с воспроизводимым выводом, а не гарантия
-человеческого восприятия. При обновлении пакета сохранённый wire следует заново
-компилировать и оценивать: семантическая идентичность Program включает выпуск
-конвенции, поэтому старые сертификаты не удостоверяют новый набор.
-
-## Подключение к внешнему sink
-
-Для сценария, где приложение само владеет DOM или другим renderer-surface,
-используйте `attachProgramWire`. Синхронный `host` получает полный typed intent
-(`setAll`, `revokeAll` или `confirmExact`) и должен вернуть `true` только после
-атомарной установки всего принадлежащего ему scope; `false` отклоняет update.
-Пакет не пишет DOM и не выдаёт authority из исходного или промежуточного Paint.
-В примере `applyOwnedPointIntent` и `revokeOwnedPointScope` реализует приложение:
-первая функция атомарно применяет intent и возвращает `boolean`, вторая
-возвращает управление только после отзыва всего принадлежащего sink scope.
-
-```ts
-import { attachProgramWire } from "@labpics/colors";
-
-const attachment = attachProgramWire(programBytes, 1, 91, 501, 71, 61, (intent) => {
-  // Приложение проверяет sinkOutput, expectedSequence и bindingEpoch,
-  // затем одним действием обновляет собственный renderer-surface.
-  return applyOwnedPointIntent(intent);
-});
-try {
-  const snapshot = attachment.updateObserved(
-    1n,
-    new Uint32Array([1]),
-    new Uint8Array([255, 255, 255]),
-    1,
-  );
-  try {
-    if (snapshot.state === "ready") {
-      const authority = attachment.materializationAuthority();
-      try {
-        console.log(authority.terminalCompositeRgb());
-      } finally {
-        authority.free();
-      }
-    }
-  } finally {
-    snapshot.free();
-  }
-} finally {
-  revokeOwnedPointScope();
-  attachment.dispose(true);
-  attachment.free();
-}
-```
-
-`materializationAuthority()` читает только успешно установленный
-attachment head. Его `rendererProvenance` остаётся `"unverified"`: результат —
-модельная terminal materialization с проверенными identity, revision, sink stamp,
-binding epoch и отсутствием downstream point, а не доказательство browser paint
-или человеческого восприятия. При отказе host предыдущий head сохраняется.
-Пока host callback исполняется синхронно, повторный вызов любой операции attachment,
-включая `free()`, получает typed-отказ busy; освобождайте attachment после возврата
-из callback. `free()` также получает typed-отказ `program_attachment_revoke_unconfirmed`,
-пока внешний scope не отозван и `dispose(true)` не завершился успешно. Внешний scope
-отзывается владельцем host до `dispose(true)`. Подтверждением служит только
-примитивный `true`; числа, строки и объекты не приводятся к boolean и получают
-`program_attachment_revoke_unconfirmed`.
-
-`Symbol.dispose` и TypeScript `using` выполняют тот же защищённый `free()`.
-До выхода из `using` приложение должно отозвать scope и вызвать `dispose(true)`;
-автоматическое освобождение не подтверждает отзыв за внешнего владельца.
-
-## Создание и инспекция certificate envelope
-
-После инициализации WASM `issueSourceCertificateEnvelope()` возвращает новый
-`Uint8Array` с envelope встроенного source producer Core. Функция не принимает
-payload или identity. Например, после `await init()`:
-
-```ts
-import {
-  decodeCertificateEnvelope,
-  issueSourceCertificateEnvelope,
-} from "@labpics/colors";
-
-const bytes = issueSourceCertificateEnvelope();
-const metadata = decodeCertificateEnvelope(bytes);
-```
-
-Обе функции импортируются из `@labpics/colors`. `metadata.producerRevision` —
-полный Git tree object ID исходников Core, а content identity адресует встроенный
-source descriptor. Эти данные не утверждают равенство исполняемых файлов,
-аутентичность удалённого отправителя или научные свойства цвета.
-
-Если при сборке проверенный source descriptor недоступен, issuance бросает
-ошибку с `operation: "issueSourceCertificateEnvelope"` и
-`code: "certificate_producer_identity_unavailable"`. Её распознаёт
-`isCertificateError`; untrusted decode и остальные операции остаются доступны.
-
-`decodeCertificateEnvelope(bytes)` разбирает только фиксированный `LCEN` v1
-transport envelope и возвращает замороженный metadata-object
-`UntrustedCertificateEnvelopeV1`. Результат — метаданные framing и проверенные digest,
-а не authority result и не доказательство
-истины payload. Тело payload остаётся opaque и не передаётся в JavaScript.
-
-До вызова WASM-функции фасад проверяет intrinsic storage `Uint8Array` и создаёт
-собственный snapshot по правилам [допуска массивов](#массивы-на-границе-wasm).
-Размер больше `MAX_CERTIFICATE_ENVELOPE_BYTES`
-(`2097152`) отвергается до копирования, поскольку `wasm-bindgen` копирует typed array
-в linear memory до входа Rust. Неизвестная schema, authority,
-operation, payload type/version, неканоничные строки, trailing bytes и digest
-mismatch дают typed error; `isCertificateError(value)` проверяет только
-допустимую пару `operation`/`code`.
-
-Заморожен внешний metadata-object; его три byte-поля — отдельные detached snapshots,
-поэтому изменение буфера результата не меняет состояние WASM или следующий decode.
-
-Создать envelope из произвольных JS-байтов, `ProgramSnapshot`, Paint, CSS, DOM или
-materialization authority нельзя. Producer capability и admission ledger остаются
-владением Rust Core; в r13 нет persistence, network relay, CLI, science authority
-или registry publication.
-
-## Контракт
-
-- Один публичный runtime-root: `compileProgramWire` → `ProgramRuntime` → `ProgramSnapshot`.
-- Обновление атомарно: отказ не публикует частичный state.
-- Output появляется только при выполненных всех обязательных (`hard: true`) ограничениях. Это внутренняя проверка в рамках Session, а не публичный переносимый сертификат или гарантия конечного видимого результата приложения.
-- Канонические байты имеют одну `ContentIdentity`.
-- Невалидные wire-байты, графы, observation и resource bounds возвращают typed-отказы; fallback отсутствует.
-- DOM и CSS не входят в ядро. Применение output принадлежит приложению.
-
-## Числовые входы
-
-ID потока и причины, число подложек и индекс output принимаются только как
-конечные целые `number` в диапазоне `0..4294967295`. Ревизия принимается как
-`bigint` в диапазоне `0n..18446744073709551615n`. Строки, нечисловые значения,
-дроби и выход за диапазон не приводятся к допустимому значению. Допуск входа
-предшествует изменению Session; после отказа корректную ревизию можно повторить.
-Допустимость конкретного индекса, формы observations и порядка ревизий
-по-прежнему проверяет соответствующий контракт runtime.
-
-## Массивы на границе WASM
-
-Program wire, поверхности и content identity принимают реальный `Uint8Array`,
-ID сценариев — `Uint32Array`. Обычные массивы, другие виды typed array,
-Proxy-обёртки, detached storage и собственные свойства `length`/`byteLength`
-дают типизированный отказ до generated copier. Числа не оборачиваются и не
-округляются неявно.
-
-Допустимы `Buffer`, subclasses, subarray и массивы из другого realm, если их
-внутренний тип соответствует аргументу. Фасад использует intrinsic storage,
-не читает пользовательские getters и не обходит цепочку прототипов. Унаследованные
-свойства размеров не участвуют в копировании; WASM получает отдельный snapshot.
-Отказ observations сохраняет предыдущий head и допускает повтор той же ревизии.
-Для `materializationAuthorityFor` identity должна содержать ровно 32 байта;
-неверная длина отвергается до выделения snapshot.
-
-## Распознавание ошибок
-
-`isProgramError(value)` распознаёт ошибки Program по принадлежности текущему
-`Error` и допустимой паре `operation`/`code`. Неизвестное значение, чужая пара
-или исключение при чтении возвращают `false`, не заменяя исходную ошибку
-новым исключением. Каждое поле читается не более одного раза, без преобразования
-его значения; читаемые унаследованные поля и getters допустимы.
-
-Нехватка ресурсов при compile/instantiate/update возвращает
-`program_resource_exhausted`, внутренний сбой — `program_internal_invariant`.
-Attachment сохраняет те же классы в `program_attachment_resource_exhausted`
-и `program_attachment_internal_invariant`. Эти причины не означают, что
-пользовательский граф или observation семантически недопустимы; отказ update
-сохраняет предыдущий committed head и допускает повтор той же ревизии.
-Нехватка памяти при подготовке identity для `materializationAuthorityFor`
-также возвращает `program_attachment_resource_exhausted` с операцией
-`materializationAuthority`.
-
-Проверка описывает только наблюдённые значения. Она не удостоверяет происхождение
-ошибки, не замораживает объект и не гарантирует неизменность следующих чтений
-пользовательских getters. Непознанная ошибка остаётся у вызывающего приложения.
-
-## Дополнительные функции
-
-- `evaluateWcag22` — точная оценка WCAG 2.2 в finite sRGB8/Q55-профиле.
-- `numericalCapabilityManifest` — манифест численных возможностей и доказательств сборки.
-
-## Снимок входных массивов
-
-Program wire, scenario IDs, surface bytes и certificate envelope принимают
-типизированные массивы на обычном `ArrayBuffer`. Buffer, срезы и массивы из
-другого JavaScript realm поддерживаются. Пакет делает собственную копию до
-передачи в WASM и сохраняет прежнее состояние при отказе входа.
-
-Массивы на `SharedArrayBuffer`, включая growable storage, получают штатный
-typed-отказ входа: параллельный писатель может менять данные во время копирования.
-Производитель наблюдения должен завершить запись и передать принадлежащий ему
-обычный буфер. Это правило общее для компиляции, обновлений и идентичностей.
-
-## Конечные варианты и явный порядок выбора
-
-Для графа с `finiteTarget` используйте `ProgramWireBuilderV2` из
-`@labpics/colors/program-wire/abi-v2.js`. Остальные методы описания графа
-совпадают с V1. Готовые байты принимает прежний `compileProgramWire` или
-`attachProgramWire`; второй решатель или отдельный lifecycle не нужны.
+### Результат без DOM
 
 ```js
-builder.selectionRelease(1n, [
-  [{ id: 1, choices: [{ target: 21, candidate: 201 }] }],
-  [{ id: 2, choices: [{ target: 21, candidate: 202 }] }],
-]);
+for (const canvas of ["#e6ddd0", "#283548"]) {
+  const frame = program.resolve({ canvas });
+  console.log(frame);
+}
+program.dispose();
 ```
 
-Группы расположены от предпочтительной к следующей. Каждое состояние описывает
-одновременно все конечные цели. Перечень должен покрывать полное произведение
-доменов без повторов. Внутри одной группы порядок списка не влияет на решение:
-ничья разрешается каноническими байтами непрозрачного ID состояния. Ревизия и
-группы входят в идентичность выпуска выбора.
+Пропущенный вход, `null` или `undefined` означает неизвестный контекст.
+Лишнее имя или некорректный цвет — ошибка входа. Передавайте весь набор
+поверхностей при каждом обновлении.
 
-Core проверяет каждое состояние на всех наблюдаемых сценариях и выбирает первое,
-которое прошло все обязательные ограничения. Неизвестный вход и конфликт
-сохраняют существующие состояния Session и отзыв установленного результата.
-Порядок задаёт предпочтения клиента; он не определяет cleanliness, не подбирает
-научные коэффициенты и не ослабляет ограничения.
+## Настройки
 
-V2 допускает один выпуск выбора, до 4096 состояний и 4096 назначений суммарно.
-V1 сохраняет прежние байты и отказывается от конечного графа без доступного ему
-выпуска выбора. Нативные функции с суффиксом `_v1` остаются строго V1; функции
-`check_program_wire` и `compile_program_wire` распознают обе поддерживаемые версии.
+Обычная роль адаптируется по умолчанию. Core сохраняет её характер и пересекает
+обязательные условия для конечной композиции. Параметры `identity`, `tone`,
+`opacity`, `contrast`, `separation` и `fixed` описаны в
+[справке авторского API](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md#настройки).
 
+## Cleanliness в рабочем пути
 
-### Ошибки оценки и чтения результата
+Каждый готовый кадр содержит `frame.cleanliness`. Обычная декларация без
+применимой модели возвращает `status: "not-assessed"`: успешный подбор по
+идентичности и контрасту не выдаётся за оценку Cleanliness.
 
-`isBindingError(error)` распознаёт `Error` по паре `operation` и `code`.
-Для `evaluateWcag22` причины: `invalid_color`, `unknown_wcag22_criterion`,
-`internal_error`. Для `numericalCapabilityManifest` доступен `internal_error`.
-Неверный индекс в `outputSlot`, `outputRgb` или `outputOpacity` возвращает
-`invalid_output_index` с операцией `readProgramOutput`; snapshot сохраняется.
+Если дизайн-система выбирает опубликованную номинальную конвенцию sRGB8,
+она подключается одной настройкой и участвует в обычном автоматическом поиске:
 
-Текст `message` служит диагностикой. Проверка читает каждое поле один раз,
-не преобразует значения и возвращает `false` для неизвестной пары или ошибки
-чтения. Контракт принадлежит также прямым WASM-входам.
+```js
+const c = colors({ cleanliness: "nominal-srgb8-v2" });
+const canvas = c.surface("canvas");
+const material = c.role("material", "#00c740", { maxChange: 0.01 }).on(canvas);
+const program = await c.compile({ material });
+const frame = program.resolve({ canvas: "#ffffff" });
+if (frame.state === "ready") {
+  console.log(frame.values.material, frame.cleanliness);
+}
+program.dispose();
+```
+
+Профиль проверяет опорный конечный encoded-sRGB8 цвет после наложения, включая
+участвующие промежуточные поверхности. Core пересекает его с `identity`, `maxChange`,
+контрастом и другими обязательствами, затем перепроверяет результат. Исходные
+опоры и `fixed` сохраняются. Противоречие даёт обычную диагностику
+`requirement: "cleanliness"`; `attach` сохраняет прежнюю композицию при отказе.
+
+Оценка содержит `profile`, `basis: "declared-convention"`,
+`scope: "declared-final-points"` и числа принятых, отвергнутых и недоступных
+клеток. Это объём покрытия, не балл качества. Профиль не является общим
+человеческим отношением `Cleaner`/`NotDirtier`, не оценивает пространственное
+поле целиком и не включается скрыто: его границы могут исключать нужные
+тёмные и приглушённые оттенки. Общая контекстная Cleanliness остаётся
+обязательной незавершённой способностью продукта.
+
+## Одно правило для разных композиций
+
+Клиент может переиспользовать один закон поверхностей, сохраняя произвольную
+топологию интерфейса. Следующее объявление независимо от первого примера:
+
+```js
+import { colors } from "@labpics/colors";
+
+const c = colors();
+const canvas = c.surface("canvas");
+const paper = c.role("paper", "#efe6d8");
+const warm = c.role("warm", "#b85d35");
+const ink = c.role("ink", "#242424");
+const text = { contrast: "wcag22-text" };
+const layer = {
+  tone: { from: canvas, curve: [[0, 0.22], [0.5, 0.58], [1, 0.97]] },
+  separation: [0.02, 0.35],
+};
+
+// Первая композиция: общая поверхность → панель → текст.
+const panel = paper.on(canvas, layer);
+const panelText = ink.on(panel, text);
+
+// Другая композиция: общая поверхность → прозрачный материал → текст.
+const notice = warm.on(canvas, { ...layer, opacity: 0.72 });
+const noticeText = ink.on(notice, text);
+
+// Локальная поверхность не меняется при смене внешнего контекста.
+const island = c.fixed("note-paper", "#f4eadb").on(canvas);
+const islandText = ink.on(island, text);
+
+const program = await c.compile({ panel, panelText, notice, noticeText, island, islandText });
+```
+
+Кривая `tone` задаётся парами `[светлота входа, предпочтительная светлота]`
+в Oklab L. Нужны хотя бы две точки, возрастающие абсциссы и крайние значения
+`0` и `1`; координаты лежат в `0..1`. Между точками Core интерполирует
+линейно. Это предпочтение внутри допустимого множества. Значения кривой —
+решение автора интерфейса; в Core нет названий тем или предписанной иерархии.
+
+`opacity` сериализуется в alpha цвета, например `rgb(… / 0.72)`, и считается
+как source-over над объявленной подложкой. Не заменяйте его CSS `opacity` на
+всей группе: это другая композиция. Характер и предпочтение относятся к
+опорному encoded-sRGB8 цвету; обязательные contrast и separation также
+учитывают [численную точность наложения](https://github.com/Labpics-Team/lab-colors/blob/main/docs/explanation/material-emission.md).
+Конкретный browser paint остаётся ответственностью renderer.
+Обычная адаптация с `opacity: 1` меняет непрозрачный RGB.
+
+### Изменение исходного замысла
+
+Чтобы поменять authored цвет, материал или связи, скомпилируйте новую
+декларацию и замените весь кадр:
+
+```js
+const replacement = view.replace(nextProgram, { canvas: "#283548" });
+if (replacement.state === "committed") {
+  // Новый handle имеет типы outputs новой программы; прежний больше не активен.
+  const nextView = replacement.view;
+  // Сохраните nextView у владельца интерфейса.
+}
+```
+
+Успешная замена удаляет старые owned CSS variables и устанавливает новые в
+той же транзакции. При отказе прежний view продолжает работать. Программы
+не владеют runtime уже созданных views; каждый такой view освобождается
+своим `dispose()`.
+
+## Результат и диагностика
+
+`resolve` возвращает готовый кадр с `values` либо причину, по которой свежего
+результата нет. Допустимость результата и завершённость поиска лучшего значения
+различаются. [Справка состояний и диагностики](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md#результат-и-диагностика)
+описывает `ready`, `conflict`, `unresolved`, `unknown`, `stale` и типизированные ошибки.
+
+## Низкоуровневый Program API
+
+`colors()` компилирует тот же Program, что и `compileProgramWire` →
+`ProgramRuntime` → `ProgramSnapshot`. V1 с фиксированными значениями,
+V2 с явными конечными вариантами и V3 с вычисляемыми целями остаются доступны.
+Ни DOM, ни авторские имена ролей не входят в математическое ядро.
+
+[Справка JavaScript Program](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md)
+описывает wire builders, output table, оценки, типизированные отказы, прямую
+транзакцию runtime, point attachments, certificate envelopes и WASM ownership.
+Точные публичные типы включены в пакет.

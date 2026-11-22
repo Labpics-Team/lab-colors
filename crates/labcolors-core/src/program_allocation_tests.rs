@@ -205,7 +205,7 @@ fn attachment_snapshot_is_inline_and_independent() {
                 .update_observed(revision, &input)
                 .expect("the valid update must return an owned snapshot");
         }
-        let mut previous = None;
+        let mut previous: Option<crate::program_wire::ProgramSnapshotV1> = None;
         for revision in [5, 5, 6, 7] {
             let (snapshot, events) = measured_allocator_events(|| {
                 if borrowed {
@@ -220,6 +220,7 @@ fn attachment_snapshot_is_inline_and_independent() {
                 .expect("the valid update must return an owned snapshot")
             });
             assert_eq!(snapshot.snapshot().state(), ProgramSnapshotStateV1::Ready);
+            assert_eq!(snapshot.snapshot().revision(), revision);
             assert_eq!(
                 snapshot
                     .render()
@@ -232,7 +233,8 @@ fn attachment_snapshot_is_inline_and_independent() {
                 "borrowed={borrowed}, revision={revision}"
             );
             if let Some(old) = previous.as_ref() {
-                assert_eq!(old, snapshot.snapshot());
+                assert_eq!(old.outputs(), snapshot.snapshot().outputs());
+                assert_eq!(old.state(), snapshot.snapshot().state());
             }
             previous = Some(snapshot.snapshot().clone());
         }
@@ -404,11 +406,64 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
         let second = session
             .update_observed_view(6, input)
             .expect("the valid update must return an owned snapshot");
-        assert_eq!(snapshot, second);
+        assert_eq!(snapshot.outputs(), second.outputs());
+        assert_eq!(snapshot.state(), second.state());
+        assert_eq!((snapshot.revision(), second.revision()), (5, 6));
         drop(session);
         for (index, output) in snapshot.outputs().iter().enumerate() {
             assert_eq!(output.slot(), 17 + index as u32);
             assert_eq!(output.source(), Srgb8::new([0x40; 3]));
         }
     }
+}
+
+#[test]
+fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() -> Result<(), String>
+{
+    let mut session = crate::program_wire::compile_program_wire(include_bytes!(
+        "../tests/fixtures/computed-coupled.lcpw"
+    ))
+    .expect("the computed fixture must compile")
+    .instantiate(100)
+    .expect("the computed fixture must instantiate");
+    let input = ProgramObservationV1::from_rgb8(&[7], &[255; 3], 1)
+        .map_err(|error| format!("observation: {error:?}"))?;
+    let prepared = session
+        .prepare_observed_view(1, input)
+        .map_err(|error| format!("prepare: {error:?}"))?;
+    assert_eq!(prepared.snapshot().state(), ProgramSnapshotStateV1::Ready);
+    assert_eq!(prepared.snapshot().outputs().len(), 2);
+    let mut retained = None;
+    let failure = crate::program_session::fail_program_preflight_reservation_for_test(0);
+    crate::appearance::reset_paint_node_evaluation_count();
+    let (accepted, events) = measured_allocator_events(|| {
+        prepared.commit_with(|snapshot| {
+            retained = Some(snapshot);
+            Ok::<_, ()>(true)
+        })
+    });
+    assert_eq!(accepted, Ok(true));
+    assert_eq!(events.alloc, 0);
+    assert_eq!(events.realloc, 0);
+    assert_eq!(crate::appearance::paint_node_evaluation_count(), 0);
+    assert_eq!(
+        crate::program_session::program_preflight_failure_remaining_for_test(),
+        Some(0),
+        "commit must not enter preparation again"
+    );
+    drop(failure);
+    let conflicting = ProgramObservationV1::from_rgb8(&[7], &[254; 3], 1)
+        .map_err(|error| format!("conflicting observation: {error:?}"))?;
+    assert_eq!(
+        session.update_observed_view(1, conflicting),
+        Err(ProgramRuntimeErrorV1::Update),
+        "host acceptance must already commit the observation revision"
+    );
+    assert_eq!(
+        session
+            .update_observed_view(1, input)
+            .map_err(|error| format!("replay: {error:?}"))?,
+        retained.ok_or("commit callback must retain its snapshot")?
+    );
+    Ok(())
 }
