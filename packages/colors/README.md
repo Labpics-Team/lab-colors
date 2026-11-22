@@ -183,8 +183,10 @@ const program = await c.compile({ panel, panelText, notice, noticeText, island, 
 
 `opacity` сериализуется в alpha цвета, например `rgb(… / 0.72)`, и считается
 как source-over над объявленной подложкой. Не заменяйте его CSS `opacity` на
-всей группе: это другая композиция. Ядро проверяет конечный encoded sRGB8 своей
-модели; конкретный browser paint остаётся ответственностью renderer.
+всей группе: это другая композиция. Характер и предпочтение относятся к
+опорному encoded-sRGB8 цвету; обязательные contrast и separation также
+учитывают [численную точность наложения](https://github.com/Labpics-Team/lab-colors/blob/main/docs/explanation/material-emission.md).
+Конкретный browser paint остаётся ответственностью renderer.
 Обычная адаптация с `opacity: 1` меняет непрозрачный RGB.
 
 ### Изменение исходного замысла

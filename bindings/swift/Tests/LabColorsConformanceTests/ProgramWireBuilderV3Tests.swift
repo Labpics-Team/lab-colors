@@ -90,12 +90,14 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             let report = try XCTUnwrap(try snapshot.assessmentReport())
             XCTAssertEqual(report.cells.count, 1)
             let cell = try XCTUnwrap(report.cells.first)
-            guard case let .visibleSeparation(verdict, _, _, distance, minimum, maximum) = cell.assessment else {
+            guard case let .visibleSeparation(verdict, _, _, distance, lower, upper, minimum, maximum) = cell.assessment else {
                 return XCTFail("expected the declared visible separation")
             }
             XCTAssertEqual(verdict, .pass)
-            XCTAssertGreaterThanOrEqual(distance, minimum)
-            XCTAssertLessThanOrEqual(distance, maximum)
+            XCTAssertGreaterThanOrEqual(lower, minimum)
+            XCTAssertLessThanOrEqual(upper, maximum)
+            XCTAssertGreaterThanOrEqual(distance, lower)
+            XCTAssertLessThanOrEqual(distance, upper)
         }
         XCTAssertNotEqual(try light.outputRgb(index: 0), try dark.outputRgb(index: 0))
     }
