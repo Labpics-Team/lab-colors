@@ -624,6 +624,11 @@ fn project_attachment_commit_v2(
         StateKindV1::Ready => PrivateFixtureStateV2::Ready,
         StateKindV1::Stale => PrivateFixtureStateV2::Stale,
         StateKindV1::Failed => PrivateFixtureStateV2::Failed,
+        // This private V2 transport can only construct fixed declarations.
+        // Computed outcomes cannot be projected as its legacy `Failed` state.
+        StateKindV1::Unsatisfied | StateKindV1::Incomplete => {
+            return Err(PrivateFixtureErrorV1::InternalInvariant);
+        }
     };
     let mut renders = commit.render_outputs();
     let Some(render) = renders.next() else {
