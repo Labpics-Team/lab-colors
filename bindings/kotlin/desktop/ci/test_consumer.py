@@ -33,6 +33,14 @@ def main(distribution, output):
                 raise ValueError("unsafe distribution path")
         bundle.extractall(repository)
     vectors = json.loads((ROOT / "conformance/program-runtime-v1.json").read_text(encoding="utf-8"))
+    authoring = json.loads((ROOT / "conformance/program-authoring-v3.json").read_text(encoding="utf-8"))
+    if authoring["schemaVersion"] != 1:
+        raise ValueError("unknown Program authoring fixture")
+    authoring_rows = [f'    "{name}" to "{authoring[name]}"' for name in
+                      ["computedBox", "computedGray", "contextual", "encodingOnly", "fixedOnly"]]
+    authoring_tests = project / "src/main/kotlin/pics/lab/colors/conformance"
+    authoring_tests.mkdir(parents=True)
+    shutil.copy2(ROOT / "bindings/kotlin/conformance/ProgramAuthoringV3.kt", authoring_tests)
     rows = []
     for row in vectors["history"]:
         background = row.get("backgrounds", [])
@@ -45,7 +53,8 @@ def main(distribution, output):
               'data class Frame(val revision: ULong, val ids: List<UInt>, val background: ByteArray, '
               'val reason: UInt?, val state: String, val rgb: ByteArray?)\n'
               f'val fixedWire = "{vectors["fixed"]}"\nval adaptiveWire = "{vectors["adaptive"]}"\n'
-              'val history = listOf(\n' + ',\n'.join(rows) + '\n)\n')
+              'val history = listOf(\n' + ',\n'.join(rows) + '\n)\n'
+              'val authoringV3Wires = mapOf(\n' + ',\n'.join(authoring_rows) + '\n)\n')
     (project / "src/main/kotlin/consumer/Vectors.kt").write_text(source, encoding="utf-8")
     environment = dict(os.environ)
     environment.pop("JNA_LIBRARY_PATH", None)

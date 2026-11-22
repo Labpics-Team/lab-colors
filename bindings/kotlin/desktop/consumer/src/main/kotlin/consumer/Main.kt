@@ -1,6 +1,7 @@
 package consumer
 
 import pics.lab.colors.*
+import pics.lab.colors.conformance.verifyProgramAuthoringV3
 
 private fun String.hex() = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
@@ -56,5 +57,6 @@ fun main() {
     val afterClose = runCatching { closed.updateUnknown(2uL, 7u) }
     afterClose.getOrNull()?.close()
     check(afterClose.exceptionOrNull() is IllegalStateException) { "disposed Program was usable" }
-    println("Installed desktop Program: history, RGB, opacity, owned output tables, retained snapshot, builder and disposal passed")
+    verifyProgramAuthoringV3(authoringV3Wires)
+    println("Installed desktop Program: history, computed authoring, atomic callback, owned reports and outputs, disposal passed")
 }
