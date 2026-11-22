@@ -272,13 +272,7 @@ fn decode_program_wire_version(
         return Err(ProgramWireErrorV1::InvalidLength);
     }
 
-    let decoded = decode_body(&mut reader, version);
-    decoded.map_err(|error| match error {
-        ProgramWireErrorV1::ResourceExhausted { section } if version == PROGRAM_WIRE_VERSION_V3 => {
-            ProgramWireErrorV1::AssignmentResourceExhausted { section }
-        }
-        other => other,
-    })
+    decode_body(&mut reader, version)
 }
 
 fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, ProgramWireErrorV1> {
@@ -447,7 +441,7 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
             let count = reader.read_count()?;
             let mut order = Vec::new();
             order.try_reserve_exact(count as usize).map_err(|_| {
-                ProgramWireErrorV1::ResourceExhausted {
+                ProgramWireErrorV1::AssignmentResourceExhausted {
                     section: WireSectionV1::JointSelection,
                 }
             })?;
@@ -1080,6 +1074,31 @@ mod tests {
                 section: WireSectionV1::Sources
             })
         ));
+    }
+
+    #[test]
+    fn wire_limits_remain_format_errors_in_every_version() {
+        for version in [
+            PROGRAM_WIRE_VERSION_V1,
+            PROGRAM_WIRE_VERSION_V2,
+            PROGRAM_WIRE_VERSION_V3,
+        ] {
+            let mut wire = WireBuilder::new();
+            wire.u32(MAX_SECTION_ENTRIES_V1 + 1);
+            let mut bytes = wire.seal();
+            bytes[4..6].copy_from_slice(&version.to_le_bytes());
+            assert!(matches!(
+                crate::program_wire::check_program_wire(&bytes),
+                Err(crate::program_wire::ProgramWireCheckErrorV1::Wire {
+                    section: "sources",
+                    ..
+                })
+            ));
+            assert!(matches!(
+                crate::program_wire::compile_program_wire(&bytes),
+                Err(crate::program_wire::ProgramRuntimeErrorV1::Wire)
+            ));
+        }
     }
 
     /// Неканоничная opacity (NaN) в кандидате — байтовый отказ, не паника.

@@ -10,7 +10,7 @@ use crate::color_intent::color_at_lightness;
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v13.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v14.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -20,6 +20,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 struct ContextV1<'a> {
     targets: ComputedTargetsV1<'a>,
     constraint_indices: Option<&'a [usize]>,
+    physical: Option<&'a CompiledAppearanceConeV1>,
     domains: Vec<AssignmentDomainV1>,
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
@@ -80,8 +81,6 @@ impl<'a> ContextV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(
         selection: &'a ComputedSelectionV1,
         component: Option<&'a ComputedComponentV1>,
-        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
-        epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         let targets = ComputedTargetsV1::new(selection, component);
@@ -93,20 +92,13 @@ impl<'a> ContextV1<'a> {
         let mut preferred = buffer(cells, [0.0; 3]).map_err(allocation)?;
         let mut preferred_rgb = buffer(cells, Srgb8::new([0; 3])).map_err(allocation)?;
         let mut opaque = buffer(count, true).map_err(allocation)?;
-        let schema = epoch.observation_group.schema.as_slice();
-        let mut paints = epoch
-            .graph
-            .prepare_paints_for_surface_cases(
-                runtime.bindings,
-                schema.iter().copied(),
-                runtime.workspace,
-            )
-            .map_err(map_program_execution_binding_error)?;
+        for (index, target) in targets.iter().enumerate() {
+            opaque[index] = target.opaque;
+        }
         for case in 0..scenarios.len().get() {
             let inputs = scenarios
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
             for (index, target) in targets.iter().enumerate() {
                 let mut rgb = target.declaration.anchor;
                 if let Some(intent) = &target.declaration.intent {
@@ -122,12 +114,6 @@ impl<'a> ContextV1<'a> {
                 let cell = case * count + index;
                 preferred_rgb[cell] = rgb;
                 preferred[cell] = lab(rgb);
-                if let Some(slot) = target.appearance {
-                    let point = evaluation
-                        .occurrence_at(slot)
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                    opaque[index] &= point.certificate().subject_opacity().value() == 1.0;
-                }
             }
         }
         let mut domains = Vec::new();
@@ -144,10 +130,11 @@ impl<'a> ContextV1<'a> {
                         .is_some_and(|intent| intent.identity.neutral())
                 {
                     // У opaque собственного применения source и visible совпадают.
-                    AssignmentDomainV1::Gray {
-                        lower: 0,
-                        upper: 255,
-                    }
+                    target
+                        .declaration
+                        .domain
+                        .gray_intersection()
+                        .unwrap_or(target.declaration.domain)
                 } else {
                     target.declaration.domain
                 },
@@ -161,6 +148,7 @@ impl<'a> ContextV1<'a> {
         Ok(Self {
             targets,
             constraint_indices: component.map(|component| component.constraints.as_ref()),
+            physical: component.map(|component| &component.physical),
             domains,
             preferred,
             preferred_rgb,
@@ -243,12 +231,17 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
         &mut self,
         case: usize,
         evaluation: &AppearanceEvaluationView<'_, '_>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
         let context = self.context;
         let count = context.targets.len();
         for (index, target) in context.targets.iter().enumerate() {
             let rgb = if let Some(slot) = target.appearance {
-                Srgb8::new(evaluation.occurrence_at(slot).ok_or(())?.visible())
+                Srgb8::new(
+                    evaluation
+                        .occurrence_at(slot)
+                        .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                        .visible(),
+                )
             } else {
                 self.values[index]
             };
@@ -282,14 +275,14 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut collector = IntentScoreCollectorV1::new(context, values, scores);
     let schema = epoch.observation_group.schema.as_slice();
-    let mut paints = epoch
-        .graph
-        .prepare_paints_for_surface_cases(
-            runtime.bindings,
-            schema.iter().copied(),
-            runtime.workspace,
-        )
-        .map_err(map_program_execution_binding_error)?;
+    let mut paints = prepare_candidate_paints(
+        &epoch.graph,
+        context.physical,
+        runtime.bindings,
+        schema,
+        runtime.workspace,
+    )
+    .map_err(map_program_execution_binding_error)?;
     for case in 0..scenarios.len().get() {
         let inputs = scenarios
             .physical_values(case)
@@ -297,7 +290,7 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
         let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
         collector
             .observe(case, &evaluation)
-            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+            .map_err(map_physical_case_error)?;
     }
     Ok(collector.violations())
 }
@@ -331,7 +324,10 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
         },
         context.constraint_indices.map_or(
             ProgramCandidateScanV1::Full { previous: None },
-            ProgramCandidateScanV1::Constraints,
+            |indices| ProgramCandidateScanV1::Constraints {
+                indices,
+                physical: context.physical,
+            },
         ),
     )?;
     let hard_violations = arena
@@ -381,6 +377,7 @@ fn inverse_hint(desired: Srgb8, backdrop: [u8; 3], alpha: f64) -> Srgb8 {
 
 fn physical_context<E: ProgramConstraintEvaluatorSetV1>(
     target: &CompiledComputedTargetV1,
+    physical: Option<&CompiledAppearanceConeV1>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
@@ -392,14 +389,14 @@ fn physical_context<E: ProgramConstraintEvaluatorSetV1>(
     let inputs = scenarios
         .physical_values(case)
         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-    let mut paints = epoch
-        .graph
-        .prepare_paints_for_surface_cases(
-            runtime.bindings,
-            epoch.observation_group.schema.as_slice().iter().copied(),
-            runtime.workspace,
-        )
-        .map_err(map_program_execution_binding_error)?;
+    let mut paints = prepare_candidate_paints(
+        &epoch.graph,
+        physical,
+        runtime.bindings,
+        epoch.observation_group.schema.as_slice(),
+        runtime.workspace,
+    )
+    .map_err(map_program_execution_binding_error)?;
     let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
     let point = evaluation
         .occurrence_at(slot)
@@ -417,7 +414,7 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     values: &[Srgb8],
 ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let context = ContextV1::new(selection, None, runtime, epoch, scenarios)?;
+    let context = ContextV1::new::<E>(selection, None, scenarios)?;
     let mut scores =
         buffer(values.len(), 0.0).map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     if context
@@ -497,14 +494,14 @@ impl BoundsV1 {
                         )
                         .map_err(map_program_execution_binding_error)?;
                 }
-                let mut paints = epoch
-                    .graph
-                    .prepare_paints_for_surface_cases(
-                        runtime.bindings,
-                        epoch.observation_group.schema.as_slice().iter().copied(),
-                        runtime.workspace,
-                    )
-                    .map_err(map_program_execution_binding_error)?;
+                let mut paints = prepare_candidate_paints(
+                    &epoch.graph,
+                    context.physical,
+                    runtime.bindings,
+                    epoch.observation_group.schema.as_slice(),
+                    runtime.workspace,
+                )
+                .map_err(map_program_execution_binding_error)?;
                 let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
                 self.evaluations += 1;
                 for (index, constraint) in self.constraints.iter().enumerate() {
@@ -614,7 +611,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
         });
     }
     apply_targets::<E>(targets, runtime, &values)?;
-    let context = ContextV1::new(selection, Some(component), runtime, epoch, scenarios)?;
+    let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
     let seed_case = *context
         .local_cases
         .order
@@ -667,7 +664,14 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                 continue;
             }
             apply_targets::<E>(targets, runtime, &values)?;
-            let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, seed_case)?;
+            let (backdrop, alpha) = physical_context(
+                target,
+                context.physical,
+                runtime,
+                epoch,
+                scenarios,
+                seed_case,
+            )?;
             values[index] = inverse_hint(
                 context.preferred_rgb[seed_case * count + index],
                 backdrop,
@@ -766,8 +770,14 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                     }
                     values.copy_from_slice(&current_values);
                     apply_targets::<E>(targets, runtime, &values)?;
-                    let (backdrop, alpha) =
-                        physical_context(target, runtime, epoch, scenarios, case)?;
+                    let (backdrop, alpha) = physical_context(
+                        target,
+                        context.physical,
+                        runtime,
+                        epoch,
+                        scenarios,
+                        case,
+                    )?;
                     let source = if intent.identity.neutral() {
                         Srgb8::new([128; 3])
                     } else {

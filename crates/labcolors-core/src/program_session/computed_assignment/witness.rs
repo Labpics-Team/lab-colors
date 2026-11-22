@@ -7,6 +7,82 @@ use crate::program_diagnostics::{
     ProgramDiagnosticV1, ProgramDiagnosticsV1,
 };
 
+fn push_violation(
+    violations: &mut Vec<ProgramDiagnosticV1>,
+    violation: ProgramDiagnosticV1,
+) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
+    violations
+        .try_reserve(1)
+        .map_err(|_| ProgramPhysicalCaseObserverErrorV1::ResourceExhausted)?;
+    violations.push(violation);
+    Ok(())
+}
+
+struct IntentWitnessV1<'a> {
+    selection: &'a ComputedSelectionV1,
+    values: &'a [Srgb8],
+    violations: &'a mut Vec<ProgramDiagnosticV1>,
+}
+
+impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
+    fn observe(
+        &mut self,
+        case_index: usize,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
+        for (target, &source) in self.selection.targets.iter().zip(self.values) {
+            let actual = if let Some(slot) = target.appearance {
+                Srgb8::new(
+                    evaluation
+                        .occurrence_at(slot)
+                        .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                        .visible(),
+                )
+            } else {
+                source
+            };
+            let occurrence_id = target
+                .declaration
+                .intent
+                .as_ref()
+                .and_then(|intent| intent.appearance)
+                .map(|id| id.value());
+            if target
+                .declaration
+                .intent
+                .as_ref()
+                .is_some_and(|intent| !intent.identity.contains(actual))
+            {
+                push_violation(
+                    self.violations,
+                    ProgramDiagnosticV1::ColorIdentity {
+                        target_id: target.id.value(),
+                        case_index,
+                        occurrence_id,
+                        actual,
+                    },
+                )?;
+            }
+            let distance_squared = squared_distance(lab(actual), target.anchor_lab);
+            let maximum_distance = f64::from_bits(target.declaration.max_delta_bits);
+            if distance_squared > maximum_distance * maximum_distance {
+                push_violation(
+                    self.violations,
+                    ProgramDiagnosticV1::MaxChange {
+                        target_id: target.id.value(),
+                        case_index,
+                        occurrence_id,
+                        actual,
+                        distance_squared,
+                        maximum_distance,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -31,6 +107,12 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     }
     apply::<E>(selection, runtime, &values)?;
     arena.clear();
+    let mut violations = Vec::new();
+    let mut collector = IntentWitnessV1 {
+        selection,
+        values: &values,
+        violations: &mut violations,
+    };
     scan_program_candidate(
         runtime,
         epoch,
@@ -44,33 +126,22 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             },
             outputs: None,
             point_causal: None,
-            physical_case: None,
+            physical_case: Some(&mut collector),
         },
         None,
     )?;
-    let target_cells = selection
-        .targets
-        .len()
-        .checked_mul(scenarios.len().get())
-        .and_then(|value| value.checked_mul(2))
-        .and_then(|value| value.checked_add(selection.targets.len()))
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    let capacity = arena
-        .cells
-        .len()
-        .checked_add(target_cells)
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut violations = Vec::new();
-    violations
-        .try_reserve_exact(capacity)
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let intent_count = violations.len();
     for cell in &arena.cells {
         if cell.result().is_violation() {
-            violations.push(ProgramDiagnosticV1::HardConstraint {
-                constraint_id: cell.constraint().value(),
-                case_index: cell.case_index(),
-                subject: subject(cell.subject()),
-            });
+            push_violation(
+                &mut violations,
+                ProgramDiagnosticV1::HardConstraint {
+                    constraint_id: cell.constraint().value(),
+                    case_index: cell.case_index(),
+                    subject: subject(cell.subject()),
+                },
+            )
+            .map_err(map_physical_case_error)?;
         }
     }
     let mut targets = Vec::new();
@@ -83,25 +154,24 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             source: value,
         });
         if !target.declaration.domain.contains(value) {
-            violations.push(ProgramDiagnosticV1::TargetDomain {
-                target_id: target.id.value(),
-                source: value,
-            });
+            push_violation(
+                &mut violations,
+                ProgramDiagnosticV1::TargetDomain {
+                    target_id: target.id.value(),
+                    source: value,
+                },
+            )
+            .map_err(map_physical_case_error)?;
         }
     }
+    // Keep the public witness order: hard conditions, domains, then per-case
+    // intent violations. Rotation needs no second buffer or physical pass.
+    violations.rotate_left(intent_count);
 
     let mut case_scenario_ids = Vec::new();
     case_scenario_ids
         .try_reserve_exact(scenarios.len().get())
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut paints = epoch
-        .graph
-        .prepare_paints_for_surface_cases(
-            runtime.bindings,
-            epoch.observation_group.schema.as_slice().iter().copied(),
-            runtime.workspace,
-        )
-        .map_err(map_program_execution_binding_error)?;
     for case_index in 0..scenarios.len().get() {
         let provenance = scenarios
             .observation()
@@ -112,53 +182,6 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         ids.extend(provenance.iter().map(|id| id.value()));
         case_scenario_ids.push(ids);
-        let inputs = scenarios
-            .physical_values(case_index)
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        let evaluation = paints.evaluate_surface_inputs_canonical(|index| inputs[index].srgb8());
-        for (target, &source) in selection.targets.iter().zip(&values) {
-            let actual = if let Some(slot) = target.appearance {
-                Srgb8::new(
-                    evaluation
-                        .occurrence_at(slot)
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
-                        .visible(),
-                )
-            } else {
-                source
-            };
-            let occurrence_id = target
-                .declaration
-                .intent
-                .as_ref()
-                .and_then(|intent| intent.appearance)
-                .map(|id| id.value());
-            if target
-                .declaration
-                .intent
-                .as_ref()
-                .is_some_and(|intent| !intent.identity.contains(actual))
-            {
-                violations.push(ProgramDiagnosticV1::ColorIdentity {
-                    target_id: target.id.value(),
-                    case_index,
-                    occurrence_id,
-                    actual,
-                });
-            }
-            let distance_squared = squared_distance(lab(actual), target.anchor_lab);
-            let maximum_distance = f64::from_bits(target.declaration.max_delta_bits);
-            if distance_squared > maximum_distance * maximum_distance {
-                violations.push(ProgramDiagnosticV1::MaxChange {
-                    target_id: target.id.value(),
-                    case_index,
-                    occurrence_id,
-                    actual,
-                    distance_squared,
-                    maximum_distance,
-                });
-            }
-        }
     }
     // Этот tuple уже отвергнут до остановки. Повторный законный успех означал
     // бы недетерминизм или ошибку поиска, а не новый fallback после бюджета.

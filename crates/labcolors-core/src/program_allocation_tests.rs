@@ -452,6 +452,13 @@ fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() -
         "commit must not enter preparation again"
     );
     drop(failure);
+    let conflicting = ProgramObservationV1::from_rgb8(&[7], &[254; 3], 1)
+        .map_err(|error| format!("conflicting observation: {error:?}"))?;
+    assert_eq!(
+        session.update_observed_view(1, conflicting),
+        Err(ProgramRuntimeErrorV1::Update),
+        "host acceptance must already commit the observation revision"
+    );
     assert_eq!(
         session
             .update_observed_view(1, input)

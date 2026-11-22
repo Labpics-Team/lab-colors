@@ -5,6 +5,7 @@ use crate::observation::{
     ObservationPayloadInput, ObservedScenarioSetInput, ScenarioId, ScenarioInput,
     SurfaceInputBinding,
 };
+use crate::session::SessionState;
 
 fn color(source: [u8; 3], max_change: f64, tone: Option<ToneCurveV1>) -> Result<Target, String> {
     let source = Srgb8::new(source);
@@ -126,6 +127,7 @@ fn client_tone_curve_changes_the_whole_gray_surface_without_theme_names() -> Res
     let mut session = owner
         .instantiate(ObservationStreamId::new(8))
         .map_err(|error| format!("instantiate: {error:?}"))?;
+    let mut actual = Vec::new();
     for (revision, backdrop) in [(1, 0), (2, 255)] {
         session
             .prepare_update(update(revision, backdrop))
@@ -144,6 +146,37 @@ fn client_tone_curve_changes_the_whole_gray_surface_without_theme_names() -> Res
                 .optimality(),
             ComputedOptimalityV1::Exact
         );
+        actual.push(rgb(&session));
+    }
+    assert!(actual[1].bytes()[0] > actual[0].bytes()[0]);
+    Ok(())
+}
+
+#[test]
+fn neutral_opaque_search_intersects_the_authored_domain() -> Result<(), String> {
+    for source in [[140; 3], [140, 141, 140]] {
+        let mut target = color([128; 3], 2.0, None)?;
+        let TargetIntentV1::Computed(value) = &mut target.intent else {
+            return Err("computed fixture".into());
+        };
+        value.domain = AssignmentDomainV1::Cube {
+            lower: source,
+            upper: source,
+        };
+        let owner = compile_assignment(unconstrained(target), 1024)
+            .map_err(|error| format!("compile: {error:?}"))?;
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(|error| format!("instantiate: {error:?}"))?;
+        session
+            .prepare_update(update(1, 255))
+            .map_err(|error| format!("update: {error:?}"))?
+            .commit();
+        if source == [140; 3] {
+            assert_eq!(rgb(&session), Srgb8::new(source));
+        } else {
+            assert!(matches!(session.state(), SessionState::Failed { .. }));
+        }
     }
     Ok(())
 }

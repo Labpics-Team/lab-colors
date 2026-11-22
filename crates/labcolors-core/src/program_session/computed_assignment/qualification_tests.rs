@@ -150,7 +150,7 @@ fn product_bounds_enclose_exhaustive_small_boxes_and_machine_scores() {
 #[test]
 fn actual_roots_are_finite_and_monotone_on_small_edges() {
     let mut comparisons = 0;
-    for origin in [0_u8, 123, 251] {
+    for origin in [0_u8, 8, 123, 251] {
         visit_box([origin; 3], [origin + 4; 3], |rgb| {
             let value = roots(rgb);
             assert!(value.iter().all(|x| x.is_finite()));
@@ -171,7 +171,7 @@ fn actual_roots_are_finite_and_monotone_on_small_edges() {
             }
         });
     }
-    assert_eq!(comparisons, 2_700);
+    assert_eq!(comparisons, 3_600);
 }
 
 #[test]

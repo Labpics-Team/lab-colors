@@ -65,6 +65,162 @@ fn duplicate_use(declaration: &mut Program<Wcag22Srgb8V1>, target: Target) {
 }
 
 #[test]
+fn independent_roles_execute_only_their_physical_cones() -> Result<(), String> {
+    let mut single = None;
+    for count in [1_u32, 1000] {
+        let mut declaration = program(
+            blue(10, 5, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        let context = declaration.occurrences[0].context;
+        declaration.targets.clear();
+        declaration.paints.clear();
+        declaration.occurrences.clear();
+        declaration.constraints.hard.clear();
+        declaration.outputs.clear();
+        for index in 0..count {
+            let offset = index * 10;
+            declaration
+                .targets
+                .push(blue(10 + offset, 5 + offset, u64::from(index)));
+            declaration.paints.push(Paint::Solid {
+                id: PaintId::new(3 + offset),
+                target: TargetId::new(10 + offset),
+            });
+            declaration.occurrences.push(Occurrence::new(
+                OccurrenceId::new(5 + offset),
+                PaintId::new(3 + offset),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context,
+            ));
+            declaration
+                .constraints
+                .hard
+                .push(ConstraintInvocation::visible_unary_hard(
+                    ConstraintId::new(6 + offset),
+                    OccurrenceId::new(5 + offset),
+                    Wcag22CriterionV1::Sc143TextDefault,
+                ));
+            declaration.outputs.push(OutputBinding::new(
+                OutputSlotId::new(7 + offset),
+                PaintId::new(3 + offset),
+            ));
+        }
+        let owner = compile_assignment(declaration, 65_536)
+            .map_err(|error| format!("compile: {error:?}"))?;
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(|error| format!("instantiate: {error:?}"))?;
+        crate::appearance::reset_paint_node_evaluation_count();
+        crate::composition::reset_source_over_evaluation_count();
+        session
+            .prepare_update(update(1, 255))
+            .map_err(|error| format!("update: {error:?}"))?
+            .commit();
+        let work = (
+            crate::appearance::paint_node_evaluation_count(),
+            crate::composition::source_over_evaluation_count(),
+        );
+        let verified = session
+            .state()
+            .current_verified()
+            .ok_or("every role must be ready")?
+            .computed_for_test();
+        assert_eq!(verified.optimality(), ComputedOptimalityV1::Exact);
+        assert_eq!(verified.arena.storage.outputs.len(), count as usize);
+        for (index, output) in verified.arena.storage.outputs.iter().enumerate() {
+            assert_eq!(output.output.value(), 7 + index as u32 * 10);
+            assert_eq!(output.paint.source(), Srgb8::new([0, 103, 244]));
+        }
+        if let Some((paint, render)) = single {
+            assert!(
+                work.0 <= paint * count as usize,
+                "paint work must scale with independent roles: {work:?}"
+            );
+            assert!(
+                work.1 <= render * count as usize,
+                "render work must scale with independent roles: {work:?}"
+            );
+        } else {
+            single = Some(work);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn presentation_cache_clears_only_the_queried_slots_without_allocating() -> Result<(), String> {
+    let owner = compile_assignment(
+        program(
+            blue(10, 5, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        ),
+        100,
+    )
+    .map_err(|error| format!("compile: {error:?}"))?;
+    let epoch = &owner.owner_generation;
+    let root = epoch
+        .graph
+        .compile_point_presentation_root(OccurrenceId::new(5))
+        .map_err(|error| format!("root: {error:?}"))?;
+    let path = epoch
+        .graph
+        .compile_point_presentation_path(OccurrenceId::new(5), &root)
+        .map_err(|error| format!("path: {error:?}"))?;
+    let presentations = CompiledPointPresentationsV1 {
+        entries: (0..1000)
+            .map(|id| CompiledPointPresentationV1 {
+                root: PresentationRootId::new(id),
+                terminal: OccurrenceId::new(5),
+                target: OccurrenceId::new(5),
+                absence_release: PointOccurrenceAbsenceReleaseV1::BypassOwnBackdropV1,
+                path: path.clone(),
+            })
+            .collect(),
+        steps_per_case: 1000,
+    };
+    let mut cache =
+        ProgramPresentationCacheV1::try_new(&presentations).map_err(|()| "cache allocation")?;
+    let mut workspace = epoch
+        .graph
+        .new_workspace()
+        .map_err(|error| format!("workspace: {error:?}"))?;
+    let evaluation = epoch
+        .graph
+        .evaluate_admitted_into(&epoch.binding_template, &mut workspace)
+        .map_err(|error| format!("physical: {error:?}"))?;
+    let (result, allocations) =
+        crate::test_support::measured_allocations(|| -> Result<(), String> {
+            for (ordinal, phase) in [
+                (999, ProgramEvaluationPhaseV1::Hard),
+                (5, ProgramEvaluationPhaseV1::ReportOnly),
+            ] {
+                cache.begin_case(phase);
+                let presentation = &presentations.entries[ordinal];
+                let first = cache
+                    .resolve(&evaluation, ordinal, presentation, None)
+                    .map_err(|()| "first resolve")?;
+                let cached = cache
+                    .resolve(&evaluation, ordinal, presentation, None)
+                    .map_err(|()| "cached resolve")?;
+                assert_eq!(first.domain, cached.domain);
+                assert_eq!(cache.touched, [ordinal]);
+            }
+            cache.begin_case(ProgramEvaluationPhaseV1::Hard);
+            assert_eq!(cache.cleared_domains, 2);
+            assert_eq!(cache.replay_counts(), (1, 1));
+            assert!(cache.domains.iter().all(Option::is_none));
+            Ok(())
+        });
+    result?;
+    assert_eq!(allocations, 0);
+    Ok(())
+}
+
+#[test]
 fn identical_uses_match_the_standalone_color_on_a_shared_input() {
     for backdrop in [[244, 234, 219], [230, 221, 208]] {
         let standalone = compile_assignment(

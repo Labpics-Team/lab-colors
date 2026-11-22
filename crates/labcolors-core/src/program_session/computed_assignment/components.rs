@@ -3,6 +3,49 @@
 
 use super::*;
 
+fn physical_cone<Invocation>(
+    selection: &ComputedSelectionV1,
+    targets: &[usize],
+    constraints: &[CompiledPointConstraint<Invocation>],
+    indices: &[usize],
+    compiler: &mut AppearanceConeCompilerV1<'_>,
+) -> Result<CompiledAppearanceConeV1, BindingError> {
+    for &target in targets {
+        if let Some(appearance) = selection.targets[target]
+            .declaration
+            .intent
+            .as_ref()
+            .and_then(|intent| intent.appearance)
+        {
+            compiler.occurrence(appearance)?;
+        }
+    }
+    for &index in indices {
+        match &constraints[index].body {
+            CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
+                compiler.occurrence(*occurrence)?;
+            }
+            CompiledProgramConstraintBodyV1::VisibleRelation {
+                reference,
+                candidates,
+                ..
+            } => {
+                compiler.occurrence(reference.occurrence)?;
+                for candidate in candidates {
+                    compiler.occurrence(candidate.occurrence)?;
+                }
+            }
+            CompiledProgramConstraintBodyV1::PointPresentation { terminal, .. } => {
+                compiler.occurrence(*terminal)?;
+            }
+            // Intrinsic checks read admitted target bindings directly.
+            CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
+            | CompiledProgramConstraintBodyV1::IntrinsicRelation { .. } => {}
+        }
+    }
+    compiler.finish()
+}
+
 struct VisibleDependenciesV1 {
     opacity: Vec<f64>,
     seen: Vec<bool>,
@@ -284,6 +327,19 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     }
     let mut marked = false_slots(program.targets.len())?;
     let mut visible = VisibleDependenciesV1::new(program, graph, bindings)?;
+    for target in &mut selection.targets {
+        if let Some(appearance) = target
+            .declaration
+            .intent
+            .as_ref()
+            .and_then(|intent| intent.appearance)
+        {
+            let occurrence = index
+                .occurrence(appearance)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            target.opaque = visible.opacity[occurrence] == 1.0;
+        }
+    }
     let mut members = Vec::new();
     members
         .try_reserve_exact(count)
@@ -394,6 +450,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         .try_reserve_exact(grouped_targets.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     let mut required_inputs = false_slots(visible.input_seen.len())?;
+    let mut physical = AppearanceConeCompilerV1::new(graph).map_err(map_binding_compile_error)?;
     for (targets, constraint_indices) in grouped_targets.into_iter().zip(grouped_constraints) {
         visible.clear_inputs();
         for &target in &targets {
@@ -461,6 +518,14 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             }
         }
         components.push(ComputedComponentV1 {
+            physical: physical_cone(
+                selection,
+                &targets,
+                constraints,
+                &constraint_indices,
+                &mut physical,
+            )
+            .map_err(map_binding_compile_error)?,
             targets: targets.into_boxed_slice(),
             constraints: constraint_indices.into_boxed_slice(),
             inputs: inputs.into_boxed_slice(),
@@ -502,12 +567,13 @@ pub(super) struct ConditionalComponentsV1 {
 }
 
 /// Fixing a candidate prefix changes factor connectivity, not any law.
-pub(super) fn conditioned(
+pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     component: &ComputedComponentV1,
     prefix: usize,
-    input_count: usize,
+    epoch: &ProgramEpochV1<E>,
 ) -> Result<ConditionalComponentsV1, ()> {
+    let input_count = epoch.observation_group.schema.as_slice().len();
     let count = selection.targets.len();
     let mut active = buffer(count, false)?;
     for &target in &component.targets[prefix..] {
@@ -574,6 +640,7 @@ pub(super) fn conditioned(
         }
     }
     let mut seen_inputs = buffer(input_count, false)?;
+    let mut physical = AppearanceConeCompilerV1::new(&epoch.graph).map_err(|_| ())?;
     let mut components = Vec::new();
     components
         .try_reserve_exact(grouped_targets.len())
@@ -611,6 +678,14 @@ pub(super) fn conditioned(
             seen_inputs[input] = false;
         }
         components.push(ComputedComponentV1 {
+            physical: physical_cone(
+                selection,
+                &targets,
+                &epoch.constraints,
+                &constraints,
+                &mut physical,
+            )
+            .map_err(|_| ())?,
             targets: targets.into_boxed_slice(),
             constraints: constraints.into_boxed_slice(),
             inputs: inputs.into_boxed_slice(),
@@ -625,11 +700,12 @@ pub(super) fn conditioned(
 /// The first objective may be solved locally only when its physical context
 /// does not depend on the remaining variables. Hard factors follow the same
 /// dependency boundary, irrespective of which occurrence declared them.
-pub(super) fn leading(
+pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     component: &ComputedComponentV1,
-    input_count: usize,
+    epoch: &ProgramEpochV1<E>,
 ) -> Result<Option<ComputedComponentV1>, ()> {
+    let input_count = epoch.observation_group.schema.as_slice().len();
     let &first = component.targets.first().ok_or(())?;
     let objective = selection
         .factors
@@ -667,6 +743,14 @@ pub(super) fn leading(
         }
     }
     Ok(Some(ComputedComponentV1 {
+        physical: physical_cone(
+            selection,
+            &[first],
+            &epoch.constraints,
+            &constraints,
+            &mut AppearanceConeCompilerV1::new(&epoch.graph).map_err(|_| ())?,
+        )
+        .map_err(|_| ())?,
         targets: buffer(1, first)?.into_boxed_slice(),
         constraints: constraints.into_boxed_slice(),
         inputs: inputs.into_boxed_slice(),
@@ -729,7 +813,10 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints(&selection.fixed_constraints),
+            ProgramCandidateScanV1::Constraints {
+                indices: &selection.fixed_constraints,
+                physical: None,
+            },
         )?;
         evidence.visited = 1;
         evidence.points = 1;

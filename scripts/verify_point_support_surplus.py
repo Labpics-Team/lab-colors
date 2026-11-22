@@ -28,6 +28,7 @@ NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
 SESSION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/session.rs"
 COMPOSITION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/composition.rs"
 APPEARANCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance.rs"
+APPEARANCE_CONE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance/execution_cone.rs"
 CONSTRAINTS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/mod.rs"
 EXACT_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/exact.rs"
 WCAG22_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/wcag22.rs"
@@ -96,6 +97,7 @@ SOURCE_CONE_PATHS = (
     NUMERICS_SOURCE,
     COMPOSITION_SOURCE,
     APPEARANCE_SOURCE,
+    APPEARANCE_CONE_SOURCE,
     CONSTRAINTS_SOURCE,
     EXACT_CONSTRAINT_SOURCE,
     WCAG22_CONSTRAINT_SOURCE,

@@ -130,6 +130,13 @@ impl AssignmentDomainV1 {
         }
     }
 
+    fn gray_intersection(self) -> Option<Self> {
+        let (lower, upper) = self.bounds();
+        let lower = lower[0].max(lower[1]).max(lower[2]);
+        let upper = upper[0].min(upper[1]).min(upper[2]);
+        (lower <= upper).then_some(Self::Gray { lower, upper })
+    }
+
     pub(super) fn identity_bytes(self) -> [u8; 7] {
         match self {
             Self::Cube { lower, upper } => [
@@ -181,6 +188,32 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 impl ComputedTargetV1 {
+    fn try_clone_v1(&self) -> Result<Self, ProgramCompileError> {
+        let intent = self
+            .intent
+            .as_ref()
+            .map(|intent| -> Result<_, ProgramCompileError> {
+                Ok(ColorUseIntentV1 {
+                    identity: intent.identity,
+                    appearance: intent.appearance,
+                    tone: intent
+                        .tone
+                        .as_ref()
+                        .map(ToneCurveV1::try_clone_v1)
+                        .transpose()
+                        .map_err(|_| ProgramCompileError::ResourceExhausted)?,
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            domain: self.domain,
+            anchor: self.anchor,
+            max_delta_bits: self.max_delta_bits,
+            preference: self.preference,
+            intent,
+        })
+    }
+
     pub(crate) fn declared(domain: AssignmentDomainV1, anchor: Srgb8, max_delta: f64) -> Self {
         Self {
             domain,
@@ -297,6 +330,7 @@ struct CompiledComputedTargetV1 {
     anchor_lab: [f64; 3],
     appearance: Option<CompiledOccurrenceSlotV1>,
     tone_input: Option<usize>,
+    opaque: bool,
 }
 
 pub(super) struct ComputedSelectionV1 {
@@ -314,6 +348,7 @@ struct ComputedComponentV1 {
     targets: Box<[usize]>,
     constraints: Box<[usize]>,
     inputs: Box<[usize]>,
+    physical: CompiledAppearanceConeV1,
 }
 
 /// The same compiled cone supports both initial and conditional independence.
@@ -456,7 +491,7 @@ pub(super) fn compile_selection(
             binding: graph
                 .bind_paint_input(target_paint_input_id(target.id))
                 .ok_or(ProgramCompileError::InternalInvariant)?,
-            declaration: declaration.clone(),
+            declaration: declaration.try_clone_v1()?,
             anchor_lab: lab(declaration.anchor),
             appearance: declaration
                 .intent
@@ -479,6 +514,7 @@ pub(super) fn compile_selection(
                         .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput))
                 })
                 .transpose()?,
+            opaque: true,
         });
         if let Some(appearance) = declaration.intent.as_ref().and_then(|v| v.appearance) {
             if graph.occurrence_source_input(appearance) != Some(target_paint_input_id(target.id)) {
@@ -698,13 +734,14 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
     Ok(result)
 }
 
-struct RegionPruningV1 {
+struct RegionPruningV1<'scope> {
     constraints: Vec<RegionConstraintV1>,
     lower: Vec<([u8; 3], [u8; 3])>,
     endpoint_evaluations: u64,
+    physical: &'scope CompiledAppearanceConeV1,
 }
 
-impl RegionPruningV1 {
+impl RegionPruningV1<'_> {
     fn may_pass<Evaluation: ProgramConstraintEvaluatorSetV1>(
         &mut self,
         targets: ComputedTargetsV1<'_>,
@@ -748,9 +785,9 @@ impl RegionPruningV1 {
                 }
                 let mut paints = epoch
                     .graph
-                    .prepare_paints_for_surface_cases(
+                    .prepare_scoped_surface_cases(
+                        self.physical,
                         runtime.bindings,
-                        schema.iter().copied(),
                         runtime.workspace,
                     )
                     .map_err(map_program_execution_binding_error)?;
@@ -843,7 +880,10 @@ where
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints(&component.constraints),
+            ProgramCandidateScanV1::Constraints {
+                indices: &component.constraints,
+                physical: Some(&component.physical),
+            },
         )? {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
@@ -858,6 +898,7 @@ where
     let constraints = region_constraints(epoch, Some(&component.constraints)).map_err(allocate)?;
     let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
     let mut pruning = RegionPruningV1 {
+        physical: &component.physical,
         constraints,
         lower,
         endpoint_evaluations: 0,
@@ -1010,7 +1051,10 @@ where
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints(&component.constraints),
+            ProgramCandidateScanV1::Constraints {
+                indices: &component.constraints,
+                physical: Some(&component.physical),
+            },
         )? && (!has_best
             || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
                 == Ordering::Less)

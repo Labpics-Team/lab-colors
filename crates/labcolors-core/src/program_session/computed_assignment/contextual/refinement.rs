@@ -93,7 +93,8 @@ impl StateV1<'_> {
             self.pool.copy_from_slice(self.best_values);
             let target = &context.targets[index];
             apply_targets::<E>(context.targets, runtime, self.best_values)?;
-            let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, seed)?;
+            let (backdrop, alpha) =
+                physical_context(target, context.physical, runtime, epoch, scenarios, seed)?;
             let preferred =
                 inverse_hint(context.preferred_rgb[seed * count + index], backdrop, alpha);
             for ordinal in 0..count + 2 {
@@ -141,7 +142,8 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
             continue;
         }
         apply_targets::<E>(context.targets, runtime, state.best_values)?;
-        let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, seed)?;
+        let (backdrop, alpha) =
+            physical_context(target, context.physical, runtime, epoch, scenarios, seed)?;
         let preferred = inverse_hint(context.preferred_rgb[seed * count + fixed], backdrop, alpha);
         if preferred == state.best_values[fixed] || !context.domains[fixed].contains(preferred) {
             continue;
@@ -180,8 +182,14 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
                 for &case in &context.local_cases.order {
                     state.values.copy_from_slice(state.current_values);
                     apply_targets::<E>(context.targets, runtime, state.values)?;
-                    let (backdrop, alpha) =
-                        physical_context(target, runtime, epoch, scenarios, case)?;
+                    let (backdrop, alpha) = physical_context(
+                        target,
+                        context.physical,
+                        runtime,
+                        epoch,
+                        scenarios,
+                        case,
+                    )?;
                     let source = if intent.identity.neutral() {
                         Srgb8::new([128; 3])
                     } else {

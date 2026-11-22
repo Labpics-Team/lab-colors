@@ -438,7 +438,7 @@ fn computed_physical_recheck_owns_verdict_after_search_pass() {
 }
 
 #[test]
-fn cube_search_and_tolerance_never_expand_authored_domain() {
+fn cube_search_and_tolerance_never_expand_authored_domain() -> Result<(), String> {
     let declaration = ComputedTargetV1::new(
         AssignmentDomainV1::Cube {
             lower: [60, 80, 90],
@@ -469,6 +469,29 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         .expect("наблюдение допускает подготовку перехода")
         .commit();
     assert_eq!(rgb(&session), Srgb8::new([63, 82, 91]));
+    let outside = compile_assignment(
+        program(
+            Target::new(
+                TargetId::new(10),
+                TargetIntentV1::Computed(declaration.clone()),
+            ),
+            declaration.anchor,
+            ExactSrgb8IdentityV1,
+        ),
+        200,
+    )
+    .map_err(|error| format!("outside compile: {error:?}"))?;
+    let mut outside_session = outside
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("outside instantiate: {error:?}"))?;
+    outside_session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("outside update: {error:?}"))?
+        .commit();
+    assert!(matches!(
+        outside_session.state(),
+        SessionState::Failed { .. }
+    ));
     let mut strict = declaration;
     strict.max_delta_bits = 0;
     let owner = compile_assignment(
@@ -488,6 +511,7 @@ fn cube_search_and_tolerance_never_expand_authored_domain() {
         .expect("наблюдение допускает подготовку перехода")
         .commit();
     assert!(matches!(session.state(), SessionState::Failed { .. }));
+    Ok(())
 }
 
 pub(super) fn nested(reverse: bool) -> Program<Wcag22Srgb8V1> {
@@ -596,7 +620,10 @@ fn coupled_pair_uses_whole_composition_and_joint_lexicographic_preference() {
             ];
             let tuple = [lower, upper];
             if expected.as_ref().is_none_or(|(best_scores, best_tuple)| {
-                compare_scores(&scores, best_scores).then_with(|| tuple.cmp(best_tuple))
+                scores[0]
+                    .total_cmp(&best_scores[0])
+                    .then_with(|| scores[1].total_cmp(&best_scores[1]))
+                    .then_with(|| tuple.cmp(best_tuple))
                     == Ordering::Less
             }) {
                 expected = Some((scores, tuple));
@@ -707,6 +734,7 @@ fn compiled_preferences_keep_target_payloads_under_declaration_permutations() {
         }
         let selection = compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
             .expect("плотные уникальные ранги допускаются в любом порядке деклараций");
+        assert_eq!(selection.targets.len(), 2);
         for (actual, (id, anchor, count)) in selection
             .targets
             .iter()
@@ -812,6 +840,7 @@ fn compiled_preferences_preserve_payloads_across_long_cycles() {
                     let selection =
                         compile_selection(&owner.owner_generation.graph, &targets, None, 20_000)
                             .expect("каждая перестановка плотных рангов допустима");
+                    assert_eq!(selection.targets.len(), expected.len());
                     for (index, actual) in selection.targets.iter().enumerate() {
                         let TargetIntentV1::Computed(declaration) = &expected[index].intent else {
                             unreachable!();

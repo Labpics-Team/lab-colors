@@ -219,6 +219,16 @@ pub(crate) struct ToneCurveV1 {
 impl Eq for ToneCurveV1 {}
 
 impl ToneCurveV1 {
+    pub(crate) fn try_clone_v1(&self) -> Result<Self, std::collections::TryReserveError> {
+        let mut stops = Vec::new();
+        stops.try_reserve_exact(self.stops.len())?;
+        stops.extend_from_slice(&self.stops);
+        Ok(Self {
+            input: self.input,
+            stops,
+        })
+    }
+
     pub(crate) fn new(input: u32, mut stops: Vec<[f64; 2]>) -> Result<Self, ColorIntentErrorV1> {
         if stops.len() < 2 {
             return Err(ColorIntentErrorV1::InvalidCurve);

@@ -93,13 +93,8 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
         open_regions: 0,
     };
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
-    let residual = components::conditioned(
-        selection,
-        component,
-        prefix,
-        epoch.observation_group.schema.as_slice().len(),
-    )
-    .map_err(allocation)?;
+    let residual =
+        components::conditioned(selection, component, prefix, epoch).map_err(allocation)?;
     let mut values = buffer(candidate.values.len(), Srgb8::new([0; 3])).map_err(allocation)?;
     values.copy_from_slice(candidate.values);
     if preferred_probe {
@@ -107,12 +102,8 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
     }
     apply_targets::<E>(context.targets, runtime, &values)?;
     if !preferred_probe {
-        if let Some(leading) = components::leading(
-            selection,
-            component,
-            epoch.observation_group.schema.as_slice().len(),
-        )
-        .map_err(allocation)?
+        if let Some(leading) =
+            components::leading(selection, component, epoch).map_err(allocation)?
         {
             let result = select_task(selection, &leading, runtime, epoch, scenarios, arena)?;
             components::merge_evidence(&mut extra, result.evidence).map_err(allocation)?;
@@ -141,7 +132,10 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
             0,
             ProgramEvaluationPhaseV1::Hard,
             ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints(&residual.fixed_constraints),
+            ProgramCandidateScanV1::Constraints {
+                indices: &residual.fixed_constraints,
+                physical: Some(&component.physical),
+            },
         )?;
         candidate.evidence.visited += 1;
         candidate.evidence.points += 1;

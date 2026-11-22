@@ -29,13 +29,14 @@ use std::num::NonZeroUsize;
 
 use crate::Srgb8;
 use crate::appearance::{
-    AdmittedAppearanceBindings, AppearanceBindings, AppearanceEvaluationView, AppearanceGraphSpec,
-    AppearanceWorkspace, BindingError, CompileError, CompiledAppearanceGraph,
-    CompiledOccurrenceSlotV1, CompiledPaintInputSlotV1, CompiledPaintSlotV1,
-    CompiledPointPresentationPathV1, EncodedPointPaintV1, EncodedPointPaintValueV1,
-    ExactFinalOwnedPointDomainV1, OccurrenceId, OccurrenceSpec, OpacityInputId, PaintId,
-    PaintInputId, PaintSpec, PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1,
-    PointOccurrenceAbsenceSummaryV1, PointPresentationPathErrorV1, SurfaceId, SurfaceInputPortId,
+    AdmittedAppearanceBindings, AppearanceBindings, AppearanceConeCompilerV1,
+    AppearanceEvaluationView, AppearanceGraphSpec, AppearanceWorkspace, BindingError, CompileError,
+    CompiledAppearanceConeV1, CompiledAppearanceGraph, CompiledOccurrenceSlotV1,
+    CompiledPaintInputSlotV1, CompiledPaintSlotV1, CompiledPointPresentationPathV1,
+    EncodedPointPaintV1, EncodedPointPaintValueV1, ExactFinalOwnedPointDomainV1, OccurrenceId,
+    OccurrenceSpec, OpacityInputId, PaintId, PaintInputId, PaintSpec,
+    PointOccurrenceAbsenceReleaseV1, PointOccurrenceAbsenceStepV1, PointOccurrenceAbsenceSummaryV1,
+    PointPresentationPathErrorV1, PreparedAppearancePaints, SurfaceId, SurfaceInputPortId,
     SurfaceSpec,
 };
 use crate::clean_set::{
@@ -3006,11 +3007,14 @@ struct ResolvedPointPresentationV1 {
 /// полномочия друг друга.
 struct ProgramPresentationCacheV1 {
     domains: Vec<Option<ExactFinalOwnedPointDomainV1>>,
+    touched: Vec<usize>,
     scratch_steps: Vec<PointOccurrenceAbsenceStepV1>,
     #[cfg(test)]
     phase: ProgramEvaluationPhaseV1,
     #[cfg(test)]
     replay_counts: [usize; 2],
+    #[cfg(test)]
+    cleared_domains: usize,
 }
 
 impl ProgramPresentationCacheV1 {
@@ -3020,22 +3024,35 @@ impl ProgramPresentationCacheV1 {
             .try_reserve_exact(presentations.len())
             .map_err(|_| ())?;
         domains.resize(presentations.len(), None);
+        let mut touched = Vec::new();
+        touched
+            .try_reserve_exact(presentations.len())
+            .map_err(|_| ())?;
         let mut scratch_steps = Vec::new();
         scratch_steps
             .try_reserve_exact(presentations.steps_per_case())
             .map_err(|_| ())?;
         Ok(Self {
             domains,
+            touched,
             scratch_steps,
             #[cfg(test)]
             phase: ProgramEvaluationPhaseV1::Hard,
             #[cfg(test)]
             replay_counts: [0; 2],
+            #[cfg(test)]
+            cleared_domains: 0,
         })
     }
 
     fn begin_case(&mut self, _phase: ProgramEvaluationPhaseV1) {
-        self.domains.fill(None);
+        for index in self.touched.drain(..) {
+            self.domains[index] = None;
+            #[cfg(test)]
+            {
+                self.cleared_domains += 1;
+            }
+        }
         self.scratch_steps.clear();
         #[cfg(test)]
         {
@@ -3081,7 +3098,11 @@ impl ProgramPresentationCacheV1 {
         let domain = summary.domain();
         let end = start.checked_add(replay.steps().len()).ok_or(())?;
         let span = NonEmptyReplaySpanV1::from_bounds(start, end).ok_or(())?;
+        if self.touched.len() == self.touched.capacity() {
+            return Err(());
+        }
         self.domains[presentation_ordinal] = Some(domain);
+        self.touched.push(presentation_ordinal);
         #[cfg(test)]
         {
             let phase_index = match self.phase {
@@ -4208,7 +4229,25 @@ trait ProgramPhysicalCaseObserverV1 {
         &mut self,
         case_index: usize,
         evaluation: &AppearanceEvaluationView<'_, '_>,
-    ) -> Result<(), ()>;
+    ) -> Result<(), ProgramPhysicalCaseObserverErrorV1>;
+}
+
+enum ProgramPhysicalCaseObserverErrorV1 {
+    ResourceExhausted,
+    InternalInvariant,
+}
+
+fn map_physical_case_error<E>(
+    error: ProgramPhysicalCaseObserverErrorV1,
+) -> ProgramSessionEvaluationError<E> {
+    match error {
+        ProgramPhysicalCaseObserverErrorV1::ResourceExhausted => {
+            ProgramSessionEvaluationError::ResourceExhausted
+        }
+        ProgramPhysicalCaseObserverErrorV1::InternalInvariant => {
+            ProgramSessionEvaluationError::InternalInvariant
+        }
+    }
 }
 
 struct ProgramCandidateCollectionV1<'buffers, Evaluation>
@@ -4914,7 +4953,23 @@ enum ProgramCandidateScanV1<'a, Evaluation: ProgramConstraintEvaluatorSetV1> {
         previous: Option<&'a ProgramVerifiedV1<Evaluation>>,
     },
     // A component search cannot reuse a previous full-frame certificate.
-    Constraints(&'a [usize]),
+    Constraints {
+        indices: &'a [usize],
+        physical: Option<&'a CompiledAppearanceConeV1>,
+    },
+}
+
+fn prepare_candidate_paints<'program, 'bindings, 'workspace>(
+    graph: &'program CompiledAppearanceGraph,
+    physical: Option<&'program CompiledAppearanceConeV1>,
+    bindings: &'bindings AdmittedAppearanceBindings,
+    schema: &[SurfaceInputPortId],
+    workspace: &'workspace mut AppearanceWorkspace,
+) -> Result<PreparedAppearancePaints<'program, 'bindings, 'workspace>, BindingError> {
+    match physical {
+        Some(cone) => graph.prepare_scoped_surface_cases(cone, bindings, workspace),
+        None => graph.prepare_paints_for_surface_cases(bindings, schema.iter().copied(), workspace),
+    }
 }
 
 /// Search can assess one compiled independent component. The final candidate
@@ -4932,9 +4987,11 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let (previous, constraint_indices) = match scope {
-        ProgramCandidateScanV1::Full { previous } => (previous, None),
-        ProgramCandidateScanV1::Constraints(indices) => (None, Some(indices)),
+    let (previous, constraint_indices, physical) = match scope {
+        ProgramCandidateScanV1::Full { previous } => (previous, None, None),
+        ProgramCandidateScanV1::Constraints { indices, physical } => {
+            (None, Some(indices), physical)
+        }
     };
     let ProgramCandidateCollectionV1 {
         mut evidence,
@@ -5100,16 +5157,16 @@ where
         }
         if prepared_paints.is_none() {
             prepared_paints = Some(
-                epoch
-                    .graph
-                    .prepare_paints_for_surface_cases(
-                        runtime.bindings,
-                        schema.as_slice().iter().copied(),
-                        workspace
-                            .take()
-                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
-                    )
-                    .map_err(map_program_execution_binding_error)?,
+                prepare_candidate_paints(
+                    &epoch.graph,
+                    physical,
+                    runtime.bindings,
+                    schema.as_slice(),
+                    workspace
+                        .take()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
+                )
+                .map_err(map_program_execution_binding_error)?,
             );
         }
         let evaluation = prepared_paints
@@ -5119,7 +5176,7 @@ where
         if let Some(observer) = physical_case.as_mut() {
             observer
                 .observe(case_index, &evaluation)
-                .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                .map_err(map_physical_case_error)?;
         }
         runtime.presentation_cache.begin_case(phase);
 
@@ -7375,6 +7432,7 @@ where
 
 fn map_compile_error(error: CompileError) -> ProgramCompileError {
     match error {
+        CompileError::ResourceExhausted => ProgramCompileError::ResourceExhausted,
         CompileError::DuplicatePaintInput { .. } => ProgramCompileError::InternalInvariant,
         CompileError::DuplicateOpacityInput { input } => {
             ProgramCompileError::DuplicateOpacityInput { input }
