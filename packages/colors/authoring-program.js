@@ -17,13 +17,22 @@ export function colorProgramSource(program) {
 export async function compileColorSystem(entries) {
   const graph = lowerColorSystem(entries);
   await init();
-  const runtime = compileProgramWire(graph.wire, 1);
+  // Compilation validates Core once. The first independent owner consumes this session.
+  let reserved = compileProgramWire(graph.wire, 1), headless;
   let disposed = false, busy = false, revision = 0n;
   const ensureLive = () => {
     if (disposed) authoringError("program", "program is disposed", "color_disposed");
   };
   const source = Object.freeze({ graph, ensureLive,
-    createRuntime() { ensureLive(); return compileProgramWire(graph.wire, 1); } });
+    createRuntime() {
+      ensureLive();
+      if (reserved !== undefined) {
+        const runtime = reserved;
+        reserved = undefined;
+        return runtime;
+      }
+      return compileProgramWire(graph.wire, 1);
+    } });
   const program = Object.freeze({
     inputs: Object.freeze(graph.inputs.map((input) => input.name)),
     outputs: Object.freeze(graph.outputs.map((output) => output.name)),
@@ -34,10 +43,11 @@ export async function compileColorSystem(entries) {
       let snapshot;
       try {
         const context = parseColorContext(graph, values);
+        headless ??= source.createRuntime();
         revision += 1n;
         snapshot = context.unknown.length > 0
-          ? runtime.updateUnknown(revision, 1)
-          : runtime.updateObserved(revision, scenario, context.rgb, graph.inputs.length);
+          ? headless.updateUnknown(revision, 1)
+          : headless.updateObserved(revision, scenario, context.rgb, graph.inputs.length);
         return copyColorFrame(snapshot, graph, context);
       } finally {
         snapshot?.free();
@@ -51,7 +61,10 @@ export async function compileColorSystem(entries) {
     dispose() {
       if (busy) authoringError("program.dispose", "program is updating", "color_busy");
       if (disposed) return;
-      runtime.free();
+      reserved?.free();
+      headless?.free();
+      reserved = undefined;
+      headless = undefined;
       disposed = true;
     },
   });
