@@ -4763,6 +4763,25 @@ where
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
     }
+    if !has_hard_constraints && !has_report_constraints {
+        scan_program_candidate(
+            runtime,
+            epoch,
+            scenario_set,
+            candidate_state_index,
+            ProgramEvaluationPhaseV1::Hard,
+            ProgramCandidateCollectionV1 {
+                evidence: ProgramConstraintEvidenceCaptureV1::None,
+                outputs: Some(&mut arena.outputs),
+                point_causal: Some(ProgramPointCausalBuffersV1 {
+                    considered_state_index: None,
+                    records: &mut arena.point_causal_records,
+                    steps: &mut arena.point_causal_steps,
+                }),
+            },
+            None,
+        )?;
+    }
     if !program_report_cardinality_is_exact(
         [
             arena.cells.len(),
@@ -5502,7 +5521,7 @@ where
     if program.occurrences.is_empty() {
         return Err(ProgramCompileError::EmptyOccurrenceSet);
     }
-    if program.constraints.is_empty() {
+    if program.constraints.is_empty() && program.assignment.is_none() {
         return Err(ProgramCompileError::EmptyConstraintSet);
     }
     if program.outputs.is_empty() && program.field_outputs.is_empty() {
@@ -6058,6 +6077,13 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    // Computed assignment уже имеет собственный domain и preference, а color
+    // target дополнительно проверяет характер видимого применения. Отдельный
+    // readability/evaluator закон не требуется для существования цвета.
+    // Fixed inputs в том же Program — явные физические значения клиента.
+    if matches!(target_selection, CompiledTargetSelectionV1::Computed(_)) {
+        return Ok(());
+    }
     // Объекты ограничений здесь уже скомпилированы, поэтому более точная
     // диагностика отсутствующей ссылки ещё может принадлежать только выходу.
     if program
@@ -6102,8 +6128,6 @@ where
         .iter()
         .filter(|target| target.intent.is_solver_dependent())
         .count();
-    // Computed выбирает полную tuple по всем ограничениям; общей строки для
-    // независимых групп не требуется. Покрытие каждой цели и output проверено выше.
     // Дополнительное условие конечного выбора V1/V2 сохраняет прежний контракт.
     if finite_count > 1 && !matches!(target_selection, CompiledTargetSelectionV1::Computed(_)) {
         let mut has_common_assessment = false;

@@ -342,6 +342,82 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 let tolerance = reader.read_f64_bits()?;
                 draft.push_computed_target(TargetIdV1::new(id), domain, anchor, tolerance);
             }
+            4 if version == PROGRAM_WIRE_VERSION_V3 => {
+                use crate::color_intent::{ColorIdentityDomainV1, IdentityOptionsV1, ToneCurveV1};
+                let anchor = reader.read_rgb()?;
+                let neutral = match reader.read_u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(reader.declaration_error(entry_offset)),
+                };
+                let mask = reader.read_u8()?;
+                if mask & !7 != 0 {
+                    return Err(reader.declaration_error(entry_offset));
+                }
+                let hue_deviation = if mask & 1 != 0 {
+                    Some(reader.read_f64_bits()?)
+                } else {
+                    None
+                };
+                let chroma = if mask & 2 != 0 {
+                    Some([reader.read_f64_bits()?, reader.read_f64_bits()?])
+                } else {
+                    None
+                };
+                let lightness = if mask & 4 != 0 {
+                    Some([reader.read_f64_bits()?, reader.read_f64_bits()?])
+                } else {
+                    None
+                };
+                let identity = ColorIdentityDomainV1::new(
+                    anchor,
+                    neutral,
+                    IdentityOptionsV1 {
+                        hue_deviation,
+                        chroma,
+                        lightness,
+                    },
+                )
+                .map_err(|_| reader.declaration_error(entry_offset))?;
+                let max_delta = reader.read_f64_bits()?;
+                if !max_delta.is_finite() || max_delta < 0.0 || max_delta > 2.0 {
+                    return Err(reader.declaration_error(entry_offset));
+                }
+                let appearance = match reader.read_u8()? {
+                    0 => None,
+                    1 => Some(OccurrenceIdV1::new(reader.read_u32()?)),
+                    _ => return Err(reader.declaration_error(entry_offset)),
+                };
+                let tone = match reader.read_u8()? {
+                    0 => None,
+                    1 => {
+                        let input = reader.read_u32()?;
+                        let count = reader.read_count()?;
+                        let mut stops = Vec::new();
+                        stops.try_reserve_exact(count as usize).map_err(|_| {
+                            ProgramWireErrorV1::AssignmentResourceExhausted {
+                                section: reader.section,
+                            }
+                        })?;
+                        for _ in 0..count {
+                            stops.push([reader.read_f64_bits()?, reader.read_f64_bits()?]);
+                        }
+                        Some(
+                            ToneCurveV1::new(input, stops)
+                                .map_err(|_| reader.declaration_error(entry_offset))?,
+                        )
+                    }
+                    _ => return Err(reader.declaration_error(entry_offset)),
+                };
+                draft.push_color_target(
+                    TargetIdV1::new(id),
+                    anchor,
+                    max_delta,
+                    identity,
+                    appearance,
+                    tone,
+                );
+            }
             _ => return Err(reader.declaration_error(entry_offset)),
         }
     }
@@ -457,10 +533,21 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
         let against = reader.read_u32()?;
         let adapting = reader.read_f64_bits()?;
         let background_ratio = reader.read_f64_bits()?;
-        let surround = match reader.read_u8()? {
-            1 => SurroundV1::Average,
-            2 => SurroundV1::Dim,
-            3 => SurroundV1::Dark,
+        let surround_tag = reader.read_u8()?;
+        let (adapting, background_ratio, surround) = match surround_tag {
+            0 if version == PROGRAM_WIRE_VERSION_V3
+                && adapting.to_bits() == 0
+                && background_ratio.to_bits() == 0 =>
+            {
+                (
+                    crate::spaces::vc::SRGB_ADAPTING_LUMINANCE_CD_M2,
+                    crate::spaces::vc::SRGB_BACKGROUND_LUMINANCE_RATIO,
+                    SurroundV1::Average,
+                )
+            }
+            1 => (adapting, background_ratio, SurroundV1::Average),
+            2 => (adapting, background_ratio, SurroundV1::Dim),
+            3 => (adapting, background_ratio, SurroundV1::Dark),
             _ => return Err(reader.declaration_error(entry_offset)),
         };
         let context = AppearanceContextV1::try_new(adapting, background_ratio, surround).map_err(

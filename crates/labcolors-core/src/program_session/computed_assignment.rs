@@ -2,6 +2,7 @@
 //! Области сокращаются до полного выбора; физика остаётся у Program.
 
 use super::*;
+use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +143,15 @@ pub(crate) struct ComputedTargetV1 {
     anchor: Srgb8,
     max_delta_bits: u64,
     preference: u64,
+    intent: Option<ColorUseIntentV1>,
+}
+
+/// Авторский характер относится к видимому применению, а не к имени роли.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ColorUseIntentV1 {
+    pub(crate) identity: ColorIdentityDomainV1,
+    pub(crate) appearance: Option<OccurrenceId>,
+    pub(crate) tone: Option<ToneCurveV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,8 +159,10 @@ pub(crate) enum ComputedAdmissionErrorV1 {
     InvalidDomain,
     InvalidTolerance,
     MixedSelection,
-    EmptySelection,
     InvalidPreferenceOrder,
+    InvalidColorIntent,
+    MissingColorAppearance,
+    MissingToneInput,
 }
 
 // Предел экспериментального синхронного профиля; не клиентская политика.
@@ -176,7 +188,62 @@ impl ComputedTargetV1 {
                 max_delta.to_bits()
             },
             preference: u64::MAX,
+            intent: None,
         }
+    }
+
+    pub(crate) fn color(anchor: Srgb8, max_delta: f64, intent: ColorUseIntentV1) -> Self {
+        let domain = if intent.appearance.is_none() && intent.identity.neutral() {
+            AssignmentDomainV1::Gray {
+                lower: 0,
+                upper: 255,
+            }
+        } else {
+            AssignmentDomainV1::Cube {
+                lower: [0; 3],
+                upper: [255; 3],
+            }
+        };
+        let mut value = Self::declared(domain, anchor, max_delta);
+        value.intent = Some(intent);
+        value
+    }
+
+    pub(crate) fn color_intent(&self) -> Option<&ColorUseIntentV1> {
+        self.intent.as_ref()
+    }
+
+    /// Оpaque IDs связывает canonical graph; здесь только собственные данные.
+    pub(crate) fn color_identity_hash(&self) -> Result<[u8; 32], ProgramCompileError> {
+        let intent = self
+            .intent
+            .as_ref()
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let stops = intent.tone.as_ref().map_or(0, |tone| tone.stops().len());
+        let size = 26_usize
+            .checked_add(46 + 1 + 4)
+            .and_then(|n| stops.checked_mul(16).and_then(|s| n.checked_add(s)))
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        bytes.extend_from_slice(&self.identity_bytes());
+        bytes.extend_from_slice(&intent.identity.identity_bytes());
+        bytes.push(u8::from(intent.appearance.is_some()));
+        bytes.extend_from_slice(
+            &u32::try_from(stops)
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?
+                .to_le_bytes(),
+        );
+        if let Some(tone) = &intent.tone {
+            for stop in tone.stops() {
+                for component in stop {
+                    bytes.extend_from_slice(&component.to_bits().to_le_bytes());
+                }
+            }
+        }
+        Ok(*crate::sha256::digest(&bytes).as_bytes())
     }
 
     // Фабрика недоступна старым wire/SDK и private-fixture ABI.
@@ -202,6 +269,7 @@ impl ComputedTargetV1 {
                 max_delta.to_bits()
             },
             preference,
+            intent: None,
         })
     }
 
@@ -223,6 +291,8 @@ struct CompiledComputedTargetV1 {
     binding: CompiledPaintInputSlotV1,
     declaration: ComputedTargetV1,
     anchor_lab: [f64; 3],
+    appearance: Option<CompiledOccurrenceSlotV1>,
+    tone_input: Option<usize>,
 }
 
 pub(super) struct ComputedSelectionV1 {
@@ -247,9 +317,6 @@ pub(super) fn assign_preference(
             Err(invalid(ComputedAdmissionErrorV1::InvalidPreferenceOrder))
         };
     };
-    if computed == 0 {
-        return Err(invalid(ComputedAdmissionErrorV1::EmptySelection));
-    }
     if targets
         .iter()
         .any(|target| matches!(target.intent, TargetIntentV1::Finite(_)))
@@ -311,10 +378,33 @@ pub(super) fn compile_selection(
                 .ok_or(ProgramCompileError::InternalInvariant)?,
             declaration: declaration.clone(),
             anchor_lab: lab(declaration.anchor),
+            appearance: declaration
+                .intent
+                .as_ref()
+                .and_then(|v| v.appearance)
+                .map(|id| {
+                    graph
+                        .bind_occurrence(id)
+                        .ok_or(invalid(ComputedAdmissionErrorV1::MissingColorAppearance))
+                })
+                .transpose()?,
+            tone_input: declaration
+                .intent
+                .as_ref()
+                .and_then(|v| v.tone.as_ref())
+                .map(|tone| {
+                    graph
+                        .surface_input_ports()
+                        .position(|id| id.value() == tone.input())
+                        .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput))
+                })
+                .transpose()?,
         });
-    }
-    if compiled.is_empty() {
-        return Err(invalid(ComputedAdmissionErrorV1::EmptySelection));
+        if let Some(appearance) = declaration.intent.as_ref().and_then(|v| v.appearance) {
+            if graph.occurrence_source_input(appearance) != Some(target_paint_input_id(target.id)) {
+                return Err(invalid(ComputedAdmissionErrorV1::InvalidColorIntent));
+            }
+        }
     }
     for index in 0..compiled.len() {
         loop {
@@ -332,10 +422,17 @@ pub(super) fn compile_selection(
             compiled.swap(index, preference as usize);
         }
     }
+    let contextual = compiled
+        .iter()
+        .any(|target| target.declaration.intent.is_some());
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
         budget,
-        execution_profile: execution_profile_identity(budget),
+        execution_profile: if contextual {
+            contextual::execution_profile_identity(budget)
+        } else {
+            execution_profile_identity(budget)
+        },
     })
 }
 
@@ -591,6 +688,25 @@ where
         return Ok(SearchResultV1 {
             evidence,
             values: None,
+        });
+    }
+    if count == 0 {
+        evidence.visited = 1;
+        evidence.points = 1;
+        evidence.examined = 1;
+        evidence.completion = CompletionV1::Complete;
+        let failed = scan_program_candidate(
+            runtime,
+            epoch,
+            scenario_set,
+            0,
+            ProgramEvaluationPhaseV1::Hard,
+            ProgramCandidateCollectionV1::none(),
+            None,
+        )?;
+        return Ok(SearchResultV1 {
+            evidence,
+            values: (!failed).then_some(values),
         });
     }
     values
@@ -895,10 +1011,32 @@ where
     let scenarios = NonEmptyScenarioSetV1::from_admitted(&observation)
         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
     let counts = prepare_program_evaluation_arena(epoch, scenarios, arena.storage_mut())?;
-    let selected = select(selection, &mut runtime, epoch, scenarios)?;
+    let selected = if selection
+        .targets
+        .iter()
+        .any(|target| target.declaration.intent.is_some())
+    {
+        contextual::select_contextual(
+            selection,
+            &mut runtime,
+            epoch,
+            scenarios,
+            arena.storage_mut(),
+        )?
+    } else {
+        select(selection, &mut runtime, epoch, scenarios)?
+    };
+    arena.storage_mut().clear();
     match selected.values {
         Some(values) => {
             apply::<Evaluation>(selection, &mut runtime, &values)?;
+            if selection
+                .targets
+                .iter()
+                .any(|target| target.declaration.intent.is_some())
+            {
+                contextual::recheck_intents(selection, &mut runtime, epoch, scenarios, &values)?;
+            }
             #[cfg(test)]
             if let Some(corrupted) = CORRUPT_FINAL_SOURCE.with(|value| value.take()) {
                 runtime
@@ -977,8 +1115,13 @@ where
     }
 }
 
+mod contextual;
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod qualification_tests;
+
+#[cfg(test)]
+mod color_tests;

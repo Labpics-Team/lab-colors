@@ -1881,6 +1881,30 @@ impl DraftV1 {
         self.inner.set_assignment(order);
     }
 
+    pub(crate) fn push_color_target(
+        &mut self,
+        id: TargetIdV1,
+        anchor: Srgb8,
+        max_delta: f64,
+        identity: crate::color_intent::ColorIdentityDomainV1,
+        appearance: Option<OccurrenceIdV1>,
+        tone: Option<crate::color_intent::ToneCurveV1>,
+    ) {
+        use crate::program_session::computed_assignment::{ColorUseIntentV1, ComputedTargetV1};
+        self.inner.push_target(Target::new(
+            id.into_core(),
+            crate::program_session::TargetIntentV1::Computed(ComputedTargetV1::color(
+                anchor,
+                max_delta,
+                ColorUseIntentV1 {
+                    identity,
+                    appearance: appearance.map(OccurrenceIdV1::into_core),
+                    tone,
+                },
+            )),
+        ));
+    }
+
     /// Связывает клиентский output slot с выбранным encoded Paint.
     pub(crate) fn push_output(&mut self, output: OutputSlotIdV1, paint: PaintIdV1) -> &mut Self {
         self.inner

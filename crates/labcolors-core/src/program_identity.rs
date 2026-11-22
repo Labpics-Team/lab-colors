@@ -205,6 +205,7 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_SCREEN: u8 = 28;
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
     pub(super) const TARGET_COMPUTED: u8 = 30;
+    pub(super) const TARGET_COLOR: u8 = 31;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -258,6 +259,8 @@ declare_edge_roles_v1! {
     FieldLighterSource = 35,
     FieldLighterDestination = 36,
     FieldOutputOperator = 37,
+    TargetToneInput = 38,
+    TargetAppearance = 39,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1135,8 +1138,16 @@ where
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
             TargetIntentV1::Computed(target) => {
-                let mut color = VertexColorV1::new(vertex_tag::TARGET_COMPUTED);
-                color.push_bytes(&target.identity_bytes())?;
+                let mut color = VertexColorV1::new(if target.color_intent().is_some() {
+                    vertex_tag::TARGET_COLOR
+                } else {
+                    vertex_tag::TARGET_COMPUTED
+                });
+                if target.color_intent().is_some() {
+                    color.push_bytes(&target.color_identity_hash()?)?;
+                } else {
+                    color.push_bytes(&target.identity_bytes())?;
+                }
                 color
             }
         };
@@ -1224,6 +1235,24 @@ where
 
     for target in &program.targets {
         let target_vertex = targets.get(target.id())?;
+        if let TargetIntentV1::Computed(value) = target.intent() {
+            if let Some(intent) = value.color_intent() {
+                if let Some(tone) = &intent.tone {
+                    graph.add_edge(
+                        target_vertex,
+                        ports.get(SurfaceInputPortId::new(tone.input()))?,
+                        EdgeRoleV1::TargetToneInput,
+                    )?;
+                }
+                if let Some(appearance) = intent.appearance {
+                    graph.add_edge(
+                        target_vertex,
+                        occurrences.get(appearance)?,
+                        EdgeRoleV1::TargetAppearance,
+                    )?;
+                }
+            }
+        }
         if let TargetIntentV1::FixedSource(source) = target.intent() {
             graph.add_edge(
                 target_vertex,

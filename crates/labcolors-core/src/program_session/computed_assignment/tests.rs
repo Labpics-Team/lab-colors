@@ -858,6 +858,7 @@ fn compiled_preferences_keep_declaration_errors_before_order_validation() {
         let invalid = Target::new(
             TargetId::new(20),
             TargetIntentV1::Computed(ComputedTargetV1 {
+                intent: None,
                 domain,
                 anchor: Srgb8::new([160; 3]),
                 max_delta_bits,

@@ -1,6 +1,6 @@
 import { ProgramWireBuilderV1 } from "./abi-v1.js";
 import { ByteSink, byteValue, candidateList, f64Value, inputProperty, invalid,
-  rgb24, u32Value } from "./encoding.js";
+  rgb24, u32Value, inputArrayLength, indexedValues, MAX_SECTION_ENTRIES_V1 } from "./encoding.js";
 
 export { ProgramWireError, PROGRAM_WIRE_INVALID_DECLARATION, PROGRAM_WIRE_TOO_MANY_ENTRIES,
   SURROUND_AVERAGE_V1, SURROUND_DIM_V1, SURROUND_DARK_V1,
@@ -9,6 +9,71 @@ export { ProgramWireError, PROGRAM_WIRE_INVALID_DECLARATION, PROGRAM_WIRE_TOO_MA
 
 /** V3 передаёт области, опоры и предпочтения; назначение цветов принадлежит Core. */
 export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
+  colorTarget(id, anchor, options = {}) {
+    const checkedId = u32Value(id, "target id");
+    const checkedAnchor = rgb24(anchor, "color anchor");
+    const domain = inputProperty(options, "domain", "color options");
+    if (domain !== undefined && domain !== "srgb" && domain !== "neutral") {
+      invalid("color domain must be srgb or neutral");
+    }
+    const rawIdentity = inputProperty(options, "identity", "color options");
+    const identity = rawIdentity === undefined ? {} : rawIdentity;
+    const hue = inputProperty(identity, "maxHueDeviation", "color identity");
+    const chroma = inputProperty(identity, "chroma", "color identity");
+    const lightness = inputProperty(identity, "lightness", "color identity");
+    const rawDelta = inputProperty(options, "maxChange", "color options");
+    const delta = bounded(rawDelta === undefined ? 2 : rawDelta, 2, "color maxChange");
+    const appearance = inputProperty(options, "appearance", "color options");
+    const tone = inputProperty(options, "tone", "color options");
+    const payload = new ByteSink();
+    payload.u32(checkedId);
+    payload.u8(4);
+    payload.rgb24(checkedAnchor);
+    payload.u8(domain === "neutral" ? 1 : 0);
+    payload.u8((hue === undefined ? 0 : 1) | (chroma === undefined ? 0 : 2) | (lightness === undefined ? 0 : 4));
+    if (hue !== undefined) payload.f64Bits(bounded(hue, 180, "identity maxHueDeviation"));
+    for (const [name, range] of [["chroma", chroma], ["lightness", lightness]]) {
+      if (range === undefined) continue;
+      const values = checkedPair(range, "identity " + name);
+      for (const value of values) payload.f64Bits(value);
+    }
+    payload.f64Bits(delta);
+    payload.u8(appearance === undefined ? 0 : 1);
+    if (appearance !== undefined) payload.u32(u32Value(appearance, "color appearance"));
+    payload.u8(tone === undefined ? 0 : 1);
+    if (tone !== undefined) {
+      const from = u32Value(inputProperty(tone, "from", "tone"), "tone input");
+      const curve = candidateList(inputProperty(tone, "curve", "tone"), "tone curve")
+        .map((point) => {
+          if (inputArrayLength(point, "tone point") !== 2) invalid("tone point must contain two numbers");
+          return indexedValues(point, 2, "tone point").map((value) => bounded(value, 1, "tone point"));
+        });
+      if (curve.length < 2 || curve[0][0] !== 0 || curve.at(-1)[0] !== 1
+        || curve.some((point, index) => index > 0 && point[0] <= curve[index - 1][0])) {
+        invalid("tone curve must span 0..1 with increasing input coordinates");
+      }
+      payload.u32(from);
+      payload.u32(curve.length);
+      for (const point of curve) for (const value of point) payload.f64Bits(value);
+    }
+    const output = this.entry("targets");
+    for (const byte of payload.bytes) output.u8(byte);
+    return this;
+  }
+
+  pointOccurrence(id, paint, surface) {
+    const payload = new ByteSink();
+    payload.u32(u32Value(id, "occurrence id"));
+    payload.u32(u32Value(paint, "occurrence paint"));
+    payload.u32(u32Value(surface, "occurrence surface"));
+    payload.f64Bits(0);
+    payload.f64Bits(0);
+    payload.u8(0);
+    const output = this.entry("occurrences");
+    for (const byte of payload.bytes) output.u8(byte);
+    return this;
+  }
+
   computedTarget(id, domain, anchor, maxDelta) {
     const checkedId = u32Value(id, "target id");
     const kind = inputProperty(domain, "kind", "computed domain");
@@ -51,7 +116,9 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
 
   assignment(targetsInPreferenceOrder) {
     if (this.section("jointSelection").count !== 0) invalid("assignment is already declared");
-    const targets = candidateList(targetsInPreferenceOrder, "assignment targets")
+    const length = inputArrayLength(targetsInPreferenceOrder, "assignment targets");
+    if (length > MAX_SECTION_ENTRIES_V1) invalid("too many assignment targets");
+    const targets = indexedValues(targetsInPreferenceOrder, length, "assignment targets")
       .map((target) => u32Value(target, "assignment target"));
     const payload = new ByteSink();
     payload.u8(3);
@@ -70,4 +137,17 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint16(4, 3, true);
     return bytes;
   }
+}
+
+function bounded(value, maximum, what) {
+  const checked = f64Value(value, what);
+  if (checked < 0 || checked > maximum) invalid(`${what} must be in [0, ${maximum}]`);
+  return checked === 0 ? 0 : checked;
+}
+
+function checkedPair(range, what) {
+  if (inputArrayLength(range, what) !== 2) invalid(what + " must contain two bounds");
+  const pair = indexedValues(range, 2, what).map((v) => bounded(v, 1, what));
+  if (pair[0] > pair[1]) invalid(what + " bounds must be increasing");
+  return pair;
 }

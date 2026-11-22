@@ -2077,6 +2077,20 @@ impl CompiledAppearanceGraph {
         Some(self.occurrences[index].subject_id)
     }
 
+    /// Единственный исходный paint input цепочки opacity данного применения.
+    pub(crate) fn occurrence_source_input(&self, id: OccurrenceId) -> Option<PaintInputId> {
+        let occurrence = self.occurrences.binary_search_by_key(&id, |v| v.id).ok()?;
+        let mut paint = self.occurrences[occurrence].subject;
+        loop {
+            match self.paints.get(paint)? {
+                CompiledPaintSpec::Input { input_index, .. } => {
+                    return self.paint_inputs.get(*input_index).copied();
+                }
+                CompiledPaintSpec::Opacity { source, .. } => paint = *source,
+            }
+        }
+    }
+
     /// Создаёт полномочие только для `Occurrence`, который не потребляется
     /// другим `Occurrence` этого точечного графа: промежуточный слой нельзя
     /// принять за финальный моделируемый результат.
