@@ -1,0 +1,75 @@
+name: color demo
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [publish]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: color-demo-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Read the package version and selected Node
+        id: package
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          package = json.loads(Path('packages/colors/package.json').read_text())
+          recipe = json.loads(Path('packages/colors/bench/wasm.json').read_text())
+          version = package['version']
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('The public example requires a stable package release')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nnode={recipe["toolchain"]["node"]}\n')
+          PY
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ steps.package.outputs.node }}
+      - name: Install the published package and prepare the example
+        env:
+          DEMO_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "refs/tags/colors-v${DEMO_VERSION}"
+          release_sha=$(git rev-parse 'FETCH_HEAD^{commit}')
+          npm install --prefix _site --ignore-scripts --no-audit --no-fund \
+            --package-lock=false --omit=dev "@labpics/colors@${DEMO_VERSION}"
+          node scripts/prepare-color-demo.mjs _site "$DEMO_VERSION" "$release_sha"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Publish the running color system
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
