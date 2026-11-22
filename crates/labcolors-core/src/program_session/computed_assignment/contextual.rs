@@ -5,7 +5,7 @@ use super::*;
 use crate::color_intent::color_at_lightness;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v4.visible-oklab-max-cases.lex-rgb.context-anchor.two-coordinate-tonal-seeds256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v5.visible-oklab-max-cases.lex-rgb.independent-authored-context-seeds.alternating-coordinate-tonal256.quarter-budget.full-domain-dfs.endpoints.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -453,11 +453,12 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     let mut best_values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     let mut current_scores = buffer(count, 0.0).map_err(allocation)?;
     let mut current_values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
+    let mut preferred_seed = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     let mut has_best = false;
 
     // Сначала вся согласованная опора. Для opaque она единственна при нулевой
     // дистанции; при alpha продолжаем поиск, поскольку source может быть не один.
-    let mut current_failures = assess(
+    let authored_failures = assess(
         &context,
         runtime,
         epoch,
@@ -471,7 +472,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
     evidence.examined += 1;
     current_scores.copy_from_slice(&scores);
     current_values.copy_from_slice(&values);
-    if current_failures == 0 {
+    if authored_failures == 0 {
         best_scores.copy_from_slice(&scores);
         best_values.copy_from_slice(&values);
         has_best = true;
@@ -484,6 +485,8 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
 
+    preferred_seed.copy_from_slice(&values);
+
     // Контекстные опоры строятся внутри Core. Изменение parent учитывается
     // физическим графом перед приготовлением source следующего применения.
     if evidence.visited < selection.budget {
@@ -495,6 +498,7 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
             let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, 0)?;
             values[index] = inverse_hint(context.preferred_rgb[index], backdrop, alpha);
         }
+        preferred_seed.copy_from_slice(&values);
         let failures = assess(
             &context,
             runtime,
@@ -507,16 +511,6 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         evidence.visited += 1;
         evidence.points += 1;
         evidence.examined += 1;
-        if failures < current_failures
-            || failures == current_failures
-                && compare_scores(&scores, &current_scores)
-                    .then_with(|| values.cmp(&current_values))
-                    == Ordering::Less
-        {
-            current_failures = failures;
-            current_scores.copy_from_slice(&scores);
-            current_values.copy_from_slice(&values);
-        }
         if failures == 0
             && (!has_best
                 || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
@@ -535,78 +529,123 @@ pub(super) fn select_contextual<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
 
-    // Два прохода ремонта полного tuple. Число нарушений служит только порядку
-    // начальных приближений; готовый результат требует ноль нарушений каждого закона.
+    // Независимые исходные точки не отбрасывают контекстный замысел из-за
+    // большего числа временных нарушений. Сначала меняются менее приоритетные
+    // применения: надпись может приспособиться к панели, прежде чем панель
+    // потеряет желаемый тон ради прежней надписи. Обратный проход остаётся
+    // эвристикой поиска, а не семантикой порядка графа или условием приёмки.
     let seed_limit = (selection.budget / 4).max(evidence.visited);
-    for _pass in 0..2 {
-        let mut changed = false;
-        for (index, target) in selection.targets.iter().enumerate() {
-            let Some(intent) = &target.declaration.intent else {
-                continue;
-            };
-            for case in 0..scenarios.len().get() {
-                if evidence.visited >= seed_limit {
-                    break;
-                }
-                values.copy_from_slice(&current_values);
-                apply::<E>(selection, runtime, &values)?;
-                let (backdrop, alpha) = physical_context(target, runtime, epoch, scenarios, case)?;
-                let source = if intent.identity.neutral() {
-                    Srgb8::new([128; 3])
+    let distinct_origins = preferred_seed
+        .iter()
+        .zip(selection.targets.iter())
+        .any(|(value, target)| *value != target.declaration.anchor);
+    let origin_count = if distinct_origins { 2 } else { 1 };
+    let origin_budget = (seed_limit - evidence.visited) / origin_count;
+    for origin in 0..origin_count {
+        let origin_limit = if origin + 1 == origin_count {
+            seed_limit
+        } else {
+            evidence.visited + origin_budget
+        };
+        if evidence.visited >= origin_limit {
+            continue;
+        }
+        if origin == 0 {
+            current_values.copy_from_slice(&preferred_seed);
+        } else {
+            for (value, target) in current_values.iter_mut().zip(selection.targets.iter()) {
+                *value = target.declaration.anchor;
+            }
+        }
+        let mut current_failures = assess(
+            &context,
+            runtime,
+            epoch,
+            scenarios,
+            &current_values,
+            &mut current_scores,
+            arena,
+        )?;
+        evidence.visited += 1;
+        evidence.points += 1;
+        evidence.examined += 1;
+        for pass in 0..2 {
+            let mut changed = false;
+            for position in 0..count {
+                let index = if (origin + pass) % 2 == 0 {
+                    count - 1 - position
                 } else {
-                    target.declaration.anchor
+                    position
                 };
-                let mut previous = None;
-                for step in 0..=255_u32 {
-                    if evidence.visited >= seed_limit {
+                let target = &selection.targets[index];
+                let Some(intent) = &target.declaration.intent else {
+                    continue;
+                };
+                for case in 0..scenarios.len().get() {
+                    if evidence.visited >= origin_limit {
                         break;
                     }
-                    let desired = color_at_lightness(source, f64::from(step) / 255.0);
-                    let candidate = inverse_hint(desired, backdrop, alpha);
-                    if previous == Some(candidate) {
-                        continue;
-                    }
-                    previous = Some(candidate);
                     values.copy_from_slice(&current_values);
-                    values[index] = candidate;
-                    let failures = assess(
-                        &context,
-                        runtime,
-                        epoch,
-                        scenarios,
-                        &values,
-                        &mut scores,
-                        arena,
-                    )?;
-                    evidence.visited += 1;
-                    evidence.points += 1;
-                    evidence.examined += 1;
-                    if failures < current_failures
-                        || failures == current_failures
-                            && compare_scores(&scores, &current_scores)
-                                .then_with(|| values.cmp(&current_values))
-                                == Ordering::Less
-                    {
-                        current_failures = failures;
-                        current_scores.copy_from_slice(&scores);
-                        current_values.copy_from_slice(&values);
-                        changed = true;
-                    }
-                    if failures == 0
-                        && (!has_best
-                            || compare_scores(&scores, &best_scores)
-                                .then_with(|| values.cmp(&best_values))
-                                == Ordering::Less)
-                    {
-                        has_best = true;
-                        best_scores.copy_from_slice(&scores);
-                        best_values.copy_from_slice(&values);
+                    apply::<E>(selection, runtime, &values)?;
+                    let (backdrop, alpha) =
+                        physical_context(target, runtime, epoch, scenarios, case)?;
+                    let source = if intent.identity.neutral() {
+                        Srgb8::new([128; 3])
+                    } else {
+                        target.declaration.anchor
+                    };
+                    let mut previous = None;
+                    for step in 0..=255_u32 {
+                        if evidence.visited >= origin_limit {
+                            break;
+                        }
+                        let desired = color_at_lightness(source, f64::from(step) / 255.0);
+                        let candidate = inverse_hint(desired, backdrop, alpha);
+                        if previous == Some(candidate) {
+                            continue;
+                        }
+                        previous = Some(candidate);
+                        values.copy_from_slice(&current_values);
+                        values[index] = candidate;
+                        let failures = assess(
+                            &context,
+                            runtime,
+                            epoch,
+                            scenarios,
+                            &values,
+                            &mut scores,
+                            arena,
+                        )?;
+                        evidence.visited += 1;
+                        evidence.points += 1;
+                        evidence.examined += 1;
+                        if failures < current_failures
+                            || failures == current_failures
+                                && compare_scores(&scores, &current_scores)
+                                    .then_with(|| values.cmp(&current_values))
+                                    == Ordering::Less
+                        {
+                            current_failures = failures;
+                            current_scores.copy_from_slice(&scores);
+                            current_values.copy_from_slice(&values);
+                            changed = true;
+                        }
+                        if failures == 0
+                            && (!has_best
+                                || compare_scores(&scores, &best_scores)
+                                    .then_with(|| values.cmp(&best_values))
+                                    == Ordering::Less)
+                        {
+                            has_best = true;
+                            best_scores.copy_from_slice(&scores);
+                            best_values.copy_from_slice(&values);
+                        }
                     }
                 }
             }
-        }
-        if !changed {
-            break;
+            if !changed {
+                break;
+            }
         }
     }
 
