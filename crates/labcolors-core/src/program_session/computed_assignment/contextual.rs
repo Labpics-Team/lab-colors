@@ -211,6 +211,67 @@ fn compare_tuples(
         .then_with(|| values.cmp(other_values))
 }
 
+struct IntentScoreCollectorV1<'a, 'context> {
+    context: &'a ContextV1<'context>,
+    values: &'a [Srgb8],
+    scores: &'a mut [f64],
+    violations: usize,
+    has_violation: bool,
+}
+
+impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
+    fn new(context: &'a ContextV1<'context>, values: &'a [Srgb8], scores: &'a mut [f64]) -> Self {
+        scores.fill(0.0);
+        Self {
+            context,
+            values,
+            scores,
+            violations: 0,
+            has_violation: false,
+        }
+    }
+
+    fn violations(&self) -> usize {
+        // Every original case is assessed. Representatives only normalize the
+        // heuristic count; a failure outside them can never become a valid tuple.
+        self.violations.max(usize::from(self.has_violation))
+    }
+}
+
+impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
+    fn observe(
+        &mut self,
+        case: usize,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Result<(), ()> {
+        let context = self.context;
+        let count = context.targets.len();
+        for (index, target) in context.targets.iter().enumerate() {
+            let rgb = if let Some(slot) = target.appearance {
+                Srgb8::new(evaluation.occurrence_at(slot).ok_or(())?.visible())
+            } else {
+                self.values[index]
+            };
+            let point_lab = lab(rgb);
+            let delta = f64::from_bits(target.declaration.max_delta_bits);
+            let identity_failed = target
+                .declaration
+                .intent
+                .as_ref()
+                .is_some_and(|intent| !intent.identity.contains(rgb));
+            if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
+                self.has_violation = true;
+                self.violations += usize::from(context.represents_case(case));
+            }
+            self.scores[index] = self.scores[index].max(squared_distance(
+                point_lab,
+                context.preferred[case * count + index],
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     context: &ContextV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -219,11 +280,8 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     values: &[Srgb8],
     scores: &mut [f64],
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    scores.fill(0.0);
-    let count = context.targets.len();
+    let mut collector = IntentScoreCollectorV1::new(context, values, scores);
     let schema = epoch.observation_group.schema.as_slice();
-    let mut violations = 0;
-    let mut has_violation = false;
     let mut paints = epoch
         .graph
         .prepare_paints_for_surface_cases(
@@ -237,37 +295,11 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
             .physical_values(case)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
         let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
-        for (index, target) in context.targets.iter().enumerate() {
-            let rgb = if let Some(slot) = target.appearance {
-                Srgb8::new(
-                    evaluation
-                        .occurrence_at(slot)
-                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
-                        .visible(),
-                )
-            } else {
-                values[index]
-            };
-            let point_lab = lab(rgb);
-            let delta = f64::from_bits(target.declaration.max_delta_bits);
-            let identity_failed = target
-                .declaration
-                .intent
-                .as_ref()
-                .is_some_and(|intent| !intent.identity.contains(rgb));
-            if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
-                has_violation = true;
-                violations += usize::from(context.represents_case(case));
-            }
-            scores[index] = scores[index].max(squared_distance(
-                point_lab,
-                context.preferred[case * count + index],
-            ));
-        }
+        collector
+            .observe(case, &evaluation)
+            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
     }
-    // Every original case is assessed. Representatives only normalize the
-    // heuristic count; a failure outside them can never become a valid tuple.
-    Ok(violations.max(usize::from(has_violation)))
+    Ok(collector.violations())
 }
 
 fn assess<E: ProgramConstraintEvaluatorSetV1>(
@@ -280,7 +312,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     apply_targets::<E>(context.targets, runtime, values)?;
-    let intent_violations = intent_scores(context, runtime, epoch, scenarios, values, scores)?;
+    let mut collector = IntentScoreCollectorV1::new(context, values, scores);
     arena.clear();
     let hard_failed = scan_program_candidate_scoped(
         runtime,
@@ -295,6 +327,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             },
             outputs: None,
             point_causal: None,
+            physical_case: Some(&mut collector),
         },
         context.constraint_indices.map_or(
             ProgramCandidateScanV1::Full { previous: None },
@@ -306,7 +339,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
         .iter()
         .filter(|cell| context.represents_case(cell.case_index()) && cell.result().is_violation())
         .count();
-    Ok(intent_violations
+    Ok(collector.violations()
         + context
             .domains
             .iter()

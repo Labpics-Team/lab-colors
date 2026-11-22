@@ -44,6 +44,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             },
             outputs: None,
             point_causal: None,
+            physical_case: None,
         },
         None,
     )?;

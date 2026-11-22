@@ -4201,6 +4201,16 @@ where
     })
 }
 
+/// A borrowed consumer shares the already resolved physical case. It cannot
+/// change bindings or retain a workspace view across cases.
+trait ProgramPhysicalCaseObserverV1 {
+    fn observe(
+        &mut self,
+        case_index: usize,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Result<(), ()>;
+}
+
 struct ProgramCandidateCollectionV1<'buffers, Evaluation>
 where
     Evaluation: ProgramConstraintEvaluatorSetV1,
@@ -4208,6 +4218,7 @@ where
     evidence: ProgramConstraintEvidenceCaptureV1<'buffers, Evaluation>,
     outputs: Option<&'buffers mut Vec<ProgramPaintOutputV1>>,
     point_causal: Option<ProgramPointCausalBuffersV1<'buffers>>,
+    physical_case: Option<&'buffers mut dyn ProgramPhysicalCaseObserverV1>,
 }
 
 impl<Evaluation> ProgramCandidateCollectionV1<'_, Evaluation>
@@ -4219,6 +4230,7 @@ where
             evidence: ProgramConstraintEvidenceCaptureV1::None,
             outputs: None,
             point_causal: None,
+            physical_case: None,
         }
     }
 }
@@ -4580,6 +4592,7 @@ where
                     records: &mut arena.point_causal_records,
                     steps: &mut arena.point_causal_steps,
                 }),
+                physical_case: None,
             },
             None,
         )? {
@@ -4606,6 +4619,7 @@ where
                     },
                     outputs: None,
                     point_causal: None,
+                    physical_case: None,
                 },
                 None,
             )? {
@@ -4728,6 +4742,7 @@ where
                     records: &mut arena.point_causal_records,
                     steps: &mut arena.point_causal_steps,
                 }),
+                physical_case: None,
             },
             previous,
         )?
@@ -4776,6 +4791,7 @@ where
                 },
                 outputs: (!has_hard_constraints).then_some(&mut arena.outputs),
                 point_causal,
+                physical_case: None,
             },
             None,
         )? {
@@ -4797,6 +4813,7 @@ where
                     records: &mut arena.point_causal_records,
                     steps: &mut arena.point_causal_steps,
                 }),
+                physical_case: None,
             },
             None,
         )?;
@@ -4923,6 +4940,7 @@ where
         mut evidence,
         mut outputs,
         mut point_causal,
+        mut physical_case,
     } = collection;
     let observation = scenario_set.observation();
     let schema = &epoch.observation_group.schema;
@@ -4936,7 +4954,10 @@ where
     let case_count = scenario_set.len().get();
     let previous_storage = previous
         .filter(|verified| {
-            Evaluation::supports_evidence_copy()
+            // Saved constraint evidence cannot replace a physical view needed
+            // by the observer. Ordinary fixed updates keep their reuse path.
+            physical_case.is_none()
+                && Evaluation::supports_evidence_copy()
                 && matches!(verified.origin, CandidateOriginV1::Fixed)
                 && !epoch
                     .constraint_phases
@@ -5095,6 +5116,11 @@ where
             .as_mut()
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
             .evaluate_surface_inputs_canonical(|index| values[index].srgb8());
+        if let Some(observer) = physical_case.as_mut() {
+            observer
+                .observe(case_index, &evaluation)
+                .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+        }
         runtime.presentation_cache.begin_case(phase);
 
         if let Some(point_causal) = point_causal.as_mut() {
