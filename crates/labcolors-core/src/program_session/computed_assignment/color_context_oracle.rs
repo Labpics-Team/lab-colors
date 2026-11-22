@@ -104,7 +104,7 @@ fn oracle(intrinsic: bool) -> (usize, [[u8; 3]; 2]) {
     )
 }
 
-fn color_target(index: usize) -> Target {
+fn color_target(index: usize) -> Result<Target, String> {
     let anchor = Srgb8::new(ANCHORS[index]);
     let mut declaration = ComputedTargetV1::color(
         anchor,
@@ -119,7 +119,7 @@ fn color_target(index: usize) -> Target {
                     lightness: None,
                 },
             )
-            .unwrap(),
+            .map_err(|error| format!("target {index} identity: {error:?}"))?,
             appearance: Some(OccurrenceId::new(5 + index as u32 * 10)),
             tone: None,
         },
@@ -131,29 +131,31 @@ fn color_target(index: usize) -> Target {
         upper: UPPER[index],
     };
     declaration.preference = index as u64;
-    Target::new(
+    Ok(Target::new(
         TargetId::new(10 + index as u32 * 10),
         TargetIntentV1::Computed(declaration),
-    )
+    ))
 }
 
-fn context() -> AppearanceContextId {
-    AppearanceContextId::from_inputs(
+fn context() -> Result<AppearanceContextId, String> {
+    Ok(AppearanceContextId::from_inputs(
         AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
         IEC_SRGB_D65_XYZ_FRAME_V1,
-        AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
-        BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+        AdaptingLuminanceCdM2::try_new(64.0)
+            .map_err(|error| format!("adapting luminance: {error:?}"))?,
+        BackgroundLuminanceRatio::try_new(0.2)
+            .map_err(|error| format!("background luminance: {error:?}"))?,
         SurroundProfileId::AverageV1,
-    )
+    ))
 }
 
-fn coupled(reverse: bool) -> Program<CoreProgramEvaluatorsV1> {
+fn coupled(reverse: bool) -> Result<Program<CoreProgramEvaluatorsV1>, String> {
     let mut declaration = program(
-        color_target(0),
+        color_target(0)?,
         CoreProgramConstraintInvocationV1::ExactSrgb8(Srgb8::new(REQUIRED)),
         CoreProgramEvaluatorsV1,
     );
-    declaration.targets.push(color_target(1));
+    declaration.targets.push(color_target(1)?);
     declaration.opacities = vec![OpacityInput::new(OpacityInputId::new(30), 0.5)];
     declaration.paints = vec![
         Paint::Solid {
@@ -185,14 +187,14 @@ fn coupled(reverse: bool) -> Program<CoreProgramEvaluatorsV1> {
             PaintId::new(40),
             SurfaceId::new(4),
             CompositionProfile::EncodedSrgb8SourceOverV1,
-            context(),
+            context()?,
         ),
         Occurrence::new(
             OccurrenceId::new(15),
             PaintId::new(41),
             SurfaceId::new(14),
             CompositionProfile::EncodedSrgb8SourceOverV1,
-            context(),
+            context()?,
         ),
     ];
     declaration.constraints = ConstraintSet::new(
@@ -214,11 +216,11 @@ fn coupled(reverse: bool) -> Program<CoreProgramEvaluatorsV1> {
         declaration.occurrences.reverse();
         declaration.outputs.reverse();
     }
-    declaration
+    Ok(declaration)
 }
 
 #[test]
-fn visible_objective_and_bounds_match_exhaustive_coupled_cube_oracle() {
+fn visible_objective_and_bounds_match_exhaustive_coupled_cube_oracle() -> Result<(), String> {
     let (feasible, expected) = oracle(false);
     assert_eq!(feasible, 120);
     assert_ne!(
@@ -228,13 +230,16 @@ fn visible_objective_and_bounds_match_exhaustive_coupled_cube_oracle() {
     );
     let mut identity = None;
     for reverse in [false, true] {
-        let owner = compile_assignment(coupled(reverse), 65_536).unwrap();
+        let owner = compile_assignment(coupled(reverse)?, 65_536)
+            .map_err(|error| format!("compile: {error:?}"))?;
         if let Some(expected_identity) = identity {
             assert_eq!(owner.owner_generation.content_identity, expected_identity);
         } else {
             identity = Some(owner.owner_generation.content_identity);
         }
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(|error| format!("instantiate: {error:?}"))?;
         let mut observed = update(1, 0);
         let mut cases: Vec<_> = BACKDROPS
             .into_iter()
@@ -252,7 +257,10 @@ fn visible_objective_and_bounds_match_exhaustive_coupled_cube_oracle() {
         }
         observed.payload =
             ObservationPayloadInput::Scenarios(ObservedScenarioSetInput { scenarios: cases });
-        session.prepare_update(observed).unwrap().commit();
+        session
+            .prepare_update(observed)
+            .map_err(|error| format!("update: {error:?}"))?
+            .commit();
         let result = session
             .state()
             .current_verified()
@@ -268,11 +276,13 @@ fn visible_objective_and_bounds_match_exhaustive_coupled_cube_oracle() {
             );
         }
     }
+    Ok(())
 }
 
 #[test]
-fn contextual_search_preserves_a_raw_computed_domain_when_its_anchor_is_outside() {
-    let mut declaration = coupled(false);
+fn contextual_search_preserves_a_raw_computed_domain_when_its_anchor_is_outside()
+-> Result<(), String> {
+    let mut declaration = coupled(false)?;
     declaration.targets[0] = tests::target(10, 150, 0, 3, 0);
     let TargetIntentV1::Computed(child) = &mut declaration.targets[1].intent else {
         panic!()
@@ -282,15 +292,22 @@ fn contextual_search_preserves_a_raw_computed_domain_when_its_anchor_is_outside(
         upper: ANCHORS[1],
     };
     declaration.constraints = ConstraintSet::new(vec![], vec![]);
-    let owner = compile_assignment(declaration, 4096).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let owner =
+        compile_assignment(declaration, 4096).map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("update: {error:?}"))?
+        .commit();
     let result = session
         .state()
         .current_verified()
-        .unwrap()
+        .ok_or("the bounded contextual tuple must be ready")?
         .computed_for_test();
     assert_eq!(result.values[0], Srgb8::new([3; 3]));
     assert_eq!(result.values[1], Srgb8::new(ANCHORS[1]));
     assert_eq!(result.search.completion, CompletionV1::Complete);
+    Ok(())
 }

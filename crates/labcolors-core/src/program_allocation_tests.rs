@@ -418,15 +418,19 @@ fn multiple_outputs_use_one_exact_owned_buffer_without_reallocation() {
 }
 
 #[test]
-fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() {
+fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() -> Result<(), String>
+{
     let mut session = crate::program_wire::compile_program_wire(include_bytes!(
         "../tests/fixtures/computed-coupled.lcpw"
     ))
     .expect("the computed fixture must compile")
     .instantiate(100)
     .expect("the computed fixture must instantiate");
-    let input = ProgramObservationV1::from_rgb8(&[7], &[255; 3], 1).unwrap();
-    let prepared = session.prepare_observed_view(1, input).unwrap();
+    let input = ProgramObservationV1::from_rgb8(&[7], &[255; 3], 1)
+        .map_err(|error| format!("observation: {error:?}"))?;
+    let prepared = session
+        .prepare_observed_view(1, input)
+        .map_err(|error| format!("prepare: {error:?}"))?;
     assert_eq!(prepared.snapshot().state(), ProgramSnapshotStateV1::Ready);
     assert_eq!(prepared.snapshot().outputs().len(), 2);
     let mut retained = None;
@@ -449,7 +453,10 @@ fn prepared_commit_does_not_repeat_solving_or_allocate_after_host_acceptance() {
     );
     drop(failure);
     assert_eq!(
-        session.update_observed_view(1, input).unwrap(),
-        retained.unwrap()
+        session
+            .update_observed_view(1, input)
+            .map_err(|error| format!("replay: {error:?}"))?,
+        retained.ok_or("commit callback must retain its snapshot")?
     );
+    Ok(())
 }

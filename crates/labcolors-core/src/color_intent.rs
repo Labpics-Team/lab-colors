@@ -312,31 +312,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn identity_preserves_source_direction_without_using_the_role_name() {
+    fn identity_preserves_source_direction_without_using_the_role_name() -> Result<(), String> {
         let blue = ColorIdentityDomainV1::new(
             Srgb8::new([0, 103, 244]),
             false,
             IdentityOptionsV1::default(),
         )
-        .unwrap();
+        .map_err(|error| format!("blue identity: {error:?}"))?;
         assert!(blue.contains(blue.source()));
         assert!(blue.contains(Srgb8::new([90, 155, 255])));
         assert!(!blue.contains(Srgb8::new([244, 103, 0])));
         assert!(!blue.contains(Srgb8::new([128; 3])));
         assert!(!blue.contains(Srgb8::new([0; 3])));
+        Ok(())
     }
 
     #[test]
-    fn neutral_is_an_exact_gray_locus_not_a_noisy_angle() {
+    fn neutral_is_an_exact_gray_locus_not_a_noisy_angle() -> Result<(), String> {
         let neutral =
             ColorIdentityDomainV1::new(Srgb8::new([128; 3]), false, IdentityOptionsV1::default())
-                .unwrap();
+                .map_err(|error| format!("neutral identity: {error:?}"))?;
         for channel in 0..=255 {
             assert!(neutral.contains(Srgb8::new([channel; 3])));
         }
         assert!(!neutral.contains(Srgb8::new([128, 128, 129])));
         assert!(!neutral.may_intersect_rgb_box([0, 100, 200], [20, 120, 220]));
         assert!(neutral.may_intersect_rgb_box([100, 90, 80], [120, 130, 140]));
+        Ok(())
     }
 
     #[test]
@@ -389,10 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn policy_identity_canonicalizes_zero_and_keeps_explicit_choices() {
+    fn policy_identity_canonicalizes_zero_and_keeps_explicit_choices() -> Result<(), String> {
         let source = Srgb8::new([0, 103, 244]);
-        let make = |value| {
-            ColorIdentityDomainV1::new(
+        let make = |value| -> Result<[u8; 46], String> {
+            Ok(ColorIdentityDomainV1::new(
                 source,
                 false,
                 IdentityOptionsV1 {
@@ -401,22 +403,25 @@ mod tests {
                     lightness: Some([value, 1.0]),
                 },
             )
-            .unwrap()
-            .identity_bytes()
+            .map_err(|error| format!("explicit identity: {error:?}"))?
+            .identity_bytes())
         };
-        assert_eq!(make(0.0), make(-0.0));
+        assert_eq!(make(0.0)?, make(-0.0)?);
         assert_ne!(
-            make(0.0),
+            make(0.0)?,
             ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
-                .unwrap()
+                .map_err(|error| format!("default identity: {error:?}"))?
                 .identity_bytes()
         );
+        Ok(())
     }
 
     #[test]
-    fn client_curve_allows_different_surface_orders() {
-        let first = ToneCurveV1::new(7, vec![[0.0, 0.12], [1.0, 0.96]]).unwrap();
-        let second = ToneCurveV1::new(7, vec![[0.0, 0.20], [1.0, 1.0]]).unwrap();
+    fn client_curve_allows_different_surface_orders() -> Result<(), String> {
+        let first = ToneCurveV1::new(7, vec![[0.0, 0.12], [1.0, 0.96]])
+            .map_err(|error| format!("first curve: {error:?}"))?;
+        let second = ToneCurveV1::new(7, vec![[0.0, 0.20], [1.0, 1.0]])
+            .map_err(|error| format!("second curve: {error:?}"))?;
         let dark = Srgb8::new([0; 3]);
         let light = Srgb8::new([255; 3]);
         let neutral = Srgb8::new([128; 3]);
@@ -430,6 +435,7 @@ mod tests {
         );
         assert_eq!(first.input(), 7);
         assert_eq!(first.stops().len(), 2);
+        Ok(())
     }
 
     #[test]
@@ -454,9 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn tonal_seeds_are_opaque_bytes_and_keep_a_useful_blue_path() {
+    fn tonal_seeds_are_opaque_bytes_and_keep_a_useful_blue_path() -> Result<(), String> {
         let source = Srgb8::new([0, 103, 244]);
-        let identity = ColorIdentityDomainV1::new(source, false, Default::default()).unwrap();
+        let identity = ColorIdentityDomainV1::new(source, false, Default::default())
+            .map_err(|error| format!("blue identity: {error:?}"))?;
         let mut previous = 0.0;
         for step in 1..255 {
             let candidate = color_at_lightness(source, f64::from(step) / 255.0);
@@ -471,5 +478,6 @@ mod tests {
         }
         assert_eq!(color_at_lightness(source, 0.0), Srgb8::new([0; 3]));
         assert_eq!(color_at_lightness(source, 1.0), Srgb8::new([255; 3]));
+        Ok(())
     }
 }

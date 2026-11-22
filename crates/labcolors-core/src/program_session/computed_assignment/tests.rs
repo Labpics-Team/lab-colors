@@ -1231,15 +1231,21 @@ fn full_rgb_product_budget_limits_search_instead_of_admission() {
 }
 
 #[test]
-fn computed_domain_and_preference_do_not_need_an_additional_constraint() {
+fn computed_domain_and_preference_do_not_need_an_additional_constraint() -> Result<(), String> {
     let declaration = || cube_product([FULL_RGB; 3], [0, 96, 48], 1.0, None);
     assert!(compile_assignment(declaration(), EXECUTION_NODE_LIMIT_V1).is_ok());
 
     let mut missing_target = declaration();
     missing_target.constraints.hard.pop();
-    let owner = compile_assignment(missing_target, EXECUTION_NODE_LIMIT_V1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let owner = compile_assignment(missing_target, EXECUTION_NODE_LIMIT_V1)
+        .map_err(|error| format!("compile without target constraint: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("update: {error:?}"))?
+        .commit();
     assert!(session.state().current_verified().is_some());
 
     let mut missing_output = declaration();
@@ -1257,13 +1263,19 @@ fn computed_domain_and_preference_do_not_need_an_additional_constraint() {
     missing_output
         .outputs
         .push(OutputBinding::new(OutputSlotId::new(40), PaintId::new(40)));
-    let owner = compile_assignment(missing_output, EXECUTION_NODE_LIMIT_V1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let owner = compile_assignment(missing_output, EXECUTION_NODE_LIMIT_V1)
+        .map_err(|error| format!("compile with fixed output: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("update: {error:?}"))?
+        .commit();
     let outputs = &session
         .state()
         .current_verified()
-        .unwrap()
+        .ok_or("the unconstrained computed tuple must be ready")?
         .computed_for_test()
         .arena
         .storage
@@ -1274,6 +1286,7 @@ fn computed_domain_and_preference_do_not_need_an_additional_constraint() {
             .any(|output| output.output == OutputSlotId::new(40)
                 && output.paint.source() == Srgb8::new([255; 3]))
     );
+    Ok(())
 }
 
 #[test]
