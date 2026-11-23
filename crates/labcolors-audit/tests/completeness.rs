@@ -1,5 +1,6 @@
 use labcolors_audit::{ArtifactClass, Disposition, DispositionedArtifact, RawArtifact, audit_gate};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -61,12 +62,14 @@ fn missing_source_root_is_an_input_failure() -> TestResult {
 }
 
 fn with_source_tree(operation: impl FnOnce(&std::path::Path) -> TestResult) -> TestResult {
+    static NEXT_TREE: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
-        "labcolors-audit-input-{}-{}",
+        "labcolors-audit-input-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
+            .as_nanos(),
+        NEXT_TREE.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir(&root)?;
     let result = (|| -> TestResult {

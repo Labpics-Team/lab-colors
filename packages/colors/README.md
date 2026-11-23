@@ -24,10 +24,6 @@ npm install @labpics/colors@^1.2
 JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в пакет.
 Сохраните lockfile, чтобы закрепить версию.
 
-[Самостоятельный пример интерфейса](https://github.com/Labpics-Team/lab-colors/tree/main/examples/contextual-colors)
-показывает связанные заливку и текст, локальный лист с фиксированным фоном и
-полупрозрачный слой. В нём можно менять фон, исходные акценты и материал.
-
 <a id="первый-маршрут"></a>
 
 ## Первый запуск в браузере
@@ -125,9 +121,6 @@ if (update.state === "rejected") {
 import init from "@labpics/colors";
 await init({ module_or_path: wasmUrl });
 ```
-
-В [готовом примере](https://github.com/Labpics-Team/lab-colors/tree/main/examples/contextual-colors)
-есть import map и небольшой dev server; отдельный bundler не требуется.
 
 ## Node.js
 
