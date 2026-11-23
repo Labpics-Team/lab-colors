@@ -142,7 +142,11 @@ export function inputArrayLength(values, what) {
     invalid(`${what} must be a readable array`);
   }
   if (!isArray) invalid(`${what} must be an array`);
-  return inputProperty(values, "length", what);
+  const length = inputProperty(values, "length", what);
+  if (!Number.isInteger(length) || length < 0 || length > 0xffff_ffff) {
+    invalid(`${what} must have a valid array length`);
+  }
+  return length;
 }
 
 export function indexedValues(values, length, what) {

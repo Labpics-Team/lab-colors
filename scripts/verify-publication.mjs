@@ -5,7 +5,7 @@ import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "n
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyPackageRelease } from "./verify-package-release.mjs";
+import { pythonInvocation, verifyPackageRelease } from "./verify-package-release.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -74,7 +74,8 @@ if mode != 'control' and not changed:
 payload = raw.getvalue()[:members_end] + bytes(2 * tarfile.BLOCKSIZE)
 sys.stdout.buffer.write(gzip.compress(payload, mtime=0))
 `;
-  const edited = spawnSync(process.platform === "win32" ? "python" : "python3", ["-c", editTar, tarball, mode], {
+  const python = pythonInvocation();
+  const edited = spawnSync(python.commandName, [...python.argsPrefix, "-c", editTar, tarball, mode], {
     cwd: ROOT, env, timeout: 30_000, maxBuffer: 64 * 1024 * 1024,
   });
   if (edited.error) throw edited.error;

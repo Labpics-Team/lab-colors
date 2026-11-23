@@ -1171,19 +1171,23 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             .try_reserve_exact(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         for (target, compiled) in search.context.targets.iter().enumerate() {
-            let rank = compiled
+            let depth = compiled
                 .appearance
                 .map(|slot| {
                     epoch
                         .graph
-                        .occurrence_execution_rank(slot)
+                        .occurrence_dependency_depth(slot)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)
                 })
                 .transpose()?
                 .unwrap_or(usize::MAX);
-            repair_order.push((rank, target));
+            repair_order.push((depth, target));
         }
         repair_order.sort_unstable();
+        let mut opposite_siblings = cloned(&repair_order).map_err(allocation)?;
+        for siblings in opposite_siblings.chunk_by_mut(|left, right| left.0 == right.0) {
+            siblings.reverse();
+        }
         let starts = search
             .context
             .local_cases
@@ -1195,10 +1199,13 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // Each branch gets its own repair trajectory. A jointly infeasible
         // branch can be close to a feasible composition even when no single
         // coordinate move from the authored paints improves the failure count.
-        // Both physical dependency orders restart from that same branch: an
-        // upstream repair may consume capacity needed by a downstream relation.
-        // Authored preference orders selection, never this traversal. All starts share
-        // the existing quarter-budget; unused work passes to the next start.
+        // Both sibling directions restart from that same branch, beginning
+        // downstream: an upstream repair may consume capacity needed by a
+        // downstream relation. Reversing a flat order couples these independent
+        // choices and misses both possible downstream-first sibling repairs.
+        // Only dependency depth orders different levels; equal-depth uses retain
+        // authored preference. Numeric occurrence IDs cannot order siblings.
+        // All starts share the existing quarter-budget; unused work passes on.
         for start in 0..starts {
             if search.evidence.visited >= seed_limit {
                 break;
@@ -1238,15 +1245,20 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             // The legacy distance only guides repair. Every hard-valid point
             // is retained and compared by the unchanged typed reference key.
+            let order = if start % 2 == 0 {
+                &repair_order
+            } else {
+                &opposite_siblings
+            };
             'repair: for pass in 0.. {
                 let mut changed = false;
                 for position in 0..count {
-                    let coordinate = if (pass + start) % 2 == 0 {
+                    let coordinate = if pass % 2 == 0 {
                         count - 1 - position
                     } else {
                         position
                     };
-                    let target = repair_order[coordinate].1;
+                    let target = order[coordinate].1;
                     if search.context.targets[target].declaration.intent.is_none() {
                         continue;
                     }

@@ -1090,11 +1090,11 @@ fn complete_field_schema() -> (FieldDeclarationsV1, Vec<ProgramFieldOutputBindin
 
 #[test]
 fn complete_program_schema_v9_digest_is_cross_platform_golden() {
-    // Вместе с fixed golden этот Program содержит каждый V9 vertex/edge tag,
-    // все constraint topology и оба режима. Случайная смена кодировки требует
+    // Вместе с fixed golden этот Program содержит прежние V9 vertex/edge tags,
+    // все legacy constraint topology и оба режима. Случайная смена кодировки требует
     // явной смены версии, а не тихого перевыпуска прежнего content address.
-    // Nominal release v2 меняет один семантический вход (release SHA-256),
-    // а не V9-кодировку: прежний Program не должен иметь новую идентичность.
+    // Исправленный nominal release меняет один семантический вход (release SHA-256).
+    // Прежний pinned release ниже сохраняет отдельную проверку V9-кодировки.
     let (field, field_outputs) = complete_field_schema();
     let compiled = full_program(
         canonical_full_ids(),
@@ -1106,15 +1106,14 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
     .unwrap();
 
     let (field, field_outputs) = complete_field_schema();
-    let schema = crate::program_session::program_identity_graph_schema_for_test(
-        &full_program(
-            canonical_full_ids(),
-            false,
-            FullMutation::CompleteSchemaGolden,
-        )
-        .with_field_declarations(field, field_outputs),
+    let declaration = full_program(
+        canonical_full_ids(),
+        false,
+        FullMutation::CompleteSchemaGolden,
     )
-    .unwrap();
+    .with_field_declarations(field, field_outputs);
+    let schema = crate::program_session::program_identity_graph_schema_for_test(&declaration)
+        .expect("complete legacy fixture has a valid identity graph");
     assert_eq!(schema.0, (1_u8..=29).collect::<Vec<_>>());
     let edge_role_count = crate::program_session::program_identity_edge_role_count_for_test();
     // Contextual targets and ordered relation members extend tags without changing legacy V9 bytes.
@@ -1124,6 +1123,22 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
 
     assert_eq!(
         compiled.content_identity().as_bytes(),
+        &[
+            178, 246, 19, 179, 36, 44, 124, 14, 60, 229, 29, 229, 231, 252, 68, 30, 95, 104, 184,
+            122, 216, 47, 195, 154, 39, 242, 112, 98, 102, 48, 172, 187,
+        ]
+    );
+    let legacy = crate::program_session::content_identity_with_clean_set_release_for_test(
+        &declaration,
+        [
+            0x5f, 0x8c, 0xeb, 0xdd, 0xf1, 0x6b, 0x13, 0x3d, 0x61, 0x7c, 0x07, 0x91, 0x46, 0xde,
+            0x47, 0xb5, 0xf7, 0x18, 0x5c, 0x7f, 0x41, 0x5b, 0x2f, 0x5b, 0x6b, 0x8e, 0x85, 0x14,
+            0x16, 0xe2, 0x35, 0x9c,
+        ],
+    )
+    .expect("historical clean-set release preserves the prior graph identity");
+    assert_eq!(
+        legacy.as_bytes(),
         &[
             233, 128, 235, 40, 248, 23, 223, 249, 143, 131, 221, 90, 4, 88, 91, 177, 52, 68, 253,
             222, 136, 93, 251, 121, 118, 84, 242, 82, 33, 210, 131, 194,

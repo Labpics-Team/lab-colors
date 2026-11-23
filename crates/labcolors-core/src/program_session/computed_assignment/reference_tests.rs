@@ -461,6 +461,42 @@ fn reference_map_and_relation_order_are_semantic_but_declaration_order_is_not() 
 }
 
 #[test]
+fn contextual_reference_identity_has_a_cross_platform_golden() {
+    let mut p = hierarchy();
+    let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+        unreachable!("hierarchy fixture declares computed targets")
+    };
+    target
+        .intent
+        .as_mut()
+        .expect("reference target carries color intent")
+        .tone = Some(
+        ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]])
+            .expect("finite descending tone curve is valid"),
+    );
+    let (_, roles) = crate::program_session::program_identity_graph_schema_for_test(&p)
+        .expect("reference hierarchy has valid identity graph bindings");
+    // The legacy V9 golden covers roles 1..=37. Pin the added tone-input,
+    // appearance, ordered-member and member-occurrence bindings here.
+    assert_eq!(
+        roles
+            .into_iter()
+            .filter(|role| *role >= 38)
+            .collect::<Vec<_>>(),
+        [38, 39, 40, 41]
+    );
+    let owner =
+        compile_assignment(p, 1024).expect("reference hierarchy with explicit tone compiles");
+    assert_eq!(
+        owner.content_identity().as_bytes(),
+        &[
+            63, 176, 24, 203, 195, 74, 182, 156, 7, 147, 120, 218, 129, 28, 27, 214, 243, 161, 114,
+            34, 128, 184, 113, 126, 82, 232, 217, 103, 26, 57, 115, 234,
+        ]
+    );
+}
+
+#[test]
 fn opaque_endpoints_keep_the_computed_backdrop_in_the_relation_component() {
     let mut p = hierarchy();
     p.targets.push(color(40, 45, 255, 2));
@@ -1131,7 +1167,10 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
         for priority in 0..3 {
             let sources = [[37, 99, 235], [217, 119, 6], [124, 58, 237], [13, 148, 136]];
             let mut p = singleton(Srgb8::new(sources[0]), 255, 1.0);
-            p.reference_inputs.as_mut().unwrap()[0].1 = Srgb8::new([246, 244, 240]);
+            p.reference_inputs
+                .as_mut()
+                .expect("chromatic fixture declares its authored backdrop")[0]
+                .1 = Srgb8::new([246, 244, 240]);
             p.targets.clear();
             p.paints.clear();
             p.occurrences.clear();
@@ -1152,9 +1191,13 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                     unreachable!()
                 };
                 value.anchor = anchor;
-                value.intent.as_mut().unwrap().identity =
+                value
+                    .intent
+                    .as_mut()
+                    .expect("chromatic target carries source identity")
+                    .identity =
                     ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
-                        .unwrap();
+                        .expect("fixture colors admit their own source identity");
                 value.preference = match priority {
                     0 => index,
                     1 => count + 1 - index,
@@ -1212,8 +1255,11 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                         OccurrenceId::new(15 + count as u32 * 10),
                     ],
                 ));
-            let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
-            let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+            let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
+                .expect("authored chromatic composition compiles");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("chromatic composition instantiates");
             authored_values.sort_unstable();
             let authored_values = authored_values
                 .into_iter()
@@ -1237,7 +1283,10 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                     SurfaceInputPortId::new(2),
                     ColorSignal::from_srgb8(Srgb8::new(backdrop)),
                 );
-                session.prepare_update(observation).unwrap().commit();
+                session
+                    .prepare_update(observation)
+                    .expect("declared backdrop update is admitted")
+                    .commit();
                 let verified = session
                     .state()
                     .current_verified()

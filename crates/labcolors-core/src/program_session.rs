@@ -94,6 +94,8 @@ use computed_assignment::{
 };
 pub(crate) use identity::ProgramContentIdentityV9;
 #[cfg(test)]
+pub(crate) use identity::content_identity_with_clean_set_release_for_test;
+#[cfg(test)]
 pub(crate) use identity::edge_role_count_for_test as program_identity_edge_role_count_for_test;
 #[cfg(test)]
 pub(crate) use identity::graph_schema_for_test as program_identity_graph_schema_for_test;

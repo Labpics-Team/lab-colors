@@ -16,8 +16,8 @@ assert.match(binaryenNodeArchiveSha256, /^[0-9a-f]{64}$/u);
 const optimizerFlags = wasmOptFlags.trim().split(/\s+/u);
 assert.ok(optimizerFlags.length > 0 && optimizerFlags.every((flag) => flag.startsWith("-")));
 
-function run(command, args, capture = false) {
-  const result = spawnSync(command, args, { cwd: ROOT, encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
+function run(command, args, capture = false, env = process.env) {
+  const result = spawnSync(command, args, { cwd: ROOT, env, encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${command} failed: ${result.signal ?? result.stderr ?? result.status}`);
   return result.stdout?.trim();
@@ -73,8 +73,21 @@ try {
   const optimizer = join(binaryen, "wasm-opt.js");
   await Promise.all([access(optimizer), access(join(binaryen, "wasm-opt.wasm"))]);
   const crate = join(ROOT, "crates/labcolors-wasm");
+  const buildEnvironment = {
+    ...process.env,
+    GITHUB_WORKSPACE: resolve(ROOT),
+    CARGO_HOME: resolve(process.env.CARGO_HOME || join(homedir(), ".cargo")),
+  };
+  // Use the canonical build's path-independent Rust inputs on local checkouts too.
+  buildEnvironment.CARGO_ENCODED_RUSTFLAGS = budget.recipe.rustPathRemap.map((mapping) => {
+    const separator = mapping.indexOf("=");
+    assert.ok(separator > 0 && separator < mapping.length - 1, "invalid Rust path mapping");
+    const source = buildEnvironment[mapping.slice(0, separator)];
+    assert.ok(source, `missing build path ${mapping.slice(0, separator)}`);
+    return `--remap-path-prefix=${source}=${mapping.slice(separator + 1)}`;
+  }).join("\x1f");
   run("wasm-pack", ["build", "--no-opt", "--release", "--target", "web",
-    "--out-dir", relative(crate, dirname(wasm)), "--out-name", basename(wasm, "_bg.wasm"), crate, "--locked"]);
+    "--out-dir", relative(crate, dirname(wasm)), "--out-name", basename(wasm, "_bg.wasm"), crate, "--locked"], false, buildEnvironment);
   const before = (await readFile(wasm)).length;
   run(process.execPath, [optimizer, wasm, "-o", optimized, ...optimizerFlags]);
   const bytes = await readFile(optimized);

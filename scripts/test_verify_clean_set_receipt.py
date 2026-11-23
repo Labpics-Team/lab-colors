@@ -45,6 +45,8 @@ TRANSITIVE_EXECUTOR_ROLES = (
     "point_attachment_source",
     "session_runtime_source",
     "signal_transport_source",
+    *(role for role, path in PRODUCT_ARTIFACT_PATHS.items()
+      if "/program_session/" in path or "program_wire" in role),
 )
 ATTACHMENT_PROOF_ROLES = (
     "point_attachment_allocator_oracle",
@@ -226,6 +228,15 @@ def _product_fixture(root: Path, research_commit: str, release_sha256: str) -> d
     artifacts = []
     for role, path in PRODUCT_ARTIFACT_PATHS.items():
         data = CANONICAL_CODEC if role == "runtime_codec" else f"{role}\n".encode()
+        if role == "classifier_source":
+            values = [f"0x{value:02x}" for value in bytes.fromhex(release_sha256)]
+            data = (
+                "pub(crate) const EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2: [u8; 32] = [\n"
+                + "".join("    " + ", ".join(values[start:start + 16]) + ",\n" for start in (0, 16))
+                + "];\n"
+            ).encode("ascii")
+        elif role == "verifier_source":
+            data = (REPO_ROOT / path).read_bytes()
         _write(root / path, data)
         license_id = (
             "CC-BY-4.0 AND CC-BY-SA-4.0" if role == "runtime_codec" else "MIT"
@@ -541,6 +552,30 @@ class ReceiptHostileTests(unittest.TestCase):
 
 
 class ReceiptRefreshLocaleTests(unittest.TestCase):
+    def test_refresh_derives_runtime_selector_and_artifact_roles_from_their_authorities(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = _fixture(Path(temporary))
+            fixture.write_pin()
+            script = fixture.product / "scripts/refresh_clean_set_receipt.py"
+            shutil.copyfile(REPO_ROOT / "scripts/refresh_clean_set_receipt.py", script)
+            source = fixture.product / PRODUCT_ARTIFACT_PATHS["classifier_source"]
+            original = source.read_bytes()
+            source.write_bytes(original.replace(
+                original.splitlines()[1], b"    " + b"0x00, " * 15 + b"0x00,", 1
+            ))
+            missing = "program_computed_reference_search_source"
+            fixture.receipt["artifacts"] = [entry for entry in fixture.receipt["artifacts"]
+                                            if entry["role"] != missing]
+            fixture.write_receipt()
+            process = subprocess.run([sys.executable, "-B", str(script)],
+                                     cwd=fixture.product, capture_output=True, check=False, timeout=30)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(source.read_bytes(), original)
+            receipt = json.loads(fixture.receipt_path.read_bytes())
+            self.assertEqual([entry["role"] for entry in receipt["artifacts"]],
+                             sorted(PRODUCT_ARTIFACT_PATHS))
+            verify_product_receipt(fixture.product, policy=fixture.policy)
+
     def test_refresh_status_and_byte_bindings_do_not_depend_on_text_locale(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / os.fsdecode(b"refresh-\xce\xbb")

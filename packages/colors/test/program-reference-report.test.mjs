@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import init, { compileProgramWire } from "../index.js";
+import { ProgramWireBuilderV3 } from "../program-wire/abi-v3.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
 
@@ -35,5 +36,48 @@ test("reference evidence is the same owned projection in the lightweight accesso
   } finally {
     for (const snapshot of snapshots) snapshot?.free();
     runtime.free();
+  }
+});
+
+test("numeric occurrence IDs cannot change repair of a colored reference hierarchy", () => {
+  const anchors = [[37, 99, 235], [217, 119, 6], [124, 58, 237], [13, 148, 136], [8, 21, 40], [20, 37, 59]];
+  const renamings = [
+    (i) => 500 + i,
+    (i) => 5000 + 37 * i,
+    (i) => 1000 - i,
+    (i) => 500 + (i < 4 ? i : 9 - i),
+  ];
+  for (const priority of [[0, 1, 2, 3, 4, 5], [4, 5, 3, 2, 1, 0]]) {
+    let expected;
+    for (const occurrence of renamings) {
+      const builder = new ProgramWireBuilderV3().surfaceInputPort(1).inputSurface(2, 1);
+      for (const [i, anchor] of anchors.entries()) {
+        builder.colorTarget(100 + i, anchor, { referenceAppearance: occurrence(i) }).solidPaint(200 + i, 100 + i);
+        if (i < 4) builder.opacityInput(400 + i, i % 2 ? 0.1 : 0.12).opacityPaint(300 + i, 200 + i, 400 + i);
+        builder.pointOccurrence(occurrence(i), (i < 4 ? 300 : 200) + i, i === 0 ? 2 : 600 + Math.min(i - 1, 3));
+        if (i < 4) builder.occurrenceSurface(600 + i, occurrence(i));
+        else builder.wcag22VisibleUnary(true, 700 + i, occurrence(i), 1);
+        builder.output(800 + i, (i < 4 ? 300 : 200) + i);
+      }
+      builder.preserveTonalHierarchy(900, [occurrence(4), occurrence(5)]);
+      builder.assignment(priority.map((i) => 100 + i), { reference: [[1, [246, 244, 240]]] });
+      const runtime = compileProgramWire(builder.finish(), 1), frames = [];
+      try {
+        for (const [i, background] of [[246, 244, 240], [63, 36, 63], [246, 244, 240]].entries()) {
+          const snapshot = runtime.updateObserved(BigInt(i + 1), new Uint32Array([1]), new Uint8Array(background), 1);
+          try {
+            assert.equal(snapshot.state, "ready", `priority ${priority}, occurrence IDs ${anchors.map((_, i) => occurrence(i))}`);
+            frames.push({
+              optimality: snapshot.optimality,
+              colors: Array.from({ length: snapshot.outputCount() }, (_, j) =>
+                [snapshot.outputSlot(j), ...snapshot.outputRgb(j), snapshot.outputOpacity(j)]),
+            });
+          } finally { snapshot.free(); }
+        }
+        assert.deepEqual(frames[2], frames[0]);
+        if (expected) assert.deepEqual(frames, expected, "only nominal IDs changed");
+        else expected = frames;
+      } finally { runtime.free(); }
+    }
   }
 });

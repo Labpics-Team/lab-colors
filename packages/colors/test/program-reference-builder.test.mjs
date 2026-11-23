@@ -59,3 +59,24 @@ test("reference getter reentry cannot overwrite an admitted assignment", () => {
   }), ProgramWireError);
   assert.deepEqual(builder.finish(), inner);
 });
+
+test("malformed array lengths reject without reading entries or changing the builder", () => {
+  for (const length of [NaN, Infinity, -1, 1.5, "2", 2n, Symbol("length")]) {
+    const input = new Proxy([], {
+      get(_target, property) {
+        if (property === "length") return length;
+        assert.fail("invalid length must be rejected before reading entries");
+      },
+    });
+    for (const declare of [
+      (builder) => builder.preserveTonalHierarchy(1, input),
+      (builder) => builder.assignment(input),
+      (builder) => builder.assignment([], { reference: input }),
+    ]) {
+      const builder = new ProgramWireBuilderV3().source(1, [10, 20, 30]);
+      const before = builder.finish();
+      assert.throws(() => declare(builder), ProgramWireError);
+      assert.deepEqual(builder.finish(), before);
+    }
+  }
+});

@@ -218,3 +218,41 @@ test("colored material branches find a readable hierarchy without an explicit to
     assert.deepEqual(program.resolve({ canvas: "#f6f4f0" }).values, original.values);
   } finally { program.dispose(); }
 });
+
+test("Alert reference hierarchy keeps feasible updates and exposes an impossible colored backdrop", async () => {
+  // Exact roles/paints of Lab UI's Alert composition probe. Its text hierarchy
+  // and identical 4.5 contrast requirements are retained without a tone recipe.
+  const composite = (paint, background) => paint.rgb.map((value, i) =>
+    Math.round(value * paint.opacity + background[i] * (1 - paint.opacity)));
+  const y = (rgb) => rgb.reduce((sum, channel, i) => sum + luminance(channel) * [0.2126, 0.7152, 0.0722][i], 0);
+  const ratio = (left, right) => (Math.max(y(left), y(right)) + 0.05) / (Math.min(y(left), y(right)) + 0.05);
+  const blue = [40, 60, 100];
+  for (const dark of [false, true]) {
+    const reference = dark ? [28, 28, 30] : [255, 255, 255];
+    const c = colors({ reference: { canvas: reference } }), canvas = c.surface("canvas");
+    const heading = c.role("heading", dark ? [246, 248, 250] : [16, 16, 18]).on(canvas, { contrast: "wcag22-text" });
+    const description = c.role("description", dark ? [176, 176, 185] : [60, 60, 67]).on(canvas, { opacity: 0.722, contrast: "wcag22-text" });
+    const dangerIcon = c.role("dangerIcon", dark ? [255, 58, 58] : [255, 59, 48]).on(canvas, { contrast: "wcag22-graphic" });
+    const close = c.role("close", dark ? [176, 176, 185] : [60, 60, 67]).on(canvas, { opacity: 0.722, contrast: "wcag22-ui" });
+    const border = c.role("border", [120, 120, 128]).on(canvas, { opacity: dark ? 0.2 : 0.161 });
+    const focus = c.role("focus", dark ? [74, 143, 255] : [0, 122, 255]).on(canvas, { contrast: "wcag22-ui" });
+    c.preserveTonalHierarchy([heading, description]);
+    const program = await c.compile({ heading, description, dangerIcon, close, border, focus });
+    try {
+      const original = program.resolve({ canvas: reference });
+      assert.equal(original.state, "ready");
+      const requiredRatio = ratio(original.values.heading.rgb, reference)
+        / ratio(composite(original.values.description, reference), reference);
+      const maximumBlueContrast = Math.max(ratio([255, 255, 255], blue), ratio([0, 0, 0], blue));
+      assert.ok(4.5 * requiredRatio > maximumBlueContrast,
+        "even the entire sRGB domain cannot satisfy this authored hierarchy and both contrast floors on blue");
+      const feasible = program.resolve({ canvas: dark ? [255, 255, 255] : [0, 0, 0] });
+      assert.equal(feasible.state, "ready");
+      assert.equal(feasible.values.description.opacity, 0.722);
+      const impossible = program.resolve({ canvas: blue });
+      assert.ok(["unresolved", "conflict"].includes(impossible.state));
+      assert.equal("values" in impossible, false);
+      assert.deepEqual(program.resolve({ canvas: reference }).values, original.values);
+    } finally { program.dispose(); }
+  }
+});

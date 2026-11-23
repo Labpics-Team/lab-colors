@@ -1579,6 +1579,39 @@ pub(crate) const fn edge_role_count_for_test() -> usize {
     EDGE_ROLES_V1.len()
 }
 
+#[cfg(test)]
+pub(crate) fn content_identity_with_clean_set_release_for_test<Evaluation>(
+    program: &Program<Evaluation>,
+    release: [u8; 32],
+) -> Result<ProgramContentIdentityV9, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    // Pin the historical semantic input without adding an obsolete release to
+    // executable Program declarations. Every other graph byte stays current.
+    let mut graph = build_graph(program)?;
+    let mut replaced = false;
+    for mode in [
+        vertex_tag::CONSTRAINT_HARD,
+        vertex_tag::CONSTRAINT_REPORT_ONLY,
+    ] {
+        let current = declared_srgb8_clean_set_constraint_color(mode)?;
+        for color in &mut graph.colors {
+            if *color == current {
+                *color = declared_srgb8_clean_set_constraint_color_for_release(mode, release)?;
+                replaced = true;
+            }
+        }
+    }
+    if !replaced {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
+    Ok(ProgramContentIdentityV9(
+        *crate::sha256::digest(&canonical_preimage(&graph)?).as_bytes(),
+    ))
+}
+
 struct PartitionV1 {
     cells: Vec<Vec<usize>>,
 }

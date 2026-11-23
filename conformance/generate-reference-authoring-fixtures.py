@@ -49,7 +49,8 @@ if __name__ == "__main__":
     original = fixture.copy()
     fixture["referenceSingleton"] = reference_program(False).hex()
     hierarchy = reference_program(True)
-    assert hierarchy == (ROOT / "crates/labcolors-core/tests/fixtures/reference-hierarchy.lcpw").read_bytes()
+    if hierarchy != (ROOT / "crates/labcolors-core/tests/fixtures/reference-hierarchy.lcpw").read_bytes():
+        raise SystemExit("reference-hierarchy.lcpw differs from independent encoder")
     fixture["referenceHierarchy"] = hierarchy.hex()
     empty = [[] for _ in range(14)]
     empty[3].append(bytes([4, 0]) + u32(0) + u32(0))
