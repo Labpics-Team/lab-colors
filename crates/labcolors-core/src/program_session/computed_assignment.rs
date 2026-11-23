@@ -1322,6 +1322,7 @@ pub(crate) struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1
     execution_profile: [u8; 32],
     reference_selections:
         Option<std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>>,
+    components: std::sync::Arc<[components::VerifiedComponentV1]>,
     pub(super) arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
 
@@ -1384,38 +1385,44 @@ where
         previous.identity == identity
             && previous.execution_profile == selection.execution_profile
             && previous.values.len() == selection.targets.len()
+            && previous.components.len() == selection.components.len()
             && previous
                 .observation
                 .shares_schema_backing_with(&epoch.observation_group.schema)
             && observation.shares_schema_backing_with(&epoch.observation_group.schema)
-            && previous.observation.physical_case_count() == scenarios.len().get()
+    });
+    let unchanged = reusable.filter(|previous| {
+        previous.observation.physical_case_count() == scenarios.len().get()
             && (0..scenarios.len().get()).all(|index| {
                 previous.observation.physical_values(index) == observation.physical_values(index)
             })
     });
-    let selected = if let Some(previous) = reusable {
-        // Selection depends on ordered physical inputs, not scenario names or
-        // revision. Reuse only the selected tuple and its original search
-        // completion; apply and certify it again below against this observation.
-        // In particular, a discarded prospective update may have changed bindings.
+    let (selected, components) = if let Some(previous) = unchanged {
+        // Only this stronger equality preserves global report case indexes.
+        // All paths still restore the committed tuple and certify it below.
         let mut values = Vec::new();
         values
             .try_reserve_exact(previous.values.len())
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         values.extend_from_slice(&previous.values);
-        SearchResultV1 {
-            reference_selections: previous.reference_selections.clone(),
-            evidence: previous.search,
-            values: Some(values),
-        }
+        (
+            SearchResultV1 {
+                reference_selections: previous.reference_selections.clone(),
+                evidence: previous.search,
+                values: Some(values),
+            },
+            previous.components.clone(),
+        )
     } else {
-        components::select(
+        let (selected, components) = components::select(
             selection,
             &mut runtime,
             epoch,
             scenarios,
             arena.storage_mut(),
-        )?
+            reusable,
+        )?;
+        (selected, components.into())
     };
     arena.storage_mut().clear();
     match selected.values {
@@ -1485,6 +1492,7 @@ where
                     values,
                     search: selected.evidence,
                     reference_selections: selected.reference_selections,
+                    components,
                     arena: arena.into_lease(),
                 }),
             ))
