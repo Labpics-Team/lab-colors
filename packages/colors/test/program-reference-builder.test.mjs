@@ -24,6 +24,7 @@ test("reference and hierarchy admission is transactional and snapshots caller ar
   const failures = [
     () => builder.colorTarget(2, [0, 0, 0], { appearance: 3, referenceAppearance: 4 }),
     () => builder.colorTarget(2, [0, 0, 0], { referenceAppearance: -1 }),
+    () => builder.colorTarget(2, [0, 0, 0], { referenceAppearance: null }),
     () => builder.preserveTonalHierarchy(2, [3]),
     () => builder.preserveTonalHierarchy(2, [3, 3]),
     () => builder.preserveTonalHierarchy(2, [3, NaN]),
@@ -35,6 +36,10 @@ test("reference and hierarchy admission is transactional and snapshots caller ar
     assert.throws(run, ProgramWireError);
     assert.deepEqual(builder.finish(), before);
   }
+  assert.notDeepEqual(
+    new ProgramWireBuilderV3().colorTarget(2, [0, 0, 0], { referenceAppearance: 0 }).finish(),
+    new ProgramWireBuilderV3().colorTarget(2, [0, 0, 0], { referenceAppearance: undefined }).finish(),
+  );
   const rgb = [255, 255, 255], reference = [[4, rgb]], members = [5, 6];
   builder.preserveTonalHierarchy(7, members).assignment([], { reference });
   const accepted = builder.finish();

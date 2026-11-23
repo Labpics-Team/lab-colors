@@ -846,7 +846,23 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
         return Ok(result);
     }
     let count = constraint_indices.map_or(epoch.constraints.len(), <[usize]>::len);
-    result.try_reserve_exact(count).map_err(|_| ())?;
+    let capacity = (0..count).try_fold(0_usize, |total, ordinal| {
+        let index = constraint_indices.map_or(ordinal, |indices| indices[ordinal]);
+        let constraint = &epoch.constraints[index];
+        let entries = if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
+            0
+        } else {
+            match &constraint.body {
+                CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences, ..
+                } => occurrences.len().checked_sub(1).ok_or(())?,
+                CompiledProgramConstraintBodyV1::VisibleUnary { .. } => 1,
+                _ => 0,
+            }
+        };
+        total.checked_add(entries).ok_or(())
+    })?;
+    result.try_reserve_exact(capacity).map_err(|_| ())?;
     for ordinal in 0..count {
         let index = constraint_indices.map_or(ordinal, |indices| indices[ordinal]);
         let constraint = &epoch.constraints[index];
@@ -858,7 +874,6 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
             hierarchy,
         } = &constraint.body
         {
-            result.try_reserve(occurrences.len() - 1).map_err(|_| ())?;
             for (pair, &required) in occurrences.windows(2).zip(hierarchy.ratios()) {
                 result.push(RegionConstraintV1::TonalHierarchy {
                     slot: pair[0].slot,

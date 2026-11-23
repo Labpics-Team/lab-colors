@@ -9,7 +9,7 @@ fn color(id: u32, occurrence: u32, gray: u8, preference: u64) -> Target {
         2.0,
         ColorUseIntentV1 {
             identity: ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
-                .unwrap(),
+                .expect("gray fixture anchor should define a valid source identity"),
             appearance: Some(OccurrenceId::new(occurrence)),
             tone: None,
         },
@@ -57,18 +57,72 @@ fn hierarchy() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn hierarchy_then_unary_regions_allocate_the_complete_result_once() {
+    let mut p = singleton(Srgb8::new([16; 3]), 255, 1.0);
+    for index in 1..8 {
+        let offset = index as u32 * 10;
+        p.targets.push(color(
+            10 + offset,
+            5 + offset,
+            16 + index * 16,
+            index as u64,
+        ));
+        p.paints.push(Paint::Solid {
+            id: PaintId::new(3 + offset),
+            target: TargetId::new(10 + offset),
+        });
+        p.occurrences.push(Occurrence::new(
+            OccurrenceId::new(5 + offset),
+            PaintId::new(3 + offset),
+            SurfaceId::new(4),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            p.occurrences[0].context,
+        ));
+    }
+    p.constraints
+        .hard
+        .push(ConstraintInvocation::preserve_tonal_hierarchy(
+            ConstraintId::new(30),
+            p.occurrences
+                .iter()
+                .map(|occurrence| occurrence.id)
+                .collect(),
+        ));
+    p.constraints
+        .hard
+        .push(ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(31),
+            OccurrenceId::new(5),
+            Wcag22CriterionV1::Sc143TextDefault,
+        ));
+    let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
+        .expect("ordered hierarchy followed by a unary constraint should compile");
+    let (result, allocations) = crate::test_support::measured_allocator_events(|| {
+        region_constraints(&owner.owner_generation, None)
+    });
+    let regions = result.expect("finite region constraints should allocate");
+    assert_eq!(regions.len(), 8);
+    assert_eq!(allocations.alloc, 1);
+    assert_eq!(allocations.realloc, 0);
+}
+
+#[test]
 fn gray_reference_hierarchy_adapts_and_recovers_authored_composition() {
-    let owner = compile_assignment(hierarchy(), EXECUTION_NODE_LIMIT_V1).unwrap();
+    let owner = compile_assignment(hierarchy(), EXECUTION_NODE_LIMIT_V1)
+        .expect("authored gray reference hierarchy should compile");
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
     };
     assert_eq!(selection.components.len(), 1);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    assert_eq!(selection.total_budget, EXECUTION_NODE_LIMIT_V1);
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
     for (revision, backdrop) in [(1, 255), (2, 0), (3, 255)] {
         session
             .prepare_update(update(revision, backdrop))
-            .unwrap()
+            .expect("well-formed fixture observation should be admitted")
             .commit();
         let verified = session
             .state()
@@ -106,7 +160,7 @@ fn gray_reference_hierarchy_adapts_and_recovers_authored_composition() {
                 } => Some(*value),
                 _ => None,
             })
-            .unwrap();
+            .expect("verified hierarchy fixture should include tonal-hierarchy evidence");
         assert!(evidence.satisfied());
         let contrast = crate::color_intent::reference_transport::contrast_ratio;
         assert_eq!(
@@ -133,7 +187,7 @@ fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
     if let TargetIntentV1::Computed(value) = &mut p.targets[0].intent {
         value.max_delta_bits = 0_f64.to_bits();
     }
-    let owner = compile_assignment(p, 4096).unwrap();
+    let owner = compile_assignment(p, 4096).expect("half-opacity reference fixture should compile");
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
@@ -143,8 +197,13 @@ fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
         selection.targets[0].effective_anchor(),
         Srgb8::new([162; 3])
     );
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
+    session
+        .prepare_update(update(1, 255))
+        .expect("well-formed fixture observation should be admitted")
+        .commit();
     let verified = session
         .state()
         .current_verified()
@@ -163,7 +222,10 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
     let make = |force_neutral| {
         let mut p = hierarchy();
         p.constraints = ConstraintSet::new(vec![], vec![]);
-        p.reference_inputs.as_mut().unwrap()[0].1 = Srgb8::new([0, 0, 255]);
+        p.reference_inputs
+            .as_mut()
+            .expect("hierarchy fixture should contain authored reference bindings")[0]
+            .1 = Srgb8::new([0, 0, 255]);
         p.opacities
             .push(OpacityInput::new(OpacityInputId::new(50), 0.5));
         p.paints.push(Paint::Opacity {
@@ -175,14 +237,19 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
         p.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(51));
         if let TargetIntentV1::Computed(value) = &mut p.targets[0].intent {
             value.max_delta_bits = 0_f64.to_bits();
-            value.intent.as_mut().unwrap().identity = ColorIdentityDomainV1::new(
+            value
+                .intent
+                .as_mut()
+                .expect("color fixture should carry source-identity intent")
+                .identity = ColorIdentityDomainV1::new(
                 value.anchor,
                 force_neutral,
                 IdentityOptionsV1::default(),
             )
-            .unwrap();
+            .expect("neutral source fixture should define a valid identity domain");
         }
-        compile_assignment(p, 4096).unwrap()
+        compile_assignment(p, 4096)
+            .expect("tinted reference fixture with neutral source intent should compile")
     };
     let owner = make(false);
     let forced = make(true);
@@ -198,7 +265,7 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
     assert!(
         selection.targets[0]
             .effective_intent()
-            .unwrap()
+            .expect("compiled color fixture should retain source-identity intent")
             .identity
             .neutral()
     );
@@ -210,7 +277,9 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
             upper: 255,
         }
     );
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
     let mut observed = update(1, 255);
     let ObservationPayloadInput::Scenarios(scenarios) = &mut observed.payload else {
         panic!()
@@ -219,12 +288,15 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
         SurfaceInputPortId::new(2),
         ColorSignal::from_srgb8(Srgb8::new([0, 0, 255])),
     );
-    session.prepare_update(observed).unwrap().commit();
+    session
+        .prepare_update(observed)
+        .expect("well-formed fixture observation should be admitted")
+        .commit();
     assert_eq!(
         session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("unchanged tinted reference should yield a verified authored source")
             .computed_for_test()
             .arena
             .storage
@@ -239,7 +311,8 @@ fn gray_source_identity_remains_neutral_while_reference_appearance_is_tinted() {
 fn orange_source_identity_survives_a_neutral_reference_appearance() {
     use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
     let anchor = Srgb8::new([255, 128, 0]);
-    let identity = ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default()).unwrap();
+    let identity = ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+        .expect("orange fixture anchor should define a valid identity domain");
     let mut value = ComputedTargetV1::color(
         anchor,
         2.0,
@@ -269,7 +342,8 @@ fn orange_source_identity_survives_a_neutral_reference_appearance() {
     });
     p.occurrences[0].subject = PaintId::new(51);
     p.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(51));
-    let owner = compile_assignment(p, 4096).unwrap();
+    let owner = compile_assignment(p, 4096)
+        .expect("orange source on a complementary reference backdrop should compile");
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
@@ -279,10 +353,15 @@ fn orange_source_identity_survives_a_neutral_reference_appearance() {
         Srgb8::new([128; 3])
     );
     assert_eq!(
-        selection.targets[0].effective_intent().unwrap().identity,
+        selection.targets[0]
+            .effective_intent()
+            .expect("compiled color fixture should retain source-identity intent")
+            .identity,
         identity
     );
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
     for (revision, backdrop) in [(1, [0, 127, 255]), (2, [255; 3]), (3, [0, 127, 255])] {
         let mut observed = update(revision, 255);
         let ObservationPayloadInput::Scenarios(scenarios) = &mut observed.payload else {
@@ -292,11 +371,14 @@ fn orange_source_identity_survives_a_neutral_reference_appearance() {
             SurfaceInputPortId::new(2),
             ColorSignal::from_srgb8(Srgb8::new(backdrop)),
         );
-        session.prepare_update(observed).unwrap().commit();
+        session
+            .prepare_update(observed)
+            .expect("well-formed fixture observation should be admitted")
+            .commit();
         let verified = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("orange material fixture should yield a verified color on each tested backdrop")
             .computed_for_test();
         let source = verified.arena.storage.outputs[0].paint.source();
         assert!(
@@ -325,21 +407,27 @@ fn invalid_reference_and_order_are_compile_errors() {
             2 => p
                 .reference_inputs
                 .as_mut()
-                .unwrap()
+                .expect("hierarchy fixture should contain authored reference bindings")
                 .push((SurfaceInputPortId::new(2), Srgb8::new([255; 3]))),
             3 => {
-                p.constraints.hard.last_mut().unwrap().body =
-                    ProgramConstraintBodyV1::ComputedVisibleRelation {
-                        occurrences: vec![OccurrenceId::new(15), OccurrenceId::new(5)],
-                        invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
-                    }
+                p.constraints
+                    .hard
+                    .last_mut()
+                    .expect("hierarchy fixture should end with a tonal-hierarchy constraint")
+                    .body = ProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences: vec![OccurrenceId::new(15), OccurrenceId::new(5)],
+                    invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
+                }
             }
             _ => {
-                p.constraints.hard.last_mut().unwrap().body =
-                    ProgramConstraintBodyV1::ComputedVisibleRelation {
-                        occurrences: vec![OccurrenceId::new(5), OccurrenceId::new(5)],
-                        invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
-                    }
+                p.constraints
+                    .hard
+                    .last_mut()
+                    .expect("hierarchy fixture should end with a tonal-hierarchy constraint")
+                    .body = ProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences: vec![OccurrenceId::new(5), OccurrenceId::new(5)],
+                    invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
+                }
             }
         }
         assert!(matches!(
@@ -351,18 +439,24 @@ fn invalid_reference_and_order_are_compile_errors() {
 
 #[test]
 fn reference_map_and_relation_order_are_semantic_but_declaration_order_is_not() {
-    let owner = compile_assignment(hierarchy(), 1024).unwrap();
+    let owner = compile_assignment(hierarchy(), 1024)
+        .expect("authored gray reference hierarchy should compile");
     let mut p = hierarchy();
     p.targets.reverse();
     p.paints.reverse();
     p.occurrences.reverse();
     p.outputs.reverse();
     p.constraints.hard.reverse();
-    let permuted = compile_assignment(p, 1024).unwrap();
+    let permuted =
+        compile_assignment(p, 1024).expect("permuted hierarchy declarations should compile");
     assert_eq!(owner.content_identity(), permuted.content_identity());
     let mut p = hierarchy();
-    p.reference_inputs.as_mut().unwrap()[0].1 = Srgb8::new([240; 3]);
-    let changed = compile_assignment(p, 1024).unwrap();
+    p.reference_inputs
+        .as_mut()
+        .expect("hierarchy fixture should contain authored reference bindings")[0]
+        .1 = Srgb8::new([240; 3]);
+    let changed = compile_assignment(p, 1024)
+        .expect("hierarchy with an altered authored reference should compile");
     assert_ne!(owner.content_identity(), changed.content_identity());
 }
 
@@ -389,7 +483,8 @@ fn opaque_endpoints_keep_the_computed_backdrop_in_the_relation_component() {
     p.occurrences[1].against = SurfaceId::new(44);
     p.outputs
         .push(OutputBinding::new(OutputSlotId::new(47), PaintId::new(43)));
-    let owner = compile_assignment(p, 1024).unwrap();
+    let owner = compile_assignment(p, 1024)
+        .expect("hierarchy with a computed shared backdrop should compile");
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
@@ -404,8 +499,12 @@ fn singleton(anchor: Srgb8, reference: u8, alpha: f64) -> Program<Wcag22Srgb8V1>
         unreachable!()
     };
     value.anchor = anchor;
-    value.intent.as_mut().unwrap().identity =
-        ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default()).unwrap();
+    value
+        .intent
+        .as_mut()
+        .expect("color fixture should carry source-identity intent")
+        .identity = ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+        .expect("singleton anchor should define a valid source identity");
     let mut p = program(target, Wcag22CriterionV1::Sc143TextDefault, Wcag22Srgb8V1);
     p.constraints = ConstraintSet::new(vec![], vec![]);
     p.reference_inputs = Some(vec![(
@@ -510,7 +609,8 @@ fn gray_oracle(anchor: u8, reference: u8, alpha: f64, backdrops: &[u8]) -> (u8, 
             best = Some((source, key, capacity));
         }
     }
-    let (source, _, capacity) = best.unwrap();
+    let (source, _, capacity) =
+        best.expect("exhaustive nonempty gray domain should contain a selected source");
     (source, capacity)
 }
 
@@ -525,9 +625,11 @@ fn reference_gray_selection_matches_exhaustive_joint_capacity_oracle() {
         (128, 128, 1.0, vec![0, 128, 255]),
     ] {
         let expected = gray_oracle(anchor, reference, alpha, &backdrops);
-        let owner =
-            compile_assignment(singleton(Srgb8::new([anchor; 3]), reference, alpha), 4096).unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        let owner = compile_assignment(singleton(Srgb8::new([anchor; 3]), reference, alpha), 4096)
+            .expect("single-color gray oracle fixture should compile");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled reference fixture should instantiate observation stream 8");
         for (revision, cases) in [
             (1, backdrops.clone()),
             (
@@ -542,12 +644,12 @@ fn reference_gray_selection_matches_exhaustive_joint_capacity_oracle() {
         ] {
             session
                 .prepare_update(gray_cases(revision, &cases))
-                .unwrap()
+                .expect("well-formed fixture observation should be admitted")
                 .commit();
             let verified = session
                 .state()
                 .current_verified()
-                .unwrap()
+                .expect("exhaustive gray-domain fixture should yield a verified color")
                 .computed_for_test();
             assert_eq!(
                 verified.values[0].bytes()[0],
@@ -560,9 +662,11 @@ fn reference_gray_selection_matches_exhaustive_joint_capacity_oracle() {
                 "{:?}",
                 verified.search
             );
-            let capacity = verified.reference_selections().unwrap()[0]
+            let capacity = verified
+                .reference_selections()
+                .expect("verified reference-color fixture should expose selection evidence")[0]
                 .capacity()
-                .unwrap();
+                .expect("implicit reference-strength selection should include capacity bounds");
             assert!(capacity.complete());
             assert_eq!(capacity.ratio_lower(), expected.1);
             assert_eq!(capacity.ratio_upper(), expected.1);
@@ -583,16 +687,18 @@ fn reference_real_neutral_tints_keep_strength_without_a_readability_floor() {
             singleton(Srgb8::new(anchor), reference, 1.0),
             EXECUTION_NODE_LIMIT_V1,
         )
-        .unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        .expect("real near-neutral reference fixture should compile");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled reference fixture should instantiate observation stream 8");
         session
             .prepare_update(update(1, backdrop))
-            .unwrap()
+            .expect("well-formed fixture observation should be admitted")
             .commit();
         let verified = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("near-neutral reference fixture should yield a verified color")
             .computed_for_test();
         let value = verified.values[0];
         let reference_cr = contrast_ratio(Srgb8::new(anchor), Srgb8::new([reference; 3]));
@@ -612,23 +718,78 @@ fn explicit_tone_reports_override_without_implicit_capacity() {
     let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
         unreachable!()
     };
-    target.intent.as_mut().unwrap().tone =
-        Some(ToneCurveV1::new(2, vec![[0.0, 0.5], [1.0, 0.5]]).unwrap());
-    let owner = compile_assignment(p, 4096).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 0)).unwrap().commit();
+    target
+        .intent
+        .as_mut()
+        .expect("color fixture should carry source-identity intent")
+        .tone = Some(
+        ToneCurveV1::new(2, vec![[0.0, 0.5], [1.0, 0.5]])
+            .expect("constant midpoint tone fixture should form a valid curve"),
+    );
+    let owner = compile_assignment(p, 4096).expect("explicit midpoint tone fixture should compile");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
+    session
+        .prepare_update(update(1, 0))
+        .expect("well-formed fixture observation should be admitted")
+        .commit();
     let verified = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("explicit midpoint tone fixture should yield a verified color")
         .computed_for_test();
     assert!((lab(verified.values[0])[0] - 0.5).abs() < 0.003);
-    let report = &verified.reference_selections().unwrap()[0];
+    let report = &verified
+        .reference_selections()
+        .expect("verified reference-color fixture should expose selection evidence")[0];
     assert_eq!(
         report.preference(),
         crate::program_wire::ProgramReferencePreferenceV1::ExplicitTone
     );
     assert_eq!(report.capacity(), None);
+    assert_eq!(verified.optimality(), ComputedOptimalityV1::Exact);
+}
+
+#[test]
+fn explicit_reference_tone_retains_lightness_below_rgb8_resolution() {
+    let lightness = 0.001_f64;
+    let mut p = singleton(Srgb8::new([0; 3]), 255, 1.0);
+    let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+        unreachable!("singleton fixture declares a computed target")
+    };
+    target.max_delta_bits = 0.0_f64.to_bits();
+    target
+        .intent
+        .as_mut()
+        .expect("color fixture has intent")
+        .tone = Some(
+        ToneCurveV1::new(2, vec![[0.0, lightness], [1.0, lightness]])
+            .expect("constant finite tone is valid"),
+    );
+    let owner = compile_assignment(p, 4096).expect("black reference fixture compiles");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("reference fixture instantiates");
+    session
+        .prepare_update(update(1, 255))
+        .expect("well-formed authored observation is admitted")
+        .commit();
+    let verified = session
+        .state()
+        .current_verified()
+        .expect("zero maxChange preserves authored black")
+        .computed_for_test();
+    assert_eq!(&*verified.values, &[Srgb8::new([0; 3])]);
+    let reports = verified
+        .reference_selections()
+        .expect("reference evidence exists");
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].capacity(), None);
+    assert_eq!(
+        reports[0].cases()[0].virtual_distance_squared(),
+        lightness * lightness
+    );
     assert_eq!(verified.optimality(), ComputedOptimalityV1::Exact);
 }
 
@@ -643,7 +804,7 @@ fn reference_capacity_cannot_borrow_a_different_more_important_paint() {
     );
     p.reference_inputs
         .as_mut()
-        .unwrap()
+        .expect("hierarchy fixture should contain authored reference bindings")
         .push((SurfaceInputPortId::new(22), Srgb8::new([255; 3])));
     p.surfaces.push(Surface::Input {
         id: SurfaceId::new(24),
@@ -666,8 +827,11 @@ fn reference_capacity_cannot_borrow_a_different_more_important_paint() {
         )],
         vec![],
     );
-    let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
+        .expect("shared-paint hierarchy fixture should compile");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
     let mut observed = update(1, 90);
     let ObservationPayloadInput::Scenarios(cases) = &mut observed.payload else {
         unreachable!()
@@ -676,11 +840,14 @@ fn reference_capacity_cannot_borrow_a_different_more_important_paint() {
         SurfaceInputPortId::new(22),
         ColorSignal::from_srgb8(Srgb8::new([255; 3])),
     ));
-    session.prepare_update(observed).unwrap().commit();
+    session
+        .prepare_update(observed)
+        .expect("well-formed fixture observation should be admitted")
+        .commit();
     let verified = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("shared-paint hierarchy fixture should yield a verified assignment")
         .computed_for_test();
     assert_eq!(
         &*verified.values,
@@ -694,31 +861,69 @@ fn reference_capacity_cannot_borrow_a_different_more_important_paint() {
         "{:?}",
         verified.search
     );
-    let capacity = verified.reference_selections().unwrap()[1]
+    let capacity = verified
+        .reference_selections()
+        .expect("verified reference-color fixture should expose selection evidence")[1]
         .capacity()
-        .unwrap();
+        .expect("implicit reference-strength selection should include capacity bounds");
     assert!(capacity.complete());
     assert_eq!(capacity.ratio_lower(), 1.0);
 }
 
 #[test]
 fn reference_budget_keeps_unresolved_capacity_honest() {
-    let owner = compile_assignment(singleton(Srgb8::new([100; 3]), 255, 1.0), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 90)).unwrap().commit();
+    let owner = compile_assignment(singleton(Srgb8::new([100; 3]), 255, 1.0), 1)
+        .expect("one-attempt reference fixture should compile");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
+    session
+        .prepare_update(update(1, 90))
+        .expect("well-formed fixture observation should be admitted")
+        .commit();
     let verified = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("one-attempt fixture should retain a feasible verified assignment")
         .computed_for_test();
     assert_eq!(verified.optimality(), ComputedOptimalityV1::Unfinished);
     assert_eq!(verified.search.visited, 1);
-    let capacity = verified.reference_selections().unwrap()[0]
+    let capacity = verified
+        .reference_selections()
+        .expect("verified reference-color fixture should expose selection evidence")[0]
         .capacity()
-        .unwrap();
+        .expect("implicit reference-strength selection should include capacity bounds");
     assert!(!capacity.complete());
     assert!(capacity.ratio_lower() < capacity.ratio_upper());
     assert_eq!(capacity.ratio_upper(), 1.0);
+}
+
+#[test]
+fn reference_search_spends_last_visit_on_another_open_traversal() {
+    // In each fixture the next scheduled region needs two visits, while the
+    // other traversal has a complete tuple ready for the one remaining visit.
+    for (anchor, reference, alpha, backdrops, budget) in [
+        (100, 255, 1.0, vec![0, 90, 180], 47),
+        (170, 0, 0.5, vec![50, 120, 200], 46),
+    ] {
+        let owner =
+            compile_assignment(singleton(Srgb8::new([anchor; 3]), reference, alpha), budget)
+                .expect("bounded reference declaration should compile");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled reference fixture should instantiate observation stream 8");
+        session
+            .prepare_update(gray_cases(1, &backdrops))
+            .expect("well-formed fixture observation should be admitted")
+            .commit();
+        let verified = session
+            .state()
+            .current_verified()
+            .expect("bounded reference search should retain a feasible assignment")
+            .computed_for_test();
+        assert_eq!(verified.search.visited, budget);
+        assert_eq!(verified.optimality(), ComputedOptimalityV1::Unfinished);
+    }
 }
 
 #[test]
@@ -798,7 +1003,7 @@ fn reference_variable_backdrop_matches_complete_tuple_enumeration() {
                         .then_with(|| left.cmp(&right))
                 })
         })
-        .unwrap();
+        .expect("nonempty enumerated foreground and backdrop domain should have a minimum");
     let expected_key = key(expected);
     let mut p = hierarchy();
     p.constraints = ConstraintSet::new(vec![], vec![]);
@@ -823,16 +1028,19 @@ fn reference_variable_backdrop_matches_complete_tuple_enumeration() {
         occurrence: OccurrenceId::new(15),
     });
     p.occurrences[0].against = SurfaceId::new(44);
-    let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
+        .expect("finite foreground and backdrop composition fixture should compile");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference fixture should instantiate observation stream 8");
     session
         .prepare_update(gray_cases(1, &backdrops))
-        .unwrap()
+        .expect("well-formed fixture observation should be admitted")
         .commit();
     let verified = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("enumerated foreground and backdrop fixture should yield a verified assignment")
         .computed_for_test();
     assert_eq!(&*verified.values, &expected.map(gray));
     assert_eq!(
@@ -841,13 +1049,15 @@ fn reference_variable_backdrop_matches_complete_tuple_enumeration() {
         "{:?}",
         verified.search
     );
-    for (report, key) in verified
+    let reports = verified
         .reference_selections()
-        .unwrap()
-        .iter()
-        .zip(expected_key)
-    {
-        let capacity = report.capacity().unwrap();
+        .expect("verified reference-color fixture should expose selection evidence");
+    assert_eq!(reports.len(), expected_key.len());
+    for ((report, key), target_id) in reports.iter().zip(expected_key).zip([10, 20]) {
+        assert_eq!(report.target_id(), target_id);
+        let capacity = report
+            .capacity()
+            .expect("implicit reference-strength selection should include capacity bounds");
         assert!(capacity.complete());
         assert!((capacity.ratio_lower() - (1.0 - key[0])).abs() < 2.0 * f64::EPSILON);
         assert_eq!(capacity.ratio_lower(), capacity.ratio_upper());
@@ -886,13 +1096,19 @@ fn reference_chain_prunes_unavoidable_strength_loss() {
                 PaintId::new(3 + offset),
             ));
         }
-        let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 136)).unwrap().commit();
+        let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
+            .expect("authored reference chain should compile");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled reference fixture should instantiate observation stream 8");
+        session
+            .prepare_update(update(1, 136))
+            .expect("well-formed fixture observation should be admitted")
+            .commit();
         let verified = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("reference chain should yield a verified assignment under the test budget")
             .computed_for_test();
         assert_eq!(
             verified.optimality(),

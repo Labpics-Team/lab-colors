@@ -74,7 +74,7 @@ if mode != 'control' and not changed:
 payload = raw.getvalue()[:members_end] + bytes(2 * tarfile.BLOCKSIZE)
 sys.stdout.buffer.write(gzip.compress(payload, mtime=0))
 `;
-  const edited = spawnSync("python3", ["-c", editTar, tarball, mode], {
+  const edited = spawnSync(process.platform === "win32" ? "python" : "python3", ["-c", editTar, tarball, mode], {
     cwd: ROOT, env, timeout: 30_000, maxBuffer: 64 * 1024 * 1024,
   });
   if (edited.error) throw edited.error;

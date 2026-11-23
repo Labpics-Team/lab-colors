@@ -549,7 +549,8 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         });
     }
     let constant_check = u64::from(!fixed.is_empty() || components.is_empty());
-    // A contextual task may run one local prefix search and at most n-1
+    // Reference point/capacity jobs share one budget. A legacy contextual task
+    // may run one local prefix search and at most n-1
     // residual searches. Its original budget still covers the full fallback
     // and whole checks. Singleton tasks need no conditional search.
     let search_units = components
@@ -559,7 +560,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .targets
                 .iter()
                 .any(|&target| selection.targets[target].declaration.intent.is_some());
-            let units = if contextual && component.targets.len() > 1 {
+            let reference = component
+                .targets
+                .iter()
+                .any(|&target| selection.targets[target].declaration.reference_appearance);
+            let units = if !reference && contextual && component.targets.len() > 1 {
                 component.targets.len().checked_add(1)?
             } else {
                 1

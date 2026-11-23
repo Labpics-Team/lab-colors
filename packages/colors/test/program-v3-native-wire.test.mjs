@@ -33,3 +33,17 @@ test("V3 independent wire vectors cover native and JavaScript authoring", () => 
     .computedTarget(25, { kind: "gray", lower: 11, upper: 12 }, [13, 14, 15], 3)
     .pointOccurrence(26, 27, 28).visibleSeparationHard(29, 26, 0, 2).assignment([])), fixture.encodingOnly);
 });
+
+test("reference declarations match independent native wire vectors", () => {
+  for (const hierarchy of [false, true]) {
+    const wire = new ProgramWireBuilderV3().colorTarget(10, [68, 68, 68], { referenceAppearance: 5 });
+    if (hierarchy) wire.colorTarget(20, [102, 102, 102], { referenceAppearance: 15 });
+    wire.assignment(hierarchy ? [10, 20] : [10], { reference: [[2, [255, 255, 255]]] })
+      .surfaceInputPort(2).solidPaint(3, 10).inputSurface(4, 2).pointOccurrence(5, 3, 4);
+    if (hierarchy) wire.solidPaint(13, 20).pointOccurrence(15, 13, 4).preserveTonalHierarchy(30, [5, 15]);
+    wire.wcag22VisibleUnary(true, 6, 5, WCAG22_SC143_TEXT_DEFAULT_V1).output(7, 3);
+    if (hierarchy) wire.wcag22VisibleUnary(true, 16, 15, WCAG22_SC143_TEXT_DEFAULT_V1).output(17, 13);
+    assert.equal(hex(wire), hierarchy ? fixture.referenceHierarchy : fixture.referenceSingleton);
+  }
+  assert.equal(hex(new ProgramWireBuilderV3().assignment([], { reference: [] })), fixture.referenceEmpty);
+});

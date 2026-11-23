@@ -18,7 +18,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v1.source-identity.immutable-visible-reference.upper-monotone-cubic.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-bounded-work.pending-points.source-tie\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v1.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -109,6 +109,7 @@ impl<'a> ContextV1<'a> {
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             for (index, target) in targets.iter().enumerate() {
                 let mut rgb = target.effective_anchor();
+                let mut reference_lightness = None;
                 if let Some(intent) = target.effective_intent() {
                     if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
                         let source = if !target.declaration.reference_appearance
@@ -119,11 +120,19 @@ impl<'a> ContextV1<'a> {
                             rgb
                         };
                         rgb = curve.preferred_color(source, inputs[input].srgb8());
+                        if target.declaration.reference_appearance {
+                            reference_lightness =
+                                Some(curve.preferred_lightness(inputs[input].srgb8()));
+                        }
                     }
                 }
                 let cell = case * count + index;
                 preferred_rgb[cell] = rgb;
                 preferred[cell] = lab(rgb);
+                if let Some(lightness) = reference_lightness {
+                    // RGB8 is a seed, not the continuous reference-tone target.
+                    preferred[cell][0] = lightness;
+                }
             }
         }
         let mut domains = Vec::new();
@@ -316,6 +325,17 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
     scores: &mut [f64],
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut collector = IntentScoreCollectorV1::new(context, values, scores);
+    observe_intents(context, runtime, epoch, scenarios, &mut collector)?;
+    Ok(collector.violations())
+}
+
+fn observe_intents<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    collector: &mut impl ProgramPhysicalCaseObserverV1,
+) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let schema = epoch.observation_group.schema.as_slice();
     let mut paints = prepare_candidate_paints(
         &epoch.graph,
@@ -334,7 +354,7 @@ fn intent_scores<E: ProgramConstraintEvaluatorSetV1>(
             .observe(case, &evaluation)
             .map_err(map_physical_case_error)?;
     }
-    Ok(collector.violations())
+    Ok(())
 }
 
 fn assess<E: ProgramConstraintEvaluatorSetV1>(
@@ -437,8 +457,8 @@ fn inverse_hint(desired: Srgb8, backdrop: [u8; 3], alpha: f64) -> Srgb8 {
     }))
 }
 
-// A source-identity walk samples the material itself. Inverting a neutral
-// reference appearance can otherwise turn a chromatic material into gray.
+// Legacy visible-appearance refinement. Reference targets use the independent
+// source-identity walks in reference_search before this path is entered.
 fn tonal_hint(
     target: &CompiledComputedTargetV1,
     intent: &EffectiveColorIntentV1<'_>,
@@ -446,9 +466,7 @@ fn tonal_hint(
     backdrop: [u8; 3],
     alpha: f64,
 ) -> Srgb8 {
-    if target.declaration.reference_appearance {
-        return color_at_lightness(target.declaration.anchor, lightness);
-    }
+    debug_assert!(!target.declaration.reference_appearance);
     let source = if intent.identity.neutral() {
         Srgb8::new([128; 3])
     } else {

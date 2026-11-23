@@ -109,9 +109,9 @@ pub fn srgb_gamma(v: f64) -> f64 {
     }
 }
 
-const RELATIVE_LUMINANCE_RED_WEIGHT: f64 = 0.2126;
-const RELATIVE_LUMINANCE_GREEN_WEIGHT: f64 = 0.7152;
-const RELATIVE_LUMINANCE_BLUE_WEIGHT: f64 = 0.0722;
+pub(crate) const RELATIVE_LUMINANCE_RED_WEIGHT: f64 = 0.2126;
+pub(crate) const RELATIVE_LUMINANCE_GREEN_WEIGHT: f64 = 0.7152;
+pub(crate) const RELATIVE_LUMINANCE_BLUE_WEIGHT: f64 = 0.0722;
 const CONTINUOUS_ENCODED_CHANNEL_SPLIT: f64 = 0.039_28;
 /// Frozen continuous encoded-sRGB channel transfer used by pre-cutover physical
 /// proposal and reporting paths.

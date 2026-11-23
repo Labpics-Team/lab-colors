@@ -28,6 +28,6 @@ test("default protocol keeps the short workload and requires complete failure/re
 });
 
 test("comparison preserves independent processes and rejects incomplete or unequal work", () => {
-  execFileSync("python3", [fileURLToPath(new URL("../../../scripts/test_program_performance.py", import.meta.url))],
+  execFileSync(process.platform === "win32" ? "python" : "python3", [fileURLToPath(new URL("../../../scripts/test_program_performance.py", import.meta.url))],
     { encoding: "utf8", timeout: 30_000 });
 });

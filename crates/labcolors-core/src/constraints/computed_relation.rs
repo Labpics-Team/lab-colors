@@ -6,7 +6,8 @@
 //! intent композиции, не модель salience, Cleanliness или нормативный WCAG pass.
 
 use crate::Srgb8;
-use crate::color_intent::reference_transport::{contrast_ratio, luminance, polarity};
+use crate::color_intent::reference_transport::{luminance, luminance_polarity};
+use crate::spaces::srgb::relative_luminance_ratio;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreComputedVisibleRelationInvocationV1 {
@@ -102,14 +103,16 @@ impl CompiledTonalHierarchyV1 {
         if reference_visible.len() < 2 {
             return Err(Error::TooFewOccurrences);
         }
-        let first_polarity = polarity(reference_visible[0], backdrop);
+        let backdrop = luminance(backdrop);
+        let first_polarity = luminance_polarity(luminance(reference_visible[0]), backdrop);
         let mut ratios = Vec::new();
         ratios
             .try_reserve_exact(reference_visible.len() - 1)
             .map_err(|_| Error::ResourceExhausted)?;
         let mut previous_visible = None;
         for &visible in reference_visible {
-            let current_polarity = polarity(visible, backdrop);
+            let visible = luminance(visible);
+            let current_polarity = luminance_polarity(visible, backdrop);
             if current_polarity == TonalPolarityV1::Equal {
                 return Err(Error::ZeroPolarity);
             }
@@ -143,12 +146,13 @@ impl CompiledTonalHierarchyV1 {
         weaker: Srgb8,
         backdrop: Srgb8,
     ) -> TonalHierarchyPairMeasurementV1 {
+        let [stronger, weaker, backdrop] = [stronger, weaker, backdrop].map(luminance);
         let actual_ratio = contrast_multiplier(stronger, weaker, backdrop);
         TonalHierarchyPairMeasurementV1 {
             required_ratio_bits: self.ratios[index].to_bits(),
             actual_ratio_bits: actual_ratio.to_bits(),
-            stronger_polarity: polarity(stronger, backdrop),
-            weaker_polarity: polarity(weaker, backdrop),
+            stronger_polarity: luminance_polarity(stronger, backdrop),
+            weaker_polarity: luminance_polarity(weaker, backdrop),
         }
     }
 
@@ -196,21 +200,21 @@ impl CompiledTonalHierarchyV1 {
 /// A common backdrop cancels on either shared nonzero side. Preserve that
 /// invariant before floating-point evaluation: two separate contrasts followed
 /// by division can invent a one-ulp loss when only the background changes.
-fn contrast_multiplier(stronger: Srgb8, weaker: Srgb8, backdrop: Srgb8) -> f64 {
-    let direction = polarity(stronger, backdrop);
-    if direction == polarity(weaker, backdrop) {
+fn contrast_multiplier(stronger: f64, weaker: f64, backdrop: f64) -> f64 {
+    let direction = luminance_polarity(stronger, backdrop);
+    if direction == luminance_polarity(weaker, backdrop) {
         match direction {
             TonalPolarityV1::Darker => {
-                return multiplier_upper(luminance(weaker), luminance(stronger));
+                return multiplier_upper(weaker, stronger);
             }
             TonalPolarityV1::Lighter => {
-                return multiplier_upper(luminance(stronger), luminance(weaker));
+                return multiplier_upper(stronger, weaker);
             }
             TonalPolarityV1::Equal => return 1.0,
         }
     }
     // Mixed-side ratios remain useful diagnostic data, never a hierarchy pass.
-    contrast_ratio(stronger, backdrop) / contrast_ratio(weaker, backdrop)
+    relative_luminance_ratio(stronger, backdrop) / relative_luminance_ratio(weaker, backdrop)
 }
 
 // Monotone positive arithmetic is identical in point and interval evaluation.
@@ -251,7 +255,9 @@ mod tests {
         let weaker = gray(78);
         let backdrop = gray(80);
         assert!(crate::color_intent::oklab(blue)[0] > crate::color_intent::oklab(backdrop)[0]);
-        let hierarchy = CompiledTonalHierarchyV1::compile(&[blue, weaker], backdrop).unwrap();
+        let hierarchy = CompiledTonalHierarchyV1::compile(&[blue, weaker], backdrop).expect(
+            "blue and gray fixture colors share a darker polarity and valid strength order",
+        );
         let pair = hierarchy.measure_pair(0, blue, weaker, backdrop);
         assert!(pair.satisfied());
         assert_eq!(pair.stronger_polarity(), TonalPolarityV1::Darker);
@@ -267,7 +273,8 @@ mod tests {
     #[test]
     fn authored_strength_survives_complete_polarity_flip() {
         let reference = [gray(0), gray(64), gray(128)];
-        let hierarchy = CompiledTonalHierarchyV1::compile(&reference, gray(255)).unwrap();
+        let hierarchy = CompiledTonalHierarchyV1::compile(&reference, gray(255))
+            .expect("ordered gray reference hierarchy on white should compile");
         let reversed = [gray(255), gray(160), gray(80)];
         for index in 0..2 {
             let exact =
@@ -299,8 +306,8 @@ mod tests {
 
     #[test]
     fn quantized_point_decision_has_no_epsilon_at_inclusive_threshold() {
-        let hierarchy =
-            CompiledTonalHierarchyV1::compile(&[gray(255), gray(128)], gray(0)).unwrap();
+        let hierarchy = CompiledTonalHierarchyV1::compile(&[gray(255), gray(128)], gray(0))
+            .expect("ordered white and gray reference hierarchy on black should compile");
         let exact = hierarchy.measure_pair(0, gray(255), gray(128), gray(0));
         let below = hierarchy.measure_pair(0, gray(254), gray(128), gray(0));
         assert!(exact.satisfied());
@@ -314,7 +321,7 @@ mod tests {
         for (stronger, weaker) in [(0, 128), (16, 64), (32, 192), (127, 128)] {
             let hierarchy =
                 CompiledTonalHierarchyV1::compile(&[gray(stronger), gray(weaker)], gray(255))
-                    .unwrap();
+                    .expect("ordered darker-side gray reference pair should compile");
             for backdrop in weaker + 1..=255 {
                 let pair = hierarchy.measure_pair(0, gray(stronger), gray(weaker), gray(backdrop));
                 assert_eq!(pair.actual_ratio(), pair.required_ratio());
@@ -324,7 +331,7 @@ mod tests {
                 &[gray(255 - stronger), gray(255 - weaker)],
                 gray(0),
             )
-            .unwrap();
+            .expect("mirrored lighter-side gray reference pair should compile");
             for backdrop in 0..255 - weaker {
                 let pair = hierarchy.measure_pair(
                     0,
@@ -340,8 +347,8 @@ mod tests {
 
     #[test]
     fn bounds_prune_impossible_multipliers_and_use_common_backdrop() {
-        let hierarchy =
-            CompiledTonalHierarchyV1::compile(&[gray(0), gray(128)], gray(255)).unwrap();
+        let hierarchy = CompiledTonalHierarchyV1::compile(&[gray(0), gray(128)], gray(255))
+            .expect("black and mid-gray reference pair on white should compile");
         assert!(!hierarchy.pair_possible(0, [0.4, 0.5], [0.45, 0.55], [0.0, 1.0]));
         assert!(!hierarchy.pair_possible(0, [0.0, 0.1], [0.8, 0.9], [0.4, 0.6]));
         assert!(hierarchy.pair_possible(0, [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]));
@@ -352,7 +359,8 @@ mod tests {
     fn bounds_never_prune_a_valid_small_encoded_domain_tuple() {
         let values = [0, 64, 128, 192, 255].map(gray);
         let ys = values.map(luminance);
-        let hierarchy = CompiledTonalHierarchyV1::compile(&[gray(0), gray(32)], gray(255)).unwrap();
+        let hierarchy = CompiledTonalHierarchyV1::compile(&[gray(0), gray(32)], gray(255))
+            .expect("black and dark-gray reference pair on white should compile");
         let mut ranges = Vec::new();
         for lower in 0..values.len() {
             for upper in lower..values.len() {

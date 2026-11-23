@@ -68,7 +68,6 @@ struct CapacityV1 {
 
 struct PendingPointV1 {
     values: Vec<Srgb8>,
-    appearance: Vec<AppearancePointV1>,
     capacities: Vec<Option<usize>>,
     keys: Vec<TargetKeyV1>,
     revision: u64,
@@ -524,7 +523,6 @@ impl<'a> ReferenceRuntimeV1<'a> {
             {
                 let previous = &mut self.pending[index];
                 previous.values.copy_from_slice(values);
-                previous.appearance.copy_from_slice(points);
                 previous.keys.copy_from_slice(&self.scratch_keys);
                 previous.revision += 1;
                 self.consider_point(index);
@@ -536,7 +534,6 @@ impl<'a> ReferenceRuntimeV1<'a> {
                 &mut self.pending,
                 PendingPointV1 {
                     values: cloned(values)?,
-                    appearance: cloned(points)?,
                     capacities: cloned(&self.scratch_capacities)?,
                     keys: cloned(&self.scratch_keys)?,
                     revision: 0,
@@ -1038,10 +1035,10 @@ impl<'a> ReferenceRuntimeV1<'a> {
             let compiled = &self.context.targets[target];
             let mut cases = Vec::new();
             cases
-                .try_reserve_exact(point.appearance.len() / count)
+                .try_reserve_exact(self.appearance.len() / count)
                 .map_err(|_| ())?;
-            for case_index in 0..point.appearance.len() / count {
-                let appearance = point.appearance[case_index * count + target];
+            for case_index in 0..self.appearance.len() / count {
+                let appearance = self.appearance[case_index * count + target];
                 let direction = polarity(appearance.visible, appearance.backdrop);
                 let actual_contrast = contrast_ratio(appearance.visible, appearance.backdrop);
                 let mut preferred = model.lab_for(appearance.backdrop, direction);
@@ -1248,7 +1245,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         while search.evidence.visited < search.budget {
             let needed = search.needed_capacity().map_err(allocation)?;
             let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
-            let progressed = if run_point {
+            let mut progressed = if run_point {
                 capacity_steps = 0;
                 search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?
             } else if let Some(capacity) = needed {
@@ -1264,6 +1261,28 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             } else {
                 break;
             };
+            if !progressed {
+                // Splitting a region or extending a partial tuple needs two
+                // visits. The other traversal may still evaluate a leaf with
+                // the final visit, and that tuple may replace the current best.
+                if run_point {
+                    if let Some(capacity) = needed {
+                        capacity_steps = capacity_steps.saturating_add(1);
+                        progressed = search.step(
+                            Some(capacity),
+                            &mut bounds,
+                            runtime,
+                            epoch,
+                            scenarios,
+                            arena,
+                        )?;
+                    }
+                } else if !search.point_closed {
+                    capacity_steps = 0;
+                    progressed =
+                        search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?;
+                }
+            }
             if !progressed {
                 break;
             }
@@ -1281,8 +1300,21 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     let (values, reference_selections) = if let Some(best) = search.best {
+        let values = cloned(&search.pending[best].values).map_err(allocation)?;
+        // Pending tuples need their typed keys and source paints, not a copy
+        // of every physical case. Recompose only the selected report, without
+        // running another search or another constraint evaluator. The caller
+        // still performs the normal full-tuple validation before publication.
+        apply_targets::<E>(search.context.targets, runtime, &values)?;
+        let mut collector =
+            IntentScoreCollectorV1::new(&search.context, &values, &mut search.legacy_scores);
+        collector.appearance = Some(&mut search.appearance);
+        observe_intents(&search.context, runtime, epoch, scenarios, &mut collector)?;
+        if collector.violations() != 0 {
+            return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
         (
-            Some(cloned(&search.pending[best].values).map_err(allocation)?),
+            Some(values),
             Some(search.reference_reports(best).map_err(allocation)?),
         )
     } else {

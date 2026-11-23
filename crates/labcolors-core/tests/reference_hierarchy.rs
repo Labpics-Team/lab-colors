@@ -6,13 +6,18 @@ use labcolors_core::program_wire::{
 
 #[test]
 fn public_wire_preserves_reference_hierarchy_and_owned_measurements() {
-    let owner = compile_program_wire(include_bytes!("fixtures/reference-hierarchy.lcpw")).unwrap();
-    let mut session = owner.instantiate(8).unwrap();
+    let owner = compile_program_wire(include_bytes!("fixtures/reference-hierarchy.lcpw"))
+        .expect("reference-hierarchy wire fixture should compile");
+    let mut session = owner
+        .instantiate(8)
+        .expect("compiled hierarchy wire fixture should instantiate observation stream 8");
     let snapshot = session
         .update_observed(1, &[ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])])])
-        .unwrap();
+        .expect("well-formed black-background observation should be admitted");
     assert_eq!(snapshot.state(), ProgramSnapshotStateV1::Ready);
-    let report = snapshot.assessment_report().unwrap();
+    let report = snapshot
+        .assessment_report()
+        .expect("ready hierarchy snapshot should include an assessment report");
     assert!(report.cells().iter().any(|cell| matches!(
         cell.assessment(),
         ProgramConstraintAssessmentV1::TonalHierarchy { .. }
@@ -45,7 +50,9 @@ fn public_wire_preserves_reference_hierarchy_and_owned_measurements() {
     for (index, reference) in report.reference_selections().iter().enumerate() {
         assert_eq!(reference.target_id(), [10, 20][index]);
         assert_eq!(reference.occurrence_id(), [5, 15][index]);
-        let capacity = reference.capacity().unwrap();
+        let capacity = reference
+            .capacity()
+            .expect("reference-strength selection should include capacity bounds");
         assert!(capacity.complete());
         assert_eq!(capacity.ratio_lower(), 1.0);
         assert_eq!(capacity.ratio_upper(), 1.0);
@@ -63,31 +70,43 @@ fn public_wire_preserves_reference_hierarchy_and_owned_measurements() {
     let reference_selections = report.reference_selections().to_vec();
     let restored = session
         .update_observed(2, &[ProgramScenarioV1::new(9, vec![Srgb8::new([255; 3])])])
-        .unwrap();
+        .expect("well-formed reference-background recovery observation should be admitted");
     assert_eq!(restored.outputs()[0].source(), Srgb8::new([68; 3]));
     assert_eq!(restored.outputs()[1].source(), Srgb8::new([102; 3]));
     assert_eq!(
-        snapshot.assessment_report().unwrap().tonal_hierarchy()[0],
+        snapshot
+            .assessment_report()
+            .expect("owned snapshot should retain its assessment after a later update")
+            .tonal_hierarchy()[0],
         pair
     );
     drop(session);
     assert_eq!(
-        snapshot.assessment_report().unwrap().reference_selections(),
+        snapshot
+            .assessment_report()
+            .expect("owned snapshot should retain reference evidence after the session is dropped")
+            .reference_selections(),
         reference_selections
     );
 }
 
 #[test]
 fn fixed_relation_conflict_has_pair_evidence_and_recovers() {
-    let owner =
-        compile_program_wire(include_bytes!("fixtures/reference-hierarchy-fixed.lcpw")).unwrap();
-    let mut session = owner.instantiate(8).unwrap();
+    let owner = compile_program_wire(include_bytes!("fixtures/reference-hierarchy-fixed.lcpw"))
+        .expect("fixed reference-hierarchy wire fixture should compile");
+    let mut session = owner
+        .instantiate(8)
+        .expect("compiled fixed-hierarchy fixture should instantiate observation stream 8");
     let conflict = session
         .update_observed(1, &[ProgramScenarioV1::new(9, vec![Srgb8::new([0; 3])])])
-        .unwrap();
+        .expect("well-formed black-background observation should be admitted despite the fixed hierarchy conflict");
     assert_eq!(conflict.state(), ProgramSnapshotStateV1::Unsatisfied);
     assert!(conflict.outputs().is_empty());
-    let witness = conflict.diagnostics().unwrap().witness().unwrap();
+    let witness = conflict
+        .diagnostics()
+        .expect("unsatisfied fixed-hierarchy snapshot should include diagnostics")
+        .witness()
+        .expect("fixed-hierarchy conflict diagnostics should include a witness");
     assert!(
         matches!(witness.violations(), [ProgramDiagnosticV1::TonalHierarchy {
         stronger_occurrence_id: 5, weaker_occurrence_id: 15,
@@ -97,10 +116,13 @@ fn fixed_relation_conflict_has_pair_evidence_and_recovers() {
     );
     let restored = session
         .update_observed(2, &[ProgramScenarioV1::new(9, vec![Srgb8::new([255; 3])])])
-        .unwrap();
+        .expect("well-formed reference-background recovery observation should be admitted");
     assert_eq!(restored.state(), ProgramSnapshotStateV1::Ready);
     assert!(
-        restored.assessment_report().unwrap().tonal_hierarchy()[0]
+        restored
+            .assessment_report()
+            .expect("recovered ready snapshot should include a hierarchy assessment")
+            .tonal_hierarchy()[0]
             .measurement()
             .satisfied()
     );

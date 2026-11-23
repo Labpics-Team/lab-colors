@@ -314,7 +314,8 @@ test("publication repacking controls remain canonical and preserve zero-filled p
       "NOTICE.md": Buffer.from("synthetic attribution\n"),
       "payload.bin": Buffer.alloc(size),
     };
-    execFileSync("python3", ["-c", `import base64, io, json, sys, tarfile
+    const python = process.platform === "win32" ? "python" : "python3";
+    execFileSync(python, ["-c", `import base64, io, json, sys, tarfile
 with tarfile.open(sys.argv[1], 'w:gz', format=tarfile.USTAR_FORMAT) as target:
     for name, encoded in json.load(sys.stdin).items():
         data = base64.b64decode(encoded)
@@ -331,7 +332,7 @@ with tarfile.open(sys.argv[1], 'w:gz', format=tarfile.USTAR_FORMAT) as target:
       const expected = Object.keys(files).filter((name) => mode !== "missing" || name !== "NOTICE.md");
       if (mode === "extra") expected.push("unreviewed.js");
       writeFileSync(inventory, JSON.stringify({ schemaVersion: 1, files: expected.sort() }));
-      const result = spawnSync("python3", [inspector,
+      const result = spawnSync(python, [inspector,
         "--tarball", repacked, "--declared-inventory-json", inventory,
       ], { env, encoding: "utf8" });
       assert.ifError(result.error);
@@ -349,7 +350,7 @@ with tarfile.open(sys.argv[1], 'w:gz', format=tarfile.USTAR_FORMAT) as target:
         writeFileSync(repacked, gzipSync(Buffer.concat([
           gunzipSync(readFileSync(repacked)), Buffer.alloc(512),
         ])));
-        const padded = spawnSync("python3", [inspector,
+        const padded = spawnSync(python, [inspector,
           "--tarball", repacked, "--declared-inventory-json", inventory,
         ], { env, encoding: "utf8" });
         assert.ifError(padded.error);

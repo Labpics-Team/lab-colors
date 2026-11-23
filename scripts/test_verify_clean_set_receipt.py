@@ -577,7 +577,14 @@ class CapsuleReplayTests(unittest.TestCase):
     def test_full_replay_is_offline_and_does_not_need_the_research_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = _fixture(Path(temporary))
+
+            # Git objects are read-only on Windows; remove the actual fixture
+            # with the same cleanup path on every supported Python version.
+            for git_object in (fixture.research / ".git" / "objects").rglob("*"):
+                if git_object.is_file():
+                    git_object.chmod(0o600)
             shutil.rmtree(fixture.research)
+            self.assertFalse(fixture.research.exists())
             self.assertTrue(self.replay(fixture).research_replayed)
 
     def test_identity_mode_never_claims_or_executes_mathematical_replay(self) -> None:

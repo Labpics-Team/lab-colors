@@ -28,7 +28,7 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     if (appearance !== undefined && referenceAppearance !== undefined) {
       invalid("appearance and referenceAppearance are mutually exclusive");
     }
-    const visible = referenceAppearance ?? appearance;
+    const visible = referenceAppearance !== undefined ? referenceAppearance : appearance;
     const tone = inputProperty(options, "tone", "color options");
     const payload = new ByteSink();
     payload.u32(checkedId);

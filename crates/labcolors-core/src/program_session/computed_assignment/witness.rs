@@ -429,7 +429,9 @@ mod tests {
             0.0,
             ColorUseIntentV1 {
                 identity: ColorIdentityDomainV1::new(source, true, IdentityOptionsV1::default())
-                    .unwrap(),
+                    .expect(
+                        "forced-neutral identity options should accept the colored source anchor",
+                    ),
                 appearance: Some(OccurrenceId::new(5)),
                 tone: None,
             },
@@ -453,13 +455,19 @@ mod tests {
         });
         declaration.occurrences[0].subject = PaintId::new(12);
         declaration.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(12));
-        let owner = compile_assignment(declaration, 1).unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
+        let owner = compile_assignment(declaration, 1)
+            .expect("transparent reference fixture should compile with a one-attempt budget");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled witness fixture should instantiate observation stream 8");
+        session.prepare_update(update(1, 255)).expect("well-formed witness observation should be admitted even when solving remains incomplete").commit();
         let SessionState::Incomplete { cause, .. } = session.state() else {
             panic!("one authored-source attempt cannot satisfy forced source neutrality");
         };
-        let witness = cause.diagnostics().witness().unwrap();
+        let witness = cause
+            .diagnostics()
+            .witness()
+            .expect("incomplete authored-source attempt should include a diagnostic witness");
         assert!(
             witness
                 .violations()

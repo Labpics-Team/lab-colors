@@ -25,8 +25,10 @@ pub(crate) fn contrast_ratio(visible: Srgb8, backdrop: Srgb8) -> f64 {
 }
 
 pub(crate) fn polarity(visible: Srgb8, backdrop: Srgb8) -> TonalPolarityV1 {
-    let visible = luminance(visible);
-    let backdrop = luminance(backdrop);
+    luminance_polarity(luminance(visible), luminance(backdrop))
+}
+
+pub(crate) fn luminance_polarity(visible: f64, backdrop: f64) -> TonalPolarityV1 {
     if visible < backdrop {
         TonalPolarityV1::Darker
     } else if visible > backdrop {
@@ -290,6 +292,10 @@ impl UpperLuminanceCurveV1 {
                 },
             )
         };
+        let floor = evaluate(self.lower_l);
+        if y < floor.lo {
+            return [next_down(self.lower_l), next_up(self.lower_l)];
+        }
         let mut certified_lower = self.lower_l;
         let mut certified_upper = self.upper_l;
         // Search the two signs independently. An uncertain sign narrows only
@@ -310,7 +316,7 @@ impl UpperLuminanceCurveV1 {
                     } else {
                         lower = middle;
                     }
-                } else if value.hi < y {
+                } else if floor.hi < y && value.hi < y {
                     certified_lower = middle;
                     lower = middle;
                 } else {
@@ -318,11 +324,10 @@ impl UpperLuminanceCurveV1 {
                 }
             }
         }
-        let point = self.inverse(y);
-        [
-            next_down(certified_lower.min(point)),
-            next_up(certified_upper.max(point)),
-        ]
+        // If y overlaps the floor enclosure, retain the saturated endpoint as
+        // well as the possible upper-branch root. The tested inverse result is
+        // never used to construct its own numerical reference interval.
+        [next_down(certified_lower), next_up(certified_upper)]
     }
 }
 
@@ -465,6 +470,9 @@ mod tests {
         let below = curve.inverse(curve.floor_y - 1e-9);
         let above = curve.inverse(curve.floor_y + 1e-9);
         assert_eq!(below, curve.lower_l);
+        let saturated = curve.inverse_enclosure(curve.floor_y - 1e-9);
+        assert!(saturated[0] <= below && below <= saturated[1]);
+        assert!(saturated[1] < below + 1e-12);
         assert!(above >= below && above - below < 0.001);
         for y in [
             next_down(curve.floor_y),

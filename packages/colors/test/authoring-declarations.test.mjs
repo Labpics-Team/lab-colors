@@ -26,6 +26,7 @@ test("authored references admit finite RGB values and own properties only", asyn
   }
   let inheritedReads = 0;
   const inherited = Object.create(Object.defineProperty({}, "canvas", {
+    enumerable: true,
     get() { inheritedReads++; return "#ffffff"; },
   }));
   const c = colors({ reference: inherited });

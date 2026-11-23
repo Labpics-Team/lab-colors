@@ -1,7 +1,7 @@
 {
   "upstream_repository": "https://github.com/Labpics-Team/agents-config",
   "upstream_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
-  "geometry_verifier_sha256": "d59e8fe1633ffd7876b1d6c3309586e88ede26053348e3c35d7917462554dbd8",
+  "geometry_verifier_sha256": "c87edbe70ed24b1a9e47ec156c1fe4aec3738657b7f4296ef9e7f508b896a8c8",
   "private_context_excluded": [
     "CLEANLINESS-DESIGN.md",
     "CLEANLINESS-EVIDENCE.md",
@@ -388,5 +388,134 @@
       4212411104,
       4212411150
     ]
+  },
+  "source_visibility_refresh": {
+    "reason": "The product shares its existing three relative-luminance constants with the reference adaptation search through pub(crate). The archived Rust source follows that committed source; all numerical literals are unchanged.",
+    "prior_research_commit": "0adb410a92e943dad67161ce616e9f8c701d8a51",
+    "prior_release_sha256": "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c",
+    "prior_proof_manifest_sha256": "2c4eb64a7cd5a0ba50760297e74371d093eca2c1143684153a89892a81273778",
+    "prior_product_source_commit": "e579f73135d359e3d40efdf959aca7d72b600608",
+    "new_product_source_commit": "95be02f7f0a99ef0cad282bdffa6ff9283fa2eeb",
+    "source_path": "crates/labcolors-core/src/spaces/srgb.rs",
+    "old_source": {
+      "sha256": "9789d638620e4209106a07d788bbb3e7efc64f78fd424f5c4c189cb5048138bf",
+      "git_blob_sha1": "a5464ccbbd1265274fc366da83cffafc4001d7df"
+    },
+    "new_source": {
+      "sha256": "1d4d7c0b10f1f1936fe47958b507fec7c4d083e352dda79b3c039295088eed32",
+      "git_blob_sha1": "ae00cc531c31650a80c3cbe7c556dfcb1f09075f"
+    },
+    "source_origin_policy": "The previous capsule remains exactly retrievable at its preserved research commit. This snapshot is the actual new committed product source, not historical bytes.",
+    "certificate_provenance": "Only source-binding metadata changes in the numerical certificate JSON. Historical computation timestamps, generators and arithmetic payloads are preserved and do not describe a new numerical computation.",
+    "verifier_change": "Exactly three expected bridge SHA anchors change. Arithmetic, predicates, coverage, mutation cases and all independent audit programs are unchanged.",
+    "historical_stage_scope": "Existing source_refresh and text_io_revision blocks remain unchanged historical records. Their current fields refer to those earlier stages, not this visibility refresh.",
+    "metadata_change_audit": [
+      {
+        "path": "geometry/input/bridge.json",
+        "old_sha256": "cd5f1839179166e8f898fb03bd26a6c8e85efc50e60f480393f88ccdfc5ec2ab",
+        "new_sha256": "0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357",
+        "changed_json_paths": [
+          [
+            "product_commit"
+          ],
+          [
+            "created_utc"
+          ],
+          [
+            "bindings",
+            1,
+            "sha256"
+          ],
+          [
+            "bindings",
+            1,
+            "git_blob_sha1"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/profile-candidate.json",
+        "old_sha256": "2aa2f539b5617b050c6dbe666a3e448570313c8dd00cff04705b972a749c8aff",
+        "new_sha256": "66d5d2934d8f7205d26e86dc08262db430227f50efb11cc021209f1c8c2dd5ab",
+        "changed_json_paths": [
+          [
+            "source_pins",
+            "bridge",
+            "sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/frontier-candidate.json",
+        "old_sha256": "ffe4c9094ddbc6ef54082269425285758283397bee146baccd06e94ffeb8ee20",
+        "new_sha256": "754f97d5e9202ef416b6232ad0739d0142d8261a209fb705864c6464e8c3fd3a",
+        "changed_json_paths": [
+          [
+            "profile_sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-full.json",
+        "old_sha256": "9ffc641881229c5bddc6c725d0c79a1ff0519f681f7b832cfe686ab2edd2f626",
+        "new_sha256": "c92d3f3ddca0a18e53c25a6de455f4f783f04983da2e41b507d858e95321f306",
+        "changed_json_paths": [
+          [
+            "pins",
+            "profile"
+          ],
+          [
+            "pins",
+            "frontier"
+          ],
+          [
+            "pins",
+            "bridge"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-refined.json",
+        "old_sha256": "0975b7a7d386b59fe739c5de561b527201ede96939ec4af01ce0f11329e18d04",
+        "new_sha256": "dc4ccfabcd8974add65e73bf1c9b4acc64b8e19185f3407bb46f3a7f2bd3e1f3",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/mutation-corpus.json",
+        "old_sha256": "ab9c0f7032f4aec1d4c79f756c54a784749aff82c3591e879ad24fe64b5f3a43",
+        "new_sha256": "3ab87504b153232b332ad3a1cc1b7e0c7e5a66cdc99345b958d3164b6c6e5d64",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "profile-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "frontier-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-refined.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      }
+    ],
+    "raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+    "codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
   }
 }

@@ -36,9 +36,9 @@ RESEARCH_CAPSULE_PATH = (
     "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule"
 )
 RESEARCH_RELEASE_PATH = f"{RESEARCH_CAPSULE_PATH}/release-v2.json"
-RESEARCH_COMMIT = "0adb410a92e943dad67161ce616e9f8c701d8a51"
+RESEARCH_COMMIT = "58ca2b958ea5ab2713f23bf58ae459520b7a2576"
 RESEARCH_RELEASE_SHA256 = (
-    "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c"
+    "05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290"
 )
 
 RELEASE_ID = "exact-nominal-srgb8-point-clean-set-v2"

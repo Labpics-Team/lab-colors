@@ -171,14 +171,14 @@
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "f9f3b43bea16d3105f1285fb9b7f11dc4c4a36659ca14e177ec1712494faeb61"
+      "sha256": "d27ec093d90ba5b4c5ec0bbbb1e85899bc936d3ed0c1e594169eb2e960b961e3"
     },
     {
-      "bytes": 38326,
+      "bytes": 38704,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "189b41186ab9eecc71957712ac1e0555508f117e3ab4c82e000947d3d825c172"
+      "sha256": "6180632d68adbb9cee08dbb5d7d771e6cdeb818311d07af6b7ce7e4b8d86dafd"
     }
   ],
   "excluded_claims": [
@@ -199,7 +199,7 @@
         "bytes": 4608,
         "path": "crates/labcolors-core/NOTICE.md",
         "role": "attribution_notice",
-        "sha256": "15badc6b2b868aff66b74ae34f6b1360c273c2b935f8061214dcdc56db7f7c39"
+        "sha256": "a1a9408474c2ef44c41a287b1723d52ec0484010c6c3c5e477f72b2ebad182a0"
       },
       {
         "bytes": 18657,
@@ -231,10 +231,10 @@
   },
   "release_id": "exact-nominal-srgb8-point-clean-set-v2",
   "research": {
-    "commit": "0adb410a92e943dad67161ce616e9f8c701d8a51",
+    "commit": "58ca2b958ea5ab2713f23bf58ae459520b7a2576",
     "object_format": "sha1",
     "release_path": "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule/release-v2.json",
-    "release_sha256": "5f8cebddf16b133d617c079146de47b5f7185c7f415b2f5b6b8e851416e2359c",
+    "release_sha256": "05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290",
     "repository": "https://github.com/Labpics-Team/agents-config"
   },
   "runtime_contract": {
