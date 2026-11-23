@@ -1,6 +1,0 @@
-{
-  "name": "contextual-colors-example",
-  "private": true,
-  "type": "module",
-  "scripts": { "dev": "node server.mjs", "test": "node --test interaction.test.mjs" }
-}
