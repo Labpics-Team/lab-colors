@@ -98,6 +98,19 @@ cargo test --workspace --locked
 Версия Rust указана в [Cargo.toml](Cargo.toml). Команды сборки и проверки
 npm-пакета находятся в [package.json](packages/colors/package.json).
 
+```sh
+npm --prefix packages/colors run build
+```
+
+Сборка требует Rust из `rust-toolchain.toml`, `wasm-pack` из
+[`bench/wasm.json`](packages/colors/bench/wasm.json), Node.js и `tar` в PATH.
+Она отключает только встроенный optimizer `wasm-pack`, затем выполняет
+официальный Binaryen Node с теми же release, SHA-256 и флагами, что указаны
+в `bench/wasm.json`. Оптимизированный WASM проверяется перед завершением.
+Первый запуск скачивает архив с GitHub; следующие используют проверяемый
+по SHA-256 пользовательский кэш. Для уже скачанного архива задайте
+`LABCOLORS_BINARYEN_ARCHIVE`: его байты проходят ту же проверку.
+
 Cargo обнаруживает проверки рядом с модулем Core и публичные контракты в
 `crates/*/tests`. Для адресного запуска выбирайте крейт, тестовый файл,
 затем функцию или группу. Например, публичный Program wire:

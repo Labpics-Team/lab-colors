@@ -68,7 +68,7 @@
     "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"
   ],
   "scripts": {
-    "build": "wasm-pack build ../../crates/labcolors-wasm --release --target web --out-dir ../../packages/colors/pkg --out-name labcolors --locked",
+    "build": "node ../../scripts/build-wasm.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test",
     "prepack": "npm run build && node ../../scripts/prepare-npm-package.mjs",
