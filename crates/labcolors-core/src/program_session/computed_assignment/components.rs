@@ -803,14 +803,50 @@ pub(super) fn merge_evidence(
     Ok(())
 }
 
+pub(super) struct VerifiedComponentV1 {
+    support: std::sync::Arc<[ColorSignal]>,
+    search: SearchEvidenceV1,
+    reports: std::ops::Range<usize>,
+}
+
+fn local_support<E: ProgramConstraintEvaluatorSetV1>(
+    component: &ComputedComponentV1,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+) -> Result<Vec<ColorSignal>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let cases = contextual::local_case_order::<E>(component, scenarios)?;
+    let count = cases
+        .len()
+        .checked_mul(component.inputs.len())
+        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+    let mut support = Vec::new();
+    support
+        .try_reserve_exact(count)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    for case in cases {
+        let values = scenarios
+            .physical_values(case)
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        support.extend(component.inputs.iter().map(|&input| values[input]));
+    }
+    Ok(support)
+}
+
 pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
-) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    previous: Option<&ComputedVerifiedV1<E>>,
+) -> Result<
+    (SearchResultV1, Vec<VerifiedComponentV1>),
+    ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
+> {
     let mut reference_selections = Vec::new();
+    let mut components = Vec::new();
+    components
+        .try_reserve_exact(selection.components.len())
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::AuthoredExact,
         visited: 0,
@@ -846,15 +882,54 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         evidence.examined = 1;
         if failed {
             evidence.completion = CompletionV1::Complete;
-            return Ok(SearchResultV1 {
-                reference_selections: None,
-                evidence,
-                values: None,
-            });
+            return Ok((
+                SearchResultV1 {
+                    reference_selections: None,
+                    evidence,
+                    values: None,
+                },
+                components,
+            ));
         }
     }
-    for component in &selection.components {
-        let selected = if component
+    for (index, component) in selection.components.iter().enumerate() {
+        let support = local_support::<E>(component, scenarios)?;
+        let reusable =
+            previous.filter(|previous| previous.components[index].support.as_ref() == support);
+        let support = reusable.map_or_else(
+            || support.into(),
+            |previous| previous.components[index].support.clone(),
+        );
+        let selected = if let Some(previous) = reusable {
+            let cached = &previous.components[index];
+            let mut local = Vec::new();
+            local
+                .try_reserve_exact(component.targets.len())
+                .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            local.extend(
+                component
+                    .targets
+                    .iter()
+                    .map(|&target| previous.values[target]),
+            );
+            let reference_selections = if cached.reports.is_empty() {
+                None
+            } else {
+                let reports = previous
+                    .reference_selections
+                    .as_ref()
+                    .and_then(|reports| reports.get(cached.reports.clone()))
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                Some(contextual::refresh_reports(
+                    selection, component, runtime, epoch, scenarios, &local, reports,
+                )?)
+            };
+            SearchResultV1 {
+                values: Some(local),
+                evidence: cached.search,
+                reference_selections,
+            }
+        } else if component
             .targets
             .iter()
             .any(|&index| selection.targets[index].declaration.intent.is_some())
@@ -871,11 +946,14 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 evidence.completion = CompletionV1::Complete;
                 evidence.open_regions = 0;
             }
-            return Ok(SearchResultV1 {
-                reference_selections: None,
-                evidence,
-                values: None,
-            });
+            return Ok((
+                SearchResultV1 {
+                    reference_selections: None,
+                    evidence,
+                    values: None,
+                },
+                components,
+            ));
         };
         if local.len() != component.targets.len() {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
@@ -883,17 +961,26 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         for (&index, value) in component.targets.iter().zip(local) {
             values[index] = value;
         }
+        let report_start = reference_selections.len();
         if let Some(reports) = selected.reference_selections {
             reference_selections
                 .try_reserve(reports.len())
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
             reference_selections.extend(reports.iter().cloned());
         }
+        components.push(VerifiedComponentV1 {
+            support,
+            search: selected.evidence,
+            reports: report_start..reference_selections.len(),
+        });
     }
-    Ok(SearchResultV1 {
-        reference_selections: (!reference_selections.is_empty())
-            .then(|| reference_selections.into()),
-        evidence,
-        values: Some(values),
-    })
+    Ok((
+        SearchResultV1 {
+            reference_selections: (!reference_selections.is_empty())
+                .then(|| reference_selections.into()),
+            evidence,
+            values: Some(values),
+        },
+        components,
+    ))
 }

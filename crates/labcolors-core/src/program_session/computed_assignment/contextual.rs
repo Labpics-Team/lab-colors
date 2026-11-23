@@ -42,10 +42,10 @@ struct LocalCasesV1 {
     representatives: Vec<bool>,
 }
 
-fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
-) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+) -> Result<Vec<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let count = scenarios.len().get();
     let mut cases = Vec::new();
     cases
@@ -73,10 +73,20 @@ fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
     order
         .try_reserve_exact(cases.len())
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut representatives =
-        buffer(count, false).map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     for (case, _) in cases {
         order.push(case);
+    }
+    Ok(order)
+}
+
+fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
+    component: &ComputedComponentV1,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let order = local_case_order::<E>(component, scenarios)?;
+    let mut representatives = buffer(scenarios.len().get(), false)
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    for &case in &order {
         representatives[case] = true;
     }
     Ok(LocalCasesV1 {
@@ -84,6 +94,8 @@ fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
         representatives,
     })
 }
+
+pub(super) use reference_search::refresh_reports;
 
 impl<'a> ContextV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(

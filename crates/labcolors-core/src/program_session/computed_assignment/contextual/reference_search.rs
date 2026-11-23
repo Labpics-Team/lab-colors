@@ -1062,73 +1062,128 @@ impl<'a> ReferenceRuntimeV1<'a> {
         &self,
         selected: usize,
     ) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
-        let point = &self.pending[selected];
-        let count = self.context.targets.len();
-        let mut reports = Vec::new();
-        reports
-            .try_reserve_exact(self.models.iter().filter(|model| model.is_some()).count())
-            .map_err(|_| ())?;
-        for (target, model) in self.models.iter().enumerate() {
-            let Some(model) = model else {
-                continue;
-            };
-            let compiled = &self.context.targets[target];
-            let mut cases = Vec::new();
-            cases
-                .try_reserve_exact(self.appearance.len() / count)
-                .map_err(|_| ())?;
-            for case_index in 0..self.appearance.len() / count {
-                let appearance = self.appearance[case_index * count + target];
-                let direction = polarity(appearance.visible, appearance.backdrop);
-                let actual_contrast = contrast_ratio(appearance.visible, appearance.backdrop);
-                let mut preferred = model.lab_for(appearance.backdrop, direction);
-                if !self.capacity_enabled(target) {
-                    preferred[0] = self.context.preferred[case_index * count + target][0];
-                }
-                cases.push(ProgramReferenceCaseV1 {
-                    case_index,
-                    reference_visible: compiled.effective_anchor(),
-                    reference_backdrop: compiled.reference_backdrop.ok_or(())?,
-                    actual_visible: appearance.visible,
-                    actual_backdrop: appearance.backdrop,
-                    reference_contrast_bits: model.reference_contrast().to_bits(),
-                    actual_contrast_bits: actual_contrast.to_bits(),
-                    polarity: direction,
-                    strength_loss_bits: (model.reference_log_contrast() - actual_contrast.ln())
-                        .max(0.0)
-                        .to_bits(),
-                    virtual_distance_squared_bits: squared_distance(appearance.lab, preferred)
-                        .to_bits(),
-                });
-            }
-            let capacity = point.capacities[target].map(|index| {
+        reports(&self.context, &self.appearance, |target| {
+            Ok(self.pending[selected].capacities[target].map(|index| {
                 let capacity = &self.capacities[index];
                 ProgramReferenceCapacityV1 {
                     ratio_lower_bits: capacity.ratio_lower.to_bits(),
                     ratio_upper_bits: capacity.ratio_upper.to_bits(),
                     complete: capacity.complete,
                 }
-            });
-            reports.push(ProgramReferenceSelectionV1 {
-                target_id: compiled.id.value(),
-                occurrence_id: compiled
-                    .declaration
-                    .intent
-                    .as_ref()
-                    .and_then(|intent| intent.appearance)
-                    .ok_or(())?
-                    .value(),
-                preference: if self.capacity_enabled(target) {
-                    ProgramReferencePreferenceV1::ReferenceStrength
-                } else {
-                    ProgramReferencePreferenceV1::ExplicitTone
-                },
-                capacity,
-                cases: cases.into(),
+            }))
+        })
+    }
+}
+
+fn reports(
+    context: &ContextV1<'_>,
+    appearance: &[AppearancePointV1],
+    mut capacity: impl FnMut(usize) -> Result<Option<ProgramReferenceCapacityV1>, ()>,
+) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
+    let count = context.targets.len();
+    let mut reports = Vec::new();
+    reports
+        .try_reserve_exact(
+            context
+                .targets
+                .iter()
+                .filter(|target| target.reference_backdrop.is_some())
+                .count(),
+        )
+        .map_err(|_| ())?;
+    for (target, compiled) in context.targets.iter().enumerate() {
+        let Some(backdrop) = compiled.reference_backdrop else {
+            continue;
+        };
+        let model = ReferenceTransportV1::new(compiled.effective_anchor(), backdrop);
+        let capacity_enabled = compiled.tone_input.is_none();
+        let mut cases = Vec::new();
+        cases
+            .try_reserve_exact(appearance.len() / count)
+            .map_err(|_| ())?;
+        for case_index in 0..appearance.len() / count {
+            let appearance = appearance[case_index * count + target];
+            let direction = polarity(appearance.visible, appearance.backdrop);
+            let actual_contrast = contrast_ratio(appearance.visible, appearance.backdrop);
+            let mut preferred = model.lab_for(appearance.backdrop, direction);
+            if !capacity_enabled {
+                preferred[0] = context.preferred[case_index * count + target][0];
+            }
+            cases.push(ProgramReferenceCaseV1 {
+                case_index,
+                reference_visible: compiled.effective_anchor(),
+                reference_backdrop: compiled.reference_backdrop.ok_or(())?,
+                actual_visible: appearance.visible,
+                actual_backdrop: appearance.backdrop,
+                reference_contrast_bits: model.reference_contrast().to_bits(),
+                actual_contrast_bits: actual_contrast.to_bits(),
+                polarity: direction,
+                strength_loss_bits: (model.reference_log_contrast() - actual_contrast.ln())
+                    .max(0.0)
+                    .to_bits(),
+                virtual_distance_squared_bits: squared_distance(appearance.lab, preferred)
+                    .to_bits(),
             });
         }
-        Ok(reports.into())
+        let capacity = capacity(target)?;
+        reports.push(ProgramReferenceSelectionV1 {
+            target_id: compiled.id.value(),
+            occurrence_id: compiled
+                .declaration
+                .intent
+                .as_ref()
+                .and_then(|intent| intent.appearance)
+                .ok_or(())?
+                .value(),
+            preference: if capacity_enabled {
+                ProgramReferencePreferenceV1::ReferenceStrength
+            } else {
+                ProgramReferencePreferenceV1::ExplicitTone
+            },
+            capacity,
+            cases: cases.into(),
+        });
     }
+    Ok(reports.into())
+}
+
+pub(in crate::program_session::computed_assignment) fn refresh_reports<
+    E: ProgramConstraintEvaluatorSetV1,
+>(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    previous: &[ProgramReferenceSelectionV1],
+) -> Result<
+    std::sync::Arc<[ProgramReferenceSelectionV1]>,
+    ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
+> {
+    let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+    let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+    let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
+    let mut appearance =
+        buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
+    apply_targets::<E>(context.targets, runtime, values)?;
+    let mut collector = IntentScoreCollectorV1::new(&context, values, &mut scores);
+    collector.appearance = Some(&mut appearance);
+    observe_intents(&context, runtime, epoch, scenarios, &mut collector)?;
+    if collector.violations() != 0 {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    // Capacity and search completeness describe the same local support. Case
+    // indexes and appearances describe this observation and must be rebuilt.
+    let mut previous = previous.iter();
+    reports(&context, &appearance, |target| {
+        let report = previous.next().ok_or(())?;
+        if report.target_id != context.targets[target].id.value() {
+            return Err(());
+        }
+        Ok(report.capacity)
+    })
+    .map_err(allocation)
 }
 
 fn interval_distance(left: [f64; 2], right: [f64; 2]) -> f64 {

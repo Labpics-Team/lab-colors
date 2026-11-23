@@ -636,16 +636,18 @@ fn foreign_inputs_cannot_reorder_or_duplicate_the_local_search_contexts() {
     for (relevant, foreign) in [(2, 1), (1, 2)] {
         let owner = compile_assignment(local_scenarios(relevant, foreign), 65_536)
             .expect("independent observed inputs");
-        let mut session = owner
-            .instantiate(ObservationStreamId::new(8))
-            .expect("session");
         let variants = [
             vec![(0, 0), (255, 1)],
             vec![(255, 0), (0, 1)],
             vec![(255, 0), (0, 1), (128, 0)],
         ];
-        for (revision, cases) in variants.into_iter().enumerate() {
-            let mut observed = update(revision as u64 + 1, 0);
+        for cases in variants {
+            // A fresh session tests search itself, without committed reuse
+            // hiding a dependency on foreign case order or multiplicity.
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            let mut observed = update(1, 0);
             observed.payload = ObservationPayloadInput::Scenarios(ObservedScenarioSetInput {
                 scenarios: cases
                     .iter()
