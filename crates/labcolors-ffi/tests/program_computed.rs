@@ -21,6 +21,69 @@ fn rgb(gray: u8) -> ProgramRgb8 {
 }
 
 #[test]
+fn native_reference_hierarchy_preserves_owned_pairs_and_explains_fixed_conflict() -> TestResult {
+    let runtime = compile_program_wire(
+        include_bytes!("../../labcolors-core/tests/fixtures/reference-hierarchy.lcpw").to_vec(),
+        8,
+    )?;
+    let dark = runtime.update_observed(1, vec![9], vec![0; 3], 1)?;
+    assert_eq!(dark.state(), "ready");
+    let report = dark
+        .assessment_report()?
+        .ok_or("reference hierarchy report")?;
+    let pair = &report.tonal_hierarchy[0];
+    assert_eq!(
+        (
+            pair.constraint_id,
+            pair.stronger_occurrence_id,
+            pair.weaker_occurrence_id
+        ),
+        (30, 5, 15)
+    );
+    assert!(pair.actual_gap >= pair.required_gap);
+    assert!(pair.actual_ratio >= pair.required_ratio);
+    assert_eq!(pair.required_gap, pair.required_ratio.ln());
+    assert_eq!(pair.stronger_polarity, ProgramTonalPolarity::Lighter);
+    assert_eq!(report.reference_selections.len(), 2);
+    let selection = &report.reference_selections[0];
+    assert_eq!(selection.target_id, 10);
+    assert_eq!(selection.occurrence_id, 5);
+    assert_eq!(
+        selection.preference,
+        ProgramReferencePreference::ReferenceStrength
+    );
+    assert_eq!(selection.cases[0].reference_backdrop, rgb(255));
+    assert_eq!(selection.cases[0].actual_backdrop, rgb(0));
+    assert_eq!(
+        dark.reference_selections()?,
+        Some(report.reference_selections.clone())
+    );
+    runtime.update_observed(2, vec![9], vec![255; 3], 1)?;
+    assert_eq!(dark.assessment_report()?, Some(report));
+
+    let fixed = compile_program_wire(
+        include_bytes!("../../labcolors-core/tests/fixtures/reference-hierarchy-fixed.lcpw")
+            .to_vec(),
+        8,
+    )?;
+    let rejected = fixed.update_observed(1, vec![9], vec![0; 3], 1)?;
+    assert_eq!(rejected.state(), "unsatisfied");
+    assert_eq!(rejected.reference_selections()?, None);
+    let diagnostics = rejected.diagnostics()?.ok_or("fixed relation diagnostic")?;
+    let witness = diagnostics.witness.ok_or("fixed relation witness")?;
+    assert!(
+        matches!(witness.violations.as_slice(), [ProgramDiagnostic::TonalHierarchy {
+        stronger_occurrence_id: 5, weaker_occurrence_id: 15, required_gap, actual_gap, ..
+    }] if actual_gap < required_gap)
+    );
+    assert_eq!(
+        fixed.update_observed(2, vec![9], vec![255; 3], 1)?.state(),
+        "ready"
+    );
+    Ok(())
+}
+
+#[test]
 fn native_nominal_visible_reports_preserve_the_final_color_and_typed_rejection() -> TestResult {
     // Public JS V3 builder: fixed white at opacity 0.5 over one input, with a
     // report-only nominal-visible constraint and an empty assignment.

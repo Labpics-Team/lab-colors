@@ -1117,8 +1117,8 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
     .unwrap();
     assert_eq!(schema.0, (1_u8..=29).collect::<Vec<_>>());
     let edge_role_count = crate::program_session::program_identity_edge_role_count_for_test();
-    // Contextual target добавляет два новых edge tag, не меняя V9 байты.
-    assert_eq!(edge_role_count, 39);
+    // Contextual targets and ordered relation members extend tags without changing legacy V9 bytes.
+    assert_eq!(edge_role_count, 41);
     assert_eq!(schema.1.len(), 37);
     assert_eq!(schema.1, (1_u8..=37).collect::<Vec<_>>());
 

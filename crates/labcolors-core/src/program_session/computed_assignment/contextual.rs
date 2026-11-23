@@ -17,6 +17,14 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     *crate::sha256::digest(&bytes).as_bytes()
 }
 
+pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v1.source-identity.immutable-visible-reference.upper-monotone-cubic.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-bounded-work.pending-points.source-tie\0";
+    let mut bytes = [0; DOMAIN.len() + 8];
+    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
+    *crate::sha256::digest(&bytes).as_bytes()
+}
+
 struct ContextV1<'a> {
     targets: ComputedTargetsV1<'a>,
     constraint_indices: Option<&'a [usize]>,
@@ -100,10 +108,12 @@ impl<'a> ContextV1<'a> {
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             for (index, target) in targets.iter().enumerate() {
-                let mut rgb = target.declaration.anchor;
-                if let Some(intent) = &target.declaration.intent {
+                let mut rgb = target.effective_anchor();
+                if let Some(intent) = target.effective_intent() {
                     if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
-                        let source = if intent.identity.neutral() {
+                        let source = if !target.declaration.reference_appearance
+                            && intent.identity.neutral()
+                        {
                             Srgb8::new([128; 3])
                         } else {
                             rgb
@@ -120,25 +130,8 @@ impl<'a> ContextV1<'a> {
         domains
             .try_reserve_exact(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-        for (index, target) in targets.iter().enumerate() {
-            domains.push(
-                if opaque[index]
-                    && target
-                        .declaration
-                        .intent
-                        .as_ref()
-                        .is_some_and(|intent| intent.identity.neutral())
-                {
-                    // У opaque собственного применения source и visible совпадают.
-                    target
-                        .declaration
-                        .domain
-                        .gray_intersection()
-                        .unwrap_or(target.declaration.domain)
-                } else {
-                    target.declaration.domain
-                },
-            );
+        for target in targets.iter() {
+            domains.push(target.search_domain());
         }
         let local_cases = if let Some(component) = component {
             local_cases::<E>(component, scenarios)?
@@ -205,6 +198,26 @@ struct IntentScoreCollectorV1<'a, 'context> {
     scores: &'a mut [f64],
     violations: usize,
     has_violation: bool,
+    appearance: Option<&'a mut [AppearancePointV1]>,
+}
+
+#[derive(Clone, Copy)]
+struct AppearancePointV1 {
+    visible: Srgb8,
+    backdrop: Srgb8,
+    lab: [f64; 3],
+    alpha: f64,
+}
+
+impl Default for AppearancePointV1 {
+    fn default() -> Self {
+        Self {
+            visible: Srgb8::new([0; 3]),
+            backdrop: Srgb8::new([0; 3]),
+            lab: [0.0; 3],
+            alpha: 1.0,
+        }
+    }
 }
 
 impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
@@ -216,6 +229,7 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
             scores,
             violations: 0,
             has_violation: false,
+            appearance: None,
         }
     }
 
@@ -246,12 +260,40 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
                 self.values[index]
             };
             let point_lab = lab(rgb);
+            if let Some(points) = &mut self.appearance {
+                let backdrop = if let Some(slot) = target.appearance {
+                    Srgb8::new(
+                        evaluation
+                            .occurrence_at(slot)
+                            .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                            .certificate()
+                            .backdrop_rgb(),
+                    )
+                } else {
+                    rgb
+                };
+                points[case * count + index] = AppearancePointV1 {
+                    visible: rgb,
+                    backdrop,
+                    lab: point_lab,
+                    alpha: if let Some(slot) = target.appearance {
+                        evaluation
+                            .occurrence_at(slot)
+                            .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                            .certificate()
+                            .subject_opacity()
+                            .value()
+                    } else {
+                        1.0
+                    },
+                };
+            }
             let delta = f64::from_bits(target.declaration.max_delta_bits);
-            let identity_failed = target
-                .declaration
-                .intent
-                .as_ref()
-                .is_some_and(|intent| !intent.identity.contains(rgb));
+            let identity_failed = target.effective_intent().is_some_and(|intent| {
+                !intent
+                    .identity
+                    .contains(target.identity_point(self.values[index], rgb))
+            });
             if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
                 self.has_violation = true;
                 self.violations += usize::from(context.represents_case(case));
@@ -304,8 +346,29 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
     scores: &mut [f64],
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    apply_targets::<E>(context.targets, runtime, values)?;
     let mut collector = IntentScoreCollectorV1::new(context, values, scores);
+    let failures = assess_observed(
+        context,
+        runtime,
+        epoch,
+        scenarios,
+        values,
+        &mut collector,
+        arena,
+    )?;
+    Ok(failures + collector.violations())
+}
+
+fn assess_observed<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    collector: &mut impl ProgramPhysicalCaseObserverV1,
+    arena: &mut ProgramEvaluationArenaV1<E>,
+) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    apply_targets::<E>(context.targets, runtime, values)?;
     arena.clear();
     let hard_failed = scan_program_candidate_scoped(
         runtime,
@@ -320,7 +383,7 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
             },
             outputs: None,
             point_causal: None,
-            physical_case: Some(&mut collector),
+            physical_case: Some(collector),
         },
         context.constraint_indices.map_or(
             ProgramCandidateScanV1::Full { previous: None },
@@ -335,13 +398,12 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
         .iter()
         .filter(|cell| context.represents_case(cell.case_index()) && cell.result().is_violation())
         .count();
-    Ok(collector.violations()
-        + context
-            .domains
-            .iter()
-            .zip(values)
-            .filter(|(domain, value)| !domain.contains(**value))
-            .count()
+    Ok(context
+        .domains
+        .iter()
+        .zip(values)
+        .filter(|(domain, value)| !domain.contains(**value))
+        .count()
         + hard_violations.max(usize::from(hard_failed)))
 }
 
@@ -373,6 +435,26 @@ fn inverse_hint(desired: Srgb8, backdrop: [u8; 3], alpha: f64) -> Srgb8 {
             lo
         }
     }))
+}
+
+// A source-identity walk samples the material itself. Inverting a neutral
+// reference appearance can otherwise turn a chromatic material into gray.
+fn tonal_hint(
+    target: &CompiledComputedTargetV1,
+    intent: &EffectiveColorIntentV1<'_>,
+    lightness: f64,
+    backdrop: [u8; 3],
+    alpha: f64,
+) -> Srgb8 {
+    if target.declaration.reference_appearance {
+        return color_at_lightness(target.declaration.anchor, lightness);
+    }
+    let source = if intent.identity.neutral() {
+        Srgb8::new([128; 3])
+    } else {
+        target.effective_anchor()
+    };
+    inverse_hint(color_at_lightness(source, lightness), backdrop, alpha)
 }
 
 fn physical_context<E: ProgramConstraintEvaluatorSetV1>(
@@ -432,11 +514,12 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
 struct BoundsV1 {
     lower: Vec<[u8; 3]>,
     constraints: Vec<RegionConstraintV1>,
-    constraint_lower: Vec<([u8; 3], [u8; 3])>,
+    constraint_lower: Vec<RegionPointV1>,
     scores: Vec<f64>,
     changes_min: Vec<bool>,
     tuple_min: Vec<Srgb8>,
     evaluations: u64,
+    appearance: Option<Vec<[RegionPointV1; 2]>>,
 }
 
 impl BoundsV1 {
@@ -505,23 +588,16 @@ impl BoundsV1 {
                 let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
                 self.evaluations += 1;
                 for (index, constraint) in self.constraints.iter().enumerate() {
-                    let point = evaluation
-                        .occurrence_at(constraint.slot())
+                    let point = constraint
+                        .point(&evaluation)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     if !high {
-                        self.constraint_lower[index] =
-                            (point.visible(), point.certificate().backdrop_rgb());
-                    } else {
-                        let (visible, backdrop) = self.constraint_lower[index];
-                        if !constraint
-                            .may_pass(
-                                (visible, point.visible()),
-                                (backdrop, point.certificate().backdrop_rgb()),
-                            )
-                            .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
-                        {
-                            return Ok(false);
-                        }
+                        self.constraint_lower[index] = point;
+                    } else if !constraint
+                        .may_pass(self.constraint_lower[index], point)
+                        .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
+                    {
+                        return Ok(false);
                     }
                 }
                 for (index, target) in context.targets.iter().enumerate() {
@@ -541,17 +617,44 @@ impl BoundsV1 {
                         .bounds();
                         if high { hi } else { lo }
                     };
+                    if let Some(points) = &mut self.appearance {
+                        let backdrop = if let Some(slot) = target.appearance {
+                            evaluation
+                                .occurrence_at(slot)
+                                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
+                                .certificate()
+                                .backdrop_rgb()
+                        } else {
+                            rgb
+                        };
+                        points[case * count + index][usize::from(high)] = RegionPointV1 {
+                            visible: rgb,
+                            backdrop,
+                            weaker: [0; 3],
+                        };
+                    }
                     if !high {
                         self.lower[index] = rgb;
                         continue;
                     }
                     let lower = self.lower[index];
-                    if target
-                        .declaration
-                        .intent
-                        .as_ref()
-                        .is_some_and(|intent| !intent.identity.may_intersect_rgb_box(lower, rgb))
-                    {
+                    let identity_box = if target.declaration.reference_appearance {
+                        if index < node.depth {
+                            let point = values[index].bytes();
+                            (point, point)
+                        } else if index == node.depth {
+                            node.domain.bounds()
+                        } else {
+                            context.domains[index].bounds()
+                        }
+                    } else {
+                        (lower, rgb)
+                    };
+                    if target.effective_intent().is_some_and(|intent| {
+                        !intent
+                            .identity
+                            .may_intersect_rgb_box(identity_box.0, identity_box.1)
+                    }) {
                         return Ok(false);
                     }
                     let domain = AssignmentDomainV1::Cube { lower, upper: rgb };
@@ -576,6 +679,15 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    if component
+        .targets
+        .iter()
+        .any(|&index| selection.targets[index].declaration.reference_appearance)
+    {
+        return reference_search::select_component(
+            selection, component, runtime, epoch, scenarios, arena,
+        );
+    }
     select_component_inner(selection, component, runtime, epoch, scenarios, arena, true)
 }
 
@@ -606,6 +718,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
     };
     if selection.budget == 0 {
         return Ok(SearchResultV1 {
+            reference_selections: None,
             evidence,
             values: None,
         });
@@ -648,6 +761,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
         if context.exact_optimum(&values, &scores) {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: Some(values),
             });
@@ -703,6 +817,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
         if failures == 0 && context.exact_optimum(&values, &scores) {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: Some(values),
             });
@@ -761,7 +876,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                     position
                 };
                 let target = &targets[index];
-                let Some(intent) = &target.declaration.intent else {
+                let Some(intent) = target.effective_intent() else {
                     continue;
                 };
                 for &case in &context.local_cases.order {
@@ -778,18 +893,13 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                         scenarios,
                         case,
                     )?;
-                    let source = if intent.identity.neutral() {
-                        Srgb8::new([128; 3])
-                    } else {
-                        target.declaration.anchor
-                    };
                     let mut previous = None;
                     for step in 0..=255_u32 {
                         if evidence.visited >= origin_limit {
                             break;
                         }
-                        let desired = color_at_lightness(source, f64::from(step) / 255.0);
-                        let candidate = inverse_hint(desired, backdrop, alpha);
+                        let candidate =
+                            tonal_hint(target, &intent, f64::from(step) / 255.0, backdrop, alpha);
                         if previous == Some(candidate) {
                             continue;
                         }
@@ -871,6 +981,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
             evidence.completion = CompletionV1::Complete;
             evidence.open_regions = 0;
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: Some(best_values),
             });
@@ -880,13 +991,15 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
     // Полный RGB8/gray domain остаётся доступен после приближений.
     let constraints = region_constraints(epoch, context.constraint_indices).map_err(allocation)?;
     let mut bounds = BoundsV1 {
-        constraint_lower: buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocation)?,
+        constraint_lower: buffer(constraints.len(), RegionPointV1::default())
+            .map_err(allocation)?,
         constraints,
         lower: buffer(count, [0; 3]).map_err(allocation)?,
         scores: buffer(count, 0.0).map_err(allocation)?,
         changes_min: buffer(count, false).map_err(allocation)?,
         tuple_min: buffer(count, Srgb8::new([0; 3])).map_err(allocation)?,
         evaluations: 0,
+        appearance: None,
     };
     let stack_limit = context
         .domains
@@ -1102,10 +1215,12 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
         evidence.open_regions = open_regions;
     }
     Ok(SearchResultV1 {
+        reference_selections: None,
         evidence,
         values: has_best.then_some(best_values),
     })
 }
 
 mod conditional;
+mod reference_search;
 mod refinement;

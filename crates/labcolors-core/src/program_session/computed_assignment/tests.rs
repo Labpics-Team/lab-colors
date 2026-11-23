@@ -888,6 +888,7 @@ fn compiled_preferences_keep_declaration_errors_before_order_validation() {
             TargetId::new(20),
             TargetIntentV1::Computed(ComputedTargetV1 {
                 intent: None,
+                reference_appearance: false,
                 domain,
                 anchor: Srgb8::new([160; 3]),
                 max_delta_bits,

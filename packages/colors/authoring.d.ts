@@ -1,13 +1,22 @@
-import type { ProgramCleanlinessAssessmentV1 } from "./pkg/labcolors.js";
+import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1 } from "./pkg/labcolors.js";
 
 declare const colorHandle: unique symbol;
 
 /** Итог применённой модели; конвенция не является человеческой оценкой всей композиции. */
 export type ColorCleanlinessAssessment = ProgramCleanlinessAssessmentV1;
 
+/** Объяснение выбора тем же Core, который адаптирует цвет. Привязано к авторскому применению. */
+export type ColorReferenceSelection = Readonly<Omit<ProgramReferenceSelectionV1, "targetId" | "occurrenceId"> & {
+  role: string;
+  use: ColorUse;
+  outputs: readonly string[];
+}>;
+
 export interface ColorSystemOptions {
   /** Явная ограниченная конвенция; Core ищет соответствующий ей результат для всех reachable uses. */
   readonly cleanliness?: "nominal-srgb8-v2";
+  /** Исходное окружение. Core выводит желаемый вид из source anchors и материала; resolve его не меняет. */
+  readonly reference?: Readonly<Record<string, AuthoredColor>>;
 }
 
 /** Исходный encoded sRGB: HEX без alpha или три целых канала [0, 255]. */
@@ -38,7 +47,7 @@ export interface ColorIdentity {
 export interface ColorRoleOptions {
   readonly domain?: "srgb" | "neutral";
   readonly identity?: ColorIdentity;
-  /** Верхняя граница прямого расстояния Oklab final visible до authored anchor, в [0, 2]. */
+  /** Максимальное расстояние Oklab final visible до исходного visible при reference, иначе до anchor, в [0, 2]. */
   readonly maxChange?: number;
 }
 
@@ -99,6 +108,22 @@ export interface ResolvedColor {
 
 export type ColorDiagnostic =
   | Readonly<{
+      kind: "relation";
+      requirement: "tonal-hierarchy";
+      evidence: "candidate-witness";
+      stronger: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
+      weaker: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
+      caseIndex: number;
+      /** CRstrong / CRweak на общем фоне; сравнение выполняется по этим значениям. */
+      requiredRatio: number;
+      actualRatio: number;
+      /** Натуральный логарифм соответствующего отношения, только для диагностики. */
+      requiredGap: number;
+      actualGap: number;
+      strongerPolarity: "darker" | "equal" | "lighter";
+      weakerPolarity: "darker" | "equal" | "lighter";
+    }>
+  | Readonly<{
       kind: "requirement";
       role: string;
       use: ColorUse;
@@ -127,6 +152,8 @@ export type ColorResolution<Name extends string = string> =
       revision: bigint;
       optimality: "exact" | "unfinished";
       readonly cleanliness: ColorCleanlinessAssessment;
+      /** Исходный вид и результат адаптации; пусто без reference и для fixed uses. */
+      readonly reference: readonly ColorReferenceSelection[];
       context: Readonly<Record<string, readonly [number, number, number]>>;
       values: Readonly<Record<Name, ResolvedColor>>;
     }>
@@ -178,6 +205,8 @@ export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorAdaptiveRole;
   fixed(id: string, source: AuthoredColor): ColorFixedRole;
+  /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
+  preserveTonalHierarchy(members: readonly ColorUse[]): void;
   /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,

@@ -154,9 +154,11 @@ pub(crate) struct ComputedTargetV1 {
     max_delta_bits: u64,
     preference: u64,
     intent: Option<ColorUseIntentV1>,
+    reference_appearance: bool,
 }
 
-/// Авторский характер относится к видимому применению, а не к имени роли.
+/// Геометрия авторского характера без знания имён ролей. Explicit appearance
+/// проверяет visible; reference appearance сохраняет identity исходного материала.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ColorUseIntentV1 {
     pub(crate) identity: ColorIdentityDomainV1,
@@ -173,6 +175,8 @@ pub(crate) enum ComputedAdmissionErrorV1 {
     InvalidColorIntent,
     MissingColorAppearance,
     MissingToneInput,
+    InvalidReferenceComposition,
+    InvalidTonalHierarchy,
 }
 
 // Предел одной связанной задачи синхронного профиля; не клиентская политика.
@@ -211,6 +215,7 @@ impl ComputedTargetV1 {
             max_delta_bits: self.max_delta_bits,
             preference: self.preference,
             intent,
+            reference_appearance: self.reference_appearance,
         })
     }
 
@@ -225,6 +230,7 @@ impl ComputedTargetV1 {
             },
             preference: u64::MAX,
             intent: None,
+            reference_appearance: false,
         }
     }
 
@@ -245,6 +251,10 @@ impl ComputedTargetV1 {
         value
     }
 
+    pub(crate) fn set_reference_appearance(&mut self) {
+        self.reference_appearance = true;
+    }
+
     pub(crate) fn color_intent(&self) -> Option<&ColorUseIntentV1> {
         self.intent.as_ref()
     }
@@ -256,7 +266,7 @@ impl ComputedTargetV1 {
             .as_ref()
             .ok_or(ProgramCompileError::InternalInvariant)?;
         let stops = intent.tone.as_ref().map_or(0, |tone| tone.stops().len());
-        let size = 26_usize
+        let size = 27_usize
             .checked_add(46 + 1 + 4)
             .and_then(|n| stops.checked_mul(16).and_then(|s| n.checked_add(s)))
             .ok_or(ProgramCompileError::ResourceExhausted)?;
@@ -266,7 +276,14 @@ impl ComputedTargetV1 {
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
         bytes.extend_from_slice(&self.identity_bytes());
         bytes.extend_from_slice(&intent.identity.identity_bytes());
-        bytes.push(u8::from(intent.appearance.is_some()));
+        bytes.push(if self.reference_appearance {
+            2
+        } else {
+            u8::from(intent.appearance.is_some())
+        });
+        if self.reference_appearance {
+            bytes.push(u8::from(intent.identity.force_neutral()));
+        }
         bytes.extend_from_slice(
             &u32::try_from(stops)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?
@@ -306,6 +323,7 @@ impl ComputedTargetV1 {
             },
             preference,
             intent: None,
+            reference_appearance: false,
         })
     }
 
@@ -328,9 +346,90 @@ struct CompiledComputedTargetV1 {
     binding: CompiledPaintInputSlotV1,
     declaration: ComputedTargetV1,
     anchor_lab: [f64; 3],
+    effective_anchor: Srgb8,
+    reference_backdrop: Option<Srgb8>,
     appearance: Option<CompiledOccurrenceSlotV1>,
     tone_input: Option<usize>,
     opaque: bool,
+}
+
+struct EffectiveColorIntentV1<'a> {
+    identity: ColorIdentityDomainV1,
+    appearance: Option<OccurrenceId>,
+    tone: Option<&'a ToneCurveV1>,
+}
+
+impl CompiledComputedTargetV1 {
+    fn effective_intent(&self) -> Option<EffectiveColorIntentV1<'_>> {
+        let authored = self.declaration.intent.as_ref()?;
+        Some(EffectiveColorIntentV1 {
+            identity: authored.identity,
+            appearance: authored.appearance,
+            tone: authored.tone.as_ref(),
+        })
+    }
+    fn effective_anchor(&self) -> Srgb8 {
+        self.effective_anchor
+    }
+
+    // Reference composition describes the use's appearance. It never changes
+    // the material's authored source identity, even when compositing cancels
+    // its hue. The older explicit-appearance mode keeps its visible contract.
+    fn identity_point(&self, source: Srgb8, visible: Srgb8) -> Srgb8 {
+        if self.declaration.reference_appearance {
+            source
+        } else {
+            visible
+        }
+    }
+
+    fn search_domain(&self) -> AssignmentDomainV1 {
+        if (self.opaque || self.declaration.reference_appearance)
+            && self
+                .effective_intent()
+                .is_some_and(|intent| intent.identity.neutral())
+        {
+            // Source identity remains neutral through a transparent use.
+            // Explicit visible identity narrows the source only if opaque.
+            self.declaration
+                .domain
+                .gray_intersection()
+                .unwrap_or(self.declaration.domain)
+        } else {
+            self.declaration.domain
+        }
+    }
+}
+
+impl ComputedSelectionV1 {
+    pub(super) fn compile_reference(
+        &mut self,
+        reference: Option<&reference::ReferenceCompositionV1>,
+    ) -> Result<(), ProgramCompileError> {
+        for target in &mut self.targets {
+            if !target.declaration.reference_appearance {
+                continue;
+            }
+            let invalid = || {
+                ProgramCompileError::InvalidComputedAssignment(
+                    ComputedAdmissionErrorV1::InvalidReferenceComposition,
+                )
+            };
+            let occurrence = target
+                .declaration
+                .intent
+                .as_ref()
+                .and_then(|intent| intent.appearance)
+                .ok_or_else(invalid)?;
+            let (visible, backdrop) = reference
+                .and_then(|value| value.occurrence(occurrence))
+                .ok_or_else(invalid)?;
+            target.effective_anchor = visible;
+            target.anchor_lab = lab(visible);
+            target.reference_backdrop = Some(backdrop);
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct ComputedSelectionV1 {
@@ -492,6 +591,8 @@ pub(super) fn compile_selection(
                 .bind_paint_input(target_paint_input_id(target.id))
                 .ok_or(ProgramCompileError::InternalInvariant)?,
             declaration: declaration.try_clone_v1()?,
+            effective_anchor: declaration.anchor,
+            reference_backdrop: None,
             anchor_lab: lab(declaration.anchor),
             appearance: declaration
                 .intent
@@ -541,6 +642,9 @@ pub(super) fn compile_selection(
     let contextual = compiled
         .iter()
         .any(|target| target.declaration.intent.is_some());
+    let reference = compiled
+        .iter()
+        .any(|target| target.declaration.reference_appearance);
     Ok(ComputedSelectionV1 {
         targets: compiled.into_boxed_slice(),
         components: Box::new([]),
@@ -548,7 +652,9 @@ pub(super) fn compile_selection(
         fixed_constraints: Box::new([]),
         budget,
         total_budget: budget,
-        execution_profile: if contextual {
+        execution_profile: if reference {
+            contextual::reference_execution_profile_identity(budget)
+        } else if contextual {
             contextual::execution_profile_identity(budget)
         } else {
             execution_profile_identity(budget)
@@ -595,6 +701,8 @@ impl SearchEvidenceV1 {
 struct SearchResultV1 {
     evidence: SearchEvidenceV1,
     values: Option<Vec<Srgb8>>,
+    reference_selections:
+        Option<std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>>,
 }
 
 #[derive(Clone, Copy)]
@@ -628,6 +736,11 @@ fn region_node(
 
 #[derive(Clone, Copy)]
 enum RegionConstraintV1 {
+    TonalHierarchy {
+        slot: CompiledOccurrenceSlotV1,
+        weaker: CompiledOccurrenceSlotV1,
+        required: f64,
+    },
     Wcag {
         slot: CompiledOccurrenceSlotV1,
         criterion: Wcag22CriterionV1,
@@ -642,20 +755,35 @@ enum RegionConstraintV1 {
     },
 }
 
-impl RegionConstraintV1 {
-    fn slot(self) -> CompiledOccurrenceSlotV1 {
-        match self {
-            Self::Wcag { slot, .. } | Self::Exact { slot, .. } | Self::Separation { slot, .. } => {
-                slot
-            }
-        }
-    }
+#[derive(Clone, Copy, Default)]
+struct RegionPointV1 {
+    visible: [u8; 3],
+    backdrop: [u8; 3],
+    weaker: [u8; 3],
+}
 
-    fn may_pass(
-        self,
-        visible: ([u8; 3], [u8; 3]),
-        backdrop: ([u8; 3], [u8; 3]),
-    ) -> Result<bool, ()> {
+impl RegionConstraintV1 {
+    fn point(self, evaluation: &AppearanceEvaluationView<'_, '_>) -> Option<RegionPointV1> {
+        let slot = match self {
+            Self::Wcag { slot, .. }
+            | Self::Exact { slot, .. }
+            | Self::Separation { slot, .. }
+            | Self::TonalHierarchy { slot, .. } => slot,
+        };
+        let point = evaluation.occurrence_at(slot)?;
+        let weaker = match self {
+            Self::TonalHierarchy { weaker, .. } => evaluation.occurrence_at(weaker)?.visible(),
+            _ => [0; 3],
+        };
+        Some(RegionPointV1 {
+            visible: point.visible(),
+            backdrop: point.certificate().backdrop_rgb(),
+            weaker,
+        })
+    }
+    fn may_pass(self, lower: RegionPointV1, upper: RegionPointV1) -> Result<bool, ()> {
+        let visible = (lower.visible, upper.visible);
+        let backdrop = (lower.backdrop, upper.backdrop);
         match self {
             Self::Wcag { criterion, .. } => {
                 rgb_boxes_may_pass(visible, backdrop, criterion).map_err(|_| ())
@@ -669,6 +797,19 @@ impl RegionConstraintV1 {
                 let [minimum, maximum] =
                     crate::spaces::oklab::srgb8_boxes_distance_bounds(visible, backdrop);
                 Ok(minimum <= bounds.maximum() && maximum >= bounds.minimum())
+            }
+            Self::TonalHierarchy { required, .. } => {
+                let luminance = |lower, upper| {
+                    [lower, upper].map(|rgb| {
+                        crate::color_intent::reference_transport::luminance(Srgb8::new(rgb))
+                    })
+                };
+                Ok(CompiledTonalHierarchyV1::pair_possible_ratio(
+                    required,
+                    luminance(lower.visible, upper.visible),
+                    luminance(lower.weaker, upper.weaker),
+                    luminance(lower.backdrop, upper.backdrop),
+                ))
             }
         }
     }
@@ -712,6 +853,20 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
         if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
             continue;
         }
+        if let CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
+            occurrences,
+            hierarchy,
+        } = &constraint.body
+        {
+            result.try_reserve(occurrences.len() - 1).map_err(|_| ())?;
+            for (pair, &required) in occurrences.windows(2).zip(hierarchy.ratios()) {
+                result.push(RegionConstraintV1::TonalHierarchy {
+                    slot: pair[0].slot,
+                    weaker: pair[1].slot,
+                    required,
+                });
+            }
+        }
         let CompiledProgramConstraintBodyV1::VisibleUnary {
             slot, invocation, ..
         } = constraint.body
@@ -736,7 +891,7 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
 
 struct RegionPruningV1<'scope> {
     constraints: Vec<RegionConstraintV1>,
-    lower: Vec<([u8; 3], [u8; 3])>,
+    lower: Vec<RegionPointV1>,
     endpoint_evaluations: u64,
     physical: &'scope CompiledAppearanceConeV1,
 }
@@ -794,19 +949,15 @@ impl RegionPruningV1<'_> {
                 let evaluation = paints.evaluate_surface_inputs_canonical(|i| observed[i].srgb8());
                 self.endpoint_evaluations += 1;
                 for (index, constraint) in self.constraints.iter().enumerate() {
-                    let point = evaluation
-                        .occurrence_at(constraint.slot())
+                    let point = constraint
+                        .point(&evaluation)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     if !high {
-                        self.lower[index] = (point.visible(), point.certificate().backdrop_rgb());
+                        self.lower[index] = point;
                         continue;
                     }
-                    let (visible, backdrop) = self.lower[index];
                     let possible = constraint
-                        .may_pass(
-                            (visible, point.visible()),
-                            (backdrop, point.certificate().backdrop_rgb()),
-                        )
+                        .may_pass(self.lower[index], point)
                         .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
                     if !possible {
                         return Ok(false);
@@ -856,6 +1007,7 @@ where
     };
     if selection.budget == 0 {
         return Ok(SearchResultV1 {
+            reference_selections: None,
             evidence,
             values: None,
         });
@@ -887,6 +1039,7 @@ where
         )? {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: Some(values),
             });
@@ -896,7 +1049,7 @@ where
     let mut scores = buffer(count, 0.0).map_err(allocate)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
     let constraints = region_constraints(epoch, Some(&component.constraints)).map_err(allocate)?;
-    let lower = buffer(constraints.len(), ([0; 3], [0; 3])).map_err(allocate)?;
+    let lower = buffer(constraints.len(), RegionPointV1::default()).map_err(allocate)?;
     let mut pruning = RegionPruningV1 {
         physical: &component.physical,
         constraints,
@@ -924,6 +1077,7 @@ where
         &mut evidence,
     ) else {
         return Ok(SearchResultV1 {
+            reference_selections: None,
             evidence,
             values: has_best.then_some(best_values),
         });
@@ -962,6 +1116,7 @@ where
                     &mut evidence,
                 ) else {
                     return Ok(SearchResultV1 {
+                        reference_selections: None,
                         evidence,
                         values: has_best.then_some(best_values),
                     });
@@ -974,6 +1129,7 @@ where
                     &mut evidence,
                 ) else {
                     return Ok(SearchResultV1 {
+                        reference_selections: None,
                         evidence,
                         values: has_best.then_some(best_values),
                     });
@@ -997,6 +1153,7 @@ where
         }
         if evidence.visited == selection.budget {
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: has_best.then_some(best_values),
             });
@@ -1035,6 +1192,7 @@ where
                 &mut evidence,
             ) else {
                 return Ok(SearchResultV1 {
+                    reference_selections: None,
                     evidence,
                     values: has_best.then_some(best_values),
                 });
@@ -1070,6 +1228,7 @@ where
     }
     evidence.completion = CompletionV1::Complete;
     Ok(SearchResultV1 {
+        reference_selections: None,
         evidence,
         values: has_best.then_some(best_values),
     })
@@ -1146,10 +1305,17 @@ pub(crate) struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1
     values: Box<[Srgb8]>,
     search: SearchEvidenceV1,
     execution_profile: [u8; 32],
+    reference_selections:
+        Option<std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>>,
     pub(super) arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
 
 impl<Evaluation: ProgramConstraintEvaluatorSetV1> ComputedVerifiedV1<Evaluation> {
+    pub(crate) fn reference_selections(
+        &self,
+    ) -> Option<&std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>> {
+        self.reference_selections.as_ref()
+    }
     pub(super) const fn optimality(&self) -> ComputedOptimalityV1 {
         match self.search.completion {
             CompletionV1::AuthoredExact | CompletionV1::Complete => ComputedOptimalityV1::Exact,
@@ -1223,6 +1389,7 @@ where
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         values.extend_from_slice(&previous.values);
         SearchResultV1 {
+            reference_selections: previous.reference_selections.clone(),
             evidence: previous.search,
             values: Some(values),
         }
@@ -1302,6 +1469,7 @@ where
                     observation,
                     values,
                     search: selected.evidence,
+                    reference_selections: selected.reference_selections,
                     arena: arena.into_lease(),
                 }),
             ))
@@ -1358,3 +1526,6 @@ mod component_tests;
 
 #[cfg(test)]
 mod refinement_tests;
+
+#[cfg(test)]
+mod reference_tests;

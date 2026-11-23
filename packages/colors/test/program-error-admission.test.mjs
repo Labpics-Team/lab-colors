@@ -55,7 +55,7 @@ const materializationCodes = [
 ];
 const physicalIdentityCodes = ["program_physical_identity"];
 const operations = ["compileProgramWire", "updateObserved", "updateUnknown", "updateObservedWith",
-  "runtimeFree", "snapshotFree", "copyOutputTable", "assessmentReport", "cleanlinessAssessment", "diagnostics", "other", undefined];
+  "runtimeFree", "snapshotFree", "copyOutputTable", "assessmentReport", "cleanlinessAssessment", "referenceSelections", "diagnostics", "other", undefined];
 const attachmentOperations = [
   "attachProgramWire",
   "attachmentUpdateObserved",
@@ -87,7 +87,7 @@ test("error admission recognizes exactly the operation/code relation", () => {
   ]) {
     for (const operation of operations) {
       const expected = operation === "compileProgramWire" ? compileCodes.includes(code)
-        : operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "diagnostics" ? code === "program_resource_exhausted"
+        : operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "referenceSelections" || operation === "diagnostics" ? code === "program_resource_exhausted"
         : operation === "runtimeFree" || operation === "snapshotFree" ? code === "program_busy"
         : operation === "updateObservedWith" ? updateCodes.includes(code) || code === "program_host_protocol"
         : (operation === "updateObserved" || operation === "updateUnknown") && updateCodes.includes(code);

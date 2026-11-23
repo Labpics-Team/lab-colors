@@ -377,9 +377,10 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 if !max_delta.is_finite() || max_delta < 0.0 || max_delta > 2.0 {
                     return Err(reader.declaration_error(entry_offset));
                 }
-                let appearance = match reader.read_u8()? {
+                let appearance_tag = reader.read_u8()?;
+                let appearance = match appearance_tag {
                     0 => None,
-                    1 => Some(OccurrenceIdV1::new(reader.read_u32()?)),
+                    1 | 2 => Some(OccurrenceIdV1::new(reader.read_u32()?)),
                     _ => return Err(reader.declaration_error(entry_offset)),
                 };
                 let tone = match reader.read_u8()? {
@@ -411,6 +412,9 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                     appearance,
                     tone,
                 );
+                if appearance_tag == 2 {
+                    draft.set_reference_appearance(TargetIdV1::new(id));
+                }
             }
             _ => return Err(reader.declaration_error(entry_offset)),
         }
@@ -435,7 +439,8 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
     match (version, selection_count) {
         (PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2, 0) => {}
         (PROGRAM_WIRE_VERSION_V3, 1) => {
-            if reader.read_u16()? != 3 {
+            let tag = reader.read_u16()?;
+            if !matches!(tag, 3 | 4) {
                 return Err(reader.declaration_error(joint_offset));
             }
             let count = reader.read_count()?;
@@ -449,6 +454,22 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 order.push(crate::program_session::TargetId::new(reader.read_u32()?));
             }
             draft.set_assignment(order);
+            if tag == 4 {
+                let count = reader.read_count()?;
+                let mut inputs = Vec::new();
+                inputs.try_reserve_exact(count as usize).map_err(|_| {
+                    ProgramWireErrorV1::AssignmentResourceExhausted {
+                        section: reader.section,
+                    }
+                })?;
+                for _ in 0..count {
+                    inputs.push((
+                        crate::appearance::SurfaceInputPortId::new(reader.read_u32()?),
+                        reader.read_rgb()?,
+                    ));
+                }
+                draft.set_reference_inputs(inputs);
+            }
         }
         (PROGRAM_WIRE_VERSION_V2, 1) => {
             let selection = read_selection_release(reader)?;
@@ -645,6 +666,19 @@ fn decode_constraint(
     let kind = reader.read_u8()?;
     let hard = matches!(mode, ConstraintModeV1::Hard);
     match kind {
+        13 if hard && version == PROGRAM_WIRE_VERSION_V3 => {
+            let count = reader.read_count()?;
+            let mut occurrences = Vec::new();
+            occurrences.try_reserve_exact(count as usize).map_err(|_| {
+                ProgramWireErrorV1::AssignmentResourceExhausted {
+                    section: reader.section,
+                }
+            })?;
+            for _ in 0..count {
+                occurrences.push(crate::appearance::OccurrenceId::new(reader.read_u32()?));
+            }
+            draft.preserve_tonal_hierarchy(id, occurrences);
+        }
         KIND_NOMINAL_SRGB8_VISIBLE => {
             let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
             if hard {

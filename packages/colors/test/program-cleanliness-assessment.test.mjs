@@ -47,6 +47,8 @@ test("fixed V1 preserves its result while explicit V3 provides a current assessm
     assert.deepEqual(legacy.copyOutputTable(), current.copyOutputTable());
     assert.equal(legacy.assessmentReport(), null);
     assert.equal(legacy.cleanlinessAssessment(), null);
+    assert.equal(legacy.referenceSelections(), null);
+    assert.deepEqual(current.referenceSelections(), []);
     assert.deepEqual(current.cleanlinessAssessment(), nominal("conforms", 1, 0, 0));
     assert.deepEqual(current.assessmentReport().cleanliness, current.cleanlinessAssessment());
   } finally {

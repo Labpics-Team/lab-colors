@@ -9,7 +9,9 @@
 //! они не превращаются в отказ пользовательского графа или observation.
 
 use crate::Srgb8;
-pub use crate::constraints::ProgramVisibleSeparationMeasurementV1;
+pub use crate::constraints::{
+    ProgramVisibleSeparationMeasurementV1, TonalHierarchyPairMeasurementV1, TonalPolarityV1,
+};
 use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 pub use crate::program_diagnostics::{
@@ -576,7 +578,9 @@ pub use crate::cleanliness::assessment::{
 use assessment_report::ProgramAssessmentReportScratchV1;
 pub use assessment_report::{
     ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
-    ProgramConstraintAssessmentV1, ProgramScenarioProvenanceV1,
+    ProgramConstraintAssessmentV1, ProgramReferenceCapacityV1, ProgramReferenceCaseV1,
+    ProgramReferencePreferenceV1, ProgramReferenceSelectionV1, ProgramScenarioProvenanceV1,
+    ProgramTonalHierarchyPairV1,
 };
 
 pub struct CompiledProgramV1 {
@@ -1984,7 +1988,13 @@ impl ProgramSessionV1 {
                 .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
                 .verified_cells();
             self.assessment_scratch
-                .reserve(cell_count, source.scenario_count())
+                .reserve(
+                    cell_count,
+                    source.scenario_count(),
+                    self.owner
+                        .relation_member_bound(source.scenario_count())
+                        .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?,
+                )
                 .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
         }
         reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())

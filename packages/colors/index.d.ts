@@ -7,7 +7,7 @@ export type {
   ColorAdaptiveRole, ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
   ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
-  ColorSystemOptions, ColorCleanlinessAssessment,
+  ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection,
 } from "./authoring.js";
 
 // Authoring declarations and low-level wire share one Program runtime.
@@ -95,7 +95,7 @@ export type ProgramError = Error & (
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" }>
   | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
-  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "diagnostics" }>
+  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "referenceSelections" | "diagnostics" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;

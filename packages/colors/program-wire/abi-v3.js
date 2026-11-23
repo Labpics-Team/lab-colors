@@ -24,6 +24,11 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     const rawDelta = inputProperty(options, "maxChange", "color options");
     const delta = bounded(rawDelta === undefined ? 2 : rawDelta, 2, "color maxChange");
     const appearance = inputProperty(options, "appearance", "color options");
+    const referenceAppearance = inputProperty(options, "referenceAppearance", "color options");
+    if (appearance !== undefined && referenceAppearance !== undefined) {
+      invalid("appearance and referenceAppearance are mutually exclusive");
+    }
+    const visible = referenceAppearance ?? appearance;
     const tone = inputProperty(options, "tone", "color options");
     const payload = new ByteSink();
     payload.u32(checkedId);
@@ -38,8 +43,8 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
       for (const value of values) payload.f64Bits(value);
     }
     payload.f64Bits(delta);
-    payload.u8(appearance === undefined ? 0 : 1);
-    if (appearance !== undefined) payload.u32(u32Value(appearance, "color appearance"));
+    payload.u8(referenceAppearance !== undefined ? 2 : appearance === undefined ? 0 : 1);
+    if (visible !== undefined) payload.u32(u32Value(visible, "color appearance"));
     payload.u8(tone === undefined ? 0 : 1);
     if (tone !== undefined) {
       const from = u32Value(inputProperty(tone, "from", "tone"), "tone input");
@@ -92,6 +97,22 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     return this;
   }
 
+  /** Core derives and preserves the authored visible tonal gaps; no numerical margin crosses the wire. */
+  preserveTonalHierarchy(id, occurrences) {
+    const checkedId = u32Value(id, "constraint id");
+    const length = inputArrayLength(occurrences, "tonal hierarchy occurrences");
+    if (length < 2 || length > MAX_SECTION_ENTRIES_V1) invalid("tonal hierarchy requires a bounded group of at least two occurrences");
+    const members = indexedValues(occurrences, length, "tonal hierarchy occurrences")
+      .map((value) => u32Value(value, "tonal hierarchy occurrence"));
+    if (new Set(members).size !== members.length) invalid("tonal hierarchy occurrences must be distinct");
+    const sink = this.constraintEntry(true);
+    sink.u32(checkedId);
+    sink.u8(13);
+    sink.u32(members.length);
+    for (const member of members) sink.u32(member);
+    return this;
+  }
+
   computedTarget(id, domain, anchor, maxDelta) {
     const checkedId = u32Value(id, "target id");
     const kind = inputProperty(domain, "kind", "computed domain");
@@ -132,17 +153,36 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     return this;
   }
 
-  assignment(targetsInPreferenceOrder) {
+  assignment(targetsInPreferenceOrder, options = {}) {
     if (this.section("jointSelection").count !== 0) invalid("assignment is already declared");
     const length = inputArrayLength(targetsInPreferenceOrder, "assignment targets");
     if (length > MAX_SECTION_ENTRIES_V1) invalid("too many assignment targets");
     const targets = indexedValues(targetsInPreferenceOrder, length, "assignment targets")
       .map((target) => u32Value(target, "assignment target"));
+    const rawReference = inputProperty(options, "reference", "assignment options");
+    let reference;
+    if (rawReference !== undefined) {
+      const referenceLength = inputArrayLength(rawReference, "assignment reference");
+      if (referenceLength > MAX_SECTION_ENTRIES_V1) invalid("too many reference inputs");
+      reference = indexedValues(rawReference, referenceLength, "assignment reference").map((entry) => {
+        if (inputArrayLength(entry, "reference input") !== 2) invalid("reference input must contain a port and RGB");
+        const [port, rgb] = indexedValues(entry, 2, "reference input");
+        return [u32Value(port, "reference input port"), rgb24(rgb, "reference input RGB")];
+      });
+      if (new Set(reference.map(([port]) => port)).size !== reference.length) invalid("reference input ports must be distinct");
+    }
     const payload = new ByteSink();
-    payload.u8(3);
+    payload.u8(reference === undefined ? 3 : 4);
     payload.u8(0);
     payload.u32(targets.length);
     for (const target of targets) payload.u32(target);
+    if (reference !== undefined) {
+      payload.u32(reference.length);
+      for (const [port, rgb] of reference) {
+        payload.u32(port);
+        payload.rgb24(rgb);
+      }
+    }
     // Getter мог принять вложенное assignment; внешнее не заменяет его.
     if (this.section("jointSelection").count !== 0) invalid("assignment is already declared");
     const output = this.entry("jointSelection");

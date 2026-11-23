@@ -49,6 +49,18 @@ export function copyReadyColorFrame(snapshot, graph, context) {
   if (cleanliness === null) {
     authoringError("resolution.cleanliness", "Core omitted the current quality assessment", "color_core_contract");
   }
+  const selections = snapshot.referenceSelections();
+  if (selections === null) {
+    authoringError("resolution.reference", "Core omitted the current adaptation evidence", "color_core_contract");
+  }
+  const reference = Object.freeze(selections.map((selection) => {
+    const node = graph.targets.get(selection.targetId);
+    if (node === undefined || graph.occurrences.get(selection.occurrenceId) !== node) {
+      authoringError("resolution.reference", "Core evidence refers to an undeclared use", "color_core_contract");
+    }
+    return Object.freeze({ role: node.role.id, use: node.handle, outputs: graph.outputNames.get(node),
+      preference: selection.preference, capacity: selection.capacity, cases: selection.cases });
+  }));
   const table = snapshot.copyOutputTable();
   const bySlot = new Map();
   for (let i = 0; i < table.length; i += 5) {
@@ -60,7 +72,7 @@ export function copyReadyColorFrame(snapshot, graph, context) {
     if (value === undefined) authoringError(`resolution.${name}`, "Core omitted a declared output", "color_core_contract");
     return [name, value];
   });
-  return Object.freeze({ state: "ready", revision: snapshot.revision, optimality, cleanliness,
+  return Object.freeze({ state: "ready", revision: snapshot.revision, optimality, cleanliness, reference,
     context: Object.freeze(Object.fromEntries(context.colors.map(({ name, rgb }) => [name, rgb]))),
     values: Object.freeze(Object.fromEntries(pairs)) });
 }
@@ -89,7 +101,24 @@ function copyDiagnostics(snapshot, graph) {
     items.push(Object.freeze({ kind: "search-limit", visited: report.searchVisited, budget: report.searchBudget }));
   }
   for (const violation of report?.witness?.violations ?? []) {
-    const constraint = violation.kind === "hard-constraint" ? graph.constraints.get(violation.constraintId) : undefined;
+    const constraint = violation.kind === "hard-constraint" || violation.kind === "tonal-hierarchy"
+      ? graph.constraints.get(violation.constraintId) : undefined;
+    if (violation.kind === "tonal-hierarchy") {
+      const stronger = graph.occurrences.get(violation.strongerOccurrenceId);
+      const weaker = graph.occurrences.get(violation.weakerOccurrenceId);
+      if (constraint?.requirement !== "tonal-hierarchy" || stronger === undefined || weaker === undefined
+        || !constraint.nodes.includes(stronger) || !constraint.nodes.includes(weaker)) {
+        authoringError("resolution.diagnostics", "Core witness refers to an undeclared relation", "color_core_contract");
+      }
+      const member = (node) => Object.freeze({ role: node.role.id, use: node.handle,
+        outputs: graph.outputNames.get(node) });
+      items.push(Object.freeze({ kind: "relation", requirement: "tonal-hierarchy", evidence: "candidate-witness",
+        stronger: member(stronger), weaker: member(weaker), caseIndex: violation.caseIndex,
+        requiredRatio: violation.requiredRatio, actualRatio: violation.actualRatio,
+        requiredGap: violation.requiredGap, actualGap: violation.actualGap,
+        strongerPolarity: violation.strongerPolarity, weakerPolarity: violation.weakerPolarity }));
+      continue;
+    }
     const node = constraint?.node ?? graph.targets.get(violation.targetId);
     const requirement = constraint?.requirement ?? {
       "target-domain": "output-domain", "color-identity": "identity", "max-change": "max-change",
@@ -101,7 +130,7 @@ function copyDiagnostics(snapshot, graph) {
     items.push(Object.freeze({
       kind: "requirement", evidence: "candidate-witness", requirement,
       role: node.role.id, use: node.handle,
-      outputs: Object.freeze(graph.outputs.filter((output) => output.node === node).map((output) => output.name)),
+      outputs: graph.outputNames.get(node),
       ...(violation.caseIndex === undefined ? {} : { caseIndex: violation.caseIndex }),
       ...(actual === undefined ? {} : { actual: Object.freeze([...actual]) }),
       ...(violation.kind === "max-change" ? { distanceSquared: violation.distanceSquared, maximumDistance: violation.maximumDistance } : {}),

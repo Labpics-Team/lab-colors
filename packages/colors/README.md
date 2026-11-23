@@ -33,7 +33,7 @@ JavaScript и TypeScript, ESM. Ядро на Rust/WASM включено в па�
 ```js
 import { colors } from "@labpics/colors";
 
-const c = colors();
+const c = colors({ reference: { canvas: "#e6ddd0" } });
 const canvas = c.surface("canvas");
 const accent = c.role("accent", "#0067f4");
 const ink = c.role("ink", "#242424");
@@ -51,6 +51,12 @@ const program = await c.compile({ fill, label, link, text });
 акцентную роль, но могут получить разные RGB. Повторная передача того же
 handle `fill` означает одну общую заливку, в том числе при нескольких aliases.
 Имена и смысл ролей принадлежат приложению.
+
+`reference` задаёт исходное окружение один раз. Core учитывает вид цвета после
+наложения и его силу относительно подложки: выразительный текст сохраняет это
+предпочтение даже при более низком допустимом минимуме контраста. Для обязательного
+сохранения отношений между несколькими применениями есть
+[`preserveTonalHierarchy`](https://github.com/Labpics-Team/lab-colors/blob/main/docs/reference/javascript-program.md#исходная-композиция-и-отношения).
 
 `compile` проверяет граф и инициализирует WASM. Приоритет предпочтений задаётся
 порядком создания локальных применений через `.on`: подложка объявлена раньше

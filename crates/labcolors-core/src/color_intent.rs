@@ -8,6 +8,8 @@ use crate::Srgb8;
 use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
 use crate::spaces::srgb::{srgb_linear_from_srgb8, srgb8_from_linear};
 
+pub(crate) mod reference_transport;
+
 /// Настройки геометрии в Oklch: градусы, абсолютная chroma и светлота [0, 1].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct IdentityOptionsV1 {
@@ -40,6 +42,7 @@ const DEFAULT_MINIMUM_CHROMA_FRACTION: f64 = 0.1;
 pub(crate) struct ColorIdentityDomainV1 {
     source: Srgb8,
     neutral: bool,
+    force_neutral: bool,
     options: IdentityOptionsV1,
     hue: f64,
     hue_deviation: f64,
@@ -120,12 +123,17 @@ impl ColorIdentityDomainV1 {
         Ok(Self {
             source,
             neutral,
+            force_neutral,
             options,
             hue: if neutral { 0.0 } else { hue(lab) },
             hue_deviation,
             chroma,
             lightness,
         })
+    }
+
+    pub(crate) const fn force_neutral(&self) -> bool {
+        self.force_neutral
     }
 
     pub(crate) const fn neutral(&self) -> bool {

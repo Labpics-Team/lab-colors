@@ -42,24 +42,25 @@ impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
                 source
             };
             let occurrence_id = target
-                .declaration
-                .intent
-                .as_ref()
+                .effective_intent()
                 .and_then(|intent| intent.appearance)
                 .map(|id| id.value());
-            if target
-                .declaration
-                .intent
-                .as_ref()
-                .is_some_and(|intent| !intent.identity.contains(actual))
-            {
+            if target.effective_intent().is_some_and(|intent| {
+                !intent
+                    .identity
+                    .contains(target.identity_point(source, actual))
+            }) {
                 push_violation(
                     self.violations,
                     ProgramDiagnosticV1::ColorIdentity {
                         target_id: target.id.value(),
                         case_index,
-                        occurrence_id,
-                        actual,
+                        occurrence_id: if target.declaration.reference_appearance {
+                            None
+                        } else {
+                            occurrence_id
+                        },
+                        actual: target.identity_point(source, actual),
                     },
                 )?;
             }
@@ -133,6 +134,49 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     let intent_count = violations.len();
     for cell in &arena.cells {
         if cell.result().is_violation() {
+            if let ProgramConstraintResultV1::Violation(
+                ProgramConstraintViolationEvidenceV1::Relation(span),
+            ) = cell.result()
+            {
+                for member in span
+                    .get(&arena.relation_members)
+                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
+                {
+                    if let ProgramRelationMemberEvidenceV1::TonalHierarchy {
+                        stronger,
+                        weaker,
+                        measurement: CoreRelationMeasurementV1::TonalHierarchy(measurement),
+                        ..
+                    } = member
+                    {
+                        if !measurement.satisfied() {
+                            push_violation(
+                                &mut violations,
+                                ProgramDiagnosticV1::TonalHierarchy {
+                                    constraint_id: cell.constraint().value(),
+                                    case_index: cell.case_index(),
+                                    stronger_occurrence_id: stronger.occurrence.value(),
+                                    weaker_occurrence_id: weaker.occurrence.value(),
+                                    required_gap: measurement.required_gap(),
+                                    actual_gap: measurement.actual_gap(),
+                                    required_ratio: measurement.required_ratio(),
+                                    actual_ratio: measurement.actual_ratio(),
+                                    stronger_polarity: measurement.stronger_polarity(),
+                                    weaker_polarity: measurement.weaker_polarity(),
+                                },
+                            )
+                            .map_err(map_physical_case_error)?;
+                        }
+                    }
+                }
+            }
+
+            if matches!(
+                cell.subject(),
+                ProgramConstraintSubjectV1::ComputedVisibleRelation
+            ) {
+                continue;
+            }
             push_violation(
                 &mut violations,
                 ProgramDiagnosticV1::HardConstraint {
@@ -201,6 +245,9 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
 
 fn subject(value: ProgramConstraintSubjectV1) -> ProgramDiagnosticSubjectV1 {
     match value {
+        ProgramConstraintSubjectV1::ComputedVisibleRelation => {
+            ProgramDiagnosticSubjectV1::ComputedVisibleRelation
+        }
         ProgramConstraintSubjectV1::VisibleUnary { occurrence, .. } => {
             ProgramDiagnosticSubjectV1::Occurrence {
                 occurrence_id: occurrence.value(),
@@ -372,5 +419,62 @@ mod tests {
                 if *actual == Srgb8::new([255; 3]) && *distance_squared > 0.0 && *maximum_distance == 0.0)));
         assert!(session.state().current_verified().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn reference_attempt_reports_source_identity_separately_from_visible_max_change() {
+        let source = Srgb8::new([0, 103, 244]);
+        let mut color = ComputedTargetV1::color(
+            source,
+            0.0,
+            ColorUseIntentV1 {
+                identity: ColorIdentityDomainV1::new(source, true, IdentityOptionsV1::default())
+                    .unwrap(),
+                appearance: Some(OccurrenceId::new(5)),
+                tone: None,
+            },
+        );
+        color.reference_appearance = true;
+        let mut declaration = program(
+            Target::new(TargetId::new(10), TargetIntentV1::Computed(color)),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        declaration.constraints = ConstraintSet::new(vec![], vec![]);
+        declaration.reference_inputs =
+            Some(vec![(SurfaceInputPortId::new(2), Srgb8::new([255; 3]))]);
+        declaration
+            .opacities
+            .push(OpacityInput::new(OpacityInputId::new(11), 0.0));
+        declaration.paints.push(Paint::Opacity {
+            id: PaintId::new(12),
+            source: PaintId::new(3),
+            opacity: OpacityInputId::new(11),
+        });
+        declaration.occurrences[0].subject = PaintId::new(12);
+        declaration.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(12));
+        let owner = compile_assignment(declaration, 1).unwrap();
+        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        session.prepare_update(update(1, 255)).unwrap().commit();
+        let SessionState::Incomplete { cause, .. } = session.state() else {
+            panic!("one authored-source attempt cannot satisfy forced source neutrality");
+        };
+        let witness = cause.diagnostics().witness().unwrap();
+        assert!(
+            witness
+                .violations()
+                .contains(&ProgramDiagnosticV1::ColorIdentity {
+                    target_id: 10,
+                    case_index: 0,
+                    occurrence_id: None,
+                    actual: source,
+                })
+        );
+        assert!(
+            !witness
+                .violations()
+                .iter()
+                .any(|value| matches!(value, ProgramDiagnosticV1::MaxChange { .. }))
+        );
     }
 }

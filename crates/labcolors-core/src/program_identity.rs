@@ -212,6 +212,7 @@ mod vertex_tag {
     pub(super) const FIELD_OPERATOR_LIGHTER: u8 = 29;
     pub(super) const TARGET_COMPUTED: u8 = 30;
     pub(super) const TARGET_COLOR: u8 = 31;
+    pub(super) const TONAL_HIERARCHY_ENDPOINT: u8 = 32;
 }
 
 macro_rules! declare_edge_roles_v1 {
@@ -267,6 +268,8 @@ declare_edge_roles_v1! {
     FieldOutputOperator = 37,
     TargetToneInput = 38,
     TargetAppearance = 39,
+    ComputedRelationMember = 40,
+    ComputedRelationOccurrence = 41,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1028,6 +1031,14 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     let color = match body {
+        ProgramConstraintBodyV1::ComputedVisibleRelation { .. } => {
+            let mut color = VertexColorV1::new(mode_tag);
+            color.push_bytes(
+                crate::sha256::digest(b"preserve-tonal-hierarchy.cancelled-background-ratio.v1")
+                    .as_bytes(),
+            )?;
+            color
+        }
         ProgramConstraintBodyV1::VisibleUnary { invocation, .. } => {
             constraint_color(mode_tag, context.evaluator.constraint_content(*invocation))?
         }
@@ -1051,6 +1062,19 @@ where
     };
     let vertex = graph.add_member(color)?;
     match body {
+        ProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+            for (ordinal, occurrence) in occurrences.iter().enumerate() {
+                let mut color = VertexColorV1::new(vertex_tag::TONAL_HIERARCHY_ENDPOINT);
+                color.push_u64(ordinal as u64)?;
+                let member = graph.add_member(color)?;
+                graph.add_edge(vertex, member, EdgeRoleV1::ComputedRelationMember)?;
+                graph.add_edge(
+                    member,
+                    context.occurrences.get(*occurrence)?,
+                    EdgeRoleV1::ComputedRelationOccurrence,
+                )?;
+            }
+        }
         ProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
             graph.add_edge(
                 vertex,
@@ -1214,10 +1238,15 @@ where
 
     let group = graph.add_member(VertexColorV1::new(vertex_tag::OBSERVATION_GROUP))?;
     for port in &program.observation_group.surface_input_ports {
-        ports.insert(
-            *port,
-            graph.add_member(VertexColorV1::new(vertex_tag::SURFACE_INPUT_PORT))?,
-        )?;
+        let mut color = VertexColorV1::new(vertex_tag::SURFACE_INPUT_PORT);
+        if let Some(inputs) = &program.reference_inputs {
+            let index = inputs
+                .binary_search_by_key(port, |entry| entry.0)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            color.push_bytes(b"reference.v1")?;
+            color.push_bytes(&inputs[index].1.bytes())?;
+        }
+        ports.insert(*port, graph.add_member(color)?)?;
     }
     for surface in &program.surfaces {
         let (id, tag) = match surface {

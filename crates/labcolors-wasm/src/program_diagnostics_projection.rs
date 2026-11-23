@@ -2,8 +2,10 @@
 
 use super::{
     diagnostic_color, diagnostic_constraint, diagnostic_domain, diagnostic_subject,
-    diagnostic_target, diagnostic_witness, diagnostics_projection, report_array, report_array_push,
+    diagnostic_target, diagnostic_tonal_hierarchy, diagnostic_witness, diagnostics_projection,
+    report_array, report_array_push,
 };
+use labcolors_core::program_wire::TonalPolarityV1;
 use labcolors_core::program_wire::{
     ProgramDiagnosticSubjectV1, ProgramDiagnosticV1, ProgramDiagnosticsV1,
 };
@@ -56,6 +58,9 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
                 ProgramDiagnosticSubjectV1::VisibleRelation {
                     reference_occurrence_id,
                 } => ("visible-relation", reference_occurrence_id, 0, 0),
+                ProgramDiagnosticSubjectV1::ComputedVisibleRelation => {
+                    ("computed-visible-relation", 0, 0, 0)
+                }
                 ProgramDiagnosticSubjectV1::Presentation {
                     root_id,
                     occurrence_id,
@@ -112,5 +117,36 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
                 maximum_distance,
             )
         }
+        ProgramDiagnosticV1::TonalHierarchy {
+            constraint_id,
+            case_index,
+            stronger_occurrence_id,
+            weaker_occurrence_id,
+            required_ratio,
+            actual_ratio,
+            required_gap,
+            actual_gap,
+            stronger_polarity,
+            weaker_polarity,
+        } => diagnostic_tonal_hierarchy(
+            constraint_id,
+            case_index,
+            stronger_occurrence_id,
+            weaker_occurrence_id,
+            required_ratio,
+            actual_ratio,
+            required_gap,
+            actual_gap,
+            polarity_key(stronger_polarity),
+            polarity_key(weaker_polarity),
+        ),
+    }
+}
+
+pub(super) const fn polarity_key(value: TonalPolarityV1) -> &'static str {
+    match value {
+        TonalPolarityV1::Darker => "darker",
+        TonalPolarityV1::Equal => "equal",
+        TonalPolarityV1::Lighter => "lighter",
     }
 }

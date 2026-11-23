@@ -176,7 +176,7 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
                     position
                 };
                 let target = &context.targets[index];
-                let Some(intent) = &target.declaration.intent else {
+                let Some(intent) = target.effective_intent() else {
                     continue;
                 };
                 for &case in &context.local_cases.order {
@@ -190,15 +190,10 @@ pub(super) fn improve<E: ProgramConstraintEvaluatorSetV1>(
                         scenarios,
                         case,
                     )?;
-                    let source = if intent.identity.neutral() {
-                        Srgb8::new([128; 3])
-                    } else {
-                        target.declaration.anchor
-                    };
                     let mut previous = None;
                     for step in 0..=255_u32 {
-                        let desired = color_at_lightness(source, f64::from(step) / 255.0);
-                        let candidate = inverse_hint(desired, backdrop, alpha);
+                        let candidate =
+                            tonal_hint(target, &intent, f64::from(step) / 255.0, backdrop, alpha);
                         if previous == Some(candidate) {
                             continue;
                         }

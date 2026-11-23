@@ -501,6 +501,9 @@ fn assert_verified_cell_matches_core(
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
     let (occurrence, context) = match core.subject() {
+        ProgramConstraintSubjectV1::ComputedVisibleRelation => {
+            panic!("fixture has no computed relation")
+        }
         ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
@@ -545,6 +548,9 @@ fn assert_conflict_cell_matches_core(
     assert_eq!(public.case_index(), core.case_index());
     assert_eq!(public.constraint().value(), core.constraint().value());
     let (occurrence, context) = match core.subject() {
+        ProgramConstraintSubjectV1::ComputedVisibleRelation => {
+            panic!("fixture has no computed relation")
+        }
         ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
@@ -846,6 +852,9 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
                     match cell.subject() {
+                        crate::program::ConstraintSubjectV1::ComputedVisibleRelation => {
+                            panic!("fixture has no computed relation")
+                        }
                         ConstraintSubjectV1::VisibleUnary { occurrence, .. } => {
                             probe.mix(u64::from(occurrence.value()));
                         }
@@ -890,6 +899,9 @@ fn consume_public_evidence(view: EvidenceViewV1<'_>) -> EvidenceProbe {
                     probe.mix(cell.case_index() as u64);
                     probe.mix(u64::from(cell.constraint().value()));
                     match cell.subject() {
+                        crate::program::ConstraintSubjectV1::ComputedVisibleRelation => {
+                            panic!("fixture has no computed relation")
+                        }
                         ConstraintSubjectV1::VisibleUnary { occurrence, .. } => {
                             probe.mix(u64::from(occurrence.value()));
                         }

@@ -18,7 +18,14 @@ export interface ProgramWireColorOptionsV3 {
   }>;
   readonly maxChange?: number;
   readonly appearance?: number;
+  /** Anchor и identity относятся к source; visible-опору и maxChange Core выводит из reference occurrence. */
+  readonly referenceAppearance?: number;
   readonly tone?: Readonly<{from: number; curve: readonly (readonly [number, number])[]}>;
+}
+
+export interface ProgramWireAssignmentOptionsV3 {
+  /** Единственное неизменяемое авторское окружение: [SurfaceInputPortId, RGB]. */
+  readonly reference?: readonly (readonly [number, ProgramWireRgbV1])[];
 }
 
 export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
@@ -28,9 +35,11 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   pointOccurrence(id: number, paint: number, surface: number): this;
   /** Включённые границы 0..2 расстояния Oklab: final visible против actual backdrop. Порог задаёт клиент. */
   visibleSeparationHard(id: number, occurrence: number, minimum: number, maximum: number): this;
+  /** Сильнее → слабее на одной поверхности; сохраняет reference CRstrong/CRweak, не модель salience. */
+  preserveTonalHierarchy(id: number, occurrences: readonly number[]): this;
   /** Опора может лежать вне domain; конечный неотрицательный допуск имеет конечный квадрат. */
   computedTarget(id: number, domain: ProgramWireDomainV3, anchor: ProgramWireRgbV1, maxDelta: number): this;
   /** Лексикографический приоритет: каждый computed target ровно один раз; граф проверяет Core. */
-  assignment(targetsInPreferenceOrder: readonly number[]): this;
+  assignment(targetsInPreferenceOrder: readonly number[], options?: ProgramWireAssignmentOptionsV3): this;
   finish(): Uint8Array;
 }

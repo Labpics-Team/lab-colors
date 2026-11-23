@@ -516,6 +516,7 @@ pub(crate) enum CompiledCoreRelationInvocationV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationMeasurementV1 {
+    TonalHierarchy(crate::constraints::TonalHierarchyPairMeasurementV1),
     ExactSrgb8(ExactSrgb8RelationMeasurementV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionMeasurementV1),
     FamilyCategory {
@@ -526,6 +527,7 @@ pub(crate) enum CoreRelationMeasurementV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationPassV1 {
+    TonalHierarchy,
     ExactSrgb8(ExactSrgb8RelationPassV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionPassV1),
     FamilyCategory(FamilyCategoryRelationPassV1),
@@ -533,6 +535,7 @@ pub(crate) enum CoreRelationPassV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationViolationV1 {
+    TonalHierarchy,
     ExactSrgb8(ExactSrgb8RelationViolationV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionViolationV1),
     FamilyCategory(FamilyCategoryRelationViolationV1),

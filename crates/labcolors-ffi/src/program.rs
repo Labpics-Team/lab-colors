@@ -296,6 +296,20 @@ impl ProgramSnapshot {
             })
             .transpose()
     }
+    /// Объяснение адаптации без копирования остальных assessment cells.
+    pub fn reference_selections(
+        &self,
+    ) -> Result<Option<Vec<crate::ProgramReferenceSelection>>, LabColorsError> {
+        self.inner
+            .assessment_report()
+            .map(|report| {
+                crate::program_reports::reference_selections(
+                    report.reference_selections(),
+                    "referenceSelections",
+                )
+            })
+            .transpose()
+    }
     /// Независимая типизированная копия witness текущего отказа или поиска.
     pub fn diagnostics(&self) -> Result<Option<crate::ProgramDiagnostics>, LabColorsError> {
         crate::program_reports::diagnostics(self.inner.diagnostics())

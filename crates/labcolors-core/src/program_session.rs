@@ -45,6 +45,7 @@ use crate::clean_set::{
 use crate::composition::CompositionProfileV1;
 use crate::constraints::{
     CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
+    CompiledTonalHierarchyV1, CoreComputedVisibleRelationInvocationV1,
     CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,
     CoreIntrinsicUnaryViolationV1, CoreRelationInvocationV1, CoreRelationMeasurementV1,
     CoreRelationPassV1, CoreRelationViolationV1, Evaluator, ExactSrgb8IdentityV1, HardDecision,
@@ -83,6 +84,7 @@ use crate::session::{
 use crate::wcag22::Wcag22CriterionV1;
 
 pub(crate) mod computed_assignment;
+mod reference;
 
 #[path = "program_identity.rs"]
 mod identity;
@@ -591,6 +593,10 @@ pub(crate) enum ProgramConstraintBodyV1<Invocation> {
         relation: DirectedRelationV1<OccurrenceId>,
         invocation: CoreRelationInvocationV1,
     },
+    ComputedVisibleRelation {
+        occurrences: Vec<OccurrenceId>,
+        invocation: CoreComputedVisibleRelationInvocationV1,
+    },
     DeclaredSrgb8CleanSet {
         target: PointPresentationTargetV1,
     },
@@ -619,6 +625,20 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
             body: ProgramConstraintBodyV1::VisibleUnary {
                 occurrence,
                 invocation,
+            },
+            mode: PhantomData,
+        }
+    }
+
+    pub(crate) fn preserve_tonal_hierarchy(
+        id: ConstraintId,
+        occurrences: Vec<OccurrenceId>,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::ComputedVisibleRelation {
+                occurrences,
+                invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
             },
             mode: PhantomData,
         }
@@ -1149,6 +1169,7 @@ where
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
     assignment: Option<Vec<TargetId>>,
+    reference_inputs: Option<Vec<(SurfaceInputPortId, Srgb8)>>,
     #[cfg(test)]
     computed_budget: Option<u64>,
     observation_group: ObservationGroup,
@@ -1189,6 +1210,7 @@ where
             families: Vec::new(),
             joint_selection: None,
             assignment: None,
+            reference_inputs: None,
             #[cfg(test)]
             computed_budget: None,
             observation_group,
@@ -1323,8 +1345,26 @@ impl CoreProgramDraftV1 {
         self.program.targets.push(target);
     }
 
+    pub(crate) fn set_reference_inputs(&mut self, inputs: Vec<(SurfaceInputPortId, Srgb8)>) {
+        self.program.reference_inputs = Some(inputs);
+    }
+
     pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
         self.program.assignment = Some(order);
+    }
+
+    pub(crate) fn set_reference_appearance(&mut self, id: TargetId) {
+        if let Some(Target {
+            intent: TargetIntentV1::Computed(target),
+            ..
+        }) = self
+            .program
+            .targets
+            .iter_mut()
+            .find(|target| target.id == id)
+        {
+            target.set_reference_appearance();
+        }
     }
 
     pub(crate) fn push_family(&mut self, family: FamilyDeclarationV2) {
@@ -1899,6 +1939,10 @@ enum CompiledProgramConstraintBodyV1<Invocation> {
         candidates: Box<[CompiledVisibleRelationEndpointV1]>,
         invocation: CompiledCoreRelationInvocationV1,
     },
+    ComputedVisibleRelation {
+        occurrences: Box<[CompiledVisibleRelationEndpointV1]>,
+        hierarchy: CompiledTonalHierarchyV1,
+    },
     PointPresentation {
         presentation_ordinal: usize,
         terminal: OccurrenceId,
@@ -1918,6 +1962,9 @@ fn compiled_relation_member_count<Invocation>(
     match &constraint.body {
         CompiledProgramConstraintBodyV1::IntrinsicRelation { candidates, .. } => candidates.len(),
         CompiledProgramConstraintBodyV1::VisibleRelation { candidates, .. } => candidates.len(),
+        CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+            occurrences.len() - 1
+        }
         CompiledProgramConstraintBodyV1::VisibleUnary { .. }
         | CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
         | CompiledProgramConstraintBodyV1::PointPresentation { .. } => 0,
@@ -2457,6 +2504,10 @@ where
         &self.owner_generation.required_family_releases
     }
 
+    pub(crate) fn relation_member_bound(&self, scenario_count: usize) -> Option<usize> {
+        scenario_count.checked_mul(self.owner_generation.relation_members_per_case)
+    }
+
     pub(crate) fn evidence_cell_bounds(&self, scenario_count: usize) -> Option<(usize, usize)> {
         checked_program_epoch_evaluation_cell_counts(&self.owner_generation, scenario_count)
             .map(|counts| (counts.selected, counts.exhaustive_conflict))
@@ -2613,6 +2664,7 @@ fn map_session_instantiate_error(error: BindingError) -> ProgramSessionInstantia
 /// `Occurrence`, и тем самым не подменяют финальный корень внутренним цветом.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProgramConstraintSubjectV1 {
+    ComputedVisibleRelation,
     VisibleUnary {
         occurrence: OccurrenceId,
         context: AppearanceContextId,
@@ -2678,6 +2730,12 @@ pub(crate) enum ProgramRelationMemberDecisionV1 {
 /// Одно однородное свидетельство reference→candidate в плоском report arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProgramRelationMemberEvidenceV1 {
+    TonalHierarchy {
+        stronger: ProgramVisibleRelationBindingV1,
+        weaker: ProgramVisibleRelationBindingV1,
+        measurement: CoreRelationMeasurementV1,
+        decision: ProgramRelationMemberDecisionV1,
+    },
     Intrinsic {
         reference: ProgramIntrinsicPaintBindingV1,
         candidate: ProgramIntrinsicPaintBindingV1,
@@ -2737,13 +2795,17 @@ impl ProgramIntrinsicUnaryViolationEvidenceV1 {
 impl ProgramRelationMemberEvidenceV1 {
     pub(crate) const fn measurement(self) -> CoreRelationMeasurementV1 {
         match self {
-            Self::Intrinsic { measurement, .. } | Self::Visible { measurement, .. } => measurement,
+            Self::Intrinsic { measurement, .. }
+            | Self::Visible { measurement, .. }
+            | Self::TonalHierarchy { measurement, .. } => measurement,
         }
     }
 
     pub(crate) const fn decision(self) -> ProgramRelationMemberDecisionV1 {
         match self {
-            Self::Intrinsic { decision, .. } | Self::Visible { decision, .. } => decision,
+            Self::Intrinsic { decision, .. }
+            | Self::Visible { decision, .. }
+            | Self::TonalHierarchy { decision, .. } => decision,
         }
     }
 
@@ -2759,7 +2821,7 @@ impl ProgramRelationMemberEvidenceV1 {
                 candidate,
                 ..
             } => Some((reference, candidate)),
-            Self::Visible { .. } => None,
+            Self::Visible { .. } | Self::TonalHierarchy { .. } => None,
         }
     }
 
@@ -2775,7 +2837,7 @@ impl ProgramRelationMemberEvidenceV1 {
                 candidate,
                 ..
             } => Some((reference, candidate)),
-            Self::Intrinsic { .. } => None,
+            Self::Intrinsic { .. } | Self::TonalHierarchy { .. } => None,
         }
     }
 }
@@ -3372,6 +3434,14 @@ impl<E: ProgramConstraintEvaluatorSetV1> ProgramVerifiedOutcomeV1<E> {
             Self::Computed(value) => Some(value.optimality()),
         }
     }
+    pub(crate) fn relation_members(
+        &self,
+        span: NonEmptyRelationMemberSpanV1,
+    ) -> &[ProgramRelationMemberEvidenceV1] {
+        span.get(&self.arena().storage.relation_members)
+            .expect("admitted report span")
+    }
+
     pub(crate) fn cells(&self) -> &[ProgramConstraintCellV1<E>] {
         &self.arena().storage.cells
     }
@@ -5471,6 +5541,62 @@ where
                         has_violation,
                     )
                 }
+                CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences,
+                    hierarchy,
+                } => {
+                    let mut relation_evidence = ProgramRelationEvidenceAccumulatorV1::try_begin(
+                        &mut evidence,
+                        occurrences.len() - 1,
+                    )
+                    .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    for (index, pair) in occurrences.windows(2).enumerate() {
+                        let (stronger, stronger_binding) = resolve_visible_relation_endpoint(
+                            &evaluation,
+                            &epoch.occurrence_contexts,
+                            pair[0],
+                        )
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                        let (weaker, weaker_binding) = resolve_visible_relation_endpoint(
+                            &evaluation,
+                            &epoch.occurrence_contexts,
+                            pair[1],
+                        )
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                        let backdrop = evaluation
+                            .occurrence_at(pair[0].slot)
+                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
+                            .certificate()
+                            .backdrop_rgb();
+                        let measurement =
+                            hierarchy.measure_pair(index, stronger, weaker, Srgb8::new(backdrop));
+                        let decision = if measurement.satisfied() {
+                            ProgramRelationMemberDecisionV1::Pass(
+                                CoreRelationPassV1::TonalHierarchy,
+                            )
+                        } else {
+                            ProgramRelationMemberDecisionV1::Violation(
+                                CoreRelationViolationV1::TonalHierarchy,
+                            )
+                        };
+                        relation_evidence
+                            .push(ProgramRelationMemberEvidenceV1::TonalHierarchy {
+                                stronger: stronger_binding,
+                                weaker: weaker_binding,
+                                measurement: CoreRelationMeasurementV1::TonalHierarchy(measurement),
+                                decision,
+                            })
+                            .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
+                    }
+                    let (span, has_violation) = relation_evidence
+                        .finish()
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    (
+                        ProgramConstraintSubjectV1::ComputedVisibleRelation,
+                        project_relation_result(span, has_violation),
+                        has_violation,
+                    )
+                }
                 CompiledProgramConstraintBodyV1::PointPresentation {
                     presentation_ordinal,
                     terminal,
@@ -5708,6 +5834,7 @@ where
     let observation_schema = canonicalize_observation_schema(surface_input_ports)
         .map_err(map_observation_schema_compile_error)?;
 
+    let reference = reference::compile(&mut program, &graph, &binding_template)?;
     let computed_budget = program.assignment_budget();
     let mut target_selection = compile_targets(
         &graph,
@@ -5716,6 +5843,9 @@ where
         program.assignment.as_deref(),
         computed_budget,
     )?;
+    if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
+        selection.compile_reference(reference.as_ref())?;
+    }
     let all_occurrence_contexts = compile_occurrence_contexts(&graph, &program.occurrences)?;
     let point_presentations = compile_point_presentations(
         &graph,
@@ -5731,7 +5861,7 @@ where
         &mut dependency_scratch,
         &all_occurrence_contexts,
         &point_presentations,
-        &program.constraints,
+        reference.as_ref(),
     )?;
     if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
         computed_assignment::compile_components(
@@ -6378,6 +6508,15 @@ where
             constrained_targets,
             assessed_paints,
         ),
+        CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+            merge_visible_constraint_coverage(
+                index,
+                scratch,
+                occurrences.iter().map(|endpoint| endpoint.occurrence),
+                constrained_targets,
+                assessed_paints,
+            )
+        }
         CompiledProgramConstraintBodyV1::PointPresentation { terminal, .. } => {
             merge_visible_constraint_coverage(
                 index,
@@ -6719,7 +6858,7 @@ fn compile_constraints<Evaluation>(
     dependency_scratch: &mut ProgramDependencyScratchV1,
     occurrence_contexts: &[CompiledOccurrenceContextV1],
     presentations: &CompiledPointPresentationsV1,
-    authored: &ConstraintSet<ProgramConstraintInvocationOf<Evaluation>>,
+    reference: Option<&reference::ReferenceCompositionV1>,
 ) -> Result<
     Box<[CompiledPointConstraint<ProgramConstraintInvocationOf<Evaluation>>]>,
     ProgramCompileError,
@@ -6728,6 +6867,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    let authored = &program.constraints;
     let total = authored
         .hard
         .len()
@@ -6768,6 +6908,75 @@ where
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for constraint in lowered {
         let body = match constraint.body {
+            ProgramConstraintBodyV1::ComputedVisibleRelation {
+                occurrences,
+                invocation: CoreComputedVisibleRelationInvocationV1::PreserveTonalHierarchy,
+            } => {
+                let invalid = || {
+                    ProgramCompileError::InvalidComputedAssignment(
+                        computed_assignment::ComputedAdmissionErrorV1::InvalidTonalHierarchy,
+                    )
+                };
+                let reference = reference.ok_or_else(invalid)?;
+                if occurrences.len() < 2 {
+                    return Err(invalid());
+                }
+                let mut endpoints = Vec::new();
+                let mut reference_visible = Vec::new();
+                endpoints
+                    .try_reserve_exact(occurrences.len())
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                reference_visible
+                    .try_reserve_exact(occurrences.len())
+                    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+                let mut common_surface = None;
+                let mut backdrop = None;
+                for (ordinal, &occurrence) in occurrences.iter().enumerate() {
+                    if occurrences[..ordinal].contains(&occurrence) {
+                        return Err(invalid());
+                    }
+                    let declared = program
+                        .occurrences
+                        .iter()
+                        .find(|entry| entry.id == occurrence)
+                        .ok_or(ProgramCompileError::MissingConstraintOccurrence {
+                            constraint: constraint.id,
+                            occurrence,
+                        })?;
+                    if common_surface.is_some_and(|surface| surface != declared.against) {
+                        return Err(invalid());
+                    }
+                    common_surface = Some(declared.against);
+                    let (visible, background) =
+                        reference.occurrence(occurrence).ok_or_else(invalid)?;
+                    backdrop = Some(background);
+                    reference_visible.push(visible);
+                    let slot = graph.bind_occurrence(occurrence).ok_or_else(invalid)?;
+                    let occurrence_context_index = occurrence_contexts
+                        .binary_search_by_key(&occurrence, |entry| entry.occurrence)
+                        .map_err(|_| ProgramCompileError::InternalInvariant)?;
+                    endpoints.push(CompiledVisibleRelationEndpointV1 {
+                        occurrence,
+                        slot,
+                        occurrence_context_index,
+                    });
+                }
+                let hierarchy = CompiledTonalHierarchyV1::compile(
+                    &reference_visible,
+                    backdrop.ok_or_else(invalid)?,
+                )
+                .map_err(|error| match error {
+                    crate::constraints::TonalHierarchyReferenceErrorV1::ResourceExhausted => {
+                        ProgramCompileError::ResourceExhausted
+                    }
+                    _ => invalid(),
+                })?;
+                CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences: endpoints.into_boxed_slice(),
+                    hierarchy,
+                }
+            }
+
             ProgramConstraintBodyV1::VisibleUnary {
                 occurrence,
                 invocation,
@@ -6996,6 +7205,9 @@ fn compact_constraint_contexts<Invocation>(
         .try_fold(0_usize, |count, constraint| {
             count.checked_add(match &constraint.body {
                 CompiledProgramConstraintBodyV1::VisibleUnary { .. } => 1,
+                CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
+                    occurrences, ..
+                } => occurrences.len(),
                 CompiledProgramConstraintBodyV1::VisibleRelation { candidates, .. } => {
                     candidates.len().checked_add(1)?
                 }
@@ -7011,6 +7223,9 @@ fn compact_constraint_contexts<Invocation>(
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for constraint in constraints.iter() {
         match &constraint.body {
+            CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+                targets.extend(occurrences.iter().map(|endpoint| endpoint.occurrence))
+            }
             CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
                 targets.push(*occurrence);
             }
@@ -7042,6 +7257,15 @@ fn compact_constraint_contexts<Invocation>(
     }
 
     for constraint in constraints {
+        if let CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } =
+            &mut constraint.body
+        {
+            for endpoint in occurrences.iter_mut() {
+                endpoint.occurrence_context_index = compact
+                    .binary_search_by_key(&endpoint.occurrence, |binding| binding.occurrence)
+                    .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            }
+        }
         if let CompiledProgramConstraintBodyV1::VisibleUnary {
             occurrence,
             slot,

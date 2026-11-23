@@ -2133,7 +2133,7 @@ fn program_session_keeps_physical_evidence_separate_from_lazy_lcs_capability() {
         "let outputs = compile_outputs(",
     );
     for required in [
-        "compile_constraints::<Evaluation>( &program, &graph, &dependency_index, &mut dependency_scratch, &all_occurrence_contexts, &point_presentations, &program.constraints, )?",
+        "compile_constraints::<Evaluation>( &program, &graph, &dependency_index, &mut dependency_scratch, &all_occurrence_contexts, &point_presentations, reference.as_ref(), )?",
         "compact_constraint_contexts(&all_occurrence_contexts, &mut constraints)?",
     ] {
         assert!(

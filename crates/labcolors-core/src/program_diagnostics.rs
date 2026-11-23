@@ -7,6 +7,7 @@ use crate::Srgb8;
 /// исходной декларации; relation reference не подменяет всех её участников.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramDiagnosticSubjectV1 {
+    ComputedVisibleRelation,
     Target {
         target_id: u32,
     },
@@ -30,6 +31,18 @@ pub enum ProgramDiagnosticSubjectV1 {
 /// authored requirement по ID; остальные варианты — условия самого target.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProgramDiagnosticV1 {
+    TonalHierarchy {
+        constraint_id: u32,
+        case_index: usize,
+        stronger_occurrence_id: u32,
+        weaker_occurrence_id: u32,
+        required_gap: f64,
+        actual_gap: f64,
+        required_ratio: f64,
+        actual_ratio: f64,
+        stronger_polarity: crate::constraints::TonalPolarityV1,
+        weaker_polarity: crate::constraints::TonalPolarityV1,
+    },
     HardConstraint {
         constraint_id: u32,
         case_index: usize,
