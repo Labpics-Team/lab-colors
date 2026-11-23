@@ -43,8 +43,13 @@ export type ProgramDiagnosticSubjectV1 =
   | Readonly<{kind: "occurrence"; occurrenceId: number}>
   | Readonly<{kind: "intrinsic-relation"; referenceTargetId: number}>
   | Readonly<{kind: "visible-relation"; referenceOccurrenceId: number}>
+  | Readonly<{kind: "computed-visible-relation"}>
   | Readonly<{kind: "presentation"; rootId: number; occurrenceId: number; terminalId: number}>;
 export type ProgramDiagnosticV1 =
+  | Readonly<{kind: "tonal-hierarchy"; constraintId: number; caseIndex: number;
+      strongerOccurrenceId: number; weakerOccurrenceId: number; requiredRatio: number; actualRatio: number;
+      requiredGap: number; actualGap: number;
+      strongerPolarity: "darker" | "equal" | "lighter"; weakerPolarity: "darker" | "equal" | "lighter"}>
   | Readonly<{kind: "hard-constraint"; constraintId: number; caseIndex: number; subject: ProgramDiagnosticSubjectV1}>
   | Readonly<{kind: "target-domain"; targetId: number; source: readonly [number, number, number]}>
   | Readonly<{kind: "color-identity"; targetId: number; caseIndex: number; occurrenceId: number | null;
@@ -71,7 +76,7 @@ export type ProgramConstraintAssessmentV1 =
       distance: number; distanceBounds: readonly [number, number]; minimum: number; maximum: number;
     }>
   | Readonly<{
-      kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation";
+      kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation" | "tonal-hierarchy";
       verdict: ProgramAssessmentVerdictV1;
     }>
   | Readonly<{
@@ -108,6 +113,48 @@ export type ProgramCleanlinessAssessmentV1 =
       /** Количества клеток case × constraint, не пикселей или quality points. */
       accepted: number; rejected: number; unavailable: number;
     }>;
+export interface ProgramTonalHierarchyPairV1 {
+  readonly constraintId: number;
+  readonly caseIndex: number;
+  readonly strongerOccurrenceId: number;
+  readonly weakerOccurrenceId: number;
+  /** Отношение CRstrong / CRweak; сравниваются эти значения. */
+  readonly requiredRatio: number;
+  readonly actualRatio: number;
+  /** Натуральный логарифм соответствующего отношения, только для диагностики. */
+  readonly requiredGap: number;
+  readonly actualGap: number;
+  readonly strongerPolarity: "darker" | "equal" | "lighter";
+  readonly weakerPolarity: "darker" | "equal" | "lighter";
+  readonly satisfied: boolean;
+}
+export interface ProgramReferenceCapacityV1 {
+  /** Совместная достижимость для всех cases при сохранённых более приоритетных paints. */
+  readonly ratioLower: number;
+  readonly ratioUpper: number;
+  /** При ratio=1 означает достижимость исходной силы, а не максимальный CR. */
+  readonly complete: boolean;
+}
+export interface ProgramReferenceCaseV1 {
+  readonly caseIndex: number;
+  readonly referenceVisible: readonly [number, number, number];
+  readonly referenceBackdrop: readonly [number, number, number];
+  readonly actualVisible: readonly [number, number, number];
+  readonly actualBackdrop: readonly [number, number, number];
+  readonly referenceContrast: number;
+  readonly actualContrast: number;
+  readonly polarity: "darker" | "equal" | "lighter";
+  /** Положительная часть ln(referenceContrast/actualContrast), не общий quality score. */
+  readonly strengthLoss: number;
+  readonly virtualDistanceSquared: number;
+}
+export interface ProgramReferenceSelectionV1 {
+  readonly targetId: number;
+  readonly occurrenceId: number;
+  readonly preference: "reference-strength" | "explicit-tone";
+  readonly capacity: ProgramReferenceCapacityV1 | null;
+  readonly cases: ReadonlyArray<ProgramReferenceCaseV1>;
+}
 /** Историческое свидетельство одного Ready-снимка; без права публикации. */
 export interface ProgramAssessmentReportV1 {
   /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
@@ -117,6 +164,8 @@ export interface ProgramAssessmentReportV1 {
   readonly scenarioProvenance: ReadonlyArray<ProgramScenarioProvenanceV1>;
   readonly cells: ReadonlyArray<ProgramAssessmentCellV1>;
   readonly cleanliness: ProgramCleanlinessAssessmentV1;
+  readonly tonalHierarchy: ReadonlyArray<ProgramTonalHierarchyPairV1>;
+  readonly referenceSelections: ReadonlyArray<ProgramReferenceSelectionV1>;
 }
 
 export type Wcag22CriterionV1 =
@@ -282,6 +331,7 @@ const reportFreeze = Object.freeze;
 const ReportBytes = Uint8Array;
 const reportPush = Array.prototype.push;
 export function reportArray() { return []; }
+export function reportArrayFreeze(array) { return reportFreeze(array); }
 export function reportArrayPush(array, value) { reportPush.call(array, value); }
 export function reportScenario(caseIndex, scenarioId) {
   return reportFreeze({ caseIndex, scenarioId });
@@ -292,10 +342,16 @@ export function diagnosticSubject(kind, first, second, third) {
   if (kind === "occurrence") return reportFreeze({kind, occurrenceId: first});
   if (kind === "intrinsic-relation") return reportFreeze({kind, referenceTargetId: first});
   if (kind === "visible-relation") return reportFreeze({kind, referenceOccurrenceId: first});
+  if (kind === "computed-visible-relation") return reportFreeze({kind});
   return reportFreeze({kind, rootId: first, occurrenceId: second, terminalId: third});
 }
 export function diagnosticConstraint(constraintId, caseIndex, subject) {
   return reportFreeze({kind: "hard-constraint", constraintId, caseIndex, subject});
+}
+export function diagnosticTonalHierarchy(constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+    requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity) {
+  return reportFreeze({kind: "tonal-hierarchy", constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+    requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity});
 }
 export function diagnosticDomain(targetId, red, green, blue) {
   return reportFreeze({kind: "target-domain", targetId, source: reportFreeze([red, green, blue])});
@@ -350,13 +406,35 @@ export function reportCleanliness(status, profile, basis, scope, accepted, rejec
   if (status === "not-assessed") return reportFreeze({status, reason: "no-declared-profile"});
   return reportFreeze({status, profile, basis, scope, accepted, rejected, unavailable});
 }
-export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness) {
+export function reportTonalHierarchy(constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+    requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity, satisfied) {
+  return reportFreeze({constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+    requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity, satisfied});
+}
+export function reportReferenceCapacity(ratioLower, ratioUpper, complete) {
+  return reportFreeze({ratioLower, ratioUpper, complete});
+}
+export function reportReferenceCase(caseIndex, colors, referenceContrast, actualContrast,
+    polarity, strengthLoss, virtualDistanceSquared) {
+  return reportFreeze({caseIndex,
+    referenceVisible: reportFreeze([colors[0], colors[1], colors[2]]),
+    referenceBackdrop: reportFreeze([colors[3], colors[4], colors[5]]),
+    actualVisible: reportFreeze([colors[6], colors[7], colors[8]]),
+    actualBackdrop: reportFreeze([colors[9], colors[10], colors[11]]),
+    referenceContrast, actualContrast, polarity, strengthLoss, virtualDistanceSquared});
+}
+export function reportReferenceSelection(targetId, occurrenceId, preference, capacity, cases) {
+  return reportFreeze({targetId, occurrenceId, preference, capacity, cases: reportFreeze(cases)});
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness, tonalHierarchy, referenceSelections) {
   return reportFreeze({
     contentIdentity: new ReportBytes(contentIdentity),
     streamId, revision,
     scenarioProvenance: reportFreeze(scenarioProvenance),
     cells: reportFreeze(cells),
     cleanliness,
+    tonalHierarchy: reportFreeze(tonalHierarchy),
+    referenceSelections: reportFreeze(referenceSelections),
   });
 }
 "#)]
@@ -399,6 +477,8 @@ extern "C" {
     ) -> JsValue;
     #[wasm_bindgen(catch, js_name = reportArray)]
     fn report_array() -> Result<js_sys::Array, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportArrayFreeze)]
+    fn report_array_freeze(array: &js_sys::Array) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportArrayPush)]
     fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = reportScenario)]
@@ -417,6 +497,19 @@ extern "C" {
         constraint: u32,
         case: usize,
         subject: &JsValue,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticTonalHierarchy)]
+    fn diagnostic_tonal_hierarchy(
+        constraint: u32,
+        case: usize,
+        stronger_occurrence: u32,
+        weaker_occurrence: u32,
+        required_ratio: f64,
+        actual_ratio: f64,
+        required_gap: f64,
+        actual_gap: f64,
+        stronger_polarity: &str,
+        weaker_polarity: &str,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = diagnosticDomain)]
     fn diagnostic_domain(target: u32, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
@@ -499,6 +592,46 @@ extern "C" {
         scenario_provenance: &js_sys::Array,
         cells: &js_sys::Array,
         cleanliness: &JsValue,
+        tonal_hierarchy: &js_sys::Array,
+        reference_selections: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportTonalHierarchy)]
+    fn report_tonal_hierarchy(
+        constraint: u32,
+        case: usize,
+        stronger_occurrence: u32,
+        weaker_occurrence: u32,
+        required_ratio: f64,
+        actual_ratio: f64,
+        required_gap: f64,
+        actual_gap: f64,
+        stronger_polarity: &str,
+        weaker_polarity: &str,
+        satisfied: bool,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportReferenceCapacity)]
+    fn report_reference_capacity(
+        ratio_lower: f64,
+        ratio_upper: f64,
+        complete: bool,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportReferenceCase)]
+    fn report_reference_case(
+        case_index: usize,
+        colors: &[u8],
+        reference_contrast: f64,
+        actual_contrast: f64,
+        polarity: &str,
+        strength_loss: f64,
+        virtual_distance_squared: f64,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportReferenceSelection)]
+    fn report_reference_selection(
+        target_id: u32,
+        occurrence_id: u32,
+        preference: &str,
+        capacity: &JsValue,
+        cases: &js_sys::Array,
     ) -> Result<JsValue, JsValue>;
 }
 
@@ -590,6 +723,7 @@ enum ProgramOperation {
     MaterializationAuthority,
     AssessmentReport,
     CleanlinessAssessment,
+    ReferenceSelections,
 }
 
 impl ProgramOperation {
@@ -608,6 +742,7 @@ impl ProgramOperation {
             Self::MaterializationAuthority => "materializationAuthority",
             Self::AssessmentReport => "assessmentReport",
             Self::CleanlinessAssessment => "cleanlinessAssessment",
+            Self::ReferenceSelections => "referenceSelections",
         }
     }
 }
@@ -872,6 +1007,18 @@ impl ProgramSnapshot {
                 )
             },
         )
+    }
+
+    /// Копирует объяснение адаптации без остальных assessment cells; вне Ready — null.
+    #[wasm_bindgen(js_name = referenceSelections, unchecked_return_type = "ReadonlyArray<ProgramReferenceSelectionV1> | null")]
+    pub fn reference_selections(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project_reference_selections(self.inner.assessment_report())
+            .map_err(|_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::ReferenceSelections,
+                )
+            })
     }
 
     #[wasm_bindgen(getter, js_name = snapshotVersion)]

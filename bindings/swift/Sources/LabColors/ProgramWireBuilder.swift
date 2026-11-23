@@ -294,11 +294,25 @@ public struct ProgramWireColorOptionsV3 {
     public let maxChange: Double
     public let appearance: UInt32?
     public let tone: ProgramWireToneV3?
+    public let referenceAppearance: UInt32?
     public init(domain: ProgramWireColorDomainV3 = .srgb, identity: ProgramWireColorIdentityV3? = nil,
-                maxChange: Double = 2, appearance: UInt32? = nil, tone: ProgramWireToneV3? = nil) {
+                maxChange: Double = 2, appearance: UInt32? = nil, tone: ProgramWireToneV3? = nil,
+                referenceAppearance: UInt32? = nil) {
         self.domain = domain; self.identity = identity; self.maxChange = maxChange
-        self.appearance = appearance; self.tone = tone
+        self.appearance = appearance; self.tone = tone; self.referenceAppearance = referenceAppearance
     }
+}
+
+public struct ProgramWireReferenceInputV3 {
+    public let port: UInt32
+    public let rgb: [UInt8]
+    public init(port: UInt32, rgb: [UInt8]) { self.port = port; self.rgb = rgb }
+}
+
+public struct ProgramWireAssignmentOptionsV3 {
+    /// nil omits the reference; an empty array explicitly declares a reference without input ports.
+    public let reference: [ProgramWireReferenceInputV3]?
+    public init(reference: [ProgramWireReferenceInputV3]? = nil) { self.reference = reference }
 }
 
 /// LCPW v3 передаёт domain, опоры и предпочтения. Выбор и композицию выполняет Core.
@@ -331,8 +345,11 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
             if let chroma = identity?.chroma { for value in try pair(chroma) { b.f64(value) } }
             if let lightness = identity?.lightness { for value in try pair(lightness) { b.f64(value) } }
             b.f64(try bounded(options.maxChange, maximum: 2))
-            b.u8(options.appearance == nil ? 0 : 1)
-            if let appearance = options.appearance { b.u32(appearance) }
+            guard options.appearance == nil || options.referenceAppearance == nil else {
+                throw ProgramWireError.invalidDeclaration("appearance and referenceAppearance are mutually exclusive")
+            }
+            b.u8(options.referenceAppearance != nil ? 2 : options.appearance != nil ? 1 : 0)
+            if let appearance = options.referenceAppearance ?? options.appearance { b.u32(appearance) }
             b.u8(options.tone == nil ? 0 : 1)
             if let tone = options.tone {
                 guard tone.curve.count >= 2 else { throw ProgramWireError.invalidDeclaration("tone requires two or more stops") }
@@ -389,11 +406,36 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
         return self
     }
 
-    @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32]) throws -> Self {
+    @discardableResult public func preserveTonalHierarchy(_ id: UInt32, occurrences: [UInt32]) throws -> Self {
+        guard occurrences.count >= 2 else { throw ProgramWireError.invalidDeclaration("hierarchy requires at least two occurrences") }
+        guard occurrences.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
+        guard Set(occurrences).count == occurrences.count else {
+            throw ProgramWireError.invalidDeclaration("hierarchy occurrences must be distinct")
+        }
+        try append(11) { b in
+            b.u32(id); b.u8(13); b.u32(UInt32(occurrences.count))
+            for occurrence in occurrences { b.u32(occurrence) }
+        }
+        return self
+    }
+
+    @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32],
+        options: ProgramWireAssignmentOptionsV3 = ProgramWireAssignmentOptionsV3()) throws -> Self {
         guard targetsInPreferenceOrder.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
         try selection { b in
-            b.u8(3); b.u8(0); b.u32(UInt32(targetsInPreferenceOrder.count))
+            b.u8(options.reference == nil ? 3 : 4); b.u8(0); b.u32(UInt32(targetsInPreferenceOrder.count))
             for target in targetsInPreferenceOrder { b.u32(target) }
+            if let reference = options.reference {
+                guard reference.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
+                var ports = Set<UInt32>()
+                b.u32(UInt32(reference.count))
+                for input in reference {
+                    guard ports.insert(input.port).inserted else {
+                        throw ProgramWireError.invalidDeclaration("reference input ports must be distinct")
+                    }
+                    b.u32(input.port); try b.rgb(input.rgb)
+                }
+            }
         }
         return self
     }

@@ -64,9 +64,7 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
         && context.domains[0].contains(preferred)
         && squared_distance(lab(preferred), target.anchor_lab) <= delta * delta
         && target
-            .declaration
-            .intent
-            .as_ref()
+            .effective_intent()
             .is_none_or(|intent| intent.identity.contains(preferred));
     // Each opaque occurrence is admitted as its own source's appearance.
     // Therefore distance zero has exactly one source, in every physical case.

@@ -22,6 +22,11 @@ fn physical_cone<Invocation>(
     }
     for &index in indices {
         match &constraints[index].body {
+            CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+                for endpoint in occurrences {
+                    compiler.occurrence(endpoint.occurrence)?;
+                }
+            }
             CompiledProgramConstraintBodyV1::VisibleUnary { occurrence, .. } => {
                 compiler.occurrence(*occurrence)?;
             }
@@ -213,6 +218,12 @@ impl VisibleDependenciesV1 {
         targets: &mut [bool],
     ) -> Result<(), ProgramCompileError> {
         match &constraint.body {
+            CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
+                for endpoint in occurrences {
+                    self.visible(index, endpoint.occurrence, targets)?;
+                    self.backdrop(index, endpoint.occurrence, targets)?;
+                }
+            }
             CompiledProgramConstraintBodyV1::VisibleUnary {
                 occurrence,
                 invocation,
@@ -394,6 +405,9 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         visible.clear_inputs();
         if let Some(appearance) = appearance {
             visible.visible(index, appearance, &mut marked)?;
+            if target.declaration.reference_appearance {
+                visible.backdrop(index, appearance, &mut marked)?;
+            }
         }
         if let Some(input) = target.tone_input {
             visible.input(input);
@@ -462,6 +476,9 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .and_then(|v| v.appearance)
             {
                 visible.visible(index, appearance, &mut marked)?;
+                if target.declaration.reference_appearance {
+                    visible.backdrop(index, appearance, &mut marked)?;
+                }
             }
             if let Some(input) = target.tone_input {
                 visible.input(input);
@@ -532,7 +549,8 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         });
     }
     let constant_check = u64::from(!fixed.is_empty() || components.is_empty());
-    // A contextual task may run one local prefix search and at most n-1
+    // Reference point/capacity jobs share one budget. A legacy contextual task
+    // may run one local prefix search and at most n-1
     // residual searches. Its original budget still covers the full fallback
     // and whole checks. Singleton tasks need no conditional search.
     let search_units = components
@@ -542,7 +560,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .targets
                 .iter()
                 .any(|&target| selection.targets[target].declaration.intent.is_some());
-            let units = if contextual && component.targets.len() > 1 {
+            let reference = component
+                .targets
+                .iter()
+                .any(|&target| selection.targets[target].declaration.reference_appearance);
+            let units = if !reference && contextual && component.targets.len() > 1 {
                 component.targets.len().checked_add(1)?
             } else {
                 1
@@ -788,6 +810,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let mut reference_selections = Vec::new();
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::AuthoredExact,
         visited: 0,
@@ -824,6 +847,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         if failed {
             evidence.completion = CompletionV1::Complete;
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: None,
             });
@@ -848,6 +872,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 evidence.open_regions = 0;
             }
             return Ok(SearchResultV1 {
+                reference_selections: None,
                 evidence,
                 values: None,
             });
@@ -858,8 +883,16 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         for (&index, value) in component.targets.iter().zip(local) {
             values[index] = value;
         }
+        if let Some(reports) = selected.reference_selections {
+            reference_selections
+                .try_reserve(reports.len())
+                .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            reference_selections.extend(reports.iter().cloned());
+        }
     }
     Ok(SearchResultV1 {
+        reference_selections: (!reference_selections.is_empty())
+            .then(|| reference_selections.into()),
         evidence,
         values: Some(values),
     })

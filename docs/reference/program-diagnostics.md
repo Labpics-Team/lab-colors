@@ -18,6 +18,14 @@ const diagnostics = snapshot.diagnostics();
 
 В computed V3 отдельный поиск получает предел `B = 65 536` посещений.
 Независимые группы вычисляемых целей не делят этот предел друг с другом.
+В режиме reference appearance поиск набора цветов и оценка достижимости
+разделяют один `B` для связанной группы. Если достижимость осталась неизвестной,
+допустимый результат имеет `optimality: "unfinished"`. В `referenceSelections`
+интервалы достижимой силы (`capacity`) доступны для `reference-strength`;
+при `explicit-tone` это поле равно `null`. Счётчики посещений для готового
+результата не выдаются, а `diagnostics()` возвращает `null`.
+Следующее увеличение бюджета для условных поисков относится к прежнему режиму
+без reference appearance.
 У контекстной группы из `n > 1` целей общая верхняя граница — `(n + 1) × B`: из уже
 пригодного набора может быть предложена точная опора первой по приоритету цели,
 если её RGB непосредственно задаёт видимый цвет. Когда опора одинакова во всех
@@ -71,9 +79,13 @@ const diagnostics = snapshot.diagnostics();
 | `target-domain` | `targetId`, `source` | Авторский source лежит вне объявленного множества RGB. |
 | `color-identity` | `targetId`, `caseIndex`, `occurrenceId`, `actual` | Фактический цвет вне объявленной области характера цвета. |
 | `max-change` | те же поля, `distanceSquared`, `maximumDistance` | Превышен hard-допуск изменения относительно authored anchor. Сравнение Core использует squared distance и квадрат допуска. |
+| `tonal-hierarchy` | `constraintId`, `caseIndex`, `strongerOccurrenceId`, `weakerOccurrenceId`, `requiredRatio`, `actualRatio`, `requiredGap`, `actualGap`, `strongerPolarity`, `weakerPolarity` | Нарушено отношение исходной силы либо общая ненулевая сторона фона. Ratio — `CRstrong/CRweak`; gap — его натуральный логарифм только для диагностики. |
 
 Для `color-identity` и `max-change` непустой `occurrenceId` означает измерение
 финального visible в указанном применении. При `null` оценено intrinsic значение.
+В reference appearance идентичность относится к source, поэтому у её нарушения
+`occurrenceId` равен `null`. `max-change` сравнивает конечный visible с исходным
+visible в reference composition и сохраняет ID применения.
 `subject` различает target, occurrence, reference intrinsic/visible relation и
 point presentation; relation reference не выдаётся за полный состав отношения.
 

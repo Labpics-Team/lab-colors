@@ -2,14 +2,15 @@
 
 use labcolors_core::program_wire::{
     ProgramAssessmentReportV1, ProgramAssessmentVerdictV1, ProgramCleanlinessAssessmentV1,
-    ProgramCleanlinessStatusV1, ProgramConstraintAssessmentV1,
+    ProgramCleanlinessStatusV1, ProgramConstraintAssessmentV1, ProgramReferencePreferenceV1,
 };
 use wasm_bindgen::prelude::*;
 
 use super::{
-    report_accepted, report_array, report_array_push, report_cell, report_cleanliness,
-    report_domain_absent, report_projection, report_rejected, report_scenario, report_separation,
-    report_summary,
+    report_accepted, report_array, report_array_freeze, report_array_push, report_cell,
+    report_cleanliness, report_domain_absent, report_projection, report_reference_capacity,
+    report_reference_case, report_reference_selection, report_rejected, report_scenario,
+    report_separation, report_summary, report_tonal_hierarchy,
 };
 
 /// Неудачное чтение не изменяет Rust snapshot и не имеет sink-эффекта.
@@ -34,6 +35,25 @@ pub(super) fn project(report: Option<&ProgramAssessmentReportV1>) -> Result<JsVa
         report_array_push(&cells, &record)?;
     }
     let cleanliness = project_cleanliness(Some(report.cleanliness()))?;
+    let tonal_hierarchy = report_array()?;
+    for pair in report.tonal_hierarchy() {
+        let measurement = pair.measurement();
+        let record = report_tonal_hierarchy(
+            pair.constraint_id(),
+            pair.case_index(),
+            pair.stronger_occurrence_id(),
+            pair.weaker_occurrence_id(),
+            measurement.required_ratio(),
+            measurement.actual_ratio(),
+            measurement.required_gap(),
+            measurement.actual_gap(),
+            super::program_diagnostics_projection::polarity_key(measurement.stronger_polarity()),
+            super::program_diagnostics_projection::polarity_key(measurement.weaker_polarity()),
+            measurement.satisfied(),
+        )?;
+        report_array_push(&tonal_hierarchy, &record)?;
+    }
+    let reference_selections = reference_selections(report)?;
     report_projection(
         &report.content_identity(),
         report.stream_id(),
@@ -41,7 +61,68 @@ pub(super) fn project(report: Option<&ProgramAssessmentReportV1>) -> Result<JsVa
         &scenario_provenance,
         &cells,
         &cleanliness,
+        &tonal_hierarchy,
+        &reference_selections,
     )
+}
+
+/// Копирует только объяснение адаптации, без всех assessment cells.
+pub(super) fn project_reference_selections(
+    report: Option<&ProgramAssessmentReportV1>,
+) -> Result<JsValue, JsValue> {
+    let Some(report) = report else {
+        return Ok(JsValue::NULL);
+    };
+    report_array_freeze(&reference_selections(report)?)
+}
+
+fn reference_selections(report: &ProgramAssessmentReportV1) -> Result<js_sys::Array, JsValue> {
+    let selections = report_array()?;
+    for selection in report.reference_selections() {
+        let capacity = match selection.capacity() {
+            Some(capacity) => report_reference_capacity(
+                capacity.ratio_lower(),
+                capacity.ratio_upper(),
+                capacity.complete(),
+            )?,
+            None => JsValue::NULL,
+        };
+        let cases = report_array()?;
+        for case in selection.cases() {
+            let mut colors = [0_u8; 12];
+            for (slot, rgb) in colors.chunks_exact_mut(3).zip([
+                case.reference_visible(),
+                case.reference_backdrop(),
+                case.actual_visible(),
+                case.actual_backdrop(),
+            ]) {
+                slot.copy_from_slice(&rgb.bytes());
+            }
+            let record = report_reference_case(
+                case.case_index(),
+                &colors,
+                case.reference_contrast(),
+                case.actual_contrast(),
+                super::program_diagnostics_projection::polarity_key(case.polarity()),
+                case.strength_loss(),
+                case.virtual_distance_squared(),
+            )?;
+            report_array_push(&cases, &record)?;
+        }
+        let preference = match selection.preference() {
+            ProgramReferencePreferenceV1::ReferenceStrength => "reference-strength",
+            ProgramReferencePreferenceV1::ExplicitTone => "explicit-tone",
+        };
+        let record = report_reference_selection(
+            selection.target_id(),
+            selection.occurrence_id(),
+            preference,
+            &capacity,
+            &cases,
+        )?;
+        report_array_push(&selections, &record)?;
+    }
+    Ok(selections)
 }
 
 /// Одна плоская immutable запись; полный массив клеток для обычного UI не копируется.
@@ -114,6 +195,9 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
             report_summary("intrinsic-unary", verdict_key(verdict))
         }
         Assessment::Relation { verdict } => report_summary("relation", verdict_key(verdict)),
+        Assessment::TonalHierarchy { verdict } => {
+            report_summary("tonal-hierarchy", verdict_key(verdict))
+        }
         Assessment::DeclaredSrgb8CleanSetPass { visible } => {
             let [red, green, blue] = visible.bytes();
             report_accepted("declared-srgb8-clean-set", red, green, blue)

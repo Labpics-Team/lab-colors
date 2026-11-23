@@ -1958,8 +1958,29 @@ impl DraftV1 {
             ),
         ));
     }
+    pub(crate) fn preserve_tonal_hierarchy(
+        &mut self,
+        id: ConstraintIdV1,
+        occurrences: Vec<OccurrenceId>,
+    ) {
+        self.inner.push_hard_constraint(
+            crate::program_session::ConstraintInvocation::preserve_tonal_hierarchy(
+                id.into_core(),
+                occurrences,
+            ),
+        );
+    }
+
+    pub(crate) fn set_reference_inputs(&mut self, inputs: Vec<(SurfaceInputPortId, Srgb8)>) {
+        self.inner.set_reference_inputs(inputs);
+    }
+
     pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
         self.inner.set_assignment(order);
+    }
+
+    pub(crate) fn set_reference_appearance(&mut self, id: TargetIdV1) {
+        self.inner.set_reference_appearance(id.into_core());
     }
 
     pub(crate) fn push_color_target(
@@ -2078,6 +2099,10 @@ impl OwnerV1 {
     /// сертификат может быть короче. Нулевое значение разрешено только как
     /// чистый арифметический preflight; пустой Observed-update по-прежнему не
     /// допускается. Запрос не создаёт Session и не меняет состояние.
+    pub(crate) fn relation_member_bound(&self, scenarios: usize) -> Option<usize> {
+        self.compiled.relation_member_bound(scenarios)
+    }
+
     pub(crate) fn evidence_cell_bounds(
         &self,
         scenario_count: usize,
@@ -2702,6 +2727,21 @@ pub(crate) struct VerifiedOutputV1<'a> {
 }
 
 impl<'a> VerifiedOutputV1<'a> {
+    pub(crate) fn reference_selections(
+        self,
+    ) -> Option<&'a std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>> {
+        match self.inner {
+            ProgramVerifiedOutcomeV1::Computed(value) => value.reference_selections(),
+            ProgramVerifiedOutcomeV1::Legacy(_) => None,
+        }
+    }
+    pub(crate) fn relation_members(
+        self,
+        span: crate::program_session::NonEmptyRelationMemberSpanV1,
+    ) -> &'a [ProgramRelationMemberEvidenceV1] {
+        self.inner.relation_members(span)
+    }
+
     pub(crate) fn optimality(
         self,
     ) -> Option<crate::program_session::computed_assignment::ComputedOptimalityV1> {
@@ -2983,6 +3023,7 @@ pub(crate) enum ConstraintModeV1 {
 /// Полный физический объект ограничения без подстановки одного лишь `Occurrence`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConstraintSubjectV1 {
+    ComputedVisibleRelation,
     /// Видимый результат одного `Occurrence` в объявленном для него контексте.
     VisibleUnary {
         occurrence: OccurrenceIdV1,
@@ -3008,6 +3049,9 @@ pub(crate) enum ConstraintSubjectV1 {
 
 const fn project_constraint_subject(subject: ProgramConstraintSubjectV1) -> ConstraintSubjectV1 {
     match subject {
+        ProgramConstraintSubjectV1::ComputedVisibleRelation => {
+            ConstraintSubjectV1::ComputedVisibleRelation
+        }
         ProgramConstraintSubjectV1::VisibleUnary {
             occurrence,
             context,
@@ -3458,6 +3502,7 @@ impl<'a> RelationEvidenceV1<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) enum RelationMemberV1<'a> {
+    TonalHierarchy(TonalHierarchyMemberV1<'a>),
     Intrinsic(IntrinsicRelationMemberV1<'a>),
     Visible(VisibleRelationMemberV1<'a>),
 }
@@ -3465,6 +3510,9 @@ pub(crate) enum RelationMemberV1<'a> {
 impl<'a> RelationMemberV1<'a> {
     fn from_core(inner: &'a ProgramRelationMemberEvidenceV1) -> Self {
         match inner {
+            ProgramRelationMemberEvidenceV1::TonalHierarchy { .. } => {
+                Self::TonalHierarchy(TonalHierarchyMemberV1 { inner })
+            }
             ProgramRelationMemberEvidenceV1::Intrinsic { .. } => {
                 Self::Intrinsic(IntrinsicRelationMemberV1 { inner })
             }
@@ -3478,6 +3526,7 @@ impl<'a> RelationMemberV1<'a> {
         let measurement = match self {
             Self::Intrinsic(value) => value.inner.measurement(),
             Self::Visible(value) => value.inner.measurement(),
+            Self::TonalHierarchy(value) => value.inner.measurement(),
         };
         project_relation_measurement(measurement)
     }
@@ -3486,6 +3535,7 @@ impl<'a> RelationMemberV1<'a> {
         match self {
             Self::Intrinsic(value) => value.verdict(),
             Self::Visible(value) => value.verdict(),
+            Self::TonalHierarchy(value) => project_relation_verdict(value.inner.decision()),
         }
     }
 
@@ -3493,8 +3543,29 @@ impl<'a> RelationMemberV1<'a> {
         let decision = match self {
             Self::Intrinsic(value) => value.inner.decision(),
             Self::Visible(value) => value.inner.decision(),
+            Self::TonalHierarchy(value) => value.inner.decision(),
         };
         project_relation_proof(decision)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TonalHierarchyMemberV1<'a> {
+    inner: &'a ProgramRelationMemberEvidenceV1,
+}
+
+impl<'a> TonalHierarchyMemberV1<'a> {
+    pub(crate) fn stronger(self) -> VisibleRelationEndpointV1<'a> {
+        let ProgramRelationMemberEvidenceV1::TonalHierarchy { stronger, .. } = self.inner else {
+            unreachable!()
+        };
+        VisibleRelationEndpointV1 { inner: stronger }
+    }
+    pub(crate) fn weaker(self) -> VisibleRelationEndpointV1<'a> {
+        let ProgramRelationMemberEvidenceV1::TonalHierarchy { weaker, .. } = self.inner else {
+            unreachable!()
+        };
+        VisibleRelationEndpointV1 { inner: weaker }
     }
 }
 
@@ -3607,6 +3678,7 @@ impl FamilyCategoryRelationMeasurementV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMeasurementV1 {
+    TonalHierarchy(crate::constraints::TonalHierarchyPairMeasurementV1),
     ExactSrgb8(ExactSrgb8RelationMeasurementV1),
     ExactSrgb8Distinction(ExactSrgb8RelationMeasurementV1),
     FamilyCategory(FamilyCategoryRelationMeasurementV1),
@@ -3622,6 +3694,8 @@ pub(crate) enum FamilyCategoryViolationKindV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMemberProofV1 {
+    TonalHierarchyPass,
+    TonalHierarchyViolation,
     ExactSrgb8Pass,
     ExactSrgb8Violation,
     ExactSrgb8DistinctionPass,
@@ -3632,6 +3706,9 @@ pub(crate) enum RelationMemberProofV1 {
 
 const fn project_relation_measurement(value: CoreRelationMeasurementV1) -> RelationMeasurementV1 {
     match value {
+        CoreRelationMeasurementV1::TonalHierarchy(value) => {
+            RelationMeasurementV1::TonalHierarchy(value)
+        }
         CoreRelationMeasurementV1::ExactSrgb8(value) => {
             RelationMeasurementV1::ExactSrgb8(ExactSrgb8RelationMeasurementV1 {
                 reference: value.reference(),
@@ -3663,6 +3740,12 @@ const fn project_relation_verdict(value: ProgramRelationMemberDecisionV1) -> Ver
 
 const fn project_relation_proof(value: ProgramRelationMemberDecisionV1) -> RelationMemberProofV1 {
     match value {
+        ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::TonalHierarchy) => {
+            RelationMemberProofV1::TonalHierarchyPass
+        }
+        ProgramRelationMemberDecisionV1::Violation(CoreRelationViolationV1::TonalHierarchy) => {
+            RelationMemberProofV1::TonalHierarchyViolation
+        }
         ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::ExactSrgb8(_)) => {
             RelationMemberProofV1::ExactSrgb8Pass
         }

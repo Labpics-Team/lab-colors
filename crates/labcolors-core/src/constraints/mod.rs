@@ -29,7 +29,13 @@ pub(crate) use family::{
 #[cfg(test)]
 pub(crate) use exact::ExactIdentityPassV1;
 
+mod computed_relation;
 mod relation;
+pub(crate) use computed_relation::{
+    CompiledTonalHierarchyV1, CoreComputedVisibleRelationInvocationV1,
+    TonalHierarchyReferenceErrorV1,
+};
+pub use computed_relation::{TonalHierarchyPairMeasurementV1, TonalPolarityV1};
 pub(crate) use relation::{
     CompiledCoreIntrinsicUnaryInvocationV1, CompiledCoreRelationInvocationV1,
     CoreIntrinsicUnaryInvocationV1, CoreIntrinsicUnaryMeasurementV1, CoreIntrinsicUnaryPassV1,

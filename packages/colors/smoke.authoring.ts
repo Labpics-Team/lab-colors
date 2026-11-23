@@ -30,6 +30,14 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
     const rgb: readonly [number, number, number] = frame.values.fill.rgb;
     const completed: "exact" | "unfinished" = frame.optimality;
     const quality: ColorCleanlinessAssessment = frame.cleanliness;
+    for (const selection of frame.reference) {
+      const use: ColorUse = selection.use;
+      const complete: boolean | undefined = selection.capacity?.complete;
+      const contrast: number | undefined = selection.cases[0]?.actualContrast;
+      void use; void complete; void contrast;
+      // @ts-expect-error public evidence uses authored handles, not physical wire IDs.
+      selection.targetId;
+    }
     void quality;
     void rgb; void completed;
     // @ts-expect-error only declared aliases exist on a ready headless result.
@@ -72,3 +80,17 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   void fakeRole; void fakeUse;
 }
 void contextualProgram;
+
+async function authoredHierarchy(): Promise<void> {
+  const c = colors({ reference: { canvas: "#ffffff" } });
+  const canvas = c.surface("canvas");
+  const heading = c.role("heading", "#444444").on(canvas, { contrast: "wcag22-text" });
+  const description = c.role("description", "#666666").on(canvas, { contrast: "wcag22-text", opacity: 0.9 });
+  c.preserveTonalHierarchy([heading, description]);
+  // @ts-expect-error relations connect physical applications, not source roles.
+  c.preserveTonalHierarchy([heading.role, description.role]);
+  const program = await c.compile({ heading, description });
+  program.resolve({ canvas: "#000000" });
+  program.dispose();
+}
+void authoredHierarchy;

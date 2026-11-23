@@ -2,6 +2,43 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ColorAuthoringError, colors } from "../authoring.js";
 
+test("tonal preservation declares local uses on one authored reference surface", () => {
+  const c = colors({ reference: { canvas: "#ffffff", other: "#202020" } });
+  const canvas = c.surface("canvas"), other = c.surface("other");
+  const strong = c.role("strong", "#444444").on(canvas);
+  const weak = c.role("weak", "#666666").on(canvas);
+  assert.doesNotThrow(() => c.preserveTonalHierarchy([strong, weak]));
+  for (const members of [[], [strong], [strong, strong], [strong, weak.role], [strong, { ...weak }]]) {
+    assert.throws(() => c.preserveTonalHierarchy(members), ColorAuthoringError);
+  }
+  assert.throws(() => c.preserveTonalHierarchy([strong, weak.role.on(other)]),
+    { code: "color_invalid_definition", path: "preserveTonalHierarchy" });
+  const foreign = colors({ reference: { canvas: "#ffffff" } });
+  assert.throws(() => c.preserveTonalHierarchy([strong, foreign.role("foreign", "#666666").on(foreign.surface("canvas"))]),
+    { code: "color_foreign_reference" });
+  assert.throws(() => colors().preserveTonalHierarchy([strong, weak]),
+    { code: "color_invalid_definition", path: "preserveTonalHierarchy" });
+});
+
+test("authored references admit finite RGB values and own properties only", async () => {
+  for (const reference of [null, { canvas: undefined }, { canvas: "#fff" }, { canvas: [256, 0, 0] }]) {
+    assert.throws(() => colors({ reference }), ColorAuthoringError);
+  }
+  let inheritedReads = 0;
+  const inherited = Object.create(Object.defineProperty({}, "canvas", {
+    enumerable: true,
+    get() { inheritedReads++; return "#ffffff"; },
+  }));
+  const c = colors({ reference: inherited });
+  const ink = c.role("ink", "#222222").on(c.surface("canvas"));
+  await assert.rejects(c.compile({ ink }),
+    { code: "color_invalid_definition", path: "colors.options.reference.canvas" });
+  assert.equal(inheritedReads, 0);
+  const typo = colors({ reference: { typo: "#ffffff" } });
+  await assert.rejects(typo.compile({ ink: typo.fixed("ink", "#222222").on(typo.surface("canvas")) }),
+    { code: "color_invalid_definition", path: "colors.options.reference.typo" });
+});
+
 test("cleanliness profiles are admitted explicitly without accepting invented ratings", () => {
   assert.doesNotThrow(() => colors({ cleanliness: "nominal-srgb8-v2" }));
   for (const cleanliness of [null, true, false, 0.8, "auto", "whole-field", {}, []]) {

@@ -646,6 +646,8 @@ impl AppearanceGraphSpec {
                 surfaces: compiled_surfaces.len(),
                 occurrences: compiled_occurrences.len(),
             },
+            &compiled_surfaces,
+            &compiled_occurrences,
         )
         .map_err(|_| CompileError::ResourceExhausted)?;
         let mut graph = CompiledAppearanceGraph {

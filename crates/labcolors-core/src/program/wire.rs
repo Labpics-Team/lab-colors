@@ -377,9 +377,10 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 if !max_delta.is_finite() || max_delta < 0.0 || max_delta > 2.0 {
                     return Err(reader.declaration_error(entry_offset));
                 }
-                let appearance = match reader.read_u8()? {
+                let appearance_tag = reader.read_u8()?;
+                let appearance = match appearance_tag {
                     0 => None,
-                    1 => Some(OccurrenceIdV1::new(reader.read_u32()?)),
+                    1 | 2 => Some(OccurrenceIdV1::new(reader.read_u32()?)),
                     _ => return Err(reader.declaration_error(entry_offset)),
                 };
                 let tone = match reader.read_u8()? {
@@ -411,6 +412,9 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                     appearance,
                     tone,
                 );
+                if appearance_tag == 2 {
+                    draft.set_reference_appearance(TargetIdV1::new(id));
+                }
             }
             _ => return Err(reader.declaration_error(entry_offset)),
         }
@@ -435,7 +439,8 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
     match (version, selection_count) {
         (PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2, 0) => {}
         (PROGRAM_WIRE_VERSION_V3, 1) => {
-            if reader.read_u16()? != 3 {
+            let tag = reader.read_u16()?;
+            if !matches!(tag, 3 | 4) {
                 return Err(reader.declaration_error(joint_offset));
             }
             let count = reader.read_count()?;
@@ -449,6 +454,22 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 order.push(crate::program_session::TargetId::new(reader.read_u32()?));
             }
             draft.set_assignment(order);
+            if tag == 4 {
+                let count = reader.read_count()?;
+                let mut inputs = Vec::new();
+                inputs.try_reserve_exact(count as usize).map_err(|_| {
+                    ProgramWireErrorV1::AssignmentResourceExhausted {
+                        section: reader.section,
+                    }
+                })?;
+                for _ in 0..count {
+                    inputs.push((
+                        crate::appearance::SurfaceInputPortId::new(reader.read_u32()?),
+                        reader.read_rgb()?,
+                    ));
+                }
+                draft.set_reference_inputs(inputs);
+            }
         }
         (PROGRAM_WIRE_VERSION_V2, 1) => {
             let selection = read_selection_release(reader)?;
@@ -645,6 +666,19 @@ fn decode_constraint(
     let kind = reader.read_u8()?;
     let hard = matches!(mode, ConstraintModeV1::Hard);
     match kind {
+        13 if hard && version == PROGRAM_WIRE_VERSION_V3 => {
+            let count = reader.read_count()?;
+            let mut occurrences = Vec::new();
+            occurrences.try_reserve_exact(count as usize).map_err(|_| {
+                ProgramWireErrorV1::AssignmentResourceExhausted {
+                    section: reader.section,
+                }
+            })?;
+            for _ in 0..count {
+                occurrences.push(crate::appearance::OccurrenceId::new(reader.read_u32()?));
+            }
+            draft.preserve_tonal_hierarchy(id, occurrences);
+        }
         KIND_NOMINAL_SRGB8_VISIBLE => {
             let occurrence = OccurrenceIdV1::new(reader.read_u32()?);
             if hard {
@@ -1611,7 +1645,89 @@ mod material_emission_tests;
 #[cfg(test)]
 mod assignment_v3_tests {
     use super::*;
+    use crate::program::CompileErrorV1;
     use crate::program_wire::{ProgramRuntimeErrorV1, ProgramScenarioV1, compile_program_wire};
+
+    fn reference_declaration(ports: &[u32], inputs: &[(u32, Srgb8)]) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .computed_gray_target(10, 0, 255, Srgb8::new([68; 3]), 1.0)
+            .solid_paint(20, 10)
+            .output(50, 20);
+        for &port in ports {
+            builder
+                .surface_input_port(port)
+                .input_surface(30 + port, port)
+                .source_over_occurrence(40 + port, 20, 30 + port, 64.0, 0.2, 1);
+        }
+        let selection_offset =
+            10 + 12 + builder.sources.len() + builder.targets.len() + builder.families.len();
+        let mut bytes = builder
+            .finish_assignment(&[10])
+            .expect("reference wire fixture encodes");
+        bytes[selection_offset + 4..selection_offset + 6].copy_from_slice(&4_u16.to_le_bytes());
+        let mut reference = Vec::new();
+        push_u32(&mut reference, inputs.len() as u32);
+        for &(port, value) in inputs {
+            push_u32(&mut reference, port);
+            reference.extend_from_slice(&value.bytes());
+        }
+        let reference_offset = selection_offset + 4 + 2 + 4 + 4;
+        bytes.splice(reference_offset..reference_offset, reference);
+        let len = u32::try_from(bytes.len()).expect("reference wire fixture is small");
+        bytes[6..10].copy_from_slice(&len.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn v3_reference_input_order_is_normalized_before_content_identity() {
+        let a = (1, Srgb8::new([255; 3]));
+        let b = (2, Srgb8::new([240; 3]));
+        let c = (3, Srgb8::new([220; 3]));
+        for ports in [&[1, 2][..], &[1, 2, 3][..]] {
+            let canonical = reference_declaration(ports, &[a, b, c][..ports.len()]);
+            let expected = compile_program_wire(&canonical)
+                .expect("canonical reference inputs compile")
+                .content_identity();
+            let permutations = if ports.len() == 2 {
+                vec![vec![b, a]]
+            } else {
+                vec![
+                    vec![a, c, b],
+                    vec![b, a, c],
+                    vec![b, c, a],
+                    vec![c, a, b],
+                    vec![c, b, a],
+                ]
+            };
+            for inputs in permutations {
+                let compiled = compile_program_wire(&reference_declaration(ports, &inputs))
+                    .expect("permuted reference inputs compile");
+                assert_eq!(compiled.content_identity(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn v3_reference_input_admission_rejects_duplicates_missing_and_extra_ports() {
+        let a = (1, Srgb8::new([255; 3]));
+        let b = (2, Srgb8::new([240; 3]));
+        let c = (3, Srgb8::new([220; 3]));
+        for inputs in [
+            vec![a, a, b],
+            vec![a, b, a],
+            vec![c, b, c],
+            vec![a, b],
+            vec![a, b, c, (4, Srgb8::new([200; 3]))],
+        ] {
+            let bytes = reference_declaration(&[1, 2, 3], &inputs);
+            let draft = decode_program_wire(&bytes).expect("reference wire structure is valid");
+            assert!(matches!(
+                draft.compile(),
+                Err(CompileErrorV1::InvalidAssignment)
+            ));
+        }
+    }
 
     fn declaration(lower: u8, upper: u8, tolerance: f64) -> ProgramWireBuilderV1 {
         let mut builder = ProgramWireBuilderV1::new();

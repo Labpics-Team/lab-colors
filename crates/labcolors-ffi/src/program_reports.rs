@@ -4,6 +4,23 @@ use labcolors_core::program_wire as core;
 
 use crate::LabColorsError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramTonalPolarity {
+    Darker,
+    Equal,
+    Lighter,
+}
+
+impl From<core::TonalPolarityV1> for ProgramTonalPolarity {
+    fn from(value: core::TonalPolarityV1) -> Self {
+        match value {
+            core::TonalPolarityV1::Darker => Self::Darker,
+            core::TonalPolarityV1::Equal => Self::Equal,
+            core::TonalPolarityV1::Lighter => Self::Lighter,
+        }
+    }
+}
+
 /// Три канала конечного sRGB8 без отдельной heap-аллокации на каждый цвет.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
 pub struct ProgramRgb8 {
@@ -75,6 +92,9 @@ pub enum ProgramConstraintAssessment {
         rejected_blue_lower: u8,
         rejected_blue_upper: u8,
     },
+    TonalHierarchy {
+        verdict: ProgramAssessmentVerdict,
+    },
 }
 
 impl From<core::ProgramConstraintAssessmentV1> for ProgramConstraintAssessment {
@@ -115,6 +135,9 @@ impl From<core::ProgramConstraintAssessmentV1> for ProgramConstraintAssessment {
                 verdict: verdict.into(),
             },
             C::Relation { verdict } => Self::Relation {
+                verdict: verdict.into(),
+            },
+            C::TonalHierarchy { verdict } => Self::TonalHierarchy {
                 verdict: verdict.into(),
             },
             C::DeclaredSrgb8CleanSetPass { visible } => Self::DeclaredSrgb8CleanSetPass {
@@ -178,6 +201,59 @@ pub struct ProgramAssessmentReport {
     pub scenario_provenance: Vec<ProgramScenarioProvenance>,
     pub cells: Vec<ProgramAssessmentCell>,
     pub cleanliness: ProgramCleanlinessAssessment,
+    pub tonal_hierarchy: Vec<ProgramTonalHierarchyPair>,
+    pub reference_selections: Vec<ProgramReferenceSelection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramReferencePreference {
+    ReferenceStrength,
+    ExplicitTone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct ProgramReferenceCapacity {
+    pub ratio_lower: f64,
+    pub ratio_upper: f64,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct ProgramReferenceCase {
+    pub case_index: u64,
+    pub reference_visible: ProgramRgb8,
+    pub reference_backdrop: ProgramRgb8,
+    pub actual_visible: ProgramRgb8,
+    pub actual_backdrop: ProgramRgb8,
+    pub reference_contrast: f64,
+    pub actual_contrast: f64,
+    pub polarity: ProgramTonalPolarity,
+    pub strength_loss: f64,
+    pub virtual_distance_squared: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ProgramReferenceSelection {
+    pub target_id: u32,
+    pub occurrence_id: u32,
+    pub preference: ProgramReferencePreference,
+    pub capacity: Option<ProgramReferenceCapacity>,
+    pub cases: Vec<ProgramReferenceCase>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct ProgramTonalHierarchyPair {
+    pub constraint_id: u32,
+    pub case_index: u64,
+    pub stronger_occurrence_id: u32,
+    pub weaker_occurrence_id: u32,
+    pub required_ratio: f64,
+    pub actual_ratio: f64,
+    pub required_gap: f64,
+    pub actual_gap: f64,
+    pub stronger_polarity: ProgramTonalPolarity,
+    pub weaker_polarity: ProgramTonalPolarity,
+    pub satisfied: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -199,6 +275,7 @@ pub enum ProgramDiagnosticSubject {
         occurrence_id: u32,
         terminal_id: u32,
     },
+    ComputedVisibleRelation,
 }
 
 impl From<core::ProgramDiagnosticSubjectV1> for ProgramDiagnosticSubject {
@@ -217,6 +294,7 @@ impl From<core::ProgramDiagnosticSubjectV1> for ProgramDiagnosticSubject {
             } => Self::VisibleRelation {
                 reference_occurrence_id,
             },
+            C::ComputedVisibleRelation => Self::ComputedVisibleRelation,
             C::Presentation {
                 root_id,
                 occurrence_id,
@@ -254,6 +332,18 @@ pub enum ProgramDiagnostic {
         actual: ProgramRgb8,
         distance_squared: f64,
         maximum_distance: f64,
+    },
+    TonalHierarchy {
+        constraint_id: u32,
+        case_index: u64,
+        stronger_occurrence_id: u32,
+        weaker_occurrence_id: u32,
+        required_ratio: f64,
+        actual_ratio: f64,
+        required_gap: f64,
+        actual_gap: f64,
+        stronger_polarity: ProgramTonalPolarity,
+        weaker_polarity: ProgramTonalPolarity,
     },
 }
 
@@ -299,6 +389,29 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
                 actual: actual.into(),
                 distance_squared,
                 maximum_distance,
+            },
+            C::TonalHierarchy {
+                constraint_id,
+                case_index,
+                stronger_occurrence_id,
+                weaker_occurrence_id,
+                required_ratio,
+                actual_ratio,
+                required_gap,
+                actual_gap,
+                stronger_polarity,
+                weaker_polarity,
+            } => Self::TonalHierarchy {
+                constraint_id,
+                case_index: case_index as u64,
+                stronger_occurrence_id,
+                weaker_occurrence_id,
+                required_ratio,
+                actual_ratio,
+                required_gap,
+                actual_gap,
+                stronger_polarity: stronger_polarity.into(),
+                weaker_polarity: weaker_polarity.into(),
             },
         }
     }
@@ -394,6 +507,23 @@ pub(crate) fn assessment_report(
         hard: value.hard(),
         assessment: value.assessment().into(),
     }));
+    let mut tonal_hierarchy = storage(report.tonal_hierarchy().len(), operation)?;
+    tonal_hierarchy.extend(report.tonal_hierarchy().iter().map(|pair| {
+        let measurement = pair.measurement();
+        ProgramTonalHierarchyPair {
+            constraint_id: pair.constraint_id(),
+            case_index: pair.case_index() as u64,
+            stronger_occurrence_id: pair.stronger_occurrence_id(),
+            weaker_occurrence_id: pair.weaker_occurrence_id(),
+            required_ratio: measurement.required_ratio(),
+            actual_ratio: measurement.actual_ratio(),
+            required_gap: measurement.required_gap(),
+            actual_gap: measurement.actual_gap(),
+            stronger_polarity: measurement.stronger_polarity().into(),
+            weaker_polarity: measurement.weaker_polarity().into(),
+            satisfied: measurement.satisfied(),
+        }
+    }));
     Ok(Some(ProgramAssessmentReport {
         content_identity: copy_slice(&report.content_identity(), operation)?,
         stream_id: report.stream_id(),
@@ -401,7 +531,53 @@ pub(crate) fn assessment_report(
         scenario_provenance,
         cells,
         cleanliness: cleanliness_assessment(report.cleanliness(), operation)?,
+        tonal_hierarchy,
+        reference_selections: reference_selections(report.reference_selections(), operation)?,
     }))
+}
+
+pub(crate) fn reference_selections(
+    selections: &[core::ProgramReferenceSelectionV1],
+    operation: &str,
+) -> Result<Vec<ProgramReferenceSelection>, LabColorsError> {
+    let mut reference_selections = storage(selections.len(), operation)?;
+    for selection in selections {
+        let mut cases = storage(selection.cases().len(), operation)?;
+        cases.extend(selection.cases().iter().map(|case| ProgramReferenceCase {
+            case_index: case.case_index() as u64,
+            reference_visible: case.reference_visible().into(),
+            reference_backdrop: case.reference_backdrop().into(),
+            actual_visible: case.actual_visible().into(),
+            actual_backdrop: case.actual_backdrop().into(),
+            reference_contrast: case.reference_contrast(),
+            actual_contrast: case.actual_contrast(),
+            polarity: case.polarity().into(),
+            strength_loss: case.strength_loss(),
+            virtual_distance_squared: case.virtual_distance_squared(),
+        }));
+        let preference = match selection.preference() {
+            core::ProgramReferencePreferenceV1::ReferenceStrength => {
+                ProgramReferencePreference::ReferenceStrength
+            }
+            core::ProgramReferencePreferenceV1::ExplicitTone => {
+                ProgramReferencePreference::ExplicitTone
+            }
+        };
+        reference_selections.push(ProgramReferenceSelection {
+            target_id: selection.target_id(),
+            occurrence_id: selection.occurrence_id(),
+            preference,
+            capacity: selection
+                .capacity()
+                .map(|capacity| ProgramReferenceCapacity {
+                    ratio_lower: capacity.ratio_lower(),
+                    ratio_upper: capacity.ratio_upper(),
+                    complete: capacity.complete(),
+                }),
+            cases,
+        });
+    }
+    Ok(reference_selections)
 }
 
 pub(crate) fn diagnostics(

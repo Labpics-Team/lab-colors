@@ -127,6 +127,9 @@ fn assert_evidence_snapshot(view: EvidenceViewV1<'_>) {
                 let _ = cell.case_index();
                 let _ = cell.constraint().value();
                 match cell.subject() {
+                    crate::program::ConstraintSubjectV1::ComputedVisibleRelation => {
+                        panic!("fixture has no computed relation")
+                    }
                     ConstraintSubjectV1::VisibleUnary {
                         occurrence,
                         context,

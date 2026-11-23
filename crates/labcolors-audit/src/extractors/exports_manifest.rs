@@ -598,7 +598,7 @@ mod tests {
             .iter()
             .find(|m| m.crate_name == "labcolors-audit")
             .unwrap();
-        assert_eq!(audit.version, "0.3.0");
+        assert_eq!(audit.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(audit.license.as_deref(), Some("MIT"));
         assert!(audit.description.is_some());
     }

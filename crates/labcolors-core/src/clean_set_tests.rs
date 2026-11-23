@@ -1,10 +1,24 @@
 use crate::Srgb8;
 use crate::clean_set::{
     EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V2, EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V2,
-    EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V2, ExactNominalSrgb8CleanSetDecisionV1,
+    EXACT_NOMINAL_SRGB8_CLEAN_SET_RAW_TABLE_SHA256_V2,
+    EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2, ExactNominalSrgb8CleanSetDecisionV1,
     ExactNominalSrgb8CleanSetV2, RejectedBlueIntervalV1, exact_nominal_srgb8_clean_set_codec_v1,
 };
 use crate::sha256::Hasher;
+
+#[test]
+fn runtime_release_selector_matches_the_receipt_scientific_source() {
+    let receipt: serde_json::Value = serde_json::from_str(include_str!(
+        "../contracts/clean-set-srgb8-v2/receipt-v2.json"
+    ))
+    .expect("the admitted product receipt is valid JSON");
+    let release = EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(receipt["research"]["release_sha256"], release);
+}
 
 #[test]
 fn neutral_axis_precedes_declared_rejected_interval() {

@@ -78,6 +78,22 @@ pub(super) struct AppearanceExecutionOrderV1 {
     paint_rank: Vec<usize>,
     surface_rank: Vec<usize>,
     occurrence_rank: Vec<usize>,
+    occurrence_depth: Vec<usize>,
+}
+
+impl CompiledAppearanceGraph {
+    // Dependency depth excludes the arbitrary sibling order of the executor.
+    // It is computed once in the existing topological pass, not by walking
+    // backdrop chains again during every search.
+    pub(crate) fn occurrence_dependency_depth(
+        &self,
+        slot: CompiledOccurrenceSlotV1,
+    ) -> Option<usize> {
+        self.execution_order
+            .occurrence_depth
+            .get(slot.index)
+            .copied()
+    }
 }
 
 impl AppearanceExecutionOrderV1 {
@@ -85,23 +101,36 @@ impl AppearanceExecutionOrderV1 {
         paints: &[usize],
         render: &[RenderNode],
         shape: AppearanceWorkspaceShape,
+        surfaces: &[CompiledSurfaceSpec],
+        occurrences: &[CompiledOccurrenceSpec],
     ) -> Result<Self, BindingError> {
         let mut paint_rank = slots(shape.paints, 0)?;
         let mut surface_rank = slots(shape.surfaces, 0)?;
         let mut occurrence_rank = slots(shape.occurrences, 0)?;
+        let mut occurrence_depth = slots(shape.occurrences, 0_usize)?;
         for (rank, &paint) in paints.iter().enumerate() {
             paint_rank[paint] = rank;
         }
         for (rank, node) in render.iter().enumerate() {
             match *node {
                 RenderNode::Surface(index) => surface_rank[index] = rank,
-                RenderNode::Occurrence(index) => occurrence_rank[index] = rank,
+                RenderNode::Occurrence(index) => {
+                    occurrence_rank[index] = rank;
+                    occurrence_depth[index] = match surfaces[occurrences[index].against] {
+                        CompiledSurfaceSpec::Input { .. } => 0,
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => occurrence_depth
+                            [occurrence]
+                            .checked_add(1)
+                            .ok_or(BindingError::ResourceExhausted)?,
+                    };
+                }
             }
         }
         Ok(Self {
             paint_rank,
             surface_rank,
             occurrence_rank,
+            occurrence_depth,
         })
     }
 }

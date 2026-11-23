@@ -156,15 +156,23 @@ function usePolicy(value = {}, owner) {
 }
 
 export function colors(options = {}) {
-  allowedKeys(options, ["cleanliness"], "colors.options");
+  allowedKeys(options, ["cleanliness", "reference"], "colors.options");
   const cleanliness = read(options, "cleanliness", "colors.options.cleanliness");
   if (cleanliness !== undefined && cleanliness !== "nominal-srgb8-v2") {
     authoringError("colors.options.cleanliness", "unknown cleanliness profile");
   }
-  const systemOptions = Object.freeze({ cleanliness });
+  const referenceInput = read(options, "reference", "colors.options.reference");
+  const reference = referenceInput === undefined ? undefined : new Map(
+    keys(referenceInput, "colors.options.reference").map((key) => [
+      name(key, "colors.options.reference.input"),
+      authoredRgb(read(referenceInput, key, `colors.options.reference.${key}`), `colors.options.reference.${key}`),
+    ]),
+  );
+  const systemOptions = Object.freeze({ cleanliness, reference });
   const owner = {};
   const roleNames = new Set();
   const surfaceNames = new Set();
+  const hierarchies = [];
   let nextOrdinal = 0;
 
   const declareRole = (id, anchor, options, adaptive) => {
@@ -202,6 +210,19 @@ export function colors(options = {}) {
     },
     role(id, anchor, options) { return declareRole(id, anchor, options, true); },
     fixed(id, anchor) { return declareRole(id, anchor, undefined, false); },
+    preserveTonalHierarchy(members) {
+      const path = "preserveTonalHierarchy";
+      if (reference === undefined) authoringError(path, "requires an authored reference context");
+      const nodes = array(members, path, 2, MAX_SECTION_ENTRIES_V1).map((handle, index) => {
+        const node = uses.get(handle);
+        if (node === undefined || node.owner !== owner) authoringError(`${path}[${index}]`, "expected a local use", "color_foreign_reference");
+        return node;
+      });
+      if (new Set(nodes).size !== nodes.length) authoringError(path, "members must be distinct uses");
+      if (nodes.some((node) => node.against !== nodes[0].against)) authoringError(path, "members must share the same surface");
+      // Core derives the visible gaps and validates their direction from the reference composition.
+      hierarchies.push(Object.freeze(nodes));
+    },
     async compile(outputs) {
       const entries = keys(outputs, "compile.outputs").map((key) => {
         const checkedKey = name(key, "compile.output");
@@ -210,8 +231,12 @@ export function colors(options = {}) {
         return Object.freeze({ name: checkedKey, node });
       });
       if (entries.length === 0 || entries.length > MAX_SECTION_ENTRIES_V1) authoringError("compile.outputs", "expected a bounded non-empty output map");
+      for (const key of reference?.keys() ?? []) {
+        if (!surfaceNames.has(key)) authoringError(`colors.options.reference.${key}`, "unknown surface");
+      }
+      const compiledOptions = Object.freeze({ ...systemOptions, hierarchies: Object.freeze([...hierarchies]) });
       const { compileColorSystem } = await import("./authoring-program.js");
-      return compileColorSystem(Object.freeze(entries), systemOptions);
+      return compileColorSystem(Object.freeze(entries), compiledOptions);
     },
   });
 }

@@ -947,7 +947,7 @@ mod tests {
         let manifest = pack.manifest();
         assert_eq!(PACK_VERSION, "13.0.0");
         assert_eq!(manifest.pack_version, PACK_VERSION);
-        assert_eq!(manifest.core_version, "0.3.0");
+        assert_eq!(manifest.core_version, env!("CARGO_PKG_VERSION"));
         // Recipe-ladder family и floorOverride удалены атомарным C7c.
         assert_eq!(manifest.counts.total, 61);
         assert_eq!(manifest.counts.contrasts, 40);

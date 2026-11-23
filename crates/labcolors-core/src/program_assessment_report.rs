@@ -43,6 +43,9 @@ pub enum ProgramConstraintAssessmentV1 {
     Relation {
         verdict: ProgramAssessmentVerdictV1,
     },
+    TonalHierarchy {
+        verdict: ProgramAssessmentVerdictV1,
+    },
     DeclaredSrgb8CleanSetPass {
         visible: Srgb8,
     },
@@ -103,6 +106,159 @@ impl ProgramScenarioProvenanceV1 {
     }
 }
 
+/// Final encoded evidence for one adjacent pair in an authored tonal hierarchy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramTonalHierarchyPairV1 {
+    constraint_id: u32,
+    case_index: usize,
+    stronger_occurrence_id: u32,
+    weaker_occurrence_id: u32,
+    measurement: crate::constraints::TonalHierarchyPairMeasurementV1,
+}
+impl ProgramTonalHierarchyPairV1 {
+    #[must_use]
+    pub const fn constraint_id(self) -> u32 {
+        self.constraint_id
+    }
+    #[must_use]
+    pub const fn case_index(self) -> usize {
+        self.case_index
+    }
+    #[must_use]
+    pub const fn stronger_occurrence_id(self) -> u32 {
+        self.stronger_occurrence_id
+    }
+    #[must_use]
+    pub const fn weaker_occurrence_id(self) -> u32 {
+        self.weaker_occurrence_id
+    }
+    #[must_use]
+    pub const fn measurement(self) -> crate::constraints::TonalHierarchyPairMeasurementV1 {
+        self.measurement
+    }
+}
+
+/// Which authored preference determined this reference use's objective.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramReferencePreferenceV1 {
+    ReferenceStrength,
+    ExplicitTone,
+}
+
+/// Bounds on joint, baseline-capped preservation capacity. One hard-feasible
+/// complete tuple must serve every case while retaining the prior paint values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramReferenceCapacityV1 {
+    pub(crate) ratio_lower_bits: u64,
+    pub(crate) ratio_upper_bits: u64,
+    pub(crate) complete: bool,
+}
+impl ProgramReferenceCapacityV1 {
+    #[must_use]
+    pub fn ratio_lower(self) -> f64 {
+        f64::from_bits(self.ratio_lower_bits)
+    }
+    #[must_use]
+    pub fn ratio_upper(self) -> f64 {
+        f64::from_bits(self.ratio_upper_bits)
+    }
+    /// Complete at ratio 1 proves preservation is attainable, not maximal CR.
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.complete
+    }
+}
+
+/// The same final composited bytes used by the selector and final verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramReferenceCaseV1 {
+    pub(crate) case_index: usize,
+    pub(crate) reference_visible: Srgb8,
+    pub(crate) reference_backdrop: Srgb8,
+    pub(crate) actual_visible: Srgb8,
+    pub(crate) actual_backdrop: Srgb8,
+    pub(crate) reference_contrast_bits: u64,
+    pub(crate) actual_contrast_bits: u64,
+    pub(crate) polarity: crate::constraints::TonalPolarityV1,
+    pub(crate) strength_loss_bits: u64,
+    pub(crate) virtual_distance_squared_bits: u64,
+}
+impl ProgramReferenceCaseV1 {
+    #[must_use]
+    pub const fn case_index(self) -> usize {
+        self.case_index
+    }
+    #[must_use]
+    pub const fn reference_visible(self) -> Srgb8 {
+        self.reference_visible
+    }
+    #[must_use]
+    pub const fn reference_backdrop(self) -> Srgb8 {
+        self.reference_backdrop
+    }
+    #[must_use]
+    pub const fn actual_visible(self) -> Srgb8 {
+        self.actual_visible
+    }
+    #[must_use]
+    pub const fn actual_backdrop(self) -> Srgb8 {
+        self.actual_backdrop
+    }
+    #[must_use]
+    pub fn reference_contrast(self) -> f64 {
+        f64::from_bits(self.reference_contrast_bits)
+    }
+    #[must_use]
+    pub fn actual_contrast(self) -> f64 {
+        f64::from_bits(self.actual_contrast_bits)
+    }
+    #[must_use]
+    pub const fn polarity(self) -> crate::constraints::TonalPolarityV1 {
+        self.polarity
+    }
+    #[must_use]
+    pub fn strength_loss(self) -> f64 {
+        f64::from_bits(self.strength_loss_bits)
+    }
+    #[must_use]
+    pub fn virtual_distance_squared(self) -> f64 {
+        f64::from_bits(self.virtual_distance_squared_bits)
+    }
+}
+
+/// One use's historical selection evidence. Capacity belongs to the whole
+/// joint sign signature; it is not an independent per-case maximum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramReferenceSelectionV1 {
+    pub(crate) target_id: u32,
+    pub(crate) occurrence_id: u32,
+    pub(crate) preference: ProgramReferencePreferenceV1,
+    pub(crate) capacity: Option<ProgramReferenceCapacityV1>,
+    pub(crate) cases: std::sync::Arc<[ProgramReferenceCaseV1]>,
+}
+impl ProgramReferenceSelectionV1 {
+    #[must_use]
+    pub const fn target_id(&self) -> u32 {
+        self.target_id
+    }
+    #[must_use]
+    pub const fn occurrence_id(&self) -> u32 {
+        self.occurrence_id
+    }
+    #[must_use]
+    pub const fn preference(&self) -> ProgramReferencePreferenceV1 {
+        self.preference
+    }
+    #[must_use]
+    pub const fn capacity(&self) -> Option<ProgramReferenceCapacityV1> {
+        self.capacity
+    }
+    #[must_use]
+    pub fn cases(&self) -> &[ProgramReferenceCaseV1] {
+        &self.cases
+    }
+}
+
 /// Исторический owned-отчёт одного Ready-снимка, а не capability публикации.
 /// Клиент связывает constraint ID со своей декларацией той же content identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,10 +268,21 @@ pub struct ProgramAssessmentReportV1 {
     revision: u64,
     scenario_provenance: Vec<ProgramScenarioProvenanceV1>,
     cells: Vec<ProgramAssessmentCellV1>,
+    tonal_hierarchy: Vec<ProgramTonalHierarchyPairV1>,
+    reference_selections: Option<std::sync::Arc<[ProgramReferenceSelectionV1]>>,
     cleanliness: ProgramCleanlinessAssessmentV1,
 }
 
 impl ProgramAssessmentReportV1 {
+    #[must_use]
+    pub fn reference_selections(&self) -> &[ProgramReferenceSelectionV1] {
+        self.reference_selections.as_deref().unwrap_or(&[])
+    }
+    /// Measured adjacent pairs from the same final physical recheck.
+    #[must_use]
+    pub fn tonal_hierarchy(&self) -> &[ProgramTonalHierarchyPairV1] {
+        &self.tonal_hierarchy
+    }
     #[must_use]
     pub const fn content_identity(&self) -> [u8; 32] {
         self.content_identity
@@ -152,18 +319,28 @@ impl ProgramAssessmentReportV1 {
 pub(super) struct ProgramAssessmentReportScratchV1 {
     scenario_provenance: Vec<ProgramScenarioProvenanceV1>,
     cells: Vec<ProgramAssessmentCellV1>,
+    tonal_hierarchy: Vec<ProgramTonalHierarchyPairV1>,
 }
 
 impl ProgramAssessmentReportScratchV1 {
     pub(super) fn clear(&mut self) {
         self.scenario_provenance.clear();
         self.cells.clear();
+        self.tonal_hierarchy.clear();
     }
 
     /// Резервирование завершается до атомарного перехода Session или sink.
-    pub(super) fn reserve(&mut self, cells: usize, scenarios: usize) -> Result<(), ()> {
+    pub(super) fn reserve(
+        &mut self,
+        cells: usize,
+        scenarios: usize,
+        relation_members: usize,
+    ) -> Result<(), ()> {
         self.clear();
         self.cells.try_reserve_exact(cells).map_err(|_| ())?;
+        self.tonal_hierarchy
+            .try_reserve_exact(relation_members)
+            .map_err(|_| ())?;
         self.scenario_provenance
             .try_reserve_exact(scenarios)
             .map_err(|_| ())
@@ -188,7 +365,23 @@ impl ProgramAssessmentReportScratchV1 {
         }
         let mut cleanliness = ProgramCleanlinessAssessmentV1::default();
         self.cells.extend(verified.cells().map(|cell| {
-            let assessment = copy_assessment(cell.result());
+            let mut assessment = copy_assessment(cell.result());
+            if matches!(cell.subject(), crate::program_session::ProgramConstraintSubjectV1::ComputedVisibleRelation) {
+                let verdict = if cell.result().is_violation() { ProgramAssessmentVerdictV1::Violation } else { ProgramAssessmentVerdictV1::Pass };
+                assessment = ProgramConstraintAssessmentV1::TonalHierarchy { verdict };
+                let span = match cell.result() {
+                    ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(span))
+                    | ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(span)) => *span,
+                    _ => unreachable!("compiled computed relation owns relation evidence"),
+                };
+                for member in verified.relation_members(span) {
+                    if let crate::program_session::ProgramRelationMemberEvidenceV1::TonalHierarchy { stronger, weaker, measurement: crate::constraints::CoreRelationMeasurementV1::TonalHierarchy(measurement), .. } = member {
+                        self.tonal_hierarchy.push(ProgramTonalHierarchyPairV1 {
+                            constraint_id: cell.constraint().value(), case_index: cell.case_index(), stronger_occurrence_id: stronger.occurrence().value(), weaker_occurrence_id: weaker.occurrence().value(), measurement: *measurement,
+                        });
+                    }
+                }
+            }
             match assessment {
                 ProgramConstraintAssessmentV1::DeclaredSrgb8CleanSetPass { .. }
                 | ProgramConstraintAssessmentV1::NominalSrgb8VisiblePass { .. } => {
@@ -216,6 +409,8 @@ impl ProgramAssessmentReportScratchV1 {
             revision: observation.revision(),
             scenario_provenance: std::mem::take(&mut self.scenario_provenance),
             cells: std::mem::take(&mut self.cells),
+            tonal_hierarchy: std::mem::take(&mut self.tonal_hierarchy),
+            reference_selections: verified.reference_selections().cloned(),
             cleanliness,
         }
     }
