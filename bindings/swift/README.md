@@ -49,9 +49,11 @@ worker вызывает [Native conformance](../../.github/workflows/native-conf
 сохранение предыдущего состояния, повторный вход, смену потока и отзыв scope.
 
 [Wire-векторы V3](../../conformance/program-authoring-v3.json) независимо
-задают байты computed domains, visible identity, tone, separation и пустого
-assignment. Swift, Kotlin и JavaScript сравнивают полные декларации с ними;
-нативный потребитель также компилирует их и проверяет результат Core.
+задают байты computed domains, visible identity, tone, separation, reference
+appearance, тональной иерархии и пустого assignment. Swift, Kotlin и JavaScript
+сравнивают полные декларации с ними. Нативный потребитель проверяет смену
+светлого и тёмного контекста, возврат к исходному виду, типизированные оценки
+reference и сохранность предыдущего снимка после освобождения runtime.
 
 Четыре численных семейства [conformance-пака](../../conformance/README.md)
 сохраняют собственные правила сравнения: численные поля с `driftTol`, композит

@@ -37,7 +37,8 @@ def main(distribution, output):
     if authoring["schemaVersion"] != 1:
         raise ValueError("unknown Program authoring fixture")
     authoring_rows = [f'    "{name}" to "{authoring[name]}"' for name in
-                      ["computedBox", "computedGray", "contextual", "encodingOnly", "fixedOnly"]]
+                      ["computedBox", "computedGray", "contextual", "encodingOnly", "fixedOnly",
+                       "referenceSingleton", "referenceHierarchy", "referenceEmpty"]]
     authoring_tests = project / "src/main/kotlin/pics/lab/colors/conformance"
     authoring_tests.mkdir(parents=True)
     shutil.copy2(ROOT / "bindings/kotlin/conformance/ProgramAuthoringV3.kt", authoring_tests)

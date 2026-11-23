@@ -29,6 +29,33 @@ data class ProgramWireColorOptionsV3(
     val maxChange: Double? = null,
     val appearance: UInt? = null,
     val tone: ProgramWireToneV3? = null,
+    val referenceAppearance: UInt? = null,
+) {
+    // Скомпилированный SDK v0.3 вызывает эти JVM-сигнатуры вместе с default-mask bridges.
+    @Deprecated("Binary compatibility with v0.3", level = DeprecationLevel.HIDDEN)
+    constructor(
+        domain: ProgramWireColorDomainV3 = ProgramWireColorDomainV3.SRGB,
+        identity: ProgramWireColorIdentityV3? = null,
+        maxChange: Double? = null,
+        appearance: UInt? = null,
+        tone: ProgramWireToneV3? = null,
+    ) : this(domain, identity, maxChange, appearance, tone, null)
+
+    @Deprecated("Binary compatibility with v0.3", level = DeprecationLevel.HIDDEN)
+    fun copy(
+        domain: ProgramWireColorDomainV3 = this.domain,
+        identity: ProgramWireColorIdentityV3? = this.identity,
+        maxChange: Double? = this.maxChange,
+        appearance: UInt? = this.appearance,
+        tone: ProgramWireToneV3? = this.tone,
+    ): ProgramWireColorOptionsV3 = ProgramWireColorOptionsV3(domain, identity, maxChange, appearance, tone, referenceAppearance)
+}
+
+data class ProgramWireReferenceInputV3(val port: UInt, val rgb: ByteArray)
+
+data class ProgramWireAssignmentOptionsV3(
+    /** null omits the reference; an empty list explicitly declares a reference without input ports. */
+    val reference: List<ProgramWireReferenceInputV3>? = null,
 )
 
 private class WireBytes {
@@ -214,8 +241,13 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         // Omitted identity fields remain absent; Core owns the color defaults.
         out.f64(bounded(options.maxChange ?: 2.0, 2.0, "color maxChange"))
         val appearance = options.appearance
-        out.u8(if (appearance != null) 1 else 0)
-        if (appearance != null) out.u32(appearance)
+        val referenceAppearance = options.referenceAppearance
+        if (appearance != null && referenceAppearance != null) {
+            throw ProgramWireException.InvalidDeclaration("appearance and referenceAppearance are mutually exclusive")
+        }
+        out.u8(if (referenceAppearance != null) 2 else if (appearance != null) 1 else 0)
+        val visible = referenceAppearance ?: appearance
+        if (visible != null) out.u32(visible)
         val tone = options.tone
         out.u8(if (tone != null) 1 else 0)
         if (tone != null) {
@@ -267,14 +299,38 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         }
         it.rgb(anchor); it.f64(if (maxDelta == 0.0) 0.0 else maxDelta)
     }
-    internal fun assignmentV3(targets: List<UInt>) {
+    internal fun preserveTonalHierarchyV3(id: UInt, occurrences: List<UInt>) = v3Entry(11) { out ->
+        val size = count(occurrences.size).toInt()
+        if (size < 2) throw ProgramWireException.InvalidDeclaration("hierarchy requires at least two occurrences")
+        val seen = HashSet<UInt>(size)
+        out.u32(id); out.u8(13); out.u32(size.toUInt())
+        for (index in 0 until size) {
+            val occurrence = occurrences[index]
+            if (!seen.add(occurrence)) throw ProgramWireException.InvalidDeclaration("hierarchy occurrences must be distinct")
+            out.u32(occurrence)
+        }
+    }
+    internal fun assignmentV3(targets: List<UInt>, options: ProgramWireAssignmentOptionsV3) {
         if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("assignment is already declared")
         v3Entry(3) { out ->
             val size = targets.size
             if (size < 0) throw ProgramWireException.InvalidDeclaration("invalid assignment length")
             if (size > 4096) throw ProgramWireException.TooManyEntries()
-            out.u8(3); out.u8(0); out.u32(size.toUInt())
+            val reference = options.reference
+            out.u8(if (reference != null) 4 else 3); out.u8(0); out.u32(size.toUInt())
             for (index in 0 until size) out.u32(targets[index])
+            if (reference != null) {
+                val referenceSize = reference.size
+                if (referenceSize < 0) throw ProgramWireException.InvalidDeclaration("invalid reference length")
+                if (referenceSize > 4096) throw ProgramWireException.TooManyEntries()
+                val ports = HashSet<UInt>(referenceSize)
+                out.u32(referenceSize.toUInt())
+                for (index in 0 until referenceSize) {
+                    val input = reference[index]
+                    if (!ports.add(input.port)) throw ProgramWireException.InvalidDeclaration("reference input ports must be distinct")
+                    out.u32(input.port); out.rgb(input.rgb)
+                }
+            }
         }
     }
     fun finish(): ByteArray {
@@ -318,8 +374,15 @@ class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
         computedTargetV3(id, domain, anchor, maxDelta)
         return this
     }
-    fun assignment(targetsInPreferenceOrder: List<UInt>): ProgramWireBuilderV3 {
-        assignmentV3(targetsInPreferenceOrder)
+    fun preserveTonalHierarchy(id: UInt, occurrences: List<UInt>): ProgramWireBuilderV3 {
+        preserveTonalHierarchyV3(id, occurrences)
+        return this
+    }
+    fun assignment(targetsInPreferenceOrder: List<UInt>): ProgramWireBuilderV3 =
+        assignment(targetsInPreferenceOrder, ProgramWireAssignmentOptionsV3())
+
+    fun assignment(targetsInPreferenceOrder: List<UInt>, options: ProgramWireAssignmentOptionsV3): ProgramWireBuilderV3 {
+        assignmentV3(targetsInPreferenceOrder, options)
         return this
     }
 }

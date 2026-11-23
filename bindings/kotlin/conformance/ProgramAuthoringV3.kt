@@ -19,8 +19,55 @@ private fun graph(builder: ProgramWireBuilderV3, contrast: Boolean = true) = bui
     output(91u, 41u)
 }
 
+private fun referenceProgram(hierarchy: Boolean) = ProgramWireBuilderV3().apply {
+    colorTarget(10u, rgb(68, 68, 68), ProgramWireColorOptionsV3(referenceAppearance = 5u))
+    if (hierarchy) colorTarget(20u, rgb(102, 102, 102), ProgramWireColorOptionsV3(referenceAppearance = 15u))
+    assignment(if (hierarchy) listOf(10u, 20u) else listOf(10u),
+        ProgramWireAssignmentOptionsV3(listOf(ProgramWireReferenceInputV3(2u, rgb(255, 255, 255)))))
+    surfaceInputPort(2u); solidPaint(3u, 10u); inputSurface(4u, 2u); pointOccurrence(5u, 3u, 4u)
+    if (hierarchy) {
+        solidPaint(13u, 20u); pointOccurrence(15u, 13u, 4u); preserveTonalHierarchy(30u, listOf(5u, 15u))
+    }
+    wcag22VisibleUnary(true, 6u, 5u, Wcag22Criterion.SC143_TEXT_DEFAULT); output(7u, 3u)
+    if (hierarchy) { wcag22VisibleUnary(true, 16u, 15u, Wcag22Criterion.SC143_TEXT_DEFAULT); output(17u, 13u) }
+}.finish()
+
+private fun verifyPublishedV03AuthoringAbi() {
+    // Эти JVM-сигнатуры взяты из опубликованного SDK v0.3: пересборка Kotlin-клиента скрыла бы их потерю.
+    val optionsType = ProgramWireColorOptionsV3::class.java
+    val fields = arrayOf(ProgramWireColorDomainV3::class.java, ProgramWireColorIdentityV3::class.java,
+        Double::class.javaObjectType, UInt::class.java, ProgramWireToneV3::class.java)
+    val marker = Class.forName("kotlin.jvm.internal.DefaultConstructorMarker")
+    val legacy = optionsType.getConstructor(*fields, marker).newInstance(
+        ProgramWireColorDomainV3.NEUTRAL, null, 1.5, 0u, null, null) as ProgramWireColorOptionsV3
+    check(legacy.domain == ProgramWireColorDomainV3.NEUTRAL && legacy.appearance == 0u)
+    check(legacy.referenceAppearance == null)
+    val defaults = optionsType.getConstructor(*fields, Int::class.javaPrimitiveType!!, marker).newInstance(
+        null, null, null, null, null, 31, null) as ProgramWireColorOptionsV3
+    check(defaults == ProgramWireColorOptionsV3())
+
+    val reference = ProgramWireColorOptionsV3(referenceAppearance = 5u)
+    val copied = optionsType.getMethod("copy-iC4mN9g", *fields).invoke(
+        reference, reference.domain, reference.identity, reference.maxChange, reference.appearance, reference.tone)
+    check(copied == reference)
+    val defaultCopy = optionsType.getMethod("copy-iC4mN9g\$default", optionsType, *fields,
+        Int::class.javaPrimitiveType!!, Any::class.java).invoke(null,
+        reference, null, null, 1.0, null, null, 27, null) as ProgramWireColorOptionsV3
+    check(defaultCopy.maxChange == 1.0 && defaultCopy.referenceAppearance == 5u)
+
+    val builder = ProgramWireBuilderV3()
+    ProgramWireBuilderV3::class.java.getMethod("assignment", List::class.java).invoke(builder, emptyList<UInt>())
+    bytesEqual(builder.finish(), ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3()).finish())
+}
+
 /** The same external consumer checks run against installed Android and JVM packages. */
 fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
+    verifyPublishedV03AuthoringAbi()
+    val referenceOptions = ProgramWireColorOptionsV3(referenceAppearance = 5u)
+    check(referenceOptions.copy() == referenceOptions)
+    check(referenceOptions.copy(maxChange = 1.0).referenceAppearance == 5u)
+    check(referenceOptions.copy(referenceAppearance = 0u).referenceAppearance == 0u)
+    check(referenceOptions.copy(referenceAppearance = null) != referenceOptions)
     val box = graph(ProgramWireBuilderV3().apply {
         computedTarget(21u, ProgramWireDomainV3.Box(rgb(0, 0, 0), rgb(15, 15, 15)), rgb(8, 9, 10), 2.0)
     }).assignment(listOf(21u)).finish()
@@ -45,7 +92,9 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         assignment(emptyList())
     }.finish()
     for ((name, actual) in mapOf("computedBox" to box, "computedGray" to gray,
-        "contextual" to contextual, "fixedOnly" to fixed, "encodingOnly" to encodingOnly)) {
+        "contextual" to contextual, "fixedOnly" to fixed, "encodingOnly" to encodingOnly,
+        "referenceSingleton" to referenceProgram(false), "referenceHierarchy" to referenceProgram(true),
+        "referenceEmpty" to ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3(emptyList())).finish())) {
         bytesEqual(requireNotNull(fixtures[name]) { "missing independent wire fixture $name" }.wireBytes(), actual)
     }
 
@@ -59,6 +108,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     rejects { builder.colorTarget(2u, rgb(1, 2)) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(maxChange = Double.NaN)) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(maxChange = 2.01)) }
+    rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(appearance = 0u, referenceAppearance = 0u)) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(identity = ProgramWireColorIdentityV3(maxHueDeviation = 181.0))) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(identity = ProgramWireColorIdentityV3(chroma = 0.6 to 0.2))) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(identity = ProgramWireColorIdentityV3(lightness = 0.0 to Double.POSITIVE_INFINITY))) }
@@ -71,6 +121,13 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     rejects { builder.computedTarget(2u, ProgramWireDomainV3.Gray(0u, 255u), rgb(1, 2, 3), Double.MAX_VALUE) }
     rejects { builder.visibleSeparationHard(3u, 61u, 0.5, 0.4) }
     rejects { builder.assignment(List(4097) { 1u }) }
+    rejects { builder.preserveTonalHierarchy(7u, emptyList()) }
+    rejects { builder.preserveTonalHierarchy(7u, listOf(3u)) }
+    rejects { builder.preserveTonalHierarchy(7u, listOf(3u, 3u)) }
+    rejects { builder.preserveTonalHierarchy(7u, List(4097) { it.toUInt() }) }
+    rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(listOf(ProgramWireReferenceInputV3(0u, rgb(1, 2))))) }
+    rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(List(2) { ProgramWireReferenceInputV3(0u, rgb(1, 2, 3)) })) }
+    rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(List(4097) { ProgramWireReferenceInputV3(it.toUInt(), rgb(1, 2, 3)) })) }
     val reentrant = object : AbstractList<UInt>() {
         override val size = 1
         override fun get(index: Int): UInt {
@@ -79,6 +136,24 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         }
     }
     rejects { builder.assignment(reentrant) }
+    val reentrantHierarchy = object : AbstractList<UInt>() {
+        override val size: Int get() { builder.source(10u, rgb(1, 2, 3)); return 2 }
+        override fun get(index: Int): UInt = index.toUInt()
+    }
+    rejects { builder.preserveTonalHierarchy(7u, reentrantHierarchy) }
+    val reentrantReference = object : AbstractList<ProgramWireReferenceInputV3>() {
+        override val size = 1
+        override fun get(index: Int): ProgramWireReferenceInputV3 {
+            builder.source(10u, rgb(1, 2, 3))
+            return ProgramWireReferenceInputV3(0u, rgb(1, 2, 3))
+        }
+    }
+    rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(reentrantReference)) }
+    val reentrantReferenceSize = object : AbstractList<ProgramWireReferenceInputV3>() {
+        override val size: Int get() { builder.finish(); return 0 }
+        override fun get(index: Int) = error("unreachable")
+    }
+    rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(reentrantReferenceSize)) }
     builder.assignment(listOf(1u))
     val assigned = builder.finish()
     try { builder.assignment(emptyList()); error("duplicate assignment was accepted") }
@@ -95,6 +170,67 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     bytesEqual(owned, captured.finish())
     captured.finish().fill(0)
     bytesEqual(owned, captured.finish())
+
+    val referenceRgb = rgb(255, 255, 255)
+    val referenceInputs = mutableListOf(ProgramWireReferenceInputV3(0u, referenceRgb))
+    val hierarchyMembers = mutableListOf(0u, 1u)
+    val referenceCapture = ProgramWireBuilderV3()
+        .preserveTonalHierarchy(7u, hierarchyMembers)
+        .assignment(emptyList(), ProgramWireAssignmentOptionsV3(referenceInputs))
+    val referenceOwned = referenceCapture.finish()
+    referenceRgb.fill(0); referenceInputs.clear(); hierarchyMembers[1] = 0u
+    bytesEqual(referenceOwned, referenceCapture.finish())
+    check(!ProgramWireBuilderV3().assignment(emptyList()).finish().contentEquals(
+        ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3(emptyList())).finish()))
+    check(!ProgramWireBuilderV3().colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(referenceAppearance = 0u)).finish()
+        .contentEquals(ProgramWireBuilderV3().colorTarget(2u, rgb(1, 2, 3)).finish()))
+
+    for (hierarchy in listOf(false, true)) {
+        val runtime = compileProgramWire(referenceProgram(hierarchy), 1u)
+        val original = runtime.updateObserved(1uL, listOf(1u), rgb(255, 255, 255), 1u)
+        val selections = requireNotNull(original.referenceSelections())
+        try {
+            check(original.state() == "ready")
+            bytesEqual(rgb(68, 68, 68), original.outputRgb(0u))
+            check(selections == requireNotNull(original.assessmentReport()).referenceSelections)
+            check(selections.size == if (hierarchy) 2 else 1)
+            val strong = selections.first()
+            check(strong.targetId == 10u && strong.occurrenceId == 5u)
+            check(strong.preference == ProgramReferencePreference.REFERENCE_STRENGTH)
+            val referenceCase = strong.cases.single()
+            check(referenceCase.referenceVisible == ProgramRgb8(68u, 68u, 68u))
+            check(referenceCase.referenceBackdrop == ProgramRgb8(255u, 255u, 255u))
+            check(referenceCase.actualContrast == referenceCase.referenceContrast && referenceCase.referenceContrast > 9.0)
+            check(referenceCase.polarity == ProgramTonalPolarity.DARKER && referenceCase.strengthLoss == 0.0)
+            check(referenceCase.virtualDistanceSquared == 0.0)
+            val capacity = requireNotNull(strong.capacity)
+            check(capacity.ratioLower <= capacity.ratioUpper && capacity.ratioLower >= 1.0)
+            runtime.updateObserved(2uL, listOf(1u), rgb(0, 0, 0), 1u).use { dark ->
+                check(dark.state() == "ready")
+                check(!dark.outputRgb(0u).contentEquals(original.outputRgb(0u)))
+                val darkSelections = requireNotNull(dark.referenceSelections())
+                check(darkSelections == requireNotNull(dark.assessmentReport()).referenceSelections)
+                check(darkSelections.first().cases.single().polarity == ProgramTonalPolarity.LIGHTER)
+                if (hierarchy) {
+                    bytesEqual(rgb(102, 102, 102), original.outputRgb(1u))
+                    val authoredPair = requireNotNull(original.assessmentReport()).tonalHierarchy.single()
+                    val adaptedPair = requireNotNull(dark.assessmentReport()).tonalHierarchy.single()
+                    check(authoredPair.constraintId == 30u && authoredPair.strongerOccurrenceId == 5u && authoredPair.weakerOccurrenceId == 15u)
+                    check(authoredPair.requiredRatio == authoredPair.actualRatio && authoredPair.requiredRatio > 1.0)
+                    check(kotlin.math.abs(authoredPair.requiredGap - kotlin.math.ln(authoredPair.requiredRatio)) < 1e-12)
+                    check(adaptedPair.requiredRatio == authoredPair.requiredRatio && adaptedPair.satisfied)
+                    check(adaptedPair.actualRatio >= adaptedPair.requiredRatio)
+                }
+            }
+            runtime.updateObserved(3uL, listOf(1u), rgb(255, 255, 255), 1u).use { restored ->
+                bytesEqual(original.outputRgb(0u), restored.outputRgb(0u))
+                if (hierarchy) bytesEqual(original.outputRgb(1u), restored.outputRgb(1u))
+            }
+            runtime.updateUnknown(4uL, 7u).use { check(it.referenceSelections() == null) }
+        } finally { runtime.close() }
+        try { check(original.referenceSelections() == selections) } finally { original.close() }
+        check(selections.first().cases.single().referenceVisible == ProgramRgb8(68u, 68u, 68u))
+    }
 
     compileProgramWire(box, 1u).use { runtime ->
         runtime.updateObserved(1uL, listOf(1u), rgb(255, 255, 255), 1u).use { snapshot ->

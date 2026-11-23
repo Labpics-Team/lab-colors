@@ -9,6 +9,9 @@ private struct AuthoringV3Fixture: Decodable {
     let contextual: String
     let encodingOnly: String
     let fixedOnly: String
+    let referenceSingleton: String
+    let referenceHierarchy: String
+    let referenceEmpty: String
 }
 
 final class ProgramWireBuilderV3Tests: XCTestCase {
@@ -33,6 +36,27 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             tone: ProgramWireToneV3(from: 31, curve: [[0, 0.25], [0.5, 0.55], [1, 0.9]]))
     }
 
+    private func referenceProgram(hierarchy: Bool) throws -> Data {
+        let builder = try ProgramWireBuilderV3()
+            .colorTarget(10, anchor: [68, 68, 68], options: ProgramWireColorOptionsV3(referenceAppearance: 5))
+        if hierarchy {
+            try builder.colorTarget(20, anchor: [102, 102, 102], options: ProgramWireColorOptionsV3(referenceAppearance: 15))
+        }
+        try builder.assignment(hierarchy ? [10, 20] : [10],
+            options: ProgramWireAssignmentOptionsV3(reference: [ProgramWireReferenceInputV3(port: 2, rgb: [255, 255, 255])]))
+            .surfaceInputPort(2).solidPaint(3, target: 10).inputSurface(4, input: 2)
+            .pointOccurrence(5, paint: 3, surface: 4)
+        if hierarchy {
+            try builder.solidPaint(13, target: 20).pointOccurrence(15, paint: 13, surface: 4)
+                .preserveTonalHierarchy(30, occurrences: [5, 15])
+        }
+        try builder.wcag22VisibleUnary(true, id: 6, occurrence: 5, criterion: .sc143TextDefault).output(7, paint: 3)
+        if hierarchy {
+            try builder.wcag22VisibleUnary(true, id: 16, occurrence: 15, criterion: .sc143TextDefault).output(17, paint: 13)
+        }
+        return try builder.finish()
+    }
+
     func testIndependentV3VectorsCoverEveryFieldAndEmptyAssignment() throws {
         let expected = try fixtureV3()
         XCTAssertEqual(try graph(ProgramWireBuilderV3().computedTarget(21,
@@ -55,6 +79,66 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             .pointOccurrence(26, paint: 27, surface: 28)
             .visibleSeparationHard(29, occurrence: 26, minimum: 0, maximum: 2).assignment([])
         XCTAssertEqual(try all.finish(), try bytes(expected.encodingOnly))
+        XCTAssertEqual(try referenceProgram(hierarchy: false), try bytes(expected.referenceSingleton))
+        XCTAssertEqual(try referenceProgram(hierarchy: true), try bytes(expected.referenceHierarchy))
+        XCTAssertEqual(try ProgramWireBuilderV3().assignment([], options: ProgramWireAssignmentOptionsV3(reference: [])).finish(),
+            try bytes(expected.referenceEmpty))
+    }
+
+    func testAuthoredReferenceAndHierarchySurviveContextChangesAndRuntimeRelease() throws {
+        for hierarchy in [false, true] {
+            var runtime: ProgramRuntime? = try compileProgramWire(bytes: referenceProgram(hierarchy: hierarchy), streamId: 1)
+            let original = try XCTUnwrap(runtime).updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+            XCTAssertEqual(original.state(), "ready")
+            XCTAssertEqual(try original.outputRgb(index: 0), Data([68, 68, 68]))
+            let selections = try XCTUnwrap(try original.referenceSelections())
+            XCTAssertEqual(selections, try original.assessmentReport()?.referenceSelections)
+            XCTAssertEqual(selections.count, hierarchy ? 2 : 1)
+            let strong = try XCTUnwrap(selections.first)
+            XCTAssertEqual(strong.targetId, 10)
+            XCTAssertEqual(strong.occurrenceId, 5)
+            XCTAssertEqual(strong.preference, .referenceStrength)
+            let referenceCase = try XCTUnwrap(strong.cases.first)
+            XCTAssertEqual(referenceCase.referenceVisible, ProgramRgb8(red: 68, green: 68, blue: 68))
+            XCTAssertEqual(referenceCase.referenceBackdrop, ProgramRgb8(red: 255, green: 255, blue: 255))
+            XCTAssertEqual(referenceCase.actualContrast, referenceCase.referenceContrast)
+            XCTAssertGreaterThan(referenceCase.referenceContrast, 9)
+            XCTAssertEqual(referenceCase.polarity, .darker)
+            XCTAssertEqual(referenceCase.strengthLoss, 0)
+            XCTAssertEqual(referenceCase.virtualDistanceSquared, 0)
+            let capacity = try XCTUnwrap(strong.capacity)
+            XCTAssertLessThanOrEqual(capacity.ratioLower, capacity.ratioUpper)
+            XCTAssertGreaterThanOrEqual(capacity.ratioLower, 1)
+
+            let dark = try XCTUnwrap(runtime).updateObserved(revision: 2, scenarioIds: [1], surfaces: Data([0, 0, 0]), surfaceCount: 1)
+            XCTAssertEqual(dark.state(), "ready")
+            XCTAssertNotEqual(try dark.outputRgb(index: 0), try original.outputRgb(index: 0))
+            let darkSelections = try XCTUnwrap(try dark.referenceSelections())
+            XCTAssertEqual(darkSelections, try dark.assessmentReport()?.referenceSelections)
+            XCTAssertEqual(darkSelections.first?.cases.first?.polarity, .lighter)
+            if hierarchy {
+                XCTAssertEqual(try original.outputRgb(index: 1), Data([102, 102, 102]))
+                let authoredPair = try XCTUnwrap(try original.assessmentReport()?.tonalHierarchy.first)
+                let adaptedPair = try XCTUnwrap(try dark.assessmentReport()?.tonalHierarchy.first)
+                XCTAssertEqual(authoredPair.constraintId, 30)
+                XCTAssertEqual(authoredPair.strongerOccurrenceId, 5)
+                XCTAssertEqual(authoredPair.weakerOccurrenceId, 15)
+                XCTAssertEqual(authoredPair.requiredRatio, authoredPair.actualRatio)
+                XCTAssertGreaterThan(authoredPair.requiredRatio, 1)
+                XCTAssertEqual(authoredPair.requiredGap, log(authoredPair.requiredRatio), accuracy: 1e-12)
+                XCTAssertEqual(adaptedPair.requiredRatio, authoredPair.requiredRatio)
+                XCTAssertTrue(adaptedPair.satisfied)
+                XCTAssertGreaterThanOrEqual(adaptedPair.actualRatio, adaptedPair.requiredRatio)
+            }
+            let restored = try XCTUnwrap(runtime).updateObserved(revision: 3, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
+            XCTAssertEqual(try restored.outputRgb(index: 0), try original.outputRgb(index: 0))
+            if hierarchy { XCTAssertEqual(try restored.outputRgb(index: 1), try original.outputRgb(index: 1)) }
+            let unknown = try XCTUnwrap(runtime).updateUnknown(revision: 4, reasonId: 7)
+            XCTAssertNil(try unknown.referenceSelections())
+            runtime = nil
+            XCTAssertEqual(try original.referenceSelections(), selections)
+            XCTAssertEqual(selections.first?.cases.first?.referenceVisible, ProgramRgb8(red: 68, green: 68, blue: 68))
+        }
     }
 
     func testComputedAndContextualProgramsReachCoreAndExposeAssessments() throws {
@@ -158,6 +242,7 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             ProgramWireColorOptionsV3(identity: ProgramWireColorIdentityV3(lightness: [0.4])),
             ProgramWireColorOptionsV3(maxChange: .infinity),
             ProgramWireColorOptionsV3(maxChange: 2.1),
+            ProgramWireColorOptionsV3(appearance: 0, referenceAppearance: 0),
             ProgramWireColorOptionsV3(tone: ProgramWireToneV3(from: 31, curve: [[0, 0.2], [0.5, 0.5], [0.5, 0.8], [1, 1]])),
             ProgramWireColorOptionsV3(tone: ProgramWireToneV3(from: 31, curve: [[0, 0.2], [1, .nan]])),
             ProgramWireColorOptionsV3(tone: ProgramWireToneV3(from: 31, curve: [[0, 0.2], [0.8, 1]])),
@@ -172,11 +257,39 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertThrowsError(try builder.visibleSeparationHard(81, occurrence: 61, minimum: 1, maximum: 0.5))
         XCTAssertThrowsError(try builder.visibleSeparationHard(81, occurrence: 61, minimum: 0, maximum: .nan))
         XCTAssertThrowsError(try builder.assignment(Array(repeating: 21, count: 4097)))
+        let invalidHierarchies: [[UInt32]] = [[], [3], [3, 3], Array(0...4096)]
+        for occurrences in invalidHierarchies {
+            XCTAssertThrowsError(try builder.preserveTonalHierarchy(7, occurrences: occurrences))
+            XCTAssertEqual(try builder.finish(), before)
+        }
+        for inputs in [
+            [ProgramWireReferenceInputV3(port: 0, rgb: [1, 2])],
+            Array(repeating: ProgramWireReferenceInputV3(port: 0, rgb: [1, 2, 3]), count: 2),
+            (0...4096).map { ProgramWireReferenceInputV3(port: UInt32($0), rgb: [1, 2, 3]) },
+        ] {
+            XCTAssertThrowsError(try builder.assignment([], options: ProgramWireAssignmentOptionsV3(reference: inputs)))
+            XCTAssertEqual(try builder.finish(), before)
+        }
         XCTAssertEqual(try builder.finish(), before)
         try builder.colorTarget(21, anchor: [1, 2, 3]).assignment([21])
         let accepted = try builder.finish()
         XCTAssertThrowsError(try builder.assignment([]))
         XCTAssertEqual(try builder.finish(), accepted)
+    }
+
+    func testReferenceAuthoringOwnsValuesAndDistinguishesMissingReference() throws {
+        var referenceRgb: [UInt8] = [255, 255, 255]
+        var referenceInputs = [ProgramWireReferenceInputV3(port: 0, rgb: referenceRgb)]
+        var hierarchyMembers: [UInt32] = [0, 1]
+        let referenceBuilder = try ProgramWireBuilderV3().preserveTonalHierarchy(7, occurrences: hierarchyMembers)
+            .assignment([], options: ProgramWireAssignmentOptionsV3(reference: referenceInputs))
+        let referenceAccepted = try referenceBuilder.finish()
+        referenceRgb[0] = 0; referenceInputs.removeAll(); hierarchyMembers[1] = 0
+        XCTAssertEqual(try referenceBuilder.finish(), referenceAccepted)
+        XCTAssertNotEqual(try ProgramWireBuilderV3().assignment([]).finish(),
+            try ProgramWireBuilderV3().assignment([], options: ProgramWireAssignmentOptionsV3(reference: [])).finish())
+        XCTAssertNotEqual(try ProgramWireBuilderV3().colorTarget(2, anchor: [1, 2, 3], options: ProgramWireColorOptionsV3(referenceAppearance: 0)).finish(),
+            try ProgramWireBuilderV3().colorTarget(2, anchor: [1, 2, 3]).finish())
     }
 
     func testV3OwnsAcceptedArraysAndCanonicalizesAllNegativeZeros() throws {
