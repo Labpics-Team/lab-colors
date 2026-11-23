@@ -1128,7 +1128,7 @@ fn reference_chain_prunes_unavoidable_strength_loss() {
 fn chromatic_reference_materials_preserve_readable_hierarchy() {
     use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
     for count in [2, 4, 8] {
-        for reverse_priority in [false, true] {
+        for priority in 0..3 {
             let sources = [[37, 99, 235], [217, 119, 6], [124, 58, 237], [13, 148, 136]];
             let mut p = singleton(Srgb8::new(sources[0]), 255, 1.0);
             p.reference_inputs.as_mut().unwrap()[0].1 = Srgb8::new([246, 244, 240]);
@@ -1147,7 +1147,6 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                 } else {
                     [20, 37, 59]
                 });
-                authored_values.push(anchor);
                 let mut target = color(10 + offset, 5 + offset, 0, index as u64);
                 let TargetIntentV1::Computed(value) = &mut target.intent else {
                     unreachable!()
@@ -1156,9 +1155,13 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                 value.intent.as_mut().unwrap().identity =
                     ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
                         .unwrap();
-                if reverse_priority {
-                    value.preference = (count + 1 - index) as u64;
-                }
+                value.preference = match priority {
+                    0 => index,
+                    1 => count + 1 - index,
+                    _ if index < count => count + 1 - index,
+                    _ => index - count,
+                } as u64;
+                authored_values.push((value.preference, anchor));
                 p.targets.push(target);
                 p.paints.push(Paint::Solid {
                     id: PaintId::new(3 + offset),
@@ -1211,9 +1214,11 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                 ));
             let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
             let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-            if reverse_priority {
-                authored_values.reverse();
-            }
+            authored_values.sort_unstable();
+            let authored_values = authored_values
+                .into_iter()
+                .map(|(_, anchor)| anchor)
+                .collect::<Vec<_>>();
             for (revision, backdrop) in [
                 [246, 244, 240],
                 [16, 24, 39],
@@ -1237,7 +1242,7 @@ fn chromatic_reference_materials_preserve_readable_hierarchy() {
                     .state()
                     .current_verified()
                     .unwrap_or_else(|| {
-                        panic!("count {count}, reversed {reverse_priority}, backdrop {backdrop:?}")
+                        panic!("count {count}, priority {priority}, backdrop {backdrop:?}")
                     })
                     .computed_for_test();
                 assert!(verified.search.visited <= EXECUTION_NODE_LIMIT_V1);

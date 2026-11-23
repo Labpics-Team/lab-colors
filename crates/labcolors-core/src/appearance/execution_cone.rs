@@ -80,6 +80,18 @@ pub(super) struct AppearanceExecutionOrderV1 {
     occurrence_rank: Vec<usize>,
 }
 
+impl CompiledAppearanceGraph {
+    pub(crate) fn occurrence_execution_rank(
+        &self,
+        slot: CompiledOccurrenceSlotV1,
+    ) -> Option<usize> {
+        self.execution_order
+            .occurrence_rank
+            .get(slot.index)
+            .copied()
+    }
+}
+
 impl AppearanceExecutionOrderV1 {
     pub(super) fn new(
         paints: &[usize],

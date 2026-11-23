@@ -1166,6 +1166,24 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut seed_values = cloned(&authored).map_err(allocation)?;
         let mut proposal = cloned(&working).map_err(allocation)?;
         let mut current_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
+        let mut repair_order = Vec::new();
+        repair_order
+            .try_reserve_exact(count)
+            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        for (target, compiled) in search.context.targets.iter().enumerate() {
+            let rank = compiled
+                .appearance
+                .map(|slot| {
+                    epoch
+                        .graph
+                        .occurrence_execution_rank(slot)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)
+                })
+                .transpose()?
+                .unwrap_or(usize::MAX);
+            repair_order.push((rank, target));
+        }
+        repair_order.sort_unstable();
         let starts = search
             .context
             .local_cases
@@ -1177,9 +1195,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // Each branch gets its own repair trajectory. A jointly infeasible
         // branch can be close to a feasible composition even when no single
         // coordinate move from the authored paints improves the failure count.
-        // Both coordinate orders restart from that same branch: preference
-        // order is not physical dependency order, and an upstream repair may
-        // consume capacity needed by a downstream relation. All starts share
+        // Both physical dependency orders restart from that same branch: an
+        // upstream repair may consume capacity needed by a downstream relation.
+        // Authored preference orders selection, never this traversal. All starts share
         // the existing quarter-budget; unused work passes to the next start.
         for start in 0..starts {
             if search.evidence.visited >= seed_limit {
@@ -1223,11 +1241,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             'repair: for pass in 0.. {
                 let mut changed = false;
                 for position in 0..count {
-                    let target = if (pass + start) % 2 == 0 {
+                    let coordinate = if (pass + start) % 2 == 0 {
                         count - 1 - position
                     } else {
                         position
                     };
+                    let target = repair_order[coordinate].1;
                     if search.context.targets[target].declaration.intent.is_none() {
                         continue;
                     }
