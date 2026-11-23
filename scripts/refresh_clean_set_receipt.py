@@ -10,7 +10,12 @@ import re
 import sys
 from pathlib import Path
 
-from verify_clean_set_receipt import PRODUCT_ARTIFACT_LICENSES, PRODUCT_ARTIFACT_PATHS, RELEASE_PATH
+from verify_clean_set_receipt import (
+    PRODUCT_ARTIFACT_LICENSES,
+    PRODUCT_ARTIFACT_PATHS,
+    RELEASE_PATH,
+    RESEARCH_RELEASE_SHA256,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 RECEIPT_PATH = ROOT / "crates/labcolors-core/contracts/clean-set-srgb8-v2/receipt-v2.json"
@@ -30,8 +35,9 @@ receipt = json.loads(RECEIPT_PATH.read_bytes())
 # The immutable scientific release is the authority for the runtime selector.
 # Refreshing product provenance must not retain a selector from its predecessor.
 release_sha = sha256hex((ROOT / RELEASE_PATH).read_bytes())
-if release_sha != receipt["research"]["release_sha256"]:
-    raise ValueError("scientific release differs from the receipt research identity")
+if (release_sha != RESEARCH_RELEASE_SHA256
+        or receipt["research"]["release_sha256"] != RESEARCH_RELEASE_SHA256):
+    raise ValueError("scientific release and receipt must match the verifier-pinned identity")
 classifier_path = ROOT / PRODUCT_ARTIFACT_PATHS["classifier_source"]
 classifier = classifier_path.read_bytes()
 selector = re.compile(
@@ -43,15 +49,11 @@ body = "".join("    " + ", ".join(values[start:start + 16]) + ",\n" for start in
 updated, count = selector.subn(lambda match: match[1] + body + match[2], classifier)
 if count != 1:
     raise ValueError("expected exactly one canonical runtime release selector")
-if updated != classifier:
-    classifier_path.write_bytes(updated)
-    print(f"Updated runtime release selector: {release_sha}")
-
 changed_artifacts = 0
 previous_artifacts = {entry["role"]: entry for entry in receipt["artifacts"]}
 artifacts = []
 for role, path in sorted(PRODUCT_ARTIFACT_PATHS.items()):
-    data = (ROOT / path).read_bytes()
+    data = updated if role == "classifier_source" else (ROOT / path).read_bytes()
     entry = {"role": role, "path": path, "bytes": len(data),
              "sha256": sha256hex(data), "license": PRODUCT_ARTIFACT_LICENSES[role]}
     previous = previous_artifacts.get(role)
@@ -73,16 +75,22 @@ for entry in receipt.get("license_scope", {}).get("legal_files", []):
         entry["sha256"] = new_sha
         changed_legal += 1
 
-if changed_artifacts == 0 and changed_legal == 0:
+if updated == classifier and changed_artifacts == 0 and changed_legal == 0:
     print("No changes needed: receipt already matches working tree.")
     sys.exit(0)
 
 new_receipt_bytes = canonical_json(receipt).encode("ascii")
+pin_bytes = f"{sha256hex(new_receipt_bytes)}  receipt-v2.json\n".encode("ascii")
+
+# Read every input and derive every output before changing a tracked file.
+# A missing late artifact or legal file must leave the previous release intact.
+if updated != classifier:
+    classifier_path.write_bytes(updated)
+    print(f"Updated runtime release selector: {release_sha}")
 RECEIPT_PATH.write_bytes(new_receipt_bytes)
 print(f"Wrote {RECEIPT_PATH.relative_to(ROOT)} ({len(new_receipt_bytes)} bytes)")
 
-pin_content = f"{sha256hex(new_receipt_bytes)}  receipt-v2.json\n"
-PIN_PATH.write_bytes(pin_content.encode("ascii"))
+PIN_PATH.write_bytes(pin_bytes)
 print(f"Wrote {PIN_PATH.relative_to(ROOT)}")
 print(f"New receipt SHA-256: {sha256hex(new_receipt_bytes)}")
 print(f"Changed: {changed_artifacts} artifacts, {changed_legal} legal files")

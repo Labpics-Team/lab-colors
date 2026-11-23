@@ -244,11 +244,11 @@
       "sha256": "a56b9f415cde5ab92a8389afeb78601ab460f1bf6abe972643a3ea5d9201b79e"
     },
     {
-      "bytes": 40853,
+      "bytes": 44618,
       "license": "MIT",
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
-      "sha256": "d3c4f3d88de4d9dbb18846df39e1be2ff1df490b16782b9c38d0b7636c36d9c2"
+      "sha256": "ca93528dc42b1e5d2d1b49dd19b464616118b60e033472be4d95988b1481efe8"
     }
   ],
   "excluded_claims": [

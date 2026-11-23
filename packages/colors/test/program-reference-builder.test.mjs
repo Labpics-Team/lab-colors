@@ -62,10 +62,12 @@ test("reference getter reentry cannot overwrite an admitted assignment", () => {
 
 test("malformed array lengths reject without reading entries or changing the builder", () => {
   for (const length of [NaN, Infinity, -1, 1.5, "2", 2n, Symbol("length")]) {
+    let entryReads = 0;
     const input = new Proxy([], {
       get(_target, property) {
         if (property === "length") return length;
-        assert.fail("invalid length must be rejected before reading entries");
+        entryReads++;
+        return undefined;
       },
     });
     for (const declare of [
@@ -76,6 +78,7 @@ test("malformed array lengths reject without reading entries or changing the bui
       const builder = new ProgramWireBuilderV3().source(1, [10, 20, 30]);
       const before = builder.finish();
       assert.throws(() => declare(builder), ProgramWireError);
+      assert.equal(entryReads, 0, "invalid length must be rejected before reading entries");
       assert.deepEqual(builder.finish(), before);
     }
   }
