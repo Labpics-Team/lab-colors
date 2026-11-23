@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { measurementProtocol, splitMeasurements } from "./measurement-protocol.mjs";
 
-const packageRoot = resolve(process.argv[2] ?? "packages/colors");
+const packageRoot = process.argv[2] === undefined
+  ? fileURLToPath(new URL("../", import.meta.url))
+  : resolve(process.argv[2]);
 const components = Number(process.argv[3] ?? 8);
 const protocol = measurementProtocol({ samples: process.argv[4], warmups: process.argv[5], frames: process.argv[6] });
 const pattern = process.argv[7] ?? "independent";

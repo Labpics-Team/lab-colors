@@ -160,19 +160,36 @@ fn changed_component_only_searches_its_own_inputs() {
             .values[1],
         old_values[1]
     );
-    CORRUPT_FINAL_SOURCE.with(|value| value.set(Some(Srgb8::new([0; 3]))));
+    CORRUPT_FINAL_SOURCE.with(|value| value.set(Some(Srgb8::new([255; 3]))));
     assert!(matches!(
-        session.prepare_update(independent_update(4, &[(0, 0)])),
+        session.prepare_update(independent_update(4, &[(255, 0)])),
         Err(SessionUpdateError::Plan(
             ProgramSessionEvaluationError::FinalRecheckViolation { .. }
         ))
     ));
+    let retained = session
+        .state()
+        .current_verified()
+        .expect("failed proposal retains the committed snapshot")
+        .computed_for_test();
+    assert_eq!(retained.observation.revision(), Revision::new(3));
+    assert_eq!(retained.values[0], rgb(&standalone));
+    assert_eq!(retained.values[1], old_values[1]);
     let before = calls.calls().len();
+    let solo_before = solo_calls.calls().len();
     session
-        .prepare_update(independent_update(4, &[(0, 0)]))
-        .expect("recover failed recheck")
+        .prepare_update(independent_update(4, &[(255, 0)]))
+        .expect("recover failed partial recheck")
         .commit();
-    assert_eq!(calls.calls().len() - before, 2);
+    standalone
+        .prepare_update(update(4, 255))
+        .expect("standalone A changes")
+        .commit();
+    assert_eq!(
+        calls.calls().len() - before,
+        solo_calls.calls().len() - solo_before + 1,
+        "failed partial proposal cannot cache A; B only needs final verification"
+    );
 }
 
 #[test]
