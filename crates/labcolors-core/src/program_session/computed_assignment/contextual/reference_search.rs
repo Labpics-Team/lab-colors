@@ -261,6 +261,46 @@ impl<'a> ReferenceRuntimeV1<'a> {
         }
     }
 
+    // An out-of-gamut continuous target must not collapse a chromatic source
+    // to white/black outside its identity. Project a bounded source tonal walk
+    // in the actual visible space instead; this is only a proposal, not a
+    // capacity witness or a restriction of the searched RGB domain.
+    fn source_hint(&self, target: usize, point: AppearancePointV1, preferred: [f64; 3]) -> Srgb8 {
+        let compiled = &self.context.targets[target];
+        let anchor = compiled.declaration.anchor;
+        let Some(intent) = compiled.effective_intent() else {
+            return anchor;
+        };
+        let distance_to = |source: Srgb8| {
+            let visible = Srgb8::new(std::array::from_fn(|channel| {
+                crate::composition::source_over_channel_srgb8(
+                    source.bytes()[channel],
+                    point.alpha,
+                    point.backdrop.bytes()[channel],
+                )
+            }));
+            if !self.context.domains[target].contains(source)
+                || !intent
+                    .identity
+                    .contains(compiled.identity_point(source, visible))
+            {
+                return f64::INFINITY;
+            }
+            squared_distance(lab(visible), preferred)
+        };
+        let mut best = anchor;
+        let mut distance = distance_to(anchor);
+        for step in 0..=255_u32 {
+            let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+            let next = distance_to(source);
+            if next < distance {
+                distance = next;
+                best = source;
+            }
+        }
+        best
+    }
+
     fn capacity_hash(&self, target: usize, values: &[Srgb8], points: &[AppearancePointV1]) -> u64 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         target.hash(&mut hash);
@@ -1118,95 +1158,133 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         *value = target.declaration.anchor;
     }
     let mut working = cloned(&authored).map_err(allocation)?;
-    let mut current_failures = search
-        .assess_tuple(runtime, epoch, scenarios, &working, arena)?
-        .unwrap_or(usize::MAX);
+    search.assess_tuple(runtime, epoch, scenarios, &working, arena)?;
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
     if !search.authored_exact() && search.evidence.visited < search.budget {
         let seed_limit = (search.budget / COORDINATE_BUDGET_DIVISOR).max(search.evidence.visited);
         let initial_appearance = cloned(&search.appearance).map_err(allocation)?;
-        // Both continuous branches are proposals only. A branch is never
-        // selected by its encoded rounding error or a gamut-clipped seed.
-        for position in 0..search.context.local_cases.order.len() {
-            let case = search.context.local_cases.order[position];
-            for direction in [-1, 1] {
-                if search.evidence.visited >= seed_limit {
-                    break;
-                }
-                working.copy_from_slice(&authored);
+        let mut seed_values = cloned(&authored).map_err(allocation)?;
+        let mut proposal = cloned(&working).map_err(allocation)?;
+        let mut current_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
+        let starts = search
+            .context
+            .local_cases
+            .order
+            .len()
+            .checked_mul(4)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+        // Each branch gets its own repair trajectory. A jointly infeasible
+        // branch can be close to a feasible composition even when no single
+        // coordinate move from the authored paints improves the failure count.
+        // Both coordinate orders restart from that same branch: preference
+        // order is not physical dependency order, and an upstream repair may
+        // consume capacity needed by a downstream relation. All starts share
+        // the existing quarter-budget; unused work passes to the next start.
+        for start in 0..starts {
+            if search.evidence.visited >= seed_limit {
+                break;
+            }
+            let limit = search.evidence.visited
+                + (seed_limit - search.evidence.visited) / (starts - start) as u64;
+            let seed = start / 2;
+            if seed > 0 && start % 2 == 0 {
+                let case = search.context.local_cases.order[(seed - 1) / 2];
+                let direction = if seed % 2 == 1 { -1 } else { 1 };
                 for target in 0..count {
                     let point = initial_appearance[case * count + target];
-                    let desired = if search.models[target].is_some() {
+                    seed_values[target] = if search.models[target].is_some() {
                         let preferred = search
                             .virtual_lab(target, case, point.backdrop, direction)
                             .map_err(allocation)?;
-                        color_at_lightness(
-                            search.context.targets[target].effective_anchor(),
-                            preferred[0].clamp(0.0, 1.0),
-                        )
+                        search.source_hint(target, point, preferred)
                     } else {
-                        search.context.preferred_rgb[case * count + target]
+                        inverse_hint(
+                            search.context.preferred_rgb[case * count + target],
+                            point.backdrop.bytes(),
+                            point.alpha,
+                        )
                     };
-                    working[target] = inverse_hint(desired, point.backdrop.bytes(), point.alpha);
-                }
-                if let Some(failures) =
-                    search.assess_tuple(runtime, epoch, scenarios, &working, arena)?
-                {
-                    if failures <= current_failures {
-                        current_failures = failures;
-                        current_scores.copy_from_slice(&search.legacy_scores);
-                    }
                 }
             }
-        }
-        if let Some(best) = search.best {
-            working.copy_from_slice(&search.pending[best].values);
-            current_failures = 0;
-        } else {
-            working.copy_from_slice(&authored);
-            current_failures = search
+            working.copy_from_slice(&seed_values);
+            let mut current_failures = search
                 .assess_tuple(runtime, epoch, scenarios, &working, arena)?
                 .unwrap_or(usize::MAX);
+            if current_failures == 0 {
+                continue;
+            }
             current_scores.copy_from_slice(&search.legacy_scores);
-        }
-        let mut proposal = cloned(&working).map_err(allocation)?;
-        // Source-identity tonal walks repair a complete composition. The legacy
-        // distance merely orders invalid proposals; only the typed reference
-        // key retains a hard-valid final tuple or proves a region inferior.
-        'repair: for pass in 0..2 {
-            for position in 0..count {
-                let target = if pass == 0 {
-                    count - 1 - position
-                } else {
-                    position
-                };
-                if search.context.targets[target].declaration.intent.is_none() {
-                    continue;
-                }
-                let anchor = search.context.targets[target].declaration.anchor;
-                for step in 0..=255_u32 {
-                    if search.evidence.visited >= seed_limit {
-                        break 'repair;
-                    }
-                    proposal.copy_from_slice(&working);
-                    proposal[target] = color_at_lightness(anchor, f64::from(step) / 255.0);
-                    if !search.context.domains[target].contains(proposal[target]) {
+            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells) {
+                *failed = cell.result().is_violation();
+            }
+            // The legacy distance only guides repair. Every hard-valid point
+            // is retained and compared by the unchanged typed reference key.
+            'repair: for pass in 0.. {
+                let mut changed = false;
+                for position in 0..count {
+                    let target = if (pass + start) % 2 == 0 {
+                        count - 1 - position
+                    } else {
+                        position
+                    };
+                    if search.context.targets[target].declaration.intent.is_none() {
                         continue;
                     }
-                    let Some(failures) =
-                        search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?
-                    else {
-                        break 'repair;
-                    };
-                    if failures < current_failures
-                        || failures == current_failures
-                            && compare_scores(&search.legacy_scores, &current_scores)
-                                == Ordering::Less
-                    {
-                        working.copy_from_slice(&proposal);
-                        current_failures = failures;
-                        current_scores.copy_from_slice(&search.legacy_scores);
+                    let anchor = search.context.targets[target].declaration.anchor;
+                    let mut previous = None;
+                    for step in 0..=255_u32 {
+                        if search.evidence.visited >= limit {
+                            break 'repair;
+                        }
+                        let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+                        if previous == Some(source) {
+                            continue;
+                        }
+                        previous = Some(source);
+                        if source == working[target] {
+                            continue;
+                        }
+                        proposal.copy_from_slice(&working);
+                        proposal[target] = source;
+                        if !search.context.domains[target].contains(proposal[target]) {
+                            continue;
+                        }
+                        let Some(failures) =
+                            search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?
+                        else {
+                            break 'repair;
+                        };
+                        if failures == 0 {
+                            break 'repair;
+                        }
+                        // With equal failure counts, exchanging a violated
+                        // relation for a violated readability requirement is not
+                        // progress toward feasibility. Keep satisfied hard cells
+                        // while the legacy preference guides movement on a plateau.
+                        if failures < current_failures
+                            || failures == current_failures
+                                && arena.cells.iter().zip(&current_hard_failures).all(
+                                    |(cell, &was_failed)| {
+                                        !cell.result().is_violation() || was_failed
+                                    },
+                                )
+                                && compare_scores(&search.legacy_scores, &current_scores)
+                                    == Ordering::Less
+                        {
+                            working.copy_from_slice(&proposal);
+                            changed = true;
+                            current_failures = failures;
+                            current_scores.copy_from_slice(&search.legacy_scores);
+                            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells)
+                            {
+                                *failed = cell.result().is_violation();
+                            }
+                        }
                     }
+                }
+                if !changed {
+                    break;
                 }
             }
         }

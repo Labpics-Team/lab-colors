@@ -181,3 +181,40 @@ test("unchanged readable fixed colors keep their hierarchy while their common ba
     }
   } finally { program.dispose(); }
 });
+
+test("colored material branches find a readable hierarchy without an explicit tone recipe", async () => {
+  const c = colors({ reference: { canvas: "#f6f4f0" } }), canvas = c.surface("canvas");
+  const blue = c.role("blue", "#2563eb").on(canvas, { opacity: 0.12 });
+  const amber = c.role("amber", "#d97706").on(blue, { opacity: 0.10 });
+  const heading = c.role("heading", "#122940").on(amber, { contrast: "wcag22-text" });
+  const description = c.role("description", "#21364f").on(amber, { contrast: "wcag22-text" });
+  c.preserveTonalHierarchy([heading, description]);
+  const program = await c.compile({ blue, amber, heading, description });
+  const composite = (paint, background) => paint.rgb.map((channel, i) =>
+    Math.round(channel * paint.opacity + background[i] * (1 - paint.opacity)));
+  const luminanceRgb = (rgb) => rgb.reduce((sum, channel, i) =>
+    sum + luminance(channel) * [0.2126, 0.7152, 0.0722][i], 0);
+  const ratio = (rgb, background) => {
+    const foreground = luminanceRgb(rgb), backdrop = luminanceRgb(background);
+    return (Math.max(foreground, backdrop) + 0.05) / (Math.min(foreground, backdrop) + 0.05);
+  };
+  try {
+    const original = program.resolve({ canvas: "#f6f4f0" });
+    assert.equal(original.state, "ready");
+    assert.equal(original.optimality, "exact");
+    const authoredBackdrop = composite(original.values.amber, composite(original.values.blue, [246, 244, 240]));
+    const authoredRatio = ratio(original.values.heading.rgb, authoredBackdrop)
+      / ratio(original.values.description.rgb, authoredBackdrop);
+    const changed = program.resolve({ canvas: "#3f243f" });
+    assert.equal(changed.state, "ready");
+    const background = composite(changed.values.amber, composite(changed.values.blue, [63, 36, 63]));
+    const headingRatio = ratio(changed.values.heading.rgb, background);
+    const descriptionRatio = ratio(changed.values.description.rgb, background);
+    assert.ok(headingRatio >= 4.5 && descriptionRatio >= 4.5);
+    assert.ok(headingRatio / descriptionRatio >= authoredRatio);
+    assert.equal(changed.values.blue.opacity, 0.12);
+    assert.equal(changed.values.amber.opacity, 0.10);
+    assert.ok(changed.reference.every((entry) => entry.preference === "reference-strength"));
+    assert.deepEqual(program.resolve({ canvas: "#f6f4f0" }).values, original.values);
+  } finally { program.dispose(); }
+});

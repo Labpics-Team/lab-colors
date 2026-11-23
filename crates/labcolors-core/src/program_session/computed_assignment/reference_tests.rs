@@ -1123,3 +1123,129 @@ fn reference_chain_prunes_unavoidable_strength_loss() {
         );
     }
 }
+
+#[test]
+fn chromatic_reference_materials_preserve_readable_hierarchy() {
+    use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
+    for count in [2, 4, 8] {
+        for reverse_priority in [false, true] {
+            let sources = [[37, 99, 235], [217, 119, 6], [124, 58, 237], [13, 148, 136]];
+            let mut p = singleton(Srgb8::new(sources[0]), 255, 1.0);
+            p.reference_inputs.as_mut().unwrap()[0].1 = Srgb8::new([246, 244, 240]);
+            p.targets.clear();
+            p.paints.clear();
+            p.occurrences.clear();
+            p.outputs.clear();
+            let appearance_context = hierarchy().occurrences[0].context;
+            let mut authored_values = Vec::new();
+            for index in 0..count + 2 {
+                let offset = index as u32 * 10;
+                let anchor = Srgb8::new(if index < count {
+                    sources[index % sources.len()]
+                } else if index == count {
+                    [8, 21, 40]
+                } else {
+                    [20, 37, 59]
+                });
+                authored_values.push(anchor);
+                let mut target = color(10 + offset, 5 + offset, 0, index as u64);
+                let TargetIntentV1::Computed(value) = &mut target.intent else {
+                    unreachable!()
+                };
+                value.anchor = anchor;
+                value.intent.as_mut().unwrap().identity =
+                    ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+                        .unwrap();
+                if reverse_priority {
+                    value.preference = (count + 1 - index) as u64;
+                }
+                p.targets.push(target);
+                p.paints.push(Paint::Solid {
+                    id: PaintId::new(3 + offset),
+                    target: TargetId::new(10 + offset),
+                });
+                let mut paint = PaintId::new(3 + offset);
+                if index < count {
+                    p.opacities.push(OpacityInput::new(
+                        OpacityInputId::new(1 + offset),
+                        if index % 2 == 0 { 0.12 } else { 0.10 },
+                    ));
+                    p.paints.push(Paint::Opacity {
+                        id: PaintId::new(8 + offset),
+                        source: paint,
+                        opacity: OpacityInputId::new(1 + offset),
+                    });
+                    paint = PaintId::new(8 + offset);
+                    p.surfaces.push(Surface::FromOccurrence {
+                        id: SurfaceId::new(14 + offset),
+                        occurrence: OccurrenceId::new(5 + offset),
+                    });
+                }
+                p.occurrences.push(Occurrence::new(
+                    OccurrenceId::new(5 + offset),
+                    paint,
+                    SurfaceId::new(4 + index.min(count) as u32 * 10),
+                    CompositionProfile::EncodedSrgb8SourceOverV1,
+                    appearance_context,
+                ));
+                p.outputs
+                    .push(OutputBinding::new(OutputSlotId::new(7 + offset), paint));
+                if index >= count {
+                    p.constraints
+                        .hard
+                        .push(ConstraintInvocation::visible_unary_hard(
+                            ConstraintId::new(6 + offset),
+                            OccurrenceId::new(5 + offset),
+                            Wcag22CriterionV1::Sc143TextDefault,
+                        ));
+                }
+            }
+            p.constraints
+                .hard
+                .push(ConstraintInvocation::preserve_tonal_hierarchy(
+                    ConstraintId::new(999),
+                    vec![
+                        OccurrenceId::new(5 + count as u32 * 10),
+                        OccurrenceId::new(15 + count as u32 * 10),
+                    ],
+                ));
+            let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1).unwrap();
+            let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+            if reverse_priority {
+                authored_values.reverse();
+            }
+            for (revision, backdrop) in [
+                [246, 244, 240],
+                [16, 24, 39],
+                [100, 116, 139],
+                [63, 36, 63],
+                [246, 244, 240],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut observation = update(revision as u64 + 1, 0);
+                let ObservationPayloadInput::Scenarios(cases) = &mut observation.payload else {
+                    unreachable!()
+                };
+                cases.scenarios[0].bindings[0] = SurfaceInputBinding::new(
+                    SurfaceInputPortId::new(2),
+                    ColorSignal::from_srgb8(Srgb8::new(backdrop)),
+                );
+                session.prepare_update(observation).unwrap().commit();
+                let verified = session
+                    .state()
+                    .current_verified()
+                    .unwrap_or_else(|| {
+                        panic!("count {count}, reversed {reverse_priority}, backdrop {backdrop:?}")
+                    })
+                    .computed_for_test();
+                assert!(verified.search.visited <= EXECUTION_NODE_LIMIT_V1);
+                if backdrop == [246, 244, 240] {
+                    assert_eq!(verified.optimality(), ComputedOptimalityV1::Exact);
+                    assert_eq!(verified.values.as_ref(), authored_values.as_slice());
+                }
+            }
+        }
+    }
+}
