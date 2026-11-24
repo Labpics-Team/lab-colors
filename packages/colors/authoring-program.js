@@ -59,7 +59,11 @@ export async function compileColorSystem(entries, options) {
     },
     attach(element, values, options) {
       ensureLive();
-      return attachColorView(source, element, values, options);
+      return attachColorView(source, element, values, options, "attach");
+    },
+    preview(element, values, options) {
+      ensureLive();
+      return attachColorView(source, element, values, options, "preview");
     },
     dispose() {
       if (busy) authoringError("program.dispose", "program is updating", "color_busy");

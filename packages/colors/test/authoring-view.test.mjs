@@ -39,7 +39,7 @@ function host() {
   }
   const document = {
     head: new Node(),
-    defaultView: { Node, Element, HTMLElement, getComputedStyle(element) {
+    defaultView: { Node, Element, HTMLElement, CSS: { supports: () => true }, getComputedStyle(element) {
       const token = element.getAttribute("data-lab-colors-scope");
       const sheet = document.head.children.find((item) => item.getAttribute("data-lab-colors") === token);
       const values = new Map([...sheet.textContent.matchAll(/--([\w-]+):([^;]+);/gu)]
@@ -57,6 +57,59 @@ async function fixedProgram(name, source = "#808080", options = { separation: [0
   const c = colors(), canvas = c.surface("canvas");
   return c.compile({ [name]: c.fixed(name, source).on(canvas, options) });
 }
+
+test("a preview installs the complete modeled frame, retains it on conflict, and keeps its mode after replacement", async () => {
+  const h = host(), ink = await fixedProgram("ink", "#000000", { contrast: "wcag22-text" });
+  const next = await fixedProgram("label", "#151515", { contrast: "wcag22-text" });
+  const light = { kind: "affine-srgb8", from: "#ffffff", to: "#dddddd" };
+  const dark = { kind: "affine-srgb8", from: "#222222", to: "#000000" };
+  const view = ink.preview(h.root, { canvas: light });
+  let replacement;
+  try {
+    const current = view.current, sheet = h.sheet, writes = h.state.writes.length;
+    assert.equal(view.lastUpdate.frame, current);
+    assert.equal(current.state, "modeled");
+    assert.equal(current.coverage.rendering, "unknown");
+    assert.ok(sheet.includes(`--canvas:${current.contextCss.canvas};`));
+    assert.ok(sheet.includes(`--ink:${current.values.ink.css};`));
+    const refused = view.set({ canvas: dark });
+    assert.equal(refused.state, "rejected");
+    assert.equal(refused.proposed.state, "conflict");
+    assert.equal(view.current, current);
+    assert.equal(h.sheet, sheet);
+    assert.equal(h.state.writes.length, writes);
+    const result = view.replace(next, { canvas: light });
+    assert.equal(result.state, "committed");
+    replacement = result.view;
+    assert.equal(replacement.current.state, "modeled");
+    assert.equal(result.frame, replacement.current);
+    assert.equal(view.current, null);
+    assert.ok(!h.sheet.includes("--ink:"));
+    assert.ok(h.sheet.includes(`--label:${result.frame.values.label.css};`));
+    assert.equal(replacement.set({ canvas: "#ffffff" }).frame.state, "ready");
+    assert.equal(replacement.set({ canvas: light }).frame.state, "modeled");
+  } finally { replacement?.dispose(); view.dispose(); ink.dispose(); next.dispose(); }
+});
+
+test("unsupported gradient syntax leaves the preview and its last accepted update untouched", async () => {
+  const h = host(), program = await fixedProgram("ink", "#000000", {});
+  const field = { kind: "affine-srgb8", from: "#dddddd", to: "#ffffff" };
+  const view = program.preview(h.root, { canvas: "#ffffff" });
+  try {
+    const current = view.current, lastUpdate = view.lastUpdate, sheet = h.sheet;
+    h.document.defaultView.CSS.supports = (property, value) => {
+      assert.equal(property, "background-image");
+      assert.match(value, /^linear-gradient\(90deg in srgb,/);
+      return false;
+    };
+    assert.throws(() => view.set({ canvas: field }), { code: "color_unsupported_context", path: "context.canvas" });
+    assert.equal(view.current, current);
+    assert.equal(view.lastUpdate, lastUpdate);
+    assert.equal(h.sheet, sheet);
+    h.document.defaultView.CSS.supports = () => true;
+    assert.equal(view.set({ canvas: field }).frame.state, "modeled");
+  } finally { view.dispose(); program.dispose(); }
+});
 
 test("modeled set and replacement reject the complete proposal without changing the accepted composition", async () => {
   const h = host(), program = await fixedProgram("ink", "#242424", {});

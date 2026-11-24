@@ -21,7 +21,10 @@ function update(state, values, replacement) {
     const accept = (candidate) => {
       snapshot = candidate;
       const frame = copyColorFrame(candidate, state.graph, context);
-      if (frame.state !== "ready") { outcome = reject(frame); return false; }
+      if (frame.state !== "ready" && !(state.sink.preview && frame.state === "modeled")) {
+        outcome = reject(frame);
+        return false;
+      }
       const prepared = state.sink.prepare(context, frame);
       const lastUpdate = Object.freeze({ state: "committed", frame });
       outcome = replacement === undefined ? lastUpdate : Object.freeze({ ...lastUpdate, view: replacement });
@@ -100,11 +103,11 @@ function createView(source, runtime, sink, active) {
   return { view, state };
 }
 
-export function attachColorView(source, element, values, options) {
+export function attachColorView(source, element, values, options, operation) {
   const runtime = source.createRuntime();
   let sink, result;
   try {
-    sink = createCssScope(element, options);
+    sink = createCssScope(element, options, operation);
     result = createView(source, runtime, sink, true);
     if (values !== undefined) result.view.set(values);
     return result.view;

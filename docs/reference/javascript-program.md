@@ -137,24 +137,31 @@ Core выводит точную поддержку модели
 Успешный ответ для поля имеет `state: "modeled"`, `scope: "nominal-model"` и
 `coverage: { model: "complete", rendering: "unknown", sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" }`.
 Он содержит `values`, `optimality`, `reference`, `cleanliness` и полный descriptor
-в `context`. `contextCss` сериализует входы для явного локального preview:
+в `context`. `contextCss` содержит CSS исходных поверхностей. Для интерактивного
+предпросмотра подключите элемент, использующий `background: var(--canvas)`
+и переменные выходных цветов.
 
 ```js
-if (frame.state === "modeled") {
-  preview.style.background = frame.contextCss.canvas;
-  preview.style.color = frame.values.ink.css;
-}
+const preview = program.preview(element, {
+  canvas: { kind: "affine-srgb8", from: "#f4eadb", to: "#d7c5a8" },
+});
+preview.set({ canvas: "#f4eadb" });
+preview.dispose();
 ```
 
-Поле сериализуется как горизонтальный `linear-gradient(90deg in srgb, … 0%, … 100%)`.
-Явное [пространство интерполяции CSS](https://www.w3.org/TR/css-images-4/#linear-gradients)
-сохраняет объявленный encoded-sRGB; отсутствие `in srgb` могло бы изменить
-интерполяцию. Preview отображает результат модели для проверки реального
-интерфейса. `set` и `replace` автоматически его не применяют: возвращают
-`rejected` с самим модельным кадром в `proposed` и сохраняют предыдущую
-композицию целиком. `attach` возвращает `ColorView`; отказ находится в
-`view.lastUpdate`, модельный кадр — в `view.lastUpdate.proposed`, а
-`view.current` остаётся `null`.
+Предпросмотр устанавливает всю композицию одной таблицей CSS. При успехе
+`lastUpdate.state` равно `"committed"`. Для поля `current.state` остаётся
+`"modeled"`, а `current.coverage.rendering` — `"unknown"`. Для постоянных
+поверхностей `current.state` равно `"ready"`. Режим сохраняется при `replace`.
+При `conflict`, `unresolved` или недостающем входе прежняя композиция остаётся
+видимой. У обычного `attach` модельный кадр остаётся в `lastUpdate.proposed`
+с исходом `"rejected"`.
+
+Браузер должен поддерживать горизонтальный `linear-gradient(90deg in srgb, … 0%, … 100%)`.
+Предпросмотр проверяет синтаксис перед обновлением. Неподдерживаемое поле
+даёт `color_unsupported_context`. Явное пространство задаёт интерполяцию
+encoded-sRGB. Растеризация может изменить значения отдельных пикселей и
+фактический контраст около порога. [Интерполяция линейных градиентов CSS](https://www.w3.org/TR/css-images-4/#linear-gradients).
 
 Номинальные `conflict` и `unresolved` сохраняют descriptor и явный
 `scope: "nominal-model"`. У них `coverage.model` равно `"violated"` или
@@ -204,7 +211,7 @@ DOM или CSS после принятия кадра не входит в уп�
 | Состояние `resolve` | Значение |
 | --- | --- |
 | `ready` | Все обязательные условия выполнены. `values` и `context` — независимые неизменяемые копии. |
-| `modeled` | Все обязательные условия выполнены на всей области объявленной модели поля. Точность браузерного отображения неизвестна; автоматического CSS-применения нет. |
+| `modeled` | Все обязательные условия выполнены на всей области объявленной модели поля. `preview` может показать результат в браузере. Точность растеризации неизвестна. |
 | `conflict` | Для объявленного конечного домена допустимого решения нет. |
 | `unresolved` | Бюджет поиска исчерпан до нахождения допустимого решения. Это не доказательство конфликта. |
 | `unknown` | Не хватает входных поверхностей. |

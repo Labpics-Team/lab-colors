@@ -63,10 +63,24 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   // @ts-expect-error interpolation spaces beyond opaque encoded-sRGB are not implemented.
   program.resolve({ canvas: { kind: "affine-oklab", from: "#ffffff", to: "#000000" } });
   const view: ColorView<"fill" | "label" | "pane"> = program.attach(element, { canvas: "#283548" }, attachmentOptions);
+  const preview = program.preview(element, undefined, attachmentOptions);
+  const previewUpdate = preview.set({ canvas: { kind: "affine-srgb8", from: "#ffffff", to: "#dddddd" } });
+  if (previewUpdate.state === "committed" && previewUpdate.frame.state === "modeled") {
+    const coverage: "unknown" = previewUpdate.frame.coverage.rendering;
+    void coverage;
+  }
+  const readyOnly: "ready" | undefined = view.current?.state;
+  void readyOnly;
   // @ts-expect-error a CSP nonce is an explicit string, not a coerced value.
   program.attach(element, { canvas: "#283548" }, { nonce: 123 });
   view.set({ canvas: "#61766a" });
   const next = await c.compile({ primary: fill });
+  const previewReplacement = preview.replace(next, { canvas: "#ffffff" });
+  if (previewReplacement.state === "committed" && previewReplacement.view.current?.state === "modeled") {
+    previewReplacement.view.current.values.primary;
+    // @ts-expect-error a replaced preview uses the new program's aliases.
+    previewReplacement.view.current.values.fill;
+  }
   const fieldReplacement = view.replace(next, { canvas: { kind: "affine-srgb8", from: "#ffffff", to: "#dddddd" } });
   if (fieldReplacement.state === "rejected" && fieldReplacement.proposed.state === "modeled") {
     fieldReplacement.proposed.values.primary;
