@@ -157,9 +157,16 @@ impl AppearanceNumericKernel for CertifiedAppearanceKernel {
         backdrop: Self::Color,
         _backdrop_occurrence: Option<Self::Occurrence>,
     ) -> Self::Occurrence {
-        let visible = subject.source().and_then(|source| {
-            backdrop.and_then(|backdrop| source.source_over(subject.opacity(), backdrop))
-        });
+        let opacity = subject.opacity();
+        let visible = if opacity == AdmittedOpacityV1::OPAQUE {
+            subject.source()
+        } else if opacity.bits() == 0 {
+            backdrop
+        } else {
+            subject.source().and_then(|source| {
+                backdrop.and_then(|backdrop| source.source_over(opacity, backdrop))
+            })
+        };
         CertifiedResolvedOccurrenceV1 {
             id: spec.id,
             visible,
