@@ -883,7 +883,7 @@ fn local_support<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
 ) -> Result<Vec<ColorSignal>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let cases = contextual::local_case_order::<E>(component, scenarios)?;
+    let cases = contextual::local_case_order::<E>(component, scenarios, |_, _| {})?;
     let count = cases
         .len()
         .checked_mul(component.inputs.len())

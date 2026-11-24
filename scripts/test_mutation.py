@@ -3373,8 +3373,8 @@ class CoreConsumerProjectionTest(unittest.TestCase):
                     else: package["dependencies"].append(copy.deepcopy(dep))
                     with self.assertRaisesRegex(SystemExit, consumer):
                         execute(altered)
-        # Нулевая зависимость ядра относится ко всем feature/target-наборам,
-        # а не только к default. Dev-only инструменты остаются допустимы.
+        # The private arithmetic dependency is the only permitted runtime edge,
+        # including optional and target-specific declarations.
         for optional in (False, True):
             for target in (None, "cfg(target_arch = \"wasm32\")"):
                 with self.subTest(optional=optional, target=target):
@@ -3384,7 +3384,7 @@ class CoreConsumerProjectionTest(unittest.TestCase):
                         "name": "repository-parser", "kind": None,
                         "optional": optional, "target": target,
                     })
-                    with self.assertRaisesRegex(SystemExit, "zero runtime dependencies"):
+                    with self.assertRaisesRegex(SystemExit, "one private numerical dependency"):
                         execute(altered)
         allowed = copy.deepcopy(metadata)
         core = next(p for p in allowed["packages"] if p["name"] == "labcolors-core")

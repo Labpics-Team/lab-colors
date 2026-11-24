@@ -1785,8 +1785,8 @@ mod tests {
         let context = AppearanceContextId::from_inputs(
             AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
             IEC_SRGB_D65_XYZ_FRAME_V1,
-            AdaptingLuminanceCdM2::try_new(64.0).unwrap(),
-            BackgroundLuminanceRatio::try_new(0.2).unwrap(),
+            AdaptingLuminanceCdM2::try_new(64.0).expect("64 cd/m² is a valid adapting luminance"),
+            BackgroundLuminanceRatio::try_new(0.2).expect("0.2 is a valid background ratio"),
             SurroundProfileId::AverageV1,
         );
         let mut targets = Vec::new();
@@ -1811,7 +1811,7 @@ mod tests {
                             false,
                             IdentityOptionsV1::default(),
                         )
-                        .unwrap(),
+                        .expect("default identity admits the source color"),
                         appearance: Some(occurrence),
                         tone: None,
                     },
@@ -1845,7 +1845,8 @@ mod tests {
             inputs.reverse();
             order.reverse();
         }
-        computed_assignment::assign_preference(&mut targets, Some(&order)).unwrap();
+        computed_assignment::assign_preference(&mut targets, Some(&order))
+            .expect("fixture lists every adjustable target once");
         let mut program = Program::new(
             vec![],
             targets,
@@ -1875,7 +1876,7 @@ mod tests {
         let mut result: Vec<_> = program
             .assignment
             .as_ref()
-            .unwrap()
+            .expect("authored program declares a selection policy")
             .legacy_order()
             .iter()
             .enumerate()
@@ -1898,16 +1899,23 @@ mod tests {
         let reversed = layout_program([10, 20], [70, 80], true, true);
         let renamed = layout_program([91, 7], [99, 3], true, true);
         let compile = |program: &Program<Wcag22Srgb8V1>| {
-            compile_owner_identity_and_layout(program, &layout_preferences(program, false)).unwrap()
+            compile_owner_identity_and_layout(program, &layout_preferences(program, false))
+                .expect("fixture has a complete preference binding")
         };
         let baseline = compile(&baseline);
         let reversed = compile(&reversed);
         let renamed = compile(&renamed);
         assert_eq!(baseline.content, reversed.content);
         assert_eq!(baseline.content, renamed.content);
-        let baseline = baseline.execution.unwrap();
-        let reversed = reversed.execution.unwrap();
-        let renamed = renamed.execution.unwrap();
+        let baseline = baseline
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        let reversed = reversed
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        let renamed = renamed
+            .execution
+            .expect("authored composition supplies a physical execution layout");
         assert_eq!(baseline.targets, reversed.targets);
         assert_eq!(baseline.inputs, reversed.inputs);
         let target_roles = |values: &[TargetId], ids: [u32; 2]| {
@@ -1917,7 +1925,7 @@ mod tests {
                     ids.map(TargetId::new)
                         .iter()
                         .position(|other| other == id)
-                        .unwrap()
+                        .expect("compiled layout contains exactly the declared handles")
                 })
                 .collect::<Vec<_>>()
         };
@@ -1928,7 +1936,7 @@ mod tests {
                     ids.map(SurfaceInputPortId::new)
                         .iter()
                         .position(|other| other == id)
-                        .unwrap()
+                        .expect("compiled layout contains exactly the declared handles")
                 })
                 .collect::<Vec<_>>()
         };
@@ -1946,18 +1954,22 @@ mod tests {
     fn ordered_and_legacy_reference_identities_keep_their_declared_preference() {
         let ordered = layout_program([10, 20], [70, 80], false, false);
         let reordered = layout_program([10, 20], [70, 80], true, false);
-        let compiled = compile_owner_identity_and_layout(&ordered, &[]).unwrap();
+        let compiled = compile_owner_identity_and_layout(&ordered, &[])
+            .expect("fixture has a complete preference binding");
         assert!(compiled.execution.is_none());
-        assert_eq!(compiled.content, compile_owner_identity(&ordered).unwrap());
+        assert_eq!(
+            compiled.content,
+            compile_owner_identity(&ordered).expect("fixture has a canonical program identity")
+        );
         assert_ne!(
             compiled.content,
-            compile_owner_identity(&reordered).unwrap()
+            compile_owner_identity(&reordered).expect("fixture has a canonical program identity")
         );
         let legacy = layout_program([10, 20], [70, 80], false, true);
         let reordered_legacy = layout_program([10, 20], [70, 80], true, true);
         let identity = |program: &Program<Wcag22Srgb8V1>| {
             compile_owner_identity_and_layout(program, &layout_preferences(program, true))
-                .unwrap()
+                .expect("fixture has a complete preference binding")
                 .content
         };
         assert_ne!(identity(&legacy), identity(&reordered_legacy));
@@ -1965,7 +1977,7 @@ mod tests {
         assert_ne!(
             identity(&legacy),
             compile_owner_identity_and_layout(&legacy, &layout_preferences(&legacy, false))
-                .unwrap()
+                .expect("fixture has a complete preference binding")
                 .content,
         );
     }
@@ -2011,12 +2023,18 @@ mod tests {
         program.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
             legacy_reference_order: vec![],
         });
-        let authored = compile_owner_identity_and_layout(&program, &[]).unwrap();
-        let layout = authored.execution.unwrap();
+        let authored = compile_owner_identity_and_layout(&program, &[])
+            .expect("fixture has a complete preference binding");
+        let layout = authored
+            .execution
+            .expect("authored composition supplies a physical execution layout");
         assert!(layout.targets.is_empty());
         assert_eq!(layout.inputs.len(), 2);
         program.assignment = Some(ComputedSelectionPolicyV1::Ordered(vec![]));
-        assert_ne!(authored.content, compile_owner_identity(&program).unwrap());
+        assert_ne!(
+            authored.content,
+            compile_owner_identity(&program).expect("fixture has a canonical program identity")
+        );
     }
 
     #[test]

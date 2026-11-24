@@ -246,7 +246,7 @@ fn translucent(p: &mut Program<Wcag22Srgb8V1>, occurrence: usize, paint: u32, al
 fn canonical_working_cases_grow_without_reallocation_or_duplicate_weight() {
     let local = LocalCasesV1 {
         order: vec![4, 1, 3, 0],
-        representatives: vec![true, true, false, true, true],
+        representatives: vec![0, 1, 1, 3, 4],
     };
     let mut cases = CaseRefinementV1::new(&local, 5).expect("working cases");
     assert_eq!(cases.cases, [4, 0]);

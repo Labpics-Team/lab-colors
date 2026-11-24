@@ -554,7 +554,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 .domain
                 .cardinality()
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            if node.ordinal.is_none() {
+            let Some(ordinal) = node.ordinal else {
                 let may_pass = bounds.may_pass(
                     &context,
                     runtime,
@@ -602,12 +602,11 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                     stack.push(node);
                 }
                 continue;
-            }
+            };
             if state.evidence.visited >= selection.budget {
                 complete = false;
                 break;
             }
-            let ordinal = node.ordinal.unwrap();
             if ordinal + 1 < volume {
                 stack.push(RegionNodeV1 {
                     ordinal: Some(ordinal + 1),

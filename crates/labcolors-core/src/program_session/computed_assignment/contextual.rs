@@ -52,7 +52,7 @@ struct ContextV1<'a> {
 #[derive(Default)]
 struct LocalCasesV1 {
     order: Vec<usize>,
-    representatives: Vec<bool>,
+    representatives: Vec<usize>,
 }
 
 // Search probes use a growing subset of canonical local cases. Its maxima
@@ -121,6 +121,7 @@ impl CaseRefinementV1 {
 pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
+    mut record_duplicate: impl FnMut(usize, usize),
 ) -> Result<Vec<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let count = scenarios.len().get();
     let mut cases = Vec::new();
@@ -144,7 +145,13 @@ pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
             .cmp(component.inputs.iter().map(|&input| right[input]))
     };
     cases.sort_unstable_by(|left, right| compare(left.1, right.1));
-    cases.dedup_by(|left, right| compare(left.1, right.1) == Ordering::Equal);
+    cases.dedup_by(|later, retained| {
+        if compare(later.1, retained.1) != Ordering::Equal {
+            return false;
+        }
+        record_duplicate(later.0, retained.0);
+        true
+    });
     let mut order = Vec::new();
     order
         .try_reserve_exact(cases.len())
@@ -159,11 +166,13 @@ fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
 ) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let order = local_case_order::<E>(component, scenarios)?;
-    let mut representatives = buffer(scenarios.len().get(), false)
+    let mut representatives = buffer(scenarios.len().get(), 0)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let order = local_case_order::<E>(component, scenarios, |case, representative| {
+        representatives[case] = representative;
+    })?;
     for &case in &order {
-        representatives[case] = true;
+        representatives[case] = case;
     }
     Ok(LocalCasesV1 {
         order,
@@ -199,7 +208,7 @@ impl<'a> ContextV1<'a> {
             opaque[index] = target.opaque;
         }
         for case in (0..scenarios.len().get())
-            .filter(|&case| !joint_point || local_cases.representatives[case])
+            .filter(|&case| !joint_point || local_cases.representatives[case] == case)
         {
             let inputs = scenarios
                 .physical_values(case)
@@ -236,27 +245,11 @@ impl<'a> ContextV1<'a> {
             // The legacy hard observer and public reports address physical
             // cases directly. Reuse each local preference for its duplicate
             // cases without repeating tone, gamut, or Oklab calculations.
-            let inputs = &component
-                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
-                .inputs;
-            for case in 0..scenarios.len().get() {
-                if local_cases.representatives[case] {
+            for (case, &representative) in local_cases.representatives.iter().enumerate() {
+                if representative == case {
                     continue;
                 }
-                let values = scenarios
-                    .physical_values(case)
-                    .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                let rank = local_cases
-                    .order
-                    .binary_search_by(|&representative| {
-                        let other = scenarios.physical_values(representative).unwrap();
-                        inputs
-                            .iter()
-                            .map(|&input| other[input])
-                            .cmp(inputs.iter().map(|&input| values[input]))
-                    })
-                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
-                let start = local_cases.order[rank] * count;
+                let start = representative * count;
                 preferred.copy_within(start..start + count, case * count);
                 preferred_rgb.copy_within(start..start + count, case * count);
             }
@@ -305,7 +298,8 @@ impl<'a> ContextV1<'a> {
     }
 
     fn represents_case(&self, case: usize) -> bool {
-        self.local_cases.representatives.is_empty() || self.local_cases.representatives[case]
+        self.local_cases.representatives.is_empty()
+            || self.local_cases.representatives[case] == case
     }
 
     fn exact_optimum(&self, values: &[Srgb8], scores: &[f64]) -> bool {
