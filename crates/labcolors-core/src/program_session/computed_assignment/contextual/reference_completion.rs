@@ -520,6 +520,8 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
     /// The proposals contain every unique computed source, in compiled target
     /// order. Neither proposal authorizes overriding a strict material/domain
     /// constraint. Rejected completion preserves anchor bytes before realization.
+    /// `budget` limits each compiled independent component; visited evidence
+    /// sums their work and the compiler's once-only fixed-constraint check.
     pub(crate) fn realize(
         &mut self,
         anchor: &[ContinuousSrgbV1],
@@ -599,17 +601,6 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         };
         let scenarios = NonEmptyScenarioSetV1::from_admitted(&self.observation)
             .ok_or(Error::<E>::MissingFiniteObservation)?;
-        let context = ContextV1::new::<E>(selection, None, scenarios)?;
-        let budget = requested_budget.min(selection.total_budget);
-        let mut search = SearchEvidenceV1 {
-            completion: CompletionV1::BudgetExhausted,
-            visited: 0,
-            regions: 0,
-            points: 0,
-            endpoint_evaluations: 0,
-            examined: 0,
-            open_regions: 0,
-        };
         let mut bindings = epoch.binding_template.try_clone_v1()?;
         let mut workspace = epoch.graph.new_workspace()?;
         let mut cache = ProgramPresentationCacheV1::try_new(&epoch.point_presentations)
@@ -622,222 +613,348 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         };
         let mut arena = ProgramEvaluationArenaV1::empty();
         prepare_program_evaluation_arena(epoch, scenarios, &mut arena)?;
-        let mut scores = buffer(ideal.len(), 0.0).map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut ideal_labs = reserve::<_, E>(ideal.len())?;
-        let mut rounded = reserve::<_, E>(ideal.len())?;
-        for (value, domain) in ideal.iter().zip(&context.domains) {
-            ideal_labs.push(CertifiedRgbV1::from_encoded(value.channels())?.oklab()?);
-            let (lower, upper) = domain.bounds();
-            let channels = value.channels();
-            let hint = Srgb8::new(std::array::from_fn(|i| {
-                channels[i]
-                    .round_ties_even()
-                    .clamp(f64::from(lower[i]), f64::from(upper[i])) as u8
-            }));
-            rounded.push(if domain.contains(hint) {
-                hint
-            } else {
-                domain.value(0)
-            });
-        }
-        // Joint repair starts around every frozen source, including parents.
-        // Ordering here proposes work only: strict scans and certified scores
-        // decide acceptance. The full admitted domains remain the fallback.
-        let mut local_domains = reserve::<_, E>(ideal.len())?;
-        let mut neighbors = reserve::<_, E>(ideal.len())?;
-        for ((value, domain), ideal) in rounded.iter().zip(&context.domains).zip(ideal) {
-            let (lo, hi) = domain.bounds();
-            let bytes = value.bytes();
-            let lower = std::array::from_fn(|i| lo[i].max(bytes[i].saturating_sub(1)));
-            let upper = std::array::from_fn(|i| hi[i].min(bytes[i].saturating_add(1)));
-            let local = match domain {
-                AssignmentDomainV1::Gray { .. } => AssignmentDomainV1::Gray {
-                    lower: lower[0],
-                    upper: upper[0],
+        let mut values = reserve::<_, E>(selection.targets.len())?;
+        values.extend(
+            selection
+                .targets
+                .iter()
+                .map(|target| target.declaration.anchor),
+        );
+        apply::<E>(selection, &mut runtime, &values)?;
+        let mut search = empty_search(CompletionV1::Complete);
+        let mut numerical_order_unresolved = false;
+        let mut color_evaluations = 0_u64;
+        if !selection.fixed_constraints.is_empty() || selection.components.is_empty() {
+            // The compiler proved these conditions independent of every
+            // adjustable paint. Match the existing once-only constant check.
+            let failed = scan_program_candidate_scoped(
+                &mut runtime,
+                epoch,
+                scenarios,
+                0,
+                ProgramEvaluationPhaseV1::Hard,
+                ProgramCandidateCollectionV1::none(),
+                ProgramCandidateScanV1::Constraints {
+                    indices: &selection.fixed_constraints,
+                    physical: None,
                 },
-                AssignmentDomainV1::Cube { .. } => AssignmentDomainV1::Cube { lower, upper },
+            )?;
+            search.visited = 1;
+            search.points = 1;
+            search.examined = 1;
+            if failed {
+                return Ok(RealizationV1 {
+                    values: None,
+                    search,
+                    numerical_order_unresolved,
+                    color_evaluations,
+                });
+            }
+        }
+        for component in &selection.components {
+            let selected = realize_component(
+                selection,
+                component,
+                &mut runtime,
+                epoch,
+                scenarios,
+                &mut arena,
+                FrozenRealizationRequestV1 {
+                    sources: ideal,
+                    budget: requested_budget,
+                },
+            )?;
+            components::merge_evidence(&mut search, selected.search)
+                .map_err(|_| Error::<E>::ResourceExhausted)?;
+            numerical_order_unresolved |= selected.numerical_order_unresolved;
+            color_evaluations = color_evaluations
+                .checked_add(selected.color_evaluations)
+                .ok_or(Error::<E>::ResourceExhausted)?;
+            let Some(local) = selected.values else {
+                // A bounded component without a feasible point is unfinished;
+                // independent colors cannot repair or consume its own budget.
+                if selected.search.completion == CompletionV1::Complete {
+                    search.completion = CompletionV1::Complete;
+                }
+                return Ok(RealizationV1 {
+                    values: None,
+                    search,
+                    numerical_order_unresolved,
+                    color_evaluations,
+                });
             };
-            let count = local.cardinality().ok_or(Error::<E>::InvalidTuple)?;
-            let mut points = reserve::<_, E>(count as usize)?;
-            for ordinal in 0..count {
-                points.push(local.value(ordinal));
-            }
-            let goal = ideal.channels();
-            points.sort_unstable_by(|left, right| {
-                let score = |value: Srgb8| {
-                    value
-                        .bytes()
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &v)| (f64::from(v) - goal[i]).powi(2))
-                        .sum::<f64>()
-                };
-                score(*left)
-                    .total_cmp(&score(*right))
-                    .then_with(|| left.cmp(right))
-            });
-            local_domains.push(local);
-            neighbors.push(points);
-        }
-        let mut values = reserve::<_, E>(neighbors.len())?;
-        values.extend(neighbors.iter().map(|points| points[0]));
-        let mut ordinals = buffer(ideal.len(), 0_u64).map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut best: Option<Vec<Srgb8>> = None;
-        let zero = CertifiedScalarV1::exact(0.0)?;
-        let mut best_profile =
-            buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut profile = buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut profile_scratch =
-            buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut local_scores = reserve::<_, E>(neighbors.len())?;
-        for points in &neighbors {
-            local_scores
-                .push(buffer(points.len(), None).map_err(|_| Error::<E>::ResourceExhausted)?);
-        }
-        let mut last_scores = buffer(ideal.len(), None::<(Srgb8, CertifiedScalarV1)>)
-            .map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut color_evaluations = 0;
-        let mut unresolved = false;
-        let mut local = true;
-        loop {
-            if search.visited >= budget {
-                break;
-            }
-            search.visited += 1;
-            search.points += 1;
-            search.examined += 1;
-            // This is the existing complete-frame scan, including source
-            // identity, visible maxChange, all hard constraints and every case.
-            if assess(
-                &context,
+            apply_targets::<E>(
+                ComputedTargetsV1::new(selection, Some(component)),
                 &mut runtime,
-                epoch,
-                scenarios,
-                &values,
-                &mut scores,
-                &mut arena,
-            )? == 0
-            {
-                for (index, (value, ideal_lab)) in values.iter().zip(&ideal_labs).enumerate() {
-                    let cached = if local {
-                        local_scores[index][ordinals[index] as usize]
-                    } else {
-                        last_scores[index]
-                            .filter(|(rgb, _)| rgb == value)
-                            .map(|(_, score)| score)
-                    };
-                    let score = if let Some(score) = cached {
-                        score
-                    } else {
-                        color_evaluations += 1;
-                        let score = source_distance_squared(
-                            CertifiedRgbV1::from_encoded(value.bytes().map(f64::from))?.oklab()?,
-                            *ideal_lab,
-                        )?;
-                        if local {
-                            local_scores[index][ordinals[index] as usize] = Some(score);
-                        } else {
-                            last_scores[index] = Some((*value, score));
-                        }
-                        score
-                    };
-                    profile[index] = score;
-                }
-                sort_descending_profile(&mut profile, &mut profile_scratch)?;
-                let order = if best.is_none() {
-                    Some(Ordering::Less)
-                } else {
-                    compare_profiles(&profile, &best_profile)
-                };
-                if order == Some(Ordering::Less) {
-                    if let Some(best) = &mut best {
-                        best.copy_from_slice(&values);
-                    } else {
-                        best = Some(copy_slice::<_, E>(&values)?);
-                    }
-                    best_profile.copy_from_slice(&profile);
-                } else if order.is_none() {
-                    unresolved = true;
-                }
-            }
-            loop {
-                let mut carried = true;
-                for i in (0..values.len()).rev() {
-                    let count = if local {
-                        neighbors[i].len() as u64
-                    } else {
-                        context.domains[i]
-                            .cardinality()
-                            .ok_or(Error::<E>::InvalidTuple)?
-                    };
-                    ordinals[i] += 1;
-                    if ordinals[i] < count {
-                        values[i] = if local {
-                            neighbors[i][ordinals[i] as usize]
-                        } else {
-                            context.domains[i].value(ordinals[i])
-                        };
-                        carried = false;
-                        break;
-                    }
-                    ordinals[i] = 0;
-                    values[i] = if local {
-                        neighbors[i][0]
-                    } else {
-                        context.domains[i].value(0)
-                    };
-                }
-                if carried {
-                    if local && local_domains != context.domains {
-                        local = false;
-                        for (value, domain) in values.iter_mut().zip(&context.domains) {
-                            *value = domain.value(0);
-                        }
-                    } else {
-                        search.completion = CompletionV1::Complete;
-                        break;
-                    }
-                }
-                if local
-                    || !local_domains
-                        .iter()
-                        .zip(&values)
-                        .all(|(domain, value)| domain.contains(*value))
-                {
-                    break;
-                }
-            }
-            if search.completion == CompletionV1::Complete {
-                break;
+                &local,
+            )?;
+            for (&index, value) in component.targets.iter().zip(local) {
+                values[index] = value;
             }
         }
-        // Materialize only after a fresh, complete strict recheck of the same
-        // tuple. This terminal verification is not an extra search proposal.
-        if let Some(values) = &best {
-            if assess(
-                &context,
-                &mut runtime,
-                epoch,
-                scenarios,
-                values,
-                &mut scores,
-                &mut arena,
-            )? != 0
-            {
-                return Err(Error::<E>::Evaluation(
-                    ProgramSessionEvaluationError::InternalInvariant,
-                ));
-            }
+        // A scoped pass never authorizes publication. Reapply and verify the
+        // merged tuple with all cases, hard relations and material constraints.
+        let context = ContextV1::new::<E>(selection, None, scenarios)?;
+        let mut scores = buffer(values.len(), 0.0).map_err(|_| Error::<E>::ResourceExhausted)?;
+        if assess(
+            &context,
+            &mut runtime,
+            epoch,
+            scenarios,
+            &values,
+            &mut scores,
+            &mut arena,
+        )? != 0
+        {
+            return Err(Error::<E>::Evaluation(
+                ProgramSessionEvaluationError::InternalInvariant,
+            ));
         }
         Ok(RealizationV1 {
-            values: best,
+            values: Some(values),
             search,
-            numerical_order_unresolved: unresolved,
+            numerical_order_unresolved,
             color_evaluations,
         })
     }
 }
 
+/// A frozen tuple uses the compiled variable order. Its source-distance
+/// objective introduces no dependency between independently constrained paints.
+struct FrozenRealizationRequestV1<'a> {
+    sources: &'a [ContinuousSrgbV1],
+    budget: u64,
+}
+
+fn empty_search(completion: CompletionV1) -> SearchEvidenceV1 {
+    SearchEvidenceV1 {
+        completion,
+        visited: 0,
+        regions: 0,
+        points: 0,
+        endpoint_evaluations: 0,
+        examined: 0,
+        open_regions: 0,
+    }
+}
+
+/// The same component/runtime/arena seam as existing component selection. The
+/// graph, target membership, relevant contexts and cone all remain compiler-owned.
+fn realize_component<E: ProgramConstraintEvaluatorSetV1>(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    arena: &mut ProgramEvaluationArenaV1<E>,
+    request: FrozenRealizationRequestV1<'_>,
+) -> Result<RealizationV1, Error<E>> {
+    let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+    let budget = request.budget.min(selection.budget);
+    let mut search = empty_search(CompletionV1::BudgetExhausted);
+    let mut local_ideal = reserve::<_, E>(component.targets.len())?;
+    for &index in &component.targets {
+        local_ideal.push(*request.sources.get(index).ok_or(Error::<E>::InvalidTuple)?);
+    }
+    let ideal = local_ideal.as_slice();
+    let mut scores = buffer(ideal.len(), 0.0).map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut ideal_labs = reserve::<_, E>(ideal.len())?;
+    let mut rounded = reserve::<_, E>(ideal.len())?;
+    for (value, domain) in ideal.iter().zip(&context.domains) {
+        ideal_labs.push(CertifiedRgbV1::from_encoded(value.channels())?.oklab()?);
+        let (lower, upper) = domain.bounds();
+        let channels = value.channels();
+        let hint = Srgb8::new(std::array::from_fn(|i| {
+            channels[i]
+                .round_ties_even()
+                .clamp(f64::from(lower[i]), f64::from(upper[i])) as u8
+        }));
+        rounded.push(if domain.contains(hint) {
+            hint
+        } else {
+            domain.value(0)
+        });
+    }
+    // Joint repair starts around every frozen source, including parents.
+    // Ordering here proposes work only: strict scans and certified scores
+    // decide acceptance. The full admitted domains remain the fallback.
+    let mut local_domains = reserve::<_, E>(ideal.len())?;
+    let mut neighbors = reserve::<_, E>(ideal.len())?;
+    for ((value, domain), ideal) in rounded.iter().zip(&context.domains).zip(ideal) {
+        let (lo, hi) = domain.bounds();
+        let bytes = value.bytes();
+        let lower = std::array::from_fn(|i| lo[i].max(bytes[i].saturating_sub(1)));
+        let upper = std::array::from_fn(|i| hi[i].min(bytes[i].saturating_add(1)));
+        let local = match domain {
+            AssignmentDomainV1::Gray { .. } => AssignmentDomainV1::Gray {
+                lower: lower[0],
+                upper: upper[0],
+            },
+            AssignmentDomainV1::Cube { .. } => AssignmentDomainV1::Cube { lower, upper },
+        };
+        let count = local.cardinality().ok_or(Error::<E>::InvalidTuple)?;
+        let mut points = reserve::<_, E>(count as usize)?;
+        for ordinal in 0..count {
+            points.push(local.value(ordinal));
+        }
+        let goal = ideal.channels();
+        points.sort_unstable_by(|left, right| {
+            let score = |value: Srgb8| {
+                value
+                    .bytes()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &v)| (f64::from(v) - goal[i]).powi(2))
+                    .sum::<f64>()
+            };
+            score(*left)
+                .total_cmp(&score(*right))
+                .then_with(|| left.cmp(right))
+        });
+        local_domains.push(local);
+        neighbors.push(points);
+    }
+    let mut values = reserve::<_, E>(neighbors.len())?;
+    values.extend(neighbors.iter().map(|points| points[0]));
+    let mut ordinals = buffer(ideal.len(), 0_u64).map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut best: Option<Vec<Srgb8>> = None;
+    let zero = CertifiedScalarV1::exact(0.0)?;
+    let mut best_profile = buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut profile = buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut profile_scratch =
+        buffer(ideal.len(), zero).map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut local_scores = reserve::<_, E>(neighbors.len())?;
+    for points in &neighbors {
+        local_scores.push(buffer(points.len(), None).map_err(|_| Error::<E>::ResourceExhausted)?);
+    }
+    let mut last_scores = buffer(ideal.len(), None::<(Srgb8, CertifiedScalarV1)>)
+        .map_err(|_| Error::<E>::ResourceExhausted)?;
+    let mut color_evaluations = 0;
+    let mut unresolved = false;
+    let mut local = true;
+    loop {
+        if search.visited >= budget {
+            break;
+        }
+        search.visited += 1;
+        search.points += 1;
+        search.examined += 1;
+        // This is the existing complete-frame scan, including source
+        // identity, visible maxChange, all hard constraints and every case.
+        if assess(
+            &context,
+            runtime,
+            epoch,
+            scenarios,
+            &values,
+            &mut scores,
+            arena,
+        )? == 0
+        {
+            for (index, (value, ideal_lab)) in values.iter().zip(&ideal_labs).enumerate() {
+                let cached = if local {
+                    local_scores[index][ordinals[index] as usize]
+                } else {
+                    last_scores[index]
+                        .filter(|(rgb, _)| rgb == value)
+                        .map(|(_, score)| score)
+                };
+                let score = if let Some(score) = cached {
+                    score
+                } else {
+                    color_evaluations += 1;
+                    let score = source_distance_squared(
+                        CertifiedRgbV1::from_encoded(value.bytes().map(f64::from))?.oklab()?,
+                        *ideal_lab,
+                    )?;
+                    if local {
+                        local_scores[index][ordinals[index] as usize] = Some(score);
+                    } else {
+                        last_scores[index] = Some((*value, score));
+                    }
+                    score
+                };
+                profile[index] = score;
+            }
+            sort_descending_profile(&mut profile, &mut profile_scratch)?;
+            let order = if best.is_none() {
+                Some(Ordering::Less)
+            } else {
+                compare_profiles(&profile, &best_profile)
+            };
+            if order == Some(Ordering::Less) {
+                if let Some(best) = &mut best {
+                    best.copy_from_slice(&values);
+                } else {
+                    best = Some(copy_slice::<_, E>(&values)?);
+                }
+                best_profile.copy_from_slice(&profile);
+            } else if order.is_none() {
+                unresolved = true;
+            }
+        }
+        loop {
+            let mut carried = true;
+            for i in (0..values.len()).rev() {
+                let count = if local {
+                    neighbors[i].len() as u64
+                } else {
+                    context.domains[i]
+                        .cardinality()
+                        .ok_or(Error::<E>::InvalidTuple)?
+                };
+                ordinals[i] += 1;
+                if ordinals[i] < count {
+                    values[i] = if local {
+                        neighbors[i][ordinals[i] as usize]
+                    } else {
+                        context.domains[i].value(ordinals[i])
+                    };
+                    carried = false;
+                    break;
+                }
+                ordinals[i] = 0;
+                values[i] = if local {
+                    neighbors[i][0]
+                } else {
+                    context.domains[i].value(0)
+                };
+            }
+            if carried {
+                if local && local_domains != context.domains {
+                    local = false;
+                    for (value, domain) in values.iter_mut().zip(&context.domains) {
+                        *value = domain.value(0);
+                    }
+                } else {
+                    search.completion = CompletionV1::Complete;
+                    break;
+                }
+            }
+            if local
+                || !local_domains
+                    .iter()
+                    .zip(&values)
+                    .all(|(domain, value)| domain.contains(*value))
+            {
+                break;
+            }
+        }
+        if search.completion == CompletionV1::Complete {
+            break;
+        }
+    }
+    // Lexicographic order of a descending multiset is preserved when a fixed
+    // multiset is merged into it. Minimizing each independent source profile
+    // therefore preserves the frozen whole-tuple objective; primary policy is
+    // not evaluated or changed by this realization step.
+    Ok(RealizationV1 {
+        values: best,
+        search,
+        numerical_order_unresolved: unresolved,
+        color_evaluations,
+    })
+}
 fn compare_profiles(left: &[CertifiedScalarV1], right: &[CertifiedScalarV1]) -> Option<Ordering> {
     for (left, right) in left.iter().zip(right) {
         if left.strictly_below(*right) {

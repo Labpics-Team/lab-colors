@@ -508,3 +508,310 @@ fn private_program_consumer_repairs_full_color_nested_tuple() {
         start.elapsed()
     );
 }
+
+fn independent_reference_program(additional: usize) -> Program<Wcag22Srgb8V1> {
+    let mut p = single();
+    let TargetIntentV1::Computed(first) = &mut p.targets[0].intent else {
+        panic!()
+    };
+    first.preference = 0;
+    for (index, source) in [Srgb8::new([88, 64, 136]), Srgb8::new([58, 109, 83])]
+        .into_iter()
+        .take(additional)
+        .enumerate()
+    {
+        let id = 20 + index as u32 * 10;
+        let mut declaration = ComputedTargetV1::color(
+            source,
+            2.0,
+            ColorUseIntentV1 {
+                identity: ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
+                    .unwrap(),
+                appearance: Some(OccurrenceId::new(id + 5)),
+                tone: None,
+            },
+        );
+        declaration.reference_appearance = true;
+        declaration.preference = index as u64 + 1;
+        p.targets.push(Target::new(
+            TargetId::new(id),
+            TargetIntentV1::Computed(declaration),
+        ));
+        p.paints.push(Paint::Solid {
+            id: PaintId::new(id + 3),
+            target: TargetId::new(id),
+        });
+        p.occurrences.push(Occurrence::new(
+            OccurrenceId::new(id + 5),
+            PaintId::new(id + 3),
+            SurfaceId::new(4),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            p.occurrences[0].context,
+        ));
+        p.constraints
+            .hard
+            .push(ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(id + 6),
+                OccurrenceId::new(id + 5),
+                Wcag22CriterionV1::Sc143TextDefault,
+            ));
+        p.outputs.push(OutputBinding::new(
+            OutputSlotId::new(id + 7),
+            PaintId::new(id + 3),
+        ));
+    }
+    p
+}
+
+#[test]
+fn independent_full_rgb_components_do_not_starve_first_text_repair() {
+    let mut singleton_output = None;
+    for additional in [0, 2] {
+        let owner = compile_assignment(independent_reference_program(additional), 128).unwrap();
+        let CompiledTargetSelectionV1::Computed(selection) =
+            &owner.owner_generation.target_selection
+        else {
+            panic!()
+        };
+        assert_eq!(selection.components.len(), additional + 1);
+        assert!(
+            selection
+                .components
+                .iter()
+                .all(|component| component.targets.len() == 1)
+        );
+        assert!(
+            selection
+                .components
+                .iter()
+                .all(|component| component.inputs.len() == 1)
+        );
+        assert!(selection.fixed_constraints.is_empty());
+        assert_eq!(
+            selection.targets[0].declaration.anchor,
+            Srgb8::new([49, 85, 190])
+        );
+        assert!(
+            selection.targets[0]
+                .declaration
+                .intent
+                .as_ref()
+                .unwrap()
+                .identity
+                .contains(Srgb8::new([49, 122, 190]))
+        );
+        assert!(matches!(
+            evaluate_wcag22_srgb8(
+                [49, 123, 190],
+                [255; 3],
+                Wcag22CriterionV1::Sc143TextDefault
+            )
+            .unwrap(),
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Fail,
+                ..
+            }
+        ));
+        assert!(matches!(
+            evaluate_wcag22_srgb8(
+                [49, 122, 190],
+                [255; 3],
+                Wcag22CriterionV1::Sc143TextDefault
+            )
+            .unwrap(),
+            Wcag22AssessmentV1::Evaluated {
+                decision: Wcag22ApplicableDecisionV1::Pass,
+                ..
+            }
+        ));
+        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        session.prepare_update(update(1, 255)).unwrap().commit();
+        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        let anchor: Vec<_> = prepared
+            .sources()
+            .enumerate()
+            .map(|(index, (_, source))| {
+                if index == 0 {
+                    point([49., 122.51, 190.])
+                } else {
+                    ContinuousSrgbV1::from_srgb8(source)
+                }
+            })
+            .collect();
+        let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+        let emitted = result
+            .emitted()
+            .expect("two local visits repair the first text even with independent full RGB cubes");
+        assert_eq!(emitted[0], Srgb8::new([49, 122, 190]));
+        assert_eq!(result.visited(), 2 * (additional as u64 + 1));
+        assert!(!result.rgb8_search_exhausted());
+        assert_eq!(
+            result.continuous_optimality(),
+            ComputedOptimalityV1::Unfinished
+        );
+        if let Some(previous) = singleton_output {
+            assert_eq!(emitted[0], previous);
+        } else {
+            singleton_output = Some(emitted[0]);
+        }
+        if additional == 2 {
+            // Old whole-Program traversal spent 27×27 suffix combinations on
+            // the failing first color; even its full 384-visit budget missed
+            // the next first-color proposal. Every domain remains the full cube.
+            assert!(
+                selection
+                    .targets
+                    .iter()
+                    .all(|target| target.declaration.domain
+                        == AssignmentDomainV1::Cube {
+                            lower: [0; 3],
+                            upper: [255; 3]
+                        })
+            );
+            let generous = prepared.realize(&anchor, &anchor, 384).unwrap();
+            assert!(generous.emitted().is_some());
+            assert_eq!(generous.visited(), 384);
+        }
+    }
+}
+
+#[test]
+fn hard_related_paints_keep_their_joint_component() {
+    let mut p = independent_reference_program(2);
+    p.constraints
+        .hard
+        .push(ConstraintInvocation::preserve_tonal_hierarchy(
+            ConstraintId::new(90),
+            vec![OccurrenceId::new(25), OccurrenceId::new(5)],
+        ));
+    let owner = compile_assignment(p, 2).unwrap();
+    let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
+    else {
+        panic!()
+    };
+    let mut sizes: Vec<_> = selection
+        .components
+        .iter()
+        .map(|component| component.targets.len())
+        .collect();
+    sizes.sort_unstable();
+    assert_eq!(sizes, [1, 2]);
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let sources: Vec<_> = prepared.sources().map(|(_, source)| source).collect();
+    let anchor: Vec<_> = sources
+        .iter()
+        .copied()
+        .map(ContinuousSrgbV1::from_srgb8)
+        .collect();
+    let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+    assert_eq!(result.emitted().unwrap(), sources);
+    assert_eq!(result.visited(), 4);
+    assert!(!result.rgb8_search_exhausted());
+}
+
+#[test]
+fn failed_fixed_constraint_prevents_emitting_independent_valid_colors() {
+    let mut p = independent_reference_program(2);
+    p.sources.push(Source::new(
+        SourceId::new(90),
+        ColorSignal::from_srgb8(Srgb8::new([255; 3])),
+    ));
+    p.targets
+        .push(Target::fixed(TargetId::new(90), SourceId::new(90)));
+    p.paints.push(Paint::Solid {
+        id: PaintId::new(93),
+        target: TargetId::new(90),
+    });
+    p.occurrences.push(Occurrence::new(
+        OccurrenceId::new(95),
+        PaintId::new(93),
+        SurfaceId::new(4),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        p.occurrences[0].context,
+    ));
+    p.constraints
+        .hard
+        .push(ConstraintInvocation::visible_unary_hard(
+            ConstraintId::new(96),
+            OccurrenceId::new(95),
+            Wcag22CriterionV1::Sc143TextDefault,
+        ));
+    let owner = compile_assignment(p, 2).unwrap();
+    let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
+    else {
+        panic!()
+    };
+    assert_eq!(selection.fixed_constraints.len(), 1);
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor: Vec<_> = prepared
+        .sources()
+        .map(|(_, source)| ContinuousSrgbV1::from_srgb8(source))
+        .collect();
+    let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+    assert!(result.emitted().is_none());
+    assert_eq!(result.visited(), 1);
+}
+
+#[test]
+fn private_program_consumer_repairs_three_independent_full_rgb_components() {
+    let owner = compile_assignment(independent_reference_program(2), 128).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let probe = owner.prepare_reference_completion(&session).unwrap();
+    let anchor: Vec<_> = probe
+        .sources()
+        .map(|(_, source)| {
+            if source == Srgb8::new([49, 85, 190]) {
+                point([49., 122.51, 190.])
+            } else {
+                ContinuousSrgbV1::from_srgb8(source)
+            }
+        })
+        .collect();
+    drop(probe);
+    let start = std::time::Instant::now();
+    let ((mut prepared, cold, cold_bytes), cold_allocations) =
+        crate::test_support::measured_allocator_events(|| {
+            let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+            let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+            (
+                prepared,
+                result,
+                crate::test_support::current_allocator_bytes(),
+            )
+        });
+    let cold_elapsed = start.elapsed();
+    let start = std::time::Instant::now();
+    let ((warm, warm_bytes), warm_allocations) =
+        crate::test_support::measured_allocator_events(|| {
+            let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+            (result, crate::test_support::current_allocator_bytes())
+        });
+    let warm_elapsed = start.elapsed();
+    let emitted = cold
+        .emitted()
+        .expect("each independent full-domain component gets its own two visits");
+    assert_eq!(
+        emitted,
+        [
+            Srgb8::new([49, 122, 190]),
+            Srgb8::new([88, 64, 136]),
+            Srgb8::new([58, 109, 83])
+        ]
+    );
+    assert_eq!(warm.emitted(), cold.emitted());
+    assert_eq!(cold.visited(), 6);
+    assert!(cold.realization_color_evaluations() <= cold.visited());
+    assert!(!cold.rgb8_search_exhausted());
+    assert_eq!(cold.point_filter_evaluations(), 2);
+    eprintln!(
+        "private Program independent-component repair: tuple={emitted:?}, visits={}, color evaluations={}, filter evaluations={}, cold={cold_elapsed:?}, warm={warm_elapsed:?}, cold allocations={cold_allocations:?}, warm allocations={warm_allocations:?}, cold bytes={cold_bytes:?}, warm bytes={warm_bytes:?}",
+        cold.visited(),
+        cold.realization_color_evaluations(),
+        cold.point_filter_evaluations()
+    );
+}
