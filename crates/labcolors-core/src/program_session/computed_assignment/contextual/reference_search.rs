@@ -1347,12 +1347,13 @@ fn reports(
     Ok(reports.into())
 }
 
-pub(super) fn point_reports<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn reports_for_values<E: ProgramConstraintEvaluatorSetV1>(
     context: &ContextV1<'_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     values: &[Srgb8],
+    capacity: impl FnMut(usize) -> Result<Option<ProgramReferenceCapacityV1>, ()>,
 ) -> Result<
     std::sync::Arc<[ProgramReferenceSelectionV1]>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
@@ -1361,15 +1362,35 @@ pub(super) fn point_reports<E: ProgramConstraintEvaluatorSetV1>(
     let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
     let mut appearance =
         buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
+    observe_selected(
+        context,
+        runtime,
+        epoch,
+        scenarios,
+        values,
+        &mut scores,
+        &mut appearance,
+    )?;
+    reports(context, &appearance, capacity).map_err(allocation)
+}
+
+fn observe_selected<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1<'_>,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    scores: &mut [f64],
+    appearance: &mut [AppearancePointV1],
+) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     apply_targets::<E>(context.targets, runtime, values)?;
-    let mut collector = IntentScoreCollectorV1::new(context, values, &mut scores);
-    collector.appearance = Some(&mut appearance);
+    let mut collector = IntentScoreCollectorV1::new(context, values, scores);
+    collector.appearance = Some(appearance);
     observe_intents(context, runtime, epoch, scenarios, &mut collector)?;
     if collector.violations() != 0 {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
-    drop(collector);
-    reports(context, &appearance, |_| Ok(None)).map_err(allocation)
+    Ok(())
 }
 
 pub(in crate::program_session::computed_assignment) fn refresh_reports<
@@ -1386,30 +1407,17 @@ pub(in crate::program_session::computed_assignment) fn refresh_reports<
     std::sync::Arc<[ProgramReferenceSelectionV1]>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
 > {
-    let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
-    let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
-    let mut appearance =
-        buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
-    apply_targets::<E>(context.targets, runtime, values)?;
-    let mut collector = IntentScoreCollectorV1::new(&context, values, &mut scores);
-    collector.appearance = Some(&mut appearance);
-    observe_intents(&context, runtime, epoch, scenarios, &mut collector)?;
-    if collector.violations() != 0 {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
-    }
-    drop(collector);
     // Capacity and search completeness describe the same local support. Case
     // indexes and appearances describe this observation and must be rebuilt.
     let mut previous = previous.iter();
-    reports(&context, &appearance, |target| {
+    reports_for_values(&context, runtime, epoch, scenarios, values, |target| {
         let report = previous.next().ok_or(())?;
         if report.target_id != context.targets[target].id.value() {
             return Err(());
         }
         Ok(report.capacity)
     })
-    .map_err(allocation)
 }
 
 fn interval_distance(left: [f64; 2], right: [f64; 2]) -> f64 {
@@ -1774,15 +1782,15 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // of every physical case. Recompose only the selected report, without
         // running another search or another constraint evaluator. The caller
         // still performs the normal full-tuple validation before publication.
-        apply_targets::<E>(search.context.targets, runtime, &values)?;
-        let mut collector =
-            IntentScoreCollectorV1::new(&search.context, &values, &mut search.legacy_scores);
-        collector.appearance = Some(&mut search.appearance);
-        observe_intents(&search.context, runtime, epoch, scenarios, &mut collector)?;
-        if collector.violations() != 0 {
-            return Err(ProgramSessionEvaluationError::InternalInvariant);
-        }
-        drop(collector);
+        observe_selected(
+            &search.context,
+            runtime,
+            epoch,
+            scenarios,
+            &values,
+            &mut search.legacy_scores,
+            &mut search.appearance,
+        )?;
         (
             Some(values),
             Some(search.reference_reports(best).map_err(allocation)?),

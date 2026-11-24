@@ -696,8 +696,13 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             .iter()
             .any(|target| target.reference_backdrop.is_some())
         {
-            Some(reference_search::point_reports(
-                &context, runtime, epoch, scenarios, values,
+            Some(reference_search::reports_for_values(
+                &context,
+                runtime,
+                epoch,
+                scenarios,
+                values,
+                |_| Ok(None),
             )?)
         } else {
             None
