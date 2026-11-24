@@ -5,6 +5,7 @@ use crate::program_session::computed_assignment::tests::{
     compile_assignment, program, target, update,
 };
 use crate::session::SessionState;
+use crate::session_tests::CommitSessionUpdateForTest as _;
 
 // Standalone fixtures retain the original explicit-proposal surface. All
 // production preparation uses incoming arguments; this adapter is test-only.
@@ -100,10 +101,35 @@ pub(super) fn preference_row_visit() {
     PREFERENCE_ROW_VISITS.with(|value| value.set(value.get() + 1));
 }
 
+fn fixture_error(error: impl core::fmt::Debug) -> String {
+    format!("{error:?}")
+}
+
+fn fixture_session(
+    program: Program<Wcag22Srgb8V1>,
+    budget: u64,
+) -> Result<
+    (
+        CompiledProgram<Wcag22Srgb8V1>,
+        Session<ProgramSessionPlan<Wcag22Srgb8V1>>,
+    ),
+    String,
+> {
+    let owner = compile_assignment(program, budget).map_err(fixture_error)?;
+    let session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    Ok((owner, session))
+}
+
 fn retained_buffers<E: ProgramConstraintEvaluatorSetV1>(
     plan: &ProgramSessionPlan<E>,
 ) -> [usize; 5] {
-    let scratch = plan.reference_completion.storage.as_ref().unwrap();
+    let scratch = plan
+        .reference_completion
+        .storage
+        .as_ref()
+        .expect("reference completion has allocated reusable storage");
     [
         scratch.source_labs.as_ptr() as usize,
         scratch.binding_targets.as_ptr() as usize,
@@ -126,14 +152,20 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
     assert_eq!(incoming.revision().value(), request.expected_revision);
     assert_ne!(incoming.revision(), request.previous.revision());
     assert_eq!(
-        incoming.physical_values(0).unwrap()[0].srgb8(),
+        incoming
+            .physical_values(0)
+            .expect("incoming observation carries the first physical case")[0]
+            .srgb8(),
         request.expected_backdrop
     );
     let anchor = [point([80., 89., 109.])];
     let old = {
         // Retain a previous-observation result while reusing the incoming
         // transaction's free arena; the committed Ready arena stays leased.
-        let mut arena = plan.evaluation_arenas.guard(incoming.arena_slot()).unwrap();
+        let mut arena = plan
+            .evaluation_arenas
+            .guard(incoming.arena_slot())
+            .expect("incoming update leases its own evaluation arena");
         let mut runtime = ProgramEvaluationRuntimeV1 {
             bindings: &mut plan.bindings,
             workspace: &mut plan.workspace,
@@ -165,7 +197,11 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
         old.point_evidence().0.preferences[0].visible_lab,
         old_measurement
     );
-    assert_eq!(old.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
+    assert_eq!(
+        old.emitted()
+            .expect("the previous observation still has its emitted tuple"),
+        [Srgb8::new([80, 89, 109])]
+    );
     assert!(new.observation().is_same_binding_as(incoming));
     assert_eq!(new.use_tones()[0].occurrence, Some(OccurrenceId::new(5)));
     assert_eq!(
@@ -175,7 +211,10 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
     INCOMING_RECEIPTS.with(|values| {
         values.borrow_mut().push(IncomingReceiptV1 {
             observation: new.observation().clone(),
-            emitted: new.emitted().unwrap().to_vec(),
+            emitted: new
+                .emitted()
+                .expect("the incoming observation emitted a fresh tuple")
+                .to_vec(),
             old_tone,
             new_tone: new.use_tones()[0].per_case_bits[0],
             buffers,
@@ -184,7 +223,7 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
 }
 
 fn point(value: [f64; 3]) -> ContinuousSrgbV1 {
-    ContinuousSrgbV1::new(value).unwrap()
+    ContinuousSrgbV1::new(value).expect("fixture specifies finite encoded sRGB channels")
 }
 
 fn source_target() -> Target {
@@ -198,7 +237,7 @@ fn source_target() -> Target {
     );
     value.intent = Some(ColorUseIntentV1 {
         identity: ColorIdentityDomainV1::new(value.anchor, false, IdentityOptionsV1::default())
-            .unwrap(),
+            .expect("the fixture uses the declared source identity"),
         appearance: Some(OccurrenceId::new(5)),
         tone: None,
     });
@@ -217,30 +256,40 @@ fn single() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operation() {
+fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operation()
+-> Result<(), String> {
     let mut p = single();
     let TargetIntentV1::Computed(value) = &mut p.targets[0].intent else {
         panic!()
     };
-    value.intent.as_mut().unwrap().tone =
-        Some(ToneCurveV1::new(2, vec![[0.0, 0.6], [1.0, 0.6]]).unwrap());
-    let owner = compile_assignment(p, 8).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(3, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    value
+        .intent
+        .as_mut()
+        .ok_or("missing declared color intent")?
+        .tone = Some(ToneCurveV1::new(2, vec![[0.0, 0.6], [1.0, 0.6]]).map_err(fixture_error)?);
+    let (owner, mut session) = fixture_session(p, 8)?;
+    session.commit(update(3, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
     let completion = [point([
         43.36346865614138,
         78.15569710108728,
         182.58830650509347,
     ])];
-    let result = prepared.realize(&anchor, &completion, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &completion, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::PreferenceImproved
     );
     assert_eq!(result.ideal(), completion);
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([43, 78, 183])]);
+    assert_eq!(
+        result.emitted(),
+        Some([Srgb8::new([43, 78, 183])].as_slice())
+    );
     assert_eq!(
         result.continuous_optimality(),
         ComputedOptimalityV1::Unfinished
@@ -253,30 +302,46 @@ fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operati
     assert!(
         result.component_admissions()[0]
             .preference_drift_upper
-            .unwrap()
+            .ok_or("improved component has no preference drift bound")?
             < 0.0
     );
     assert!(!result.numerical_order_unresolved());
     let (a, b) = result.point_evidence();
-    let b = b.unwrap();
+    let b = b.ok_or("missing completion evidence to compare with the anchor")?;
     let row = &a.preferences[0];
     assert_eq!(row.target, TargetId::new(10));
     assert_eq!(row.occurrence, Some(OccurrenceId::new(5)));
     assert_eq!(row.case, 0);
     assert!(row.backdrop_lab.is_some());
-    let reference = row.reference.as_ref().unwrap();
-    let preferred = row.preferred.unwrap();
+    let reference = row
+        .reference
+        .as_ref()
+        .ok_or("missing reference for the declared occurrence")?;
+    let preferred = row.preferred.ok_or("missing preferred appearance")?;
     assert_eq!(
         preferred[0],
-        CertifiedScalarV1::exact(0.6).unwrap().bounds()
+        CertifiedScalarV1::exact(0.6)
+            .map_err(fixture_error)?
+            .bounds()
     );
     assert_eq!(preferred[1..], reference.visible_lab[1..]);
-    assert_eq!(reference.backdrop_lab, row.backdrop_lab.unwrap());
+    assert_eq!(
+        reference.backdrop_lab,
+        row.backdrop_lab
+            .ok_or("missing observed backdrop measurement")?
+    );
     assert!(reference.contrast.cell.is_ok());
     assert_ne!(row.visible_lab, b.preferences[0].visible_lab);
     assert_ne!(
-        row.distance.as_ref().unwrap().bounds,
-        b.preferences[0].distance.as_ref().unwrap().bounds
+        row.distance
+            .as_ref()
+            .ok_or("point has no certified preference distance")?
+            .bounds,
+        b.preferences[0]
+            .distance
+            .as_ref()
+            .ok_or("point has no certified preference distance")?
+            .bounds
     );
     assert_eq!(result.component_admissions()[0].component, 0);
     assert_eq!(a.source_profile.len(), 1);
@@ -285,38 +350,47 @@ fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operati
         result.use_tones()[0].per_case_bits[0],
         Some(0.6f64.to_bits())
     );
+    Ok(())
 }
 
 #[test]
-fn changed_implicit_reference_preserves_anchor_before_rgb8_realization() {
-    let owner = compile_assignment(single(), 4).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+fn changed_implicit_reference_preserves_anchor_before_rgb8_realization() -> Result<(), String> {
+    let (owner, mut session) = fixture_session(single(), 4)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
     let result = prepared
         .realize(&anchor, &[point([49., 85., 190.])], 1)
-        .unwrap();
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
     );
     assert_eq!(result.ideal(), anchor);
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
+    assert_eq!(
+        result.emitted(),
+        Some([Srgb8::new([80, 89, 109])].as_slice())
+    );
+    Ok(())
 }
+
+const SHARED_INK_PANELS: [([u8; 3], f64); 2] = [([234, 221, 234], 0.7), ([211, 233, 221], 0.65)];
 
 fn shared_ink() -> Program<Wcag22Srgb8V1> {
     let mut p = single();
     if let TargetIntentV1::Computed(value) = &mut p.targets[0].intent {
-        value.intent.as_mut().unwrap().appearance = Some(OccurrenceId::new(21));
+        value
+            .intent
+            .as_mut()
+            .expect("shared ink is declared with an appearance intent")
+            .appearance = Some(OccurrenceId::new(21));
     }
     p.occurrences.clear();
     p.constraints = ConstraintSet::new(vec![], vec![]);
     let context = single().occurrences[0].context;
-    for (index, (rgb, opacity)) in [([234, 221, 234], 0.7), ([211, 233, 221], 0.65)]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, (rgb, opacity)) in SHARED_INK_PANELS.into_iter().enumerate() {
         let id = 20 + index as u32 * 10;
         p.sources.push(Source::new(
             SourceId::new(id),
@@ -365,9 +439,9 @@ fn shared_ink() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
-    let owner = compile_assignment(shared_ink(), 4).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() -> Result<(), String>
+{
+    let (owner, mut session) = fixture_session(shared_ink(), 4)?;
     let mut input = update(7, 255);
     let ObservationPayloadInput::Scenarios(ref mut set) = input.payload else {
         panic!()
@@ -383,8 +457,10 @@ fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
             )],
         })
         .collect();
-    session.prepare_update(input).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    session.commit(input).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
     let accepted = [point([
         45.55648583981751,
@@ -393,7 +469,9 @@ fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
     ])];
     // This tuple was accepted by the historical scalar-cell convention. Its
     // archived raw evidence remains valid for that former convention only.
-    let result = prepared.realize(&anchor, &accepted, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &accepted, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
@@ -404,13 +482,18 @@ fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
         assert!(row.distance.is_none());
         assert!(row.reference.is_some());
     }
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
+    assert_eq!(
+        result.emitted(),
+        Some([Srgb8::new([80, 89, 109])].as_slice())
+    );
     let original = [point([
         45.55648583981752,
         80.83558199614438,
         185.4851713314703,
     ])];
-    let rejected = prepared.realize(&anchor, &original, 0).unwrap();
+    let rejected = prepared
+        .realize(&anchor, &original, 0)
+        .map_err(fixture_error)?;
     assert_eq!(
         rejected.admission(),
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
@@ -422,10 +505,12 @@ fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
             .is_none()
     );
     assert!(rejected.emitted().is_none());
+    Ok(())
 }
 
 #[test]
-fn both_adjustable_parent_and_child_are_jointly_realized_with_nested_opacity() {
+fn both_adjustable_parent_and_child_are_jointly_realized_with_nested_opacity() -> Result<(), String>
+{
     let mut p = program(
         target(10, 244, 242, 244, 0),
         Wcag22CriterionV1::Sc143TextDefault,
@@ -472,73 +557,93 @@ fn both_adjustable_parent_and_child_are_jointly_realized_with_nested_opacity() {
         };
         value.intent = Some(ColorUseIntentV1 {
             identity: ColorIdentityDomainV1::new(value.anchor, false, IdentityOptionsV1::default())
-                .unwrap(),
+                .map_err(fixture_error)?,
             appearance: Some(OccurrenceId::new(occurrence)),
             tone: None,
         });
         value.reference_appearance = true;
     }
-    let owner = compile_assignment(p, 20).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let (owner, mut session) = fixture_session(p, 20)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([242.25; 3]), point([2.75; 3])];
-    let result = prepared.realize(&anchor, &anchor, 20).unwrap();
+    let result = prepared
+        .realize(&anchor, &anchor, 20)
+        .map_err(fixture_error)?;
     assert_eq!(
-        result.emitted().unwrap(),
-        [Srgb8::new([242; 3]), Srgb8::new([3; 3])]
+        result.emitted(),
+        Some([Srgb8::new([242; 3]), Srgb8::new([3; 3])].as_slice())
     );
     assert!(result.rgb8_search_exhausted());
-    assert_eq!(result.visited(), 9); // the complete 3×3 tuple domain, without a duplicate hint
+    assert_eq!(result.visited(), 9); // the complete 3Р“вЂ”3 tuple domain, without a duplicate hint
     assert_eq!(
         result.continuous_optimality(),
         ComputedOptimalityV1::Unfinished
     );
+    Ok(())
 }
 
 #[test]
-fn hard_failure_of_rounded_tuple_is_not_emitted_or_called_conflict() {
-    let owner = compile_assignment(single(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+fn hard_failure_of_rounded_tuple_is_not_emitted_or_called_conflict() -> Result<(), String> {
+    let (owner, mut session) = fixture_session(single(), 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([240.; 3])];
-    let result = prepared.realize(&anchor, &anchor, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &anchor, 1)
+        .map_err(fixture_error)?;
     assert!(result.emitted().is_none());
     assert!(!result.rgb8_search_exhausted());
     assert_eq!(result.visited(), 1);
+    Ok(())
 }
 
 #[test]
-fn wrong_program_generation_is_rejected() {
-    let owner = compile_assignment(single(), 1).unwrap();
-    let other = compile_assignment(single(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+fn wrong_program_generation_is_rejected() -> Result<(), String> {
+    let owner = compile_assignment(single(), 1).map_err(fixture_error)?;
+    let other = compile_assignment(single(), 1).map_err(fixture_error)?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
     assert!(matches!(
         other.prepare_reference_completion(&session),
         Err(ReferenceCompletionErrorV1::OwnerMismatch)
     ));
+    Ok(())
 }
 
 #[test]
-fn immutable_result_outlives_preparation_and_does_not_borrow_the_mutable_session() {
-    let owner = compile_assignment(single(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+fn immutable_result_outlives_preparation_and_does_not_borrow_the_mutable_session()
+-> Result<(), String> {
+    let (owner, mut session) = fixture_session(single(), 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
-    let old = prepared.realize(&anchor, &anchor, 1).unwrap();
+    let old = prepared
+        .realize(&anchor, &anchor, 1)
+        .map_err(fixture_error)?;
     drop(prepared);
-    session.prepare_update(update(2, 250)).unwrap().commit();
+    session.commit(update(2, 250)).map_err(fixture_error)?;
     assert_eq!(old.observation().revision().value(), 1);
     assert_eq!(old.ideal(), anchor);
-    assert_eq!(old.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
-    let new = prepared.realize(&anchor, &anchor, 1).unwrap();
+    assert_eq!(old.emitted(), Some([Srgb8::new([80, 89, 109])].as_slice()));
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
+    let new = prepared
+        .realize(&anchor, &anchor, 1)
+        .map_err(fixture_error)?;
     assert_eq!(new.observation().revision().value(), 2);
     assert!(!old.observation().is_same_binding_as(new.observation()));
     assert!(old.binds_owner(&owner) && new.binds_owner(&owner));
+    Ok(())
 }
 
 #[test]
@@ -551,15 +656,17 @@ fn binding_failures_keep_their_typed_cause() {
 }
 
 #[test]
-fn declared_tone_is_derived_from_each_actual_context() {
+fn declared_tone_is_derived_from_each_actual_context() -> Result<(), String> {
     let mut p = single();
     let TargetIntentV1::Computed(value) = &mut p.targets[0].intent else {
         panic!()
     };
-    value.intent.as_mut().unwrap().tone =
-        Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap());
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    value
+        .intent
+        .as_mut()
+        .ok_or("missing declared color intent")?
+        .tone = Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).map_err(fixture_error)?);
+    let (owner, mut session) = fixture_session(p, 1)?;
     let mut input = update(1, 255);
     let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
         panic!()
@@ -571,55 +678,70 @@ fn declared_tone_is_derived_from_each_actual_context() {
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
     });
-    session.prepare_update(input).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    session.commit(input).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
-    let result = prepared.realize(&anchor, &anchor, 0).unwrap();
+    let result = prepared
+        .realize(&anchor, &anchor, 0)
+        .map_err(fixture_error)?;
     let tones = &result.use_tones()[0].per_case_bits;
-    let curve = ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap();
+    let curve = ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).map_err(fixture_error)?;
     for (case, tone) in tones.iter().enumerate() {
-        let backdrop = result.observation().physical_values(case).unwrap()[0].srgb8();
+        let backdrop = result
+            .observation()
+            .physical_values(case)
+            .ok_or("reported case has no observed backdrop")?[0]
+            .srgb8();
         assert_eq!(*tone, Some(curve.preferred_lightness(backdrop).to_bits()));
     }
     assert_ne!(tones[0], tones[1]);
+    Ok(())
 }
 
 #[test]
-fn declared_field_is_not_lifted_from_its_deduplicated_byte_support() {
-    let owner = compile_assignment(single(), 1).unwrap();
+fn declared_field_is_not_lifted_from_its_deduplicated_byte_support() -> Result<(), String> {
+    let owner = compile_assignment(single(), 1).map_err(fixture_error)?;
     let field = crate::program_wire::ProgramDeclaredFieldV1::from_rgb8(
         &[0; 3],
         0,
         Srgb8::new([254; 3]),
         Srgb8::new([255; 3]),
     )
-    .unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    .map_err(fixture_error)?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
     session
         .prepare_schema_ordered_field(crate::observation::Revision::new(1), &field)
-        .unwrap()
+        .map_err(fixture_error)?
         .commit();
     assert!(matches!(
         owner.prepare_reference_completion(&session),
         Err(ReferenceCompletionErrorV1::UnsupportedDeclaredField)
     ));
+    Ok(())
 }
 
 #[test]
-fn private_program_consumer_repairs_full_color_nested_tuple() {
+fn private_program_consumer_repairs_full_color_nested_tuple() -> Result<(), String> {
+    let ink_id = TargetId::new(10);
+    let panel_id = TargetId::new(20);
     let mut p = shared_ink();
     let parent = p
         .targets
         .iter_mut()
-        .find(|target| target.id == TargetId::new(20))
-        .unwrap();
-    let source = Srgb8::new([234, 221, 234]);
+        .find(|target| target.id == panel_id)
+        .ok_or("nested program has no adjustable panel")?;
+    let [(panel_rgb, panel_opacity), fixed_panel] = SHARED_INK_PANELS;
+    let source = Srgb8::new(panel_rgb);
     let mut declaration = ComputedTargetV1::color(
         source,
         2.0,
         ColorUseIntentV1 {
             identity: ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
-                .unwrap(),
+                .map_err(fixture_error)?,
             appearance: Some(OccurrenceId::new(20)),
             tone: None,
         },
@@ -627,60 +749,77 @@ fn private_program_consumer_repairs_full_color_nested_tuple() {
     declaration.reference_appearance = true;
     declaration.preference = 1;
     parent.intent = TargetIntentV1::Computed(declaration);
-    let owner = compile_assignment(p, 128).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let backgrounds = [([234, 221, 234], 0.7), ([211, 233, 221], 0.65)].map(|(paint, alpha)| {
-        std::array::from_fn(|i| crate::composition::source_over_channel_srgb8(paint[i], alpha, 255))
-    });
-    let passes = |foreground: [u8; 3]| {
-        backgrounds.iter().all(|&backdrop| {
-            matches!(
-                evaluate_wcag22_srgb8(foreground, backdrop, Wcag22CriterionV1::Sc143TextDefault)
-                    .unwrap(),
-                Wcag22AssessmentV1::Evaluated {
-                    decision: Wcag22ApplicableDecisionV1::Pass,
-                    ..
-                }
-            )
-        })
+    let (owner, mut session) = fixture_session(p, 128)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let passes = |ink: [u8; 3], panel: [u8; 3]| {
+        [(panel, panel_opacity), fixed_panel]
+            .into_iter()
+            .all(|(paint, opacity)| {
+                let backdrop = paint.map(|channel| {
+                    crate::composition::source_over_channel_srgb8(channel, opacity, 255)
+                });
+                matches!(
+                    evaluate_wcag22_srgb8(ink, backdrop, Wcag22CriterionV1::Sc143TextDefault)
+                        .expect("sRGB8 pair admits WCAG evaluation"),
+                    Wcag22AssessmentV1::Evaluated {
+                        decision: Wcag22ApplicableDecisionV1::Pass,
+                        ..
+                    }
+                )
+            })
     };
     let green = (0..254)
-        .find(|&green| passes([49, green, 190]) && !passes([49, green + 1, 190]))
-        .unwrap();
-    let probe = owner.prepare_reference_completion(&session).unwrap();
+        .find(|&green| {
+            passes([49, green, 190], source.bytes())
+                && !passes([49, green + 1, 190], source.bytes())
+        })
+        .ok_or("fixture contains no adjacent green-channel contrast boundary")?;
+    let probe = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor: Vec<_> = probe
         .sources()
-        .map(|(_, source)| {
-            if source == Srgb8::new([49, 85, 190]) {
+        .map(|(id, source)| {
+            if id == ink_id {
                 point([49., f64::from(green) + 0.51, 190.])
             } else {
-                point([234.25, 221.25, 234.25])
+                point(source.bytes().map(|channel| f64::from(channel) + 0.25))
             }
         })
         .collect();
     let ink_index = probe
         .sources()
-        .position(|(_, source)| source == Srgb8::new([49, 85, 190]))
-        .unwrap();
+        .position(|(id, _)| id == ink_id)
+        .ok_or("prepared sources omit the declared ink")?;
+    let panel_index = probe
+        .sources()
+        .position(|(id, _)| id == panel_id)
+        .ok_or("prepared sources omit the adjustable panel")?;
     drop(probe);
     let cold_start = std::time::Instant::now();
-    let ((mut prepared, result, cold_bytes), cold_allocations) =
-        crate::test_support::measured_allocator_events(|| {
-            let mut prepared = owner.prepare_reference_completion(&session).unwrap();
-            let result = prepared.realize(&anchor, &anchor, 128).unwrap();
-            (
-                prepared,
-                result,
-                crate::test_support::current_allocator_bytes(),
-            )
-        });
+    let (cold, cold_allocations) = crate::test_support::measured_allocator_events(|| {
+        let mut prepared = owner
+            .prepare_reference_completion(&session)
+            .map_err(fixture_error)?;
+        let result = prepared
+            .realize(&anchor, &anchor, 128)
+            .map_err(fixture_error)?;
+        Ok::<_, String>((
+            prepared,
+            result,
+            crate::test_support::current_allocator_bytes(),
+        ))
+    });
+    let (mut prepared, result, cold_bytes) = cold?;
     let cold_elapsed = cold_start.elapsed();
     let emitted = result
         .emitted()
         .expect("the joint neighborhood must repair this whole tuple");
     assert_eq!(emitted.len(), 2);
-    assert_ne!(emitted[ink_index], Srgb8::new([49, green + 1, 190]));
+    assert!(
+        passes(emitted[ink_index].bytes(), emitted[panel_index].bytes()),
+        "emitted ink must pass on both composed surfaces"
+    );
     assert!(
         matches!(owner.owner_generation.target_selection, CompiledTargetSelectionV1::Computed(ref selection) if selection.targets.iter().all(|target| target.declaration.domain == AssignmentDomainV1::Cube { lower: [0;3], upper: [255;3] }))
     );
@@ -689,11 +828,13 @@ fn private_program_consumer_repairs_full_color_nested_tuple() {
     assert_eq!(result.point_filter_evaluations(), 2);
     assert!(result.realization_color_evaluations() < result.visited());
     let start = std::time::Instant::now();
-    let ((warm, warm_bytes), warm_allocations) =
-        crate::test_support::measured_allocator_events(|| {
-            let result = prepared.realize(&anchor, &anchor, 128).unwrap();
-            (result, crate::test_support::current_allocator_bytes())
-        });
+    let (warm, warm_allocations) = crate::test_support::measured_allocator_events(|| {
+        let result = prepared
+            .realize(&anchor, &anchor, 128)
+            .map_err(fixture_error)?;
+        Ok::<_, String>((result, crate::test_support::current_allocator_bytes()))
+    });
+    let (warm, warm_bytes) = warm?;
     assert_eq!(warm.emitted(), result.emitted());
     eprintln!(
         "private Program full-color joint repair: tuple={emitted:?}, visits={}, color evaluations={}, filter evaluations={}, cold={cold_elapsed:?}, warm={:?}, cold allocations={cold_allocations:?}, warm allocations={warm_allocations:?}, cold bytes={cold_bytes:?}, warm bytes={warm_bytes:?}",
@@ -702,6 +843,7 @@ fn private_program_consumer_repairs_full_color_nested_tuple() {
         result.point_filter_evaluations(),
         start.elapsed()
     );
+    Ok(())
 }
 
 fn independent_reference_program(additional: usize) -> Program<Wcag22Srgb8V1> {
@@ -721,7 +863,7 @@ fn independent_reference_program(additional: usize) -> Program<Wcag22Srgb8V1> {
             2.0,
             ColorUseIntentV1 {
                 identity: ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
-                    .unwrap(),
+                    .expect("the fixture uses the declared source identity"),
                 appearance: Some(OccurrenceId::new(id + 5)),
                 tone: None,
             },
@@ -759,7 +901,7 @@ fn independent_reference_program(additional: usize) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn independent_point_admission_visits_each_case_target_once() {
+fn independent_point_admission_visits_each_case_target_once() -> Result<(), String> {
     for additional in 0..=2 {
         let mut p = independent_reference_program(additional);
         p.reference_inputs = None;
@@ -769,14 +911,16 @@ fn independent_point_admission_visits_each_case_target_once() {
             };
             declaration.reference_appearance = false;
         }
-        let owner = compile_assignment(p, 1).unwrap();
+        let owner = compile_assignment(p, 1).map_err(fixture_error)?;
         let CompiledTargetSelectionV1::Computed(selection) =
             &owner.owner_generation.target_selection
         else {
             panic!()
         };
         assert_eq!(selection.components.len(), additional + 1);
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(fixture_error)?;
         let mut input = update(1, 255);
         let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
             panic!()
@@ -788,8 +932,10 @@ fn independent_point_admission_visits_each_case_target_once() {
                 ColorSignal::from_srgb8(Srgb8::new([250; 3])),
             )],
         });
-        session.prepare_update(input).unwrap().commit();
-        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        session.commit(input).map_err(fixture_error)?;
+        let mut prepared = owner
+            .prepare_reference_completion(&session)
+            .map_err(fixture_error)?;
         let proposal: Vec<_> = prepared
             .sources()
             .map(|(_, source)| ContinuousSrgbV1::from_srgb8(source))
@@ -803,7 +949,9 @@ fn independent_point_admission_visits_each_case_target_once() {
             })
             .collect();
         PREFERENCE_ROW_VISITS.with(|value| value.set(0));
-        let result = prepared.realize(&anchor, &proposal, 0).unwrap();
+        let result = prepared
+            .realize(&anchor, &proposal, 0)
+            .map_err(fixture_error)?;
         assert_eq!(
             result.admission(),
             CompletionAdmissionV1::PreferenceImproved
@@ -816,13 +964,15 @@ fn independent_point_admission_visits_each_case_target_once() {
             "independent components must not rescan other targets' preference rows"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn independent_full_rgb_components_do_not_starve_first_text_repair() {
+fn independent_full_rgb_components_do_not_starve_first_text_repair() -> Result<(), String> {
     let mut singleton_output = None;
     for additional in [0, 2] {
-        let owner = compile_assignment(independent_reference_program(additional), 128).unwrap();
+        let owner = compile_assignment(independent_reference_program(additional), 128)
+            .map_err(fixture_error)?;
         let CompiledTargetSelectionV1::Computed(selection) =
             &owner.owner_generation.target_selection
         else {
@@ -851,7 +1001,7 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
                 .declaration
                 .intent
                 .as_ref()
-                .unwrap()
+                .ok_or("fixture has no declared source identity")?
                 .identity
                 .contains(Srgb8::new([49, 122, 190]))
         );
@@ -861,7 +1011,7 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
                 [255; 3],
                 Wcag22CriterionV1::Sc143TextDefault
             )
-            .unwrap(),
+            .expect("sRGB8 pair admits WCAG evaluation"),
             Wcag22AssessmentV1::Evaluated {
                 decision: Wcag22ApplicableDecisionV1::Fail,
                 ..
@@ -873,15 +1023,19 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
                 [255; 3],
                 Wcag22CriterionV1::Sc143TextDefault
             )
-            .unwrap(),
+            .expect("sRGB8 pair admits WCAG evaluation"),
             Wcag22AssessmentV1::Evaluated {
                 decision: Wcag22ApplicableDecisionV1::Pass,
                 ..
             }
         ));
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
-        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(fixture_error)?;
+        session.commit(update(1, 255)).map_err(fixture_error)?;
+        let mut prepared = owner
+            .prepare_reference_completion(&session)
+            .map_err(fixture_error)?;
         let anchor: Vec<_> = prepared
             .sources()
             .enumerate()
@@ -893,7 +1047,9 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
                 }
             })
             .collect();
-        let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+        let result = prepared
+            .realize(&anchor, &anchor, 2)
+            .map_err(fixture_error)?;
         let emitted = result
             .emitted()
             .expect("two local visits repair the first text even with independent full RGB cubes");
@@ -910,7 +1066,7 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
             singleton_output = Some(emitted[0]);
         }
         if additional == 2 {
-            // Old whole-Program traversal spent 27×27 suffix combinations on
+            // Old whole-Program traversal spent 27Р“вЂ”27 suffix combinations on
             // the failing first color; even its full 384-visit budget missed
             // the next first-color proposal. Every domain remains the full cube.
             assert!(
@@ -923,15 +1079,18 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() {
                             upper: [255; 3]
                         })
             );
-            let generous = prepared.realize(&anchor, &anchor, 384).unwrap();
+            let generous = prepared
+                .realize(&anchor, &anchor, 384)
+                .map_err(fixture_error)?;
             assert!(generous.emitted().is_some());
             assert_eq!(generous.visited(), 384);
         }
     }
+    Ok(())
 }
 
 #[test]
-fn hard_related_paints_keep_their_joint_component() {
+fn hard_related_paints_keep_their_joint_component() -> Result<(), String> {
     let mut p = independent_reference_program(2);
     p.constraints
         .hard
@@ -939,7 +1098,7 @@ fn hard_related_paints_keep_their_joint_component() {
             ConstraintId::new(90),
             vec![OccurrenceId::new(25), OccurrenceId::new(5)],
         ));
-    let owner = compile_assignment(p, 2).unwrap();
+    let owner = compile_assignment(p, 2).map_err(fixture_error)?;
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
@@ -951,23 +1110,30 @@ fn hard_related_paints_keep_their_joint_component() {
         .collect();
     sizes.sort_unstable();
     assert_eq!(sizes, [1, 2]);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let sources: Vec<_> = prepared.sources().map(|(_, source)| source).collect();
     let anchor: Vec<_> = sources
         .iter()
         .copied()
         .map(ContinuousSrgbV1::from_srgb8)
         .collect();
-    let result = prepared.realize(&anchor, &anchor, 2).unwrap();
-    assert_eq!(result.emitted().unwrap(), sources);
+    let result = prepared
+        .realize(&anchor, &anchor, 2)
+        .map_err(fixture_error)?;
+    assert_eq!(result.emitted(), Some(sources.as_slice()));
     assert_eq!(result.visited(), 4);
     assert!(!result.rgb8_search_exhausted());
+    Ok(())
 }
 
 #[test]
-fn failed_fixed_constraint_prevents_emitting_independent_valid_colors() {
+fn failed_fixed_constraint_prevents_emitting_independent_valid_colors() -> Result<(), String> {
     let mut p = independent_reference_program(2);
     p.sources.push(Source::new(
         SourceId::new(90),
@@ -993,30 +1159,38 @@ fn failed_fixed_constraint_prevents_emitting_independent_valid_colors() {
             OccurrenceId::new(95),
             Wcag22CriterionV1::Sc143TextDefault,
         ));
-    let owner = compile_assignment(p, 2).unwrap();
+    let owner = compile_assignment(p, 2).map_err(fixture_error)?;
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
     };
     assert_eq!(selection.fixed_constraints.len(), 1);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor: Vec<_> = prepared
         .sources()
         .map(|(_, source)| ContinuousSrgbV1::from_srgb8(source))
         .collect();
-    let result = prepared.realize(&anchor, &anchor, 2).unwrap();
+    let result = prepared
+        .realize(&anchor, &anchor, 2)
+        .map_err(fixture_error)?;
     assert!(result.emitted().is_none());
     assert_eq!(result.visited(), 1);
+    Ok(())
 }
 
 #[test]
-fn private_program_consumer_repairs_three_independent_full_rgb_components() {
-    let owner = compile_assignment(independent_reference_program(2), 128).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let probe = owner.prepare_reference_completion(&session).unwrap();
+fn private_program_consumer_repairs_three_independent_full_rgb_components() -> Result<(), String> {
+    let (owner, mut session) = fixture_session(independent_reference_program(2), 128)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let probe = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor: Vec<_> = probe
         .sources()
         .map(|(_, source)| {
@@ -1029,23 +1203,29 @@ fn private_program_consumer_repairs_three_independent_full_rgb_components() {
         .collect();
     drop(probe);
     let start = std::time::Instant::now();
-    let ((mut prepared, cold, cold_bytes), cold_allocations) =
-        crate::test_support::measured_allocator_events(|| {
-            let mut prepared = owner.prepare_reference_completion(&session).unwrap();
-            let result = prepared.realize(&anchor, &anchor, 2).unwrap();
-            (
-                prepared,
-                result,
-                crate::test_support::current_allocator_bytes(),
-            )
-        });
+    let (measured, cold_allocations) = crate::test_support::measured_allocator_events(|| {
+        let mut prepared = owner
+            .prepare_reference_completion(&session)
+            .map_err(fixture_error)?;
+        let result = prepared
+            .realize(&anchor, &anchor, 2)
+            .map_err(fixture_error)?;
+        Ok::<_, String>((
+            prepared,
+            result,
+            crate::test_support::current_allocator_bytes(),
+        ))
+    });
+    let (mut prepared, cold, cold_bytes) = measured?;
     let cold_elapsed = start.elapsed();
     let start = std::time::Instant::now();
-    let ((warm, warm_bytes), warm_allocations) =
-        crate::test_support::measured_allocator_events(|| {
-            let result = prepared.realize(&anchor, &anchor, 2).unwrap();
-            (result, crate::test_support::current_allocator_bytes())
-        });
+    let (warm, warm_allocations) = crate::test_support::measured_allocator_events(|| {
+        let result = prepared
+            .realize(&anchor, &anchor, 2)
+            .map_err(fixture_error)?;
+        Ok::<_, String>((result, crate::test_support::current_allocator_bytes()))
+    });
+    let (warm, warm_bytes) = warm?;
     let warm_elapsed = start.elapsed();
     let emitted = cold
         .emitted()
@@ -1069,27 +1249,36 @@ fn private_program_consumer_repairs_three_independent_full_rgb_components() {
         cold.realization_color_evaluations(),
         cold.point_filter_evaluations()
     );
+    Ok(())
 }
 
 #[test]
-fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result() {
+fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result()
+-> Result<(), String> {
     let mut p = single();
     let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
         panic!()
     };
-    target.intent.as_mut().unwrap().tone =
-        Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap());
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let curve = ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).map_err(fixture_error)?;
+    target
+        .intent
+        .as_mut()
+        .ok_or("missing declared color intent")?
+        .tone = Some(curve.clone());
+    let (_owner, mut session) = fixture_session(p, 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
     assert!(session.plan().reference_completion.storage.is_none());
     let crate::observation::ObservationHeadViewV1::Observed(previous) = session.raw_head() else {
         panic!()
     };
     let previous = previous.clone();
     INCOMING_RECEIPTS.with(|values| values.borrow_mut().clear());
-    for (revision, backdrop, commit) in [(2, 250, false), (3, 245, true)] {
-        assert_eq!(session.raw_head().revision().unwrap().value(), 1);
+    let updates = [(2, 250, false), (3, 245, true)];
+    for (revision, backdrop, commit) in updates {
+        assert_eq!(
+            session.raw_head().revision(),
+            Some(crate::observation::Revision::new(1))
+        );
         INCOMING_REQUEST.with(|value| {
             *value.borrow_mut() = Some(IncomingRequestV1 {
                 previous: previous.clone(),
@@ -1097,7 +1286,9 @@ fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result
                 expected_backdrop: Srgb8::new([backdrop; 3]),
             })
         });
-        let transaction = session.prepare_update(update(revision, backdrop)).unwrap();
+        let transaction = session
+            .prepare_update(update(revision, backdrop))
+            .map_err(fixture_error)?;
         assert!(INCOMING_REQUEST.with(|value| value.borrow().is_none()));
         if commit {
             transaction.commit();
@@ -1105,26 +1296,36 @@ fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result
             drop(transaction);
         }
     }
-    assert_eq!(session.raw_head().revision().unwrap().value(), 3);
+    assert_eq!(
+        session.raw_head().revision(),
+        Some(crate::observation::Revision::new(3))
+    );
     let receipts = INCOMING_RECEIPTS.with(|values| core::mem::take(&mut *values.borrow_mut()));
     assert_eq!(receipts.len(), 2);
-    assert_eq!(receipts[0].observation.revision().value(), 2);
-    assert_eq!(receipts[1].observation.revision().value(), 3);
+
     assert_eq!(receipts[0].buffers, receipts[1].buffers);
-    for receipt in &receipts {
-        assert_eq!(receipt.emitted, [Srgb8::new([80, 89, 109])]);
+    let tone = |gray| Some(curve.preferred_lightness(Srgb8::new([gray; 3])).to_bits());
+    for (receipt, (revision, backdrop, _)) in receipts.iter().zip(updates) {
+        assert_eq!(receipt.observation.revision().value(), revision);
+        assert_eq!(receipt.old_tone, tone(255));
+        assert_eq!(receipt.new_tone, tone(backdrop));
         assert_ne!(receipt.old_tone, receipt.new_tone);
+        assert_eq!(receipt.emitted, [Srgb8::new([80, 89, 109])]);
     }
     assert_ne!(receipts[0].new_tone, receipts[1].new_tone);
     assert_eq!(previous.revision().value(), 1);
+    Ok(())
 }
 
 #[test]
-fn incoming_operation_rejects_equal_content_from_a_different_epoch_and_scratch() {
-    let owner = compile_assignment(single(), 1).unwrap();
-    let other = compile_assignment(single(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+fn incoming_operation_rejects_equal_content_from_a_different_epoch_and_scratch()
+-> Result<(), String> {
+    let owner = compile_assignment(single(), 1).map_err(fixture_error)?;
+    let other = compile_assignment(single(), 1).map_err(fixture_error)?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
     let crate::observation::ObservationHeadViewV1::Observed(observation) = session.raw_head()
     else {
         panic!()
@@ -1135,12 +1336,13 @@ fn incoming_operation_rejects_equal_content_from_a_different_epoch_and_scratch()
         Err(ReferenceCompletionErrorV1::OwnerMismatch)
     ));
     assert!(scratch.storage.is_none());
-    prepare(&owner.owner_generation, observation, &mut scratch).unwrap();
-    let mut other_session = other.instantiate(ObservationStreamId::new(8)).unwrap();
+    prepare(&owner.owner_generation, observation, &mut scratch).map_err(fixture_error)?;
+    let mut other_session = other
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
     other_session
-        .prepare_update(update(1, 255))
-        .unwrap()
-        .commit();
+        .commit(update(1, 255))
+        .map_err(fixture_error)?;
     let crate::observation::ObservationHeadViewV1::Observed(other_observation) =
         other_session.raw_head()
     else {
@@ -1150,19 +1352,19 @@ fn incoming_operation_rejects_equal_content_from_a_different_epoch_and_scratch()
         prepare(&other.owner_generation, other_observation, &mut scratch),
         Err(ReferenceCompletionErrorV1::OwnerMismatch)
     ));
+    Ok(())
 }
 
 #[test]
-fn rollback_after_incomplete_releases_the_last_observation_slot() {
-    let owner = compile_assignment(single(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+fn rollback_after_incomplete_releases_the_last_observation_slot() -> Result<(), String> {
+    let (_owner, mut session) = fixture_session(single(), 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
     assert!(matches!(session.state(), SessionState::Ready { .. }));
     let crate::observation::ObservationHeadViewV1::Observed(previous) = session.raw_head() else {
         panic!()
     };
     let previous = previous.clone();
-    session.prepare_update(update(2, 0)).unwrap().commit();
+    session.commit(update(2, 0)).map_err(fixture_error)?;
     assert!(matches!(
         session.state(),
         SessionState::Incomplete {
@@ -1182,42 +1384,60 @@ fn rollback_after_incomplete_releases_the_last_observation_slot() {
     });
     // Ready revision 1 and current Incomplete revision 2 already retain two
     // backing slots. Revision 3 uses the sole remaining slot and is rolled back.
-    drop(session.prepare_update(update(3, 250)).unwrap());
-    assert_eq!(session.raw_head().revision().unwrap().value(), 2);
+    drop(
+        session
+            .prepare_update(update(3, 250))
+            .map_err(fixture_error)?,
+    );
+    assert_eq!(
+        session.raw_head().revision(),
+        Some(crate::observation::Revision::new(2))
+    );
     assert!(INCOMING_REQUEST.with(|value| value.borrow().is_none()));
     // Test-owned snapshots, unlike scratch, legitimately retain their backing.
     // Drop the operation result before asking admission to reuse that slot.
     INCOMING_RECEIPTS.with(|values| values.borrow_mut().clear());
-    session.prepare_update(update(4, 255)).unwrap().commit();
-    assert_eq!(session.raw_head().revision().unwrap().value(), 4);
+    session.commit(update(4, 255)).map_err(fixture_error)?;
+    assert_eq!(
+        session.raw_head().revision(),
+        Some(crate::observation::Revision::new(4))
+    );
     assert!(matches!(session.state(), SessionState::Ready { .. }));
+    Ok(())
 }
 
 #[test]
-fn full_preferred_point_improvement_works_without_reference() {
+fn full_preferred_point_improvement_works_without_reference() -> Result<(), String> {
     let mut p = single();
     p.reference_inputs = None;
     let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
         panic!()
     };
     target.reference_appearance = false;
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let (owner, mut session) = fixture_session(p, 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([80., 89., 109.])];
     let better = [point([49., 85., 190.])];
-    let result = prepared.realize(&anchor, &better, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &better, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::PreferenceImproved
     );
     assert_eq!(result.ideal(), better);
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([49, 85, 190])]);
+    assert_eq!(
+        result.emitted(),
+        Some([Srgb8::new([49, 85, 190])].as_slice())
+    );
+    Ok(())
 }
 
 #[test]
-fn same_full_distance_rounding_cell_cannot_authorize_worsening() {
+fn same_full_distance_rounding_cell_cannot_authorize_worsening() -> Result<(), String> {
     let mut p = single();
     let mut target = ComputedTargetV1::declared(
         AssignmentDomainV1::Gray {
@@ -1233,44 +1453,51 @@ fn same_full_distance_rounding_cell_cannot_authorize_worsening() {
             true,
             IdentityOptionsV1::default(),
         )
-        .unwrap(),
+        .map_err(fixture_error)?,
         appearance: Some(OccurrenceId::new(5)),
-        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]]).unwrap()),
+        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]]).map_err(fixture_error)?),
     });
     target.reference_appearance = true;
     p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let (owner, mut session) = fixture_session(p, 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([52.0; 3])];
     let worse = [point([f64::from_bits(0x4049_ffff_ffff_ffff); 3])];
     let source = CertifiedRgbV1::from_encoded([32.0; 3])
-        .unwrap()
+        .map_err(fixture_error)?
         .oklab()
-        .unwrap();
-    let preferred = [CertifiedScalarV1::exact(0.9).unwrap(), source[1], source[2]];
+        .map_err(fixture_error)?;
+    let preferred = [
+        CertifiedScalarV1::exact(0.9).map_err(fixture_error)?,
+        source[1],
+        source[2],
+    ];
     let a = CertifiedRgbV1::from_encoded(anchor[0].channels())
-        .unwrap()
+        .map_err(fixture_error)?
         .oklab()
-        .unwrap();
+        .map_err(fixture_error)?;
     let b = CertifiedRgbV1::from_encoded(worse[0].channels())
-        .unwrap()
+        .map_err(fixture_error)?
         .oklab()
-        .unwrap();
-    let da = source_distance_squared(a, preferred).unwrap();
-    let db = source_distance_squared(b, preferred).unwrap();
+        .map_err(fixture_error)?;
+    let da = source_distance_squared(a, preferred).map_err(fixture_error)?;
+    let db = source_distance_squared(b, preferred).map_err(fixture_error)?;
     assert_eq!(
-        da.nearest_even_cell().unwrap(),
-        db.nearest_even_cell().unwrap()
+        da.nearest_even_cell().map_err(fixture_error)?,
+        db.nearest_even_cell().map_err(fixture_error)?
     );
     assert!(da.strictly_below(db));
     assert!(
         source_distance_squared(b, source)
-            .unwrap()
-            .strictly_below(source_distance_squared(a, source).unwrap())
+            .map_err(fixture_error)?
+            .strictly_below(source_distance_squared(a, source).map_err(fixture_error)?)
     );
-    let result = prepared.realize(&anchor, &worse, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &worse, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceWorsened)
@@ -1280,16 +1507,17 @@ fn same_full_distance_rounding_cell_cannot_authorize_worsening() {
         a.preferences[0]
             .distance
             .as_ref()
-            .unwrap()
+            .ok_or("point has no certified preference distance")?
             .cell
-            .unwrap()
+            .map_err(fixture_error)?
             .cell_bits,
-        b.unwrap().preferences[0]
+        b.ok_or("missing completion evidence to compare with the anchor")?
+            .preferences[0]
             .distance
             .as_ref()
-            .unwrap()
+            .ok_or("point has no certified preference distance")?
             .cell
-            .unwrap()
+            .map_err(fixture_error)?
             .cell_bits
     );
     assert_eq!(
@@ -1297,10 +1525,12 @@ fn same_full_distance_rounding_cell_cannot_authorize_worsening() {
         anchor,
         "a source improvement cannot override a proven full preference worsening"
     );
+    Ok(())
 }
 
 #[test]
-fn independent_point_improves_while_changed_implicit_component_preserves_anchor() {
+fn independent_point_improves_while_changed_implicit_component_preserves_anchor()
+-> Result<(), String> {
     for connected in [false, true] {
         let mut p = independent_reference_program(1);
         let TargetIntentV1::Computed(point_target) = &mut p.targets[1].intent else {
@@ -1315,13 +1545,16 @@ fn independent_point_improves_while_changed_implicit_component_preserves_anchor(
                     vec![OccurrenceId::new(25), OccurrenceId::new(5)],
                 ));
         }
-        let owner = compile_assignment(p, 2).unwrap();
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
-        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        let (owner, mut session) = fixture_session(p, 2)?;
+        session.commit(update(1, 255)).map_err(fixture_error)?;
+        let mut prepared = owner
+            .prepare_reference_completion(&session)
+            .map_err(fixture_error)?;
         let anchor = [point([49., 85., 190.]), point([90., 64., 136.])];
         let proposed = [point([49., 90., 190.]), point([88., 64., 136.])];
-        let result = prepared.realize(&anchor, &proposed, 2).unwrap();
+        let result = prepared
+            .realize(&anchor, &proposed, 2)
+            .map_err(fixture_error)?;
         if connected {
             assert_eq!(result.component_admissions().len(), 1);
             assert_eq!(
@@ -1341,8 +1574,8 @@ fn independent_point_improves_while_changed_implicit_component_preserves_anchor(
             );
             assert_eq!(result.ideal(), [anchor[0], proposed[1]]);
             assert_eq!(
-                result.emitted().unwrap(),
-                [Srgb8::new([49, 85, 190]), Srgb8::new([88, 64, 136])]
+                result.emitted(),
+                Some([Srgb8::new([49, 85, 190]), Srgb8::new([88, 64, 136])].as_slice())
             );
             assert!(
                 result
@@ -1356,6 +1589,7 @@ fn independent_point_improves_while_changed_implicit_component_preserves_anchor(
                 )));
         }
     }
+    Ok(())
 }
 
 fn invisible_black_source() -> Program<Wcag22Srgb8V1> {
@@ -1376,7 +1610,7 @@ fn invisible_black_source() -> Program<Wcag22Srgb8V1> {
             true,
             IdentityOptionsV1::default(),
         )
-        .unwrap(),
+        .expect("the fixture uses the declared source identity"),
         appearance: Some(OccurrenceId::new(5)),
         tone: None,
     });
@@ -1403,7 +1637,7 @@ fn authored_material_minimum(
     alpha: f64,
     backgrounds: &[[u8; 3]],
     tone: Option<f64>,
-) -> bool {
+) -> Result<bool, String> {
     let mut p = invisible_black_source();
     p.opacities[0] = OpacityInput::new(OpacityInputId::new(33), alpha);
     let anchor = Srgb8::new(source);
@@ -1416,13 +1650,16 @@ fn authored_material_minimum(
         2.0,
     );
     target.intent = Some(ColorUseIntentV1 {
-        identity: ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default()).unwrap(),
+        identity: ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+            .map_err(fixture_error)?,
         appearance: Some(OccurrenceId::new(5)),
-        tone: tone.map(|value| ToneCurveV1::new(2, vec![[0.0, value], [1.0, value]]).unwrap()),
+        tone: tone.map(|value| {
+            ToneCurveV1::new(2, vec![[0.0, value], [1.0, value]])
+                .expect("constant fixture tone is in the unit range")
+        }),
     });
     p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let (owner, mut session) = fixture_session(p, 1)?;
     let mut input = update(1, 0);
     let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
         panic!()
@@ -1438,29 +1675,31 @@ fn authored_material_minimum(
             )],
         })
         .collect();
-    session.prepare_update(input).unwrap().commit();
+    session.commit(input).map_err(fixture_error)?;
     let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
     else {
         panic!()
     };
-    let mut standalone = owner.prepare_reference_completion(&session).unwrap();
+    let mut standalone = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let mut prepared = prepare(
         standalone.epoch,
         &standalone.observation,
         &mut standalone.scratch,
     )
-    .unwrap();
+    .map_err(fixture_error)?;
     let cases: Vec<_> = (0..backgrounds.len()).collect();
     prepared
         .authored_point_optimal(&selection.components[0], &cases)
-        .unwrap()
+        .map_err(fixture_error)
 }
 
 #[test]
-fn authored_point_minimum_proves_transparent_and_same_background_cases() {
+fn authored_point_minimum_proves_transparent_and_same_background_cases() -> Result<(), String> {
     for source in [[255; 3], [0, 103, 244]] {
         for alpha in [0.0, 0.5, 1.0] {
-            assert!(authored_material_minimum(source, alpha, &[source], None));
+            assert!(authored_material_minimum(source, alpha, &[source], None)?);
         }
         // Zero opacity makes every primary distance invariant even when it is
         // nonzero, including several cases and a non-authored tone preference.
@@ -1469,24 +1708,25 @@ fn authored_point_minimum_proves_transparent_and_same_background_cases() {
             0.0,
             &[[0; 3], [128; 3], [255; 3]],
             Some(0.6)
-        ));
+        )?);
     }
+    Ok(())
 }
 
 #[test]
-fn authored_point_minimum_retains_nonzero_physics_and_every_case() {
+fn authored_point_minimum_retains_nonzero_physics_and_every_case() -> Result<(), String> {
     assert!(!authored_material_minimum(
         [128; 3],
         0.5,
         &[[128; 3], [127; 3]],
         None
-    ));
+    )?);
     assert!(!authored_material_minimum(
         [128; 3],
         0.5,
         &[[128; 3]],
         Some(0.1)
-    ));
+    )?);
     // The real visible color differs from its source although both round to
     // the same binary64 encoded cell (and therefore the same emitted byte).
     assert!(!authored_material_minimum(
@@ -1494,7 +1734,7 @@ fn authored_point_minimum_retains_nonzero_physics_and_every_case() {
         f64::from_bits(1.0_f64.to_bits() - 1),
         &[[127; 3]],
         None,
-    ));
+    )?);
     // Even the smallest positive material contribution is not a constant
     // expression over the source domain.
     assert!(!authored_material_minimum(
@@ -1502,47 +1742,71 @@ fn authored_point_minimum_retains_nonzero_physics_and_every_case() {
         f64::from_bits(1),
         &[[127; 3]],
         None
-    ));
+    )?);
+    Ok(())
 }
 
 #[test]
-fn source_completion_requires_proved_preference_equality() {
-    let owner = compile_assignment(invisible_black_source(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 0)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+fn source_completion_requires_proved_preference_equality() -> Result<(), String> {
+    let (owner, mut session) = fixture_session(invisible_black_source(), 1)?;
+    session.commit(update(1, 0)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([52.; 3])];
     let proposed = [point([32.; 3])];
-    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &proposed, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::SourceImprovedWithinEquivalentPreference
     );
     assert_eq!(result.ideal(), proposed);
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([32; 3])]);
+    assert_eq!(result.emitted(), Some([Srgb8::new([32; 3])].as_slice()));
     for evidence in [
         result.point_evidence().0,
-        result.point_evidence().1.unwrap(),
+        result
+            .point_evidence()
+            .1
+            .ok_or("missing completion evidence to compare with the anchor")?,
     ] {
         assert_eq!(
-            evidence.preferences[0].distance.as_ref().unwrap().bounds,
+            evidence.preferences[0]
+                .distance
+                .as_ref()
+                .ok_or("point has no certified preference distance")?
+                .bounds,
             [0, 0]
         );
     }
+    Ok(())
 }
 
 #[test]
-fn matching_non_singleton_enclosures_are_unresolved_without_an_equality_witness() {
-    let owner = compile_assignment(invisible_black_source(), 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+fn matching_non_singleton_enclosures_are_unresolved_without_an_equality_witness()
+-> Result<(), String> {
+    let (owner, mut session) = fixture_session(invisible_black_source(), 1)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([52.; 3])];
     let proposed = [point([32.; 3])];
-    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &proposed, 1)
+        .map_err(fixture_error)?;
     let (a, b) = result.point_evidence();
-    let a = a.preferences[0].distance.as_ref().unwrap();
-    let b = b.unwrap().preferences[0].distance.as_ref().unwrap();
+    let a = a.preferences[0]
+        .distance
+        .as_ref()
+        .ok_or("point has no certified preference distance")?;
+    let b = b
+        .ok_or("missing completion evidence to compare with the anchor")?
+        .preferences[0]
+        .distance
+        .as_ref()
+        .ok_or("point has no certified preference distance")?;
     assert_eq!(a.bounds, b.bounds);
     assert_ne!(a.bounds[0], a.bounds[1]);
     assert_eq!(
@@ -1550,10 +1814,11 @@ fn matching_non_singleton_enclosures_are_unresolved_without_an_equality_witness(
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceUnresolved)
     );
     assert_eq!(result.ideal(), anchor);
+    Ok(())
 }
 
 #[test]
-fn better_worst_case_cannot_hide_worsening_another_declared_case() {
+fn better_worst_case_cannot_hide_worsening_another_declared_case() -> Result<(), String> {
     let mut p = single();
     p.reference_inputs = None;
     p.constraints = ConstraintSet::new(vec![], vec![]);
@@ -1571,13 +1836,12 @@ fn better_worst_case_cannot_hide_worsening_another_declared_case() {
             true,
             IdentityOptionsV1::default(),
         )
-        .unwrap(),
+        .map_err(fixture_error)?,
         appearance: Some(OccurrenceId::new(5)),
-        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap()),
+        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).map_err(fixture_error)?),
     });
     p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
-    let owner = compile_assignment(p, 1).unwrap();
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let (owner, mut session) = fixture_session(p, 1)?;
     let mut input = update(1, 255);
     let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
         panic!()
@@ -1589,11 +1853,15 @@ fn better_worst_case_cannot_hide_worsening_another_declared_case() {
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
     });
-    session.prepare_update(input).unwrap().commit();
-    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    session.commit(input).map_err(fixture_error)?;
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
     let anchor = [point([128.; 3])];
     let proposed = [point([110.; 3])];
-    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    let result = prepared
+        .realize(&anchor, &proposed, 1)
+        .map_err(fixture_error)?;
     assert_eq!(
         result.admission(),
         CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceIncomparable)
@@ -1604,8 +1872,25 @@ fn better_worst_case_cannot_hide_worsening_another_declared_case() {
         point
             .preferences
             .iter()
-            .map(|row| f64::from_bits(row.distance.as_ref().unwrap().cell.unwrap().cell_bits))
+            .map(|row| {
+                f64::from_bits(
+                    row.distance
+                        .as_ref()
+                        .expect("profile row has a certified distance")
+                        .cell
+                        .expect("profile distance has a unique rounding cell")
+                        .cell_bits,
+                )
+            })
             .fold(0.0_f64, f64::max)
     };
-    assert!(worst(result.point_evidence().1.unwrap()) < worst(result.point_evidence().0));
+    assert!(
+        worst(
+            result
+                .point_evidence()
+                .1
+                .ok_or("missing completion evidence to compare with the anchor")?
+        ) < worst(result.point_evidence().0)
+    );
+    Ok(())
 }

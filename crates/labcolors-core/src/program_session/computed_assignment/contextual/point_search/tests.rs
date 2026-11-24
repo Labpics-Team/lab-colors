@@ -2,6 +2,7 @@ use super::*;
 use crate::color_intent::IdentityOptionsV1;
 use crate::observation::{ObservationPayloadInput, ScenarioId, ScenarioInput, SurfaceInputBinding};
 use crate::program_session::computed_assignment::tests::{program, rgb, target, update};
+use crate::session_tests::CommitSessionUpdateForTest as _;
 
 std::thread_local! { static REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }
 std::thread_local! { static SEED_REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }
@@ -63,6 +64,10 @@ fn take_seed_refreshes() -> Vec<TargetId> {
     SEED_REFRESHES.with(|values| std::mem::take(&mut *values.borrow_mut()))
 }
 
+fn fixture_error(error: impl core::fmt::Debug) -> String {
+    format!("{error:?}")
+}
+
 fn compile(
     mut p: Program<Wcag22Srgb8V1>,
     budget: u64,
@@ -81,7 +86,8 @@ fn compile(
         legacy_reference_order: ids,
     });
     p.computed_budget = Some(budget);
-    p.compile().unwrap()
+    p.compile()
+        .expect("joint fixture declares every computed target in the composition")
 }
 
 fn joint_gray() -> Program<Wcag22Srgb8V1> {
@@ -120,13 +126,14 @@ fn joint_gray() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn public_joint_point_matches_tiny_symmetric_oracle_and_bootstraps_feasibility() {
+fn public_joint_point_matches_tiny_symmetric_oracle_and_bootstraps_feasibility()
+-> Result<(), String> {
     let mut oracle = Vec::new();
     for parent in 240..=248 {
         for child in 108..=118 {
             if matches!(
                 evaluate_wcag22_srgb8([child; 3], [parent; 3], Wcag22CriterionV1::Sc143TextDefault)
-                    .unwrap(),
+                    .map_err(fixture_error)?,
                 Wcag22AssessmentV1::Evaluated {
                     decision: Wcag22ApplicableDecisionV1::Pass,
                     ..
@@ -154,12 +161,14 @@ fn public_joint_point_matches_tiny_symmetric_oracle_and_bootstraps_feasibility()
     let mut identity = None;
     for reverse in [false, true] {
         let owner = compile(joint_gray(), 1024, reverse);
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(fixture_error)?;
+        session.commit(update(1, 255)).map_err(fixture_error)?;
         let current = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("the feasible update produced a verified assignment")
             .computed_for_test();
         let actual: Vec<_> = current
             .arena
@@ -181,10 +190,12 @@ fn public_joint_point_matches_tiny_symmetric_oracle_and_bootstraps_feasibility()
         }
         identity = Some(current.identity);
     }
+    Ok(())
 }
 
 #[test]
-fn public_point_starts_from_invalid_authored_source_and_reuses_compiled_anchors() {
+fn public_point_starts_from_invalid_authored_source_and_reuses_compiled_anchors()
+-> Result<(), String> {
     let owner = compile(
         program(
             target(10, 150, 0, 255, 0),
@@ -198,31 +209,42 @@ fn public_point_starts_from_invalid_authored_source_and_reuses_compiled_anchors(
     else {
         panic!()
     };
-    let anchors = selection.point_anchors.as_ref().unwrap().as_ref() as *const _;
+    let anchors = selection
+        .point_anchors
+        .as_ref()
+        .expect("compiled point selection retains its source anchors")
+        .as_ref() as *const _;
     for _ in 0..2 {
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 255)).unwrap().commit();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(fixture_error)?;
+        session.commit(update(1, 255)).map_err(fixture_error)?;
         assert_eq!(rgb(&session), Srgb8::new([118; 3]));
         assert_eq!(
-            selection.point_anchors.as_ref().unwrap().as_ref() as *const _,
+            selection
+                .point_anchors
+                .as_ref()
+                .expect("compiled point selection retains its source anchors")
+                .as_ref() as *const _,
             anchors
         );
-        session.prepare_update(update(2, 0)).unwrap().commit();
+        session.commit(update(2, 0)).map_err(fixture_error)?;
         assert_eq!(rgb(&session), Srgb8::new([150; 3]));
-        session.prepare_update(update(3, 255)).unwrap().commit();
+        session.commit(update(3, 255)).map_err(fixture_error)?;
         assert_eq!(rgb(&session), Srgb8::new([118; 3]));
     }
+    Ok(())
 }
 
 #[test]
-fn public_point_profile_keeps_every_unique_local_case() {
+fn public_point_profile_keeps_every_unique_local_case() -> Result<(), String> {
     let mut p = program(
         target(10, 110, 90, 110, 0),
         Wcag22CriterionV1::Sc143TextDefault,
         Wcag22Srgb8V1,
     );
     p.constraints = ConstraintSet::new(vec![], vec![]);
-    let curve = ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap();
+    let curve = ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).map_err(fixture_error)?;
     if let TargetIntentV1::Computed(target) = &mut p.targets[0].intent {
         target.intent = Some(ColorUseIntentV1 {
             identity: ColorIdentityDomainV1::new(
@@ -230,13 +252,15 @@ fn public_point_profile_keeps_every_unique_local_case() {
                 true,
                 IdentityOptionsV1::default(),
             )
-            .unwrap(),
+            .map_err(fixture_error)?,
             appearance: Some(OccurrenceId::new(5)),
             tone: Some(curve.clone()),
         });
     }
     let owner = compile(p, 256, false);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
     let mut input = update(1, 255);
     let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
         panic!()
@@ -248,7 +272,7 @@ fn public_point_profile_keeps_every_unique_local_case() {
             ColorSignal::from_srgb8(Srgb8::new([0; 3])),
         )],
     });
-    session.prepare_update(input).unwrap().commit();
+    session.commit(input).map_err(fixture_error)?;
     let loss = |gray| {
         let value = lab(Srgb8::new([gray; 3]));
         let source = lab(Srgb8::new([110; 3]));
@@ -271,12 +295,14 @@ fn public_point_profile_keeps_every_unique_local_case() {
             let b = loss(b);
             a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1]))
         })
-        .unwrap();
+        .expect("the inclusive gray domain contains a minimizer");
     assert_eq!(rgb(&session), Srgb8::new([expected; 3]));
+    Ok(())
 }
 
 #[test]
-fn independent_support_reuses_other_component_and_refreshes_only_unique_local_cases() {
+fn independent_support_reuses_other_component_and_refreshes_only_unique_local_cases()
+-> Result<(), String> {
     let mut p = program(
         target(10, 150, 0, 255, 0),
         Wcag22CriterionV1::Sc143TextDefault,
@@ -311,7 +337,9 @@ fn independent_support_reuses_other_component_and_refreshes_only_unique_local_ca
     p.outputs
         .push(OutputBinding::new(OutputSlotId::new(17), PaintId::new(13)));
     let owner = compile(p, 1024, false);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
     let observed = |revision, first| {
         let mut input = update(revision, first);
         let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
@@ -338,7 +366,7 @@ fn independent_support_reuses_other_component_and_refreshes_only_unique_local_ca
     };
     take_refreshes();
     take_seed_refreshes();
-    session.prepare_update(observed(1, 255)).unwrap().commit();
+    session.commit(observed(1, 255)).map_err(fixture_error)?;
     let refreshed = take_refreshes();
     assert_eq!(
         refreshed
@@ -356,23 +384,24 @@ fn independent_support_reuses_other_component_and_refreshes_only_unique_local_ca
     );
     assert_eq!(take_seed_refreshes(), refreshed);
     assert_eq!(rgb(&session), Srgb8::new([118; 3]));
-    session.prepare_update(observed(2, 250)).unwrap().commit();
+    session.commit(observed(2, 250)).map_err(fixture_error)?;
     assert_eq!(take_refreshes(), vec![TargetId::new(10)]);
     assert_eq!(take_seed_refreshes(), vec![TargetId::new(10)]);
-    session.prepare_update(observed(3, 250)).unwrap().commit();
+    session.commit(observed(3, 250)).map_err(fixture_error)?;
     assert!(take_refreshes().is_empty());
     assert!(take_seed_refreshes().is_empty());
     let current = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("the feasible update produced a verified assignment")
         .computed_for_test();
     assert_eq!(current.selection_components().len(), 2);
     assert!(current.search.visited <= 2048);
+    Ok(())
 }
 
 #[test]
-fn explicit_reference_point_preserves_ordinary_reference_reports() {
+fn explicit_reference_point_preserves_ordinary_reference_reports() -> Result<(), String> {
     let mut p = program(
         target(10, 100, 90, 110, 0),
         Wcag22CriterionV1::Sc143TextDefault,
@@ -386,21 +415,25 @@ fn explicit_reference_point_preserves_ordinary_reference_reports() {
                 true,
                 IdentityOptionsV1::default(),
             )
-            .unwrap(),
+            .map_err(fixture_error)?,
             appearance: Some(OccurrenceId::new(5)),
-            tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.45], [1.0, 0.45]]).unwrap()),
+            tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.45], [1.0, 0.45]]).map_err(fixture_error)?),
         });
     }
     p.reference_inputs = Some(vec![(SurfaceInputPortId::new(2), Srgb8::new([255; 3]))]);
     let owner = compile(p, 256, false);
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(fixture_error)?;
+    session.commit(update(1, 255)).map_err(fixture_error)?;
     let current = session
         .state()
         .current_verified()
-        .unwrap()
+        .expect("the feasible update produced a verified assignment")
         .computed_for_test();
-    let report = &current.reference_selections().unwrap()[0];
+    let report = &current
+        .reference_selections()
+        .expect("the reference selection exposes its transfer evidence")[0];
     assert_eq!(
         report.preference,
         crate::program_wire::ProgramReferencePreferenceV1::ExplicitTone
@@ -410,24 +443,23 @@ fn explicit_reference_point_preserves_ordinary_reference_reports() {
     assert_eq!(report.cases[0].actual_visible, rgb(&session));
     assert_eq!(report.cases[0].reference_visible, Srgb8::new([100; 3]));
     assert_eq!(report.cases[0].actual_backdrop, Srgb8::new([255; 3]));
+    Ok(())
 }
 
 #[test]
-fn unresolved_profile_never_falls_through_to_source_tie() {
-    let a = crate::certified_numeric::CertifiedRgbV1::from_encoded([52.0; 3])
-        .unwrap()
-        .oklab()
-        .unwrap();
+fn unresolved_profile_never_falls_through_to_source_tie()
+-> Result<(), crate::certified_numeric::NumericUncertaintyV1> {
+    let a = crate::certified_numeric::CertifiedRgbV1::from_encoded([52.0; 3])?.oklab()?;
     let distance = crate::certified_numeric::source_distance_squared(
         a,
-        [CertifiedScalarV1::exact(0.9).unwrap(), a[1], a[2]],
-    )
-    .unwrap();
+        [CertifiedScalarV1::exact(0.9)?, a[1], a[2]],
+    )?;
     assert_ne!(distance.bounds()[0], distance.bounds()[1]);
     assert_eq!(profile_order(&[distance], &[distance]), None);
-    let lo = CertifiedScalarV1::exact(1.0).unwrap();
-    let hi = CertifiedScalarV1::exact(2.0).unwrap();
+    let lo = CertifiedScalarV1::exact(1.0)?;
+    let hi = CertifiedScalarV1::exact(2.0)?;
     assert_eq!(profile_order(&[hi, lo], &[hi, hi]), Some(Ordering::Less));
+    Ok(())
 }
 
 fn repeated_children(opacity: f64, duplicate: bool) -> Program<Wcag22Srgb8V1> {
@@ -455,7 +487,7 @@ fn repeated_children(opacity: f64, duplicate: bool) -> Program<Wcag22Srgb8V1> {
                     false,
                     IdentityOptionsV1::default(),
                 )
-                .unwrap(),
+                .expect("the chromatic fixture uses the default source identity"),
                 appearance: Some(OccurrenceId::new(appearance)),
                 tone: None,
             },
@@ -466,7 +498,11 @@ fn repeated_children(opacity: f64, duplicate: bool) -> Program<Wcag22Srgb8V1> {
             TargetIntentV1::Computed(target) => target.clone(),
             _ => unreachable!(),
         };
-        declaration.intent.as_mut().unwrap().appearance = Some(OccurrenceId::new(25));
+        declaration
+            .intent
+            .as_mut()
+            .expect("the duplicated child has a declared color intent")
+            .appearance = Some(OccurrenceId::new(25));
         p.targets.push(Target::new(
             TargetId::new(30),
             TargetIntentV1::Computed(declaration),
@@ -496,7 +532,7 @@ fn repeated_children(opacity: f64, duplicate: bool) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn repeated_local_requirements_have_one_profile_and_one_search_dimension() {
+fn repeated_local_requirements_have_one_profile_and_one_search_dimension() -> Result<(), String> {
     // Public regression previously emitted two unequal siblings, including
     // [6,96,236] and [6,97,237]. Copying the latter strictly improved P.
     for opacity in [1.0, 0.5] {
@@ -506,8 +542,9 @@ fn repeated_local_requirements_have_one_profile_and_one_search_dimension() {
         ];
         let mut sessions = owners
             .iter()
-            .map(|owner| owner.instantiate(ObservationStreamId::new(8)).unwrap())
-            .collect::<Vec<_>>();
+            .map(|owner| owner.instantiate(ObservationStreamId::new(8)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(fixture_error)?;
         let CompiledTargetSelectionV1::Computed(selection) =
             &owners[1].owner_generation.target_selection
         else {
@@ -525,7 +562,7 @@ fn repeated_local_requirements_have_one_profile_and_one_search_dimension() {
                     SurfaceInputPortId::new(2),
                     ColorSignal::from_srgb8(Srgb8::new(backdrop)),
                 );
-                session.prepare_update(input).unwrap().commit();
+                session.commit(input).map_err(fixture_error)?;
                 let current = session
                     .state()
                     .current_verified()
@@ -549,10 +586,11 @@ fn repeated_local_requirements_have_one_profile_and_one_search_dimension() {
             assert_eq!(results[1][2], results[0][1]);
         }
     }
+    Ok(())
 }
 
 #[test]
-fn different_requirement_or_downstream_effect_prevents_source_quotient() {
+fn different_requirement_or_downstream_effect_prevents_source_quotient() -> Result<(), String> {
     let mut different = repeated_children(1.0, true);
     different.constraints.hard[1] = ConstraintInvocation::visible_unary_hard(
         ConstraintId::new(26),
@@ -590,7 +628,8 @@ fn different_requirement_or_downstream_effect_prevents_source_quotient() {
         .hard
         .push(ConstraintInvocation::exact_intrinsic_distinction_hard(
             ConstraintId::new(37),
-            DirectedRelationV1::try_new(TargetId::new(20), vec![TargetId::new(30)]).unwrap(),
+            DirectedRelationV1::try_new(TargetId::new(20), vec![TargetId::new(30)])
+                .map_err(fixture_error)?,
         ));
     related.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
         legacy_reference_order: vec![TargetId::new(10), TargetId::new(20), TargetId::new(30)],
@@ -632,10 +671,11 @@ fn different_requirement_or_downstream_effect_prevents_source_quotient() {
                 .all(|component| component.point_equivalence.is_none())
         );
     }
+    Ok(())
 }
 
 #[test]
-fn authored_constant_or_exact_appearance_stops_after_one_hard_check() {
+fn authored_constant_or_exact_appearance_stops_after_one_hard_check() -> Result<(), String> {
     for (opacity, backdrop, exact_stop) in [(0.0, 255, true), (0.5, 100, true), (0.5, 255, false)] {
         let mut p = program(
             target(10, 100, 90, 110, 0),
@@ -658,21 +698,20 @@ fn authored_constant_or_exact_appearance_stops_after_one_hard_check() {
                     true,
                     IdentityOptionsV1::default(),
                 )
-                .unwrap(),
+                .map_err(fixture_error)?,
                 appearance: Some(OccurrenceId::new(5)),
                 tone: None,
             });
         }
         let owner = compile(p, 64, false);
-        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-        session
-            .prepare_update(update(1, backdrop))
-            .unwrap()
-            .commit();
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .map_err(fixture_error)?;
+        session.commit(update(1, backdrop)).map_err(fixture_error)?;
         let current = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("the feasible update produced a verified assignment")
             .computed_for_test();
         assert_eq!(
             current.search.visited == 1,
@@ -680,6 +719,7 @@ fn authored_constant_or_exact_appearance_stops_after_one_hard_check() {
             "opacity={opacity}, backdrop={backdrop}"
         );
     }
+    Ok(())
 }
 
 fn small_alpha_program() -> Program<Wcag22Srgb8V1> {
@@ -705,7 +745,7 @@ fn small_alpha_program() -> Program<Wcag22Srgb8V1> {
                 true,
                 IdentityOptionsV1::default(),
             )
-            .unwrap(),
+            .expect("the chromatic fixture uses the default source identity"),
             appearance: Some(OccurrenceId::new(5)),
             tone: None,
         });
@@ -714,7 +754,7 @@ fn small_alpha_program() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
+fn screened_search_preserves_refined_tuple_and_every_budget_counter() -> Result<(), String> {
     let mut totals = [0_u64; 5];
     for (p, budget, backdrops) in [
         (joint_gray(), 128, vec![[255; 3]]),
@@ -734,7 +774,9 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
         let run = |refined| {
             with_refined(refined, || {
                 take_profile_measurements();
-                let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+                let mut session = owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .map_err(fixture_error)?;
                 let mut history = Vec::new();
                 for (revision, backdrop) in backdrops.iter().enumerate() {
                     let mut input = update(revision as u64 + 1, 0);
@@ -745,11 +787,11 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
                         SurfaceInputPortId::new(2),
                         ColorSignal::from_srgb8(Srgb8::new(*backdrop)),
                     );
-                    session.prepare_update(input).unwrap().commit();
+                    session.commit(input).map_err(fixture_error)?;
                     let current = session
                         .state()
                         .current_verified()
-                        .unwrap()
+                        .expect("the feasible update produced a verified assignment")
                         .computed_for_test();
                     history.push((
                         current
@@ -762,11 +804,11 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
                         current.search,
                     ));
                 }
-                (history, take_profile_measurements())
+                Ok::<_, String>((history, take_profile_measurements()))
             })
         };
-        let (screened, counts) = run(false);
-        let (refined, full_counts) = run(true);
+        let (screened, counts) = run(false)?;
+        let (refined, full_counts) = run(true)?;
         assert_eq!(
             screened, refined,
             "screening must preserve both decisions and traversal"
@@ -787,4 +829,5 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
     eprintln!(
         "screened search measurements [point screen, point full, region screen, region full, incumbent full]={totals:?}"
     );
+    Ok(())
 }
