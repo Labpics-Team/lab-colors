@@ -628,15 +628,21 @@ impl CertifiedRgbV1 {
         if alpha == 1.0 {
             return Ok(self);
         }
-        let alpha = CertifiedScalarV1::exact(alpha)?;
+        let alpha = lift(alpha)?;
+        // The real blend is nondecreasing in each channel. Use the same
+        // backdrop endpoint in its difference and sum, rounding outwards.
+        let endpoint = |source: Quad, backdrop: Quad, round| {
+            let difference = checked(source.sub_r(backdrop, round))?;
+            let weighted = checked(alpha.mul_r(difference, round))?;
+            checked(backdrop.add_r(weighted, round))
+        };
         let blend = |source: CertifiedScalarV1, backdrop: CertifiedScalarV1| {
-            let result = backdrop.add(alpha.mul(source.sub(backdrop)?)?)?;
             // Admitted alpha proves convexity. Intersecting that known domain
             // tightens arithmetic enclosure; it never clamps an input point.
             let physical = source.hull(backdrop);
             Ok(CertifiedScalarV1 {
-                lo: result.lo.max(physical.lo),
-                hi: result.hi.min(physical.hi),
+                lo: endpoint(source.lo, backdrop.lo, DOWN)?.max(physical.lo),
+                hi: endpoint(source.hi, backdrop.hi, UP)?.min(physical.hi),
             })
         };
         Ok(Self([

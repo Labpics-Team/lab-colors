@@ -25,6 +25,42 @@ fn composite(source: [f64; 3], alpha: f64, backdrop: CertifiedRgbV1) -> Certifie
 }
 
 #[test]
+fn source_over_box_attains_its_monotone_corner_bounds() -> Result<(), NumericUncertaintyV1> {
+    let source = CertifiedRgbV1::from_encoded_bounds([255.0, 0.0, 16.0], [255.0, 0.0, 112.0])?;
+    let backdrop = CertifiedRgbV1::from_encoded_bounds([0.0, 0.0, 224.0], [255.0, 255.0, 244.0])?;
+    let alpha = AdmittedOpacityV1::new(0.99).expect("physical fixture opacity");
+    let composed = source.source_over(alpha, backdrop)?;
+    // These integer coordinates and binary64 weights fit exactly in Quad.
+    let a = scalar(alpha.value());
+    let b = scalar(1.0).sub(a)?;
+    for (i, channel) in composed.0.iter().enumerate() {
+        let corner = |s, d| {
+            a.mul(CertifiedScalarV1::point(s))?
+                .add(b.mul(CertifiedScalarV1::point(d))?)
+        };
+        let lower = corner(source.0[i].lo, backdrop.0[i].lo)?;
+        let upper = corner(source.0[i].hi, backdrop.0[i].hi)?;
+        assert!(lower.proves_equal(lower) && upper.proves_equal(upper));
+        assert_eq!(channel.bounds(), [lower.lo.to_bits(), upper.hi.to_bits()]);
+    }
+    Ok(())
+}
+
+#[test]
+fn source_over_rounds_both_corners_outwards_at_subnormal_opacity()
+-> Result<(), NumericUncertaintyV1> {
+    let source = CertifiedRgbV1::from_encoded_bounds([0.0; 3], [2.0; 3])?;
+    let alpha = AdmittedOpacityV1::new(f64::from_bits(1)).expect("positive subnormal opacity");
+    let result = source.source_over(alpha, rgb([1.0; 3]))?;
+    // Both endpoints 1 ± 2^-1074 lie strictly between 1 and its Quad neighbor.
+    let one = lift(1.0)?.to_bits();
+    for channel in result.0 {
+        assert_eq!(channel.bounds(), [one - 1, one + 1]);
+    }
+    Ok(())
+}
+
+#[test]
 fn exact_admission_preserves_dyadic_values_and_rejects_invalid_channels()
 -> Result<(), NumericUncertaintyV1> {
     for value in [0.0, 1.0, f64::from_bits(1), f64::MAX, 255.0, 0.85, -0.1] {

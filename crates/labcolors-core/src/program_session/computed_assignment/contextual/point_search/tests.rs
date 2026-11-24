@@ -760,6 +760,11 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() -> Result<
         (joint_gray(), 128, vec![[255; 3]]),
         (small_alpha_program(), 64, vec![[128; 3]]),
         (
+            translucent_child_over_variable_parent(),
+            4096,
+            vec![[192; 3]],
+        ),
+        (
             repeated_children(1.0, true),
             256,
             vec![[255; 3], [244, 234, 219]],
@@ -830,4 +835,31 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() -> Result<
         "screened search measurements [point screen, point full, region screen, region full, incumbent full]={totals:?}"
     );
     Ok(())
+}
+
+fn translucent_child_over_variable_parent() -> Program<Wcag22Srgb8V1> {
+    let mut p = joint_gray();
+    p.targets[0] = target(10, 32, 0, 255, 0);
+    p.targets[1] = target(20, 224, 220, 228, 1);
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    p.opacities
+        .push(OpacityInput::new(OpacityInputId::new(1), 0.875));
+    p.paints.push(Paint::Opacity {
+        id: PaintId::new(33),
+        source: PaintId::new(13),
+        opacity: OpacityInputId::new(1),
+    });
+    p.occurrences[1].subject = PaintId::new(33);
+    for (target, occurrence) in p.targets.iter_mut().zip([5, 15]) {
+        let TargetIntentV1::Computed(t) = &mut target.intent else {
+            unreachable!()
+        };
+        t.intent = Some(ColorUseIntentV1 {
+            identity: ColorIdentityDomainV1::new(t.anchor, true, IdentityOptionsV1::default())
+                .expect("the fixture declares neutral sources"),
+            appearance: Some(OccurrenceId::new(occurrence)),
+            tone: None,
+        });
+    }
+    p
 }
