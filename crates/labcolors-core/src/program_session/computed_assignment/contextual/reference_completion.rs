@@ -89,11 +89,12 @@ impl PointMeasurementPrecisionV1 {
     fn oklab(
         self,
         cache: &mut crate::certified_numeric::CertifiedOklabCacheV1,
+        transforms: &mut crate::certified_numeric::PointTransformCache,
         rgb: CertifiedRgbV1,
     ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
         match self {
-            Self::Screened => cache.evaluate_screened(rgb),
-            Self::Refined => cache.evaluate(rgb),
+            Self::Screened => cache.evaluate_screened(rgb, transforms),
+            Self::Refined => cache.evaluate(rgb, transforms),
         }
     }
 }
@@ -346,6 +347,7 @@ struct ReferenceCompletionStorageV1 {
     binding_targets: Vec<Option<usize>>,
     source_labs: Arc<[[CertifiedScalarV1; 3]]>,
     point_buffers: super::point_search::BuffersV1,
+    point_transforms: crate::certified_numeric::PointTransformCache,
     authored_minimum_rows: Vec<bool>,
 }
 
@@ -518,6 +520,8 @@ impl ReferenceCompletionStorageV1 {
             binding_targets,
             source_labs,
             point_buffers: super::point_search::BuffersV1::default(),
+            point_transforms: crate::certified_numeric::PointTransformCache::new()
+                .map_err(|_| Error::<E>::ResourceExhausted)?,
             authored_minimum_rows: Vec::new(),
         })
     }
@@ -708,6 +712,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             let (lo, hi) = bounds(local);
             let lab = precision.oklab(
                 &mut self.scratch.uses[target].point_lab_cache,
+                &mut self.scratch.point_transforms,
                 CertifiedRgbV1::from_encoded_bounds(lo, hi)?,
             )?;
             source_profile.push(source_distance_squared(
@@ -758,7 +763,11 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                     let (lo, hi) = bounds(local);
                     CertifiedRgbV1::from_encoded_bounds(lo, hi)?
                 };
-                let visible = precision.oklab(&mut usage.point_lab_cache, visible_rgb)?;
+                let visible = precision.oklab(
+                    &mut usage.point_lab_cache,
+                    &mut self.scratch.point_transforms,
+                    visible_rgb,
+                )?;
                 primary.push(source_distance_squared(
                     visible,
                     *usage

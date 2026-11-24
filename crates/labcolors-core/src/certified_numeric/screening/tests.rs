@@ -149,20 +149,24 @@ fn screening_does_not_turn_overlap_into_an_order_or_rounding_cell() {
 #[test]
 fn memoization_upgrades_screened_values_and_fallback_uses_original_rgb() {
     let mut cache = CertifiedOklabCacheV1::default();
+    let mut transforms = crate::certified_numeric::PointTransformCache::new().unwrap();
     let rgb = CertifiedRgbV1::from_encoded([49.0, 85.0, 190.0]).unwrap();
     let screened = cache
-        .evaluate_screened(rgb)
+        .evaluate_screened(rgb, &mut transforms)
         .unwrap()
         .map(CertifiedScalarV1::bounds);
     let refined = rgb.oklab().unwrap().map(CertifiedScalarV1::bounds);
     assert_ne!(screened, refined);
     assert_eq!(
-        cache.evaluate(rgb).unwrap().map(CertifiedScalarV1::bounds),
+        cache
+            .evaluate(rgb, &mut transforms)
+            .unwrap()
+            .map(CertifiedScalarV1::bounds),
         refined
     );
     assert_eq!(
         cache
-            .evaluate_screened(rgb)
+            .evaluate_screened(rgb, &mut transforms)
             .unwrap()
             .map(CertifiedScalarV1::bounds),
         refined
@@ -171,7 +175,7 @@ fn memoization_upgrades_screened_values_and_fallback_uses_original_rgb() {
     assert!(oklab(tiny).is_err());
     assert_eq!(
         cache
-            .evaluate_screened(tiny)
+            .evaluate_screened(tiny, &mut transforms)
             .unwrap()
             .map(CertifiedScalarV1::bounds),
         tiny.oklab().unwrap().map(CertifiedScalarV1::bounds)

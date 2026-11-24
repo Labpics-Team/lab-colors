@@ -638,6 +638,7 @@ fn encoded_box_requires_ordered_finite_physical_endpoints() {
 #[test]
 fn oklab_memoization_preserves_interval_outputs_without_equality_evidence() {
     let mut cache = CertifiedOklabCacheV1::default();
+    let mut transforms = crate::certified_numeric::PointTransformCache::new().unwrap();
     let colors = [
         CertifiedRgbV1::from_encoded_bounds([42.0, 50.0, 80.0], [43.0, 51.0, 81.0]).unwrap(),
         CertifiedRgbV1::from_encoded([42.5, 50.5, 80.5]).unwrap(),
@@ -646,7 +647,10 @@ fn oklab_memoization_preserves_interval_outputs_without_equality_evidence() {
     for index in [0, 1, 0, 1, 2, 0] {
         let rgb = colors[index];
         assert_eq!(
-            cache.evaluate(rgb).unwrap().map(CertifiedScalarV1::bounds),
+            cache
+                .evaluate(rgb, &mut transforms)
+                .unwrap()
+                .map(CertifiedScalarV1::bounds),
             rgb.oklab().unwrap().map(CertifiedScalarV1::bounds)
         );
     }
@@ -654,4 +658,21 @@ fn oklab_memoization_preserves_interval_outputs_without_equality_evidence() {
         !colors[0].proves_equal(colors[0]),
         "memoization of an enclosure does not prove real equality"
     );
+}
+
+#[test]
+fn point_transform_cache_keeps_refined_endpoints_across_region_splits_and_collisions() {
+    let mut cache = PointTransformCache::new().unwrap();
+    for i in 0..192_u32 {
+        // Child and parent boxes share some, but never all, channel bounds.
+        // The repeated upper g endpoint also exercises non-integral blending.
+        let r = f64::from((i * 37) % 129);
+        let b = f64::from((i * 19) % 129);
+        let rgb =
+            CertifiedRgbV1::from_encoded_bounds([r, 0.0, b], [r + 1.0, 127.5, b + 12.0]).unwrap();
+        assert_eq!(
+            cache.oklab(rgb).unwrap().map(CertifiedScalarV1::bounds),
+            rgb.oklab().unwrap().map(CertifiedScalarV1::bounds),
+        );
+    }
 }

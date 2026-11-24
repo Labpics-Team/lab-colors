@@ -92,6 +92,64 @@ struct OklabCacheEntryV1 {
     precision: OklabPrecisionV1,
 }
 
+// Sibling boxes share channel bounds and LMS endpoints. The exact input bits
+// identify a pure arithmetic operation; a collision only evicts its value.
+const TRANSFORM_SLOTS: usize = 32;
+
+#[derive(Clone, Copy)]
+struct TransformEntry {
+    key: [u128; 2],
+    result: CertifiedScalarV1,
+}
+
+/// One bounded workspace for the entire Point session, independent of role
+/// and observation count. Only the canonical refined transform uses it.
+pub(crate) struct PointTransformCache {
+    entries: Vec<Option<TransformEntry>>,
+}
+
+impl PointTransformCache {
+    pub(crate) fn new() -> Result<Self, std::collections::TryReserveError> {
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(2 * TRANSFORM_SLOTS)?;
+        entries.resize(2 * TRANSFORM_SLOTS, None);
+        Ok(Self { entries })
+    }
+
+    fn evaluate(
+        entries: &mut [Option<TransformEntry>],
+        key: [u128; 2],
+        compute: impl FnOnce() -> Result<CertifiedScalarV1, NumericUncertaintyV1>,
+    ) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
+        let fold = |bits: u128| (bits as u64) ^ (bits >> 64) as u64;
+        let mixed = fold(key[0]).rotate_left(21) ^ fold(key[1]);
+        let slot =
+            (mixed.wrapping_mul(0x9e3779b97f4a7c15) >> (64 - TRANSFORM_SLOTS.ilog2())) as usize;
+        if let Some(entry) = entries[slot].filter(|entry| entry.key == key) {
+            return Ok(entry.result);
+        }
+        let result = compute()?;
+        entries[slot] = Some(TransformEntry { key, result });
+        Ok(result)
+    }
+
+    fn oklab(
+        &mut self,
+        rgb: CertifiedRgbV1,
+    ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
+        let (decodes, roots) = self.entries.split_at_mut(TRANSFORM_SLOTS);
+        let mut linear = rgb.0;
+        for channel in &mut linear {
+            *channel = Self::evaluate(decodes, channel.bounds(), || model::decode(*channel))?;
+        }
+        model::oklab_from_linear(linear, |value| {
+            value.root_with(|target| {
+                Self::evaluate(roots, [target.to_bits(), 0], || root_point(target, 3))
+            })
+        })
+    }
+}
+
 /// Bounded memoization of the deterministic interval transform. Equal endpoint
 /// bits are valid function-input keys; they are never real-expression equality
 /// evidence. Two entries retain a source and its current visible appearance.
@@ -107,8 +165,9 @@ impl CertifiedOklabCacheV1 {
     pub(crate) fn evaluate(
         &mut self,
         rgb: CertifiedRgbV1,
+        transforms: &mut PointTransformCache,
     ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        self.evaluate_with_precision(rgb, OklabPrecisionV1::Refined)
+        self.evaluate_with_precision(rgb, transforms, OklabPrecisionV1::Refined)
     }
 
     /// Filtering enclosure only. A caller that cannot decide from its bounds
@@ -116,50 +175,49 @@ impl CertifiedOklabCacheV1 {
     pub(crate) fn evaluate_screened(
         &mut self,
         rgb: CertifiedRgbV1,
+        transforms: &mut PointTransformCache,
     ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        self.evaluate_with_precision(rgb, OklabPrecisionV1::Screened)
+        self.evaluate_with_precision(rgb, transforms, OklabPrecisionV1::Screened)
     }
 
     fn evaluate_with_precision(
         &mut self,
         rgb: CertifiedRgbV1,
+        transforms: &mut PointTransformCache,
         requested: OklabPrecisionV1,
     ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        let existing = self.entries.iter().position(|entry| {
-            entry.as_ref().is_some_and(|entry| {
-                entry
-                    .rgb
-                    .0
-                    .iter()
-                    .zip(rgb.0)
-                    .all(|(&a, b)| a.bounds() == b.bounds())
-            })
+        let existing = self.entries.iter().enumerate().find_map(|(index, entry)| {
+            let entry = entry.as_ref()?;
+            entry
+                .rgb
+                .0
+                .iter()
+                .zip(rgb.0)
+                .all(|(&a, b)| a.bounds() == b.bounds())
+                .then_some((index, entry))
         });
-        if let Some(index) = existing {
-            let entry = self.entries[index].as_ref().unwrap();
-            if requested == OklabPrecisionV1::Screened
-                || entry.precision == OklabPrecisionV1::Refined
-            {
-                return Ok(entry.lab);
-            }
+        if let Some((_, entry)) = existing.filter(|(_, entry)| {
+            requested == OklabPrecisionV1::Screened || entry.precision == OklabPrecisionV1::Refined
+        }) {
+            return Ok(entry.lab);
         }
         let (lab, precision) = if requested == OklabPrecisionV1::Screened {
             match screening::oklab(rgb) {
                 Ok(lab) => (lab, OklabPrecisionV1::Screened),
-                Err(_) => (rgb.oklab()?, OklabPrecisionV1::Refined),
+                Err(_) => (transforms.oklab(rgb)?, OklabPrecisionV1::Refined),
             }
         } else {
-            (rgb.oklab()?, OklabPrecisionV1::Refined)
+            (transforms.oklab(rgb)?, OklabPrecisionV1::Refined)
         };
-        let index = existing.unwrap_or(self.next);
+        let index = existing.map_or(self.next, |(index, _)| index);
+        if existing.is_none() {
+            self.next ^= 1;
+        }
         self.entries[index] = Some(OklabCacheEntryV1 {
             rgb,
             lab,
             precision,
         });
-        if existing.is_none() {
-            self.next ^= 1;
-        }
         Ok(lab)
     }
 }
@@ -331,11 +389,18 @@ impl CertifiedScalarV1 {
         if self.lo < Quad::ZERO {
             return Err(NumericUncertaintyV1::DomainViolation);
         }
-        let lower = root_point(self.lo, degree)?;
+        self.root_with(|target| root_point(target, degree))
+    }
+
+    fn root_with(
+        self,
+        mut endpoint: impl FnMut(Quad) -> Result<Self, NumericUncertaintyV1>,
+    ) -> Result<Self, NumericUncertaintyV1> {
+        let lower = endpoint(self.lo)?;
         if self.lo == self.hi {
             return Ok(lower);
         }
-        let upper = root_point(self.hi, degree)?;
+        let upper = endpoint(self.hi)?;
         Ok(Self {
             lo: lower.lo,
             hi: upper.hi,
