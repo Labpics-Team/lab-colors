@@ -47,3 +47,22 @@ test("reference declarations match independent native wire vectors", () => {
   }
   assert.equal(hex(new ProgramWireBuilderV3().assignment([], { reference: [] })), fixture.referenceEmpty);
 });
+
+test("composition uses distinct tags with the unchanged assignment field grammar", () => {
+  const targets = [0x01020304, 0xffffffff, 0];
+  const reference = [[0x10203040, [1, 128, 255]], [0xffffffff, [254, 129, 0]]];
+  for (const [members, options, name, tag] of [
+    [targets, {}, "compose", 5],
+    [targets, { reference }, "composeReference", 6],
+    [[], {}, "composeEmpty", 5],
+    [[], { reference: [] }, "composeReferenceEmpty", 6],
+  ]) {
+    const composition = new ProgramWireBuilderV3().compose(members, options).finish();
+    assert.equal(Buffer.from(composition).toString("hex"), fixture[name]);
+    // With no preceding sections, byte 26 is the selection tag. Everything
+    // else, including declaration order and an explicitly empty reference, agrees.
+    assert.equal(composition[26], tag);
+    composition[26] -= 2;
+    assert.deepEqual(composition, new ProgramWireBuilderV3().assignment(members, options).finish());
+  }
+});

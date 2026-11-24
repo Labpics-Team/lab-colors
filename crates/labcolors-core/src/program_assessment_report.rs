@@ -145,6 +145,35 @@ pub enum ProgramReferencePreferenceV1 {
     ExplicitTone,
 }
 
+/// The compiled choice rule for a whole physical component. It is fixed before
+/// search; an exhausted Point search never switches to the compatibility rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramSelectionModeV1 {
+    OrderedV1,
+    JointPointV1,
+    OrderedReferenceV1,
+}
+
+/// The targets sharing one choice rule and search budget. Names and output
+/// aliases are presentation data and do not participate in this classification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramSelectionComponentV1 {
+    pub(crate) targets: Box<[u32]>,
+    pub(crate) mode: ProgramSelectionModeV1,
+}
+
+impl ProgramSelectionComponentV1 {
+    #[must_use]
+    pub fn targets(&self) -> &[u32] {
+        &self.targets
+    }
+
+    #[must_use]
+    pub const fn mode(&self) -> ProgramSelectionModeV1 {
+        self.mode
+    }
+}
+
 /// Bounds on joint, baseline-capped preservation capacity. One hard-feasible
 /// complete tuple must serve every case while retaining the prior paint values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,10 +299,18 @@ pub struct ProgramAssessmentReportV1 {
     cells: Vec<ProgramAssessmentCellV1>,
     tonal_hierarchy: Vec<ProgramTonalHierarchyPairV1>,
     reference_selections: Option<std::sync::Arc<[ProgramReferenceSelectionV1]>>,
+    selection_components: Option<std::sync::Arc<[ProgramSelectionComponentV1]>>,
     cleanliness: ProgramCleanlinessAssessmentV1,
 }
 
 impl ProgramAssessmentReportV1 {
+    /// The Core-selected rule for each computed component; no client-side
+    /// inference from reference declarations or currently emitted values.
+    #[must_use]
+    pub fn selection_components(&self) -> &[ProgramSelectionComponentV1] {
+        self.selection_components.as_deref().unwrap_or(&[])
+    }
+
     #[must_use]
     pub fn reference_selections(&self) -> &[ProgramReferenceSelectionV1] {
         self.reference_selections.as_deref().unwrap_or(&[])
@@ -411,6 +448,7 @@ impl ProgramAssessmentReportScratchV1 {
             cells: std::mem::take(&mut self.cells),
             tonal_hierarchy: std::mem::take(&mut self.tonal_hierarchy),
             reference_selections: verified.reference_selections().cloned(),
+            selection_components: verified.selection_components().cloned(),
             cleanliness,
         }
     }

@@ -1398,6 +1398,113 @@ fn invisible_black_source() -> Program<Wcag22Srgb8V1> {
     p
 }
 
+fn authored_material_minimum(
+    source: [u8; 3],
+    alpha: f64,
+    backgrounds: &[[u8; 3]],
+    tone: Option<f64>,
+) -> bool {
+    let mut p = invisible_black_source();
+    p.opacities[0] = OpacityInput::new(OpacityInputId::new(33), alpha);
+    let anchor = Srgb8::new(source);
+    let mut target = ComputedTargetV1::declared(
+        AssignmentDomainV1::Cube {
+            lower: [0; 3],
+            upper: [255; 3],
+        },
+        anchor,
+        2.0,
+    );
+    target.intent = Some(ColorUseIntentV1 {
+        identity: ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default()).unwrap(),
+        appearance: Some(OccurrenceId::new(5)),
+        tone: tone.map(|value| ToneCurveV1::new(2, vec![[0.0, value], [1.0, value]]).unwrap()),
+    });
+    p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
+    let owner = compile_assignment(p, 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut input = update(1, 0);
+    let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
+        panic!()
+    };
+    set.scenarios = backgrounds
+        .iter()
+        .enumerate()
+        .map(|(index, &background)| ScenarioInput {
+            id: ScenarioId::new(index as u32 + 10),
+            bindings: vec![SurfaceInputBinding::new(
+                SurfaceInputPortId::new(2),
+                ColorSignal::from_srgb8(Srgb8::new(background)),
+            )],
+        })
+        .collect();
+    session.prepare_update(input).unwrap().commit();
+    let CompiledTargetSelectionV1::Computed(selection) = &owner.owner_generation.target_selection
+    else {
+        panic!()
+    };
+    let mut standalone = owner.prepare_reference_completion(&session).unwrap();
+    let mut prepared = prepare(
+        standalone.epoch,
+        &standalone.observation,
+        &mut standalone.scratch,
+    )
+    .unwrap();
+    let cases: Vec<_> = (0..backgrounds.len()).collect();
+    prepared
+        .authored_point_optimal(&selection.components[0], &cases)
+        .unwrap()
+}
+
+#[test]
+fn authored_point_minimum_proves_transparent_and_same_background_cases() {
+    for source in [[255; 3], [0, 103, 244]] {
+        for alpha in [0.0, 0.5, 1.0] {
+            assert!(authored_material_minimum(source, alpha, &[source], None));
+        }
+        // Zero opacity makes every primary distance invariant even when it is
+        // nonzero, including several cases and a non-authored tone preference.
+        assert!(authored_material_minimum(
+            source,
+            0.0,
+            &[[0; 3], [128; 3], [255; 3]],
+            Some(0.6)
+        ));
+    }
+}
+
+#[test]
+fn authored_point_minimum_retains_nonzero_physics_and_every_case() {
+    assert!(!authored_material_minimum(
+        [128; 3],
+        0.5,
+        &[[128; 3], [127; 3]],
+        None
+    ));
+    assert!(!authored_material_minimum(
+        [128; 3],
+        0.5,
+        &[[128; 3]],
+        Some(0.1)
+    ));
+    // The real visible color differs from its source although both round to
+    // the same binary64 encoded cell (and therefore the same emitted byte).
+    assert!(!authored_material_minimum(
+        [128; 3],
+        f64::from_bits(1.0_f64.to_bits() - 1),
+        &[[127; 3]],
+        None,
+    ));
+    // Even the smallest positive material contribution is not a constant
+    // expression over the source domain.
+    assert!(!authored_material_minimum(
+        [128; 3],
+        f64::from_bits(1),
+        &[[127; 3]],
+        None
+    ));
+}
+
 #[test]
 fn source_completion_requires_proved_preference_equality() {
     let owner = compile_assignment(invisible_black_source(), 1).unwrap();

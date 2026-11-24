@@ -581,7 +581,7 @@ pub use assessment_report::{
     ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
     ProgramConstraintAssessmentV1, ProgramReferenceCapacityV1, ProgramReferenceCaseV1,
     ProgramReferencePreferenceV1, ProgramReferenceSelectionV1, ProgramScenarioProvenanceV1,
-    ProgramTonalHierarchyPairV1,
+    ProgramSelectionComponentV1, ProgramSelectionModeV1, ProgramTonalHierarchyPairV1,
 };
 pub use field::{
     ProgramDeclaredFieldShapeErrorV1, ProgramDeclaredFieldV1, ProgramFieldAssessmentV1,

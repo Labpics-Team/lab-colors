@@ -46,6 +46,24 @@ fn exact_admission_preserves_dyadic_values_and_rejects_invalid_channels() {
 }
 
 #[test]
+fn encoded_equality_requires_exact_values_even_with_one_rounding_cell() {
+    let anchor = rgb([128.0; 3]);
+    let material = composite(
+        [128.0; 3],
+        f64::from_bits(1.0_f64.to_bits() - 1),
+        rgb([127.0; 3]),
+    );
+    assert_eq!(
+        material.0[0].nearest_even_cell().unwrap(),
+        128.0_f64.to_bits()
+    );
+    assert!(!material.proves_equal(anchor));
+    let region = CertifiedRgbV1::from_encoded_bounds([127.0; 3], [128.0; 3]).unwrap();
+    assert!(!region.proves_equal(region));
+    assert!(anchor.proves_equal(rgb([128.0; 3])));
+}
+
+#[test]
 fn numerical_failures_are_typed_and_inexact_enclosures_remain_usable() {
     assert!(matches!(
         scalar(1.0).div(interval(-1.0, 1.0)),
@@ -136,6 +154,126 @@ fn roots_enclose_exact_rational_examples_and_small_rgb_domain() {
     let lightness = rgb([f64::from_bits(1); 3]).oklab().unwrap()[0];
     assert!(lightness.lo > Quad::ZERO);
     assert!(lightness.nearest_even_cell().is_ok());
+}
+
+/// Independent integer arithmetic: for target = p/q, e = floor(log2(target)/d),
+/// find k with k^d <= (p/q)*2^(d*(112-e)) < (k+1)^d. Those two adjacent
+/// binary128 values must be enclosed. This uses no floating-point Newton or
+/// root function. The wide exponents also bypass the optional binary64 seed.
+#[test]
+fn roots_enclose_integer_oracle_at_exact_power_neighbours_and_extreme_exponents() {
+    let fixtures = [
+        (
+            0x3ffe_ffff_ffff_ffff_ffff_ffff_ffff_ffff,
+            3,
+            [
+                0x3ffe_ffff_ffff_ffff_ffff_ffff_ffff_ffff,
+                0x3fff_0000_0000_0000_0000_0000_0000_0000,
+            ],
+        ),
+        (
+            0x3fff_0000_0000_0000_0000_0000_0000_0001,
+            3,
+            [
+                0x3fff_0000_0000_0000_0000_0000_0000_0000,
+                0x3fff_0000_0000_0000_0000_0000_0000_0001,
+            ],
+        ),
+        (
+            0x4001_ffff_ffff_ffff_ffff_ffff_ffff_ffff,
+            3,
+            [
+                0x3fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff,
+                0x4000_0000_0000_0000_0000_0000_0000_0000,
+            ],
+        ),
+        (
+            0x4002_0000_0000_0000_0000_0000_0000_0001,
+            3,
+            [
+                0x4000_0000_0000_0000_0000_0000_0000_0000,
+                0x4000_0000_0000_0000_0000_0000_0000_0001,
+            ],
+        ),
+        (
+            0x4006_e5ff_ffff_ffff_ffff_ffff_ffff_ffff,
+            5,
+            [
+                0x4000_7fff_ffff_ffff_ffff_ffff_ffff_ffff,
+                0x4000_8000_0000_0000_0000_0000_0000_0000,
+            ],
+        ),
+        (
+            0x4006_e600_0000_0000_0000_0000_0000_0001,
+            5,
+            [
+                0x4000_8000_0000_0000_0000_0000_0000_0000,
+                0x4000_8000_0000_0000_0000_0000_0000_0001,
+            ],
+        ),
+        (
+            0x4000_0000_0000_0000_0000_0000_0000_0000,
+            3,
+            [
+                0x3fff_428a_2f98_d728_ae22_3dda_b715_be25,
+                0x3fff_428a_2f98_d728_ae22_3dda_b715_be26,
+            ],
+        ),
+        (
+            0x4000_0000_0000_0000_0000_0000_0000_0000,
+            5,
+            [
+                0x3fff_2611_186b_ae67_496a_521e_4207_60e1,
+                0x3fff_2611_186b_ae67_496a_521e_4207_60e2,
+            ],
+        ),
+        (
+            0x305e_1234_5678_9abc_deff_edcb_a987_6543,
+            3,
+            [
+                0x3ac9_4a02_c314_7fde_17aa_6e7d_2c06_a5d6,
+                0x3ac9_4a02_c314_7fde_17aa_6e7d_2c06_a5d7,
+            ],
+        ),
+        (
+            0x305e_1234_5678_9abc_deff_edcb_a987_6543,
+            5,
+            [
+                0x3cde_c3e3_57ed_32cd_864c_45b5_47a5_7790,
+                0x3cde_c3e3_57ed_32cd_864c_45b5_47a5_7791,
+            ],
+        ),
+        (
+            0x4fa8_7654_321a_9876_5432_10ab_cdef_1234,
+            3,
+            [
+                0x4537_6e17_043d_957f_e13b_bdeb_c6a7_54cb,
+                0x4537_6e17_043d_957f_e13b_bdeb_c6a7_54cc,
+            ],
+        ),
+        (
+            0x4fa8_7654_321a_9876_5432_10ab_cdef_1234,
+            5,
+            [
+                0x4320_e0e9_c324_8f16_8fc9_0e33_6529_674c,
+                0x4320_e0e9_c324_8f16_8fc9_0e33_6529_674d,
+            ],
+        ),
+    ];
+    for (target, degree, [lo, hi]) in fixtures {
+        let root = root_point(Quad::from_bits(target), degree).unwrap();
+        assert!(
+            root.lo <= Quad::from_bits(lo),
+            "lower {target:x} ^ (1/{degree})"
+        );
+        assert!(
+            root.hi >= Quad::from_bits(hi),
+            "upper {target:x} ^ (1/{degree})"
+        );
+        // All fixtures have irrational roots: sharing a binary64 cell cannot
+        // authorize collapsing the mathematical enclosure to an exact point.
+        assert!(!root.proves_equal(root));
+    }
 }
 
 #[test]
@@ -462,5 +600,58 @@ fn explicit_forward_lightness_and_primary_cells_preserve_source_improvement() {
     assert_ne!(
         primary(source_lab[0]).nearest_even_cell().unwrap(),
         anchor_primary.nearest_even_cell().unwrap()
+    );
+}
+#[test]
+fn encoded_box_requires_ordered_finite_physical_endpoints() {
+    for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 256.0] {
+        assert!(CertifiedRgbV1::from_encoded_bounds([invalid, 0.0, 0.0], [255.0; 3]).is_err());
+        assert!(CertifiedRgbV1::from_encoded_bounds([0.0; 3], [255.0, invalid, 255.0]).is_err());
+    }
+    assert!(matches!(
+        CertifiedRgbV1::from_encoded_bounds([2.0; 3], [1.0; 3]),
+        Err(NumericUncertaintyV1::DomainViolation)
+    ));
+    let point = CertifiedRgbV1::from_encoded_bounds([32.0; 3], [32.0; 3]).unwrap();
+    let exact = CertifiedRgbV1::from_encoded([32.0; 3]).unwrap();
+    assert_eq!(
+        point.0.map(CertifiedScalarV1::bounds),
+        exact.0.map(CertifiedScalarV1::bounds)
+    );
+    let region =
+        CertifiedRgbV1::from_encoded_bounds([0.0, 32.0, 128.0], [64.0, 100.0, 255.0]).unwrap();
+    for (channel, (lo, hi)) in region
+        .0
+        .iter()
+        .zip([(0.0, 64.0), (32.0, 100.0), (128.0, 255.0)])
+    {
+        assert_eq!(
+            channel.bounds()[0],
+            CertifiedScalarV1::exact(lo).unwrap().bounds()[0]
+        );
+        assert_eq!(
+            channel.bounds()[1],
+            CertifiedScalarV1::exact(hi).unwrap().bounds()[1]
+        );
+    }
+}
+#[test]
+fn oklab_memoization_preserves_interval_outputs_without_equality_evidence() {
+    let mut cache = CertifiedOklabCacheV1::default();
+    let colors = [
+        CertifiedRgbV1::from_encoded_bounds([42.0, 50.0, 80.0], [43.0, 51.0, 81.0]).unwrap(),
+        CertifiedRgbV1::from_encoded([42.5, 50.5, 80.5]).unwrap(),
+        CertifiedRgbV1::from_encoded([255.0, 230.0, 123.0]).unwrap(),
+    ];
+    for index in [0, 1, 0, 1, 2, 0] {
+        let rgb = colors[index];
+        assert_eq!(
+            cache.evaluate(rgb).unwrap().map(CertifiedScalarV1::bounds),
+            rgb.oklab().unwrap().map(CertifiedScalarV1::bounds)
+        );
+    }
+    assert!(
+        !colors[0].proves_equal(colors[0]),
+        "memoization of an enclosure does not prove real equality"
     );
 }

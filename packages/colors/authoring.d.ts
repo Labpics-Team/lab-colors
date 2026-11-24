@@ -1,4 +1,4 @@
-import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1 } from "./pkg/labcolors.js";
+import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1, ProgramSelectionComponentV1 } from "./pkg/labcolors.js";
 
 declare const colorHandle: unique symbol;
 
@@ -10,6 +10,12 @@ export type ColorReferenceSelection = Readonly<Omit<ProgramReferenceSelectionV1,
   role: string;
   use: ColorUse;
   outputs: readonly string[];
+}>;
+
+/** Core-selected rule for a whole connected component, fixed before search. */
+export type ColorSelectionComponent = Readonly<{
+  mode: ProgramSelectionComponentV1["mode"];
+  uses: readonly Readonly<Pick<ColorReferenceSelection, "role" | "use" | "outputs">>[];
 }>;
 
 export interface ColorSystemOptions {
@@ -204,6 +210,7 @@ export type ModeledColorFrame<Name extends string = string> = Readonly<{
   optimality: "exact" | "unfinished";
   cleanliness: ColorCleanlinessAssessment;
   reference: readonly ColorReferenceSelection[];
+  selection: readonly ColorSelectionComponent[];
   context: ResolvedColorContext;
   /** Целые входы для явного preview: affine поле сериализовано с `in srgb` от 0% до 100%. */
   contextCss: Readonly<Record<string, string>>;
@@ -218,6 +225,7 @@ export type ColorResolution<Name extends string = string> =
       readonly cleanliness: ColorCleanlinessAssessment;
       /** Исходный вид и результат адаптации; пусто без reference и для fixed uses. */
       readonly reference: readonly ColorReferenceSelection[];
+      readonly selection: readonly ColorSelectionComponent[];
       context: Readonly<Record<string, readonly [number, number, number]>>;
       values: Readonly<Record<Name, ResolvedColor>>;
     }>
@@ -274,7 +282,9 @@ export interface ColorSystem {
   fixed(id: string, source: AuthoredColor): ColorFixedRole;
   /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
   preserveTonalHierarchy(members: readonly ColorUse[]): void;
-  /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
+  /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.
+   * Компоненты с неявным reference сохраняют последовательный режим совместимости; frame.selection раскрывает режим.
+   */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,
   ): Promise<ColorProgram<Extract<keyof Outputs, string>>>;

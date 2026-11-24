@@ -1347,6 +1347,31 @@ fn reports(
     Ok(reports.into())
 }
 
+pub(super) fn point_reports<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1<'_>,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+) -> Result<
+    std::sync::Arc<[ProgramReferenceSelectionV1]>,
+    ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
+> {
+    let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+    let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
+    let mut appearance =
+        buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
+    apply_targets::<E>(context.targets, runtime, values)?;
+    let mut collector = IntentScoreCollectorV1::new(context, values, &mut scores);
+    collector.appearance = Some(&mut appearance);
+    observe_intents(context, runtime, epoch, scenarios, &mut collector)?;
+    if collector.violations() != 0 {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    drop(collector);
+    reports(context, &appearance, |_| Ok(None)).map_err(allocation)
+}
+
 pub(in crate::program_session::computed_assignment) fn refresh_reports<
     E: ProgramConstraintEvaluatorSetV1,
 >(

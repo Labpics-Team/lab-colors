@@ -119,6 +119,20 @@ export function copyReadyColorFrame(snapshot, graph, context, field = copyFieldA
     return Object.freeze({ role: node.role.id, use: node.handle, outputs: graph.outputNames.get(node),
       preference: selection.preference, capacity: selection.capacity, cases: selection.cases });
   }));
+  const components = snapshot.selectionComponents();
+  if (components === null) {
+    authoringError("resolution.selection", "Core omitted the component selection modes", "color_core_contract");
+  }
+  const selection = Object.freeze(components.map((component) => Object.freeze({
+    mode: component.mode,
+    uses: Object.freeze(component.targets.map((target) => {
+      const node = graph.targets.get(target);
+      if (node === undefined) {
+        authoringError("resolution.selection", "Core selection refers to an undeclared use", "color_core_contract");
+      }
+      return Object.freeze({ role: node.role.id, use: node.handle, outputs: graph.outputNames.get(node) });
+    })),
+  })));
   const table = snapshot.copyOutputTable();
   const bySlot = new Map();
   for (let i = 0; i < table.length; i += 5) {
@@ -131,7 +145,7 @@ export function copyReadyColorFrame(snapshot, graph, context, field = copyFieldA
     return [name, value];
   });
   return Object.freeze({ state: field === undefined ? "ready" : "modeled", revision: snapshot.revision,
-    optimality, cleanliness, reference, ...fieldScope(field, "complete"),
+    optimality, cleanliness, reference, selection, ...fieldScope(field, "complete"),
     ...(field === undefined ? {} : {
       contextCss: Object.freeze(Object.fromEntries(context.colors.map(({ name, css }) => [name, css]))),
     }),

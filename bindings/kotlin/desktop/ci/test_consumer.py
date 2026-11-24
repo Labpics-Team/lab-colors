@@ -36,9 +36,8 @@ def main(distribution, output):
     authoring = json.loads((ROOT / "conformance/program-authoring-v3.json").read_text(encoding="utf-8"))
     if authoring["schemaVersion"] != 1:
         raise ValueError("unknown Program authoring fixture")
-    authoring_rows = [f'    "{name}" to "{authoring[name]}"' for name in
-                      ["computedBox", "computedGray", "contextual", "encodingOnly", "fixedOnly",
-                       "referenceSingleton", "referenceHierarchy", "referenceEmpty"]]
+    authoring_rows = [f'    "{name}" to "{wire}"' for name, wire in authoring.items()
+                      if name not in ("schemaVersion", "provenance")]
     authoring_tests = project / "src/main/kotlin/pics/lab/colors/conformance"
     authoring_tests.mkdir(parents=True)
     shutil.copy2(ROOT / "bindings/kotlin/conformance/ProgramAuthoringV3.kt", authoring_tests)

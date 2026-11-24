@@ -440,7 +440,7 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
         (PROGRAM_WIRE_VERSION_V1 | PROGRAM_WIRE_VERSION_V2, 0) => {}
         (PROGRAM_WIRE_VERSION_V3, 1) => {
             let tag = reader.read_u16()?;
-            if !matches!(tag, 3 | 4) {
+            if !matches!(tag, 3..=6) {
                 return Err(reader.declaration_error(joint_offset));
             }
             let count = reader.read_count()?;
@@ -453,8 +453,12 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
             for _ in 0..count {
                 order.push(crate::program_session::TargetId::new(reader.read_u32()?));
             }
-            draft.set_assignment(order);
-            if tag == 4 {
+            if matches!(tag, 5 | 6) {
+                draft.set_composition(order);
+            } else {
+                draft.set_assignment(order);
+            }
+            if matches!(tag, 4 | 6) {
                 let count = reader.read_count()?;
                 let mut inputs = Vec::new();
                 inputs.try_reserve_exact(count as usize).map_err(|_| {

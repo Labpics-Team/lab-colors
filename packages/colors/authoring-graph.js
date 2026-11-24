@@ -46,7 +46,7 @@ export function lowerColorSystem(entries, options) {
     }
   }
   // A use can only refer to already-created handles. Declaration order is therefore
-  // topological and keeps graph IDs and preferences independent of exported aliases.
+  // topological and keeps graph IDs and legacy reference order independent of exported aliases.
   const declaredOrder = (a, b) => a.ordinal - b.ordinal;
   const declaredNodes = [...reachable].sort(declaredOrder);
 
@@ -129,7 +129,7 @@ export function lowerColorSystem(entries, options) {
     return [input.port, rgb];
   });
   // Even an all-fixed declaration gets one complete tuple check under V3.
-  builder.assignment(declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
+  builder.compose(declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
     .map((node) => nodes.get(node).target), { reference });
 
   const outputNodes = new Map();

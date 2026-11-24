@@ -28,6 +28,11 @@ export interface ProgramWireAssignmentOptionsV3 {
   readonly reference?: readonly (readonly [number, ProgramWireRgbV1])[];
 }
 
+export interface ProgramWireComposeOptionsV3 {
+  /** Неизменяемое авторское окружение: [SurfaceInputPortId, RGB]; [] задаёт окружение без входов. */
+  readonly reference?: readonly (readonly [number, ProgramWireRgbV1])[];
+}
+
 export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   /** Характер и предпочтения видимого применения; источники вычисляет Core. */
   colorTarget(id: number, anchor: ProgramWireRgbV1, options?: ProgramWireColorOptionsV3): this;
@@ -41,5 +46,8 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   computedTarget(id: number, domain: ProgramWireDomainV3, anchor: ProgramWireRgbV1, maxDelta: number): this;
   /** Лексикографический приоритет: каждый computed target ровно один раз; граф проверяет Core. */
   assignment(targetsInPreferenceOrder: readonly number[], options?: ProgramWireAssignmentOptionsV3): this;
+  /** Каждый computed target ровно один раз. Core выбирает целые физические компоненты;
+   * порядок деклараций сохраняется только для совместимости implicit-reference компонентов. */
+  compose(targets: readonly number[], options?: ProgramWireComposeOptionsV3): this;
   finish(): Uint8Array;
 }

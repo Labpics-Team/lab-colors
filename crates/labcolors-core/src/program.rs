@@ -1980,6 +1980,10 @@ impl DraftV1 {
         self.inner.set_assignment(order);
     }
 
+    pub(crate) fn set_composition(&mut self, legacy_reference_order: Vec<TargetId>) {
+        self.inner.set_composition(legacy_reference_order);
+    }
+
     pub(crate) fn set_reference_appearance(&mut self, id: TargetIdV1) {
         self.inner.set_reference_appearance(id.into_core());
     }
@@ -2777,6 +2781,15 @@ pub(crate) struct VerifiedOutputV1<'a> {
 }
 
 impl<'a> VerifiedOutputV1<'a> {
+    pub(crate) fn selection_components(
+        self,
+    ) -> Option<&'a std::sync::Arc<[crate::program_wire::ProgramSelectionComponentV1]>> {
+        match self.inner {
+            ProgramVerifiedOutcomeV1::Computed(value) => Some(value.selection_components()),
+            ProgramVerifiedOutcomeV1::Legacy(_) => None,
+        }
+    }
+
     pub(crate) fn reference_selections(
         self,
     ) -> Option<&'a std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>> {

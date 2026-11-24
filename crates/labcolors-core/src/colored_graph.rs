@@ -131,6 +131,10 @@ impl<Color> ColoredGraph<Color> {
             .ok_or(CanonicalGraphError::InternalInvariant)
     }
 
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.colors.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn colors(&self) -> &[Color] {
         &self.colors
@@ -812,10 +816,16 @@ fn usize_as_u64(value: usize) -> Result<u64, CanonicalGraphError> {
     u64::try_from(value).map_err(|_| CanonicalGraphError::ResourceExhausted)
 }
 
-struct SerializedLeafV1 {
-    preimage: Vec<u8>,
-    order: Vec<usize>,
+/// A completed canonical form and its binding to this graph's vertices.
+/// Equal forms can choose different representatives of an automorphism; the
+/// vertex order is an execution projection, not a preference between outcomes.
+#[derive(Debug)]
+pub(crate) struct CanonicalFormV1 {
+    pub(crate) preimage: Vec<u8>,
+    pub(crate) order: Vec<usize>,
 }
+
+type SerializedLeafV1 = CanonicalFormV1;
 
 fn serialize_leaf<Color: Ord + AsRef<[u8]>>(
     graph: &ColoredGraph<Color>,
@@ -1400,7 +1410,7 @@ fn canonical_search_impl<Color: Ord + AsRef<[u8]>>(
     graph: &ColoredGraph<Color>,
     mut remaining_branch_expansions: Option<usize>,
     domain: &[u8],
-) -> Result<(Vec<u8>, usize, usize), CanonicalGraphError> {
+) -> Result<(CanonicalFormV1, usize, usize), CanonicalGraphError> {
     let initial = refine_partition(graph, PartitionV1::initial(graph)?)?;
     let mut bulk_groups = 0;
     let (initial, component_twins) = factor_component_twins(
@@ -1505,7 +1515,7 @@ fn canonical_search_impl<Color: Ord + AsRef<[u8]>>(
             SerializedLeafV1 { preimage, order }
         };
         let Some(parent) = stack.last_mut() else {
-            return Ok((candidate.preimage, leaf_count, bulk_groups));
+            return Ok((candidate, leaf_count, bulk_groups));
         };
         // Оба сравниваемых листа продолжают одно разбиение parent. При равных
         // полных сериализациях отображение сохраняет его клетки и выбранных
@@ -1558,7 +1568,7 @@ fn canonical_search<Color: Ord + AsRef<[u8]>>(
     // переименования автоморфизм может обнаружиться другой ветвью. Поэтому
     // динамический лимит сделал бы допуск зависимым от client-owned ID. Точный
     // поиск возвращает только полный прообраз либо типизированный отказ.
-    canonical_search_impl(graph, None, domain).map(|(preimage, leaves, _)| (preimage, leaves))
+    canonical_search_impl(graph, None, domain).map(|(form, leaves, _)| (form.preimage, leaves))
 }
 
 #[cfg(test)]
@@ -1570,7 +1580,16 @@ fn canonical_search_with_test_fuel<Color: Ord + AsRef<[u8]>>(
     // Только тестовая инъекция отказа для проверки атомарности. Это не политика
     // допуска: история поиска не инвариантна к alpha-переименованию.
     canonical_search_impl(graph, Some(test_fuel), domain)
-        .map(|(preimage, leaves, _)| (preimage, leaves))
+        .map(|(form, leaves, _)| (form.preimage, leaves))
+}
+
+pub(crate) fn canonical_form<Color: Ord + AsRef<[u8]>>(
+    graph: &ColoredGraph<Color>,
+    domain: &[u8],
+) -> Result<CanonicalFormV1, CanonicalGraphError> {
+    // The same complete search supplies identity and execution bindings. A
+    // bounded prefix would make both depend on opaque relabelling.
+    canonical_search_impl(graph, None, domain).map(|(form, _, _)| form)
 }
 
 pub(crate) fn canonical_preimage<Color: Ord + AsRef<[u8]>>(
@@ -1835,6 +1854,7 @@ mod tests {
         fuel: Option<usize>,
     ) -> Result<(Vec<u8>, usize, usize), CanonicalGraphError> {
         super::canonical_search_impl(graph, fuel, TEST_DOMAIN)
+            .map(|(form, leaves, groups)| (form.preimage, leaves, groups))
     }
 
     fn canonical_search_with_test_fuel(
@@ -2540,6 +2560,39 @@ mod tests {
         let (renamed, _) = canonical_search(&renamed)?;
 
         assert_eq!(canonical, renamed);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_form_returns_the_completed_leaf_binding() -> Result<(), CanonicalGraphError> {
+        for permutation in [vec![0, 1, 2, 3], vec![0, 3, 1, 2]] {
+            for edges in 0..64 {
+                let graph = small_directed_graph(edges, &permutation)?;
+                let form = super::canonical_form(&graph, TEST_DOMAIN)?;
+                let mut vertices = form.order.clone();
+                vertices.sort_unstable();
+                assert_eq!(vertices, vec![0, 1, 2, 3]);
+                assert_eq!(
+                    super::serialize_order(&graph, &form.order, TEST_DOMAIN)?,
+                    form.preimage,
+                    "the returned binding must serialize to the exact canonical form",
+                );
+                assert_eq!(form.preimage, canonical_preimage(&graph)?);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_form_retains_every_symmetric_vertex() -> Result<(), CanonicalGraphError> {
+        let graph = repeated_component_graph(8)?;
+        let form = super::canonical_form(&graph, TEST_DOMAIN)?;
+        let mut vertices = form.order.clone();
+        vertices.sort_unstable();
+        assert_eq!(vertices, (0..graph.colors.len()).collect::<Vec<_>>());
+        assert_eq!(form.preimage, canonical_preimage(&graph)?);
+        // Exact graph symmetry authorizes pruning equivalent leaves, not
+        // merging distinct physical targets in the execution projection.
         Ok(())
     }
 

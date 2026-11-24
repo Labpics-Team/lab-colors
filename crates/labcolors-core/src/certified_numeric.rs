@@ -68,6 +68,37 @@ pub(crate) struct CertifiedScalarV1 {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CertifiedRgbV1([CertifiedScalarV1; 3]);
 
+/// Bounded memoization of the deterministic interval transform. Equal endpoint
+/// bits are valid function-input keys; they are never real-expression equality
+/// evidence. Two entries retain a source and its current visible appearance.
+#[derive(Default)]
+pub(crate) struct CertifiedOklabCacheV1 {
+    entries: [Option<(CertifiedRgbV1, [CertifiedScalarV1; 3])>; 2],
+    next: usize,
+}
+
+impl CertifiedOklabCacheV1 {
+    pub(crate) fn evaluate(
+        &mut self,
+        rgb: CertifiedRgbV1,
+    ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
+        for (previous, lab) in self.entries.iter().flatten() {
+            if previous
+                .0
+                .iter()
+                .zip(rgb.0)
+                .all(|(&a, b)| a.bounds() == b.bounds())
+            {
+                return Ok(*lab);
+            }
+        }
+        let lab = rgb.oklab()?;
+        self.entries[self.next] = Some((rgb, lab));
+        self.next ^= 1;
+        Ok(lab)
+    }
+}
+
 fn check_status(status: Status) -> Result<(), NumericUncertaintyV1> {
     if status.contains(Status::INVALID_OP) {
         Err(NumericUncertaintyV1::InvalidOperation)
@@ -236,6 +267,9 @@ impl CertifiedScalarV1 {
             return Err(NumericUncertaintyV1::DomainViolation);
         }
         let lower = root_point(self.lo, degree)?;
+        if self.lo == self.hi {
+            return Ok(lower);
+        }
         let upper = root_point(self.hi, degree)?;
         Ok(Self {
             lo: lower.lo,
@@ -312,6 +346,34 @@ impl CertifiedScalarV1 {
     }
 }
 
+/// One interval-Newton contraction for f(x) = x^degree - target. By the mean
+/// value theorem, a root in `bracket` also lies in mid - f(mid)/f'(bracket).
+/// All residual, derivative and correction bounds round outwards. Failure or
+/// no contraction leaves the caller's proven bracket available for bisection.
+/// See <https://octave.sourceforge.io/interval/package_doc/Root-Finding.html>.
+fn root_newton_bracket(
+    bracket: CertifiedScalarV1,
+    mid: Quad,
+    power: CertifiedScalarV1,
+    target: Quad,
+    degree: u32,
+) -> Option<CertifiedScalarV1> {
+    let derivative = bracket
+        .pow(degree - 1)
+        .ok()?
+        .mul(CertifiedScalarV1::exact(f64::from(degree)).ok()?)
+        .ok()?;
+    let residual = power.sub(CertifiedScalarV1::point(target)).ok()?;
+    let correction = CertifiedScalarV1::point(mid)
+        .sub(residual.div(derivative).ok()?)
+        .ok()?;
+    let next = CertifiedScalarV1 {
+        lo: bracket.lo.max(correction.lo),
+        hi: bracket.hi.min(correction.hi),
+    };
+    (next.lo <= next.hi && (next.lo > bracket.lo || next.hi < bracket.hi)).then_some(next)
+}
+
 /// Positive root maintains lo^degree <= target <= hi^degree. Host powf/cbrt
 /// only propose a tighter bracket; directed powers must independently admit it.
 fn root_point(target: Quad, degree: u32) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
@@ -357,12 +419,18 @@ fn root_point(target: Quad, degree: u32) -> Result<CertifiedScalarV1, NumericUnc
             return Ok(CertifiedScalarV1 { lo, hi });
         }
         let power = CertifiedScalarV1::point(mid).pow(degree)?;
-        if power.hi < target {
+        if power.lo == target && power.hi == target {
+            return Ok(CertifiedScalarV1::point(mid));
+        }
+        if let Some(next) =
+            root_newton_bracket(CertifiedScalarV1 { lo, hi }, mid, power, target, degree)
+        {
+            lo = next.lo;
+            hi = next.hi;
+        } else if power.hi < target {
             lo = mid;
         } else if power.lo > target {
             hi = mid;
-        } else if power.lo == target && power.hi == target {
-            return Ok(CertifiedScalarV1::point(mid));
         } else {
             // Ambiguous powers retain the enclosure, never imply equality.
             // The consumer can still prove a cell or strict interval ordering.
@@ -411,6 +479,26 @@ fn dot(
 }
 
 impl CertifiedRgbV1 {
+    /// Exact equality of the encoded real colors, never equality of rounded
+    /// output cells or matching non-singleton enclosures.
+    pub(crate) fn proves_equal(self, rhs: Self) -> bool {
+        self.0.iter().zip(rhs.0).all(|(&a, b)| a.proves_equal(b))
+    }
+
+    /// Admitted encoded channel box in byte units. The endpoints are exact
+    /// binary64 inputs; this is an enclosure, never clamping or gamut mapping.
+    pub(crate) fn from_encoded_bounds(
+        lower: [f64; 3],
+        upper: [f64; 3],
+    ) -> Result<Self, NumericUncertaintyV1> {
+        let lower = Self::from_encoded(lower)?;
+        let upper = Self::from_encoded(upper)?;
+        if lower.0.iter().zip(upper.0).any(|(lo, hi)| lo.lo > hi.hi) {
+            return Err(NumericUncertaintyV1::DomainViolation);
+        }
+        Ok(Self(std::array::from_fn(|i| lower.0[i].hull(upper.0[i]))))
+    }
+
     pub(crate) fn from_encoded(value: [f64; 3]) -> Result<Self, NumericUncertaintyV1> {
         for (channel, value) in value.iter().enumerate() {
             if !value.is_finite() {

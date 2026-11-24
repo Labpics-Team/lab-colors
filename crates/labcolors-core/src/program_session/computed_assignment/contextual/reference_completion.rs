@@ -8,6 +8,8 @@ use crate::certified_numeric::{
     CertifiedScalarV1, NumericUncertaintyV1, sort_descending_profile, source_distance_squared,
 };
 
+mod authored_optimum;
+
 /// Only certified componentwise improvement or proved preference equality
 /// can admit a proposal. A shared rounding cell has no comparison authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +92,9 @@ struct UseV1 {
     tone_bits: Vec<Option<u64>>,
     point_anchor: Option<[CertifiedScalarV1; 3]>,
     preferred: Vec<[CertifiedScalarV1; 3]>,
+    local_preferred: Vec<[CertifiedScalarV1; 3]>,
     reference: Option<ReferenceFactsV1>,
+    point_lab_cache: crate::certified_numeric::CertifiedOklabCacheV1,
 }
 
 struct PreferenceMeasurementV1 {
@@ -244,12 +248,84 @@ impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionScratchV1<E> {
     }
 }
 
+pub(in crate::program_session) struct CompiledPointAnchorsV1 {
+    source_labs: Arc<[[CertifiedScalarV1; 3]]>,
+    references: Box<[Option<ReferenceFactsV1>]>,
+}
+
+impl CompiledPointAnchorsV1 {
+    pub(in crate::program_session) fn new<E: ProgramConstraintEvaluatorSetV1>(
+        epoch: &ProgramEpochV1<E>,
+    ) -> Result<Self, Error<E>> {
+        let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
+        let mut certified_workspace = epoch.graph.new_certified_workspace()?;
+        let bindings = &epoch.binding_template;
+        let sources = bindings.paint_inputs_canonical();
+        let mut source_labs = reserve::<_, E>(selection.targets.len())?;
+        for target in &selection.targets {
+            source_labs.push(
+                CertifiedRgbV1::from_encoded(target.declaration.anchor.bytes().map(f64::from))?
+                    .oklab()?,
+            );
+        }
+        let mut references =
+            buffer(selection.targets.len(), None).map_err(|_| Error::<E>::ResourceExhausted)?;
+        if selection
+            .targets
+            .iter()
+            .any(|target| target.declaration.reference_appearance)
+        {
+            let inputs = epoch
+                .reference_inputs
+                .as_ref()
+                .ok_or(Error::<E>::MissingReference)?;
+            let mut reference = epoch.graph.prepare_certified_surface_cases(
+                None,
+                bindings,
+                |index| {
+                    PointPaintValueV1::from_admitted(
+                        CertifiedRgbV1::from_encoded(
+                            sources[index].1.source().bytes().map(f64::from),
+                        ),
+                        sources[index].1.opacity(),
+                    )
+                },
+                &mut certified_workspace,
+            )?;
+            let view = reference.evaluate_surface_inputs_canonical(|index| {
+                CertifiedRgbV1::from_encoded(inputs[index].1.bytes().map(f64::from))
+            });
+            for (index, target) in selection.targets.iter().enumerate() {
+                if !target.declaration.reference_appearance {
+                    continue;
+                }
+                let point = view
+                    .occurrence_at(target.appearance.ok_or(Error::<E>::InvalidUse)?)
+                    .ok_or(Error::<E>::InvalidUse)?;
+                references[index] = Some(ReferenceFactsV1 {
+                    visible_lab: point.visible?.oklab()?,
+                    backdrop_lab: point.backdrop?.oklab()?,
+                    contrast: point.visible?.contrast(point.backdrop?)?,
+                });
+            }
+        }
+        Ok(Self {
+            source_labs: source_labs.into(),
+            references: references.into_boxed_slice(),
+        })
+    }
+}
+
 struct ReferenceCompletionStorageV1 {
     uses: Vec<UseV1>,
     bindings: AdmittedAppearanceBindings,
     certified_workspace: CertifiedAppearanceWorkspace,
     binding_targets: Vec<Option<usize>>,
-    source_labs: Vec<[CertifiedScalarV1; 3]>,
+    source_labs: Arc<[[CertifiedScalarV1; 3]]>,
+    point_buffers: super::point_search::BuffersV1,
+    authored_minimum_rows: Vec<bool>,
 }
 
 /// Epoch and observation authorize the operation; scratch is only borrowed
@@ -275,13 +351,27 @@ pub(in crate::program_session) fn prepare<
     observation: &RevisionBoundObservationV1,
     scratch: &'scratch mut ReferenceCompletionScratchV1<E>,
 ) -> Result<PreparedReferenceCompletionV1<'program, 'scratch, E>, Error<E>> {
+    if observation.declared_field().is_some() {
+        return Err(Error::<E>::UnsupportedDeclaredField);
+    }
+    let prepared = prepare_selection(epoch, observation, scratch)?;
+    prepared.scratch.refresh_tones(epoch, observation)?;
+    Ok(prepared)
+}
+
+pub(in crate::program_session) fn prepare_selection<
+    'program,
+    'scratch,
+    E: ProgramConstraintEvaluatorSetV1,
+>(
+    epoch: &'program ProgramEpochV1<E>,
+    observation: &RevisionBoundObservationV1,
+    scratch: &'scratch mut ReferenceCompletionScratchV1<E>,
+) -> Result<PreparedReferenceCompletionV1<'program, 'scratch, E>, Error<E>> {
     if !core::ptr::eq(scratch.owner_generation.as_ptr(), epoch)
         || !observation.shares_schema_backing_with(&epoch.observation_group.schema)
     {
         return Err(Error::<E>::OwnerMismatch);
-    }
-    if observation.declared_field().is_some() {
-        return Err(Error::<E>::UnsupportedDeclaredField);
     }
     if observation.physical_case_count() == 0 {
         return Err(Error::<E>::MissingFiniteObservation);
@@ -295,7 +385,7 @@ pub(in crate::program_session) fn prepare<
         .ok_or(Error::<E>::ResourceExhausted)?;
     // Every prepare initializes observation-derived values, including after an
     // error or rollback. Vec capacities and the compiled reference are reused.
-    storage.refresh_tones(epoch, observation)?;
+
     Ok(PreparedReferenceCompletionV1 {
         epoch,
         observation: observation.clone(),
@@ -347,56 +437,15 @@ impl ReferenceCompletionStorageV1 {
             return Err(Error::<E>::RequiresComputedTargets);
         };
         let bindings = epoch.binding_template.try_clone_v1()?;
-        let mut certified_workspace = epoch.graph.new_certified_workspace()?;
+        let certified_workspace = epoch.graph.new_certified_workspace()?;
         let sources = bindings.paint_inputs_canonical();
-        let mut source_labs = reserve::<_, E>(selection.targets.len())?;
-        for target in &selection.targets {
-            source_labs.push(
-                CertifiedRgbV1::from_encoded(target.declaration.anchor.bytes().map(f64::from))?
-                    .oklab()?,
-            );
-        }
-        let mut references =
-            buffer(selection.targets.len(), None).map_err(|_| Error::<E>::ResourceExhausted)?;
-        if selection
-            .targets
-            .iter()
-            .any(|target| target.declaration.reference_appearance)
-        {
-            let inputs = epoch
-                .reference_inputs
-                .as_ref()
-                .ok_or(Error::<E>::MissingReference)?;
-            let mut reference = epoch.graph.prepare_certified_surface_cases(
-                None,
-                &bindings,
-                |index| {
-                    PointPaintValueV1::from_admitted(
-                        CertifiedRgbV1::from_encoded(
-                            sources[index].1.source().bytes().map(f64::from),
-                        ),
-                        sources[index].1.opacity(),
-                    )
-                },
-                &mut certified_workspace,
-            )?;
-            let view = reference.evaluate_surface_inputs_canonical(|index| {
-                CertifiedRgbV1::from_encoded(inputs[index].1.bytes().map(f64::from))
-            });
-            for (index, target) in selection.targets.iter().enumerate() {
-                if !target.declaration.reference_appearance {
-                    continue;
-                }
-                let point = view
-                    .occurrence_at(target.appearance.ok_or(Error::<E>::InvalidUse)?)
-                    .ok_or(Error::<E>::InvalidUse)?;
-                references[index] = Some(ReferenceFactsV1 {
-                    visible_lab: point.visible?.oklab()?,
-                    backdrop_lab: point.backdrop?.oklab()?,
-                    contrast: point.visible?.contrast(point.backdrop?)?,
-                });
-            }
-        }
+        let anchors = if let Some(anchors) = &selection.point_anchors {
+            anchors.clone()
+        } else {
+            Arc::new(CompiledPointAnchorsV1::new(epoch)?)
+        };
+        let source_labs = anchors.source_labs.clone();
+        let references = &anchors.references;
         let mut uses = reserve::<_, E>(selection.targets.len())?;
         for (index, target) in selection.targets.iter().enumerate() {
             let point_anchor = match target.preferred_intent() {
@@ -427,7 +476,9 @@ impl ReferenceCompletionStorageV1 {
                 tone_bits: Vec::new(),
                 point_anchor,
                 preferred: Vec::new(),
+                local_preferred: Vec::new(),
                 reference: references[index],
+                point_lab_cache: crate::certified_numeric::CertifiedOklabCacheV1::default(),
             });
         }
         let mut binding_targets = reserve::<_, E>(sources.len())?;
@@ -445,6 +496,8 @@ impl ReferenceCompletionStorageV1 {
             certified_workspace,
             binding_targets,
             source_labs,
+            point_buffers: super::point_search::BuffersV1::default(),
+            authored_minimum_rows: Vec::new(),
         })
     }
 
@@ -517,6 +570,183 @@ fn sort_profile<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E> {
+    pub(super) fn refresh_point_component(
+        &mut self,
+        component: &ComputedComponentV1,
+        cases: &[usize],
+    ) -> Result<(), Error<E>> {
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
+        for &target in &component.targets {
+            let usage = &mut self.scratch.uses[target];
+            usage.local_preferred.clear();
+            usage
+                .local_preferred
+                .try_reserve(cases.len())
+                .map_err(|_| Error::<E>::ResourceExhausted)?;
+            for &case in cases {
+                #[cfg(test)]
+                super::point_search::tests::refreshed_point_case(selection.targets[target].id);
+                let mut point = usage.point_anchor.ok_or(Error::<E>::InvalidUse)?;
+                if let CompiledPreferredIntentV1::Point {
+                    tone: Some((curve, input)),
+                    ..
+                } = selection.targets[target].preferred_intent()
+                {
+                    let inputs = self
+                        .observation
+                        .physical_values(case)
+                        .ok_or(Error::<E>::MissingFiniteObservation)?;
+                    point[0] =
+                        CertifiedScalarV1::exact(curve.preferred_lightness(inputs[input].srgb8()))?;
+                }
+                usage.local_preferred.push(point);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn take_point_buffers(&mut self) -> super::point_search::BuffersV1 {
+        std::mem::take(&mut self.scratch.point_buffers)
+    }
+
+    pub(super) fn restore_point_buffers(&mut self, buffers: super::point_search::BuffersV1) {
+        self.scratch.point_buffers = buffers;
+    }
+
+    pub(super) fn same_point_expression(
+        &self,
+        component: &ComputedComponentV1,
+        local: usize,
+        a: &[Srgb8],
+        b: &[Srgb8],
+        region: Option<RegionNodeV1>,
+    ) -> bool {
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            return false;
+        };
+        let usage = &self.scratch.uses[component.targets[local]];
+        selection.factors[usage.factor]
+            .targets
+            .iter()
+            .all(|target| {
+                component.targets.binary_search(target).is_ok_and(|index| {
+                    region.is_none_or(|node| index < node.depth) && a[index] == b[index]
+                })
+            })
+    }
+
+    /// The same continuous physical interpreter measures point probes and
+    /// enclosing source boxes. Cases are the component's unique local support;
+    /// hard assessment separately retains every actual observation case.
+    pub(super) fn measure_point_component(
+        &mut self,
+        component: &ComputedComponentV1,
+        values: &[Srgb8],
+        region: Option<RegionNodeV1>,
+        cases: &[usize],
+        primary: &mut Vec<CertifiedScalarV1>,
+        source_profile: &mut Vec<CertifiedScalarV1>,
+    ) -> Result<(), Error<E>> {
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
+        let bounds = |local: usize| {
+            let local = component.point_representative(local);
+            let (lo, hi) = match region {
+                Some(node) if local >= node.depth => if local == node.depth {
+                    node.domain
+                } else {
+                    selection.targets[component.targets[local]].search_domain()
+                }
+                .bounds(),
+                _ => (values[local].bytes(), values[local].bytes()),
+            };
+            (lo.map(f64::from), hi.map(f64::from))
+        };
+        primary.clear();
+        source_profile.clear();
+        primary
+            .try_reserve(
+                cases
+                    .len()
+                    .checked_mul(component.targets.len())
+                    .ok_or(Error::<E>::ResourceExhausted)?,
+            )
+            .map_err(|_| Error::<E>::ResourceExhausted)?;
+        source_profile
+            .try_reserve(component.targets.len())
+            .map_err(|_| Error::<E>::ResourceExhausted)?;
+        for (local, &target) in component.targets.iter().enumerate() {
+            if component.point_representative(local) != local {
+                continue;
+            }
+            let (lo, hi) = bounds(local);
+            let lab = self.scratch.uses[target]
+                .point_lab_cache
+                .evaluate(CertifiedRgbV1::from_encoded_bounds(lo, hi)?)?;
+            source_profile.push(source_distance_squared(
+                lab,
+                self.scratch.source_labs[target],
+            )?);
+        }
+        let authored = self.scratch.bindings.paint_inputs_canonical();
+        let mut paints = self.epoch.graph.prepare_certified_surface_cases(
+            Some(&component.physical),
+            &self.scratch.bindings,
+            |binding| {
+                let rgb = self.scratch.binding_targets[binding]
+                    .and_then(|target| component.targets.binary_search(&target).ok())
+                    .map_or_else(
+                        || {
+                            CertifiedRgbV1::from_encoded(
+                                authored[binding].1.source().bytes().map(f64::from),
+                            )
+                        },
+                        |local| {
+                            let (lo, hi) = bounds(local);
+                            CertifiedRgbV1::from_encoded_bounds(lo, hi)
+                        },
+                    );
+                PointPaintValueV1::from_admitted(rgb, authored[binding].1.opacity())
+            },
+            &mut self.scratch.certified_workspace,
+        )?;
+        for (local_case, &case) in cases.iter().enumerate() {
+            let inputs = self
+                .observation
+                .physical_values(case)
+                .ok_or(Error::<E>::MissingFiniteObservation)?;
+            let view = paints.evaluate_surface_inputs_canonical(|index| {
+                CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
+            });
+            for (local, &target) in component.targets.iter().enumerate() {
+                if component.point_representative(local) != local {
+                    continue;
+                }
+                let usage = &mut self.scratch.uses[target];
+                let visible_rgb = if let Some(slot) = usage.slot {
+                    view.occurrence_at(slot)
+                        .ok_or(Error::<E>::InvalidUse)?
+                        .visible?
+                } else {
+                    let (lo, hi) = bounds(local);
+                    CertifiedRgbV1::from_encoded_bounds(lo, hi)?
+                };
+                let visible = usage.point_lab_cache.evaluate(visible_rgb)?;
+                primary.push(source_distance_squared(
+                    visible,
+                    *usage
+                        .local_preferred
+                        .get(local_case)
+                        .ok_or(Error::<E>::InvalidUse)?,
+                )?);
+            }
+        }
+        Ok(())
+    }
+
     /// The compiled variable order belongs to this prepared operation. Solvers
     /// consume these identities rather than assuming declaration/creation order.
     pub(crate) fn sources(&self) -> impl ExactSizeIterator<Item = (TargetId, Srgb8)> + '_ {
@@ -594,7 +824,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             }
         }
         let mut source = reserve::<_, E>(values.len())?;
-        for (value, anchor) in values.iter().zip(&self.scratch.source_labs) {
+        for (value, anchor) in values.iter().zip(self.scratch.source_labs.iter()) {
             source.push(source_distance_squared(
                 CertifiedRgbV1::from_encoded(value.channels())?.oklab()?,
                 *anchor,

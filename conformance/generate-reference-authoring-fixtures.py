@@ -40,6 +40,17 @@ def encode(sections):
     return b"LCPW" + struct.pack("<HI", 3, 10 + len(payload)) + payload
 
 
+def composition(targets, reference=None):
+    sections = [[] for _ in range(14)]
+    payload = bytes([5 if reference is None else 6, 0]) + u32(len(targets))
+    payload += b"".join(u32(target) for target in targets)
+    if reference is not None:
+        payload += u32(len(reference))
+        payload += b"".join(u32(port) + bytes(rgb) for port, rgb in reference)
+    sections[3].append(payload)
+    return encode(sections)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="compare committed vectors without rewriting them")
@@ -55,6 +66,12 @@ if __name__ == "__main__":
     empty = [[] for _ in range(14)]
     empty[3].append(bytes([4, 0]) + u32(0) + u32(0))
     fixture["referenceEmpty"] = encode(empty).hex()
+    fixture["compose"] = composition([0x01020304, 0xFFFFFFFF, 0]).hex()
+    fixture["composeReference"] = composition([0x01020304, 0xFFFFFFFF, 0], [
+        (0x10203040, [1, 128, 255]), (0xFFFFFFFF, [254, 129, 0]),
+    ]).hex()
+    fixture["composeEmpty"] = composition([]).hex()
+    fixture["composeReferenceEmpty"] = composition([], []).hex()
     if arguments.check:
         if original != fixture:
             raise SystemExit("reference-authoring vectors differ; regenerate with this script")

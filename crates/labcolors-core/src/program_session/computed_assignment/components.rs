@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod point_equivalence;
+
 fn physical_cone<Invocation>(
     selection: &ComputedSelectionV1,
     targets: &[usize],
@@ -535,6 +537,25 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             }
         }
         components.push(ComputedComponentV1 {
+            point_equivalence: None,
+            mode: if program
+                .assignment
+                .as_ref()
+                .is_some_and(ComputedSelectionPolicyV1::authored_composition)
+            {
+                if targets.iter().all(|&target| {
+                    matches!(
+                        selection.targets[target].preferred_intent(),
+                        CompiledPreferredIntentV1::Point { .. }
+                    )
+                }) {
+                    ProgramSelectionModeV1::JointPointV1
+                } else {
+                    ProgramSelectionModeV1::OrderedReferenceV1
+                }
+            } else {
+                ProgramSelectionModeV1::OrderedV1
+            },
             physical: physical_cone(
                 selection,
                 &targets,
@@ -564,7 +585,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .targets
                 .iter()
                 .any(|&target| selection.targets[target].declaration.reference_appearance);
-            let units = if !reference && contextual && component.targets.len() > 1 {
+            let units = if component.mode != ProgramSelectionModeV1::JointPointV1
+                && !reference
+                && contextual
+                && component.targets.len() > 1
+            {
                 component.targets.len().checked_add(1)?
             } else {
                 1
@@ -577,9 +602,50 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         .checked_mul(search_units)
         .and_then(|budget| budget.checked_add(constant_check))
         .ok_or(ProgramCompileError::ResourceExhausted)?;
+    for component in &mut components {
+        if component.mode == ProgramSelectionModeV1::JointPointV1 {
+            component.point_equivalence = point_equivalence::compile(
+                selection,
+                component,
+                program,
+                constraints,
+                &factors,
+                index,
+            )?;
+        }
+    }
     selection.components = components.into_boxed_slice();
     selection.factors = factors.into_boxed_slice();
     selection.fixed_constraints = fixed.into_boxed_slice();
+    let mut descriptions = Vec::new();
+    descriptions
+        .try_reserve_exact(selection.components.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for component in &selection.components {
+        let mut targets = Vec::new();
+        targets
+            .try_reserve_exact(component.targets.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        targets.extend(
+            component
+                .targets
+                .iter()
+                .map(|&index| selection.targets[index].id.value()),
+        );
+        descriptions.push(ProgramSelectionComponentV1 {
+            targets: targets.into_boxed_slice(),
+            mode: component.mode,
+        });
+    }
+    selection.selection_components = descriptions.into();
+    if selection
+        .components
+        .iter()
+        .any(|component| component.mode == ProgramSelectionModeV1::JointPointV1)
+    {
+        selection.execution_profile =
+            contextual::point_search::execution_profile_identity(selection.budget);
+    }
     Ok(())
 }
 
@@ -700,6 +766,8 @@ pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
             seen_inputs[input] = false;
         }
         components.push(ComputedComponentV1 {
+            point_equivalence: None,
+            mode: component.mode,
             physical: physical_cone(
                 selection,
                 &targets,
@@ -765,6 +833,8 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     Ok(Some(ComputedComponentV1 {
+        point_equivalence: None,
+        mode: component.mode,
         physical: physical_cone(
             selection,
             &[first],
@@ -831,6 +901,7 @@ fn local_support<E: ProgramConstraintEvaluatorSetV1>(
     Ok(support)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -838,6 +909,8 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     previous: Option<&ComputedVerifiedV1<E>>,
+    point_scratch: &mut ReferenceCompletionScratchV1<E>,
+    observation: &RevisionBoundObservationV1,
 ) -> Result<
     (SearchResultV1, Vec<VerifiedComponentV1>),
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
@@ -929,6 +1002,27 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 evidence: cached.search,
                 reference_selections,
             }
+        } else if component.mode == ProgramSelectionModeV1::JointPointV1 {
+            let mut prepared = contextual::reference_completion::prepare_selection(
+                epoch,
+                observation,
+                point_scratch,
+            )
+            .map_err(|error| match error {
+                contextual::reference_completion::ReferenceCompletionErrorV1::ResourceExhausted => {
+                    ProgramSessionEvaluationError::ResourceExhausted
+                }
+                _ => ProgramSessionEvaluationError::InternalInvariant,
+            })?;
+            contextual::point_search::select_component(
+                selection,
+                component,
+                runtime,
+                epoch,
+                scenarios,
+                arena,
+                &mut prepared,
+            )?
         } else if component
             .targets
             .iter()

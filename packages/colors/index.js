@@ -481,7 +481,7 @@ export function isProgramError(error) {
       return UPDATE_PROGRAM_ERROR_CODES.has(code) || code === "program_host_protocol";
     }
     if (operation === "runtimeFree" || operation === "snapshotFree") return code === "program_busy";
-    if (operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "referenceSelections" || operation === "fieldAssessment" || operation === "diagnostics") return code === "program_resource_exhausted";
+    if (operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "referenceSelections" || operation === "selectionComponents" || operation === "fieldAssessment" || operation === "diagnostics") return code === "program_resource_exhausted";
     if (operation === "attachProgramWire") return ATTACHMENT_ERROR_CODES.has(code);
     if (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown") {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);

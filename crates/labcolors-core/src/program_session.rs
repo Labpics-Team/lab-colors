@@ -1160,6 +1160,29 @@ impl ObservationGroup {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ComputedSelectionPolicyV1 {
+    Ordered(Vec<TargetId>),
+    AuthoredComposition {
+        legacy_reference_order: Vec<TargetId>,
+    },
+}
+
+impl ComputedSelectionPolicyV1 {
+    pub(crate) fn legacy_order(&self) -> &[TargetId] {
+        match self {
+            Self::Ordered(order) => order,
+            Self::AuthoredComposition {
+                legacy_reference_order,
+            } => legacy_reference_order,
+        }
+    }
+
+    pub(crate) fn authored_composition(&self) -> bool {
+        matches!(self, Self::AuthoredComposition { .. })
+    }
+}
+
 /// Immutable generic point Program.
 pub struct Program<Evaluation>
 where
@@ -1170,7 +1193,7 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
-    assignment: Option<Vec<TargetId>>,
+    assignment: Option<ComputedSelectionPolicyV1>,
     reference_inputs: Option<Vec<(SurfaceInputPortId, Srgb8)>>,
     #[cfg(test)]
     computed_budget: Option<u64>,
@@ -1286,7 +1309,12 @@ where
     }
 
     pub fn compile(mut self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        computed_assignment::assign_preference(&mut self.targets, self.assignment.as_deref())?;
+        computed_assignment::assign_preference(
+            &mut self.targets,
+            self.assignment
+                .as_ref()
+                .map(ComputedSelectionPolicyV1::legacy_order),
+        )?;
         prepare_program(self).map(|epoch| CompiledProgram {
             owner_generation: Shared::new(epoch),
         })
@@ -1352,7 +1380,13 @@ impl CoreProgramDraftV1 {
     }
 
     pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
-        self.program.assignment = Some(order);
+        self.program.assignment = Some(ComputedSelectionPolicyV1::Ordered(order));
+    }
+
+    pub(crate) fn set_composition(&mut self, legacy_reference_order: Vec<TargetId>) {
+        self.program.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+            legacy_reference_order,
+        });
     }
 
     pub(crate) fn set_reference_appearance(&mut self, id: TargetId) {
@@ -5871,7 +5905,10 @@ where
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
-        program.assignment.as_deref(),
+        program
+            .assignment
+            .as_ref()
+            .map(ComputedSelectionPolicyV1::legacy_order),
         computed_budget,
     )?;
     if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
@@ -5930,9 +5967,36 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_owner_identity(&program)?;
+    let preferences = match &target_selection {
+        CompiledTargetSelectionV1::Computed(selection)
+            if program
+                .assignment
+                .as_ref()
+                .is_some_and(ComputedSelectionPolicyV1::authored_composition) =>
+        {
+            selection.identity_preferences()?
+        }
+        _ => Vec::new(),
+    };
+    let compiled_identity = identity::compile_owner_identity_and_layout(&program, &preferences)?;
+    let content_identity = compiled_identity.content;
+    if let (CompiledTargetSelectionV1::Computed(selection), Some(layout)) =
+        (&mut target_selection, compiled_identity.execution.as_ref())
+    {
+        selection.canonicalize_execution(layout)?;
+        computed_assignment::compile_components(
+            selection,
+            &program,
+            &graph,
+            &binding_template,
+            &constraints,
+            &dependency_index,
+            &mut dependency_scratch,
+        )?;
+        selection.canonicalize_inputs(layout, &graph)?;
+    }
     let families = program.families.into_boxed_slice();
-    Ok(ProgramEpochV1 {
+    let mut epoch = ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
         families,
@@ -5954,7 +6018,9 @@ where
         field,
         field_outputs,
         target_selection,
-    })
+    };
+    computed_assignment::prepare_point_anchors(&mut epoch)?;
+    Ok(epoch)
 }
 
 fn canonical_required_family_releases(

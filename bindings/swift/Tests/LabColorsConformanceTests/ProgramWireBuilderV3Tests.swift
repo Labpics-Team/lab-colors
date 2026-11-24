@@ -12,6 +12,10 @@ private struct AuthoringV3Fixture: Decodable {
     let referenceSingleton: String
     let referenceHierarchy: String
     let referenceEmpty: String
+    let compose: String
+    let composeReference: String
+    let composeEmpty: String
+    let composeReferenceEmpty: String
 }
 
 private final class RejectingFieldHost: ProgramUpdateHost, @unchecked Sendable {
@@ -101,6 +105,52 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertEqual(try referenceProgram(hierarchy: true), try bytes(expected.referenceHierarchy))
         XCTAssertEqual(try ProgramWireBuilderV3().assignment([], options: ProgramWireAssignmentOptionsV3(reference: [])).finish(),
             try bytes(expected.referenceEmpty))
+    }
+
+    func testCompositionUsesIndependentVectorsAndUnchangedAssignmentFieldGrammar() throws {
+        let expected = try fixtureV3()
+        let targets: [UInt32] = [0x01020304, 0xffffffff, 0]
+        let reference = [ProgramWireReferenceInputV3(port: 0x10203040, rgb: [1, 128, 255]),
+            ProgramWireReferenceInputV3(port: 0xffffffff, rgb: [254, 129, 0])]
+        let cases: [([UInt32], [ProgramWireReferenceInputV3]?, String, UInt8)] = [
+            (targets, nil, expected.compose, 5), (targets, reference, expected.composeReference, 6),
+            ([], nil, expected.composeEmpty, 5), ([], [], expected.composeReferenceEmpty, 6),
+        ]
+        for (members, inputs, fixture, tag) in cases {
+            var composition = try ProgramWireBuilderV3().compose(members,
+                options: ProgramWireComposeOptionsV3(reference: inputs)).finish()
+            XCTAssertEqual(composition, try bytes(fixture))
+            XCTAssertEqual(composition[26], tag)
+            composition[26] -= 2
+            XCTAssertEqual(composition, try ProgramWireBuilderV3().assignment(members,
+                options: ProgramWireAssignmentOptionsV3(reference: inputs)).finish())
+        }
+    }
+
+    func testCompositionFailureRollsBackAndSelectionsCannotReplaceEachOther() throws {
+        let builder = try ProgramWireBuilderV3().source(1, rgb: [1, 2, 3])
+        let before = try builder.finish()
+        XCTAssertThrowsError(try builder.compose(Array(repeating: 1, count: 4097)))
+        for inputs in [
+            [ProgramWireReferenceInputV3(port: 0, rgb: [1, 2])],
+            Array(repeating: ProgramWireReferenceInputV3(port: 0, rgb: [1, 2, 3]), count: 2),
+            (0...4096).map { ProgramWireReferenceInputV3(port: UInt32($0), rgb: [1, 2, 3]) },
+        ] {
+            XCTAssertThrowsError(try builder.compose([], options: ProgramWireComposeOptionsV3(reference: inputs)))
+            XCTAssertEqual(try builder.finish(), before)
+        }
+        var targets: [UInt32] = [1], rgb: [UInt8] = [255, 255, 255]
+        var inputs = [ProgramWireReferenceInputV3(port: 0, rgb: rgb)]
+        try builder.compose(targets, options: ProgramWireComposeOptionsV3(reference: inputs))
+        let composed = try builder.finish()
+        targets[0] = 2; rgb[0] = 0; inputs.removeAll()
+        XCTAssertThrowsError(try builder.compose([]))
+        XCTAssertThrowsError(try builder.assignment([]))
+        XCTAssertEqual(try builder.finish(), composed)
+        let assigned = try ProgramWireBuilderV3().assignment([1])
+        let accepted = try assigned.finish()
+        XCTAssertThrowsError(try assigned.compose([]))
+        XCTAssertEqual(try assigned.finish(), accepted)
     }
 
     func testAuthoredReferenceAndHierarchySurviveContextChangesAndRuntimeRelease() throws {

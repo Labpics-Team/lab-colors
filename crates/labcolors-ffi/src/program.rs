@@ -377,6 +377,20 @@ impl ProgramSnapshot {
             })
             .transpose()
     }
+    /// Core-selected component policies without copying all assessment cells.
+    pub fn selection_components(
+        &self,
+    ) -> Result<Option<Vec<crate::ProgramSelectionComponent>>, LabColorsError> {
+        self.inner
+            .assessment_report()
+            .map(|report| {
+                crate::program_reports::selection_components(
+                    report.selection_components(),
+                    "selectionComponents",
+                )
+            })
+            .transpose()
+    }
     /// Независимая типизированная копия witness текущего отказа или поиска.
     pub fn diagnostics(&self) -> Result<Option<crate::ProgramDiagnostics>, LabColorsError> {
         crate::program_reports::diagnostics(self.inner.diagnostics())
