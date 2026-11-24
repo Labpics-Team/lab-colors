@@ -2631,6 +2631,9 @@ where
                 workspace,
                 presentation_cache,
                 evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                reference_completion: computed_assignment::ReferenceCompletionScratchV1::empty(
+                    &self.owner_generation,
+                ),
                 family_artifacts,
             },
         ))
@@ -4415,6 +4418,9 @@ where
     workspace: AppearanceWorkspace,
     presentation_cache: ProgramPresentationCacheV1,
     evaluation_arenas: ProgramEvaluationArenaPoolV1<Evaluation>,
+    // Initialized only by the private incoming continuous operation.
+    // This scratch retains no epoch lease and does not affect ordinary search.
+    reference_completion: computed_assignment::ReferenceCompletionScratchV1<Evaluation>,
     // Последнее owning-поле Plan: Session сначала уничтожает evidence/arenas,
     // затем executable artifact storage этой generation.
     family_artifacts: BoundFamilyArtifactBundleV2,
@@ -4476,6 +4482,8 @@ where
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation, Self::Incomplete>, Self::Error>
     {
+        #[cfg(test)]
+        computed_assignment::reference_completion_incoming_test_hook(self, &owner.0, &observation);
         if matches!(
             owner.0.target_selection,
             CompiledTargetSelectionV1::Computed(_)
@@ -4532,6 +4540,7 @@ where
         workspace,
         presentation_cache,
         evaluation_arenas,
+        reference_completion: _,
         family_artifacts,
     } = plan;
     let mut arena = evaluation_arenas

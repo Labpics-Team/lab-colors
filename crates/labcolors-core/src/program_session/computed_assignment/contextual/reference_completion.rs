@@ -7,7 +7,6 @@ use crate::certified_numeric::{
     CERTIFIED_NUMERIC_MODEL_V1, CertifiedNumericModelV1, CertifiedRgbV1, CertifiedScalarEvidenceV1,
     CertifiedScalarV1, NumericUncertaintyV1, sort_descending_profile, source_distance_squared,
 };
-use crate::observation::ObservationHeadViewV1;
 
 /// A point-filter outcome never asserts a mathematical tie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +67,9 @@ type Error<E> = ReferenceCompletionErrorV1<ProgramEvaluatorError<E>>;
 
 struct UseV1 {
     slot: CompiledOccurrenceSlotV1,
+    occurrence: OccurrenceId,
+    target: Option<usize>,
+    tone_bits: Vec<Option<u64>>,
     tones: Vec<Option<CertifiedScalarV1>>,
     objective: Option<usize>,
     reference_contrast: CertifiedScalarV1,
@@ -108,7 +110,7 @@ struct RealizationV1 {
 /// The borrow pins the exact compiled allocation; observation retains the exact
 /// admitted revision/context. Private fields prevent fabricating stage bindings.
 pub(crate) struct ReferenceCompletionResultV1<'program, E: ProgramConstraintEvaluatorSetV1> {
-    owner: &'program CompiledProgram<E>,
+    epoch: &'program ProgramEpochV1<E>,
     observation: RevisionBoundObservationV1,
     model: CertifiedNumericModelV1,
     use_tones: Box<[CompletionUseToneEvidenceV1]>,
@@ -153,7 +155,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionResultV1<'_, E> {
         self.primary_drift_upper
     }
     pub(crate) fn binds_owner(&self, owner: &CompiledProgram<E>) -> bool {
-        Shared::ptr_eq(&self.owner.owner_generation, &owner.owner_generation)
+        core::ptr::eq(self.epoch, owner.owner_generation.as_ref())
     }
     pub(crate) fn proposals(&self) -> (&[ContinuousSrgbV1], &[ContinuousSrgbV1]) {
         (&self.anchor, &self.completion)
@@ -181,16 +183,25 @@ impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionResultV1<'_, E> {
     }
 }
 
-pub(crate) struct PreparedReferenceCompletionV1<
-    'program,
-    'session,
-    E: ProgramConstraintEvaluatorSetV1,
-> {
-    owner: &'program CompiledProgram<E>,
-    session: &'session Session<ProgramSessionPlan<E>>,
-    observation: RevisionBoundObservationV1,
+/// Lazy per-Session storage. The ordinary selector never initializes it.
+/// It retains no observation backing: rolled-back updates must release their
+/// slot in the three-slot Session observation pool.
+pub(crate) struct ReferenceCompletionScratchV1<E: ProgramConstraintEvaluatorSetV1> {
+    owner_generation: Weak<ProgramEpochV1<E>>,
+    storage: Option<ReferenceCompletionStorageV1>,
+}
+
+impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionScratchV1<E> {
+    pub(in crate::program_session) fn empty(epoch: &Shared<ProgramEpochV1<E>>) -> Self {
+        Self {
+            owner_generation: Shared::downgrade(epoch),
+            storage: None,
+        }
+    }
+}
+
+struct ReferenceCompletionStorageV1 {
     uses: Vec<UseV1>,
-    use_tones: Vec<CompletionUseToneEvidenceV1>,
     objective_count: usize,
     bindings: AdmittedAppearanceBindings,
     certified_workspace: CertifiedAppearanceWorkspace,
@@ -198,24 +209,97 @@ pub(crate) struct PreparedReferenceCompletionV1<
     source_labs: Vec<[CertifiedScalarV1; 3]>,
 }
 
-impl<E: ProgramConstraintEvaluatorSetV1> CompiledProgram<E> {
-    /// Derive objectives from the already compiled target intents. Shared
-    /// physical occurrences additionally constrain the completion witness; they
-    /// never become extra primary weights or a second authoring root.
-    pub(crate) fn prepare_reference_completion<'program, 'session>(
-        &'program self,
-        session: &'session Session<ProgramSessionPlan<E>>,
-    ) -> Result<PreparedReferenceCompletionV1<'program, 'session, E>, Error<E>> {
-        if !self.owns_session(session) {
-            return Err(Error::<E>::OwnerMismatch);
-        }
-        let ObservationHeadViewV1::Observed(observation) = session.raw_head() else {
-            return Err(Error::<E>::MissingFiniteObservation);
-        };
-        if observation.declared_field().is_some() {
-            return Err(Error::<E>::UnsupportedDeclaredField);
-        }
-        let epoch = &self.owner_generation;
+/// Epoch and observation authorize the operation; scratch is only borrowed
+/// during preparation/execution and is never retained by immutable results.
+pub(crate) struct PreparedReferenceCompletionV1<
+    'program,
+    'scratch,
+    E: ProgramConstraintEvaluatorSetV1,
+> {
+    epoch: &'program ProgramEpochV1<E>,
+    observation: RevisionBoundObservationV1,
+    scratch: &'scratch mut ReferenceCompletionStorageV1,
+}
+
+/// The caller passes the admitted incoming observation, before Session commit.
+/// This function never reads a Session head or derives a reference from a frame.
+pub(in crate::program_session) fn prepare<
+    'program,
+    'scratch,
+    E: ProgramConstraintEvaluatorSetV1,
+>(
+    epoch: &'program ProgramEpochV1<E>,
+    observation: &RevisionBoundObservationV1,
+    scratch: &'scratch mut ReferenceCompletionScratchV1<E>,
+) -> Result<PreparedReferenceCompletionV1<'program, 'scratch, E>, Error<E>> {
+    if !core::ptr::eq(scratch.owner_generation.as_ptr(), epoch)
+        || !observation.shares_schema_backing_with(&epoch.observation_group.schema)
+    {
+        return Err(Error::<E>::OwnerMismatch);
+    }
+    if observation.declared_field().is_some() {
+        return Err(Error::<E>::UnsupportedDeclaredField);
+    }
+    if observation.physical_case_count() == 0 {
+        return Err(Error::<E>::MissingFiniteObservation);
+    }
+    if scratch.storage.is_none() {
+        scratch.storage = Some(ReferenceCompletionStorageV1::new(epoch)?);
+    }
+    let storage = scratch
+        .storage
+        .as_mut()
+        .ok_or(Error::<E>::ResourceExhausted)?;
+    // Every prepare initializes observation-derived values, including after an
+    // error or rollback. Vec capacities and the compiled reference are reused.
+    storage.refresh_tones(epoch, observation)?;
+    Ok(PreparedReferenceCompletionV1 {
+        epoch,
+        observation: observation.clone(),
+        scratch: storage,
+    })
+}
+
+/// Private operation for a prospective Session update. The epoch lease and
+/// observation come from admission; existing byte scratch/arena belong to the
+/// same plan. No committed head is consulted, and no result borrows the plan.
+pub(in crate::program_session) fn realize_incoming<'program, E: ProgramConstraintEvaluatorSetV1>(
+    plan: &mut ProgramSessionPlan<E>,
+    epoch: &'program ProgramEpochV1<E>,
+    observation: &RevisionBoundObservationV1,
+    anchor: &[ContinuousSrgbV1],
+    completion: &[ContinuousSrgbV1],
+    budget: u64,
+) -> Result<ReferenceCompletionResultV1<'program, E>, Error<E>> {
+    if !core::ptr::eq(plan.owner_generation.as_ptr(), epoch) {
+        return Err(Error::<E>::OwnerMismatch);
+    }
+    let mut prepared = prepare(epoch, observation, &mut plan.reference_completion)?;
+    let mut arena = plan
+        .evaluation_arenas
+        .guard(observation.arena_slot())
+        .ok_or(Error::<E>::Evaluation(
+            ProgramSessionEvaluationError::InternalInvariant,
+        ))?;
+    let mut runtime = ProgramEvaluationRuntimeV1 {
+        bindings: &mut plan.bindings,
+        workspace: &mut plan.workspace,
+        presentation_cache: &mut plan.presentation_cache,
+        family_artifacts: &plan.family_artifacts,
+    };
+    prepared.realize(
+        &mut runtime,
+        arena.storage_mut(),
+        anchor,
+        completion,
+        budget,
+    )
+}
+
+impl ReferenceCompletionStorageV1 {
+    fn new<E: ProgramConstraintEvaluatorSetV1>(
+        epoch: &ProgramEpochV1<E>,
+    ) -> Result<Self, Error<E>> {
         let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
@@ -242,9 +326,8 @@ impl<E: ProgramConstraintEvaluatorSetV1> CompiledProgram<E> {
         });
         let mut objective_count = 0;
         let mut uses = reserve::<_, E>(epoch.presentation_occurrence_contexts.len())?;
-        let mut use_tones = reserve::<_, E>(epoch.presentation_occurrence_contexts.len())?;
         for point in &epoch.presentation_occurrence_contexts {
-            let target = selection.targets.iter().find(|target| {
+            let target = selection.targets.iter().position(|target| {
                 target.appearance == Some(point.slot) && target.declaration.reference_appearance
             });
             let objective = target.map(|_| {
@@ -252,38 +335,17 @@ impl<E: ProgramConstraintEvaluatorSetV1> CompiledProgram<E> {
                 objective_count += 1;
                 index
             });
-            let mut tones = reserve::<_, E>(observation.physical_case_count())?;
-            let mut tone_bits = reserve::<_, E>(observation.physical_case_count())?;
-            for case in 0..observation.physical_case_count() {
-                let inputs = observation
-                    .physical_values(case)
-                    .ok_or(Error::<E>::MissingFiniteObservation)?;
-                let tone = target
-                    .and_then(|target| {
-                        target
-                            .declaration
-                            .intent
-                            .as_ref()?
-                            .tone
-                            .as_ref()
-                            .zip(target.tone_input)
-                    })
-                    .map(|(curve, input)| curve.preferred_lightness(inputs[input].srgb8()));
-                tones.push(tone.map(CertifiedScalarV1::exact).transpose()?);
-                tone_bits.push(tone.map(f64::to_bits));
-            }
             let value = reference
                 .occurrence_at(point.slot)
                 .ok_or(Error::<E>::InvalidUse)?;
             uses.push(UseV1 {
                 slot: point.slot,
-                tones,
+                occurrence: point.occurrence,
+                target,
+                tones: Vec::new(),
+                tone_bits: Vec::new(),
                 objective,
                 reference_contrast: value.visible?.contrast(value.backdrop?)?,
-            });
-            use_tones.push(CompletionUseToneEvidenceV1 {
-                occurrence: point.occurrence,
-                per_case_bits: tone_bits.into_boxed_slice(),
             });
         }
         if objective_count == 0 {
@@ -305,18 +367,59 @@ impl<E: ProgramConstraintEvaluatorSetV1> CompiledProgram<E> {
                     .oklab()?,
             );
         }
-        Ok(PreparedReferenceCompletionV1 {
-            owner: self,
-            session,
-            observation: observation.clone(),
+        Ok(Self {
             uses,
-            use_tones,
             objective_count,
             bindings,
             certified_workspace,
             binding_targets,
             source_labs,
         })
+    }
+
+    fn refresh_tones<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        epoch: &ProgramEpochV1<E>,
+        observation: &RevisionBoundObservationV1,
+    ) -> Result<(), Error<E>> {
+        let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
+        for usage in &mut self.uses {
+            usage.tones.clear();
+            usage.tone_bits.clear();
+            usage
+                .tones
+                .try_reserve(observation.physical_case_count())
+                .map_err(|_| Error::<E>::ResourceExhausted)?;
+            usage
+                .tone_bits
+                .try_reserve(observation.physical_case_count())
+                .map_err(|_| Error::<E>::ResourceExhausted)?;
+            for case in 0..observation.physical_case_count() {
+                let inputs = observation
+                    .physical_values(case)
+                    .ok_or(Error::<E>::MissingFiniteObservation)?;
+                let tone = usage
+                    .target
+                    .and_then(|index| {
+                        let target = &selection.targets[index];
+                        target
+                            .declaration
+                            .intent
+                            .as_ref()?
+                            .tone
+                            .as_ref()
+                            .zip(target.tone_input)
+                    })
+                    .map(|(curve, input)| curve.preferred_lightness(inputs[input].srgb8()));
+                usage
+                    .tones
+                    .push(tone.map(CertifiedScalarV1::exact).transpose()?);
+                usage.tone_bits.push(tone.map(f64::to_bits));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -349,7 +452,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
     /// The compiled variable order belongs to this prepared operation. Solvers
     /// consume these identities rather than assuming declaration/creation order.
     pub(crate) fn sources(&self) -> impl ExactSizeIterator<Item = (TargetId, Srgb8)> + '_ {
-        let selection = match &self.owner.owner_generation.target_selection {
+        let selection = match &self.epoch.target_selection {
             CompiledTargetSelectionV1::Computed(selection) => Some(selection),
             _ => None,
         };
@@ -360,16 +463,16 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
     }
 
     fn measure(&mut self, values: &[ContinuousSrgbV1]) -> Result<MeasurementsV1, Error<E>> {
-        if values.len() != self.source_labs.len() {
+        if values.len() != self.scratch.source_labs.len() {
             return Err(Error::<E>::InvalidTuple);
         }
-        let epoch = &self.owner.owner_generation;
-        let source = self.bindings.paint_inputs_canonical();
+        let epoch = self.epoch;
+        let source = self.scratch.bindings.paint_inputs_canonical();
         let mut paints = epoch.graph.prepare_certified_surface_cases(
             None,
-            &self.bindings,
+            &self.scratch.bindings,
             |index| {
-                let channels = self.binding_targets[index].map_or_else(
+                let channels = self.scratch.binding_targets[index].map_or_else(
                     || source[index].1.source().bytes().map(f64::from),
                     |target| values[target].channels(),
                 );
@@ -378,16 +481,16 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                     source[index].1.opacity(),
                 )
             },
-            &mut self.certified_workspace,
+            &mut self.scratch.certified_workspace,
         )?;
         let count = self.observation.physical_case_count();
         let mut measured = reserve::<_, E>(
             count
-                .checked_mul(self.uses.len())
+                .checked_mul(self.scratch.uses.len())
                 .ok_or(Error::<E>::ResourceExhausted)?,
         )?;
-        let mut primary = reserve::<_, E>(self.objective_count)?;
-        primary.resize(self.objective_count, CertifiedScalarV1::exact(1.0)?);
+        let mut primary = reserve::<_, E>(self.scratch.objective_count)?;
+        primary.resize(self.scratch.objective_count, CertifiedScalarV1::exact(1.0)?);
         for case in 0..count {
             let inputs = self
                 .observation
@@ -396,7 +499,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             let view = paints.evaluate_surface_inputs_canonical(|index| {
                 CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
             });
-            for usage in &self.uses {
+            for usage in &self.scratch.uses {
                 let occurrence = view
                     .occurrence_at(usage.slot)
                     .ok_or(Error::<E>::InvalidUse)?;
@@ -422,7 +525,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             }
         }
         let mut source_profile = reserve::<_, E>(values.len())?;
-        for (point, reference) in values.iter().zip(&self.source_labs) {
+        for (point, reference) in values.iter().zip(&self.scratch.source_labs) {
             source_profile.push(source_distance_squared(
                 CertifiedRgbV1::from_encoded(point.channels())?.oklab()?,
                 *reference,
@@ -524,6 +627,8 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
     /// sums their work and the compiler's once-only fixed-constraint check.
     pub(crate) fn realize(
         &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
         anchor: &[ContinuousSrgbV1],
         completion: &[ContinuousSrgbV1],
         budget: u64,
@@ -563,16 +668,16 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
             search,
             numerical_order_unresolved,
             color_evaluations: realization_color_evaluations,
-        } = self.realize_frozen(ideal, budget)?;
-        let mut use_tones = reserve::<_, E>(self.use_tones.len())?;
-        for usage in &self.use_tones {
+        } = self.realize_frozen(runtime, arena, ideal, budget)?;
+        let mut use_tones = reserve::<_, E>(self.scratch.uses.len())?;
+        for usage in &self.scratch.uses {
             use_tones.push(CompletionUseToneEvidenceV1 {
                 occurrence: usage.occurrence,
-                per_case_bits: copy_slice::<_, E>(&usage.per_case_bits)?.into_boxed_slice(),
+                per_case_bits: copy_slice::<_, E>(&usage.tone_bits)?.into_boxed_slice(),
             });
         }
         Ok(ReferenceCompletionResultV1 {
-            owner: self.owner,
+            epoch: self.epoch,
             observation: self.observation.clone(),
             model: CERTIFIED_NUMERIC_MODEL_V1,
             use_tones: use_tones.into_boxed_slice(),
@@ -592,27 +697,18 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
 
     fn realize_frozen(
         &self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
         ideal: &[ContinuousSrgbV1],
         requested_budget: u64,
     ) -> Result<RealizationV1, Error<E>> {
-        let epoch = &self.owner.owner_generation;
+        let epoch = self.epoch;
         let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
         let scenarios = NonEmptyScenarioSetV1::from_admitted(&self.observation)
             .ok_or(Error::<E>::MissingFiniteObservation)?;
-        let mut bindings = epoch.binding_template.try_clone_v1()?;
-        let mut workspace = epoch.graph.new_workspace()?;
-        let mut cache = ProgramPresentationCacheV1::try_new(&epoch.point_presentations)
-            .map_err(|_| Error::<E>::ResourceExhausted)?;
-        let mut runtime = ProgramEvaluationRuntimeV1 {
-            bindings: &mut bindings,
-            workspace: &mut workspace,
-            presentation_cache: &mut cache,
-            family_artifacts: &self.session.plan().family_artifacts,
-        };
-        let mut arena = ProgramEvaluationArenaV1::empty();
-        prepare_program_evaluation_arena(epoch, scenarios, &mut arena)?;
+        prepare_program_evaluation_arena(epoch, scenarios, arena)?;
         let mut values = reserve::<_, E>(selection.targets.len())?;
         values.extend(
             selection
@@ -620,7 +716,7 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
                 .iter()
                 .map(|target| target.declaration.anchor),
         );
-        apply::<E>(selection, &mut runtime, &values)?;
+        apply::<E>(selection, runtime, &values)?;
         let mut search = empty_search(CompletionV1::Complete);
         let mut numerical_order_unresolved = false;
         let mut color_evaluations = 0_u64;
@@ -628,7 +724,7 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
             // The compiler proved these conditions independent of every
             // adjustable paint. Match the existing once-only constant check.
             let failed = scan_program_candidate_scoped(
-                &mut runtime,
+                runtime,
                 epoch,
                 scenarios,
                 0,
@@ -655,10 +751,10 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
             let selected = realize_component(
                 selection,
                 component,
-                &mut runtime,
+                runtime,
                 epoch,
                 scenarios,
-                &mut arena,
+                arena,
                 FrozenRealizationRequestV1 {
                     sources: ideal,
                     budget: requested_budget,
@@ -685,7 +781,7 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
             };
             apply_targets::<E>(
                 ComputedTargetsV1::new(selection, Some(component)),
-                &mut runtime,
+                runtime,
                 &local,
             )?;
             for (&index, value) in component.targets.iter().zip(local) {
@@ -698,12 +794,12 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         let mut scores = buffer(values.len(), 0.0).map_err(|_| Error::<E>::ResourceExhausted)?;
         if assess(
             &context,
-            &mut runtime,
+            runtime,
             epoch,
             scenarios,
             &values,
             &mut scores,
-            &mut arena,
+            arena,
         )? != 0
         {
             return Err(Error::<E>::Evaluation(
@@ -971,4 +1067,4 @@ fn compare_profiles(left: &[CertifiedScalarV1], right: &[CertifiedScalarV1]) -> 
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::program_session) mod tests;

@@ -1527,6 +1527,9 @@ where
 mod components;
 mod contextual;
 pub(super) use components::compile_components;
+pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
+#[cfg(test)]
+pub(super) use contextual::reference_completion::tests::incoming_test_hook as reference_completion_incoming_test_hook;
 mod witness;
 
 #[cfg(test)]

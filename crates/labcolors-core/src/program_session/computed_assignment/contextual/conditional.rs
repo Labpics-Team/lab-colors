@@ -57,17 +57,20 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
         .first()
         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
     let preferred = context.preferred_rgb[first_case * count];
+    let preferred_lab = lab(preferred);
     let target = &context.targets[0];
     let delta = f64::from_bits(target.declaration.max_delta_bits);
     let unique_minimum = context.opaque[0]
-        && (0..scenarios.len().get()).all(|case| context.preferred_rgb[case * count] == preferred)
+        && (0..scenarios.len().get()).all(|case| context.preferred[case * count] == preferred_lab)
         && context.domains[0].contains(preferred)
-        && squared_distance(lab(preferred), target.anchor_lab) <= delta * delta
+        && squared_distance(preferred_lab, target.anchor_lab) <= delta * delta
         && target
             .effective_intent()
             .is_none_or(|intent| intent.identity.contains(preferred));
     // Each opaque occurrence is admitted as its own source's appearance.
     // Therefore distance zero has exactly one source, in every physical case.
+    // A rounded tone seed with nonzero distance cannot establish that minimum;
+    // skip this probe so the later local-prefix search remains available.
     let preferred_probe = candidate.mode == ModeV1::PreferredMinimum;
     if preferred_probe && !unique_minimum
         || candidate

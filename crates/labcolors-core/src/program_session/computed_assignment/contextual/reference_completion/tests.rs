@@ -4,6 +4,179 @@ use crate::observation::{ObservationPayloadInput, ScenarioId, ScenarioInput, Sur
 use crate::program_session::computed_assignment::tests::{
     compile_assignment, program, target, update,
 };
+use crate::session::SessionState;
+
+// Standalone fixtures retain the original explicit-proposal surface. All
+// production preparation uses incoming arguments; this adapter is test-only.
+struct StandalonePreparedV1<'program, 'session, E: ProgramConstraintEvaluatorSetV1> {
+    epoch: &'program ProgramEpochV1<E>,
+    observation: RevisionBoundObservationV1,
+    scratch: ReferenceCompletionScratchV1<E>,
+    bindings: AdmittedAppearanceBindings,
+    workspace: AppearanceWorkspace,
+    cache: ProgramPresentationCacheV1,
+    family_artifacts: &'session BoundFamilyArtifactBundleV2,
+    arena: ProgramEvaluationArenaV1<E>,
+}
+
+impl<E: ProgramConstraintEvaluatorSetV1> CompiledProgram<E> {
+    fn prepare_reference_completion<'program, 'session>(
+        &'program self,
+        session: &'session Session<ProgramSessionPlan<E>>,
+    ) -> Result<StandalonePreparedV1<'program, 'session, E>, Error<E>> {
+        if !self.owns_session(session) {
+            return Err(Error::<E>::OwnerMismatch);
+        }
+        let crate::observation::ObservationHeadViewV1::Observed(observation) = session.raw_head()
+        else {
+            return Err(Error::<E>::MissingFiniteObservation);
+        };
+        let epoch = &self.owner_generation;
+        let mut scratch = ReferenceCompletionScratchV1::empty(&self.owner_generation);
+        prepare(epoch, observation, &mut scratch)?;
+        Ok(StandalonePreparedV1 {
+            epoch,
+            observation: observation.clone(),
+            scratch,
+            bindings: epoch.binding_template.try_clone_v1()?,
+            workspace: epoch.graph.new_workspace()?,
+            cache: ProgramPresentationCacheV1::try_new(&epoch.point_presentations)
+                .map_err(|_| Error::<E>::ResourceExhausted)?,
+            family_artifacts: &session.plan().family_artifacts,
+            arena: ProgramEvaluationArenaV1::empty(),
+        })
+    }
+}
+
+impl<'program, E: ProgramConstraintEvaluatorSetV1> StandalonePreparedV1<'program, '_, E> {
+    fn sources(&self) -> impl ExactSizeIterator<Item = (TargetId, Srgb8)> + '_ {
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            panic!()
+        };
+        selection
+            .targets
+            .iter()
+            .map(|target| (target.id, target.declaration.anchor))
+    }
+
+    fn realize(
+        &mut self,
+        anchor: &[ContinuousSrgbV1],
+        completion: &[ContinuousSrgbV1],
+        budget: u64,
+    ) -> Result<ReferenceCompletionResultV1<'program, E>, Error<E>> {
+        let mut prepared = prepare(self.epoch, &self.observation, &mut self.scratch)?;
+        let mut runtime = ProgramEvaluationRuntimeV1 {
+            bindings: &mut self.bindings,
+            workspace: &mut self.workspace,
+            presentation_cache: &mut self.cache,
+            family_artifacts: self.family_artifacts,
+        };
+        prepared.realize(&mut runtime, &mut self.arena, anchor, completion, budget)
+    }
+}
+
+struct IncomingRequestV1 {
+    previous: RevisionBoundObservationV1,
+    expected_revision: u64,
+    expected_backdrop: Srgb8,
+}
+
+struct IncomingReceiptV1 {
+    observation: RevisionBoundObservationV1,
+    emitted: Vec<Srgb8>,
+    old_tone: Option<u64>,
+    new_tone: Option<u64>,
+    buffers: [usize; 5],
+}
+
+std::thread_local! {
+    static INCOMING_REQUEST: core::cell::RefCell<Option<IncomingRequestV1>> = const { core::cell::RefCell::new(None) };
+    static INCOMING_RECEIPTS: core::cell::RefCell<Vec<IncomingReceiptV1>> = const { core::cell::RefCell::new(Vec::new()) };
+}
+
+fn retained_buffers<E: ProgramConstraintEvaluatorSetV1>(
+    plan: &ProgramSessionPlan<E>,
+) -> [usize; 5] {
+    let scratch = plan.reference_completion.storage.as_ref().unwrap();
+    [
+        scratch.source_labs.as_ptr() as usize,
+        scratch.binding_targets.as_ptr() as usize,
+        scratch.uses.as_ptr() as usize,
+        scratch.uses[0].tones.as_ptr() as usize,
+        plan.bindings.paint_inputs_canonical().as_ptr() as usize,
+    ]
+}
+
+/// Called only by the actual SessionPlan incoming evaluation, before ordinary
+/// selection. It neither changes the selected outcome nor publishes evidence.
+pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluatorSetV1>(
+    plan: &mut ProgramSessionPlan<E>,
+    epoch: &ProgramEpochV1<E>,
+    incoming: &RevisionBoundObservationV1,
+) {
+    let Some(request) = INCOMING_REQUEST.with(|value| value.borrow_mut().take()) else {
+        return;
+    };
+    assert_eq!(incoming.revision().value(), request.expected_revision);
+    assert_ne!(incoming.revision(), request.previous.revision());
+    assert_eq!(
+        incoming.physical_values(0).unwrap()[0].srgb8(),
+        request.expected_backdrop
+    );
+    let anchor = [point([80., 89., 109.])];
+    let old = {
+        // Retain a previous-observation result while reusing the incoming
+        // transaction's free arena; the committed Ready arena stays leased.
+        let mut arena = plan.evaluation_arenas.guard(incoming.arena_slot()).unwrap();
+        let mut runtime = ProgramEvaluationRuntimeV1 {
+            bindings: &mut plan.bindings,
+            workspace: &mut plan.workspace,
+            presentation_cache: &mut plan.presentation_cache,
+            family_artifacts: &plan.family_artifacts,
+        };
+        let mut prepared = prepare(epoch, &request.previous, &mut plan.reference_completion)
+            .unwrap_or_else(|_| panic!("previous observation preparation"));
+        assert_eq!(
+            prepared.sources().next(),
+            Some((TargetId::new(10), Srgb8::new([49, 85, 190])))
+        );
+        prepared
+            .realize(&mut runtime, arena.storage_mut(), &anchor, &anchor, 1)
+            .unwrap_or_else(|_| panic!("previous observation operation"))
+    };
+    let old_observation = old.observation().clone();
+    let old_tone = old.use_tones()[0].per_case_bits[0];
+    let old_measurement = old.point_evidence().0.measurements[0].bounds;
+    let buffers = retained_buffers(plan);
+    let new = realize_incoming(plan, epoch, incoming, &anchor, &anchor, 1)
+        .unwrap_or_else(|_| panic!("incoming observation operation"));
+    assert_eq!(retained_buffers(plan), buffers);
+    // Both borrows of the mutable plan have ended while the first result is
+    // still read: the type itself prevents a result/scratch lifetime coupling.
+    assert!(old.observation().is_same_binding_as(&old_observation));
+    assert_eq!(old.use_tones()[0].per_case_bits[0], old_tone);
+    assert_eq!(
+        old.point_evidence().0.measurements[0].bounds,
+        old_measurement
+    );
+    assert_eq!(old.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
+    assert!(new.observation().is_same_binding_as(incoming));
+    assert_eq!(new.use_tones()[0].occurrence, OccurrenceId::new(5));
+    assert_eq!(
+        new.observation().revision().value(),
+        request.expected_revision
+    );
+    INCOMING_RECEIPTS.with(|values| {
+        values.borrow_mut().push(IncomingReceiptV1 {
+            observation: new.observation().clone(),
+            emitted: new.emitted().unwrap().to_vec(),
+            old_tone,
+            new_tone: new.use_tones()[0].per_case_bits[0],
+            buffers,
+        })
+    });
+}
 
 fn point(value: [f64; 3]) -> ContinuousSrgbV1 {
     ContinuousSrgbV1::new(value).unwrap()
@@ -814,4 +987,126 @@ fn private_program_consumer_repairs_three_independent_full_rgb_components() {
         cold.realization_color_evaluations(),
         cold.point_filter_evaluations()
     );
+}
+
+#[test]
+fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result() {
+    let mut p = single();
+    let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+        panic!()
+    };
+    target.intent.as_mut().unwrap().tone =
+        Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap());
+    let owner = compile_assignment(p, 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    assert!(session.plan().reference_completion.storage.is_none());
+    let crate::observation::ObservationHeadViewV1::Observed(previous) = session.raw_head() else {
+        panic!()
+    };
+    let previous = previous.clone();
+    INCOMING_RECEIPTS.with(|values| values.borrow_mut().clear());
+    for (revision, backdrop, commit) in [(2, 250, false), (3, 245, true)] {
+        assert_eq!(session.raw_head().revision().unwrap().value(), 1);
+        INCOMING_REQUEST.with(|value| {
+            *value.borrow_mut() = Some(IncomingRequestV1 {
+                previous: previous.clone(),
+                expected_revision: revision,
+                expected_backdrop: Srgb8::new([backdrop; 3]),
+            })
+        });
+        let transaction = session.prepare_update(update(revision, backdrop)).unwrap();
+        assert!(INCOMING_REQUEST.with(|value| value.borrow().is_none()));
+        if commit {
+            transaction.commit();
+        } else {
+            drop(transaction);
+        }
+    }
+    assert_eq!(session.raw_head().revision().unwrap().value(), 3);
+    let receipts = INCOMING_RECEIPTS.with(|values| core::mem::take(&mut *values.borrow_mut()));
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0].observation.revision().value(), 2);
+    assert_eq!(receipts[1].observation.revision().value(), 3);
+    assert_eq!(receipts[0].buffers, receipts[1].buffers);
+    for receipt in &receipts {
+        assert_eq!(receipt.emitted, [Srgb8::new([80, 89, 109])]);
+        assert_ne!(receipt.old_tone, receipt.new_tone);
+    }
+    assert_ne!(receipts[0].new_tone, receipts[1].new_tone);
+    assert_eq!(previous.revision().value(), 1);
+}
+
+#[test]
+fn incoming_operation_rejects_equal_content_from_a_different_epoch_and_scratch() {
+    let owner = compile_assignment(single(), 1).unwrap();
+    let other = compile_assignment(single(), 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let crate::observation::ObservationHeadViewV1::Observed(observation) = session.raw_head()
+    else {
+        panic!()
+    };
+    let mut scratch = ReferenceCompletionScratchV1::empty(&owner.owner_generation);
+    assert!(matches!(
+        prepare(&other.owner_generation, observation, &mut scratch),
+        Err(ReferenceCompletionErrorV1::OwnerMismatch)
+    ));
+    assert!(scratch.storage.is_none());
+    prepare(&owner.owner_generation, observation, &mut scratch).unwrap();
+    let mut other_session = other.instantiate(ObservationStreamId::new(8)).unwrap();
+    other_session
+        .prepare_update(update(1, 255))
+        .unwrap()
+        .commit();
+    let crate::observation::ObservationHeadViewV1::Observed(other_observation) =
+        other_session.raw_head()
+    else {
+        panic!()
+    };
+    assert!(matches!(
+        prepare(&other.owner_generation, other_observation, &mut scratch),
+        Err(ReferenceCompletionErrorV1::OwnerMismatch)
+    ));
+}
+
+#[test]
+fn rollback_after_incomplete_releases_the_last_observation_slot() {
+    let owner = compile_assignment(single(), 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    assert!(matches!(session.state(), SessionState::Ready { .. }));
+    let crate::observation::ObservationHeadViewV1::Observed(previous) = session.raw_head() else {
+        panic!()
+    };
+    let previous = previous.clone();
+    session.prepare_update(update(2, 0)).unwrap().commit();
+    assert!(matches!(
+        session.state(),
+        SessionState::Incomplete {
+            previous: Some(_),
+            ..
+        } | SessionState::Failed {
+            previous: Some(_),
+            ..
+        }
+    ));
+    INCOMING_REQUEST.with(|value| {
+        *value.borrow_mut() = Some(IncomingRequestV1 {
+            previous,
+            expected_revision: 3,
+            expected_backdrop: Srgb8::new([250; 3]),
+        })
+    });
+    // Ready revision 1 and current Incomplete revision 2 already retain two
+    // backing slots. Revision 3 uses the sole remaining slot and is rolled back.
+    drop(session.prepare_update(update(3, 250)).unwrap());
+    assert_eq!(session.raw_head().revision().unwrap().value(), 2);
+    assert!(INCOMING_REQUEST.with(|value| value.borrow().is_none()));
+    // Test-owned snapshots, unlike scratch, legitimately retain their backing.
+    // Drop the operation result before asking admission to reuse that slot.
+    INCOMING_RECEIPTS.with(|values| values.borrow_mut().clear());
+    session.prepare_update(update(4, 255)).unwrap().commit();
+    assert_eq!(session.raw_head().revision().unwrap().value(), 4);
+    assert!(matches!(session.state(), SessionState::Ready { .. }));
 }
