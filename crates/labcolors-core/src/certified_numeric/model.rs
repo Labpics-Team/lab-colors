@@ -110,16 +110,23 @@ pub(super) fn oklab<S: EnclosingScalarV1>(encoded: [S; 3]) -> Result<[S; 3], Num
 
 pub(super) fn oklab_from_linear<S: EnclosingScalarV1>(
     linear: [S; 3],
-    mut cube_root: impl FnMut(S) -> Result<S, NumericUncertaintyV1>,
+    cube_root: impl FnMut(S) -> Result<S, NumericUncertaintyV1>,
 ) -> Result<[S; 3], NumericUncertaintyV1> {
-    let lms = [
-        cube_root(dot(SRGB_TO_LMS[0], linear)?)?,
-        cube_root(dot(SRGB_TO_LMS[1], linear)?)?,
-        cube_root(dot(SRGB_TO_LMS[2], linear)?)?,
-    ];
+    let lms = rooted_lms(linear, cube_root)?;
     Ok([
         dot(LMS_TO_OKLAB[0], lms)?,
         dot(LMS_TO_OKLAB[1], lms)?,
         dot(LMS_TO_OKLAB[2], lms)?,
+    ])
+}
+
+pub(super) fn rooted_lms<S: EnclosingScalarV1>(
+    linear: [S; 3],
+    mut cube_root: impl FnMut(S) -> Result<S, NumericUncertaintyV1>,
+) -> Result<[S; 3], NumericUncertaintyV1> {
+    Ok([
+        cube_root(dot(SRGB_TO_LMS[0], linear)?)?,
+        cube_root(dot(SRGB_TO_LMS[1], linear)?)?,
+        cube_root(dot(SRGB_TO_LMS[2], linear)?)?,
     ])
 }

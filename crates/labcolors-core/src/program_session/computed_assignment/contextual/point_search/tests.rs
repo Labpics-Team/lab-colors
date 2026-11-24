@@ -684,7 +684,8 @@ fn authored_constant_or_exact_appearance_stops_after_one_hard_check() {
 
 fn small_alpha_program() -> Program<Wcag22Srgb8V1> {
     let mut p = program(
-        target(10, 100, 98, 102, 0),
+        // More than one leaf keeps the ambiguous comparison outside the incumbent box.
+        target(10, 100, 80, 120, 0),
         Wcag22CriterionV1::Sc143TextDefault,
         Wcag22Srgb8V1,
     );
@@ -781,7 +782,7 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
     );
     assert!(
         totals[1] > 0 && totals[3] > 0 && totals[4] > 0,
-        "ambiguous challenger, region, and incumbent all require refinement"
+        "ambiguous challenger, region, and incumbent all require refinement: {totals:?}"
     );
     eprintln!(
         "screened search measurements [point screen, point full, region screen, region full, incumbent full]={totals:?}"

@@ -3,6 +3,8 @@
 //! on native or WASM. Transcendentals only seed independently verified brackets.
 //! Failure is a request for the unchanged binary128 evaluator, never a verdict.
 
+use rustc_apfloat::Float;
+
 use super::model::{self, EnclosingScalarV1, SplitV1};
 use super::{CertifiedRgbV1, CertifiedScalarV1, DOWN, NumericUncertaintyV1, UP, lift, to_f64};
 
@@ -244,6 +246,55 @@ pub(super) fn oklab(rgb: CertifiedRgbV1) -> Result<[CertifiedScalarV1; 3], Numer
         lab[1].certified()?,
         lab[2].certified()?,
     ])
+}
+
+/// Show that the natural interval extension used by Refined cannot have a
+/// large lower loss. Each rooted LMS interval includes the values at both
+/// encoded corners. The final interval dot product admits any independent
+/// combination of these three coordinates, even a physically unrealizable one.
+/// This witness may only disprove pruning; it never selects a paint tuple.
+pub(super) fn region_loss_witness(
+    rgb: CertifiedRgbV1,
+    preferred: [CertifiedScalarV1; 3],
+) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
+    if rgb.proves_equal(rgb) {
+        // Both corners are the same exact input.
+        return super::source_distance_squared(oklab(rgb)?, preferred);
+    }
+    let lms_corner = |upper| {
+        let mut encoded = [ScreenedScalarV1::exact(0.0)?; 3];
+        for (channel, range) in encoded.iter_mut().zip(rgb.0) {
+            let end = if upper { range.hi } else { range.lo };
+            *channel = ScreenedScalarV1::range(to_f64(end, DOWN)?, to_f64(end, UP)?)?;
+        }
+        model::rooted_lms(model::linear(encoded)?, |value| value.root(3))
+    };
+    let lower = lms_corner(false)?;
+    let upper = lms_corner(true)?;
+    let mut witness = preferred;
+    for (axis, coefficients) in super::LMS_TO_OKLAB.into_iter().enumerate() {
+        let corner = |minimize| {
+            let coordinates = std::array::from_fn(|i| {
+                if (coefficients[i] >= 0.0) == minimize {
+                    lower[i]
+                } else {
+                    upper[i]
+                }
+            });
+            model::dot(coefficients, coordinates)
+        };
+        let low = corner(true)?;
+        let high = corner(false)?;
+        if low.hi <= high.lo {
+            let nearest = preferred[axis].lo.max(lift(low.hi)?).min(lift(high.lo)?);
+            witness[axis] = CertifiedScalarV1::point(nearest);
+        } else {
+            // The two corner enclosures overlap (including singleton axes).
+            // low still encloses one actual value of the refined coordinate.
+            witness[axis] = low.certified()?;
+        }
+    }
+    super::source_distance_squared(witness, preferred)
 }
 
 #[cfg(test)]

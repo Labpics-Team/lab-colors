@@ -85,6 +85,12 @@ pub(super) enum PointMeasurementPrecisionV1 {
     Refined,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum PointMeasurementV1 {
+    Profile(PointMeasurementPrecisionV1),
+    RegionWitness,
+}
+
 impl PointMeasurementPrecisionV1 {
     fn oklab(
         self,
@@ -674,7 +680,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
         cases: &[usize],
         primary: &mut Vec<CertifiedScalarV1>,
         source_profile: &mut Vec<CertifiedScalarV1>,
-        precision: PointMeasurementPrecisionV1,
+        measurement: PointMeasurementV1,
     ) -> Result<(), Error<E>> {
         let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
@@ -702,23 +708,25 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                     .ok_or(Error::<E>::ResourceExhausted)?,
             )
             .map_err(|_| Error::<E>::ResourceExhausted)?;
-        source_profile
-            .try_reserve(component.targets.len())
-            .map_err(|_| Error::<E>::ResourceExhausted)?;
-        for (local, &target) in component.targets.iter().enumerate() {
-            if component.point_representative(local) != local {
-                continue;
+        if let PointMeasurementV1::Profile(precision) = measurement {
+            source_profile
+                .try_reserve(component.targets.len())
+                .map_err(|_| Error::<E>::ResourceExhausted)?;
+            for (local, &target) in component.targets.iter().enumerate() {
+                if component.point_representative(local) != local {
+                    continue;
+                }
+                let (lo, hi) = bounds(local);
+                let lab = precision.oklab(
+                    &mut self.scratch.uses[target].point_lab_cache,
+                    &mut self.scratch.point_transforms,
+                    CertifiedRgbV1::from_encoded_bounds(lo, hi)?,
+                )?;
+                source_profile.push(source_distance_squared(
+                    lab,
+                    self.scratch.source_labs[target],
+                )?);
             }
-            let (lo, hi) = bounds(local);
-            let lab = precision.oklab(
-                &mut self.scratch.uses[target].point_lab_cache,
-                &mut self.scratch.point_transforms,
-                CertifiedRgbV1::from_encoded_bounds(lo, hi)?,
-            )?;
-            source_profile.push(source_distance_squared(
-                lab,
-                self.scratch.source_labs[target],
-            )?);
         }
         let authored = self.scratch.bindings.paint_inputs_canonical();
         let mut paints = self.epoch.graph.prepare_certified_surface_cases(
@@ -763,18 +771,24 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                     let (lo, hi) = bounds(local);
                     CertifiedRgbV1::from_encoded_bounds(lo, hi)?
                 };
-                let visible = precision.oklab(
-                    &mut usage.point_lab_cache,
-                    &mut self.scratch.point_transforms,
-                    visible_rgb,
-                )?;
-                primary.push(source_distance_squared(
-                    visible,
-                    *usage
-                        .local_preferred
-                        .get(local_case)
-                        .ok_or(Error::<E>::InvalidUse)?,
-                )?);
+                let preferred = *usage
+                    .local_preferred
+                    .get(local_case)
+                    .ok_or(Error::<E>::InvalidUse)?;
+                let loss = match measurement {
+                    PointMeasurementV1::RegionWitness => {
+                        visible_rgb.region_loss_witness(preferred)?
+                    }
+                    PointMeasurementV1::Profile(precision) => {
+                        let visible = precision.oklab(
+                            &mut usage.point_lab_cache,
+                            &mut self.scratch.point_transforms,
+                            visible_rgb,
+                        )?;
+                        source_distance_squared(visible, preferred)?
+                    }
+                };
+                primary.push(loss);
             }
         }
         Ok(())

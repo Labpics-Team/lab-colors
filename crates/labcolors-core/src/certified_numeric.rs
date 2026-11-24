@@ -571,6 +571,13 @@ fn root_point(target: Quad, degree: u32) -> Result<CertifiedScalarV1, NumericUnc
 }
 
 impl CertifiedRgbV1 {
+    pub(crate) fn region_loss_witness(
+        self,
+        preferred: [CertifiedScalarV1; 3],
+    ) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
+        screening::region_loss_witness(self, preferred)
+    }
+
     /// Exact equality of the encoded real colors, never equality of rounded
     /// output cells or matching non-singleton enclosures.
     pub(crate) fn proves_equal(self, rhs: Self) -> bool {

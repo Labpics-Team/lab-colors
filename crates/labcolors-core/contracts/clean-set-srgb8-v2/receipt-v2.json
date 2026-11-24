@@ -41,25 +41,25 @@
       "sha256": "26d145b437e118cc35ff89c71943eb94858de962dc5343877a84484dabc79a8d"
     },
     {
-      "bytes": 4138,
+      "bytes": 4357,
       "license": "MIT",
       "path": "crates/labcolors-core/src/certified_numeric/model.rs",
       "role": "certified_numeric_model_source",
-      "sha256": "7784de4c282c4e77935c6419adc0c2a44ebe7b1da979c5ed77ad07141a430f1b"
+      "sha256": "2705fdc56fbf22045cd781e78f90230339d551109fed15a099a9728f8ad06685"
     },
     {
-      "bytes": 7303,
+      "bytes": 9468,
       "license": "MIT",
       "path": "crates/labcolors-core/src/certified_numeric/screening.rs",
       "role": "certified_numeric_screening_source",
-      "sha256": "ae52fd7813d63554ca275daf3ddef3b85e5f41bd6769db6228b23c04eda4d451"
+      "sha256": "c04651038fd7d71a76afc1ba05e0da1bcab1377dd7df4a34a4fe7d5b8c355cd2"
     },
     {
-      "bytes": 26101,
+      "bytes": 26319,
       "license": "MIT",
       "path": "crates/labcolors-core/src/certified_numeric.rs",
       "role": "certified_numeric_source",
-      "sha256": "6e0d1c18bffb58dfe6e5df06491318787a5cfd7e6f2eedaf31c4483a08963e2a"
+      "sha256": "b0cd1d1af1a9be91f059547dc72bd6ebca067285770e43893b1eecf9bd77b895"
     },
     {
       "bytes": 6528,
@@ -237,18 +237,18 @@
       "sha256": "6104c37efc81e9bb92bbe6c8aa1c8479a16dc0405536bcfd8b9f7d8cb251126c"
     },
     {
-      "bytes": 27204,
+      "bytes": 28733,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
       "role": "program_point_search_source",
-      "sha256": "bd0f046b952ecd837d8cb3c4f53a794f987e78728aa4db383cb776314b96a7de"
+      "sha256": "c78ac6511aac063ec98da7d0823c459f3f1b054e7945e0ab119250e3187ce9c7"
     },
     {
-      "bytes": 59158,
+      "bytes": 59769,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion.rs",
       "role": "program_prepared_composition_source",
-      "sha256": "18bd9c792e79e6dfdde4eb1556bf45e99ad59b75526fa22c38e618aa7b548ccf"
+      "sha256": "444714550a4b58a9a2a70dd6913ecb6829b3d802ae918d2be209524ba65d90ae"
     },
     {
       "bytes": 12341,

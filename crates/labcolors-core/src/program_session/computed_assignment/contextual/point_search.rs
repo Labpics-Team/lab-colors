@@ -2,7 +2,9 @@
 //! is heuristic; certified symmetric profiles alone retain a feasible tuple.
 //! This byte-domain discovery is not a proof about the continuous source domain.
 
-use super::reference_completion::{PointMeasurementPrecisionV1, PreparedReferenceCompletionV1};
+use super::reference_completion::{
+    PointMeasurementPrecisionV1, PointMeasurementV1, PreparedReferenceCompletionV1,
+};
 use super::*;
 use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
 
@@ -85,7 +87,7 @@ fn sorted_order(buffers: &mut BuffersV1) -> Option<Ordering> {
     profile_order(&buffers.left, &buffers.right)
 }
 
-fn compare<E: ProgramConstraintEvaluatorSetV1>(
+fn compare_primary<E: ProgramConstraintEvaluatorSetV1>(
     prepared: &PreparedReferenceCompletionV1<'_, '_, E>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
@@ -114,7 +116,16 @@ fn compare<E: ProgramConstraintEvaluatorSetV1>(
             buffers.right.push(b[variable]);
         }
     }
-    match sorted_order(buffers)? {
+    sorted_order(buffers)
+}
+
+fn compare<E: ProgramConstraintEvaluatorSetV1>(
+    prepared: &PreparedReferenceCompletionV1<'_, '_, E>,
+    component: &ComputedComponentV1,
+    buffers: &mut BuffersV1,
+    region: Option<RegionNodeV1>,
+) -> Option<Ordering> {
+    match compare_primary(prepared, component, buffers, region)? {
         Ordering::Equal => {}
         order => return Some(order),
     }
@@ -162,7 +173,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
             &self.context.local_cases.order,
             &mut self.buffers.primary,
             &mut self.buffers.source,
-            precision,
+            PointMeasurementV1::Profile(precision),
         ))
     }
 
@@ -181,7 +192,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
             &self.context.local_cases.order,
             &mut self.buffers.best_primary,
             &mut self.buffers.best_source,
-            PointMeasurementPrecisionV1::Refined,
+            PointMeasurementV1::Profile(PointMeasurementPrecisionV1::Refined),
         ))?;
         self.best_precision = PointMeasurementPrecisionV1::Refined;
         Ok(())
@@ -284,6 +295,31 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         if !self.has_best || !self.best_measured {
             return Ok(false);
+        }
+        if self.initial_precision == PointMeasurementPrecisionV1::Screened {
+            // This box includes the tuple itself, so it cannot strictly lose.
+            if self.buffers.values[..node.depth] == self.buffers.best[..node.depth]
+                && node.domain.contains(self.buffers.best[node.depth])
+            {
+                return Ok(false);
+            }
+            let witnessed = measured::<E>(self.prepared.measure_point_component(
+                self.component,
+                &self.buffers.values,
+                Some(node),
+                &self.context.local_cases.order,
+                &mut self.buffers.primary,
+                &mut self.buffers.source,
+                PointMeasurementV1::RegionWitness,
+            ))?;
+            // Each row has an independent witness for its interval lower bound.
+            // Such a profile can disprove pruning but cannot retain a tuple.
+            if witnessed
+                && compare_primary(self.prepared, self.component, self.buffers, Some(node))
+                    == Some(Ordering::Less)
+            {
+                return Ok(false);
+            }
         }
         let (measured, _, order) = self.assess_profile(Some(node))?;
         Ok(measured && order == Some(Ordering::Greater))

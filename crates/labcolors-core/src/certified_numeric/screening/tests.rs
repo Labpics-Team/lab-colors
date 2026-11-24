@@ -213,3 +213,50 @@ fn memoization_upgrades_screened_values_and_fallback_uses_original_rgb()
     );
     Ok(())
 }
+
+#[test]
+fn region_witness_bounds_the_refined_lower_loss() -> Result<(), NumericUncertaintyV1> {
+    let backdrop = CertifiedRgbV1::from_encoded([21.0, 75.0, 249.0])?;
+    let goals = [[0.0; 3], [255.0; 3], [68.0, 21.0, 213.0]];
+    let alpha = AdmittedOpacityV1::new(0.53).expect("fixture material opacity");
+    let mut seed = 17_u32;
+    let mut channel = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        255.0 * f64::from(seed) / f64::from(u32::MAX)
+    };
+    let mut boxes = vec![
+        CertifiedRgbV1::from_encoded_bounds([0.0; 3], [255.0; 3])?,
+        CertifiedRgbV1::from_encoded_bounds([10.31474; 3], [10.31476; 3])?,
+        CertifiedRgbV1::from_encoded_bounds([10.31475, 7.0, 20.0], [10.31475, 217.0, 20.0])?,
+        backdrop,
+    ];
+    for _ in 0..96 {
+        let a: [f64; 3] = std::array::from_fn(|_| channel());
+        let b: [f64; 3] = std::array::from_fn(|_| channel());
+        boxes.push(CertifiedRgbV1::from_encoded_bounds(
+            std::array::from_fn(|i| a[i].min(b[i])),
+            std::array::from_fn(|i| a[i].max(b[i])),
+        )?);
+    }
+    // The uncoupled LMS enclosure of the full gamut admits each preferred
+    // opponent coordinate. A useless infinite loss would pass the lower-bound
+    // check below, but cannot rule out a region comparison.
+    let goal = CertifiedRgbV1::from_encoded(goals[2])?.oklab()?;
+    let small = CertifiedScalarV1::exact(1e-30)?;
+    assert!(region_loss_witness(boxes[0], goal)?.strictly_below(small));
+    for region in boxes {
+        for rgb in [region, region.source_over(alpha, backdrop)?] {
+            let lab = rgb.oklab()?;
+            for goal in goals {
+                let preferred = CertifiedRgbV1::from_encoded(goal)?.oklab()?;
+                let refined = source_distance_squared(lab, preferred)?;
+                let witness = region_loss_witness(rgb, preferred)?;
+                assert!(
+                    refined.lo <= witness.hi,
+                    "refined lower loss exceeds its upper bound"
+                );
+            }
+        }
+    }
+    Ok(())
+}
