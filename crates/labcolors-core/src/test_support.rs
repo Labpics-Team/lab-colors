@@ -99,8 +99,10 @@ pub(crate) struct AllocatorEvents {
     pub(crate) dealloc: usize,
 }
 
-/// Requested heap bytes above the measurement's starting live baseline.
-/// This excludes allocator metadata, stack memory and pre-existing objects.
+/// Requested heap bytes on the measured thread, excluding stack and allocator overhead.
+/// Every successful allocation or resize contributes its full requested size to
+/// `allocated`. Releasing a pre-existing block can make `live_delta` negative.
+/// `peak_extra` is the largest net increase above the starting live baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // FFI integration tests include this allocator but only inspect event counts.
 #[allow(dead_code)]
@@ -217,14 +219,41 @@ fn allocator_event_counter_distinguishes_alloc_realloc_and_dealloc() {
     let ((), checkpointed) = measured_allocator_events(|| {
         let mut buffer = Vec::<u8>::with_capacity(64);
         assert_eq!(current_allocator_events().alloc, 1);
+        let old_capacity = buffer.capacity();
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: old_capacity,
+                peak_extra: old_capacity,
+                live_delta: old_capacity as i128,
+            }
+        );
         reset_allocator_events();
         assert_eq!(current_allocator_events(), AllocatorEvents::default());
         let additional = buffer.capacity() + 1;
         buffer.reserve_exact(additional);
         assert_eq!(current_allocator_events().realloc, 1);
+        let extra = buffer.capacity() - old_capacity;
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: buffer.capacity(),
+                peak_extra: extra,
+                live_delta: extra as i128,
+            }
+        );
         reset_allocator_events();
+        let grown_capacity = buffer.capacity();
         drop(buffer);
         assert_eq!(current_allocator_events().dealloc, 1);
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: 0,
+                peak_extra: 0,
+                live_delta: -(grown_capacity as i128),
+            }
+        );
     });
     assert_eq!(
         checkpointed,

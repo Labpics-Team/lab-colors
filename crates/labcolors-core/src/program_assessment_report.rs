@@ -145,8 +145,8 @@ pub enum ProgramReferencePreferenceV1 {
     ExplicitTone,
 }
 
-/// The compiled choice rule for a whole physical component. It is fixed before
-/// search; an exhausted Point search never switches to the compatibility rule.
+/// Правило выбора для всей физической компоненты задаётся до поиска.
+/// При исчерпании выделенного объёма поиска компонента сохраняет свой режим.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramSelectionModeV1 {
     OrderedV1,
@@ -154,8 +154,8 @@ pub enum ProgramSelectionModeV1 {
     OrderedReferenceV1,
 }
 
-/// The targets sharing one choice rule and search budget. Names and output
-/// aliases are presentation data and do not participate in this classification.
+/// Применения с общим правилом выбора и объёмом поиска. Имена и псевдонимы
+/// выходов относятся к представлению результата и не влияют на классификацию.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramSelectionComponentV1 {
     pub(crate) targets: Box<[u32]>,

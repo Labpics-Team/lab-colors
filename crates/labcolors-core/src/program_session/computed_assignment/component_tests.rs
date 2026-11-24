@@ -463,13 +463,20 @@ fn composed_objectives_follow_their_own_paints_across_a_fixed_binding() {
         declaration.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
             legacy_reference_order: order.map(TargetId::new).to_vec(),
         });
-        let compiled = declaration.compile().unwrap();
-        let mut session = compiled.instantiate(ObservationStreamId::new(8)).unwrap();
-        session.prepare_update(update(1, 0)).unwrap().commit();
+        let compiled = declaration
+            .compile()
+            .expect("valid mixed fixed and computed declarations");
+        let mut session = compiled
+            .instantiate(ObservationStreamId::new(8))
+            .expect("compiled fixture creates a session");
+        session
+            .prepare_update(update(1, 0))
+            .expect("complete observed context")
+            .commit();
         let current = session
             .state()
             .current_verified()
-            .unwrap()
+            .expect("committed paints are available")
             .computed_for_test();
         let paints: Vec<_> = current
             .arena
