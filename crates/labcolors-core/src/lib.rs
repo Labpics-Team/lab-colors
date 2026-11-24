@@ -7,6 +7,7 @@ pub mod wcag22;
 pub mod wcag22_evidence;
 // END WCAG22_SOURCE_ROUTES_V1
 
+pub(crate) mod certified_numeric;
 pub(crate) mod clean_set;
 mod color_intent;
 mod colored_graph;

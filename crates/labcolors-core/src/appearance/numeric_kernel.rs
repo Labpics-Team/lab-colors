@@ -127,6 +127,47 @@ impl ContinuousResolvedOccurrenceV1 {
 pub(crate) struct ContinuousAppearanceKernel;
 impl sealed::Sealed for ContinuousAppearanceKernel {}
 
+#[derive(Debug)]
+pub(crate) struct CertifiedAppearanceKernel;
+impl sealed::Sealed for CertifiedAppearanceKernel {}
+
+pub(crate) type CertifiedColorResultV1 = Result<
+    crate::certified_numeric::CertifiedRgbV1,
+    crate::certified_numeric::NumericUncertaintyV1,
+>;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CertifiedResolvedOccurrenceV1 {
+    pub(super) id: OccurrenceId,
+    pub(crate) visible: CertifiedColorResultV1,
+    pub(crate) backdrop: CertifiedColorResultV1,
+}
+
+impl AppearanceNumericKernel for CertifiedAppearanceKernel {
+    type Color = CertifiedColorResultV1;
+    type Occurrence = CertifiedResolvedOccurrenceV1;
+
+    fn visible(occurrence: Self::Occurrence) -> Self::Color {
+        occurrence.visible
+    }
+
+    fn compose(
+        spec: &CompiledOccurrenceSpec,
+        subject: PointPaintV1<Self::Color>,
+        backdrop: Self::Color,
+        _backdrop_occurrence: Option<Self::Occurrence>,
+    ) -> Self::Occurrence {
+        let visible = subject.source().and_then(|source| {
+            backdrop.and_then(|backdrop| source.source_over(subject.opacity(), backdrop))
+        });
+        CertifiedResolvedOccurrenceV1 {
+            id: spec.id,
+            visible,
+            backdrop,
+        }
+    }
+}
+
 impl AppearanceNumericKernel for ContinuousAppearanceKernel {
     type Color = ContinuousSrgbV1;
     type Occurrence = ContinuousResolvedOccurrenceV1;

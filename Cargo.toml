@@ -10,11 +10,10 @@ license = "MIT"
 repository = "https://github.com/Labpics-Team/lab-colors"
 rust-version = "1.85"
 
-# Centralised dependency pins. `labcolors-core` stays zero-RUNTIME-deps (issue #29):
-# only the runtime WASM edge crate uses this wasm-bindgen pin.
-# `proptest` is a DEV-only dependency of `labcolors-core`; the CI metadata gate
-# rejects any normal dependency edge from Core, including target-specific ones.
+# Core uses one private, pinned software arithmetic implementation for certified
+# point enclosures. Transport and serialization dependencies stay at the edges.
 [workspace.dependencies]
+rustc_apfloat = { version = "=0.2.3", default-features = false }
 wasm-bindgen = "0.2"
 proptest = "1"
 

@@ -20,7 +20,7 @@
 //! `production_lines`. Мутацию детектора или удаления `cfg(test)` ловит
 //! RED-proof, а не отдельная встроенная проверка.
 //!
-//! Реализация использует только `std`: `labcolors-core` остаётся без зависимостей.
+//! Сам сканер использует только `std`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -2292,6 +2292,9 @@ where
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
+    // Retain authored canonical inputs for lazy private continuous preparation.
+    // The established ordered path still evaluates only its byte reference.
+    reference_inputs: Option<Box<[(SurfaceInputPortId, Srgb8)]>>,
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     // Полная таблица контекстов Occurrence сохраняется для presentation binding;
@@ -5927,6 +5930,7 @@ where
         required_family_releases,
         graph,
         binding_template,
+        reference_inputs: program.reference_inputs.map(Vec::into_boxed_slice),
         observation_group: CompiledObservationGroupV1 {
             id: program.observation_group.id,
             schema: observation_schema,

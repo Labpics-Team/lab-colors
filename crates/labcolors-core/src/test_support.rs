@@ -14,6 +14,9 @@ thread_local! {
     static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
     static REALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
     static DEALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
+    static ALLOCATED_BYTES: Cell<usize> = const { Cell::new(0) };
+    static LIVE_BYTE_DELTA: Cell<i128> = const { Cell::new(0) };
+    static PEAK_EXTRA_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 struct TestAllocator;
@@ -22,6 +25,19 @@ struct TestAllocator;
 static TEST_ALLOCATOR: TestAllocator = TestAllocator;
 
 impl TestAllocator {
+    fn record_bytes(allocated: usize, freed: usize) {
+        if COUNT_ALLOCATIONS.try_with(Cell::get) != Ok(true) {
+            return;
+        }
+        let _ = ALLOCATED_BYTES.try_with(|count| count.set(count.get().saturating_add(allocated)));
+        let _ = LIVE_BYTE_DELTA.try_with(|live| {
+            let next = live.get() + allocated as i128 - freed as i128;
+            live.set(next);
+            let _ =
+                PEAK_EXTRA_BYTES.try_with(|peak| peak.set(peak.get().max(next.max(0) as usize)));
+        });
+    }
+
     fn record(counter: &'static std::thread::LocalKey<Cell<usize>>) {
         let active = match COUNT_ALLOCATIONS.try_with(Cell::get) {
             Ok(active) => active,
@@ -41,17 +57,26 @@ unsafe impl GlobalAlloc for TestAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         Self::record(&ALLOC_COUNT);
         // SAFETY: `layout` без изменений передаётся от вызывающего allocator-а.
-        unsafe { System.alloc(layout) }
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            Self::record_bytes(layout.size(), 0);
+        }
+        pointer
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         Self::record(&ALLOC_COUNT);
         // SAFETY: `layout` без изменений передаётся от вызывающего allocator-а.
-        unsafe { System.alloc_zeroed(layout) }
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            Self::record_bytes(layout.size(), 0);
+        }
+        pointer
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         Self::record(&DEALLOC_COUNT);
+        Self::record_bytes(0, layout.size());
         // SAFETY: `ptr` и `layout` получены от делегированного allocator-а `System`.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -59,7 +84,11 @@ unsafe impl GlobalAlloc for TestAllocator {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         Self::record(&REALLOC_COUNT);
         // SAFETY: аргументы без изменений передаются от вызывающего allocator-а.
-        unsafe { System.realloc(ptr, layout, new_size) }
+        let pointer = unsafe { System.realloc(ptr, layout, new_size) };
+        if !pointer.is_null() {
+            Self::record_bytes(new_size, layout.size());
+        }
+        pointer
     }
 }
 
@@ -68,6 +97,24 @@ pub(crate) struct AllocatorEvents {
     pub(crate) alloc: usize,
     pub(crate) realloc: usize,
     pub(crate) dealloc: usize,
+}
+
+/// Requested heap bytes above the measurement's starting live baseline.
+/// This excludes allocator metadata, stack memory and pre-existing objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AllocatorBytes {
+    pub(crate) allocated: usize,
+    pub(crate) peak_extra: usize,
+    pub(crate) live_delta: i128,
+}
+
+pub(crate) fn current_allocator_bytes() -> AllocatorBytes {
+    assert_allocator_measurement_is_active();
+    AllocatorBytes {
+        allocated: ALLOCATED_BYTES.with(Cell::get),
+        peak_extra: PEAK_EXTRA_BYTES.with(Cell::get),
+        live_delta: LIVE_BYTE_DELTA.with(Cell::get),
+    }
 }
 
 fn assert_allocator_measurement_is_active() {
@@ -84,6 +131,9 @@ pub(crate) fn reset_allocator_events() {
     ALLOC_COUNT.with(|count| count.set(0));
     REALLOC_COUNT.with(|count| count.set(0));
     DEALLOC_COUNT.with(|count| count.set(0));
+    ALLOCATED_BYTES.with(|count| count.set(0));
+    LIVE_BYTE_DELTA.with(|count| count.set(0));
+    PEAK_EXTRA_BYTES.with(|count| count.set(0));
 }
 
 pub(crate) fn current_allocator_events() -> AllocatorEvents {

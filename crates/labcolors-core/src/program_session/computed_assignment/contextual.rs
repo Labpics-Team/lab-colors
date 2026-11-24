@@ -1516,6 +1516,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 mod conditional;
+pub(crate) mod reference_completion;
 mod reference_search;
 mod refinement;
 

@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # WASM-граница владеет JSON-проекциями результатов и browser bindings;
-# `labcolors-core` остаётся без runtime-зависимостей.
+# Core хранит численную модель; transport-зависимости остаются здесь.
 labcolors-core = { path = "../labcolors-core", default-features = false }
 wasm-bindgen = { workspace = true }
 # JavaScript-объекты внешней границы.

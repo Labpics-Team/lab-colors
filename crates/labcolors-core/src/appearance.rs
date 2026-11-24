@@ -29,6 +29,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+mod certified;
 mod continuous;
 mod execution_cone;
 mod numeric_kernel;
@@ -1827,6 +1828,9 @@ pub(crate) struct AppearanceWorkspace<K: AppearanceNumericKernel = ByteAppearanc
 
 pub(crate) type ContinuousAppearanceWorkspace =
     AppearanceWorkspace<numeric_kernel::ContinuousAppearanceKernel>;
+
+pub(crate) type CertifiedAppearanceWorkspace =
+    AppearanceWorkspace<numeric_kernel::CertifiedAppearanceKernel>;
 
 impl<K: AppearanceNumericKernel> AppearanceWorkspace<K> {
     fn for_program(program: CompiledAppearanceProgram<'_>) -> Result<Self, BindingError> {

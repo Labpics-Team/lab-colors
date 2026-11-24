@@ -1,30 +1,7 @@
-//! Docs-presence gate — integration (#29 / PR #212).
-//!
-//! BUG CLASS this guards: the doc gate (`RUSTDOCFLAGS="-D warnings" cargo doc`)
-//! fails on BROKEN docs but not on ABSENT docs. A revert or refactor can
-//! silently drop the zero-runtime-deps section from README.md or the CIECAM16
-//! source citations from the module headers of `cam16.rs` / `vc.rs`, and CI
-//! stays green — exactly the gap flagged in the verification verdict for
-//! PR #212 ("doc-lint гейт не падает на ОТСУТСТВИИ доки").
-//!
-//! This test reads the REAL files from the working tree via
-//! `std::fs::read_to_string` and asserts presence of the specific claims that
-//! issue #29 required:
-//!
-//!   1. README.md has the `## Зависимости` section stating zero RUNTIME deps
-//!      and the verifiable command `cargo tree -p labcolors-core --edges=no-dev`.
-//!   2. `src/spaces/cam16.rs` cites its source IN THE MODULE HEADER (`//!`):
-//!      DOI 10.1002/col.22131 and CIE 248:2022. Header lines only — before
-//!      PR #212 the citation existed merely in the `adapt` fn doc, which is
-//!      precisely the state issue #29 called insufficient, so scoping to `//!`
-//!      is what makes revert→RED hold.
-//!   3. `src/spaces/vc.rs` module header ties the surround presets to
-//!      CIECAM16 Table 1 and the same DOI.
-//!
-//! How this test bites (mutation proof, verified against `main` pre-#212):
-//!   * `git checkout main -- README.md src/spaces/{cam16,vc}.rs` → all three
-//!     assertions fail (section absent; `//!` headers lack the citations).
-//!   * Move the cam16 citation back into a fn doc comment → assertion 2 fails.
+//! Проверяем доступность источников моделей и команды проверки зависимостей.
+//! Rustdoc обнаруживает повреждённые ссылки, но не исчезновение этих пояснений.
+//! Фактические зависимости проверяет Cargo metadata в CI; этот тест не
+//! закрепляет прежний набор зависимостей через текст README.
 
 use std::path::PathBuf;
 
@@ -59,20 +36,16 @@ fn module_header(source: &str) -> String {
 }
 
 #[test]
-fn readme_documents_zero_runtime_deps() {
+fn readme_documents_dependency_inspection() {
     let readme = read(workspace_root().join("README.md"));
     assert!(
         readme.contains("## Зависимости"),
         "README.md lost the `## Зависимости` section required by #29"
     );
     assert!(
-        readme.contains("ноль рантайм-зависимостей"),
-        "README.md no longer states the zero-runtime-deps claim (#29)"
-    );
-    assert!(
         readme.contains("cargo tree -p labcolors-core --edges=no-dev"),
         "README.md lost the verifiable `cargo tree --edges=no-dev` command \
-         backing the zero-runtime-deps claim (#29)"
+         for inspecting actual runtime dependencies"
     );
 }
 

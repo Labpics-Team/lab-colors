@@ -80,6 +80,11 @@ fn mat_vec_mul(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
 //  sRGB transfer functions (IEC 61966-2-1 § 6.4)
 // ------------------------------------------------------------------
 
+pub(crate) const SRGB_DECODE_SPLIT: f64 = 0.040_45;
+pub(crate) const SRGB_LINEAR_SCALE: f64 = 12.92;
+pub(crate) const SRGB_NONLINEAR_OFFSET: f64 = 0.055;
+pub(crate) const SRGB_NONLINEAR_SCALE: f64 = 1.055;
+
 /// sRGB gamma decode: non-linear [0,1] → linear light [0,1].
 ///
 /// The canonical decode math. Production no longer calls it directly — the
@@ -91,10 +96,10 @@ fn mat_vec_mul(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
 pub fn srgb_gamma_inv(v: f64) -> f64 {
     let sign = if v < 0.0 { -1.0 } else { 1.0 };
     let abs = v * sign;
-    if abs <= 0.040_45 {
-        v / 12.92
+    if abs <= SRGB_DECODE_SPLIT {
+        v / SRGB_LINEAR_SCALE
     } else {
-        sign * ((abs + 0.055) / 1.055).powf(2.4)
+        sign * ((abs + SRGB_NONLINEAR_OFFSET) / SRGB_NONLINEAR_SCALE).powf(2.4)
     }
 }
 
@@ -103,15 +108,16 @@ pub fn srgb_gamma(v: f64) -> f64 {
     let sign = if v < 0.0 { -1.0 } else { 1.0 };
     let abs = v * sign;
     if abs > 0.003_130_8 {
-        sign * (1.055 * abs.powf(1.0 / 2.4) - 0.055)
+        sign * (SRGB_NONLINEAR_SCALE * abs.powf(1.0 / 2.4) - SRGB_NONLINEAR_OFFSET)
     } else {
-        12.92 * v
+        SRGB_LINEAR_SCALE * v
     }
 }
 
 pub(crate) const RELATIVE_LUMINANCE_RED_WEIGHT: f64 = 0.2126;
 pub(crate) const RELATIVE_LUMINANCE_GREEN_WEIGHT: f64 = 0.7152;
 pub(crate) const RELATIVE_LUMINANCE_BLUE_WEIGHT: f64 = 0.0722;
+pub(crate) const RELATIVE_LUMINANCE_RATIO_OFFSET: f64 = 0.05;
 const CONTINUOUS_ENCODED_CHANNEL_SPLIT: f64 = 0.039_28;
 /// Frozen continuous encoded-sRGB channel transfer used by pre-cutover physical
 /// proposal and reporting paths.
@@ -121,9 +127,9 @@ const CONTINUOUS_ENCODED_CHANNEL_SPLIT: f64 = 0.039_28;
 /// final sRGB8 conformance belongs to the proof-bound WCAG 2.2 evaluator.
 fn continuous_encoded_channel_to_linear(channel: f64) -> f64 {
     if channel <= CONTINUOUS_ENCODED_CHANNEL_SPLIT {
-        channel / 12.92
+        channel / SRGB_LINEAR_SCALE
     } else {
-        ((channel + 0.055) / 1.055).powf(2.4)
+        ((channel + SRGB_NONLINEAR_OFFSET) / SRGB_NONLINEAR_SCALE).powf(2.4)
     }
 }
 
@@ -147,7 +153,7 @@ pub(crate) fn relative_luminance_ratio(first: f64, second: f64) -> f64 {
     } else {
         (second, first)
     };
-    (lighter + 0.05) / (darker + 0.05)
+    (lighter + RELATIVE_LUMINANCE_RATIO_OFFSET) / (darker + RELATIVE_LUMINANCE_RATIO_OFFSET)
 }
 
 /// Continuous encoded-sRGB ratio without criterion semantics.
