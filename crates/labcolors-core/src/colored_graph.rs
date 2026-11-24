@@ -20,17 +20,17 @@ pub(crate) struct EdgeV1 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ArcV1 {
-    pub(crate) direction: u8,
-    pub(crate) role: u8,
-    pub(crate) neighbour: usize,
+struct ArcV1 {
+    direction: u8,
+    role: u8,
+    neighbour: usize,
 }
 
 pub(crate) struct ColoredGraph<Color> {
-    pub(crate) colors: Vec<Color>,
+    colors: Vec<Color>,
     adjacency_offsets: Vec<usize>,
     arcs: Vec<ArcV1>,
-    pub(crate) edge_count: usize,
+    edge_count: usize,
 }
 
 impl<Color> ColoredGraph<Color> {
@@ -118,7 +118,7 @@ impl<Color> ColoredGraph<Color> {
         })
     }
 
-    pub(crate) fn adjacent(&self, vertex: usize) -> Result<&[ArcV1], CanonicalGraphError> {
+    fn adjacent(&self, vertex: usize) -> Result<&[ArcV1], CanonicalGraphError> {
         let Some([start, end]) = self
             .adjacency_offsets
             .get(vertex..)
@@ -129,6 +129,29 @@ impl<Color> ColoredGraph<Color> {
         self.arcs
             .get(*start..*end)
             .ok_or(CanonicalGraphError::InternalInvariant)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn colors(&self) -> &[Color] {
+        &self.colors
+    }
+
+    #[cfg(test)]
+    pub(crate) fn colors_mut(&mut self) -> &mut [Color] {
+        &mut self.colors
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edge_count(&self) -> usize {
+        self.edge_count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edge_roles(&self) -> impl Iterator<Item = u8> + '_ {
+        self.arcs
+            .iter()
+            .filter(|arc| arc.direction == 0)
+            .map(|arc| arc.role)
     }
 }
 
@@ -2372,10 +2395,10 @@ mod tests {
         visit_mappings(left, right, &mut mapping, 0)
     }
 
-    fn tiny_bipartite_graph(edge_mask: u8) -> CanonicalGraphV1 {
-        let mut graph = GraphBuilderV1::new([1]).unwrap();
-        let sources = [(); 2].map(|()| graph.add_member([2]).unwrap());
-        let targets = [(); 2].map(|()| graph.add_member([3]).unwrap());
+    fn tiny_bipartite_graph(edge_mask: u8) -> Result<CanonicalGraphV1, CanonicalGraphError> {
+        let mut graph = GraphBuilderV1::new([1])?;
+        let sources = [graph.add_member([2])?, graph.add_member([2])?];
+        let targets = [graph.add_member([3])?, graph.add_member([3])?];
         for (bit, (target, source)) in [
             (targets[0], sources[0]),
             (targets[0], sources[1]),
@@ -2386,19 +2409,22 @@ mod tests {
         .enumerate()
         {
             if edge_mask & (1 << bit) != 0 {
-                graph.add_edge(target, source, 2).unwrap();
+                graph.add_edge(target, source, 2)?;
             }
         }
-        graph.finish().unwrap()
+        graph.finish()
     }
 
     #[test]
-    fn canonicalizer_matches_an_independent_tiny_isomorphism_oracle() {
-        let graphs = (0..16).map(tiny_bipartite_graph).collect::<Vec<_>>();
+    fn canonicalizer_matches_an_independent_tiny_isomorphism_oracle()
+    -> Result<(), CanonicalGraphError> {
+        let graphs = (0..16)
+            .map(tiny_bipartite_graph)
+            .collect::<Result<Vec<_>, _>>()?;
         let preimages = graphs
             .iter()
-            .map(|graph| canonical_preimage(graph).unwrap())
-            .collect::<Vec<_>>();
+            .map(canonical_preimage)
+            .collect::<Result<Vec<_>, _>>()?;
 
         for left in 0..graphs.len() {
             for right in 0..graphs.len() {
@@ -2409,6 +2435,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
@@ -2438,7 +2465,9 @@ mod tests {
         );
     }
 
-    fn relabelled_budget_graph(permutation: [usize; 9]) -> CanonicalGraphV1 {
+    fn relabelled_budget_graph(
+        permutation: [usize; 9],
+    ) -> Result<CanonicalGraphV1, CanonicalGraphError> {
         const EDGES: [(usize, usize); 16] = [
             (1, 2),
             (2, 1),
@@ -2458,16 +2487,14 @@ mod tests {
             (2, 8),
         ];
 
-        let mut graph = GraphBuilderV1::new([1]).unwrap();
+        let mut graph = GraphBuilderV1::new([1])?;
         for _ in 1..permutation.len() {
-            graph.add_member([2]).unwrap();
+            graph.add_member([2])?;
         }
         for (from, to) in EDGES {
-            graph
-                .add_edge(permutation[from], permutation[to], 2)
-                .unwrap();
+            graph.add_edge(permutation[from], permutation[to], 2)?;
         }
-        graph.finish().unwrap()
+        graph.finish()
     }
 
     fn permutation_from_keys<const N: usize>(keys: [u64; N]) -> Vec<usize> {
@@ -2478,36 +2505,38 @@ mod tests {
         permutation
     }
 
-    fn small_directed_graph(edge_mask: u16, permutation: &[usize]) -> CanonicalGraphV1 {
-        let mut graph = GraphBuilderV1::new([1]).unwrap();
+    fn small_directed_graph(
+        edge_mask: u16,
+        permutation: &[usize],
+    ) -> Result<CanonicalGraphV1, CanonicalGraphError> {
+        let mut graph = GraphBuilderV1::new([1])?;
         for _ in 1..permutation.len() {
-            graph.add_member([2]).unwrap();
+            graph.add_member([2])?;
         }
         let mut bit = 0;
         for from in 1..permutation.len() {
             for to in 1..permutation.len() {
                 if from != to && edge_mask & (1 << bit) != 0 {
-                    graph
-                        .add_edge(permutation[from], permutation[to], 2)
-                        .unwrap();
+                    graph.add_edge(permutation[from], permutation[to], 2)?;
                 }
                 if from != to {
                     bit += 1;
                 }
             }
         }
-        graph.finish().unwrap()
+        graph.finish()
     }
 
     #[test]
-    fn exact_preimage_is_invariant_under_opaque_relabelling() {
-        let canonical = relabelled_budget_graph([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-        let renamed = relabelled_budget_graph([0, 1, 2, 6, 3, 5, 4, 7, 8]);
+    fn exact_preimage_is_invariant_under_opaque_relabelling() -> Result<(), CanonicalGraphError> {
+        let canonical = relabelled_budget_graph([0, 1, 2, 3, 4, 5, 6, 7, 8])?;
+        let renamed = relabelled_budget_graph([0, 1, 2, 6, 3, 5, 4, 7, 8])?;
 
-        let (canonical, _) = canonical_search(&canonical).unwrap();
-        let (renamed, _) = canonical_search(&renamed).unwrap();
+        let (canonical, _) = canonical_search(&canonical)?;
+        let (renamed, _) = canonical_search(&renamed)?;
 
         assert_eq!(canonical, renamed);
+        Ok(())
     }
 
     fn repeated_component_graph(count: usize) -> Result<CanonicalGraphV1, CanonicalGraphError> {
@@ -2669,7 +2698,7 @@ mod tests {
     fn component_index_matches_connectivity_after_refinement_and_individualization()
     -> Result<(), CanonicalGraphError> {
         for mask in 0..=0x0fff {
-            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4])?;
             let partition = refine_partition(&graph, PartitionV1::initial(&graph)?)?;
             component_index_matches_union_oracle(&graph, &partition)?;
             if let Some(cell) = partition.0.first_non_singleton() {
@@ -3003,7 +3032,7 @@ mod tests {
     fn incremental_refinement_matches_full_refiner_for_all_small_digraphs()
     -> Result<(), CanonicalGraphError> {
         for mask in 0..=0x0fff {
-            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4])?;
             check_initial_and_individualized_refinement(&graph)?;
             let mut reversed = PartitionV1::initial(&graph)?;
             for cell in &mut reversed.cells {
@@ -3415,7 +3444,7 @@ mod tests {
     #[test]
     fn pruning_keeps_exact_bytes_on_every_four_vertex_digraph() -> Result<(), CanonicalGraphError> {
         for mask in 0..=0x0fff {
-            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4]);
+            let graph = small_directed_graph(mask, &[0, 1, 2, 3, 4])?;
             assert_eq!(
                 canonical_preimage(&graph)?,
                 exhaustive_preimage(&graph, PartitionV1::initial(&graph)?)?,
@@ -3477,13 +3506,16 @@ mod tests {
             keys in proptest::array::uniform8(any::<u64>()),
         ) {
             let permutation = permutation_from_keys(keys);
-            let permutation: [usize; 9] = permutation.try_into().unwrap();
-            let baseline = relabelled_budget_graph([0, 1, 2, 3, 4, 5, 6, 7, 8]);
-            let renamed = relabelled_budget_graph(permutation);
+            let permutation: [usize; 9] = permutation
+                .try_into()
+                .map_err(|_| TestCaseError::fail("generated bijection must have nine vertices"))?;
+            let failure = |error| TestCaseError::fail(format!("{error:?}"));
+            let baseline = relabelled_budget_graph([0, 1, 2, 3, 4, 5, 6, 7, 8]).map_err(failure)?;
+            let renamed = relabelled_budget_graph(permutation).map_err(failure)?;
 
             prop_assert_eq!(
-                canonical_search(&baseline).unwrap().0,
-                canonical_search(&renamed).unwrap().0,
+                canonical_search(&baseline).map_err(failure)?.0,
+                canonical_search(&renamed).map_err(failure)?.0,
             );
         }
 
@@ -3492,12 +3524,13 @@ mod tests {
             edge_mask in 0_u16..=0x0fff,
             keys in proptest::array::uniform4(any::<u64>()),
         ) {
-            let baseline = small_directed_graph(edge_mask, &[0, 1, 2, 3, 4]);
-            let renamed = small_directed_graph(edge_mask, &permutation_from_keys(keys));
+            let failure = |error| TestCaseError::fail(format!("{error:?}"));
+            let baseline = small_directed_graph(edge_mask, &[0, 1, 2, 3, 4]).map_err(failure)?;
+            let renamed = small_directed_graph(edge_mask, &permutation_from_keys(keys)).map_err(failure)?;
 
             prop_assert_eq!(
-                canonical_search(&baseline).unwrap().0,
-                canonical_search(&renamed).unwrap().0,
+                canonical_search(&baseline).map_err(failure)?.0,
+                canonical_search(&renamed).map_err(failure)?.0,
             );
         }
     }

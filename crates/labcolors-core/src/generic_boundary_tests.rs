@@ -1974,6 +1974,7 @@ fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
 
     for (path, source) in [
         ("clean_set.rs", CLEAN_SET_SOURCE),
+        ("colored_graph.rs", include_str!("colored_graph.rs")),
         ("program_session.rs", PROGRAM_SESSION_SOURCE),
         ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ] {

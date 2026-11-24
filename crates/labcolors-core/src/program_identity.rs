@@ -1441,26 +1441,17 @@ where
     let graph = build_graph(program)?;
     let mut vertex_tags = Vec::new();
     vertex_tags
-        .try_reserve_exact(graph.colors.len())
+        .try_reserve_exact(graph.colors().len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    vertex_tags.extend(graph.colors.iter().map(VertexColorV1::tag));
+    vertex_tags.extend(graph.colors().iter().map(VertexColorV1::tag));
     ordering::sort(&mut vertex_tags);
     vertex_tags.dedup();
 
     let mut edge_roles = Vec::new();
     edge_roles
-        .try_reserve_exact(graph.edge_count)
+        .try_reserve_exact(graph.edge_count())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    for vertex in 0..graph.colors.len() {
-        edge_roles.extend(
-            graph
-                .adjacent(vertex)
-                .map_err(canonical_graph_error)?
-                .iter()
-                .filter(|arc| arc.direction == 0)
-                .map(|arc| arc.role),
-        );
-    }
+    edge_roles.extend(graph.edge_roles());
     ordering::sort(&mut edge_roles);
     edge_roles.dedup();
     Ok((vertex_tags, edge_roles))
@@ -1489,7 +1480,7 @@ where
         vertex_tag::CONSTRAINT_REPORT_ONLY,
     ] {
         let current = declared_srgb8_clean_set_constraint_color(mode)?;
-        for color in &mut graph.colors {
+        for color in graph.colors_mut() {
             if *color == current {
                 *color = declared_srgb8_clean_set_constraint_color_for_release(mode, release)?;
                 replaced = true;
