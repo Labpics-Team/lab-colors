@@ -87,6 +87,8 @@ PRODUCT_ARTIFACT_PATHS = {
     "appearance_certified_source": "crates/labcolors-core/src/appearance/certified.rs",
     "appearance_continuous_source": "crates/labcolors-core/src/appearance/continuous.rs",
     "certified_numeric_source": "crates/labcolors-core/src/certified_numeric.rs",
+    "certified_numeric_model_source": "crates/labcolors-core/src/certified_numeric/model.rs",
+    "certified_numeric_screening_source": "crates/labcolors-core/src/certified_numeric/screening.rs",
     "classifier_source": "crates/labcolors-core/src/clean_set.rs",
     "classifier_tests": "crates/labcolors-core/src/clean_set_tests.rs",
     "colored_graph_source": "crates/labcolors-core/src/colored_graph.rs",

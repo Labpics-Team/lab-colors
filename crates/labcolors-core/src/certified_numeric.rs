@@ -2,9 +2,11 @@
 //!
 //! Входные binary64 RGB, effective alpha и коэффициенты Core имеют точное
 //! dyadic значение. Gamma имеет точную степень 12/5 с canonical cutoff 0.04045;
-//! Oklab идёт напрямую через sRGB → LMS. Directed binary128 arithmetic хранит
-//! охватывающие интервалы. Совпадение binary64 cells не означает равенства
-//! вещественных значений и не доказывает отсутствие primary drift.
+//! Oklab идёт напрямую через sRGB → LMS. Одна формула исполняется через быстрые
+//! наружные binary64-интервалы или уточняющую directed binary128 arithmetic.
+//! Неоднозначный фильтр требует уточнения исходных входов. Совпадение binary64
+//! cells не означает равенства вещественных значений и не доказывает отсутствие
+//! primary drift; evidence требует отдельного доказательства целой cell.
 //!
 //! APFloat и его нестабильный API остаются внутри этой границы. Нормальный
 //! расчёт не форматирует числа и не выделяет память; ошибки не дают verdict.
@@ -19,6 +21,13 @@ use crate::spaces::srgb::{
     RELATIVE_LUMINANCE_RATIO_OFFSET, RELATIVE_LUMINANCE_RED_WEIGHT, SRGB_DECODE_SPLIT,
     SRGB_LINEAR_SCALE, SRGB_NONLINEAR_OFFSET, SRGB_NONLINEAR_SCALE,
 };
+
+mod model;
+mod screening;
+
+#[cfg(test)]
+use model::decode;
+use model::dot;
 
 const DOWN: Round = Round::TowardNegative;
 const UP: Round = Round::TowardPositive;
@@ -68,33 +77,89 @@ pub(crate) struct CertifiedScalarV1 {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CertifiedRgbV1([CertifiedScalarV1; 3]);
 
+/// Precision is part of memoized evidence. A refined request can never reuse
+/// a screened enclosure, even when both share the same physical RGB key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OklabPrecisionV1 {
+    Screened,
+    Refined,
+}
+
+#[derive(Clone, Copy)]
+struct OklabCacheEntryV1 {
+    rgb: CertifiedRgbV1,
+    lab: [CertifiedScalarV1; 3],
+    precision: OklabPrecisionV1,
+}
+
 /// Bounded memoization of the deterministic interval transform. Equal endpoint
 /// bits are valid function-input keys; they are never real-expression equality
 /// evidence. Two entries retain a source and its current visible appearance.
 #[derive(Default)]
 pub(crate) struct CertifiedOklabCacheV1 {
-    entries: [Option<(CertifiedRgbV1, [CertifiedScalarV1; 3])>; 2],
+    entries: [Option<OklabCacheEntryV1>; 2],
     next: usize,
 }
 
 impl CertifiedOklabCacheV1 {
+    /// Always returns the unchanged binary128 calculation. Upgrade a matching
+    /// screened entry from its original encoded bounds, never from coarse Lab.
     pub(crate) fn evaluate(
         &mut self,
         rgb: CertifiedRgbV1,
     ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        for (previous, lab) in self.entries.iter().flatten() {
-            if previous
-                .0
-                .iter()
-                .zip(rgb.0)
-                .all(|(&a, b)| a.bounds() == b.bounds())
+        self.evaluate_with_precision(rgb, OklabPrecisionV1::Refined)
+    }
+
+    /// Filtering enclosure only. A caller that cannot decide from its bounds
+    /// must refine both operands, including region-pruning comparisons.
+    pub(crate) fn evaluate_screened(
+        &mut self,
+        rgb: CertifiedRgbV1,
+    ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
+        self.evaluate_with_precision(rgb, OklabPrecisionV1::Screened)
+    }
+
+    fn evaluate_with_precision(
+        &mut self,
+        rgb: CertifiedRgbV1,
+        requested: OklabPrecisionV1,
+    ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
+        let existing = self.entries.iter().position(|entry| {
+            entry.as_ref().is_some_and(|entry| {
+                entry
+                    .rgb
+                    .0
+                    .iter()
+                    .zip(rgb.0)
+                    .all(|(&a, b)| a.bounds() == b.bounds())
+            })
+        });
+        if let Some(index) = existing {
+            let entry = self.entries[index].as_ref().unwrap();
+            if requested == OklabPrecisionV1::Screened
+                || entry.precision == OklabPrecisionV1::Refined
             {
-                return Ok(*lab);
+                return Ok(entry.lab);
             }
         }
-        let lab = rgb.oklab()?;
-        self.entries[self.next] = Some((rgb, lab));
-        self.next ^= 1;
+        let (lab, precision) = if requested == OklabPrecisionV1::Screened {
+            match screening::oklab(rgb) {
+                Ok(lab) => (lab, OklabPrecisionV1::Screened),
+                Err(_) => (rgb.oklab()?, OklabPrecisionV1::Refined),
+            }
+        } else {
+            (rgb.oklab()?, OklabPrecisionV1::Refined)
+        };
+        let index = existing.unwrap_or(self.next);
+        self.entries[index] = Some(OklabCacheEntryV1 {
+            rgb,
+            lab,
+            precision,
+        });
+        if existing.is_none() {
+            self.next ^= 1;
+        }
         Ok(lab)
     }
 }
@@ -440,44 +505,6 @@ fn root_point(target: Quad, degree: u32) -> Result<CertifiedScalarV1, NumericUnc
     Err(NumericUncertaintyV1::PrecisionExhausted)
 }
 
-fn decode(channel: CertifiedScalarV1) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
-    let x = channel.div(CertifiedScalarV1::exact(255.0)?)?;
-    let split = lift(SRGB_DECODE_SPLIT)?;
-    let linear = |v: CertifiedScalarV1| v.div(CertifiedScalarV1::exact(SRGB_LINEAR_SCALE)?);
-    let power = |v: CertifiedScalarV1| {
-        v.add(CertifiedScalarV1::exact(SRGB_NONLINEAR_OFFSET)?)?
-            .div(CertifiedScalarV1::exact(SRGB_NONLINEAR_SCALE)?)?
-            .pow(12)?
-            .root(5)
-    };
-    if x.hi <= split {
-        linear(x)
-    } else if x.lo > split {
-        power(x)
-    } else {
-        // Both branches participate at a crossing. The literal coefficients
-        // have a small discontinuity; assuming continuity would lose values.
-        Ok(linear(CertifiedScalarV1 {
-            lo: x.lo,
-            hi: split,
-        })?
-        .hull(power(CertifiedScalarV1 {
-            lo: split,
-            hi: x.hi,
-        })?))
-    }
-}
-
-fn dot(
-    coefficients: [f64; 3],
-    value: [CertifiedScalarV1; 3],
-) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
-    CertifiedScalarV1::exact(coefficients[0])?
-        .mul(value[0])?
-        .add(CertifiedScalarV1::exact(coefficients[1])?.mul(value[1])?)?
-        .add(CertifiedScalarV1::exact(coefficients[2])?.mul(value[2])?)
-}
-
 impl CertifiedRgbV1 {
     /// Exact equality of the encoded real colors, never equality of rounded
     /// output cells or matching non-singleton enclosures.
@@ -548,7 +575,7 @@ impl CertifiedRgbV1 {
     }
 
     fn linear(self) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        Ok([decode(self.0[0])?, decode(self.0[1])?, decode(self.0[2])?])
+        model::linear(self.0)
     }
 
     pub(crate) fn relative_luminance(self) -> Result<CertifiedScalarV1, NumericUncertaintyV1> {
@@ -571,17 +598,7 @@ impl CertifiedRgbV1 {
     }
 
     pub(crate) fn oklab(self) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
-        let linear = self.linear()?;
-        let lms = [
-            dot(SRGB_TO_LMS[0], linear)?.root(3)?,
-            dot(SRGB_TO_LMS[1], linear)?.root(3)?,
-            dot(SRGB_TO_LMS[2], linear)?.root(3)?,
-        ];
-        Ok([
-            dot(LMS_TO_OKLAB[0], lms)?,
-            dot(LMS_TO_OKLAB[1], lms)?,
-            dot(LMS_TO_OKLAB[2], lms)?,
-        ])
+        model::oklab(self.0)
     }
 }
 

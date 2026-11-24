@@ -5,6 +5,44 @@ use crate::program_session::computed_assignment::tests::{program, rgb, target, u
 
 std::thread_local! { static REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }
 std::thread_local! { static SEED_REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }
+std::thread_local! { static FORCE_REFINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+std::thread_local! { static PROFILE_MEASUREMENTS: std::cell::Cell<[u64;5]> = const { std::cell::Cell::new([0;5]) }; }
+
+pub(super) fn force_refined() -> bool {
+    FORCE_REFINED.get()
+}
+
+pub(super) fn measured_profile(region: bool, precision: PointMeasurementPrecisionV1) {
+    PROFILE_MEASUREMENTS.with(|counts| {
+        let mut value = counts.get();
+        value[usize::from(region) * 2
+            + usize::from(precision == PointMeasurementPrecisionV1::Refined)] += 1;
+        counts.set(value);
+    });
+}
+
+pub(super) fn refined_incumbent() {
+    PROFILE_MEASUREMENTS.with(|counts| {
+        let mut value = counts.get();
+        value[4] += 1;
+        counts.set(value);
+    });
+}
+
+fn take_profile_measurements() -> [u64; 5] {
+    PROFILE_MEASUREMENTS.replace([0; 5])
+}
+
+fn with_refined<T>(value: bool, operation: impl FnOnce() -> T) -> T {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORCE_REFINED.set(self.0);
+        }
+    }
+    let _guard = Guard(FORCE_REFINED.replace(value));
+    operation()
+}
 pub(in crate::program_session::computed_assignment::contextual) fn refreshed_point_case(
     target: TargetId,
 ) {
@@ -642,4 +680,110 @@ fn authored_constant_or_exact_appearance_stops_after_one_hard_check() {
             "opacity={opacity}, backdrop={backdrop}"
         );
     }
+}
+
+fn small_alpha_program() -> Program<Wcag22Srgb8V1> {
+    let mut p = program(
+        target(10, 100, 98, 102, 0),
+        Wcag22CriterionV1::Sc143TextDefault,
+        Wcag22Srgb8V1,
+    );
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    p.opacities
+        .push(OpacityInput::new(OpacityInputId::new(1), 1e-15));
+    p.paints.push(Paint::Opacity {
+        id: PaintId::new(11),
+        source: PaintId::new(3),
+        opacity: OpacityInputId::new(1),
+    });
+    p.occurrences[0].subject = PaintId::new(11);
+    if let TargetIntentV1::Computed(target) = &mut p.targets[0].intent {
+        target.intent = Some(ColorUseIntentV1 {
+            identity: ColorIdentityDomainV1::new(
+                Srgb8::new([100; 3]),
+                true,
+                IdentityOptionsV1::default(),
+            )
+            .unwrap(),
+            appearance: Some(OccurrenceId::new(5)),
+            tone: None,
+        });
+    }
+    p
+}
+
+#[test]
+fn screened_search_preserves_refined_tuple_and_every_budget_counter() {
+    let mut totals = [0_u64; 5];
+    for (p, budget, backdrops) in [
+        (joint_gray(), 128, vec![[255; 3]]),
+        (small_alpha_program(), 64, vec![[128; 3]]),
+        (
+            repeated_children(1.0, true),
+            256,
+            vec![[255; 3], [244, 234, 219]],
+        ),
+        (
+            repeated_children(0.5, true),
+            256,
+            vec![[255; 3], [244, 234, 219]],
+        ),
+    ] {
+        let owner = compile(p, budget, false);
+        let run = |refined| {
+            with_refined(refined, || {
+                take_profile_measurements();
+                let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+                let mut history = Vec::new();
+                for (revision, backdrop) in backdrops.iter().enumerate() {
+                    let mut input = update(revision as u64 + 1, 0);
+                    let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
+                        panic!()
+                    };
+                    set.scenarios[0].bindings[0] = SurfaceInputBinding::new(
+                        SurfaceInputPortId::new(2),
+                        ColorSignal::from_srgb8(Srgb8::new(*backdrop)),
+                    );
+                    session.prepare_update(input).unwrap().commit();
+                    let current = session
+                        .state()
+                        .current_verified()
+                        .unwrap()
+                        .computed_for_test();
+                    history.push((
+                        current
+                            .arena
+                            .storage
+                            .outputs
+                            .iter()
+                            .map(|output| output.paint.source())
+                            .collect::<Vec<_>>(),
+                        current.search,
+                    ));
+                }
+                (history, take_profile_measurements())
+            })
+        };
+        let (screened, counts) = run(false);
+        let (refined, full_counts) = run(true);
+        assert_eq!(
+            screened, refined,
+            "screening must preserve both decisions and traversal"
+        );
+        assert_eq!(full_counts[0] + full_counts[2], 0);
+        for (total, count) in totals.iter_mut().zip(counts) {
+            *total += count;
+        }
+    }
+    assert!(
+        totals[0] > 0 && totals[2] > 0,
+        "exercise screening of points and regions"
+    );
+    assert!(
+        totals[1] > 0 && totals[3] > 0 && totals[4] > 0,
+        "ambiguous challenger, region, and incumbent all require refinement"
+    );
+    eprintln!(
+        "screened search measurements [point screen, point full, region screen, region full, incumbent full]={totals:?}"
+    );
 }

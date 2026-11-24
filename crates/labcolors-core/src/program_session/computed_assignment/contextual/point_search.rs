@@ -2,7 +2,7 @@
 //! is heuristic; certified symmetric profiles alone retain a feasible tuple.
 //! This byte-domain discovery is not a proof about the continuous source domain.
 
-use super::reference_completion::PreparedReferenceCompletionV1;
+use super::reference_completion::{PointMeasurementPrecisionV1, PreparedReferenceCompletionV1};
 use super::*;
 use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
 
@@ -67,6 +67,14 @@ fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ord
         }
     }
     Some(Ordering::Equal)
+}
+
+fn initial_precision() -> PointMeasurementPrecisionV1 {
+    #[cfg(test)]
+    if tests::force_refined() {
+        return PointMeasurementPrecisionV1::Refined;
+    }
+    PointMeasurementPrecisionV1::Screened
 }
 
 fn sorted_order(buffers: &mut BuffersV1) -> Option<Ordering> {
@@ -134,10 +142,87 @@ struct SearchV1<'a, 'context, 'program, 'scratch, E: ProgramConstraintEvaluatorS
     budget: u64,
     has_best: bool,
     best_measured: bool,
+    initial_precision: PointMeasurementPrecisionV1,
+    best_precision: PointMeasurementPrecisionV1,
     unresolved: bool,
 }
 
 impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
+    fn measure_current(
+        &mut self,
+        region: Option<RegionNodeV1>,
+        precision: PointMeasurementPrecisionV1,
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        #[cfg(test)]
+        tests::measured_profile(region.is_some(), precision);
+        measured::<E>(self.prepared.measure_point_component(
+            self.component,
+            &self.buffers.values,
+            region,
+            &self.context.local_cases.order,
+            &mut self.buffers.primary,
+            &mut self.buffers.source,
+            precision,
+        ))
+    }
+
+    fn refine_incumbent(
+        &mut self,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        if self.best_precision == PointMeasurementPrecisionV1::Refined {
+            return Ok(());
+        }
+        #[cfg(test)]
+        tests::refined_incumbent();
+        self.best_measured = measured::<E>(self.prepared.measure_point_component(
+            self.component,
+            &self.buffers.best,
+            None,
+            &self.context.local_cases.order,
+            &mut self.buffers.best_primary,
+            &mut self.buffers.best_source,
+            PointMeasurementPrecisionV1::Refined,
+        ))?;
+        self.best_precision = PointMeasurementPrecisionV1::Refined;
+        Ok(())
+    }
+
+    fn assess_profile(
+        &mut self,
+        region: Option<RegionNodeV1>,
+    ) -> Result<
+        (bool, PointMeasurementPrecisionV1, Option<Ordering>),
+        ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
+    > {
+        let mut precision = self.initial_precision;
+        let mut current_measured = self.measure_current(region, precision)?;
+        if !current_measured && precision == PointMeasurementPrecisionV1::Screened {
+            precision = PointMeasurementPrecisionV1::Refined;
+            current_measured = self.measure_current(region, precision)?;
+        }
+        if !self.has_best || !self.best_measured || !current_measured {
+            return Ok((current_measured, precision, None));
+        }
+        let mut order = compare(self.prepared, self.component, self.buffers, region);
+        if order.is_none()
+            && (precision == PointMeasurementPrecisionV1::Screened
+                || self.best_precision == PointMeasurementPrecisionV1::Screened)
+        {
+            // Refine both operands before an ambiguous tuple decision or a
+            // budget-affecting region branch. A wider screening interval may
+            // neither retain a worse tuple nor consume extra search nodes.
+            self.refine_incumbent()?;
+            if precision == PointMeasurementPrecisionV1::Screened {
+                precision = PointMeasurementPrecisionV1::Refined;
+                current_measured = self.measure_current(region, precision)?;
+            }
+            if self.best_measured && current_measured {
+                order = compare(self.prepared, self.component, self.buffers, region);
+            }
+        }
+        Ok((current_measured, precision, order))
+    }
+
     fn synchronize(&mut self) {
         for local in 0..self.component.targets.len() {
             self.buffers.values[local] =
@@ -172,19 +257,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         if failures != 0 {
             return Ok(Some((failures, false)));
         }
-        let measured = measured::<E>(self.prepared.measure_point_component(
-            self.component,
-            &self.buffers.values,
-            None,
-            &self.context.local_cases.order,
-            &mut self.buffers.primary,
-            &mut self.buffers.source,
-        ))?;
-        let order = if self.has_best && measured && self.best_measured {
-            compare(self.prepared, self.component, self.buffers, None)
-        } else {
-            None
-        };
+        let (measured, precision, order) = self.assess_profile(None)?;
         self.unresolved |= !measured || self.has_best && order.is_none();
         // At a proved P+S tie, canonical tuple order picks a representative;
         // it is not reported as a scientific improvement.
@@ -200,6 +273,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
             self.has_best = true;
             self.best_measured = measured;
+            self.best_precision = precision;
         }
         Ok(Some((0, retain)))
     }
@@ -211,20 +285,8 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         if !self.has_best || !self.best_measured {
             return Ok(false);
         }
-        if !measured::<E>(self.prepared.measure_point_component(
-            self.component,
-            &self.buffers.values,
-            Some(node),
-            &self.context.local_cases.order,
-            &mut self.buffers.primary,
-            &mut self.buffers.source,
-        ))? {
-            return Ok(false);
-        }
-        Ok(
-            compare(self.prepared, self.component, self.buffers, Some(node))
-                == Some(Ordering::Greater),
-        )
+        let (measured, _, order) = self.assess_profile(Some(node))?;
+        Ok(measured && order == Some(Ordering::Greater))
     }
 }
 
@@ -317,6 +379,8 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         budget: selection.budget,
         has_best: false,
         best_measured: false,
+        initial_precision: initial_precision(),
+        best_precision: initial_precision(),
         unresolved: false,
     };
     let authored = state.assess(runtime, epoch, scenarios, arena)?;

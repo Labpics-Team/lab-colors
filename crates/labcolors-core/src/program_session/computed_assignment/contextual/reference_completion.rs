@@ -77,6 +77,27 @@ impl<E> From<ProgramSessionEvaluationError<E>> for ReferenceCompletionErrorV1<E>
 
 type Error<E> = ReferenceCompletionErrorV1<ProgramEvaluatorError<E>>;
 
+/// Search may screen interval comparisons cheaply. A screening enclosure is
+/// never materialized as scalar evidence; ambiguous decisions are refined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PointMeasurementPrecisionV1 {
+    Screened,
+    Refined,
+}
+
+impl PointMeasurementPrecisionV1 {
+    fn oklab(
+        self,
+        cache: &mut crate::certified_numeric::CertifiedOklabCacheV1,
+        rgb: CertifiedRgbV1,
+    ) -> Result<[CertifiedScalarV1; 3], NumericUncertaintyV1> {
+        match self {
+            Self::Screened => cache.evaluate_screened(rgb),
+            Self::Refined => cache.evaluate(rgb),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ReferenceFactsV1 {
     visible_lab: [CertifiedScalarV1; 3],
@@ -640,6 +661,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
     /// The same continuous physical interpreter measures point probes and
     /// enclosing source boxes. Cases are the component's unique local support;
     /// hard assessment separately retains every actual observation case.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn measure_point_component(
         &mut self,
         component: &ComputedComponentV1,
@@ -648,6 +670,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
         cases: &[usize],
         primary: &mut Vec<CertifiedScalarV1>,
         source_profile: &mut Vec<CertifiedScalarV1>,
+        precision: PointMeasurementPrecisionV1,
     ) -> Result<(), Error<E>> {
         let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
@@ -683,9 +706,10 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                 continue;
             }
             let (lo, hi) = bounds(local);
-            let lab = self.scratch.uses[target]
-                .point_lab_cache
-                .evaluate(CertifiedRgbV1::from_encoded_bounds(lo, hi)?)?;
+            let lab = precision.oklab(
+                &mut self.scratch.uses[target].point_lab_cache,
+                CertifiedRgbV1::from_encoded_bounds(lo, hi)?,
+            )?;
             source_profile.push(source_distance_squared(
                 lab,
                 self.scratch.source_labs[target],
@@ -734,7 +758,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                     let (lo, hi) = bounds(local);
                     CertifiedRgbV1::from_encoded_bounds(lo, hi)?
                 };
-                let visible = usage.point_lab_cache.evaluate(visible_rgb)?;
+                let visible = precision.oklab(&mut usage.point_lab_cache, visible_rgb)?;
                 primary.push(source_distance_squared(
                     visible,
                     *usage
