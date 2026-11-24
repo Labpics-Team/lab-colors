@@ -102,12 +102,15 @@ pub(crate) struct AllocatorEvents {
 /// Requested heap bytes above the measurement's starting live baseline.
 /// This excludes allocator metadata, stack memory and pre-existing objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// FFI integration tests include this allocator but only inspect event counts.
+#[allow(dead_code)]
 pub(crate) struct AllocatorBytes {
     pub(crate) allocated: usize,
     pub(crate) peak_extra: usize,
     pub(crate) live_delta: i128,
 }
 
+#[allow(dead_code)] // Optional byte telemetry for consumers of the shared test helper.
 pub(crate) fn current_allocator_bytes() -> AllocatorBytes {
     assert_allocator_measurement_is_active();
     AllocatorBytes {

@@ -97,11 +97,11 @@
       "sha256": "ea94f463edd6b72de916552e813c1bc77f3e42d5cc6f9dd9ba4b0669f89669eb"
     },
     {
-      "bytes": 9521,
+      "bytes": 9708,
       "license": "MIT",
       "path": "crates/labcolors-core/src/test_support.rs",
       "role": "point_attachment_allocator_oracle",
-      "sha256": "bb9f38d892cc7062137e3ad23d17c9d21bb84ba6f2887686feef69d7ca401d65"
+      "sha256": "7eb4712852a9aee63830eeb3858ba40fb0140dd7ac70866862846bf85021535a"
     },
     {
       "bytes": 59192,
