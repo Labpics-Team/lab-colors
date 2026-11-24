@@ -1,7 +1,7 @@
 {
   "schema": "labcolors-nominal-binary64-inputs/1",
-  "product_commit": "95be02f7f0a99ef0cad282bdffa6ff9283fa2eeb",
-  "created_utc": "2026-11-23T07:37:06+00:00",
+  "product_commit": "c7c50ff50d22c9566974dba3fc28dd0fb28f8d3a",
+  "created_utc": "2026-11-24T12:47:30+00:00",
   "bindings": [
     {
       "path": "crates/labcolors-core/src/spaces/srgb/gamma_data.rs",
@@ -11,8 +11,8 @@
     },
     {
       "path": "crates/labcolors-core/src/spaces/srgb.rs",
-      "sha256": "1d4d7c0b10f1f1936fe47958b507fec7c4d083e352dda79b3c039295088eed32",
-      "git_blob_sha1": "ae00cc531c31650a80c3cbe7c556dfcb1f09075f",
+      "sha256": "d940f9cf443970ff34e6ed4280d5b00c2aef10b85a0818e609bf21302fcb17d4",
+      "git_blob_sha1": "90c1c01a6d4800f29853a60d518e579e0fd6726f",
       "literal_count": 9
     }
   ],

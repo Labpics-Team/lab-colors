@@ -15,7 +15,7 @@
     },
     "bridge": {
       "archive_path": "audits/bridge/input/bridge.json",
-      "sha256": "0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357"
+      "sha256": "45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996"
     },
     "witnesses": {
       "archive_path": "colors-sato-exact-witnesses-20261002/results/WITNESSES.json",
