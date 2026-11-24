@@ -2439,30 +2439,34 @@ mod tests {
     }
 
     #[test]
-    fn exact_automorphism_pruning_prevents_factorial_symmetric_search() {
+    fn exact_automorphism_pruning_prevents_factorial_symmetric_search()
+    -> Result<(), CanonicalGraphError> {
         const SYMMETRIC_VERTICES: usize = 12;
-        let mut graph = GraphBuilderV1::new([1]).unwrap();
+        let mut graph = GraphBuilderV1::new([1])?;
         for _ in 0..SYMMETRIC_VERTICES {
-            graph.add_member([2]).unwrap();
+            graph.add_member([2])?;
         }
-        let graph = graph.finish().unwrap();
+        let graph = graph.finish()?;
 
-        let (_, leaves) = canonical_search(&graph).unwrap();
+        let (_, leaves) = canonical_search(&graph)?;
 
         assert_eq!(leaves, 1, "exact twin pruning visited extra leaves");
+        Ok(())
     }
 
     #[test]
-    fn exhausted_fault_injection_fuel_never_returns_a_partial_preimage() {
-        let mut graph = GraphBuilderV1::new([1]).unwrap();
-        graph.add_member([2]).unwrap();
-        graph.add_member([2]).unwrap();
-        let graph = graph.finish().unwrap();
+    fn exhausted_fault_injection_fuel_never_returns_a_partial_preimage()
+    -> Result<(), CanonicalGraphError> {
+        let mut graph = GraphBuilderV1::new([1])?;
+        graph.add_member([2])?;
+        graph.add_member([2])?;
+        let graph = graph.finish()?;
 
         assert_eq!(
             canonical_search_with_test_fuel(&graph, 0).unwrap_err(),
             CanonicalGraphError::ResourceExhausted
         );
+        Ok(())
     }
 
     fn relabelled_budget_graph(

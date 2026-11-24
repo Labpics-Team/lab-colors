@@ -34,11 +34,11 @@
       "sha256": "67399b7ac8d34ed3095c75189369e0b544774fb5071e810c98e974f1629a8a23"
     },
     {
-      "bytes": 138152,
+      "bytes": 138196,
       "license": "MIT",
       "path": "crates/labcolors-core/src/colored_graph.rs",
       "role": "colored_graph_source",
-      "sha256": "bc4f4f06a24a4dac3b96aeb7c73be0992351557cfbbe646578298e49f9aa3141"
+      "sha256": "bbd59dff572738690cfbbef331367b4c72463016f85985b6df13efa5007432cd"
     },
     {
       "bytes": 22150,
