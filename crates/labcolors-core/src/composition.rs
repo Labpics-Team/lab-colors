@@ -1,8 +1,8 @@
 //! Нижний exact-слой point-композиции.
 //!
 //! Модуль не знает solver, recipe, constraint или client ID. Он фиксирует
-//! единственную физическую операцию encoded-sRGB8 source-over, чтобы proposal,
-//! appearance runtime и revision-bound recheck не могли разойтись по арифметике.
+//! единственную физическую операцию encoded-sRGB source-over, чтобы continuous
+//! appearance и RGB8 proposal, runtime и recheck разделяли порядок арифметики.
 
 use std::num::NonZeroU64;
 
@@ -192,7 +192,13 @@ impl CompositionProfileV1 {
 /// Core, отдельной формулы у него нет. Expanded-форма запрещена: два округления
 /// нарушают монотонность на отдельных ULP-швах.
 pub(crate) fn source_over_channel_value(tint: u8, alpha: f64, backdrop: u8) -> f64 {
-    f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))
+    source_over_channel_continuous_value(f64::from(tint), alpha, f64::from(backdrop))
+}
+
+/// Unquantized execution of the same encoded-sRGB operation order. Inputs are
+/// admitted by the numeric kernel; this function never clamps or rounds.
+pub(crate) fn source_over_channel_continuous_value(tint: f64, alpha: f64, backdrop: f64) -> f64 {
+    backdrop + alpha * (tint - backdrop)
 }
 
 pub(crate) fn source_over_channel_srgb8(tint: u8, alpha: f64, backdrop: u8) -> u8 {

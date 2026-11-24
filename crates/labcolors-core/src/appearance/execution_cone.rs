@@ -5,7 +5,7 @@ use super::*;
 
 #[derive(Debug)]
 pub(crate) struct CompiledAppearanceConeV1 {
-    graph_instance: Arc<()>,
+    pub(super) graph_instance: Arc<()>,
     roots: Box<[CompiledOccurrenceSlotV1]>,
 }
 
@@ -186,7 +186,11 @@ impl AppearanceConeWorkspaceV1 {
         }
     }
 
-    fn prepare(&mut self, graph: &CompiledAppearanceGraph, cone: &CompiledAppearanceConeV1) {
+    pub(super) fn prepare(
+        &mut self,
+        graph: &CompiledAppearanceGraph,
+        cone: &CompiledAppearanceConeV1,
+    ) {
         self.clear();
         let program = graph.program();
         for root in &cone.roots {
@@ -255,7 +259,7 @@ impl CompiledAppearanceGraph {
             program.validate_admitted_workspace(bindings, workspace)?;
         }
         workspace.cone.prepare(self, cone);
-        program.execute_paints_in_order(
+        program.execute_paints_in_order::<ByteAppearanceKernel, _, _>(
             &workspace.cone.paints,
             |index| bindings.paint_inputs[index].1,
             |index| bindings.opacities[index].1,
