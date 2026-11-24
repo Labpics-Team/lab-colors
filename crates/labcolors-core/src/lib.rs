@@ -9,6 +9,7 @@ pub mod wcag22_evidence;
 
 pub(crate) mod clean_set;
 mod color_intent;
+mod colored_graph;
 mod emission;
 
 #[cfg_attr(test, allow(dead_code))]

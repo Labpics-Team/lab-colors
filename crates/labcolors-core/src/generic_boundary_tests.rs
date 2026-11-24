@@ -369,7 +369,8 @@ fn c7c_public_surface_has_no_recipe_root() {
     );
 }
 
-const GENERIC_SOURCES: [(&str, &str); 13] = [
+const GENERIC_SOURCES: [(&str, &str); 14] = [
+    ("colored_graph.rs", include_str!("colored_graph.rs")),
     ("appearance.rs", APPEARANCE_SOURCE),
     ("composition.rs", COMPOSITION_SOURCE),
     ("constraints/family.rs", FAMILY_CONSTRAINT_SOURCE),
@@ -386,6 +387,7 @@ const GENERIC_SOURCES: [(&str, &str); 13] = [
 ];
 
 const CLEAN_SET_PROGRAM_SOURCES: &[(&str, &str)] = &[
+    ("colored_graph.rs", include_str!("colored_graph.rs")),
     ("clean_set.rs", CLEAN_SET_SOURCE),
     ("program/attachment.rs", PROGRAM_ATTACHMENT_SOURCE),
     ("program.rs", PROGRAM_SOURCE),
@@ -537,6 +539,7 @@ fn clean_set_program_guard_covers_the_complete_classifier_and_program_path() {
         covered,
         [
             "clean_set.rs",
+            "colored_graph.rs",
             "program.rs",
             "program/attachment.rs",
             "program_identity.rs",
@@ -1971,6 +1974,7 @@ fn clean_set_program_path_cannot_smuggle_auto_or_writer_contracts() {
 
     for (path, source) in [
         ("clean_set.rs", CLEAN_SET_SOURCE),
+        ("colored_graph.rs", include_str!("colored_graph.rs")),
         ("program_session.rs", PROGRAM_SESSION_SOURCE),
         ("program_identity.rs", PROGRAM_IDENTITY_SOURCE),
     ] {
