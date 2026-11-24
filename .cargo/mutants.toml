@@ -26,6 +26,7 @@ examine_globs = [
     "crates/labcolors-core/src/observation.rs",
     "crates/labcolors-core/src/point_support.rs",
     "crates/labcolors-core/src/program_identity.rs",
+    "crates/labcolors-core/src/colored_graph.rs",
     "crates/labcolors-core/src/srgb8.rs",
     "crates/labcolors-core/src/wcag22.rs",
     "crates/labcolors-core/src/wcag22_evidence.rs",

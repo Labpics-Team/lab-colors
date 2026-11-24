@@ -3207,6 +3207,7 @@ jobs:
         self.assertNotIn("crates/labcolors-core/src/recheck.rs", config)
         self.assertIn("crates/labcolors-core/src/point_support.rs", config)
         self.assertIn("crates/labcolors-core/src/program_identity.rs", config)
+        self.assertIn("crates/labcolors-core/src/colored_graph.rs", config)
 
 
 class AuthorityMutationShardContractTest(unittest.TestCase):
