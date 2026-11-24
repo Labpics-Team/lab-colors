@@ -270,6 +270,11 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             XCTAssertEqual(code, "program_update")
             XCTAssertEqual(operation, "updateDeclaredField")
         }
+        let fieldReplay = try XCTUnwrap(runtime).updateDeclaredField(revision: 2, surfaces: Data([199, 199, 199]),
+            varyingInput: 0, from: start, to: end)
+        XCTAssertEqual(fieldReplay.state(), "ready")
+        XCTAssertEqual(fieldReplay.revision(), 2)
+        XCTAssertEqual(try fieldReplay.fieldAssessment(), ownedReport)
         let reversed = try XCTUnwrap(runtime).updateDeclaredField(revision: 3, surfaces: Data([0, 0, 0]),
             varyingInput: 0, from: end, to: start)
         let reverseReport = try XCTUnwrap(try reversed.fieldAssessment())

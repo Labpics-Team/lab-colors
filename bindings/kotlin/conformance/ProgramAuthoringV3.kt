@@ -104,6 +104,10 @@ private fun verifyDeclaredField(wire: ByteArray) {
             } catch (failure: LabColorsException.Refused) {
                 check(failure.code == "program_update" && failure.operation == "updateDeclaredField")
             }
+            runtime.updateDeclaredField(2uL, rgb(199, 199, 199), 0u, start, end).use { fieldReplay ->
+                check(fieldReplay.state() == "ready" && fieldReplay.revision() == 2uL)
+                check(fieldReplay.fieldAssessment() == report)
+            }
             runtime.updateDeclaredField(3uL, rgb(0, 0, 0), 0u, end, start).use { reversed ->
                 val reverseReport = requireNotNull(reversed.fieldAssessment())
                 check(reverseReport.from == end && reverseReport.to == start)
