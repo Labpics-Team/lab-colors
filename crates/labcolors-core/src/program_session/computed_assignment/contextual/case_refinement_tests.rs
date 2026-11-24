@@ -10,6 +10,11 @@ thread_local! {
     static POINT_CASES: Cell<u64> = const { Cell::new(0) };
     static BOUND_CASES: Cell<u64> = const { Cell::new(0) };
     static TONAL_CONVERSIONS: Cell<u64> = const { Cell::new(0) };
+    static IDENTITY_CHECKS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(super) fn identity_check() {
+    IDENTITY_CHECKS.set(IDENTITY_CHECKS.get() + 1);
 }
 
 pub(super) fn tonal_conversion() {
@@ -250,6 +255,229 @@ fn canonical_working_cases_grow_without_reallocation_or_duplicate_weight() {
     assert!(cases.complete());
     assert_eq!(allocations.alloc, 0);
     assert_eq!(allocations.realloc, 0);
+}
+
+fn check_membership_pass(
+    context: &ContextV1<'_>,
+    epoch: &ProgramEpochV1<Wcag22Srgb8V1>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    cases: &[usize],
+    expected_checks: u64,
+    expected_failures: usize,
+) {
+    let mut bindings = epoch.binding_template.try_clone_v1().expect("bindings");
+    for (target, &value) in context.targets.iter().zip(values) {
+        bindings
+            .overwrite_paint_input_at(target.binding, EncodedPointPaintValueV1::opaque(value))
+            .expect("candidate source");
+    }
+    let mut workspace = epoch.graph.new_workspace().expect("physical workspace");
+    let mut scores = vec![0.0; values.len()];
+    let mut direct_scores = vec![0.0_f64; values.len()];
+    let mut direct_extrema = vec![usize::MAX; values.len()];
+    IDENTITY_CHECKS.set(0);
+    let (_, allocations) = crate::test_support::measured_allocator_events(|| {
+        let mut collector = IntentScoreCollectorV1::new(context, values, &mut scores);
+        let mut paints = prepare_candidate_paints(
+            &epoch.graph,
+            None,
+            &bindings,
+            epoch.observation_group.schema.as_slice(),
+            &mut workspace,
+        )
+        .expect("prepared physical inputs");
+        let mut direct_failures = 0;
+        let mut direct_witness = None;
+        for &case in cases {
+            let inputs = scenarios.physical_values(case).expect("case inputs");
+            let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
+            for (index, target) in context.targets.iter().enumerate() {
+                let visible = Srgb8::new(
+                    evaluation
+                        .occurrence_at(target.appearance.expect("appearance target"))
+                        .expect("physical occurrence")
+                        .visible(),
+                );
+                // The uncached predicate observes the actual physical case,
+                // including transparent visible identity and repeated failures.
+                let identity = target.effective_intent().expect("identity target").identity;
+                if !identity.contains(target.identity_point(values[index], visible)) {
+                    direct_failures += usize::from(context.represents_case(case));
+                    direct_witness = context
+                        .case_refinement
+                        .borrow()
+                        .first_case(direct_witness.into_iter().chain(std::iter::once(case)));
+                }
+                let score =
+                    squared_distance(lab(visible), context.preferred[case * values.len() + index]);
+                let previous = direct_extrema[index];
+                if previous == usize::MAX
+                    || score > direct_scores[index]
+                    || score == direct_scores[index]
+                        && context.case_refinement.borrow().ranks[case]
+                            < context.case_refinement.borrow().ranks[previous]
+                {
+                    direct_extrema[index] = case;
+                }
+                direct_scores[index] = direct_scores[index].max(score);
+            }
+            assert!(collector.observe(case, &evaluation).is_ok());
+        }
+        assert_eq!(direct_failures, expected_failures, "discriminating fixture");
+        assert_eq!(collector.violations(), direct_failures);
+        assert_eq!(collector.has_violation, direct_failures != 0);
+        assert_eq!(collector.violation_case, direct_witness);
+        assert_eq!(&*collector.scores, &direct_scores);
+        assert_eq!(&*collector.extrema, &direct_extrema);
+    });
+    assert_eq!(IDENTITY_CHECKS.get(), expected_checks);
+    assert_eq!(allocations, crate::test_support::AllocatorEvents::default());
+}
+
+#[test]
+fn identity_membership_reuses_true_and_false_without_skipping_physical_cases() {
+    for reference in [false, true] {
+        let mut p = program(
+            color(10, 5, 128, 0, 255, reference),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        p.constraints = ConstraintSet::new(vec![], vec![]);
+        if reference {
+            p.reference_inputs = Some(vec![(SurfaceInputPortId::new(2), gray(255))]);
+        }
+        let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+            panic!("computed target");
+        };
+        target.intent.as_mut().expect("color intent").identity = ColorIdentityDomainV1::new(
+            gray(128),
+            false,
+            IdentityOptionsV1 {
+                lightness: Some([0.0, lab(gray(160))[0]]),
+                ..IdentityOptionsV1::default()
+            },
+        )
+        .expect("bounded lightness identity");
+        translucent(&mut p, 0, 3, 0.5);
+        let owner = compile_assignment(p, 4096).expect("identity program");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        session
+            .prepare_update(observe(&[0, 128, 255]))
+            .expect("cases")
+            .commit();
+        let observed = &session
+            .state()
+            .current_verified()
+            .expect("feasible program")
+            .computed_for_test()
+            .observation;
+        let scenarios = NonEmptyScenarioSetV1::from_admitted(observed).expect("admitted cases");
+        let epoch = &owner.owner_generation;
+        let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+            panic!("computed selection");
+        };
+        let component = &selection.components[0];
+        let context = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+            .expect("fixed target identity context");
+        let pass = |values: &[Srgb8], cases: &[usize], work, failures| {
+            check_membership_pass(&context, epoch, scenarios, values, cases, work, failures);
+        };
+        pass(
+            &[gray(128)],
+            &[0, 0, 1, 1, 2, 2],
+            if reference { 1 } else { 3 },
+            if reference { 0 } else { 2 },
+        );
+        // A fresh collector retains both a true source result and a false visible result.
+        pass(&[gray(128)], &[2, 2], 0, if reference { 0 } else { 2 });
+        pass(
+            &[gray(128)],
+            &[2, 0, 2],
+            if reference { 0 } else { 2 },
+            if reference { 0 } else { 2 },
+        );
+        pass(
+            &[gray(200)],
+            &[0, 1, 2],
+            if reference { 1 } else { 3 },
+            if reference { 3 } else { 2 },
+        );
+        pass(&[gray(128)], &[2], 1, if reference { 0 } else { 1 });
+        let fresh = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+            .expect("independent context");
+        check_membership_pass(
+            &fresh,
+            epoch,
+            scenarios,
+            &[gray(128)],
+            &[2],
+            1,
+            if reference { 0 } else { 1 },
+        );
+    }
+}
+
+#[test]
+fn identity_membership_never_borrows_another_targets_result_for_the_same_rgb() {
+    let mut p = program(
+        color(10, 5, 128, 0, 255, false),
+        Wcag22CriterionV1::Sc143TextDefault,
+        Wcag22Srgb8V1,
+    );
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    let mut second = color(20, 15, 200, 0, 255, false);
+    let TargetIntentV1::Computed(target) = &mut second.intent else {
+        panic!("computed target")
+    };
+    target.intent.as_mut().expect("color intent").identity = ColorIdentityDomainV1::new(
+        gray(200),
+        false,
+        IdentityOptionsV1 {
+            lightness: Some([lab(gray(160))[0], 1.0]),
+            ..IdentityOptionsV1::default()
+        },
+    )
+    .expect("different identity");
+    p.targets.push(second);
+    p.paints.push(Paint::Solid {
+        id: PaintId::new(13),
+        target: TargetId::new(20),
+    });
+    p.occurrences.push(Occurrence::new(
+        OccurrenceId::new(15),
+        PaintId::new(13),
+        SurfaceId::new(4),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        p.occurrences[0].context,
+    ));
+    p.outputs
+        .push(OutputBinding::new(OutputSlotId::new(17), PaintId::new(13)));
+    let owner = compile_assignment(p, 4096).expect("separate identities");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    session
+        .prepare_update(observe(&[255]))
+        .expect("case")
+        .commit();
+    let observed = &session
+        .state()
+        .current_verified()
+        .expect("feasible program")
+        .computed_for_test()
+        .observation;
+    let scenarios = NonEmptyScenarioSetV1::from_admitted(observed).expect("admitted case");
+    let epoch = &owner.owner_generation;
+    let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+        panic!("computed selection");
+    };
+    let context = ContextV1::new::<Wcag22Srgb8V1>(selection, None, scenarios)
+        .expect("complete target context");
+    check_membership_pass(&context, epoch, scenarios, &[gray(128); 2], &[0, 0], 2, 2);
+    check_membership_pass(&context, epoch, scenarios, &[gray(128); 2], &[0, 0], 0, 2);
 }
 
 #[test]

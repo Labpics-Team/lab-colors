@@ -37,6 +37,7 @@ struct ContextV1<'a> {
     local_cases: LocalCasesV1,
     case_refinement: RefCell<CaseRefinementV1>,
     score_extrema: RefCell<Vec<usize>>,
+    identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     opaque: Vec<bool>,
 }
 
@@ -239,6 +240,7 @@ impl<'a> ContextV1<'a> {
             local_cases,
             case_refinement,
             score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
+            identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             opaque,
         })
     }
@@ -294,6 +296,7 @@ struct IntentScoreCollectorV1<'a, 'context> {
     appearance: Option<&'a mut [AppearancePointV1]>,
     violation_case: Option<usize>,
     extrema: RefMut<'a, Vec<usize>>,
+    identity_memberships: RefMut<'a, Vec<Option<(Srgb8, bool)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -329,6 +332,7 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
             appearance: None,
             violation_case: None,
             extrema,
+            identity_memberships: context.identity_memberships.borrow_mut(),
         }
     }
 
@@ -404,9 +408,22 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
             }
             let delta = f64::from_bits(target.declaration.max_delta_bits);
             let identity_failed = target.effective_intent().is_some_and(|intent| {
-                !intent
-                    .identity
-                    .contains(target.identity_point(self.values[index], rgb))
+                let point = target.identity_point(self.values[index], rgb);
+                // This Context fixes the target's identity. Only its actual
+                // RGB8 argument can change between cases or complete tuples;
+                // source and explicit visible identities share this same key.
+                let entry = &mut self.identity_memberships[index];
+                let contains = match *entry {
+                    Some((previous, contains)) if previous == point => contains,
+                    _ => {
+                        #[cfg(test)]
+                        case_refinement_tests::identity_check();
+                        let contains = intent.identity.contains(point);
+                        *entry = Some((point, contains));
+                        contains
+                    }
+                };
+                !contains
             });
             if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
                 self.has_violation = true;
