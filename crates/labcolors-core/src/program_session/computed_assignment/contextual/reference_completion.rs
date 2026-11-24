@@ -1,5 +1,5 @@
-//! Private vertical path: certified finite point completion, then one strict
-//! whole-tuple RGB8 realization. No continuous optimizer or field certificate.
+//! Private incoming path: checked full-point preference comparison, then one
+//! strict RGB8 realization. Implicit reference facts do not imply a comparator.
 
 use super::*;
 use crate::appearance::{CertifiedAppearanceWorkspace, ContinuousSrgbV1, PointPaintValueV1};
@@ -8,19 +8,30 @@ use crate::certified_numeric::{
     CertifiedScalarV1, NumericUncertaintyV1, sort_descending_profile, source_distance_squared,
 };
 
-/// A point-filter outcome never asserts a mathematical tie.
+/// Only certified componentwise improvement or proved preference equality
+/// can admit a proposal. A shared rounding cell has no comparison authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompletionAdmissionV1 {
-    UnresolvedWithinCell,
+    PreferenceImproved,
+    SourceImprovedWithinEquivalentPreference,
+    PartiallyAccepted { accepted: usize, preserved: usize },
     AnchorPreserved(CompletionRejectionV1),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompletionRejectionV1 {
-    MeasurementCellChanged,
-    PrimaryCellChanged,
+    PreferenceWorsened,
+    PreferenceIncomparable,
+    PreferenceUnresolved,
+    ImplicitReferenceUnresolved,
     SourceImprovementUnresolved,
     Numeric(NumericUncertaintyV1),
+}
+
+pub(crate) struct ComponentAdmissionEvidenceV1 {
+    pub(crate) component: usize,
+    pub(crate) admission: CompletionAdmissionV1,
+    pub(crate) preference_drift_upper: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -30,7 +41,6 @@ pub(crate) enum ReferenceCompletionErrorV1<E> {
     UnsupportedDeclaredField,
     MissingReference,
     RequiresComputedTargets,
-    MissingDeclaredReferenceUse,
     InvalidUse,
     InvalidTuple,
     ResourceExhausted,
@@ -65,38 +75,72 @@ impl<E> From<ProgramSessionEvaluationError<E>> for ReferenceCompletionErrorV1<E>
 
 type Error<E> = ReferenceCompletionErrorV1<ProgramEvaluatorError<E>>;
 
+#[derive(Clone, Copy)]
+struct ReferenceFactsV1 {
+    visible_lab: [CertifiedScalarV1; 3],
+    backdrop_lab: [CertifiedScalarV1; 3],
+    contrast: CertifiedScalarV1,
+}
+
 struct UseV1 {
-    slot: CompiledOccurrenceSlotV1,
-    occurrence: OccurrenceId,
-    target: Option<usize>,
+    slot: Option<CompiledOccurrenceSlotV1>,
+    occurrence: Option<OccurrenceId>,
+    target: usize,
+    factor: usize,
     tone_bits: Vec<Option<u64>>,
-    tones: Vec<Option<CertifiedScalarV1>>,
-    objective: Option<usize>,
-    reference_contrast: CertifiedScalarV1,
+    point_anchor: Option<[CertifiedScalarV1; 3]>,
+    preferred: Vec<[CertifiedScalarV1; 3]>,
+    reference: Option<ReferenceFactsV1>,
+}
+
+struct PreferenceMeasurementV1 {
+    target_id: TargetId,
+    occurrence: Option<OccurrenceId>,
+    case: usize,
+    visible_lab: [CertifiedScalarV1; 3],
+    backdrop_lab: Option<[CertifiedScalarV1; 3]>,
+    preferred: Option<[CertifiedScalarV1; 3]>,
+    distance: Option<CertifiedScalarV1>,
+    reference: Option<ReferenceFactsV1>,
 }
 
 struct MeasurementsV1 {
-    measured: Vec<CertifiedScalarV1>,
-    primary: Vec<CertifiedScalarV1>,
+    preferences: Vec<PreferenceMeasurementV1>,
     source: Vec<CertifiedScalarV1>,
 }
 
-/// Complete cell evidence for anchor and proposal, in canonical case/use order.
-/// Profiles are enclosing order statistics, not a host-f64 sort of estimates.
+/// Every declared use/case retains its identity. No sort or worst-case
+/// reduction can turn a redistribution of preference losses into equality.
 pub(crate) struct CompletionPointEvidenceV1 {
-    pub(crate) measurements: Box<[CompletionScalarEvidenceV1]>,
-    pub(crate) primary_profile: Box<[CompletionScalarEvidenceV1]>,
+    pub(crate) preferences: Box<[CompletionPreferenceEvidenceV1]>,
     pub(crate) source_profile: Box<[[u128; 2]]>,
 }
 
-/// An enclosure survives even when it cannot establish one rounding cell.
+pub(crate) struct CompletionPreferenceEvidenceV1 {
+    pub(crate) target: TargetId,
+    pub(crate) occurrence: Option<OccurrenceId>,
+    pub(crate) case: usize,
+    pub(crate) visible_lab: [[u128; 2]; 3],
+    pub(crate) backdrop_lab: Option<[[u128; 2]; 3]>,
+    pub(crate) preferred: Option<[[u128; 2]; 3]>,
+    pub(crate) distance: Option<CompletionScalarEvidenceV1>,
+    pub(crate) reference: Option<CompletionReferenceFactsV1>,
+}
+
+pub(crate) struct CompletionReferenceFactsV1 {
+    pub(crate) visible_lab: [[u128; 2]; 3],
+    pub(crate) backdrop_lab: [[u128; 2]; 3],
+    pub(crate) contrast: CompletionScalarEvidenceV1,
+}
+
+/// Cell evidence is diagnostic only. Order always uses enclosing real bounds.
 pub(crate) struct CompletionScalarEvidenceV1 {
     pub(crate) bounds: [u128; 2],
     pub(crate) cell: Result<CertifiedScalarEvidenceV1, NumericUncertaintyV1>,
 }
 
 pub(crate) struct CompletionUseToneEvidenceV1 {
-    pub(crate) occurrence: OccurrenceId,
+    pub(crate) occurrence: Option<OccurrenceId>,
     pub(crate) per_case_bits: Box<[Option<u64>]>,
 }
 
@@ -120,7 +164,7 @@ pub(crate) struct ReferenceCompletionResultV1<'program, E: ProgramConstraintEval
     admission: CompletionAdmissionV1,
     anchor_evidence: CompletionPointEvidenceV1,
     completion_evidence: Option<CompletionPointEvidenceV1>,
-    primary_drift_upper: Option<f64>,
+    component_admissions: Box<[ComponentAdmissionEvidenceV1]>,
     emitted: Option<Box<[Srgb8]>>,
     search: SearchEvidenceV1,
     numerical_order_unresolved: bool,
@@ -151,8 +195,8 @@ impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionResultV1<'_, E> {
     ) {
         (&self.anchor_evidence, self.completion_evidence.as_ref())
     }
-    pub(crate) fn primary_drift_upper(&self) -> Option<f64> {
-        self.primary_drift_upper
+    pub(crate) fn component_admissions(&self) -> &[ComponentAdmissionEvidenceV1] {
+        &self.component_admissions
     }
     pub(crate) fn binds_owner(&self, owner: &CompiledProgram<E>) -> bool {
         core::ptr::eq(self.epoch, owner.owner_generation.as_ref())
@@ -202,7 +246,6 @@ impl<E: ProgramConstraintEvaluatorSetV1> ReferenceCompletionScratchV1<E> {
 
 struct ReferenceCompletionStorageV1 {
     uses: Vec<UseV1>,
-    objective_count: usize,
     bindings: AdmittedAppearanceBindings,
     certified_workspace: CertifiedAppearanceWorkspace,
     binding_targets: Vec<Option<usize>>,
@@ -303,53 +346,89 @@ impl ReferenceCompletionStorageV1 {
         let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
-        let inputs = epoch
-            .reference_inputs
-            .as_ref()
-            .ok_or(Error::<E>::MissingReference)?;
         let bindings = epoch.binding_template.try_clone_v1()?;
         let mut certified_workspace = epoch.graph.new_certified_workspace()?;
         let sources = bindings.paint_inputs_canonical();
-        let mut reference = epoch.graph.prepare_certified_surface_cases(
-            None,
-            &bindings,
-            |index| {
-                PointPaintValueV1::from_admitted(
-                    CertifiedRgbV1::from_encoded(sources[index].1.source().bytes().map(f64::from)),
-                    sources[index].1.opacity(),
-                )
-            },
-            &mut certified_workspace,
-        )?;
-        let reference = reference.evaluate_surface_inputs_canonical(|index| {
-            CertifiedRgbV1::from_encoded(inputs[index].1.bytes().map(f64::from))
-        });
-        let mut objective_count = 0;
-        let mut uses = reserve::<_, E>(epoch.presentation_occurrence_contexts.len())?;
-        for point in &epoch.presentation_occurrence_contexts {
-            let target = selection.targets.iter().position(|target| {
-                target.appearance == Some(point.slot) && target.declaration.reference_appearance
+        let mut source_labs = reserve::<_, E>(selection.targets.len())?;
+        for target in &selection.targets {
+            source_labs.push(
+                CertifiedRgbV1::from_encoded(target.declaration.anchor.bytes().map(f64::from))?
+                    .oklab()?,
+            );
+        }
+        let mut references =
+            buffer(selection.targets.len(), None).map_err(|_| Error::<E>::ResourceExhausted)?;
+        if selection
+            .targets
+            .iter()
+            .any(|target| target.declaration.reference_appearance)
+        {
+            let inputs = epoch
+                .reference_inputs
+                .as_ref()
+                .ok_or(Error::<E>::MissingReference)?;
+            let mut reference = epoch.graph.prepare_certified_surface_cases(
+                None,
+                &bindings,
+                |index| {
+                    PointPaintValueV1::from_admitted(
+                        CertifiedRgbV1::from_encoded(
+                            sources[index].1.source().bytes().map(f64::from),
+                        ),
+                        sources[index].1.opacity(),
+                    )
+                },
+                &mut certified_workspace,
+            )?;
+            let view = reference.evaluate_surface_inputs_canonical(|index| {
+                CertifiedRgbV1::from_encoded(inputs[index].1.bytes().map(f64::from))
             });
-            let objective = target.map(|_| {
-                let index = objective_count;
-                objective_count += 1;
-                index
-            });
-            let value = reference
-                .occurrence_at(point.slot)
+            for (index, target) in selection.targets.iter().enumerate() {
+                if !target.declaration.reference_appearance {
+                    continue;
+                }
+                let point = view
+                    .occurrence_at(target.appearance.ok_or(Error::<E>::InvalidUse)?)
+                    .ok_or(Error::<E>::InvalidUse)?;
+                references[index] = Some(ReferenceFactsV1 {
+                    visible_lab: point.visible?.oklab()?,
+                    backdrop_lab: point.backdrop?.oklab()?,
+                    contrast: point.visible?.contrast(point.backdrop?)?,
+                });
+            }
+        }
+        let mut uses = reserve::<_, E>(selection.targets.len())?;
+        for (index, target) in selection.targets.iter().enumerate() {
+            let point_anchor = match target.preferred_intent() {
+                CompiledPreferredIntentV1::Point {
+                    anchor: PreferredPointAnchorV1::AuthoredSource,
+                    ..
+                } => Some(source_labs[index]),
+                CompiledPreferredIntentV1::Point {
+                    anchor: PreferredPointAnchorV1::ReferenceVisible,
+                    ..
+                } => Some(references[index].ok_or(Error::<E>::InvalidUse)?.visible_lab),
+                CompiledPreferredIntentV1::ImplicitReference => None,
+            };
+            let factor = selection
+                .factors
+                .iter()
+                .position(|factor| factor.kind == ComputedFactorKindV1::Objective(index))
                 .ok_or(Error::<E>::InvalidUse)?;
             uses.push(UseV1 {
-                slot: point.slot,
-                occurrence: point.occurrence,
-                target,
-                tones: Vec::new(),
+                slot: target.appearance,
+                occurrence: target
+                    .declaration
+                    .intent
+                    .as_ref()
+                    .and_then(|intent| intent.appearance),
+                target: index,
+                factor,
                 tone_bits: Vec::new(),
-                objective,
-                reference_contrast: value.visible?.contrast(value.backdrop?)?,
+                point_anchor,
+                preferred: Vec::new(),
+                reference: references[index],
             });
-        }
-        if objective_count == 0 {
-            return Err(Error::<E>::MissingDeclaredReferenceUse);
         }
         let mut binding_targets = reserve::<_, E>(sources.len())?;
         for (id, _) in sources {
@@ -360,16 +439,8 @@ impl ReferenceCompletionStorageV1 {
                     .position(|target| target_paint_input_id(target.id) == *id),
             );
         }
-        let mut source_labs = reserve::<_, E>(selection.targets.len())?;
-        for target in &selection.targets {
-            source_labs.push(
-                CertifiedRgbV1::from_encoded(target.declaration.anchor.bytes().map(f64::from))?
-                    .oklab()?,
-            );
-        }
         Ok(Self {
             uses,
-            objective_count,
             bindings,
             certified_workspace,
             binding_targets,
@@ -386,10 +457,10 @@ impl ReferenceCompletionStorageV1 {
             return Err(Error::<E>::RequiresComputedTargets);
         };
         for usage in &mut self.uses {
-            usage.tones.clear();
+            usage.preferred.clear();
             usage.tone_bits.clear();
             usage
-                .tones
+                .preferred
                 .try_reserve(observation.physical_case_count())
                 .map_err(|_| Error::<E>::ResourceExhausted)?;
             usage
@@ -400,22 +471,19 @@ impl ReferenceCompletionStorageV1 {
                 let inputs = observation
                     .physical_values(case)
                     .ok_or(Error::<E>::MissingFiniteObservation)?;
-                let tone = usage
-                    .target
-                    .and_then(|index| {
-                        let target = &selection.targets[index];
-                        target
-                            .declaration
-                            .intent
-                            .as_ref()?
-                            .tone
-                            .as_ref()
-                            .zip(target.tone_input)
-                    })
-                    .map(|(curve, input)| curve.preferred_lightness(inputs[input].srgb8()));
-                usage
-                    .tones
-                    .push(tone.map(CertifiedScalarV1::exact).transpose()?);
+                let tone = match selection.targets[usage.target].preferred_intent() {
+                    CompiledPreferredIntentV1::Point {
+                        tone: Some((curve, input)),
+                        ..
+                    } => Some(curve.preferred_lightness(inputs[input].srgb8())),
+                    _ => None,
+                };
+                if let Some(mut preferred) = usage.point_anchor {
+                    if let Some(tone) = tone {
+                        preferred[0] = CertifiedScalarV1::exact(tone)?;
+                    }
+                    usage.preferred.push(preferred);
+                }
                 usage.tone_bits.push(tone.map(f64::to_bits));
             }
         }
@@ -467,30 +535,30 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             return Err(Error::<E>::InvalidTuple);
         }
         let epoch = self.epoch;
+        let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
         let source = self.scratch.bindings.paint_inputs_canonical();
         let mut paints = epoch.graph.prepare_certified_surface_cases(
             None,
             &self.scratch.bindings,
             |index| {
-                let channels = self.scratch.binding_targets[index].map_or_else(
-                    || source[index].1.source().bytes().map(f64::from),
-                    |target| values[target].channels(),
-                );
                 PointPaintValueV1::from_admitted(
-                    CertifiedRgbV1::from_encoded(channels),
+                    CertifiedRgbV1::from_encoded(self.scratch.binding_targets[index].map_or_else(
+                        || source[index].1.source().bytes().map(f64::from),
+                        |target| values[target].channels(),
+                    )),
                     source[index].1.opacity(),
                 )
             },
             &mut self.scratch.certified_workspace,
         )?;
         let count = self.observation.physical_case_count();
-        let mut measured = reserve::<_, E>(
+        let mut preferences = reserve::<_, E>(
             count
                 .checked_mul(self.scratch.uses.len())
                 .ok_or(Error::<E>::ResourceExhausted)?,
         )?;
-        let mut primary = reserve::<_, E>(self.scratch.objective_count)?;
-        primary.resize(self.scratch.objective_count, CertifiedScalarV1::exact(1.0)?);
         for case in 0..count {
             let inputs = self
                 .observation
@@ -500,129 +568,218 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                 CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
             });
             for usage in &self.scratch.uses {
-                let occurrence = view
-                    .occurrence_at(usage.slot)
-                    .ok_or(Error::<E>::InvalidUse)?;
-                let (m, loss) = if let Some(tone) = usage.tones[case] {
-                    let l = occurrence.visible?.oklab()?[0];
-                    let offset = CertifiedScalarV1::exact(
-                        crate::spaces::srgb::RELATIVE_LUMINANCE_RATIO_OFFSET,
-                    )?;
-                    (
-                        l,
-                        l.pow(3)?
-                            .add(offset)?
-                            .ratio_loss(tone.pow(3)?.add(offset)?)?,
-                    )
+                let (visible_lab, backdrop_lab) = if let Some(slot) = usage.slot {
+                    let point = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
+                    (point.visible?.oklab()?, Some(point.backdrop?.oklab()?))
                 } else {
-                    let cr = occurrence.visible?.contrast(occurrence.backdrop?)?;
-                    (cr, cr.ratio_loss(usage.reference_contrast)?)
+                    (
+                        CertifiedRgbV1::from_encoded(values[usage.target].channels())?.oklab()?,
+                        None,
+                    )
                 };
-                measured.push(m);
-                if let Some(index) = usage.objective {
-                    primary[index] = primary[index].max(loss)?;
-                }
+                let preferred = usage.preferred.get(case).copied();
+                let distance = preferred
+                    .map(|point| source_distance_squared(visible_lab, point))
+                    .transpose()?;
+                preferences.push(PreferenceMeasurementV1 {
+                    target_id: selection.targets[usage.target].id,
+                    occurrence: usage.occurrence,
+                    case,
+                    visible_lab,
+                    backdrop_lab,
+                    preferred,
+                    distance,
+                    reference: usage.reference,
+                });
             }
         }
-        let mut source_profile = reserve::<_, E>(values.len())?;
-        for (point, reference) in values.iter().zip(&self.scratch.source_labs) {
-            source_profile.push(source_distance_squared(
-                CertifiedRgbV1::from_encoded(point.channels())?.oklab()?,
-                *reference,
+        let mut source = reserve::<_, E>(values.len())?;
+        for (value, anchor) in values.iter().zip(&self.scratch.source_labs) {
+            source.push(source_distance_squared(
+                CertifiedRgbV1::from_encoded(value.channels())?.oklab()?,
+                *anchor,
             )?);
         }
-        sort_profile::<E>(&mut primary)?;
-        sort_profile::<E>(&mut source_profile)?;
         Ok(MeasurementsV1 {
-            measured,
-            primary,
-            source: source_profile,
+            preferences,
+            source,
         })
+    }
+}
+
+fn scalar_evidence(value: CertifiedScalarV1) -> CompletionScalarEvidenceV1 {
+    CompletionScalarEvidenceV1 {
+        bounds: value.bounds(),
+        cell: value.evidence(),
     }
 }
 
 fn evidence<E: ProgramConstraintEvaluatorSetV1>(
     values: &MeasurementsV1,
 ) -> Result<CompletionPointEvidenceV1, Error<E>> {
-    fn project<E: ProgramConstraintEvaluatorSetV1>(
-        values: &[CertifiedScalarV1],
-    ) -> Result<Box<[CompletionScalarEvidenceV1]>, Error<E>> {
-        let mut result = reserve::<_, E>(values.len())?;
-        for value in values {
-            result.push(CompletionScalarEvidenceV1 {
-                bounds: value.bounds(),
-                cell: value.evidence(),
-            });
-        }
-        Ok(result.into_boxed_slice())
+    let mut preferences = reserve::<_, E>(values.preferences.len())?;
+    for row in &values.preferences {
+        preferences.push(CompletionPreferenceEvidenceV1 {
+            target: row.target_id,
+            occurrence: row.occurrence,
+            case: row.case,
+            visible_lab: row.visible_lab.map(CertifiedScalarV1::bounds),
+            backdrop_lab: row.backdrop_lab.map(|v| v.map(CertifiedScalarV1::bounds)),
+            preferred: row.preferred.map(|v| v.map(CertifiedScalarV1::bounds)),
+            distance: row.distance.map(scalar_evidence),
+            reference: row.reference.map(|v| CompletionReferenceFactsV1 {
+                visible_lab: v.visible_lab.map(CertifiedScalarV1::bounds),
+                backdrop_lab: v.backdrop_lab.map(CertifiedScalarV1::bounds),
+                contrast: scalar_evidence(v.contrast),
+            }),
+        });
     }
-    let mut source = reserve::<_, E>(values.source.len())?;
-    source.extend(values.source.iter().map(|value| value.bounds()));
+    let mut profile = copy_slice::<_, E>(&values.source)?;
+    sort_profile::<E>(&mut profile)?;
+    let mut source = reserve::<_, E>(profile.len())?;
+    source.extend(profile.iter().map(|value| value.bounds()));
     Ok(CompletionPointEvidenceV1 {
-        measurements: project::<E>(&values.measured)?,
-        primary_profile: project::<E>(&values.primary)?,
+        preferences: preferences.into_boxed_slice(),
         source_profile: source.into_boxed_slice(),
     })
 }
 
-fn admission(
+fn component_admission(
+    selection: &ComputedSelectionV1,
+    component: &ComputedComponentV1,
+    uses: &[UseV1],
+    anchor_values: &[ContinuousSrgbV1],
+    proposal_values: &[ContinuousSrgbV1],
     anchor: &MeasurementsV1,
-    completion: &MeasurementsV1,
+    proposal: &MeasurementsV1,
 ) -> Result<(CompletionAdmissionV1, Option<f64>), NumericUncertaintyV1> {
-    for (a, b) in anchor.measured.iter().zip(&completion.measured) {
-        if a.nearest_even_cell()? != b.nearest_even_cell()? {
-            return Ok((
-                CompletionAdmissionV1::AnchorPreserved(
-                    CompletionRejectionV1::MeasurementCellChanged,
-                ),
-                None,
-            ));
-        }
-    }
-    let mut drift = 0.0_f64;
-    for (a, b) in anchor.primary.iter().zip(&completion.primary) {
-        if a.nearest_even_cell()? != b.nearest_even_cell()? {
-            return Ok((
-                CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PrimaryCellChanged),
-                None,
-            ));
-        }
-        drift = drift.max(b.upper_difference(*a)?);
-    }
-    // Strict interval lexicographic improvement; equal binary64 cells are never
-    // used to skip an unresolved earlier source-displacement dimension.
-    let improves = completion
-        .source
+    let preserved = |reason| CompletionAdmissionV1::AnchorPreserved(reason);
+    let changed = component
+        .targets
         .iter()
-        .zip(&anchor.source)
-        .find_map(|(b, a)| {
-            if b.strictly_below(*a) {
-                Some(true)
-            } else if a.strictly_below(*b) {
-                Some(false)
-            } else if a.proves_equal(*b) {
-                None
-            } else {
-                Some(false)
+        .any(|&index| anchor_values[index] != proposal_values[index]);
+    if changed
+        && component
+            .targets
+            .iter()
+            .any(|&index| uses[index].point_anchor.is_none())
+    {
+        return Ok((
+            preserved(CompletionRejectionV1::ImplicitReferenceUnresolved),
+            None,
+        ));
+    }
+    let mut improved = false;
+    let mut worsened = false;
+    let mut unresolved = false;
+    let mut equal = true;
+    let mut drift = f64::NEG_INFINITY;
+    for &target in &component.targets {
+        let dependencies = &selection.factors[uses[target].factor].targets;
+        if dependencies
+            .iter()
+            .all(|&index| anchor_values[index] == proposal_values[index])
+        {
+            // Same immutable program, input observation and source dependencies:
+            // this is the same real expression, not merely equal enclosures.
+            drift = drift.max(0.0);
+            continue;
+        }
+        // Measurement rows are case-major, in compiled target order. Visit
+        // only this component's targets, without scanning unrelated rows.
+        for (a, b) in anchor
+            .preferences
+            .chunks_exact(uses.len())
+            .zip(proposal.preferences.chunks_exact(uses.len()))
+        {
+            #[cfg(test)]
+            tests::preference_row_visit();
+            let (Some(a), Some(b)) = (a[target].distance, b[target].distance) else {
+                return Ok((
+                    preserved(CompletionRejectionV1::ImplicitReferenceUnresolved),
+                    None,
+                ));
+            };
+            if a.proves_equal(b) {
+                drift = drift.max(0.0);
+                continue;
             }
-        })
-        .unwrap_or(false);
+            equal = false;
+            let upper = b.upper_difference(a)?;
+            drift = drift.max(upper);
+            if upper <= 0.0 {
+                improved |= b.strictly_below(a);
+            } else if a.strictly_below(b) {
+                worsened = true;
+            } else {
+                unresolved = true;
+            }
+        }
+    }
+    let drift = Some(if drift == f64::NEG_INFINITY {
+        0.0
+    } else {
+        drift
+    });
+    if worsened {
+        return Ok((
+            preserved(if improved {
+                CompletionRejectionV1::PreferenceIncomparable
+            } else {
+                CompletionRejectionV1::PreferenceWorsened
+            }),
+            drift,
+        ));
+    }
+    if unresolved {
+        return Ok((
+            preserved(CompletionRejectionV1::PreferenceUnresolved),
+            drift,
+        ));
+    }
+    if improved {
+        return Ok((CompletionAdmissionV1::PreferenceImproved, drift));
+    }
+    if !equal {
+        return Ok((
+            preserved(CompletionRejectionV1::PreferenceUnresolved),
+            drift,
+        ));
+    }
+    // Source completion uses a checked partial improvement. An unchanged
+    // source proves an exact tie without comparing overlapping intervals.
+    let mut source_improved = false;
+    for &index in &component.targets {
+        if anchor_values[index] == proposal_values[index] {
+            continue;
+        }
+        let (a, b) = (anchor.source[index], proposal.source[index]);
+        if a.proves_equal(b) {
+            continue;
+        }
+        if b.upper_difference(a)? > 0.0 {
+            return Ok((
+                preserved(CompletionRejectionV1::SourceImprovementUnresolved),
+                drift,
+            ));
+        }
+        source_improved |= b.strictly_below(a);
+    }
     Ok((
-        if improves {
-            CompletionAdmissionV1::UnresolvedWithinCell
+        if source_improved {
+            CompletionAdmissionV1::SourceImprovedWithinEquivalentPreference
         } else {
-            CompletionAdmissionV1::AnchorPreserved(
-                CompletionRejectionV1::SourceImprovementUnresolved,
-            )
+            preserved(CompletionRejectionV1::SourceImprovementUnresolved)
         },
-        Some(drift),
+        drift,
     ))
 }
 
 impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'program, '_, E> {
     /// The proposals contain every unique computed source, in compiled target
     /// order. Neither proposal authorizes overriding a strict material/domain
-    /// constraint. Rejected completion preserves anchor bytes before realization.
+    /// constraint. Each compiled component independently preserves its anchor
+    /// or admits a checked proposal before the merged tuple is realized.
     /// `budget` limits each compiled independent component; visited evidence
     /// sums their work and the compiler's once-only fixed-constraint check.
     pub(crate) fn realize(
@@ -638,37 +795,83 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         }
         let anchor_measurement = self.measure(anchor)?;
         let anchor_evidence = evidence::<E>(&anchor_measurement)?;
-        let completion_measurement = self.measure(completion);
-        let (admission, primary_drift_upper, completion_evidence) = match completion_measurement {
-            Ok(measurement) => match admission(&anchor_measurement, &measurement) {
-                Ok((outcome, drift)) => {
-                    let projected = evidence::<E>(&measurement)?;
-                    (outcome, drift, Some(projected))
-                }
-                Err(error) => (
-                    CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::Numeric(error)),
-                    None,
-                    None,
-                ),
-            },
-            Err(ReferenceCompletionErrorV1::Numeric(error)) => (
-                CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::Numeric(error)),
-                None,
-                None,
-            ),
+        let completion_measurement = match self.measure(completion) {
+            Ok(value) => Ok(value),
+            Err(ReferenceCompletionErrorV1::Numeric(error)) => Err(error),
             Err(error) => return Err(error),
         };
-        let ideal = if admission == CompletionAdmissionV1::UnresolvedWithinCell {
-            completion
+        let completion_evidence = completion_measurement
+            .as_ref()
+            .ok()
+            .map(evidence::<E>)
+            .transpose()?;
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
+        let mut ideal = copy_slice::<_, E>(anchor)?;
+        let mut component_admissions = reserve::<_, E>(selection.components.len())?;
+        let mut accepted = 0;
+        let mut preference_improved = false;
+        for (index, component) in selection.components.iter().enumerate() {
+            let compared = match &completion_measurement {
+                Ok(measurement) => component_admission(
+                    selection,
+                    component,
+                    &self.scratch.uses,
+                    anchor,
+                    completion,
+                    &anchor_measurement,
+                    measurement,
+                ),
+                Err(error) => Err(*error),
+            };
+            let (admission, preference_drift_upper) = compared.unwrap_or_else(|error| {
+                (
+                    CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::Numeric(error)),
+                    None,
+                )
+            });
+            if matches!(
+                admission,
+                CompletionAdmissionV1::PreferenceImproved
+                    | CompletionAdmissionV1::SourceImprovedWithinEquivalentPreference
+            ) {
+                for &target in &component.targets {
+                    ideal[target] = completion[target];
+                }
+                accepted += 1;
+                preference_improved |= admission == CompletionAdmissionV1::PreferenceImproved;
+            }
+            component_admissions.push(ComponentAdmissionEvidenceV1 {
+                component: index,
+                admission,
+                preference_drift_upper,
+            });
+        }
+        let preserved = component_admissions.len() - accepted;
+        let admission = if accepted == 0 {
+            component_admissions.first().map_or(
+                CompletionAdmissionV1::AnchorPreserved(
+                    CompletionRejectionV1::SourceImprovementUnresolved,
+                ),
+                |value| value.admission,
+            )
+        } else if preserved != 0 {
+            CompletionAdmissionV1::PartiallyAccepted {
+                accepted,
+                preserved,
+            }
+        } else if preference_improved {
+            CompletionAdmissionV1::PreferenceImproved
         } else {
-            anchor
+            CompletionAdmissionV1::SourceImprovedWithinEquivalentPreference
         };
         let RealizationV1 {
             values: emitted,
             search,
             numerical_order_unresolved,
             color_evaluations: realization_color_evaluations,
-        } = self.realize_frozen(runtime, arena, ideal, budget)?;
+        } = self.realize_frozen(runtime, arena, &ideal, budget)?;
         let mut use_tones = reserve::<_, E>(self.scratch.uses.len())?;
         for usage in &self.scratch.uses {
             use_tones.push(CompletionUseToneEvidenceV1 {
@@ -683,11 +886,11 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
             use_tones: use_tones.into_boxed_slice(),
             anchor: copy_slice::<_, E>(anchor)?.into_boxed_slice(),
             completion: copy_slice::<_, E>(completion)?.into_boxed_slice(),
-            ideal: copy_slice::<_, E>(ideal)?.into_boxed_slice(),
+            ideal: ideal.into_boxed_slice(),
             admission,
             anchor_evidence,
             completion_evidence,
-            primary_drift_upper,
+            component_admissions: component_admissions.into_boxed_slice(),
             emitted: emitted.map(Vec::into_boxed_slice),
             search,
             numerical_order_unresolved,

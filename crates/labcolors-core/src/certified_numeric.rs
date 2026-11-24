@@ -253,6 +253,7 @@ impl CertifiedScalarV1 {
     }
 
     /// Symmetric multiplicative loss max(actual/target, target/actual).
+    #[cfg(test)]
     pub(crate) fn ratio_loss(self, target: Self) -> Result<Self, NumericUncertaintyV1> {
         if self.lo <= Quad::ZERO || target.lo <= Quad::ZERO {
             return Err(NumericUncertaintyV1::DomainViolation);

@@ -93,6 +93,11 @@ struct IncomingReceiptV1 {
 std::thread_local! {
     static INCOMING_REQUEST: core::cell::RefCell<Option<IncomingRequestV1>> = const { core::cell::RefCell::new(None) };
     static INCOMING_RECEIPTS: core::cell::RefCell<Vec<IncomingReceiptV1>> = const { core::cell::RefCell::new(Vec::new()) };
+    static PREFERENCE_ROW_VISITS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+pub(super) fn preference_row_visit() {
+    PREFERENCE_ROW_VISITS.with(|value| value.set(value.get() + 1));
 }
 
 fn retained_buffers<E: ProgramConstraintEvaluatorSetV1>(
@@ -103,7 +108,7 @@ fn retained_buffers<E: ProgramConstraintEvaluatorSetV1>(
         scratch.source_labs.as_ptr() as usize,
         scratch.binding_targets.as_ptr() as usize,
         scratch.uses.as_ptr() as usize,
-        scratch.uses[0].tones.as_ptr() as usize,
+        scratch.uses[0].preferred.as_ptr() as usize,
         plan.bindings.paint_inputs_canonical().as_ptr() as usize,
     ]
 }
@@ -147,7 +152,7 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
     };
     let old_observation = old.observation().clone();
     let old_tone = old.use_tones()[0].per_case_bits[0];
-    let old_measurement = old.point_evidence().0.measurements[0].bounds;
+    let old_measurement = old.point_evidence().0.preferences[0].visible_lab;
     let buffers = retained_buffers(plan);
     let new = realize_incoming(plan, epoch, incoming, &anchor, &anchor, 1)
         .unwrap_or_else(|_| panic!("incoming observation operation"));
@@ -157,12 +162,12 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
     assert!(old.observation().is_same_binding_as(&old_observation));
     assert_eq!(old.use_tones()[0].per_case_bits[0], old_tone);
     assert_eq!(
-        old.point_evidence().0.measurements[0].bounds,
+        old.point_evidence().0.preferences[0].visible_lab,
         old_measurement
     );
     assert_eq!(old.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
     assert!(new.observation().is_same_binding_as(incoming));
-    assert_eq!(new.use_tones()[0].occurrence, OccurrenceId::new(5));
+    assert_eq!(new.use_tones()[0].occurrence, Some(OccurrenceId::new(5)));
     assert_eq!(
         new.observation().revision().value(),
         request.expected_revision
@@ -232,7 +237,7 @@ fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operati
     let result = prepared.realize(&anchor, &completion, 1).unwrap();
     assert_eq!(
         result.admission(),
-        CompletionAdmissionV1::UnresolvedWithinCell
+        CompletionAdmissionV1::PreferenceImproved
     );
     assert_eq!(result.ideal(), completion);
     assert_eq!(result.emitted().unwrap(), [Srgb8::new([43, 78, 183])]);
@@ -245,28 +250,35 @@ fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operati
     assert!(result.binds_owner(&owner));
     assert_eq!(result.observation().revision().value(), 3);
     assert_eq!(result.model(), CERTIFIED_NUMERIC_MODEL_V1);
-    assert!(result.primary_drift_upper().unwrap() > 0.0);
+    assert!(
+        result.component_admissions()[0]
+            .preference_drift_upper
+            .unwrap()
+            < 0.0
+    );
     assert!(!result.numerical_order_unresolved());
     let (a, b) = result.point_evidence();
+    let b = b.unwrap();
+    let row = &a.preferences[0];
+    assert_eq!(row.target, TargetId::new(10));
+    assert_eq!(row.occurrence, Some(OccurrenceId::new(5)));
+    assert_eq!(row.case, 0);
+    assert!(row.backdrop_lab.is_some());
+    let reference = row.reference.as_ref().unwrap();
+    let preferred = row.preferred.unwrap();
     assert_eq!(
-        a.measurements[0].cell.unwrap().cell_bits,
-        0x3fddb08132554ec6
+        preferred[0],
+        CertifiedScalarV1::exact(0.6).unwrap().bounds()
     );
-    assert_eq!(
-        a.measurements[0].cell.unwrap().cell_bits,
-        b.unwrap().measurements[0].cell.unwrap().cell_bits
+    assert_eq!(preferred[1..], reference.visible_lab[1..]);
+    assert_eq!(reference.backdrop_lab, row.backdrop_lab.unwrap());
+    assert!(reference.contrast.cell.is_ok());
+    assert_ne!(row.visible_lab, b.preferences[0].visible_lab);
+    assert_ne!(
+        row.distance.as_ref().unwrap().bounds,
+        b.preferences[0].distance.as_ref().unwrap().bounds
     );
-    assert_eq!(
-        a.primary_profile[0].cell.unwrap().cell_bits,
-        0x3ffc67be48bcb9aa
-    );
-    assert_eq!(
-        a.measurements[0].bounds,
-        [
-            a.measurements[0].cell.unwrap().lower_bits,
-            a.measurements[0].cell.unwrap().upper_bits
-        ]
-    );
+    assert_eq!(result.component_admissions()[0].component, 0);
     assert_eq!(a.source_profile.len(), 1);
     assert_eq!(result.proposals(), (&anchor[..], &completion[..]));
     assert_eq!(
@@ -276,7 +288,7 @@ fn explicit_filter_and_strict_realization_are_one_revision_bound_program_operati
 }
 
 #[test]
-fn different_cells_preserve_anchor_before_rgb8_realization() {
+fn changed_implicit_reference_preserves_anchor_before_rgb8_realization() {
     let owner = compile_assignment(single(), 4).unwrap();
     let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
     session.prepare_update(update(1, 255)).unwrap().commit();
@@ -287,7 +299,7 @@ fn different_cells_preserve_anchor_before_rgb8_realization() {
         .unwrap();
     assert_eq!(
         result.admission(),
-        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::MeasurementCellChanged)
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
     );
     assert_eq!(result.ideal(), anchor);
     assert_eq!(result.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
@@ -353,7 +365,7 @@ fn shared_ink() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn shared_source_two_materials_two_correlated_cases_admits_only_certified_completion() {
+fn shared_source_two_materials_keeps_implicit_facts_without_scalar_admission() {
     let owner = compile_assignment(shared_ink(), 4).unwrap();
     let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
     let mut input = update(7, 255);
@@ -379,14 +391,20 @@ fn shared_source_two_materials_two_correlated_cases_admits_only_certified_comple
         80.83558199614441,
         185.48517133147033,
     ])];
+    // This tuple was accepted by the historical scalar-cell convention. Its
+    // archived raw evidence remains valid for that former convention only.
     let result = prepared.realize(&anchor, &accepted, 1).unwrap();
     assert_eq!(
         result.admission(),
-        CompletionAdmissionV1::UnresolvedWithinCell
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
     );
-    assert_eq!(result.point_evidence().0.measurements.len(), 8);
-    assert_eq!(result.point_evidence().0.primary_profile.len(), 1);
-    assert_eq!(result.emitted().unwrap(), [Srgb8::new([46, 81, 185])]);
+    assert_eq!(result.point_evidence().0.preferences.len(), 2);
+    for row in &result.point_evidence().0.preferences {
+        assert!(row.preferred.is_none());
+        assert!(row.distance.is_none());
+        assert!(row.reference.is_some());
+    }
+    assert_eq!(result.emitted().unwrap(), [Srgb8::new([80, 89, 109])]);
     let original = [point([
         45.55648583981752,
         80.83558199614438,
@@ -395,10 +413,14 @@ fn shared_source_two_materials_two_correlated_cases_admits_only_certified_comple
     let rejected = prepared.realize(&anchor, &original, 0).unwrap();
     assert_eq!(
         rejected.admission(),
-        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::MeasurementCellChanged)
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::ImplicitReferenceUnresolved)
     );
     assert_eq!(rejected.ideal(), anchor);
-    assert!(rejected.primary_drift_upper().is_none());
+    assert!(
+        rejected.component_admissions()[0]
+            .preference_drift_upper
+            .is_none()
+    );
     assert!(rejected.emitted().is_none());
 }
 
@@ -734,6 +756,66 @@ fn independent_reference_program(additional: usize) -> Program<Wcag22Srgb8V1> {
         ));
     }
     p
+}
+
+#[test]
+fn independent_point_admission_visits_each_case_target_once() {
+    for additional in 0..=2 {
+        let mut p = independent_reference_program(additional);
+        p.reference_inputs = None;
+        for target in &mut p.targets {
+            let TargetIntentV1::Computed(declaration) = &mut target.intent else {
+                panic!()
+            };
+            declaration.reference_appearance = false;
+        }
+        let owner = compile_assignment(p, 1).unwrap();
+        let CompiledTargetSelectionV1::Computed(selection) =
+            &owner.owner_generation.target_selection
+        else {
+            panic!()
+        };
+        assert_eq!(selection.components.len(), additional + 1);
+        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        let mut input = update(1, 255);
+        let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
+            panic!()
+        };
+        set.scenarios.push(ScenarioInput {
+            id: ScenarioId::new(10),
+            bindings: vec![SurfaceInputBinding::new(
+                SurfaceInputPortId::new(2),
+                ColorSignal::from_srgb8(Srgb8::new([250; 3])),
+            )],
+        });
+        session.prepare_update(input).unwrap().commit();
+        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        let proposal: Vec<_> = prepared
+            .sources()
+            .map(|(_, source)| ContinuousSrgbV1::from_srgb8(source))
+            .collect();
+        let anchor: Vec<_> = proposal
+            .iter()
+            .map(|source| {
+                let mut channels = source.channels();
+                channels[0] += 1.0;
+                point(channels)
+            })
+            .collect();
+        PREFERENCE_ROW_VISITS.with(|value| value.set(0));
+        let result = prepared.realize(&anchor, &proposal, 0).unwrap();
+        assert_eq!(
+            result.admission(),
+            CompletionAdmissionV1::PreferenceImproved
+        );
+        assert_eq!(result.ideal(), proposal);
+        assert_eq!(result.observation().physical_case_count(), 2);
+        assert_eq!(
+            PREFERENCE_ROW_VISITS.with(core::cell::Cell::get),
+            2 * proposal.len(),
+            "independent components must not rescan other targets' preference rows"
+        );
+    }
 }
 
 #[test]
@@ -1109,4 +1191,314 @@ fn rollback_after_incomplete_releases_the_last_observation_slot() {
     session.prepare_update(update(4, 255)).unwrap().commit();
     assert_eq!(session.raw_head().revision().unwrap().value(), 4);
     assert!(matches!(session.state(), SessionState::Ready { .. }));
+}
+
+#[test]
+fn full_preferred_point_improvement_works_without_reference() {
+    let mut p = single();
+    p.reference_inputs = None;
+    let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+        panic!()
+    };
+    target.reference_appearance = false;
+    let owner = compile_assignment(p, 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor = [point([80., 89., 109.])];
+    let better = [point([49., 85., 190.])];
+    let result = prepared.realize(&anchor, &better, 1).unwrap();
+    assert_eq!(
+        result.admission(),
+        CompletionAdmissionV1::PreferenceImproved
+    );
+    assert_eq!(result.ideal(), better);
+    assert_eq!(result.emitted().unwrap(), [Srgb8::new([49, 85, 190])]);
+}
+
+#[test]
+fn same_full_distance_rounding_cell_cannot_authorize_worsening() {
+    let mut p = single();
+    let mut target = ComputedTargetV1::declared(
+        AssignmentDomainV1::Gray {
+            lower: 0,
+            upper: 255,
+        },
+        Srgb8::new([32; 3]),
+        2.0,
+    );
+    target.intent = Some(ColorUseIntentV1 {
+        identity: ColorIdentityDomainV1::new(
+            Srgb8::new([32; 3]),
+            true,
+            IdentityOptionsV1::default(),
+        )
+        .unwrap(),
+        appearance: Some(OccurrenceId::new(5)),
+        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]]).unwrap()),
+    });
+    target.reference_appearance = true;
+    p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
+    let owner = compile_assignment(p, 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor = [point([52.0; 3])];
+    let worse = [point([f64::from_bits(0x4049_ffff_ffff_ffff); 3])];
+    let source = CertifiedRgbV1::from_encoded([32.0; 3])
+        .unwrap()
+        .oklab()
+        .unwrap();
+    let preferred = [CertifiedScalarV1::exact(0.9).unwrap(), source[1], source[2]];
+    let a = CertifiedRgbV1::from_encoded(anchor[0].channels())
+        .unwrap()
+        .oklab()
+        .unwrap();
+    let b = CertifiedRgbV1::from_encoded(worse[0].channels())
+        .unwrap()
+        .oklab()
+        .unwrap();
+    let da = source_distance_squared(a, preferred).unwrap();
+    let db = source_distance_squared(b, preferred).unwrap();
+    assert_eq!(
+        da.nearest_even_cell().unwrap(),
+        db.nearest_even_cell().unwrap()
+    );
+    assert!(da.strictly_below(db));
+    assert!(
+        source_distance_squared(b, source)
+            .unwrap()
+            .strictly_below(source_distance_squared(a, source).unwrap())
+    );
+    let result = prepared.realize(&anchor, &worse, 1).unwrap();
+    assert_eq!(
+        result.admission(),
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceWorsened)
+    );
+    let (a, b) = result.point_evidence();
+    assert_eq!(
+        a.preferences[0]
+            .distance
+            .as_ref()
+            .unwrap()
+            .cell
+            .unwrap()
+            .cell_bits,
+        b.unwrap().preferences[0]
+            .distance
+            .as_ref()
+            .unwrap()
+            .cell
+            .unwrap()
+            .cell_bits
+    );
+    assert_eq!(
+        result.ideal(),
+        anchor,
+        "a source improvement cannot override a proven full preference worsening"
+    );
+}
+
+#[test]
+fn independent_point_improves_while_changed_implicit_component_preserves_anchor() {
+    for connected in [false, true] {
+        let mut p = independent_reference_program(1);
+        let TargetIntentV1::Computed(point_target) = &mut p.targets[1].intent else {
+            panic!()
+        };
+        point_target.reference_appearance = false;
+        if connected {
+            p.constraints
+                .hard
+                .push(ConstraintInvocation::preserve_tonal_hierarchy(
+                    ConstraintId::new(90),
+                    vec![OccurrenceId::new(25), OccurrenceId::new(5)],
+                ));
+        }
+        let owner = compile_assignment(p, 2).unwrap();
+        let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+        session.prepare_update(update(1, 255)).unwrap().commit();
+        let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+        let anchor = [point([49., 85., 190.]), point([90., 64., 136.])];
+        let proposed = [point([49., 90., 190.]), point([88., 64., 136.])];
+        let result = prepared.realize(&anchor, &proposed, 2).unwrap();
+        if connected {
+            assert_eq!(result.component_admissions().len(), 1);
+            assert_eq!(
+                result.admission(),
+                CompletionAdmissionV1::AnchorPreserved(
+                    CompletionRejectionV1::ImplicitReferenceUnresolved
+                )
+            );
+            assert_eq!(result.ideal(), anchor);
+        } else {
+            assert_eq!(
+                result.admission(),
+                CompletionAdmissionV1::PartiallyAccepted {
+                    accepted: 1,
+                    preserved: 1
+                }
+            );
+            assert_eq!(result.ideal(), [anchor[0], proposed[1]]);
+            assert_eq!(
+                result.emitted().unwrap(),
+                [Srgb8::new([49, 85, 190]), Srgb8::new([88, 64, 136])]
+            );
+            assert!(
+                result
+                    .component_admissions()
+                    .iter()
+                    .any(|row| row.admission == CompletionAdmissionV1::PreferenceImproved)
+            );
+            assert!(result.component_admissions().iter().any(|row| row.admission
+                == CompletionAdmissionV1::AnchorPreserved(
+                    CompletionRejectionV1::ImplicitReferenceUnresolved
+                )));
+        }
+    }
+}
+
+fn invisible_black_source() -> Program<Wcag22Srgb8V1> {
+    let mut p = single();
+    p.reference_inputs = None;
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    let mut target = ComputedTargetV1::declared(
+        AssignmentDomainV1::Gray {
+            lower: 0,
+            upper: 255,
+        },
+        Srgb8::new([0; 3]),
+        2.0,
+    );
+    target.intent = Some(ColorUseIntentV1 {
+        identity: ColorIdentityDomainV1::new(
+            Srgb8::new([0; 3]),
+            true,
+            IdentityOptionsV1::default(),
+        )
+        .unwrap(),
+        appearance: Some(OccurrenceId::new(5)),
+        tone: None,
+    });
+    p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
+    p.opacities
+        .push(OpacityInput::new(OpacityInputId::new(33), 0.0));
+    p.paints.push(Paint::Opacity {
+        id: PaintId::new(33),
+        source: PaintId::new(3),
+        opacity: OpacityInputId::new(33),
+    });
+    p.occurrences[0] = Occurrence::new(
+        OccurrenceId::new(5),
+        PaintId::new(33),
+        SurfaceId::new(4),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        p.occurrences[0].context,
+    );
+    p
+}
+
+#[test]
+fn source_completion_requires_proved_preference_equality() {
+    let owner = compile_assignment(invisible_black_source(), 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 0)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor = [point([52.; 3])];
+    let proposed = [point([32.; 3])];
+    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    assert_eq!(
+        result.admission(),
+        CompletionAdmissionV1::SourceImprovedWithinEquivalentPreference
+    );
+    assert_eq!(result.ideal(), proposed);
+    assert_eq!(result.emitted().unwrap(), [Srgb8::new([32; 3])]);
+    for evidence in [
+        result.point_evidence().0,
+        result.point_evidence().1.unwrap(),
+    ] {
+        assert_eq!(
+            evidence.preferences[0].distance.as_ref().unwrap().bounds,
+            [0, 0]
+        );
+    }
+}
+
+#[test]
+fn matching_non_singleton_enclosures_are_unresolved_without_an_equality_witness() {
+    let owner = compile_assignment(invisible_black_source(), 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor = [point([52.; 3])];
+    let proposed = [point([32.; 3])];
+    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    let (a, b) = result.point_evidence();
+    let a = a.preferences[0].distance.as_ref().unwrap();
+    let b = b.unwrap().preferences[0].distance.as_ref().unwrap();
+    assert_eq!(a.bounds, b.bounds);
+    assert_ne!(a.bounds[0], a.bounds[1]);
+    assert_eq!(
+        result.admission(),
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceUnresolved)
+    );
+    assert_eq!(result.ideal(), anchor);
+}
+
+#[test]
+fn better_worst_case_cannot_hide_worsening_another_declared_case() {
+    let mut p = single();
+    p.reference_inputs = None;
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    let mut target = ComputedTargetV1::declared(
+        AssignmentDomainV1::Gray {
+            lower: 0,
+            upper: 255,
+        },
+        Srgb8::new([128; 3]),
+        2.0,
+    );
+    target.intent = Some(ColorUseIntentV1 {
+        identity: ColorIdentityDomainV1::new(
+            Srgb8::new([128; 3]),
+            true,
+            IdentityOptionsV1::default(),
+        )
+        .unwrap(),
+        appearance: Some(OccurrenceId::new(5)),
+        tone: Some(ToneCurveV1::new(2, vec![[0.0, 0.8], [1.0, 0.2]]).unwrap()),
+    });
+    p.targets[0] = Target::new(TargetId::new(10), TargetIntentV1::Computed(target));
+    let owner = compile_assignment(p, 1).unwrap();
+    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
+    let mut input = update(1, 255);
+    let ObservationPayloadInput::Scenarios(set) = &mut input.payload else {
+        panic!()
+    };
+    set.scenarios.push(ScenarioInput {
+        id: ScenarioId::new(10),
+        bindings: vec![SurfaceInputBinding::new(
+            SurfaceInputPortId::new(2),
+            ColorSignal::from_srgb8(Srgb8::new([0; 3])),
+        )],
+    });
+    session.prepare_update(input).unwrap().commit();
+    let mut prepared = owner.prepare_reference_completion(&session).unwrap();
+    let anchor = [point([128.; 3])];
+    let proposed = [point([110.; 3])];
+    let result = prepared.realize(&anchor, &proposed, 1).unwrap();
+    assert_eq!(
+        result.admission(),
+        CompletionAdmissionV1::AnchorPreserved(CompletionRejectionV1::PreferenceIncomparable)
+    );
+    assert_eq!(result.ideal(), anchor);
+    assert_eq!(result.point_evidence().0.preferences.len(), 2);
+    let worst = |point: &CompletionPointEvidenceV1| {
+        point
+            .preferences
+            .iter()
+            .map(|row| f64::from_bits(row.distance.as_ref().unwrap().cell.unwrap().cell_bits))
+            .fold(0.0_f64, f64::max)
+    };
+    assert!(worst(result.point_evidence().1.unwrap()) < worst(result.point_evidence().0));
 }

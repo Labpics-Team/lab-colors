@@ -353,6 +353,22 @@ struct CompiledComputedTargetV1 {
     opaque: bool,
 }
 
+/// The declared preference is separate from source identity and maxChange.
+/// Each numeric interpreter resolves the same origin in its own model.
+enum CompiledPreferredIntentV1<'a> {
+    Point {
+        anchor: PreferredPointAnchorV1,
+        tone: Option<(&'a ToneCurveV1, usize)>,
+    },
+    ImplicitReference,
+}
+
+#[derive(Clone, Copy)]
+enum PreferredPointAnchorV1 {
+    AuthoredSource,
+    ReferenceVisible,
+}
+
 struct EffectiveColorIntentV1<'a> {
     identity: ColorIdentityDomainV1,
     appearance: Option<OccurrenceId>,
@@ -360,6 +376,26 @@ struct EffectiveColorIntentV1<'a> {
 }
 
 impl CompiledComputedTargetV1 {
+    fn preferred_intent(&self) -> CompiledPreferredIntentV1<'_> {
+        let tone = self
+            .declaration
+            .intent
+            .as_ref()
+            .and_then(|intent| intent.tone.as_ref().zip(self.tone_input));
+        if self.declaration.reference_appearance && tone.is_none() {
+            CompiledPreferredIntentV1::ImplicitReference
+        } else {
+            CompiledPreferredIntentV1::Point {
+                anchor: if self.declaration.reference_appearance {
+                    PreferredPointAnchorV1::ReferenceVisible
+                } else {
+                    PreferredPointAnchorV1::AuthoredSource
+                },
+                tone,
+            }
+        }
+    }
+
     fn effective_intent(&self) -> Option<EffectiveColorIntentV1<'_>> {
         let authored = self.declaration.intent.as_ref()?;
         Some(EffectiveColorIntentV1 {
