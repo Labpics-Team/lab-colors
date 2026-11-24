@@ -186,7 +186,7 @@ pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] =
-        b"labcolors.assignment-execution.v4.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
+        b"labcolors.assignment-execution.v5.nominal-visible-boxes.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -1012,6 +1012,9 @@ enum RegionConstraintV1 {
         slot: CompiledOccurrenceSlotV1,
         expected: Srgb8,
     },
+    NominalSrgb8Visible {
+        slot: CompiledOccurrenceSlotV1,
+    },
     Separation {
         slot: CompiledOccurrenceSlotV1,
         bounds: crate::constraints::VisibleSeparationBoundsV1,
@@ -1030,6 +1033,7 @@ impl RegionConstraintV1 {
         let slot = match self {
             Self::Wcag { slot, .. }
             | Self::Exact { slot, .. }
+            | Self::NominalSrgb8Visible { slot }
             | Self::Separation { slot, .. }
             | Self::TonalHierarchy { slot, .. } => slot,
         };
@@ -1056,6 +1060,10 @@ impl RegionConstraintV1 {
                 .iter()
                 .enumerate()
                 .all(|(i, value)| visible.0[i] <= *value && *value <= visible.1[i])),
+            Self::NominalSrgb8Visible { .. } => {
+                Ok(crate::clean_set::ExactNominalSrgb8CleanSetV2
+                    .intersects_box(visible.0, visible.1))
+            }
             Self::Separation { bounds, .. } => {
                 let [minimum, maximum] =
                     crate::spaces::oklab::srgb8_boxes_distance_bounds(visible, backdrop);
@@ -1158,6 +1166,9 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
             ProgramConstraintContentV1::ExactSrgb8 { expected, .. } => {
                 result.push(RegionConstraintV1::Exact { slot, expected })
             }
+            ProgramConstraintContentV1::NominalSrgb8Visible {
+                release: crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+            } => result.push(RegionConstraintV1::NominalSrgb8Visible { slot }),
             ProgramConstraintContentV1::VisibleSeparation { bounds, .. } => {
                 result.push(RegionConstraintV1::Separation { slot, bounds })
             }

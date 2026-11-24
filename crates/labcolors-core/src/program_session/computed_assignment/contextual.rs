@@ -12,7 +12,7 @@ use std::cell::{RefCell, RefMut};
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v16.continuous-preferred-point.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v17.nominal-visible-boxes.continuous-preferred-point.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -20,7 +20,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v7.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v8.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());

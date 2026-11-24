@@ -35,6 +35,38 @@ fn neutral_axis_precedes_declared_rejected_interval() {
 }
 
 #[test]
+fn box_intersection_matches_pointwise_classification_across_the_cube() {
+    let profile = ExactNominalSrgb8CleanSetV2;
+    // Unequal side lengths put neutral intersections inside boxes as well as
+    // on their boundaries; the last interval on each axis is truncated.
+    for r in (0..=u8::MAX).step_by(13) {
+        for g in (0..=u8::MAX).step_by(11) {
+            for b in (0..=u8::MAX).step_by(17) {
+                let lower = [r, g, b];
+                let upper = [
+                    r.saturating_add(12),
+                    g.saturating_add(10),
+                    b.saturating_add(16),
+                ];
+                let expected = (r..=upper[0]).any(|red| {
+                    (g..=upper[1]).any(|green| {
+                        (b..=upper[2]).any(|blue| {
+                            profile.classify(Srgb8::new([red, green, blue]))
+                                == ExactNominalSrgb8CleanSetDecisionV1::Accepted
+                        })
+                    })
+                });
+                assert_eq!(
+                    profile.intersects_box(lower, upper),
+                    expected,
+                    "{lower:?}..={upper:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn closed_interval_endpoints_are_rejected() {
     let profile = ExactNominalSrgb8CleanSetV2;
     let interval = profile.rejected_blue_interval(0, 199);

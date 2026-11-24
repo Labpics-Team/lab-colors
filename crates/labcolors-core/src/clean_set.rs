@@ -101,6 +101,27 @@ impl ClosedRejectedBlueIntervalV1 {
 pub(crate) struct ExactNominalSrgb8CleanSetV2;
 
 impl ExactNominalSrgb8CleanSetV2 {
+    /// The rejected chromatic body is the preimage of the convex scaled
+    /// object-colour solid under a linear map of decoded RGB (NOMINAL-SPEC.md).
+    /// Monotone channel decoding maps the box into the hull of its eight
+    /// corners. All eight being inside excludes the whole box, except for the
+    /// separately accepted neutral axis, which can cross its interior.
+    pub(crate) fn intersects_box(self, lower: [u8; 3], upper: [u8; 3]) -> bool {
+        if lower[0].max(lower[1]).max(lower[2]) <= upper[0].min(upper[1]).min(upper[2]) {
+            return true;
+        }
+        for red in [lower[0], upper[0]] {
+            for green in [lower[1], upper[1]] {
+                match self.rejected_blue_interval(red, green) {
+                    RejectedBlueIntervalV1::Closed { lo, hi }
+                        if lo <= lower[2] && upper[2] <= hi => {}
+                    _ => return true,
+                }
+            }
+        }
+        false
+    }
+
     pub(crate) fn classify(self, color: Srgb8) -> ExactNominalSrgb8CleanSetDecisionV1 {
         // Нейтральная ось входит в declared set отдельным exact union: таблица
         // описывает только chromatic complement и не вправе её исключить.
