@@ -27,6 +27,12 @@ pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
     *crate::sha256::digest(&bytes).as_bytes()
 }
 
+#[derive(Clone, Copy)]
+struct VisibleLabV1 {
+    rgb: Srgb8,
+    lab: [f64; 3],
+}
+
 struct ContextV1<'a> {
     targets: ComputedTargetsV1<'a>,
     constraint_indices: Option<&'a [usize]>,
@@ -38,6 +44,7 @@ struct ContextV1<'a> {
     case_refinement: RefCell<CaseRefinementV1>,
     score_extrema: RefCell<Vec<usize>>,
     identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
+    visible_labs: RefCell<Vec<Option<VisibleLabV1>>>,
     opaque: Vec<bool>,
 }
 
@@ -241,6 +248,7 @@ impl<'a> ContextV1<'a> {
             case_refinement,
             score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
+            visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
             opaque,
         })
     }
@@ -297,6 +305,7 @@ struct IntentScoreCollectorV1<'a, 'context> {
     violation_case: Option<usize>,
     extrema: RefMut<'a, Vec<usize>>,
     identity_memberships: RefMut<'a, Vec<Option<(Srgb8, bool)>>>,
+    visible_labs: RefMut<'a, Vec<Option<VisibleLabV1>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -333,6 +342,7 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
             violation_case: None,
             extrema,
             identity_memberships: context.identity_memberships.borrow_mut(),
+            visible_labs: context.visible_labs.borrow_mut(),
         }
     }
 
@@ -377,7 +387,22 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
             } else {
                 self.values[index]
             };
-            let point_lab = lab(rgb);
+            // Only the actual visible RGB8 determines this exact conversion.
+            // Other case data and all case accounting still follow below.
+            let entry = &mut self.visible_labs[index];
+            let point_lab = match *entry {
+                Some(previous) if previous.rgb == rgb => previous.lab,
+                _ => {
+                    #[cfg(test)]
+                    case_refinement_tests::visible_lab_conversion();
+                    let point_lab = lab(rgb);
+                    *entry = Some(VisibleLabV1 {
+                        rgb,
+                        lab: point_lab,
+                    });
+                    point_lab
+                }
+            };
             if let Some(points) = &mut self.appearance {
                 let backdrop = if let Some(slot) = target.appearance {
                     Srgb8::new(

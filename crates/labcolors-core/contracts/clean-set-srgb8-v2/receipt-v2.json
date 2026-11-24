@@ -132,11 +132,11 @@
       "sha256": "72dcc2f9926d48f07511dbb43dc31dbedc05145c663a318fa38f7a03c5d6182e"
     },
     {
-      "bytes": 58182,
+      "bytes": 59179,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
       "role": "program_computed_contextual_source",
-      "sha256": "2f7e8810ffbe38b61083c6d61cb2a1eab09f4746903c1bd49e61b36ff6cac2fe"
+      "sha256": "2799a5c986429d5a4cbbc59ef42e047d175353ac542b4eb688b07f3d14a46f06"
     },
     {
       "bytes": 73243,

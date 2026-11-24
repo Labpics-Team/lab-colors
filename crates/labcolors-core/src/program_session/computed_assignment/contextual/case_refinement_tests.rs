@@ -11,6 +11,11 @@ thread_local! {
     static BOUND_CASES: Cell<u64> = const { Cell::new(0) };
     static TONAL_CONVERSIONS: Cell<u64> = const { Cell::new(0) };
     static IDENTITY_CHECKS: Cell<u64> = const { Cell::new(0) };
+    static VISIBLE_LAB_CONVERSIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(super) fn visible_lab_conversion() {
+    VISIBLE_LAB_CONVERSIONS.set(VISIBLE_LAB_CONVERSIONS.get() + 1);
 }
 
 pub(super) fn identity_check() {
@@ -478,6 +483,258 @@ fn identity_membership_never_borrows_another_targets_result_for_the_same_rgb() {
         .expect("complete target context");
     check_membership_pass(&context, epoch, scenarios, &[gray(128); 2], &[0, 0], 2, 2);
     check_membership_pass(&context, epoch, scenarios, &[gray(128); 2], &[0, 0], 0, 2);
+}
+
+fn check_visible_lab_pass(
+    context: &ContextV1<'_>,
+    epoch: &ProgramEpochV1<Wcag22Srgb8V1>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    cases: &[usize],
+    expected_conversions: u64,
+) -> usize {
+    let count = values.len();
+    let mut bindings = epoch.binding_template.try_clone_v1().expect("bindings");
+    for (target, &value) in context.targets.iter().zip(values) {
+        bindings
+            .overwrite_paint_input_at(target.binding, EncodedPointPaintValueV1::opaque(value))
+            .expect("candidate source");
+    }
+    let mut workspace = epoch.graph.new_workspace().expect("physical workspace");
+    let mut scores = vec![0.0; count];
+    let mut direct_scores = vec![0.0_f64; count];
+    let mut direct_extrema = vec![usize::MAX; count];
+    let mut appearance = vec![AppearancePointV1::default(); scenarios.len().get() * count];
+    VISIBLE_LAB_CONVERSIONS.set(0);
+    let (failures, allocations) = crate::test_support::measured_allocator_events(|| {
+        let mut collector = IntentScoreCollectorV1::new(context, values, &mut scores);
+        collector.appearance = Some(&mut appearance);
+        let mut paints = prepare_candidate_paints(
+            &epoch.graph,
+            None,
+            &bindings,
+            epoch.observation_group.schema.as_slice(),
+            &mut workspace,
+        )
+        .expect("prepared physical inputs");
+        let mut direct_failures = 0;
+        let mut direct_has_violation = false;
+        let mut direct_witness = None;
+        for &case in cases {
+            let inputs = scenarios.physical_values(case).expect("case inputs");
+            let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
+            assert!(collector.observe(case, &evaluation).is_ok());
+            for (index, target) in context.targets.iter().enumerate() {
+                let (visible, backdrop, alpha) = if let Some(slot) = target.appearance {
+                    let occurrence = evaluation.occurrence_at(slot).expect("physical occurrence");
+                    (
+                        Srgb8::new(occurrence.visible()),
+                        Srgb8::new(occurrence.certificate().backdrop_rgb()),
+                        occurrence.certificate().subject_opacity().value(),
+                    )
+                } else {
+                    (values[index], values[index], 1.0)
+                };
+                let direct_lab = lab(visible);
+                let point = collector.appearance.as_deref().expect("appearance report")
+                    [case * count + index];
+                assert_eq!(point.visible, visible);
+                assert_eq!(point.backdrop, backdrop);
+                assert_eq!(point.alpha.to_bits(), alpha.to_bits());
+                assert_eq!(point.lab.map(f64::to_bits), direct_lab.map(f64::to_bits));
+                let delta = f64::from_bits(target.declaration.max_delta_bits);
+                let identity_failed = target.effective_intent().is_some_and(|intent| {
+                    !intent
+                        .identity
+                        .contains(target.identity_point(values[index], visible))
+                });
+                if identity_failed
+                    || squared_distance(direct_lab, target.anchor_lab) > delta * delta
+                {
+                    direct_has_violation = true;
+                    direct_failures += usize::from(context.represents_case(case));
+                    direct_witness = context
+                        .case_refinement
+                        .borrow()
+                        .first_case(direct_witness.into_iter().chain(std::iter::once(case)));
+                }
+                let score = squared_distance(direct_lab, context.preferred[case * count + index]);
+                let previous = direct_extrema[index];
+                if context.represents_case(case)
+                    && (previous == usize::MAX
+                        || score > direct_scores[index]
+                        || score == direct_scores[index]
+                            && context.case_refinement.borrow().ranks[case]
+                                < context.case_refinement.borrow().ranks[previous])
+                {
+                    direct_extrema[index] = case;
+                }
+                direct_scores[index] = direct_scores[index].max(score);
+            }
+        }
+        assert_eq!(
+            collector.violations(),
+            direct_failures.max(usize::from(direct_has_violation))
+        );
+        assert_eq!(collector.has_violation, direct_has_violation);
+        assert_eq!(collector.violation_case, direct_witness);
+        for (&actual, &expected) in collector.scores.iter().zip(&direct_scores) {
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+        assert_eq!(&*collector.extrema, &direct_extrema);
+        direct_failures
+    });
+    assert_eq!(VISIBLE_LAB_CONVERSIONS.get(), expected_conversions);
+    assert_eq!(allocations, crate::test_support::AllocatorEvents::default());
+    failures
+}
+
+#[test]
+fn visible_lab_reuse_preserves_exact_composites_and_every_case_decision() {
+    for reference in [false, true] {
+        let mut p = program(
+            color(10, 5, 128, 0, 255, reference),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        p.constraints = ConstraintSet::new(vec![], vec![]);
+        if reference {
+            p.reference_inputs = Some(vec![(SurfaceInputPortId::new(2), gray(255))]);
+        }
+        let TargetIntentV1::Computed(target) = &mut p.targets[0].intent else {
+            panic!("computed target");
+        };
+        target.max_delta_bits = 0.15_f64.to_bits();
+        translucent(&mut p, 0, 3, 0.5);
+        let owner = compile_assignment(p, 4096).expect("visible objective program");
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        session
+            .prepare_update(observe(&[96, 128, 160]))
+            .expect("cases")
+            .commit();
+        let observed = &session
+            .state()
+            .current_verified()
+            .expect("feasible program")
+            .computed_for_test()
+            .observation;
+        let scenarios = NonEmptyScenarioSetV1::from_admitted(observed).expect("admitted cases");
+        let epoch = &owner.owner_generation;
+        let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+            panic!("computed selection");
+        };
+        let component = &selection.components[0];
+        let context = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+            .expect("visible objective context");
+        let pass = |values: &[Srgb8], cases: &[usize], conversions| {
+            check_visible_lab_pass(&context, epoch, scenarios, values, cases, conversions)
+        };
+        pass(&[gray(128)], &[0, 0, 1, 1, 2, 2], 3);
+        pass(&[gray(128)], &[2, 2], 0);
+        pass(&[gray(128)], &[2, 0, 2], 2);
+        assert_eq!(
+            pass(&[gray(0)], &[0, 1, 2], 3),
+            3,
+            "changed source must fail max_delta"
+        );
+        pass(&[gray(128)], &[2], 1);
+        // Equal red channels must not hide changes in either other channel.
+        pass(&[Srgb8::new([128, 120, 140])], &[2], 1);
+        pass(&[Srgb8::new([128, 140, 140])], &[2], 1);
+        pass(&[Srgb8::new([128, 140, 142])], &[2], 1);
+        let fresh = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+            .expect("independent context");
+        check_visible_lab_pass(&fresh, epoch, scenarios, &[gray(128)], &[2], 1);
+    }
+}
+
+#[test]
+fn visible_lab_hits_keep_opaque_backdrops_fresh_and_support_sources_without_appearance() {
+    let mut declared = ComputedTargetV1::declared(
+        AssignmentDomainV1::Gray {
+            lower: 0,
+            upper: 255,
+        },
+        gray(128),
+        2.0,
+    );
+    declared.preference = 10;
+    let mut p = program(
+        Target::new(TargetId::new(10), TargetIntentV1::Computed(declared)),
+        Wcag22CriterionV1::Sc143TextDefault,
+        Wcag22Srgb8V1,
+    );
+    p.constraints = ConstraintSet::new(vec![], vec![]);
+    p.targets.push(color(20, 15, 200, 0, 255, false));
+    p.paints.push(Paint::Solid {
+        id: PaintId::new(13),
+        target: TargetId::new(20),
+    });
+    p.occurrences.push(Occurrence::new(
+        OccurrenceId::new(15),
+        PaintId::new(13),
+        SurfaceId::new(4),
+        CompositionProfile::EncodedSrgb8SourceOverV1,
+        p.occurrences[0].context,
+    ));
+    p.outputs
+        .push(OutputBinding::new(OutputSlotId::new(17), PaintId::new(13)));
+    let owner = compile_assignment(p, 4096).expect("mixed appearance targets");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    session
+        .prepare_update(observe(&[0, 128, 255]))
+        .expect("cases")
+        .commit();
+    let observed = &session
+        .state()
+        .current_verified()
+        .expect("feasible program")
+        .computed_for_test()
+        .observation;
+    let scenarios = NonEmptyScenarioSetV1::from_admitted(observed).expect("admitted cases");
+    let epoch = &owner.owner_generation;
+    let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+        panic!("computed selection");
+    };
+    let context = ContextV1::new::<Wcag22Srgb8V1>(selection, None, scenarios)
+        .expect("complete target context");
+    assert!(
+        context
+            .targets
+            .iter()
+            .next()
+            .expect("source target")
+            .appearance
+            .is_none()
+    );
+    check_visible_lab_pass(
+        &context,
+        epoch,
+        scenarios,
+        &[gray(64), gray(192)],
+        &[0, 1, 2, 0],
+        2,
+    );
+    check_visible_lab_pass(
+        &context,
+        epoch,
+        scenarios,
+        &[gray(64), gray(192)],
+        &[2, 1, 0],
+        0,
+    );
+    check_visible_lab_pass(
+        &context,
+        epoch,
+        scenarios,
+        &[gray(64), gray(128)],
+        &[0, 1, 2],
+        1,
+    );
 }
 
 #[test]
