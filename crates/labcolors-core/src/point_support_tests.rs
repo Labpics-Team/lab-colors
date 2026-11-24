@@ -289,7 +289,7 @@ fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion()
     let report = cause.report();
     assert_eq!(report.observation().physical_case_count(), 2);
     assert_eq!(
-        report.observation().physical_values(0),
+        report.observation().physical_values(0).unwrap().as_slice(),
         Some(
             &[
                 ColorSignal::from_srgb8(Srgb8::new([0; 3])),
@@ -298,7 +298,7 @@ fn duplicate_raw_scenarios_share_one_physical_case_without_cartesian_expansion()
         )
     );
     assert_eq!(
-        report.observation().physical_values(1),
+        report.observation().physical_values(1).unwrap().as_slice(),
         Some(
             &[
                 ColorSignal::from_srgb8(Srgb8::new([255; 3])),

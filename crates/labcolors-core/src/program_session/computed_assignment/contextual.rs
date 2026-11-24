@@ -3,6 +3,8 @@
 
 use super::*;
 use crate::color_intent::color_at_lightness;
+use crate::observation::PhysicalValuesV1;
+use std::cell::{RefCell, RefMut};
 
 // Performance policy: an initial repair and a final repair each receive at
 // most one quarter of the existing synchronous budget. At least half remains
@@ -10,7 +12,7 @@ use crate::color_intent::color_at_lightness;
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v14.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v15.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -18,7 +20,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v3.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v6.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -33,6 +35,9 @@ struct ContextV1<'a> {
     preferred: Vec<[f64; 3]>,
     preferred_rgb: Vec<Srgb8>,
     local_cases: LocalCasesV1,
+    case_refinement: RefCell<CaseRefinementV1>,
+    score_extrema: RefCell<Vec<usize>>,
+    identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     opaque: Vec<bool>,
 }
 
@@ -40,6 +45,69 @@ struct ContextV1<'a> {
 struct LocalCasesV1 {
     order: Vec<usize>,
     representatives: Vec<bool>,
+}
+
+// Search probes use a growing subset of canonical local cases. Its maxima
+// are lower bounds and its minima are upper bounds on the complete support.
+// Only complete assessments may supply incumbent objectives or capacities.
+struct CaseRefinementV1 {
+    cases: Vec<usize>,
+    ranks: Vec<usize>,
+    present: Vec<bool>,
+    count: usize,
+}
+
+impl CaseRefinementV1 {
+    fn new(local: &LocalCasesV1, count: usize) -> Result<Self, ()> {
+        let mut result = Self {
+            cases: Vec::new(),
+            ranks: buffer(count, usize::MAX).map_err(|_| ())?,
+            present: buffer(count, false).map_err(|_| ())?,
+            count: local.order.len(),
+        };
+        result
+            .cases
+            .try_reserve_exact(local.order.len())
+            .map_err(|_| ())?;
+        for (rank, &case) in local.order.iter().enumerate() {
+            result.ranks[case] = rank;
+        }
+        if let Some(&first) = local.order.first() {
+            result.add(first);
+        }
+        if let Some(&last) = local.order.last() {
+            result.add(last);
+        }
+        #[cfg(test)]
+        if case_refinement_tests::eager() {
+            for &case in &local.order {
+                result.add(case);
+            }
+        }
+        Ok(result)
+    }
+
+    fn complete(&self) -> bool {
+        self.cases.len() == self.count
+    }
+
+    fn add(&mut self, case: usize) {
+        if self.ranks[case] == usize::MAX || self.present[case] {
+            return;
+        }
+        let rank = self.ranks[case];
+        let position = self
+            .cases
+            .partition_point(|&other| self.ranks[other] < rank);
+        self.cases.insert(position, case);
+        self.present[case] = true;
+    }
+
+    fn first_case(&self, cases: impl Iterator<Item = usize>) -> Option<usize> {
+        cases
+            .filter(|&case| self.ranks[case] != usize::MAX)
+            .min_by_key(|&case| self.ranks[case])
+    }
 }
 
 pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
@@ -60,7 +128,7 @@ pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
         }
         cases.push((case, values));
     }
-    let compare = |left: &[ColorSignal], right: &[ColorSignal]| {
+    let compare = |left: PhysicalValuesV1<'_>, right: PhysicalValuesV1<'_>| {
         component
             .inputs
             .iter()
@@ -159,6 +227,9 @@ impl<'a> ContextV1<'a> {
         } else {
             LocalCasesV1::default()
         };
+        let case_refinement = RefCell::new(
+            CaseRefinementV1::new(&local_cases, scenarios.len().get()).map_err(allocation)?,
+        );
         Ok(Self {
             targets,
             constraint_indices: component.map(|component| component.constraints.as_ref()),
@@ -167,6 +238,9 @@ impl<'a> ContextV1<'a> {
             preferred,
             preferred_rgb,
             local_cases,
+            case_refinement,
+            score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
+            identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             opaque,
         })
     }
@@ -220,6 +294,9 @@ struct IntentScoreCollectorV1<'a, 'context> {
     violations: usize,
     has_violation: bool,
     appearance: Option<&'a mut [AppearancePointV1]>,
+    violation_case: Option<usize>,
+    extrema: RefMut<'a, Vec<usize>>,
+    identity_memberships: RefMut<'a, Vec<Option<(Srgb8, bool)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -244,6 +321,8 @@ impl Default for AppearancePointV1 {
 impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
     fn new(context: &'a ContextV1<'context>, values: &'a [Srgb8], scores: &'a mut [f64]) -> Self {
         scores.fill(0.0);
+        let mut extrema = context.score_extrema.borrow_mut();
+        extrema.fill(usize::MAX);
         Self {
             context,
             values,
@@ -251,13 +330,29 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
             violations: 0,
             has_violation: false,
             appearance: None,
+            violation_case: None,
+            extrema,
+            identity_memberships: context.identity_memberships.borrow_mut(),
         }
     }
 
     fn violations(&self) -> usize {
-        // Every original case is assessed. Representatives only normalize the
-        // heuristic count; a failure outside them can never become a valid tuple.
+        // Representatives normalize the heuristic count. Any observed failure
+        // remains nonzero; only a complete pass can establish a valid tuple.
         self.violations.max(usize::from(self.has_violation))
+    }
+
+    fn refine_cases(&self) {
+        let mut refinement = self.context.case_refinement.borrow_mut();
+        if let Some(case) = self.violation_case {
+            refinement.add(case);
+        } else {
+            // Each target is a separate lexicographic dimension. A smaller
+            // distance on a later target can still supply its essential case.
+            for &case in self.extrema.iter().filter(|&&case| case != usize::MAX) {
+                refinement.add(case);
+            }
+        }
     }
 }
 
@@ -267,6 +362,8 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
         case: usize,
         evaluation: &AppearanceEvaluationView<'_, '_>,
     ) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
+        #[cfg(test)]
+        case_refinement_tests::point_case();
         let context = self.context;
         let count = context.targets.len();
         for (index, target) in context.targets.iter().enumerate() {
@@ -311,18 +408,43 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
             }
             let delta = f64::from_bits(target.declaration.max_delta_bits);
             let identity_failed = target.effective_intent().is_some_and(|intent| {
-                !intent
-                    .identity
-                    .contains(target.identity_point(self.values[index], rgb))
+                let point = target.identity_point(self.values[index], rgb);
+                // This Context fixes the target's identity. Only its actual
+                // RGB8 argument can change between cases or complete tuples;
+                // source and explicit visible identities share this same key.
+                let entry = &mut self.identity_memberships[index];
+                let contains = match *entry {
+                    Some((previous, contains)) if previous == point => contains,
+                    _ => {
+                        #[cfg(test)]
+                        case_refinement_tests::identity_check();
+                        let contains = intent.identity.contains(point);
+                        *entry = Some((point, contains));
+                        contains
+                    }
+                };
+                !contains
             });
             if identity_failed || squared_distance(point_lab, target.anchor_lab) > delta * delta {
                 self.has_violation = true;
                 self.violations += usize::from(context.represents_case(case));
+                self.violation_case = context
+                    .case_refinement
+                    .borrow()
+                    .first_case(self.violation_case.into_iter().chain(std::iter::once(case)));
             }
-            self.scores[index] = self.scores[index].max(squared_distance(
-                point_lab,
-                context.preferred[case * count + index],
-            ));
+            let score = squared_distance(point_lab, context.preferred[case * count + index]);
+            let previous = self.extrema[index];
+            if context.represents_case(case)
+                && (previous == usize::MAX
+                    || score > self.scores[index]
+                    || score == self.scores[index]
+                        && context.case_refinement.borrow().ranks[case]
+                            < context.case_refinement.borrow().ranks[previous])
+            {
+                self.extrema[index] = case;
+            }
+            self.scores[index] = self.scores[index].max(score);
         }
         Ok(())
     }
@@ -388,7 +510,63 @@ fn assess<E: ProgramConstraintEvaluatorSetV1>(
         &mut collector,
         arena,
     )?;
+    collector.refine_cases();
     Ok(failures + collector.violations())
+}
+
+fn assess_refined<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    scores: &mut [f64],
+    arena: &mut ProgramEvaluationArenaV1<E>,
+) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    if let Some(failures) = probe_cases(context, runtime, epoch, scenarios, values, scores, arena)?
+    {
+        return Ok(failures);
+    }
+    let failures = assess(context, runtime, epoch, scenarios, values, scores, arena)?;
+    // A counterexample may have enlarged the probe. Repair comparisons must
+    // use its current cells and scores, not the failed complete-pass count.
+    if failures != 0 {
+        if let Some(failures) =
+            probe_cases(context, runtime, epoch, scenarios, values, scores, arena)?
+        {
+            return Ok(failures);
+        }
+    }
+    Ok(failures)
+}
+
+// A successful probe says only that a complete assessment is still needed.
+// No partially filled appearance buffer can escape this helper.
+fn probe_cases<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    scores: &mut [f64],
+    arena: &mut ProgramEvaluationArenaV1<E>,
+) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let refinement = context.case_refinement.borrow();
+    if refinement.complete() {
+        return Ok(None);
+    }
+    let mut collector = IntentScoreCollectorV1::new(context, values, scores);
+    let failures = assess_observed_cases(
+        context,
+        runtime,
+        epoch,
+        scenarios,
+        values,
+        &mut collector,
+        arena,
+        Some(&refinement.cases),
+    )? + collector.violations();
+    Ok((failures != 0).then_some(failures))
 }
 
 fn assess_observed<E: ProgramConstraintEvaluatorSetV1>(
@@ -399,6 +577,22 @@ fn assess_observed<E: ProgramConstraintEvaluatorSetV1>(
     values: &[Srgb8],
     collector: &mut impl ProgramPhysicalCaseObserverV1,
     arena: &mut ProgramEvaluationArenaV1<E>,
+) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    assess_observed_cases(
+        context, runtime, epoch, scenarios, values, collector, arena, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assess_observed_cases<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    collector: &mut impl ProgramPhysicalCaseObserverV1,
+    arena: &mut ProgramEvaluationArenaV1<E>,
+    cases: Option<&[usize]>,
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     apply_targets::<E>(context.targets, runtime, values)?;
     arena.clear();
@@ -417,14 +611,35 @@ fn assess_observed<E: ProgramConstraintEvaluatorSetV1>(
             point_causal: None,
             physical_case: Some(collector),
         },
-        context.constraint_indices.map_or(
-            ProgramCandidateScanV1::Full { previous: None },
-            |indices| ProgramCandidateScanV1::Constraints {
-                indices,
+        cases.map_or_else(
+            || {
+                context.constraint_indices.map_or(
+                    ProgramCandidateScanV1::Full { previous: None },
+                    |indices| ProgramCandidateScanV1::Constraints {
+                        indices,
+                        physical: context.physical,
+                    },
+                )
+            },
+            |cases| ProgramCandidateScanV1::Cases {
+                indices: context.constraint_indices,
                 physical: context.physical,
+                cases,
             },
         ),
     )?;
+    if cases.is_none() {
+        let witness = context.case_refinement.borrow().first_case(
+            arena
+                .cells
+                .iter()
+                .filter(|cell| cell.result().is_violation())
+                .map(|cell| cell.case_index()),
+        );
+        if let Some(case) = witness {
+            context.case_refinement.borrow_mut().add(case);
+        }
+    }
     let hard_violations = arena
         .cells
         .iter()
@@ -582,7 +797,8 @@ impl BoundsV1 {
                 !domain.contains(anchor)
             };
         }
-        for case in 0..scenarios.len().get() {
+        let refinement = context.case_refinement.borrow();
+        for &case in &refinement.cases {
             let inputs = scenarios
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -617,6 +833,8 @@ impl BoundsV1 {
                 .map_err(map_program_execution_binding_error)?;
                 let evaluation = paints.evaluate_surface_inputs_canonical(|i| inputs[i].srgb8());
                 self.evaluations += 1;
+                #[cfg(test)]
+                case_refinement_tests::bound_case();
                 for (index, constraint) in self.constraints.iter().enumerate() {
                     let point = constraint
                         .point(&evaluation)
@@ -823,7 +1041,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
             );
         }
         preferred_seed.copy_from_slice(&values);
-        let failures = assess(
+        let failures = assess_refined(
             &context,
             runtime,
             epoch,
@@ -885,7 +1103,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                 *value = target.declaration.anchor;
             }
         }
-        let mut current_failures = assess(
+        let mut current_failures = assess_refined(
             &context,
             runtime,
             epoch,
@@ -936,7 +1154,8 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                         previous = Some(candidate);
                         values.copy_from_slice(&current_values);
                         values[index] = candidate;
-                        let failures = assess(
+                        let case_count = context.case_refinement.borrow().cases.len();
+                        let failures = assess_refined(
                             &context,
                             runtime,
                             epoch,
@@ -948,6 +1167,26 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
                         evidence.visited += 1;
                         evidence.points += 1;
                         evidence.examined += 1;
+                        if failures != 0
+                            && current_failures != 0
+                            && case_count != context.case_refinement.borrow().cases.len()
+                        {
+                            if evidence.visited >= origin_limit {
+                                break;
+                            }
+                            current_failures = assess_refined(
+                                &context,
+                                runtime,
+                                epoch,
+                                scenarios,
+                                &current_values,
+                                &mut current_scores,
+                                arena,
+                            )?;
+                            evidence.visited += 1;
+                            evidence.points += 1;
+                            evidence.examined += 1;
+                        }
                         if failures < current_failures
                             || failures == current_failures
                                 && compare_tuples(
@@ -1170,7 +1409,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
             continue;
         }
         evidence.examined += 1;
-        if assess(
+        if assess_refined(
             &context,
             runtime,
             epoch,
@@ -1254,3 +1493,6 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
 mod conditional;
 mod reference_search;
 mod refinement;
+
+#[cfg(test)]
+mod case_refinement_tests;

@@ -174,6 +174,100 @@ fn insert_index(lookup: &mut HashMap<u64, Vec<usize>>, key: u64, index: usize) -
     pushed(lookup.entry(key).or_default(), index)
 }
 
+fn tonal_proposals(anchor: Srgb8, domain: AssignmentDomainV1) -> impl Iterator<Item = Srgb8> {
+    let mut previous = None;
+    (0..=255_u32).filter_map(move |step| {
+        #[cfg(test)]
+        case_refinement_tests::tonal_conversion();
+        let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+        let repeated = previous == Some(source);
+        previous = Some(source);
+        (!repeated && domain.contains(source)).then_some(source)
+    })
+}
+
+fn polish_plan(
+    targets: impl IntoIterator<Item = (Srgb8, AssignmentDomainV1)>,
+    maximum: usize,
+) -> Result<Vec<(usize, Srgb8)>, ()> {
+    let mut proposals = Vec::new();
+    if maximum == 0 {
+        return Ok(proposals);
+    }
+    for (target, (anchor, domain)) in targets.into_iter().enumerate() {
+        for source in tonal_proposals(anchor, domain) {
+            if proposals.is_empty() {
+                proposals.try_reserve_exact(maximum).map_err(|_| ())?;
+            }
+            proposals.push((target, source));
+            if proposals.len() == maximum {
+                return Ok(proposals);
+            }
+        }
+    }
+    Ok(proposals)
+}
+
+#[test]
+fn terminal_proposals_count_only_distinct_admitted_sources() {
+    let anchor = Srgb8::new([128; 3]);
+    assert_eq!(
+        tonal_proposals(anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })
+            .collect::<Vec<_>>(),
+        (0..=3)
+            .map(|value| Srgb8::new([value; 3]))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        tonal_proposals(
+            anchor,
+            AssignmentDomainV1::Cube {
+                lower: [0, 0, 1],
+                upper: [0, 0, 2]
+            }
+        )
+        .count(),
+        0,
+        "an off-path source domain reserves no tonal visits"
+    );
+}
+
+#[test]
+fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
+    let anchor = Srgb8::new([128; 3]);
+    let targets = std::iter::once((anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })).chain(
+        std::iter::once_with(|| panic!("the reserve needs no later target")),
+    );
+    assert_eq!(
+        polish_plan(targets, 3).expect("bounded proposal storage"),
+        (0..=2)
+            .map(|value| (0, Srgb8::new([value; 3])))
+            .collect::<Vec<_>>()
+    );
+    let (empty, allocations) = crate::test_support::measured_allocator_events(|| {
+        polish_plan(
+            [(
+                anchor,
+                AssignmentDomainV1::Cube {
+                    lower: [0, 0, 1],
+                    upper: [0, 0, 2],
+                },
+            )],
+            256,
+        )
+    });
+    assert!(empty.expect("empty proposal plan").is_empty());
+    assert_eq!(allocations, crate::test_support::AllocatorEvents::default());
+    assert!(
+        polish_plan(
+            std::iter::once_with(|| panic!("zero work never reads a target")),
+            0
+        )
+        .expect("zero proposal budget")
+        .is_empty()
+    );
+}
+
 impl<'a> ReferenceRuntimeV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(
         selection: &'a ComputedSelectionV1,
@@ -341,14 +435,20 @@ impl<'a> ReferenceRuntimeV1<'a> {
             .expect("compiled reference")
             .reference_contrast();
         let count = self.context.targets.len();
-        self.context
-            .local_cases
-            .order
-            .iter()
-            .fold(1.0_f64, |ratio, &case| {
-                let point = points[case * count + target];
-                ratio.min((contrast_ratio(point.visible, point.backdrop) / reference).min(1.0))
-            })
+        let mut minimum = 1.0_f64;
+        let mut witness = None;
+        for &case in &self.context.local_cases.order {
+            let point = points[case * count + target];
+            let ratio = (contrast_ratio(point.visible, point.backdrop) / reference).min(1.0);
+            if ratio < minimum {
+                minimum = ratio;
+                witness = Some(case);
+            }
+        }
+        if let Some(case) = witness {
+            self.context.case_refinement.borrow_mut().add(case);
+        }
+        minimum
     }
 
     fn record_capacity(
@@ -521,6 +621,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
                     Some(self.record_capacity(target, values, points)?);
             }
             // Canonical physical case order eliminates multiplicity and ID effects.
+            let mut extrema = [None; 3];
             for position in 0..self.context.local_cases.order.len() {
                 let case = self.context.local_cases.order[position];
                 let point = points[case * count + target];
@@ -529,18 +630,31 @@ impl<'a> ReferenceRuntimeV1<'a> {
                 let enabled = self.capacity_enabled(target);
                 let key = &mut self.scratch_keys[target];
                 if enabled {
-                    key.continuous_displacement = key
-                        .continuous_displacement
-                        .max(squared_distance(preferred, model.reference_lab()));
+                    let displacement = squared_distance(preferred, model.reference_lab());
+                    if displacement > key.continuous_displacement {
+                        extrema[0] = Some(case);
+                    }
+                    key.continuous_displacement = key.continuous_displacement.max(displacement);
+                    if model.reference_contrast() != 1.0
+                        && direction != sign(model.reference_polarity())
+                        && key.reference_polarity_mismatch == 0
+                    {
+                        extrema[1] = Some(case);
+                    }
                     key.reference_polarity_mismatch =
                         key.reference_polarity_mismatch.max(u8::from(
                             model.reference_contrast() != 1.0
                                 && direction != sign(model.reference_polarity()),
                         ));
                 }
-                key.final_distance = key
-                    .final_distance
-                    .max(squared_distance(point.lab, preferred));
+                let distance = squared_distance(point.lab, preferred);
+                if distance > key.final_distance {
+                    extrema[2] = Some(case);
+                }
+                key.final_distance = key.final_distance.max(distance);
+            }
+            for case in extrema.into_iter().flatten() {
+                self.context.case_refinement.borrow_mut().add(case);
             }
         }
         let hash = fingerprint(&self.scratch_capacities);
@@ -597,8 +711,36 @@ impl<'a> ReferenceRuntimeV1<'a> {
         values: &[Srgb8],
         arena: &mut ProgramEvaluationArenaV1<E>,
     ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        self.assess_tuple_inner(runtime, epoch, scenarios, values, arena, false)
+    }
+
+    fn assess_tuple_inner<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        values: &[Srgb8],
+        arena: &mut ProgramEvaluationArenaV1<E>,
+        probe: bool,
+    ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         if self.evidence.visited >= self.budget {
             return Ok(None);
+        }
+        self.evidence.visited += 1;
+        self.evidence.points += 1;
+        self.evidence.examined += 1;
+        if probe {
+            if let Some(failures) = probe_cases(
+                &self.context,
+                runtime,
+                epoch,
+                scenarios,
+                values,
+                &mut self.legacy_scores,
+                arena,
+            )? {
+                return Ok(Some(failures));
+            }
         }
         let mut collector =
             IntentScoreCollectorV1::new(&self.context, values, &mut self.legacy_scores);
@@ -612,9 +754,21 @@ impl<'a> ReferenceRuntimeV1<'a> {
             &mut collector,
             arena,
         )? + collector.violations();
-        self.evidence.visited += 1;
-        self.evidence.points += 1;
-        self.evidence.examined += 1;
+        collector.refine_cases();
+        drop(collector);
+        if probe && failures != 0 {
+            if let Some(failures) = probe_cases(
+                &self.context,
+                runtime,
+                epoch,
+                scenarios,
+                values,
+                &mut self.legacy_scores,
+                arena,
+            )? {
+                return Ok(Some(failures));
+            }
+        }
         if failures == 0 {
             let points = std::mem::take(&mut self.appearance);
             let result = self.retain_tuple(values, &points);
@@ -714,7 +868,11 @@ impl<'a> ReferenceRuntimeV1<'a> {
         let reference = self.models[capacity.target]?.reference_contrast();
         let count = self.context.targets.len();
         let mut upper = 1.0_f64;
-        for (position, &case) in self.context.local_cases.order.iter().enumerate() {
+        // The memo signature is complete; the endpoint buffer contains W.
+        // A minimum over W can only overestimate the full-support minimum.
+        let refinement = self.context.case_refinement.borrow();
+        for &case in &refinement.cases {
+            let position = refinement.ranks[case];
             let [lower, higher] = points[case * count + capacity.target];
             let backdrop = capacity.backdrops[position];
             if backdrop.bytes().iter().enumerate().any(|(channel, value)| {
@@ -738,7 +896,8 @@ impl<'a> ReferenceRuntimeV1<'a> {
 
     fn lower_key(&self, target: usize, bounds: &BoundsV1) -> TargetKeyV1 {
         // Capacity ranges over the full conditional source domain, not just
-        // this point-search box. Bounds below use physical RGB extrema.
+        // this point-search box. Maxima over W give weaker lower bounds; old
+        // prunes remain valid when subsequent full points enlarge W.
         let count = self.context.targets.len();
         let mut key = TargetKeyV1::default();
         let points = bounds
@@ -749,7 +908,8 @@ impl<'a> ReferenceRuntimeV1<'a> {
             key.final_distance = bounds.scores[target];
             return key;
         };
-        for &case in &self.context.local_cases.order {
+        let refinement = self.context.case_refinement.borrow();
+        for &case in &refinement.cases {
             let [lower, upper] = points[case * count + target];
             let (lab_lo, lab_hi) =
                 crate::spaces::oklab::srgb8_box_oklab_bounds(lower.visible, upper.visible);
@@ -1012,7 +1172,14 @@ impl<'a> ReferenceRuntimeV1<'a> {
                             capacity_upper: frame.capacity_upper,
                         });
                     } else {
-                        self.assess_tuple(runtime, epoch, scenarios, &job.values, arena)?;
+                        self.assess_tuple_inner(
+                            runtime,
+                            epoch,
+                            scenarios,
+                            &job.values,
+                            arena,
+                            true,
+                        )?;
                     }
                 }
             }
@@ -1043,6 +1210,39 @@ impl<'a> ReferenceRuntimeV1<'a> {
             self.jobs[job_index] = Some(job);
         }
         Ok(progressed)
+    }
+
+    fn polish<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+        proposals: &[(usize, Srgb8)],
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let Some(best) = self.best else {
+            return Ok(());
+        };
+        let mut values = cloned(&self.pending[best].values)
+            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        // A better early paint can reach the DFS with an almost unsearched
+        // suffix. Refine the current composition in priority order, so later
+        // uses see the selected earlier paints. Tonal proposals only discover
+        // points: full-domain traversal, hard checks and typed keys still own
+        // acceptance and completeness, including backward graph dependencies.
+        for &(target, source) in proposals {
+            if self.evidence.visited >= self.budget {
+                return Ok(());
+            }
+            let best = self.best.expect("polish retains a feasible point");
+            values.copy_from_slice(&self.pending[best].values);
+            // Visit every admitted proposal, even if an earlier coordinate
+            // move has made it the current source. This fixed work set is
+            // exactly what the scheduler reserves; each visit is assessed.
+            values[target] = source;
+            self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+        }
+        Ok(())
     }
 
     fn authored_exact(&self) -> bool {
@@ -1173,6 +1373,7 @@ pub(in crate::program_session::computed_assignment) fn refresh_reports<
     if collector.violations() != 0 {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
+    drop(collector);
     // Capacity and search completeness describe the same local support. Case
     // indexes and appearances describe this observation and must be rebuilt.
     let mut previous = previous.iter();
@@ -1221,6 +1422,8 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut seed_values = cloned(&authored).map_err(allocation)?;
         let mut proposal = cloned(&working).map_err(allocation)?;
         let mut current_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
+        let mut proposal_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
+        let mut proposal_scores = buffer(count, 0.0).map_err(allocation)?;
         let mut repair_order = Vec::new();
         repair_order
             .try_reserve_exact(count)
@@ -1289,7 +1492,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             working.copy_from_slice(&seed_values);
             let mut current_failures = search
-                .assess_tuple(runtime, epoch, scenarios, &working, arena)?
+                .assess_tuple_inner(runtime, epoch, scenarios, &working, arena, true)?
                 .unwrap_or(usize::MAX);
             if current_failures == 0 {
                 continue;
@@ -1336,13 +1539,46 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         if !search.context.domains[target].contains(proposal[target]) {
                             continue;
                         }
-                        let Some(failures) =
-                            search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?
+                        let case_count = search.context.case_refinement.borrow().cases.len();
+                        let Some(failures) = search.assess_tuple_inner(
+                            runtime, epoch, scenarios, &proposal, arena, true,
+                        )?
                         else {
                             break 'repair;
                         };
                         if failures == 0 {
                             break 'repair;
+                        }
+                        proposal_scores.copy_from_slice(&search.legacy_scores);
+                        let proposal_cell_count = arena.cells.len();
+                        for (failed, cell) in proposal_hard_failures.iter_mut().zip(&arena.cells) {
+                            *failed = cell.result().is_violation();
+                        }
+                        let refined_case_count =
+                            search.context.case_refinement.borrow().cases.len();
+                        if case_count != refined_case_count {
+                            if search.evidence.visited >= limit {
+                                break 'repair;
+                            }
+                            current_failures = search
+                                .assess_tuple_inner(
+                                    runtime, epoch, scenarios, &working, arena, true,
+                                )?
+                                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                            // Current already failed on the old probe, a subset
+                            // of the enlarged one. Unless that set is complete,
+                            // its retained violation makes probe_cases return
+                            // immediately. A complete set cannot grow either.
+                            debug_assert_ne!(current_failures, 0);
+                            debug_assert_eq!(
+                                search.context.case_refinement.borrow().cases.len(),
+                                refined_case_count
+                            );
+                            current_scores.copy_from_slice(&search.legacy_scores);
+                            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells)
+                            {
+                                *failed = cell.result().is_violation();
+                            }
                         }
                         // With equal failure counts, exchanging a violated
                         // relation for a violated readability requirement is not
@@ -1350,22 +1586,18 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         // while the legacy preference guides movement on a plateau.
                         if failures < current_failures
                             || failures == current_failures
-                                && arena.cells.iter().zip(&current_hard_failures).all(
-                                    |(cell, &was_failed)| {
-                                        !cell.result().is_violation() || was_failed
-                                    },
-                                )
-                                && compare_scores(&search.legacy_scores, &current_scores)
+                                && proposal_hard_failures[..proposal_cell_count]
+                                    .iter()
+                                    .zip(&current_hard_failures)
+                                    .all(|(&failed, &was_failed)| !failed || was_failed)
+                                && compare_scores(&proposal_scores, &current_scores)
                                     == Ordering::Less
                         {
                             working.copy_from_slice(&proposal);
                             changed = true;
                             current_failures = failures;
-                            current_scores.copy_from_slice(&search.legacy_scores);
-                            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells)
-                            {
-                                *failed = cell.result().is_violation();
-                            }
+                            current_scores.copy_from_slice(&proposal_scores);
+                            current_hard_failures.copy_from_slice(&proposal_hard_failures);
                         }
                     }
                 }
@@ -1406,7 +1638,45 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // and spend the same node budget. A short quantum prevents an unknown
         // context from blocking discovery of a better feasible composition.
         let mut capacity_steps = 0_u8;
+        let maximum_polish_work = if count > 1 {
+            (count as u64)
+                .saturating_mul(256)
+                .min(search.budget / COORDINATE_BUDGET_DIVISOR)
+        } else {
+            0
+        };
+        let mut polish_proposals = None;
         while search.evidence.visited < search.budget {
+            if maximum_polish_work != 0
+                && search.best.is_some()
+                && search.budget - search.evidence.visited <= maximum_polish_work
+            {
+                if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
+                    break;
+                }
+                // Most complete searches never reach this reserve. When one
+                // does, cache only the executable prefix, at most a quarter
+                // of the shared budget. Counting and execution reuse the RGBs.
+                if polish_proposals.is_none() {
+                    polish_proposals = Some(
+                        polish_plan(
+                            search
+                                .context
+                                .targets
+                                .iter()
+                                .zip(&search.context.domains)
+                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                        )
+                        .map_err(allocation)?,
+                    );
+                }
+                if search.budget - search.evidence.visited
+                    <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
+                {
+                    break;
+                }
+            }
             let needed = search.needed_capacity().map_err(allocation)?;
             let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
             let mut progressed = if run_point {
@@ -1461,6 +1731,16 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
             search.evidence.completion = CompletionV1::Complete;
+        } else if let Some(proposals) = polish_proposals
+            .as_deref()
+            .filter(|proposals| !proposals.is_empty() && search.evidence.visited < search.budget)
+        {
+            // Do this after the last domain-search step. Resuming DFS could
+            // accept another earlier paint with a still-unsearched suffix and
+            // undo the improvement. The exact admitted-proposal count reserves
+            // only executable work; the pass consumes the remaining visits.
+            // Open regions still keep completeness explicitly unfinished.
+            search.polish(runtime, epoch, scenarios, arena, proposals)?;
         }
     }
     let (values, reference_selections) = if let Some(best) = search.best {
@@ -1477,6 +1757,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         if collector.violations() != 0 {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
+        drop(collector);
         (
             Some(values),
             Some(search.reference_reports(best).map_err(allocation)?),

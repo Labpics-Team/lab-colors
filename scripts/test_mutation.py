@@ -3210,6 +3210,67 @@ jobs:
 
 
 class AuthorityMutationShardContractTest(unittest.TestCase):
+    def test_borrow_probes_restore_exact_source_bytes(self):
+        import check_authority_mutations as gate
+        diagnostic = json.dumps({
+            "reason": "compiler-message",
+            "message": {"level": "error", "code": {"code": "E0502"},
+                        "spans": [{"file_name": "authority/evaluation.rs"}]},
+        })
+        for ending in (b"\n", b"\r\n"):
+            for interrupted in (False, True):
+                with self.subTest(ending=ending, interrupted=interrupted), tempfile.TemporaryDirectory() as folder:
+                    source = Path(folder) / "evaluation.rs"
+                    original = b"fn fixture() -> Result<CurrentPointEvaluationV1<'a>, PointEvaluationErrorV1> {}" + ending
+                    source.write_bytes(original)
+                    outcomes = [subprocess.CompletedProcess([], code, stdout=output, stderr="")
+                                for code, output in ((0, ""), (1, diagnostic), (1, diagnostic), (0, ""))]
+                    effect = RuntimeError("interrupted test process") if interrupted else outcomes
+                    with mock.patch.object(gate, "EVAL_SOURCE", source), \
+                         mock.patch.object(gate.subprocess, "run", side_effect=effect) as calls, \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        if interrupted:
+                            with self.assertRaisesRegex(RuntimeError, "interrupted test process"):
+                                gate.verify_evaluation_borrows()
+                        else:
+                            gate.verify_evaluation_borrows()
+                            self.assertEqual(calls.call_count, 4)
+                    self.assertEqual(source.read_bytes(), original)
+
+    def test_mutants_restore_exact_source_bytes_after_every_outcome(self):
+        import check_authority_mutations as gate
+        for ending in (b"\n", b"\r\n"):
+            for outcome in ("caught", "survived", "unexpected", "interrupted"):
+                with self.subTest(ending=ending, outcome=outcome), tempfile.TemporaryDirectory() as folder:
+                    source = Path(folder) / "fixture.rs"
+                    original = ending.join((b"fn fixture() {", b"    original();", b"}", b""))
+                    source.write_bytes(original)
+
+                    def run(*_args, **_kwargs):
+                        self.assertIn(b"    mutated();", source.read_bytes())
+                        if outcome == "interrupted":
+                            raise RuntimeError("interrupted test process")
+                        return subprocess.CompletedProcess(
+                            args=[], returncode=0 if outcome == "survived" else 1,
+                            stdout="test result: FAILED" if outcome == "caught" else "unrelated result",
+                        )
+
+                    with mock.patch.object(gate.subprocess, "run", side_effect=run), \
+                         contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                        def execute():
+                            gate.run_mutant("fixture", source, [], "    original();", "    mutated();",
+                                            source.read_text(encoding="utf-8"))
+
+                        if outcome == "caught":
+                            execute()
+                        elif outcome == "interrupted":
+                            with self.assertRaisesRegex(RuntimeError, "interrupted test process"):
+                                execute()
+                        else:
+                            with self.assertRaises(SystemExit):
+                                execute()
+                    self.assertEqual(source.read_bytes(), original)
+
     def test_required_scopes_partition_every_semantic_mutant_once(self):
         import check_authority_mutations as gate
         gate.validate_scope_partition()

@@ -188,6 +188,7 @@ export async function qualifyPublication({ manifest, tarball }) {
       for (const path of [
         "packages/colors/package.json",
         "scripts/point-support-release-contract.cjs",
+        "scripts/point-support-source-cone.json",
         "scripts/inspect-npm-tarball.py",
       ]) {
         const destination = join(workspace, path);

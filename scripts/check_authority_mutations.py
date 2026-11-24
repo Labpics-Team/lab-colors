@@ -88,8 +88,9 @@ def run_mutant(
     count = original.count(before)
     if count != 1:
         raise SystemExit(f"{name}: mutation anchor count is {count}, expected 1")
-    source.write_text(original.replace(before, after, 1), encoding="utf-8")
+    original_bytes = source.read_bytes()
     try:
+        source.write_bytes(original.replace(before, after, 1).encode("utf-8"))
         result = subprocess.run(
             command,
             cwd=ROOT,
@@ -99,7 +100,7 @@ def run_mutant(
             check=False,
         )
     finally:
-        source.write_text(original, encoding="utf-8")
+        source.write_bytes(original_bytes)
     if result.returncode == 0:
         sys.stderr.write(result.stdout)
         raise SystemExit(f"{name}: mutant survived focused AUTH gate")
@@ -190,8 +191,13 @@ LIFECYCLE_MUTANTS = {
     ),
     "observation-stale-order-bypass": (
         ROOT / "crates/labcolors-core/src/observation.rs", LIFECYCLE_COMMAND,
-        "        if revision < current {",
-        "        if false && revision < current {",
+        "        if revision < current {\n            return Err(ObservationError::RevisionOutOfOrder {\n                current,\n                incoming: revision,\n            });\n        }\n    }\n    if current_revision == Some(revision)\n",
+        "        if false && revision < current {\n            return Err(ObservationError::RevisionOutOfOrder {\n                current,\n                incoming: revision,\n            });\n        }\n    }\n    if current_revision == Some(revision)\n",
+    ),
+    "declared-field-stale-order-bypass": (
+        ROOT / "crates/labcolors-core/src/observation.rs", LIFECYCLE_COMMAND,
+        "        if revision < current {\n            return Err(ObservationError::RevisionOutOfOrder {\n                current,\n                incoming: revision,\n            });\n        }\n    }\n    if current_revision == Some(revision) {",
+        "        if false && revision < current {\n            return Err(ObservationError::RevisionOutOfOrder {\n                current,\n                incoming: revision,\n            });\n        }\n    }\n    if current_revision == Some(revision) {",
     ),
     "ledger-budget-helper-bypass": (
         ROOT / "crates/labcolors-core/src/certificate.rs", LIFECYCLE_COMMAND,
@@ -204,6 +210,7 @@ LIFECYCLE_MUTANTS = {
 LIFECYCLE_FAILURES = {
     "session-stale-evidence-admission": "test session::lifecycle_tests::lifecycle_rejects_saved_evidence_for_a_new_revision ... FAILED",
     "observation-stale-order-bypass": "test session::lifecycle_tests::lifecycle_observed_order_cancel_and_failure_matrix ... FAILED",
+    "declared-field-stale-order-bypass": "test observation_tests::lifecycle_declared_field_preserves_revision_order_across_context_kinds ... FAILED",
     "ledger-budget-helper-bypass": "test certificate::lifecycle_tests::lifecycle_replay_conflict_and_capacity_use_the_real_ledger ... FAILED",
 }
 
@@ -376,6 +383,7 @@ EVAL_FAILURES = {
 
 def verify_evaluation_borrows() -> None:
     """Реальный Rust-тип удерживает оба источника, но освобождает их после использования."""
+    original_bytes = EVAL_SOURCE.read_bytes()
     original = EVAL_SOURCE.read_text(encoding="utf-8")
     use = "    let _ = result.materialization();\n"
     mutate_attachment = "    let _ = attachment.update_unknown(2, 1);\n"
@@ -392,13 +400,13 @@ fn evaluation_borrow_contract_probe(
     let result = state.evaluate_declared_modeled_point(attachment, Some(profile)).unwrap();
 """ + body + "}\n"
         try:
-            EVAL_SOURCE.write_text(source + code, encoding="utf-8")
+            EVAL_SOURCE.write_bytes((source + code).encode("utf-8"))
             completed = subprocess.run(
                 ["cargo", "check", "-p", "labcolors-core", "--tests", "--locked", "--message-format=json"],
                 cwd=ROOT, text=True, capture_output=True, check=False,
             )
         finally:
-            EVAL_SOURCE.write_text(original, encoding="utf-8")
+            EVAL_SOURCE.write_bytes(original_bytes)
         diagnostics = []
         for line in completed.stdout.splitlines():
             try:
@@ -429,7 +437,7 @@ fn evaluation_borrow_contract_probe(
     validate_anchor("eval-detached-result", original, before, after)
     probe(original.replace(before, after), mutate_attachment + mutate_authority + use,
           False, "eval-detached-result-counterexample")
-    if EVAL_SOURCE.read_text(encoding="utf-8") != original:
+    if EVAL_SOURCE.read_bytes() != original_bytes:
         raise SystemExit("evaluation source was not restored")
 
 
@@ -520,11 +528,13 @@ def run_mutation_scope(scope: str) -> None:
         | HANDOFF_MUTANTS | CC_MUTANTS | EVAL_MUTANTS
     )
     auth_original = AUTH_SOURCE.read_text(encoding="utf-8")
+    auth_original_bytes = AUTH_SOURCE.read_bytes()
     selected = {name: bounded_mutants[name] for name in bounded_names}
     originals = {
         source: source.read_text(encoding="utf-8")
         for source, _command, _before, _after in selected.values()
     }
+    original_bytes = {source: source.read_bytes() for source in originals}
 
     for name in authority_names:
         before, after = AUTH_MUTANTS[name]
@@ -535,13 +545,13 @@ def run_mutation_scope(scope: str) -> None:
     for name in authority_names:
         before, after = AUTH_MUTANTS[name]
         run_mutant(name, AUTH_SOURCE, AUTH_COMMAND, before, after, auth_original)
-    if AUTH_SOURCE.read_text(encoding="utf-8") != auth_original:
+    if AUTH_SOURCE.read_bytes() != auth_original_bytes:
         raise SystemExit("authority source was not restored")
 
     for name, (source, command, before, after) in selected.items():
         run_mutant(name, source, command, before, after, originals[source])
-    for source, original in originals.items():
-        if source.read_text(encoding="utf-8") != original:
+    for source, original in original_bytes.items():
+        if source.read_bytes() != original:
             raise SystemExit(f"{source}: source was not restored")
 
     if scope == "eval":

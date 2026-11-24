@@ -14,6 +14,24 @@ private struct AuthoringV3Fixture: Decodable {
     let referenceEmpty: String
 }
 
+private final class RejectingFieldHost: ProgramUpdateHost, @unchecked Sendable {
+    private let lock = NSLock()
+    private var retained: ProgramSnapshot?
+
+    func accept(snapshot: ProgramSnapshot) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        retained = snapshot
+        return false
+    }
+
+    func takeSnapshot() -> ProgramSnapshot? {
+        lock.lock()
+        defer { retained = nil; lock.unlock() }
+        return retained
+    }
+}
+
 final class ProgramWireBuilderV3Tests: XCTestCase {
     private func fixtureV3() throws -> AuthoringV3Fixture {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "program-authoring-v3", withExtension: "json", subdirectory: "Fixtures"))
@@ -201,13 +219,81 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertEqual(try valid.outputRgb(index: 0), Data([0, 0, 0]))
     }
 
-    func testNominalVisibleReportsAndSummaryCrossTheNativeBoundary() throws {
-        let wire = try ProgramWireBuilderV3().source(1, rgb: [255, 255, 255]).fixedTarget(2, source: 1)
+    private func nominalProgram() throws -> Data {
+        try ProgramWireBuilderV3().source(1, rgb: [255, 255, 255]).fixedTarget(2, source: 1)
             .surfaceInputPort(6).opacityInput(5, value: 0.5)
             .solidPaint(3, target: 2).opacityPaint(4, source: 3, opacity: 5).inputSurface(7, input: 6)
             .pointOccurrence(8, paint: 4, surface: 7).nominalSrgb8Visible(false, id: 10, occurrence: 8)
             .output(17, paint: 4).assignment([]).finish()
-        let runtime = try compileProgramWire(bytes: wire, streamId: 1)
+    }
+
+    func testDeclaredFieldReportsSurviveRejectionDirectionChangesAndRuntimeRelease() throws {
+        let start = ProgramRgb8(red: 0, green: 0, blue: 0)
+        let end = ProgramRgb8(red: 2, green: 2, blue: 2)
+        let expected = ProgramFieldAssessment(inputIndex: 0, from: start, to: end,
+            sourceModel: "opaque-affine-encoded-srgb8-half-up-v1", domain: "whole-field", rendering: "unknown",
+            regionCount: 7, witnesses: [
+                ProgramFieldWitness(numerator: 0, denominator: 1, nominal: start),
+                ProgramFieldWitness(numerator: 1, denominator: 4, nominal: ProgramRgb8(red: 1, green: 1, blue: 1)),
+                ProgramFieldWitness(numerator: 3, denominator: 4, nominal: end),
+            ])
+        var runtime: ProgramRuntime? = try compileProgramWire(bytes: nominalProgram(), streamId: 1)
+        let previous = try XCTUnwrap(runtime).updateObserved(revision: 1, scenarioIds: [9],
+            surfaces: Data([255, 255, 255]), surfaceCount: 1)
+        let table = try previous.copyOutputTable()
+        XCTAssertEqual(previous.state(), "ready")
+        XCTAssertNil(try previous.fieldAssessment())
+
+        let host = RejectingFieldHost()
+        XCTAssertFalse(try XCTUnwrap(runtime).updateDeclaredFieldWith(revision: 2, surfaces: Data([17, 17, 17]),
+            varyingInput: 0, from: start, to: end, accept: host))
+        let rejected = try XCTUnwrap(host.takeSnapshot())
+        XCTAssertEqual(rejected.state(), "ready")
+        XCTAssertEqual(rejected.revision(), 2)
+        XCTAssertEqual(try rejected.fieldAssessment(), expected)
+        let replay = try XCTUnwrap(runtime).updateObserved(revision: 1, scenarioIds: [9],
+            surfaces: Data([255, 255, 255]), surfaceCount: 1)
+        XCTAssertEqual(replay.revision(), 1)
+        XCTAssertEqual(try replay.copyOutputTable(), table)
+        XCTAssertNil(try replay.fieldAssessment())
+
+        let accepted = try XCTUnwrap(runtime).updateDeclaredField(revision: 2, surfaces: Data([199, 199, 199]),
+            varyingInput: 0, from: start, to: end)
+        XCTAssertEqual(accepted.state(), "ready")
+        let ownedReport = try XCTUnwrap(try accepted.fieldAssessment())
+        XCTAssertEqual(ownedReport, expected)
+        XCTAssertThrowsError(try XCTUnwrap(runtime).updateDeclaredField(revision: 2, surfaces: Data([0, 0, 0]),
+            varyingInput: 0, from: end, to: start)) { error in
+            guard case let LabColorsError.Refused(code, operation) = error else {
+                return XCTFail("unexpected field update error: \(error)")
+            }
+            XCTAssertEqual(code, "program_update")
+            XCTAssertEqual(operation, "updateDeclaredField")
+        }
+        let fieldReplay = try XCTUnwrap(runtime).updateDeclaredField(revision: 2, surfaces: Data([199, 199, 199]),
+            varyingInput: 0, from: start, to: end)
+        XCTAssertEqual(fieldReplay.state(), "ready")
+        XCTAssertEqual(fieldReplay.revision(), 2)
+        XCTAssertEqual(try fieldReplay.fieldAssessment(), ownedReport)
+        let reversed = try XCTUnwrap(runtime).updateDeclaredField(revision: 3, surfaces: Data([0, 0, 0]),
+            varyingInput: 0, from: end, to: start)
+        let reverseReport = try XCTUnwrap(try reversed.fieldAssessment())
+        XCTAssertEqual(reverseReport.from, end)
+        XCTAssertEqual(reverseReport.to, start)
+        XCTAssertEqual(reverseReport.regionCount, expected.regionCount)
+        let restored = try XCTUnwrap(runtime).updateObserved(revision: 4, scenarioIds: [9],
+            surfaces: Data([255, 255, 255]), surfaceCount: 1)
+        XCTAssertNil(try restored.fieldAssessment())
+        XCTAssertEqual(try restored.copyOutputTable(), table)
+
+        runtime = nil
+        XCTAssertEqual(try rejected.fieldAssessment(), expected)
+        XCTAssertEqual(try accepted.fieldAssessment(), ownedReport)
+        XCTAssertEqual(try previous.copyOutputTable(), table)
+    }
+
+    func testNominalVisibleReportsAndSummaryCrossTheNativeBoundary() throws {
+        let runtime = try compileProgramWire(bytes: nominalProgram(), streamId: 1)
         let first = try runtime.updateObserved(revision: 1, scenarioIds: [9], surfaces: Data([255, 255, 255]), surfaceCount: 1)
         let summary = try XCTUnwrap(try first.cleanlinessAssessment())
         XCTAssertEqual(summary.status, .conforms)

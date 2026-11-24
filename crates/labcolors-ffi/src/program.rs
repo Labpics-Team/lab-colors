@@ -22,7 +22,7 @@ impl LabColorsError {
 // The normal host transaction must abort as a value even in panic=abort builds.
 impl From<uniffi::UnexpectedUniFFICallbackError> for LabColorsError {
     fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
-        Self::new("program_host_protocol", "updateObservedWith")
+        Self::new("program_host_protocol", "ProgramUpdateHost.accept")
     }
 }
 
@@ -165,6 +165,64 @@ pub fn compile_program_wire(
 
 #[uniffi::export]
 impl ProgramRuntime {
+    /// Prepare a model result using the same atomic acceptance protocol as points.
+    pub fn update_declared_field_with(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        varying_input: u32,
+        from: crate::ProgramRgb8,
+        to: crate::ProgramRgb8,
+        accept: Box<dyn ProgramUpdateHost>,
+    ) -> Result<bool, LabColorsError> {
+        let operation = "updateDeclaredFieldWith";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let rgb = |value: crate::ProgramRgb8| {
+            labcolors_core::Srgb8::new([value.red, value.green, value.blue])
+        };
+        let field = core::ProgramDeclaredFieldV1::from_rgb8(
+            &surfaces,
+            varying_input as usize,
+            rgb(from),
+            rgb(to),
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        let prepared = inner
+            .prepare_declared_field(revision, field)
+            .map_err(|error| runtime_error(error, operation))?;
+        prepared.commit_with(|inner| {
+            let snapshot = Arc::new(ProgramSnapshot { inner });
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accept.accept(snapshot)))
+                .map_err(|_| LabColorsError::new("program_host_protocol", operation))?
+        })
+    }
+    /// Solves the entire declared nominal field. The snapshot retains unknown
+    /// renderer coverage rather than turning a model result into a pixel claim.
+    pub fn update_declared_field(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        varying_input: u32,
+        from: crate::ProgramRgb8,
+        to: crate::ProgramRgb8,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+        let operation = "updateDeclaredField";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let rgb = |value: crate::ProgramRgb8| {
+            labcolors_core::Srgb8::new([value.red, value.green, value.blue])
+        };
+        let field = core::ProgramDeclaredFieldV1::from_rgb8(
+            &surfaces,
+            varying_input as usize,
+            rgb(from),
+            rgb(to),
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        inner
+            .update_declared_field(revision, field)
+            .map(|inner| Arc::new(ProgramSnapshot { inner }))
+            .map_err(|error| runtime_error(error, operation))
+    }
     pub fn update_observed(
         &self,
         revision: u64,
@@ -267,6 +325,15 @@ fn copy_snapshot_outputs(snapshot: &core::ProgramSnapshotV1) -> Result<Vec<f64>,
 
 #[uniffi::export]
 impl ProgramSnapshot {
+    /// Scope and exact diagnostic coordinates for positive or negative model results.
+    pub fn field_assessment(
+        &self,
+    ) -> Result<Option<crate::ProgramFieldAssessment>, LabColorsError> {
+        self.inner
+            .field_assessment()
+            .map(crate::program_reports::field_assessment)
+            .transpose()
+    }
     pub fn snapshot_version(&self) -> u32 {
         self.inner.snapshot_version()
     }

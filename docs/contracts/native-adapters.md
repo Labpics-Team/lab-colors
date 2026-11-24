@@ -43,8 +43,10 @@ output с индексом `i`; эти геттеры сохраняются д�
 изменение своей копии не меняет другие результаты. Снимок без outputs
 возвращает пустую таблицу.
 
-Чтение не меняет lifecycle: только `ready` удостоверяет значения для текущего
-контекста. Legacy V1/V2 могут сохранять предыдущие outputs в `failed` и `stale`
+Чтение не меняет lifecycle: `ready` относится к текущему контексту и его
+заявленной модели. Для поля `field_assessment()` сообщает `rendering: "unknown"`
+и не удостоверяет точность фактического renderer-а. Legacy V1/V2 могут сохранять
+предыдущие outputs в `failed` и `stale`
 для просмотра; computed V3 возвращает outputs только для текущего `ready`.
 Переполнение размера таблицы или отказ её выделения на Rust-стороне возвращает
 `LabColorsError.Refused` с `code: "program_resource_exhausted"` и
@@ -80,6 +82,34 @@ output с индексом `i`; эти геттеры сохраняются д�
 Он подготавливает снимок, вызывает `ProgramUpdateHost.accept`, затем принимает
 переход только при `true`. Снимок и runtime остаются разными ARC-владельцами;
 runtime не отзывает сохранённые снимки.
+
+## Непрерывное поле
+
+Computed V3 с `assignment` принимает один непрозрачный affine encoded-sRGB
+вход на всей нормированной области `[0, 1]`; прочие входы постоянны.
+`update_declared_field(revision, surfaces, varying_input, from, to)` принимает
+обычный schema-ordered `Vec<u8>`, индекс изменяемого входа и два `ProgramRgb8`.
+Изменяемый слот `surfaces` не читается как источник: его задаёт направленный
+descriptor `from → to`. V1/V2 возвращают `program_update`; нескольких полей,
+прозрачных stops и другого пространства интерполяции этот API не представляет.
+
+`field_assessment()` возвращает owned `Option<ProgramFieldAssessment>`:
+`input_index`, endpoints, `source_model: "opaque-affine-encoded-srgb8-half-up-v1"`,
+`domain: "whole-field"`, `rendering: "unknown"`, `region_count` и `witnesses`.
+Каждый `ProgramFieldWitness` содержит рациональные `numerator`/`denominator`
+и исходный `nominal` RGB в порядке физических `case_index` Core.
+Для текущих `unsatisfied`/`incomplete` metadata сохраняет координаты причины;
+для неизвестного текущего контекста и конечных observations возвращается `None`.
+Изменение своей копии metadata, последующее обновление или освобождение runtime
+не меняют ранее выданный снимок.
+
+`update_declared_field_with(..., accept)` использует тот же синхронный
+`ProgramUpdateHost`: `false` и ошибка сохраняют прежнее состояние, а ту же
+ревизию можно предложить снова. Callback получает целый модельный снимок до
+принятия; поле не превращает `ready` в гарантию фактических пикселей.
+Повторный вход в runtime получает `program_busy`. Native unwind даёт
+`program_host_protocol` с операцией вызванного update; недекларированное foreign
+исключение, преобразованное UniFFI, относится к общему `ProgramUpdateHost.accept`.
 
 ## Условие поддержки
 

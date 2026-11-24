@@ -576,11 +576,16 @@ pub use crate::cleanliness::assessment::{
     ProgramCleanlinessAssessmentV1, ProgramCleanlinessStatusV1,
 };
 use assessment_report::ProgramAssessmentReportScratchV1;
+mod field;
 pub use assessment_report::{
     ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
     ProgramConstraintAssessmentV1, ProgramReferenceCapacityV1, ProgramReferenceCaseV1,
     ProgramReferencePreferenceV1, ProgramReferenceSelectionV1, ProgramScenarioProvenanceV1,
     ProgramTonalHierarchyPairV1,
+};
+pub use field::{
+    ProgramDeclaredFieldShapeErrorV1, ProgramDeclaredFieldV1, ProgramFieldAssessmentV1,
+    ProgramFieldWitnessV1,
 };
 
 pub struct CompiledProgramV1 {
@@ -782,6 +787,7 @@ impl ProgramOptimalityV1 {
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
+    field_assessment: Option<ProgramFieldAssessmentV1>,
     diagnostics: Option<ProgramDiagnosticsV1>,
     snapshot_version: u32,
     revision: u64,
@@ -810,6 +816,11 @@ fn reserve_snapshot_outputs(
 }
 
 impl ProgramSnapshotV1 {
+    /// Declared model scope and exact report coordinates; absent for observations.
+    #[must_use]
+    pub fn field_assessment(&self) -> Option<&ProgramFieldAssessmentV1> {
+        self.field_assessment.as_ref()
+    }
     /// Конкретные нарушения авторского attempt для текущего Unsatisfied/Incomplete.
     /// Это исторические данные; они не являются минимальным конфликтом или outputs.
     #[must_use]
@@ -1982,20 +1993,7 @@ impl ProgramSessionV1 {
     ) -> Result<PreparedProgramUpdateV1<'_>, ProgramRuntimeErrorV1> {
         let computed = self.owner.snapshot_version() == 2;
         if computed {
-            let cell_count = self
-                .owner
-                .evidence_cell_bounds(source.scenario_count())
-                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
-                .verified_cells();
-            self.assessment_scratch
-                .reserve(
-                    cell_count,
-                    source.scenario_count(),
-                    self.owner
-                        .relation_member_bound(source.scenario_count())
-                        .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?,
-                )
-                .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+            self.reserve_computed_snapshot(source.scenario_count())?;
         }
         reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
@@ -2018,6 +2016,25 @@ impl ProgramSessionV1 {
             transition,
             snapshot,
         })
+    }
+
+    fn reserve_computed_snapshot(&mut self, count: usize) -> Result<(), ProgramRuntimeErrorV1> {
+        let cells = self
+            .owner
+            .evidence_cell_bounds(count)
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
+            .verified_cells();
+        self.assessment_scratch
+            .reserve(
+                cells,
+                count,
+                self.owner
+                    .relation_member_bound(count)
+                    .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?,
+            )
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
+            .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
     }
 
     /// Атомарно применяет Unknown update с непрозрачной причиной.
@@ -2109,6 +2126,7 @@ fn snapshot_from_evidence_into(
         if outputs.len() == 1 {
             if let Some(output) = outputs.next() {
                 return Ok(ProgramSnapshotV1 {
+                    field_assessment: None,
                     diagnostics: None,
                     state,
                     snapshot_version: 1,
@@ -2125,6 +2143,7 @@ fn snapshot_from_evidence_into(
         outputs_scratch.extend(outputs);
     }
     Ok(ProgramSnapshotV1 {
+        field_assessment: None,
         diagnostics: None,
         state,
         snapshot_version: 1,
@@ -2184,6 +2203,7 @@ fn snapshot_from_computed_evidence_into(
         assessment_report = Some(assessment_scratch.copy_verified(verified));
     }
     Ok(ProgramSnapshotV1 {
+        field_assessment: field::copy_field_assessment(evidence)?,
         diagnostics: evidence
             .diagnostics()
             .map(ProgramDiagnosticsV1::try_copy)

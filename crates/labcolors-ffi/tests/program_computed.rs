@@ -12,6 +12,15 @@ fn runtime() -> Result<Arc<ProgramRuntime>, LabColorsError> {
     )
 }
 
+fn field_runtime() -> Result<Arc<ProgramRuntime>, LabColorsError> {
+    // Existing public-builder fixture: fixed white at opacity 0.5 with a
+    // report-only nominal constraint. Every small input field remains feasible.
+    compile_program_wire(
+        include_bytes!("../../labcolors-core/tests/fixtures/nominal-visible-report.lcpw").to_vec(),
+        8,
+    )
+}
+
 fn rgb(gray: u8) -> ProgramRgb8 {
     ProgramRgb8 {
         red: gray,
@@ -457,7 +466,7 @@ fn unexpected_foreign_exception_uses_the_real_uniffi_error_conversion_without_pa
         panic!("foreign callback exception must become a typed failure");
     };
     assert_eq!(code, "program_host_protocol");
-    assert_eq!(operation, "updateObservedWith");
+    assert_eq!(operation, "ProgramUpdateHost.accept");
     let point_error = <Result<bool, ProgramPointSinkCallbackError> as uniffi::LiftReturn<
         labcolors::UniFfiTag,
     >>::handle_callback_unexpected_error(
@@ -471,6 +480,188 @@ fn unexpected_foreign_exception_uses_the_real_uniffi_error_conversion_without_pa
 
 #[path = "../../labcolors-core/src/test_support.rs"]
 mod test_support;
+
+#[test]
+fn native_field_rejection_and_callback_error_preserve_the_previous_composition() -> TestResult {
+    let runtime = field_runtime()?;
+    let previous = runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
+    let previous_table = previous.copy_output_table()?;
+    let retained = Arc::new(Mutex::new(Vec::new()));
+    for decision in [Decision::Refuse, Decision::Error] {
+        let result = runtime.update_declared_field_with(
+            2,
+            vec![17; 3],
+            0,
+            rgb(0),
+            rgb(2),
+            Box::new(Capture {
+                snapshots: Arc::clone(&retained),
+                decision,
+            }),
+        );
+        match decision {
+            Decision::Refuse => assert!(!result?),
+            Decision::Error => assert!(matches!(result,
+                Err(LabColorsError::Refused { code, operation })
+                    if code == "host_batch_rejected" && operation == "hostBatch")),
+            Decision::Accept => unreachable!(),
+        }
+        let replay = runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
+        assert_eq!(replay.copy_output_table()?, previous_table);
+        assert_eq!(replay.field_assessment()?, None);
+    }
+    assert!(runtime.update_declared_field_with(
+        2,
+        vec![17; 3],
+        0,
+        rgb(0),
+        rgb(2),
+        Box::new(Capture {
+            snapshots: Arc::clone(&retained),
+            decision: Decision::Accept,
+        }),
+    )?);
+    let snapshots = retained.lock().expect("snapshot storage");
+    assert_eq!(snapshots.len(), 3);
+    let field = snapshots[2].field_assessment()?.ok_or("field metadata")?;
+    assert_eq!(field.source_model, "opaque-affine-encoded-srgb8-half-up-v1");
+    assert_eq!(
+        (field.domain.as_str(), field.rendering.as_str()),
+        ("whole-field", "unknown")
+    );
+    assert_eq!(
+        (field.input_index, field.from, field.to, field.region_count),
+        (0, rgb(0), rgb(2), 7)
+    );
+    assert_eq!(
+        field.witnesses,
+        vec![
+            ProgramFieldWitness {
+                numerator: 0,
+                denominator: 1,
+                nominal: rgb(0)
+            },
+            ProgramFieldWitness {
+                numerator: 1,
+                denominator: 4,
+                nominal: rgb(1)
+            },
+            ProgramFieldWitness {
+                numerator: 3,
+                denominator: 4,
+                nominal: rgb(2)
+            },
+        ]
+    );
+    for snapshot in snapshots.iter() {
+        assert_eq!(snapshot.state(), "ready");
+        assert_eq!(snapshot.revision(), 2);
+        assert_eq!(snapshot.field_assessment()?, Some(field.clone()));
+    }
+    // The varying slot is not a second source of truth beside the descriptor.
+    let replay = runtime.update_declared_field(2, vec![199; 3], 0, rgb(0), rgb(2))?;
+    assert_eq!(replay.field_assessment()?, Some(field.clone()));
+    drop(runtime);
+    assert_eq!(previous.copy_output_table()?, previous_table);
+    assert_eq!(snapshots[0].field_assessment()?, Some(field));
+    Ok(())
+}
+
+#[test]
+fn native_field_admission_refuses_wrong_shape_and_conflicting_direction_before_commit() -> TestResult
+{
+    let runtime = field_runtime()?;
+    let previous = runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
+    let retained = Arc::new(Mutex::new(Vec::new()));
+    for (surfaces, input) in [(vec![0; 2], 0), (vec![0; 6], 0), (vec![0; 3], 1)] {
+        let result = runtime.update_declared_field_with(
+            2,
+            surfaces,
+            input,
+            rgb(0),
+            rgb(2),
+            Box::new(Capture {
+                snapshots: Arc::clone(&retained),
+                decision: Decision::Accept,
+            }),
+        );
+        assert!(
+            matches!(result, Err(LabColorsError::Refused { code, operation })
+            if code == "program_update" && operation == "updateDeclaredFieldWith")
+        );
+    }
+    assert!(retained.lock().expect("snapshot storage").is_empty());
+    assert_eq!(
+        runtime
+            .update_observed(1, vec![9], vec![255; 3], 1)?
+            .field_assessment()?,
+        None
+    );
+    let accepted = runtime.update_declared_field(2, vec![0; 3], 0, rgb(0), rgb(2))?;
+    for revision in [1, 2] {
+        assert!(
+            matches!(runtime.update_declared_field(revision, vec![0; 3], 0, rgb(2), rgb(0)),
+            Err(LabColorsError::Refused { code, operation })
+                if code == "program_update" && operation == "updateDeclaredField")
+        );
+    }
+    let reversed = runtime.update_declared_field(3, vec![0; 3], 0, rgb(2), rgb(0))?;
+    assert_eq!(
+        reversed
+            .field_assessment()?
+            .ok_or("reversed descriptor")?
+            .from,
+        rgb(2)
+    );
+    assert_eq!(
+        accepted
+            .field_assessment()?
+            .ok_or("accepted descriptor")?
+            .from,
+        rgb(0)
+    );
+    assert_eq!(previous.field_assessment()?, None);
+    Ok(())
+}
+
+#[test]
+fn native_field_callback_unwind_recovery_and_unknown_keep_scope_revision_bound() -> TestResult {
+    let runtime = field_runtime()?;
+    runtime.update_observed(1, vec![9], vec![255; 3], 1)?;
+    assert!(runtime.update_declared_field_with(
+        2,
+        vec![0; 3],
+        0,
+        rgb(0),
+        rgb(2),
+        Box::new(Reentrant {
+            runtime: Arc::downgrade(&runtime)
+        }),
+    )?);
+    let current = runtime.update_declared_field(2, vec![0; 3], 0, rgb(0), rgb(2))?;
+    let field = current.field_assessment()?.ok_or("current field")?;
+    let result =
+        runtime.update_declared_field_with(3, vec![0; 3], 0, rgb(2), rgb(0), Box::new(Panics));
+    assert!(
+        matches!(result, Err(LabColorsError::Refused { code, operation })
+        if code == "program_host_protocol" && operation == "updateDeclaredFieldWith")
+    );
+    let replay = runtime.update_declared_field(2, vec![0; 3], 0, rgb(0), rgb(2))?;
+    assert_eq!(replay.field_assessment()?, Some(field.clone()));
+    let unknown = runtime.update_unknown(3, 17)?;
+    assert_eq!(unknown.state(), "stale");
+    assert_eq!(unknown.field_assessment()?, None);
+    let mut changed = current
+        .field_assessment()?
+        .ok_or("independent field copy")?;
+    changed.from = rgb(255);
+    changed.witnesses.clear();
+    assert_eq!(current.field_assessment()?, Some(field.clone()));
+    drop(runtime);
+    assert_eq!(current.field_assessment()?, Some(field));
+    assert_eq!(unknown.field_assessment()?, None);
+    Ok(())
+}
 
 struct FinalCheckpoint;
 impl ProgramUpdateHost for FinalCheckpoint {

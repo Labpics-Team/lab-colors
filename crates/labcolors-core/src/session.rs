@@ -14,7 +14,8 @@ use crate::observation::{
     CanonicalObservationSchemaV1, ObservationArenaPoolV1, ObservationError, ObservationHeadViewV1,
     ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
     PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1, RevisionBoundUnknownV1,
-    SchemaOrderedScenarioSourceV1, UnknownReasonId, prepare_observation,
+    SchemaOrderedFieldSourceV1, SchemaOrderedScenarioSourceV1, UnknownReasonId,
+    prepare_observation, prepare_schema_ordered_field_observation,
     prepare_schema_ordered_observation,
 };
 
@@ -669,6 +670,39 @@ impl<Plan: SessionPlanV1> Session<Plan> {
             revision,
             source,
             order_scratch,
+        )
+        .map_err(SessionUpdateError::Observation)?;
+
+        prepare_session_transition(
+            &mut self.plan,
+            &mut self.state,
+            &mut self.deferred_retirement,
+            owner,
+            prepared,
+        )
+    }
+
+    /// A declared continuous field uses the same revision transaction and
+    /// full-context evaluator as observed points. Admission retains its source
+    /// descriptor and exact coordinate coverage, not fabricated observations.
+    pub(crate) fn prepare_schema_ordered_field<Source: SchemaOrderedFieldSourceV1 + ?Sized>(
+        &mut self,
+        revision: Revision,
+        source: &Source,
+    ) -> SessionPrepareResult<'_, Plan> {
+        self.drain_deferred_retirement();
+        let owner = self
+            .plan
+            .try_acquire_owner()
+            .ok_or(SessionUpdateError::OwnerExpired)?;
+        let schema = self.plan.observation_schema(&owner);
+        let prepared = prepare_schema_ordered_field_observation(
+            &mut self.raw_head,
+            &mut self.observation_arenas,
+            self.stream,
+            schema,
+            revision,
+            source,
         )
         .map_err(SessionUpdateError::Observation)?;
 

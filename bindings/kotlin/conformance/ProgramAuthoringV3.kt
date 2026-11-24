@@ -60,6 +60,74 @@ private fun verifyPublishedV03AuthoringAbi() {
     bytesEqual(builder.finish(), ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3()).finish())
 }
 
+private fun verifyDeclaredField(wire: ByteArray) {
+    val start = ProgramRgb8(0u, 0u, 0u)
+    val end = ProgramRgb8(2u, 2u, 2u)
+    val expected = ProgramFieldAssessment(0u, start, end,
+        "opaque-affine-encoded-srgb8-half-up-v1", "whole-field", "unknown", 7u, listOf(
+            ProgramFieldWitness(0u, 1u, start),
+            ProgramFieldWitness(1u, 4u, ProgramRgb8(1u, 1u, 1u)),
+            ProgramFieldWitness(3u, 4u, end),
+        ))
+    var rejected: ProgramSnapshot? = null
+    var accepted: ProgramSnapshot? = null
+    val ownedReport: ProgramFieldAssessment
+    try {
+        ownedReport = compileProgramWire(wire, 1u).use { runtime ->
+            val table = runtime.updateObserved(1uL, listOf(9u), rgb(255, 255, 255), 1u).use { previous ->
+                check(previous.state() == "ready" && previous.fieldAssessment() == null)
+                previous.copyOutputTable()
+            }
+            val host = object : ProgramUpdateHost {
+                override fun accept(snapshot: ProgramSnapshot): Boolean {
+                    rejected = snapshot
+                    return false
+                }
+            }
+            check(!runtime.updateDeclaredFieldWith(2uL, rgb(17, 17, 17), 0u, start, end, host))
+            requireNotNull(rejected).let {
+                check(it.state() == "ready" && it.revision() == 2uL)
+                check(it.fieldAssessment() == expected)
+            }
+            runtime.updateObserved(1uL, listOf(9u), rgb(255, 255, 255), 1u).use { replay ->
+                check(replay.revision() == 1uL && replay.fieldAssessment() == null)
+                check(replay.copyOutputTable() == table)
+            }
+            val field = runtime.updateDeclaredField(2uL, rgb(199, 199, 199), 0u, start, end)
+            accepted = field
+            check(field.state() == "ready")
+            val report = requireNotNull(field.fieldAssessment())
+            check(report == expected)
+            try {
+                runtime.updateDeclaredField(2uL, rgb(0, 0, 0), 0u, end, start).close()
+                error("reversed field replaced an accepted revision")
+            } catch (failure: LabColorsException.Refused) {
+                check(failure.code == "program_update" && failure.operation == "updateDeclaredField")
+            }
+            runtime.updateDeclaredField(2uL, rgb(199, 199, 199), 0u, start, end).use { fieldReplay ->
+                check(fieldReplay.state() == "ready" && fieldReplay.revision() == 2uL)
+                check(fieldReplay.fieldAssessment() == report)
+            }
+            runtime.updateDeclaredField(3uL, rgb(0, 0, 0), 0u, end, start).use { reversed ->
+                val reverseReport = requireNotNull(reversed.fieldAssessment())
+                check(reverseReport.from == end && reverseReport.to == start)
+                check(reverseReport.regionCount == expected.regionCount)
+            }
+            runtime.updateObserved(4uL, listOf(9u), rgb(255, 255, 255), 1u).use { restored ->
+                check(restored.fieldAssessment() == null)
+                check(restored.copyOutputTable() == table)
+            }
+            report
+        }
+        check(requireNotNull(rejected).fieldAssessment() == expected)
+        check(requireNotNull(accepted).fieldAssessment() == ownedReport)
+    } finally {
+        rejected?.close()
+        accepted?.close()
+    }
+    check(ownedReport == expected)
+}
+
 /** The same external consumer checks run against installed Android and JVM packages. */
 fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     verifyPublishedV03AuthoringAbi()
@@ -333,6 +401,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         pointOccurrence(8u, 4u, 7u); nominalSrgb8Visible(false, 10u, 8u)
         output(17u, 4u); assignment(emptyList())
     }.finish()
+    verifyDeclaredField(nominal)
     compileProgramWire(nominal, 1u).use { runtime ->
         runtime.updateObserved(1uL, listOf(9u), rgb(255, 255, 255), 1u).use { first ->
             val summary = requireNotNull(first.cleanlinessAssessment())

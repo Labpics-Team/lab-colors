@@ -66,7 +66,8 @@ use crate::lcs_occurrence::{
 use crate::numerics::NumericalDecisionEvidenceV1;
 use crate::observation::{
     ObservationError, ObservationHeadViewV1, ObservationSchemaMismatchV1, ObservationStreamId,
-    Revision, ScenarioId, SchemaOrderedScenarioSourceV1, UnknownReasonId,
+    Revision, ScenarioId, SchemaOrderedFieldSourceV1, SchemaOrderedScenarioSourceV1,
+    UnknownReasonId,
 };
 #[cfg(test)]
 use crate::program_session::DeclaredJointSelectionV1;
@@ -2221,6 +2222,26 @@ impl OwnerV1 {
         Ok(PreparedSessionTransitionV1 { transition })
     }
 
+    /// Допускает непрерывный объявленный источник через тот же Session owner.
+    pub(crate) fn prepare_schema_ordered_field_update<'session, Source>(
+        &self,
+        session: &'session mut SessionV1,
+        revision: u64,
+        source: &Source,
+    ) -> Result<PreparedSessionTransitionV1<'session>, UpdateErrorV1>
+    where
+        Source: SchemaOrderedFieldSourceV1 + ?Sized,
+    {
+        if !self.compiled.owns_session(&session.session) {
+            return Err(UpdateErrorV1::OwnerMismatch);
+        }
+        let transition = session
+            .session
+            .prepare_schema_ordered_field(Revision::new(revision), source)
+            .map_err(map_session_update_error)?;
+        Ok(PreparedSessionTransitionV1 { transition })
+    }
+
     /// Создаёт Session, привязанную к одному непрозрачному stream ID.
     pub(crate) fn instantiate(&self, stream_id: u32) -> Result<SessionV1, InstantiateErrorV1> {
         let stream = ObservationStreamId::new(stream_id);
@@ -2572,6 +2593,7 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                 raw_head.revision().map_or(0, |value| value.value()),
             ),
             D::Unknown(unknown) => SnapshotEvidenceV1 {
+                observation: None,
                 diagnostics: None,
                 kind: if previous.is_some() {
                     StateKindV1::Stale
@@ -2585,6 +2607,9 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                     .map(|inner| VerifiedCertificateV1 { inner }),
             },
             D::Verified(inner) => SnapshotEvidenceV1 {
+                observation: Some(ObservationV1 {
+                    inner: inner.observation(),
+                }),
                 diagnostics: None,
                 kind: StateKindV1::Ready,
                 revision: inner.observation().revision().value(),
@@ -2592,6 +2617,9 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                 legacy_verified: inner.legacy().map(|inner| VerifiedCertificateV1 { inner }),
             },
             D::Violation(cause) => SnapshotEvidenceV1 {
+                observation: Some(ObservationV1 {
+                    inner: cause.observation(),
+                }),
                 diagnostics: match cause {
                     ProgramViolationOutcomeV1::Legacy(_) => None,
                     ProgramViolationOutcomeV1::Computed(stopped) => Some(stopped.diagnostics()),
@@ -2610,6 +2638,9 @@ impl<'session> PreparedSessionTransitionV1<'session> {
                 },
             },
             D::Incomplete(cause) => SnapshotEvidenceV1 {
+                observation: Some(ObservationV1 {
+                    inner: cause.observation(),
+                }),
                 diagnostics: Some(cause.diagnostics()),
                 kind: StateKindV1::Incomplete,
                 revision: cause.observation().revision().value(),
@@ -2632,6 +2663,7 @@ impl<'session> PreparedSessionTransitionV1<'session> {
 /// описывать ещё не принятый переход; lifecycle Session от её чтения не меняется.
 #[derive(Clone, Copy)]
 pub(crate) struct SnapshotEvidenceV1<'a> {
+    observation: Option<ObservationV1<'a>>,
     diagnostics: Option<&'a crate::program_diagnostics::ProgramDiagnosticsV1>,
     kind: StateKindV1,
     revision: u64,
@@ -2658,6 +2690,7 @@ impl<'a> SnapshotEvidenceV1<'a> {
     }
 
     fn from_state(state: &'a CoreProgramStateV1, revision: u64) -> Self {
+        use crate::session::SessionEvidenceV1;
         let kind = Self::state_kind(state);
         let legacy_verified = match kind {
             StateKindV1::Ready | StateKindV1::Stale | StateKindV1::Failed => state
@@ -2667,6 +2700,18 @@ impl<'a> SnapshotEvidenceV1<'a> {
             StateKindV1::Waiting | StateKindV1::Unsatisfied | StateKindV1::Incomplete => None,
         };
         Self {
+            observation: match state {
+                SessionState::Ready { .. } => state.current_verified().map(|inner| ObservationV1 {
+                    inner: inner.observation(),
+                }),
+                SessionState::Failed { cause, .. } => Some(ObservationV1 {
+                    inner: cause.observation(),
+                }),
+                SessionState::Incomplete { cause, .. } => Some(ObservationV1 {
+                    inner: cause.observation(),
+                }),
+                SessionState::Waiting | SessionState::Stale { .. } => None,
+            },
             diagnostics: match state {
                 SessionState::Failed {
                     cause: ProgramViolationOutcomeV1::Computed(cause),
@@ -2686,6 +2731,11 @@ impl<'a> SnapshotEvidenceV1<'a> {
 
     pub(crate) const fn kind(self) -> StateKindV1 {
         self.kind
+    }
+    /// Текущий доступный контекст, в том числе причина незавершённого или
+    /// неудовлетворённого вычисления. Unknown не заимствует прежний контекст.
+    pub(crate) const fn observation(self) -> Option<ObservationV1<'a>> {
+        self.observation
     }
     pub(crate) const fn revision(self) -> u64 {
         self.revision
@@ -2935,6 +2985,12 @@ pub(crate) struct ObservationV1<'a> {
 }
 
 impl<'a> ObservationV1<'a> {
+    /// Возвращает направленный descriptor и точные области координаты для
+    /// объявленного поля; конечное наблюдение не имеет такого descriptor.
+    pub(crate) fn declared_field(self) -> Option<crate::observation::DeclaredFieldViewV1<'a>> {
+        self.inner.declared_field()
+    }
+
     /// Возвращает stream provenance наблюдения.
     pub(crate) const fn stream(self) -> StreamIdV1 {
         StreamIdV1::from_core(self.inner.stream())
@@ -3004,7 +3060,7 @@ impl<'a> PhysicalCaseV1<'a> {
     ) -> impl ExactSizeIterator<Item = ScenarioIdV1> + FusedIterator + 'a {
         self.observation
             .provenance(self.index)
-            .expect("physical case originates from the same observation")
+            .unwrap_or(&[])
             .iter()
             .copied()
             .map(ScenarioIdV1::from_core)
@@ -4453,6 +4509,13 @@ pub(crate) enum UpdateErrorV1 {
         /// Фактическое число переданных значений.
         actual: usize,
     },
+    /// Число входов объявленного поля не равно скомпилированной schema.
+    DeclaredFieldValueCountMismatch { expected: usize, actual: usize },
+    /// Изменяемый вход отсутствует в скомпилированной schema.
+    DeclaredFieldInputOutOfBounds {
+        input_index: usize,
+        input_count: usize,
+    },
     /// Входная ревизия старше уже принятой.
     RevisionOutOfOrder {
         /// Текущая принятая ревизия.
@@ -4497,7 +4560,9 @@ impl UpdateErrorV1 {
             Self::OwnerMismatch => UpdateErrorKindV1::OwnerMismatch,
             Self::EmptyScenarioSet
             | Self::DuplicateScenarioId { .. }
-            | Self::ScenarioValueCountMismatch { .. } => UpdateErrorKindV1::InvalidObservation,
+            | Self::ScenarioValueCountMismatch { .. }
+            | Self::DeclaredFieldValueCountMismatch { .. }
+            | Self::DeclaredFieldInputOutOfBounds { .. } => UpdateErrorKindV1::InvalidObservation,
             Self::RevisionOutOfOrder { .. } => UpdateErrorKindV1::RevisionOutOfOrder,
             Self::RevisionConflict { .. } => UpdateErrorKindV1::RevisionConflict,
             Self::ResourceExhausted { .. } => UpdateErrorKindV1::ResourceExhausted,
@@ -4933,6 +4998,16 @@ fn map_observation_error(error: ObservationError) -> UpdateErrorV1 {
             scenario: ScenarioIdV1::from_core(scenario),
             expected,
             actual,
+        },
+        ObservationError::DeclaredFieldValueCountMismatch { expected, actual } => {
+            UpdateErrorV1::DeclaredFieldValueCountMismatch { expected, actual }
+        }
+        ObservationError::DeclaredFieldInputOutOfBounds {
+            input_index,
+            input_count,
+        } => UpdateErrorV1::DeclaredFieldInputOutOfBounds {
+            input_index,
+            input_count,
         },
         ObservationError::DuplicateSurfaceInputBinding { scenario, input } => {
             UpdateErrorV1::InternalInvariant {

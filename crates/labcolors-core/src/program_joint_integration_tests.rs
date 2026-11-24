@@ -1500,7 +1500,12 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
         let physical_cases = (0..observation.physical_case_count())
             .map(|case_index| {
                 (
-                    observation.physical_values(case_index).unwrap().to_vec(),
+                    observation
+                        .physical_values(case_index)
+                        .expect("case index is within the admitted physical support")
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>(),
                     observation.provenance(case_index).unwrap().to_vec(),
                 )
             })

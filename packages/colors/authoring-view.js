@@ -15,10 +15,10 @@ function ensureAvailable(state, operation) {
 function update(state, values, replacement) {
   const context = parseColorContext(state.graph, values);
   const revision = ++state.revision;
-  if (context.unknown.length > 0) return reject(unknownColorFrame(revision, context.unknown));
+  if (context.unknown.length > 0) return reject(unknownColorFrame(revision, context.unknown, context));
   let snapshot, outcome;
   try {
-    state.runtime.updateObservedWith(revision, scenario, context.rgb, state.graph.inputs.length, (candidate) => {
+    const accept = (candidate) => {
       snapshot = candidate;
       const frame = copyColorFrame(candidate, state.graph, context);
       if (frame.state !== "ready") { outcome = reject(frame); return false; }
@@ -29,7 +29,13 @@ function update(state, values, replacement) {
       state.pendingUpdate = lastUpdate;
       state.sink.install(prepared);
       return true;
-    });
+    };
+    if (context.field === undefined) {
+      state.runtime.updateObservedWith(revision, scenario, context.rgb, state.graph.inputs.length, accept);
+    } else {
+      state.runtime.updateDeclaredFieldWith(revision, context.rgb, context.field.inputIndex,
+        new Uint8Array(context.field.descriptor.from), new Uint8Array(context.field.descriptor.to), accept);
+    }
     if (outcome.state === "committed") {
       state.current = state.pendingFrame;
       state.lastUpdate = state.pendingUpdate;

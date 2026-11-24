@@ -6,6 +6,34 @@ use labcolors_core::program_wire::{
 };
 use wasm_bindgen::prelude::*;
 
+pub(super) fn project_field(
+    field: Option<&labcolors_core::program_wire::ProgramFieldAssessmentV1>,
+) -> Result<JsValue, JsValue> {
+    let Some(field) = field else {
+        return Ok(JsValue::NULL);
+    };
+    let witnesses = super::report_array()?;
+    for witness in field.witnesses() {
+        let (numerator, denominator) = witness.coordinate();
+        let [r, g, b] = witness.nominal().bytes();
+        let value = super::report_field_witness(numerator, denominator, r, g, b)?;
+        super::report_array_push(&witnesses, &value)?;
+    }
+    let (from, to) = field.endpoints();
+    let mut colors = [0; 6];
+    colors[..3].copy_from_slice(&from.bytes());
+    colors[3..].copy_from_slice(&to.bytes());
+    super::report_field(
+        field.input_index(),
+        &colors,
+        field.source_model(),
+        field.domain(),
+        field.rendering(),
+        field.region_count(),
+        &witnesses,
+    )
+}
+
 use super::{
     report_accepted, report_array, report_array_freeze, report_array_push, report_cell,
     report_cleanliness, report_domain_absent, report_projection, report_reference_capacity,

@@ -47,7 +47,10 @@ export async function compileColorSystem(entries, options) {
         revision += 1n;
         snapshot = context.unknown.length > 0
           ? headless.updateUnknown(revision, 1)
-          : headless.updateObserved(revision, scenario, context.rgb, graph.inputs.length);
+          : context.field === undefined
+            ? headless.updateObserved(revision, scenario, context.rgb, graph.inputs.length)
+            : headless.updateDeclaredField(revision, context.rgb, context.field.inputIndex,
+              new Uint8Array(context.field.descriptor.from), new Uint8Array(context.field.descriptor.to));
         return copyColorFrame(snapshot, graph, context);
       } finally {
         snapshot?.free();

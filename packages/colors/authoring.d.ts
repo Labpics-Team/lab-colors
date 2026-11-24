@@ -22,10 +22,55 @@ export interface ColorSystemOptions {
 /** Исходный encoded sRGB: HEX без alpha или три целых канала [0, 255]. */
 export type AuthoredColor = string | readonly [number, number, number];
 
+/** Один непрозрачный encoded-sRGB сегмент на всей нормированной области t ∈ [0, 1]. */
+export interface ColorAffineSrgb8Field {
+  readonly kind: "affine-srgb8";
+  readonly from: AuthoredColor;
+  readonly to: AuthoredColor;
+}
+
+/** Неизменяемая копия декларации, а не выбранный представитель поля. */
+export interface ResolvedColorAffineSrgb8Field {
+  readonly kind: "affine-srgb8";
+  readonly from: readonly [number, number, number];
+  readonly to: readonly [number, number, number];
+}
+
+export type ResolvedColorContext = Readonly<Record<string,
+  readonly [number, number, number] | ResolvedColorAffineSrgb8Field>>;
+
+export interface ColorFieldWitness {
+  /** Точный рациональный адрес внутри нормированной области: [числитель, знаменатель]. */
+  readonly coordinate: readonly [number, number];
+  readonly nominal: readonly [number, number, number];
+}
+
+export interface ColorFieldAssessment {
+  readonly input: string;
+  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1";
+  readonly domain: "whole-field";
+  readonly rendering: "unknown";
+  /** Число точных точек и открытых интервалов, выведенных Core. */
+  readonly regionCount: number;
+  /** Представители в порядке Core caseIndex; не описание покрытия вместо descriptor. */
+  readonly witnesses: readonly ColorFieldWitness[];
+}
+
+export interface ColorFieldModelScope<Model extends "complete" | "violated" | "incomplete"> {
+  readonly scope: "nominal-model";
+  readonly field: ColorFieldAssessment;
+  readonly coverage: Readonly<{
+    readonly sourceModel: ColorFieldAssessment["sourceModel"];
+    readonly model: Model;
+    readonly rendering: "unknown";
+  }>;
+}
+
 export type ColorAuthoringErrorCode =
   | "color_invalid_definition"
   | "color_foreign_reference"
   | "color_invalid_context"
+  | "color_unsupported_context"
   | "color_disposed"
   | "color_busy"
   | "color_host_changed"
@@ -114,6 +159,7 @@ export type ColorDiagnostic =
       stronger: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
       weaker: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
       caseIndex: number;
+      readonly fieldWitness?: Readonly<ColorFieldWitness & { input: string }>;
       /** CRstrong / CRweak на общем фоне; сравнение выполняется по этим значениям. */
       requiredRatio: number;
       actualRatio: number;
@@ -132,6 +178,7 @@ export type ColorDiagnostic =
       /** Проверенный нарушивший кандидат; это не минимальное конфликтное множество. */
       evidence: "candidate-witness";
       caseIndex?: number;
+      readonly fieldWitness?: Readonly<ColorFieldWitness & { input: string }>;
       actual?: readonly [number, number, number];
       distanceSquared?: number;
       maximumDistance?: number;
@@ -142,9 +189,26 @@ export type ColorDiagnostic =
 
 export type UnresolvedColorFrame =
   | Readonly<{ state: "conflict"; revision: bigint; diagnostics: readonly ColorDiagnostic[] }>
+  | Readonly<{ state: "conflict"; revision: bigint; diagnostics: readonly ColorDiagnostic[];
+      context: ResolvedColorContext } & ColorFieldModelScope<"violated">>
   | Readonly<{ state: "unresolved"; reason: "search-limit"; revision: bigint; diagnostics: readonly ColorDiagnostic[] }>
-  | Readonly<{ state: "unknown"; revision: bigint; diagnostics: readonly ColorDiagnostic[] }>
-  | Readonly<{ state: "stale"; revision: bigint; diagnostics: readonly ColorDiagnostic[] }>;
+  | Readonly<{ state: "unresolved"; reason: "search-limit"; revision: bigint; diagnostics: readonly ColorDiagnostic[];
+      context: ResolvedColorContext } & ColorFieldModelScope<"incomplete">>
+  | Readonly<{ state: "unknown"; revision: bigint; diagnostics: readonly ColorDiagnostic[]; context?: ResolvedColorContext }>
+  | Readonly<{ state: "stale"; revision: bigint; diagnostics: readonly ColorDiagnostic[]; context?: ResolvedColorContext }>;
+
+/** Пригодный результат на всей области модели; точность браузерного отображения неизвестна. */
+export type ModeledColorFrame<Name extends string = string> = Readonly<{
+  state: "modeled";
+  revision: bigint;
+  optimality: "exact" | "unfinished";
+  cleanliness: ColorCleanlinessAssessment;
+  reference: readonly ColorReferenceSelection[];
+  context: ResolvedColorContext;
+  /** Целые входы для явного preview: affine поле сериализовано с `in srgb` от 0% до 100%. */
+  contextCss: Readonly<Record<string, string>>;
+  values: Readonly<Record<Name, ResolvedColor>>;
+} & ColorFieldModelScope<"complete">>;
 
 export type ColorResolution<Name extends string = string> =
   | Readonly<{
@@ -157,13 +221,15 @@ export type ColorResolution<Name extends string = string> =
       context: Readonly<Record<string, readonly [number, number, number]>>;
       values: Readonly<Record<Name, ResolvedColor>>;
     }>
+  | ModeledColorFrame<Name>
   | UnresolvedColorFrame;
 
 export type ColorViewUpdate<Name extends string = string> =
   | Readonly<{ state: "committed"; frame: Extract<ColorResolution<Name>, { state: "ready" }> }>
-  | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame }>;
+  | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
-export type ColorContext = Readonly<Record<string, AuthoredColor | null | undefined>>;
+/** Допускается одно affine поле; прочие входы постоянны. Несколько полей пока не поддержаны. */
+export type ColorContext = Readonly<Record<string, AuthoredColor | ColorAffineSrgb8Field | null | undefined>>;
 
 export interface ColorAttachOptions {
   /** Доверенный nonce приложения для принадлежащего view stylesheet при CSP. */
@@ -176,12 +242,13 @@ export type ColorViewReplacement<Name extends string = string> =
       frame: Extract<ColorResolution<Name>, { state: "ready" }>;
       view: ColorView<Name>;
     }>
-  | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame }>;
+  | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
 export interface ColorView<Name extends string = string> {
   readonly current: Extract<ColorResolution<Name>, { state: "ready" }> | null;
-  readonly lastUpdate: ColorViewUpdate<Name> | null;
-  /** Предлагает полный новый owned context; отказ сохраняет прежний фон и все значения. */
+  /** При отклонённом replace имена proposed.values принадлежат новой программе. */
+  readonly lastUpdate: ColorViewUpdate<Name> | Extract<ColorViewReplacement<string>, { state: "rejected" }> | null;
+  /** Предлагает полный owned context; modeled отклоняется вместе с фоном и сохраняет прежние значения. */
   set(surfaces: ColorContext): ColorViewUpdate<Name>;
   /** Новая authored revision; успешный полный frame заменяет прежние variables в том же sink. */
   replace<NextName extends string>(
@@ -194,9 +261,9 @@ export interface ColorView<Name extends string = string> {
 export interface ColorProgram<Name extends string = string> {
   readonly inputs: readonly string[];
   readonly outputs: readonly Name[];
-  /** Явные данные контекста; non-ready не предоставляет сохранённые outputs как свежие. */
+  /** Явные данные контекста; поле возвращает modeled, недоступный результат не выдаёт старые outputs за свежие. */
   resolve(surfaces: ColorContext): ColorResolution<Name>;
-  /** Владеет CSS custom properties входов и outputs на одном element. */
+  /** Владеет CSS custom properties; modeled остаётся lastUpdate.proposed, автоматически не применяется. */
   attach(element: HTMLElement, surfaces?: ColorContext, options?: ColorAttachOptions): ColorView<Name>;
   dispose(): void;
 }

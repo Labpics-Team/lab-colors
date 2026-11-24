@@ -1158,8 +1158,13 @@ fn raw_head_and_program_report_share_one_observation_backing() {
     assert_eq!(raw.backing_ptr_for_test(), report.backing_ptr_for_test());
     assert_eq!(raw.schema_ptr_for_test(), report.schema_ptr_for_test());
     assert_eq!(
-        raw.physical_values(0).unwrap().as_ptr(),
-        report.physical_values(0).unwrap().as_ptr(),
+        raw.physical_values(0).unwrap().as_slice().unwrap().as_ptr(),
+        report
+            .physical_values(0)
+            .unwrap()
+            .as_slice()
+            .unwrap()
+            .as_ptr(),
     );
     assert_eq!(
         raw.provenance(0).unwrap().as_ptr(),
