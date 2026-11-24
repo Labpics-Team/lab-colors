@@ -37,6 +37,9 @@ const PREPACK_FIXTURE_SCRIPT_FILES = Object.freeze([
   "atomic-write.mjs",
   "cargo-workspace.mjs",
   "package-licenses.mjs",
+  "core-licenses.mjs",
+  "distribution-licenses.mjs",
+  "wasm-build-licenses.mjs",
   "release-evidence.mjs",
   "package-runtime-snippets.mjs",
 ]);
@@ -618,7 +621,7 @@ function assertPrepackFixtureScriptClosure(scriptFiles) {
 
 function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
   for (const path of [
-    "LICENSE", "crates/labcolors-core/NOTICE.md",
+    "LICENSE", "Cargo.lock", "crates/labcolors-core/NOTICE.md",
     "crates/labcolors-core/LICENSES/CC-BY-4.0.txt",
     "crates/labcolors-core/LICENSES/CC-BY-SA-4.0.txt",
     "crates/labcolors-core/Cargo.toml",
@@ -651,6 +654,30 @@ function copyPrepackFixture(fixture, { includeAtomicWriter = true } = {}) {
     { recursive: true },
   );
   return scripts;
+}
+
+function fixtureWasmLicenses(sourceRoot, packageDirectory = join(sourceRoot, "packages/colors")) {
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const generated = join(packageDirectory, "pkg");
+  mkdirSync(generated, { recursive: true });
+  const wasm = join(generated, "labcolors_bg.wasm");
+  if (!existsSync(wasm)) writeFileSync(wasm, Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+  const notices = Buffer.from("Fixture notices for an empty test module.\n");
+  writeFileSync(join(generated, "THIRD-PARTY-NOTICES.md"), notices);
+  const inventory = {
+    schemaVersion: 1,
+    components: ["labcolors-core", "labcolors-wasm"].map((name) => ({
+      ref: `cargo:${name}@0.0.0#workspace`, name, version: "0.0.0", licenseExpressions: ["MIT"],
+    })),
+  };
+  writeFileSync(join(generated, "dependency-licenses.json"), JSON.stringify({
+    ...inventory,
+    build: {
+      inventorySha256: hash(JSON.stringify(inventory)),
+      cargoLockSha256: hash(readFileSync(join(sourceRoot, "Cargo.lock"))),
+      wasmSha256: hash(readFileSync(wasm)), noticesSha256: hash(notices),
+    },
+  }));
 }
 
 test("prepack source graph fails closed without its atomic writer", async () => {
@@ -854,7 +881,7 @@ test("npm 11.9.0 packs canonical hex while the release guard rejects hostile sni
   }
 });
 
-test("prepack includes the generated snippet despite wasm-pack gitignore without widening the archive", async () => {
+test("prepack ships the exact snippet and dependency notices to an isolated installed consumer", async () => {
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-prepack-ignore-"));
   const previousSha = process.env.GITHUB_SHA;
   try {
@@ -889,6 +916,7 @@ test("prepack includes the generated snippet despite wasm-pack gitignore without
     writeFileSync(join(packageDirectory, snippet), "export const fixture = true;\n");
     writeFileSync(join(generated, "labcolors.js"), `import "./${snippet.slice("pkg/".length)}";\n`);
     writeFileSync(join(generated, "labcolors_bg.wasm"), Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]));
+    fixtureWasmLicenses(fixture);
     writeFileSync(join(generated, ".gitignore"), "*\n");
     writeFileSync(join(generated, "LICENSE"), "nested licence must not ship\n");
     writeFileSync(join(generated, "package.json"), "{}\n");
@@ -904,12 +932,24 @@ test("prepack includes the generated snippet despite wasm-pack gitignore without
     const npx = process.platform === "win32"
       ? { command: process.env.ComSpec ?? "cmd.exe", prefix: ["/d", "/s", "/c", "npx.cmd"] }
       : { command: "npx", prefix: [] };
-    const [pack] = JSON.parse(command(npx.command, [...npx.prefix, "--yes", "npm@11.9.0", "pack", "--dry-run", "--json", "--ignore-scripts"], packageDirectory));
+    const [pack] = JSON.parse(command(npx.command, [...npx.prefix, "--yes", "npm@11.9.0", "pack", "--json", "--ignore-scripts", "--pack-destination", fixture], packageDirectory));
     const packedPaths = pack.files.map(({ path }) => path).sort();
     assert.deepEqual(packedPaths, [
       ...packageJson.files.filter((file) => !file.includes("[0-9a-f]")),
       snippet, "README.md", "package.json",
     ].sort());
+    const consumer = join(fixture, "consumer");
+    mkdirSync(consumer);
+    writeFileSync(join(consumer, "package.json"), JSON.stringify({ private: true }));
+    command(npx.command, [...npx.prefix, "--yes", "npm@11.9.0", "install", "--offline", "--ignore-scripts",
+      "--no-audit", "--no-fund", "--no-package-lock", join(fixture, pack.filename)], consumer);
+    const installed = join(consumer, "node_modules/@labpics/colors");
+    const { verifyPackageLicenses } = await import(pathToFileURL(join(scripts, "package-licenses.mjs")));
+    await verifyPackageLicenses(installed);
+    rmSync(packageDirectory, { recursive: true });
+    rmSync(join(fixture, "Cargo.lock"));
+    const { verifyWasmLicenses } = await import(pathToFileURL(join(scripts, "wasm-build-licenses.mjs")));
+    await verifyWasmLicenses(installed);
   } finally {
     if (previousSha === undefined) delete process.env.GITHUB_SHA;
     else process.env.GITHUB_SHA = previousSha;
@@ -941,12 +981,13 @@ test("canonical package inventory includes legal materials and one exact snippet
     packageJson,
     'import "./snippets/labcolors-wasm-0123456789abcdef/inline0.js";',
   );
-  assert.equal(inventory.length, 33);
+  assert.equal(inventory.length, 35);
   for (const path of [
     "authoring.js", "authoring.d.ts", "authoring-graph.js", "authoring-frame.js",
     "authoring-program.js", "authoring-css.js", "authoring-view.js",
     "program-wire/encoding.js", "program-wire/abi-v2.js", "program-wire/abi-v2.d.ts",
     "program-wire/abi-v3.js", "program-wire/abi-v3.d.ts",
+    "pkg/dependency-licenses.json", "pkg/THIRD-PARTY-NOTICES.md",
   ]) {
     assert.ok(inventory.includes(path));
   }
@@ -1143,6 +1184,7 @@ test("npm carries canonical data attribution and rejects incomplete or altered l
       mkdirSync(dirname(join(installed, path)), { recursive: true });
       writeFileSync(join(installed, path), bytes);
     }
+    fixtureWasmLicenses(fixture, installed);
     await verifyPackageLicenses(installed);
 
     for (const { path, bytes } of inputs) {

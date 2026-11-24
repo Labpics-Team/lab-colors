@@ -13,6 +13,7 @@ import {
   assertPackageEvidenceInventory,
 } from "./release-evidence.mjs";
 import { retainImportedRuntimeSnippets } from "./package-runtime-snippets.mjs";
+import { verifyWasmLicenses } from "./wasm-build-licenses.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SCRIPT_DIR, "..");
@@ -72,6 +73,7 @@ export async function prepareNpmPackage() {
   const packageJson = JSON.parse(await readFile(resolve(PACKAGE_DIR, "package.json"), "utf8"));
   assertPackageEvidenceInventory(packageJson.files);
   const licenses = await packageLicenseInputs(packageJson);
+  await verifyWasmLicenses(PACKAGE_DIR, REPO_ROOT);
 
   for (const { path, bytes } of licenses) {
     const destination = resolve(PACKAGE_DIR, path);

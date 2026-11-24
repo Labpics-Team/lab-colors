@@ -7,6 +7,7 @@ import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeWasmLicenses } from "./wasm-build-licenses.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const budget = JSON.parse(await readFile(join(ROOT, "packages/colors/bench/wasm.json"), "utf8"));
@@ -17,7 +18,8 @@ const optimizerFlags = wasmOptFlags.trim().split(/\s+/u);
 assert.ok(optimizerFlags.length > 0 && optimizerFlags.every((flag) => flag.startsWith("-")));
 
 function run(command, args, capture = false, env = process.env) {
-  const result = spawnSync(command, args, { cwd: ROOT, env, encoding: "utf8", stdio: capture ? "pipe" : "inherit" });
+  const result = spawnSync(command, args, { cwd: ROOT, env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+    stdio: capture ? ["ignore", "pipe", "inherit"] : "inherit" });
   if (result.error) throw result.error;
   assert.equal(result.status, 0, `${command} failed: ${result.signal ?? result.stderr ?? result.status}`);
   return result.stdout?.trim();
@@ -92,13 +94,15 @@ try {
   const generatedPackage = resolve(ROOT, "packages/colors/pkg");
   assert.equal(dirname(wasm), generatedPackage, "unexpected WASM output directory");
   await rm(generatedPackage, { recursive: true, force: true });
-  run("wasm-pack", ["build", "--no-opt", "--release", "--target", "web",
-    "--out-dir", relative(crate, dirname(wasm)), "--out-name", basename(wasm, "_bg.wasm"), crate, "--locked"], false, buildEnvironment);
+  const messages = run("wasm-pack", ["build", "--no-opt", "--release", "--target", "web",
+    "--out-dir", relative(crate, dirname(wasm)), "--out-name", basename(wasm, "_bg.wasm"), crate,
+    "--locked", "--message-format=json-render-diagnostics"], true, buildEnvironment);
   const before = (await readFile(wasm)).length;
   run(process.execPath, [optimizer, wasm, "-o", optimized, ...optimizerFlags]);
   const bytes = await readFile(optimized);
   assert.ok(WebAssembly.validate(bytes), "Binaryen produced an invalid WebAssembly module");
   await rename(optimized, wasm);
+  await writeWasmLicenses(messages, ROOT);
   console.log(`Binaryen ${binaryenRelease}: ${before} -> ${bytes.length} bytes (${relative(ROOT, wasm)})`);
 } finally {
   await rm(optimized, { force: true });
