@@ -100,8 +100,7 @@ impl VisibleDependenciesV1 {
             surface_inputs.push(match surface {
                 Surface::Input { input, .. } => Some(
                     graph
-                        .surface_input_ports()
-                        .position(|candidate| candidate == *input)
+                        .surface_input_index(*input)
                         .ok_or(ProgramCompileError::InternalInvariant)?,
                 ),
                 Surface::FromOccurrence { .. } => None,
@@ -144,7 +143,12 @@ impl VisibleDependenciesV1 {
         }
     }
 
-    fn visit(&mut self, index: &IndexedProgramDependenciesV1, root: usize, targets: &mut [bool]) {
+    fn visit(
+        &mut self,
+        index: &IndexedProgramDependenciesV1,
+        root: usize,
+        mark_target: &mut impl FnMut(usize),
+    ) {
         for occurrence in self.queue.drain(..) {
             self.seen[occurrence] = false;
         }
@@ -159,7 +163,7 @@ impl VisibleDependenciesV1 {
                 loop {
                     match index.paint_dependencies[paint] {
                         IndexedPaintDependencyV1::Target(target) => {
-                            targets[target] = true;
+                            mark_target(target);
                             break;
                         }
                         IndexedPaintDependencyV1::Paint(source) => paint = source,
@@ -184,12 +188,12 @@ impl VisibleDependenciesV1 {
         &mut self,
         index: &IndexedProgramDependenciesV1,
         occurrence: OccurrenceId,
-        targets: &mut [bool],
+        mark_target: &mut impl FnMut(usize),
     ) -> Result<(), ProgramCompileError> {
         let root = index
             .occurrence(occurrence)
             .ok_or(ProgramCompileError::InternalInvariant)?;
-        self.visit(index, root, targets);
+        self.visit(index, root, mark_target);
         Ok(())
     }
 
@@ -197,14 +201,14 @@ impl VisibleDependenciesV1 {
         &mut self,
         index: &IndexedProgramDependenciesV1,
         occurrence: OccurrenceId,
-        targets: &mut [bool],
+        mark_target: &mut impl FnMut(usize),
     ) -> Result<(), ProgramCompileError> {
         let root = index
             .occurrence(occurrence)
             .ok_or(ProgramCompileError::InternalInvariant)?;
         let surface = index.occurrence_surfaces[root];
         if let Some(parent) = index.surface_occurrences[surface] {
-            self.visit(index, parent, targets);
+            self.visit(index, parent, mark_target);
         } else if let Some(input) = self.surface_inputs[surface] {
             self.input(input);
         }
@@ -217,13 +221,13 @@ impl VisibleDependenciesV1 {
         index: &IndexedProgramDependenciesV1,
         scratch: &mut ProgramDependencyScratchV1,
         constraint: &CompiledPointConstraint<ProgramConstraintInvocationOf<E>>,
-        targets: &mut [bool],
+        mark_target: &mut impl FnMut(usize),
     ) -> Result<(), ProgramCompileError> {
         match &constraint.body {
             CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
                 for endpoint in occurrences {
-                    self.visible(index, endpoint.occurrence, targets)?;
-                    self.backdrop(index, endpoint.occurrence, targets)?;
+                    self.visible(index, endpoint.occurrence, mark_target)?;
+                    self.backdrop(index, endpoint.occurrence, mark_target)?;
                 }
             }
             CompiledProgramConstraintBodyV1::VisibleUnary {
@@ -234,18 +238,23 @@ impl VisibleDependenciesV1 {
                 match program.evaluator.constraint_content(*invocation) {
                     ProgramConstraintContentV1::ExactSrgb8 { .. }
                     | ProgramConstraintContentV1::NominalSrgb8Visible { .. } => {
-                        self.visible(index, *occurrence, targets)?;
+                        self.visible(index, *occurrence, mark_target)?;
                     }
                     ProgramConstraintContentV1::Wcag22Srgb8 { .. }
                     | ProgramConstraintContentV1::VisibleSeparation { .. } => {
-                        self.visible(index, *occurrence, targets)?;
-                        self.backdrop(index, *occurrence, targets)?;
+                        self.visible(index, *occurrence, mark_target)?;
+                        self.backdrop(index, *occurrence, mark_target)?;
                     }
                     // An unrecognised evaluator keeps the complete declared
                     // physical dependency cone. It is never dropped or guessed.
                     _ => {
                         mark_constraint_coverage(
-                            program, index, scratch, constraint, targets, None,
+                            program,
+                            index,
+                            scratch,
+                            constraint,
+                            mark_target,
+                            None,
                         )?;
                         self.declared_inputs(scratch);
                     }
@@ -258,18 +267,18 @@ impl VisibleDependenciesV1 {
             } => {
                 // Relation evaluators receive final RGB endpoints and immutable
                 // family artifacts. The backdrop remains only in evidence.
-                self.visible(index, reference.occurrence, targets)?;
+                self.visible(index, reference.occurrence, mark_target)?;
                 for candidate in candidates {
-                    self.visible(index, candidate.occurrence, targets)?;
+                    self.visible(index, candidate.occurrence, mark_target)?;
                 }
             }
             CompiledProgramConstraintBodyV1::PointPresentation { .. } => {
-                mark_constraint_coverage(program, index, scratch, constraint, targets, None)?;
+                mark_constraint_coverage(program, index, scratch, constraint, mark_target, None)?;
                 self.declared_inputs(scratch);
             }
             CompiledProgramConstraintBodyV1::IntrinsicUnary { .. }
             | CompiledProgramConstraintBodyV1::IntrinsicRelation { .. } => {
-                mark_constraint_coverage(program, index, scratch, constraint, targets, None)?;
+                mark_constraint_coverage(program, index, scratch, constraint, mark_target, None)?;
             }
         }
         Ok(())
@@ -315,7 +324,56 @@ fn copy_factor(
     })
 }
 
-pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluatorSetV1>(
+/// Sparse program-target incidences of one factor. Preserve the previous
+/// canonical ID order while resetting only the targets this factor visited.
+struct FactorTargetsV1 {
+    seen: Vec<bool>,
+    touched: Vec<usize>,
+}
+
+impl FactorTargetsV1 {
+    fn new(count: usize) -> Result<Self, ProgramCompileError> {
+        let mut touched = Vec::new();
+        touched
+            .try_reserve_exact(count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        Ok(Self {
+            seen: false_slots(count)?,
+            touched,
+        })
+    }
+
+    fn mark(&mut self, target: usize) {
+        if !self.seen[target] {
+            self.seen[target] = true;
+            self.touched.push(target);
+        }
+    }
+
+    fn collect(&mut self, selected: &[Option<usize>], members: &mut Vec<usize>) {
+        self.touched.sort_unstable();
+        members.clear();
+        members.extend(self.touched.drain(..).filter_map(|target| {
+            self.seen[target] = false;
+            selected[target]
+        }));
+    }
+}
+
+pub(super) struct ComponentGroupV1 {
+    pub(super) targets: Vec<usize>,
+    constraints: Vec<usize>,
+    pub(super) mode: ProgramSelectionModeV1,
+}
+
+pub(in crate::program_session) struct ComponentPartitionV1 {
+    pub(super) groups: Vec<ComponentGroupV1>,
+    pub(super) factors: Vec<ComputedFactorV1>,
+    fixed: Vec<usize>,
+    visible: VisibleDependenciesV1,
+}
+
+pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvaluatorSetV1>(
     selection: &mut ComputedSelectionV1,
     program: &Program<E>,
     graph: &CompiledAppearanceGraph,
@@ -323,7 +381,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<E>>],
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
-) -> Result<(), ProgramCompileError> {
+) -> Result<ComponentPartitionV1, ProgramCompileError> {
     let count = selection.targets.len();
     let mut parents = buffer(count, 0).map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for (ordinal, parent) in parents.iter_mut().enumerate() {
@@ -338,7 +396,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             .map_err(|_| ProgramCompileError::InternalInvariant)?;
         selected[index] = Some(ordinal);
     }
-    let mut marked = false_slots(program.targets.len())?;
+    let mut marked = FactorTargetsV1::new(program.targets.len())?;
     let mut visible = VisibleDependenciesV1::new(program, graph, bindings)?;
     for target in &mut selection.targets {
         if let Some(appearance) = target
@@ -357,15 +415,6 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     members
         .try_reserve_exact(count)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    let collect = |marked: &[bool], members: &mut Vec<usize>| {
-        members.clear();
-        members.extend(
-            marked
-                .iter()
-                .zip(&selected)
-                .filter_map(|(&marked, &selected)| marked.then_some(selected).flatten()),
-        );
-    };
     let mut constraint_members = Vec::new();
     constraint_members
         .try_reserve_exact(constraints.len())
@@ -383,10 +432,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         if !constraint.mode.rejects_candidate() {
             continue;
         }
-        marked.fill(false);
         visible.clear_inputs();
-        visible.constraint(program, index, scratch, constraint, &mut marked)?;
-        collect(&marked, &mut members);
+        visible.constraint(program, index, scratch, constraint, &mut |target| {
+            marked.mark(target)
+        })?;
+        marked.collect(&selected, &mut members);
         factors.push(copy_factor(
             &members,
             &visible.inputs,
@@ -403,18 +453,17 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             .intent
             .as_ref()
             .and_then(|intent| intent.appearance);
-        marked.fill(false);
         visible.clear_inputs();
         if let Some(appearance) = appearance {
-            visible.visible(index, appearance, &mut marked)?;
+            visible.visible(index, appearance, &mut |target| marked.mark(target))?;
             if target.declaration.reference_appearance {
-                visible.backdrop(index, appearance, &mut marked)?;
+                visible.backdrop(index, appearance, &mut |target| marked.mark(target))?;
             }
         }
         if let Some(input) = target.tone_input {
             visible.input(input);
         }
-        collect(&marked, &mut members);
+        marked.collect(&selected, &mut members);
         if !members.contains(&ordinal) {
             members.push(ordinal);
         }
@@ -427,47 +476,96 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     }
     let mut component_of =
         buffer(count, usize::MAX).map_err(|_| ProgramCompileError::ResourceExhausted)?;
-    let mut grouped_targets: Vec<Vec<usize>> = Vec::new();
-    grouped_targets
+    let initial_mode = if program
+        .assignment
+        .as_ref()
+        .is_some_and(ComputedSelectionPolicyV1::authored_composition)
+    {
+        ProgramSelectionModeV1::JointPointV1
+    } else {
+        ProgramSelectionModeV1::OrderedV1
+    };
+    let mut groups = Vec::new();
+    groups
         .try_reserve_exact(count)
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for target in 0..count {
         let representative = root(&mut parents, target);
         if component_of[representative] == usize::MAX {
-            component_of[representative] = grouped_targets.len();
-            grouped_targets.push(Vec::new());
+            component_of[representative] = groups.len();
+            groups.push(ComponentGroupV1 {
+                targets: Vec::new(),
+                constraints: Vec::new(),
+                mode: initial_mode,
+            });
         }
         let component = component_of[representative];
         component_of[target] = component;
-        grouped_targets[component]
+        let group = &mut groups[component];
+        group
+            .targets
             .try_reserve(1)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        grouped_targets[component].push(target);
+        group.targets.push(target);
+        if group.mode == ProgramSelectionModeV1::JointPointV1
+            && matches!(
+                selection.targets[target].preferred_intent(),
+                CompiledPreferredIntentV1::ImplicitReference
+            )
+        {
+            group.mode = ProgramSelectionModeV1::OrderedReferenceV1;
+        }
     }
-    let mut grouped_constraints = buffer(grouped_targets.len(), Vec::new())
-        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     let mut fixed = Vec::new();
     fixed
         .try_reserve_exact(constraint_members.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for (constraint, member) in constraint_members {
         if let Some(target) = member {
-            let group = &mut grouped_constraints[component_of[target]];
-            group
+            let constraints = &mut groups[component_of[target]].constraints;
+            constraints
                 .try_reserve(1)
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            group.push(constraint);
+            constraints.push(constraint);
         } else {
             fixed.push(constraint);
         }
     }
+    Ok(ComponentPartitionV1 {
+        groups,
+        factors,
+        fixed,
+        visible,
+    })
+}
+
+pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluatorSetV1>(
+    selection: &mut ComputedSelectionV1,
+    partition: ComponentPartitionV1,
+    program: &Program<E>,
+    graph: &CompiledAppearanceGraph,
+    constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<E>>],
+    index: &IndexedProgramDependenciesV1,
+    scratch: &mut ProgramDependencyScratchV1,
+) -> Result<(), ProgramCompileError> {
+    let ComponentPartitionV1 {
+        groups,
+        factors,
+        fixed,
+        mut visible,
+    } = partition;
     let mut components = Vec::new();
     components
-        .try_reserve_exact(grouped_targets.len())
+        .try_reserve_exact(groups.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     let mut required_inputs = false_slots(visible.input_seen.len())?;
     let mut physical = AppearanceConeCompilerV1::new(graph).map_err(map_binding_compile_error)?;
-    for (targets, constraint_indices) in grouped_targets.into_iter().zip(grouped_constraints) {
+    for ComponentGroupV1 {
+        targets,
+        constraints: constraint_indices,
+        mode,
+    } in groups
+    {
         visible.clear_inputs();
         for &target in &targets {
             let target = &selection.targets[target];
@@ -477,9 +575,9 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .as_ref()
                 .and_then(|v| v.appearance)
             {
-                visible.visible(index, appearance, &mut marked)?;
+                visible.visible(index, appearance, &mut |_| {})?;
                 if target.declaration.reference_appearance {
-                    visible.backdrop(index, appearance, &mut marked)?;
+                    visible.backdrop(index, appearance, &mut |_| {})?;
                 }
             }
             if let Some(input) = target.tone_input {
@@ -492,7 +590,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 index,
                 scratch,
                 &constraints[constraint],
-                &mut marked,
+                &mut |_| {},
             )?;
         }
         for &input in &visible.inputs {
@@ -523,7 +621,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 index,
                 scratch,
                 &constraints[constraint],
-                &mut marked,
+                &mut |_| {},
             )?;
         }
         let mut inputs = Vec::new();
@@ -538,24 +636,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         }
         components.push(ComputedComponentV1 {
             point_equivalence: None,
-            mode: if program
-                .assignment
-                .as_ref()
-                .is_some_and(ComputedSelectionPolicyV1::authored_composition)
-            {
-                if targets.iter().all(|&target| {
-                    matches!(
-                        selection.targets[target].preferred_intent(),
-                        CompiledPreferredIntentV1::Point { .. }
-                    )
-                }) {
-                    ProgramSelectionModeV1::JointPointV1
-                } else {
-                    ProgramSelectionModeV1::OrderedReferenceV1
-                }
-            } else {
-                ProgramSelectionModeV1::OrderedV1
-            },
+            mode,
             physical: physical_cone(
                 selection,
                 &targets,
@@ -797,11 +878,7 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
 ) -> Result<Option<ComputedComponentV1>, ()> {
     let input_count = epoch.observation_group.schema.as_slice().len();
     let &first = component.targets.first().ok_or(())?;
-    let objective = selection
-        .factors
-        .iter()
-        .find(|factor| factor.kind == ComputedFactorKindV1::Objective(first))
-        .ok_or(())?;
+    let objective = &selection.factors[selection.objective_factor(first).ok_or(())?];
     if objective.targets.iter().any(|&target| target != first) {
         return Ok(None);
     }

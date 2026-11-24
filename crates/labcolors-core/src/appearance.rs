@@ -1301,6 +1301,11 @@ impl AdmittedAppearanceBindings {
         Ok(())
     }
 
+    /// Canonical position of a prebound target in this admitted binding set.
+    pub(crate) fn paint_input_index(&self, slot: CompiledPaintInputSlotV1) -> Option<usize> {
+        self.paint_input_at(slot).map(|_| slot.index)
+    }
+
     /// Читает одно заранее связанное значение Target без поиска и аллокации.
     ///
     /// Slot минтит тот же compiled graph, которому принадлежат bindings.
@@ -2308,6 +2313,10 @@ impl CompiledAppearanceGraph {
         };
         self.occurrences[index].raster_precision = true;
         true
+    }
+
+    pub(crate) fn surface_input_index(&self, input: SurfaceInputPortId) -> Option<usize> {
+        self.surface_input_ports.binary_search(&input).ok()
     }
 
     /// Canonical physical Surface-input schema accepted by this program.

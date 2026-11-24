@@ -100,6 +100,9 @@ pub(super) fn compile<E: ProgramConstraintEvaluatorSetV1>(
         ProgramCompileError::ResourceExhausted
     }
     let count = component.targets.len();
+    if count < 2 {
+        return Ok(None);
+    }
     let mut occurrences = buffer(count, None).map_err(allocation)?;
     let mut unary = buffer(count, Vec::new()).map_err(allocation)?;
     for (local, &target) in component.targets.iter().enumerate() {

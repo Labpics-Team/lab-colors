@@ -484,12 +484,13 @@ impl CompiledComputedTargetV1 {
 impl ComputedSelectionV1 {
     pub(super) fn identity_preferences(
         &self,
+        partition: &components::ComponentPartitionV1,
     ) -> Result<Vec<identity::ComputedTargetIdentityPreferenceV1>, ProgramCompileError> {
         let mut result = Vec::new();
         result
             .try_reserve_exact(self.targets.len())
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        for component in &self.components {
+        for component in &partition.groups {
             for (rank, &index) in component.targets.iter().enumerate() {
                 let target = &self.targets[index];
                 let preference = match component.mode {
@@ -513,9 +514,12 @@ impl ComputedSelectionV1 {
         Ok(result)
     }
 
+    /// Apply the canonical schedule to the existing partition. Dependencies are
+    /// physical facts and do not change when target ordinals are permuted.
     pub(super) fn canonicalize_execution(
         &mut self,
         layout: &identity::CanonicalExecutionLayoutV1,
+        partition: &mut components::ComponentPartitionV1,
     ) -> Result<(), ProgramCompileError> {
         let allocation = |_| ProgramCompileError::ResourceExhausted;
         let mut ranks = Vec::new();
@@ -530,59 +534,79 @@ impl ComputedSelectionV1 {
                 .map(|(rank, &id)| (id, rank)),
         );
         ranks.sort_unstable_by_key(|entry| entry.0);
-        let rank = |index: usize| -> usize {
-            ranks
-                .binary_search_by_key(&self.targets[index].id, |entry| entry.0)
-                .map(|i| ranks[i].1)
-                .unwrap_or(usize::MAX)
-        };
-        let mut groups = Vec::new();
-        groups
-            .try_reserve_exact(self.components.len())
-            .map_err(allocation)?;
-        for component in &self.components {
-            let mut indices = Vec::new();
-            indices
-                .try_reserve_exact(component.targets.len())
-                .map_err(allocation)?;
-            indices.extend_from_slice(&component.targets);
-            if component.mode == ProgramSelectionModeV1::JointPointV1 {
-                indices.sort_unstable_by_key(|&index| rank(index));
-            }
-            groups.push((
-                indices
-                    .iter()
-                    .map(|&index| rank(index))
-                    .min()
-                    .unwrap_or(usize::MAX),
-                indices,
-            ));
-        }
-        groups.sort_unstable_by_key(|entry| entry.0);
-        let mut old = Vec::new();
-        old.try_reserve_exact(self.targets.len())
-            .map_err(allocation)?;
-        let mut ordered = Vec::new();
-        ordered
+        let mut target_ranks = Vec::new();
+        target_ranks
             .try_reserve_exact(self.targets.len())
             .map_err(allocation)?;
-        old.extend(
-            std::mem::take(&mut self.targets)
-                .into_vec()
-                .into_iter()
-                .map(Some),
-        );
-        for (_, indices) in groups {
-            for index in indices {
-                ordered.push(
-                    old[index]
-                        .take()
-                        .ok_or(ProgramCompileError::InternalInvariant)?,
-                );
+        for target in &self.targets {
+            let position = ranks
+                .binary_search_by_key(&target.id, |entry| entry.0)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            target_ranks.push(ranks[position].1);
+        }
+        let mut old_to_new =
+            buffer(self.targets.len(), 0).map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for group in &mut partition.groups {
+            if group.mode == ProgramSelectionModeV1::JointPointV1 {
+                group
+                    .targets
+                    .sort_unstable_by_key(|&target| target_ranks[target]);
+            }
+            let &first = group
+                .targets
+                .first()
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            old_to_new[first] = group
+                .targets
+                .iter()
+                .map(|&target| target_ranks[target])
+                .min()
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+        }
+        partition
+            .groups
+            .sort_unstable_by_key(|group| old_to_new[group.targets[0]]);
+        for (next, index) in partition
+            .groups
+            .iter_mut()
+            .flat_map(|group| &mut group.targets)
+            .enumerate()
+        {
+            old_to_new[*index] = next;
+            *index = next;
+        }
+        for factor in &mut partition.factors {
+            for target in &mut factor.targets {
+                *target = old_to_new[*target];
             }
         }
-        self.targets = ordered.into_boxed_slice();
+        // An objective travels with its target. Each swap places one target,
+        // its physical objective, and its binding at their final ordinal.
+        let first = partition
+            .factors
+            .len()
+            .checked_sub(self.targets.len())
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let objectives = &mut partition.factors[first..];
+        for index in 0..self.targets.len() {
+            while old_to_new[index] != index {
+                let next = old_to_new[index];
+                self.targets.swap(index, next);
+                objectives.swap(index, next);
+                old_to_new.swap(index, next);
+            }
+            objectives[index].kind = ComputedFactorKindV1::Objective(index);
+        }
         Ok(())
+    }
+
+    fn objective_factor(&self, target: usize) -> Option<usize> {
+        let index = self
+            .factors
+            .len()
+            .checked_sub(self.targets.len())?
+            .checked_add(target)?;
+        (self.factors.get(index)?.kind == ComputedFactorKindV1::Objective(target)).then_some(index)
     }
 
     pub(super) fn canonicalize_inputs(
@@ -871,8 +895,7 @@ pub(super) fn compile_selection(
                 .and_then(|v| v.tone.as_ref())
                 .map(|tone| {
                     graph
-                        .surface_input_ports()
-                        .position(|id| id.value() == tone.input())
+                        .surface_input_index(SurfaceInputPortId::new(tone.input()))
                         .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput))
                 })
                 .transpose()?,
@@ -1834,7 +1857,7 @@ where
 
 mod components;
 mod contextual;
-pub(super) use components::compile_components;
+pub(super) use components::{compile_components, partition_components};
 pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
 #[cfg(test)]
 pub(super) use contextual::reference_completion::tests::incoming_test_hook as reference_completion_incoming_test_hook;

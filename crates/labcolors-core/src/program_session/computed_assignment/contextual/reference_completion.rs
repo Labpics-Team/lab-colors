@@ -467,7 +467,8 @@ impl ReferenceCompletionStorageV1 {
         };
         let bindings = epoch.binding_template.try_clone_v1()?;
         let certified_workspace = epoch.graph.new_certified_workspace()?;
-        let sources = bindings.paint_inputs_canonical();
+        let mut binding_targets = reserve::<_, E>(bindings.paint_inputs_canonical().len())?;
+        binding_targets.resize(bindings.paint_inputs_canonical().len(), None);
         let anchors = if let Some(anchors) = &selection.point_anchors {
             anchors.clone()
         } else {
@@ -489,10 +490,12 @@ impl ReferenceCompletionStorageV1 {
                 CompiledPreferredIntentV1::ImplicitReference => None,
             };
             let factor = selection
-                .factors
-                .iter()
-                .position(|factor| factor.kind == ComputedFactorKindV1::Objective(index))
+                .objective_factor(index)
                 .ok_or(Error::<E>::InvalidUse)?;
+            let binding = bindings
+                .paint_input_index(target.binding)
+                .ok_or(Error::<E>::InvalidUse)?;
+            binding_targets[binding] = Some(index);
             uses.push(UseV1 {
                 slot: target.appearance,
                 occurrence: target
@@ -509,15 +512,6 @@ impl ReferenceCompletionStorageV1 {
                 reference: references[index],
                 point_lab_cache: crate::certified_numeric::CertifiedOklabCacheV1::default(),
             });
-        }
-        let mut binding_targets = reserve::<_, E>(sources.len())?;
-        for (id, _) in sources {
-            binding_targets.push(
-                selection
-                    .targets
-                    .iter()
-                    .position(|target| target_paint_input_id(target.id) == *id),
-            );
         }
         Ok(Self {
             uses,

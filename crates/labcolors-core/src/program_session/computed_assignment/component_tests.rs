@@ -441,6 +441,55 @@ fn fixed_constraint() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn composed_objectives_follow_their_own_paints_across_a_fixed_binding() {
+    for order in [[10, 40], [40, 10]] {
+        let mut declaration = fixed_constraint();
+        declaration.targets.push(target(40, 200, 190, 210, 1));
+        let paint = PaintId::new(23);
+        declaration.paints.push(Paint::Solid {
+            id: paint,
+            target: TargetId::new(40),
+        });
+        declaration.occurrences.push(Occurrence::new(
+            OccurrenceId::new(25),
+            paint,
+            SurfaceId::new(4),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            declaration.occurrences[0].context,
+        ));
+        declaration
+            .outputs
+            .push(OutputBinding::new(OutputSlotId::new(27), paint));
+        declaration.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+            legacy_reference_order: order.map(TargetId::new).to_vec(),
+        });
+        let compiled = declaration.compile().unwrap();
+        let mut session = compiled.instantiate(ObservationStreamId::new(8)).unwrap();
+        session.prepare_update(update(1, 0)).unwrap().commit();
+        let current = session
+            .state()
+            .current_verified()
+            .unwrap()
+            .computed_for_test();
+        let paints: Vec<_> = current
+            .arena
+            .storage
+            .outputs
+            .iter()
+            .map(|out| (out.output.value(), out.paint.source()))
+            .collect();
+        assert_eq!(
+            paints,
+            [
+                (7, Srgb8::new([150; 3])),
+                (17, Srgb8::new([255; 3])),
+                (27, Srgb8::new([200; 3]))
+            ]
+        );
+    }
+}
+
+#[test]
 fn fixed_only_failure_rejects_the_frame_before_search_and_keeps_the_previous_snapshot() {
     let owner = compile_assignment(fixed_constraint(), 1).expect("fixed and computed program");
     let mut session = owner

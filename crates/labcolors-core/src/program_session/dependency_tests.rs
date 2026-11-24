@@ -97,7 +97,7 @@ proptest! {
                 &index,
                 &mut scratch,
                 roots.iter().copied().map(occurrence),
-                &mut constrained,
+                &mut |target| constrained[target] = true,
                 Some(&mut assessed),
             );
             prop_assert!(coverage.is_ok());

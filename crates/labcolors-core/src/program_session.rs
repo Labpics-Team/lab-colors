@@ -5931,8 +5931,8 @@ where
         &point_presentations,
         reference.as_ref(),
     )?;
-    if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
-        computed_assignment::compile_components(
+    let partition = if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
+        Some(computed_assignment::partition_components(
             selection,
             &program,
             &graph,
@@ -5940,8 +5940,10 @@ where
             &constraints,
             &dependency_index,
             &mut dependency_scratch,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
     validate_compiled_family_usage(&program.families, &constraints)?;
     validate_terminal_dependency_cone(
         &program,
@@ -5967,33 +5969,37 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let preferences = match &target_selection {
-        CompiledTargetSelectionV1::Computed(selection)
+    let preferences = match (&target_selection, &partition) {
+        (CompiledTargetSelectionV1::Computed(selection), Some(partition))
             if program
                 .assignment
                 .as_ref()
                 .is_some_and(ComputedSelectionPolicyV1::authored_composition) =>
         {
-            selection.identity_preferences()?
+            selection.identity_preferences(partition)?
         }
         _ => Vec::new(),
     };
     let compiled_identity = identity::compile_owner_identity_and_layout(&program, &preferences)?;
     let content_identity = compiled_identity.content;
-    if let (CompiledTargetSelectionV1::Computed(selection), Some(layout)) =
-        (&mut target_selection, compiled_identity.execution.as_ref())
+    if let (CompiledTargetSelectionV1::Computed(selection), Some(mut partition)) =
+        (&mut target_selection, partition)
     {
-        selection.canonicalize_execution(layout)?;
+        if let Some(layout) = &compiled_identity.execution {
+            selection.canonicalize_execution(layout, &mut partition)?;
+        }
         computed_assignment::compile_components(
             selection,
+            partition,
             &program,
             &graph,
-            &binding_template,
             &constraints,
             &dependency_index,
             &mut dependency_scratch,
         )?;
-        selection.canonicalize_inputs(layout, &graph)?;
+        if let Some(layout) = &compiled_identity.execution {
+            selection.canonicalize_inputs(layout, &graph)?;
+        }
     }
     let families = program.families.into_boxed_slice();
     let mut epoch = ProgramEpochV1 {
@@ -6490,7 +6496,7 @@ where
             index,
             scratch,
             constraint,
-            &mut constrained_targets,
+            &mut |target| constrained_targets[target] = true,
             Some(&mut assessed_paints),
         )?;
     }
@@ -6527,7 +6533,7 @@ where
                 index,
                 scratch,
                 constraint,
-                &mut per_constraint_targets,
+                &mut |target| per_constraint_targets[target] = true,
                 None,
             )?;
             if program.targets.iter().enumerate().all(|(index, target)| {
@@ -6549,7 +6555,7 @@ fn mark_constraint_coverage<Invocation, Evaluation>(
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
     constraint: &CompiledPointConstraint<Invocation>,
-    constrained_targets: &mut [bool],
+    mark_target: &mut impl FnMut(usize),
     assessed_paints: Option<&mut [bool]>,
 ) -> Result<(), ProgramCompileError>
 where
@@ -6562,9 +6568,7 @@ where
                 .targets
                 .binary_search_by_key(target_id, |candidate| candidate.id)
                 .map_err(|_| ProgramCompileError::InternalInvariant)?;
-            *constrained_targets
-                .get_mut(ordinal)
-                .ok_or(ProgramCompileError::InternalInvariant)? = true;
+            mark_target(ordinal);
             Ok(())
         }
         CompiledProgramConstraintBodyV1::IntrinsicRelation {
@@ -6579,9 +6583,7 @@ where
                     .targets
                     .binary_search_by_key(&target, |candidate| candidate.id)
                     .map_err(|_| ProgramCompileError::InternalInvariant)?;
-                *constrained_targets
-                    .get_mut(ordinal)
-                    .ok_or(ProgramCompileError::InternalInvariant)? = true;
+                mark_target(ordinal);
             }
             Ok(())
         }
@@ -6590,7 +6592,7 @@ where
                 index,
                 scratch,
                 [*occurrence],
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6603,7 +6605,7 @@ where
             scratch,
             std::iter::once(reference.occurrence)
                 .chain(candidates.iter().map(|candidate| candidate.occurrence)),
-            constrained_targets,
+            mark_target,
             assessed_paints,
         ),
         CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
@@ -6611,7 +6613,7 @@ where
                 index,
                 scratch,
                 occurrences.iter().map(|endpoint| endpoint.occurrence),
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6620,7 +6622,7 @@ where
                 index,
                 scratch,
                 [*terminal],
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6631,13 +6633,10 @@ fn merge_visible_constraint_coverage(
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
     roots: impl IntoIterator<Item = OccurrenceId>,
-    constrained_targets: &mut [bool],
+    mark_target: &mut impl FnMut(usize),
     assessed_paints: Option<&mut [bool]>,
 ) -> Result<(), ProgramCompileError> {
     scratch.scan(index, roots)?;
-    if scratch.targets.len() != constrained_targets.len() {
-        return Err(ProgramCompileError::InternalInvariant);
-    }
     if assessed_paints
         .as_ref()
         .is_some_and(|paints| scratch.paints.len() != paints.len())
@@ -6647,7 +6646,7 @@ fn merge_visible_constraint_coverage(
     let mut assessed_paints = assessed_paints;
     for node in &scratch.queue {
         match *node {
-            IndexedDependencyNodeV1::Target(target) => constrained_targets[target] = true,
+            IndexedDependencyNodeV1::Target(target) => mark_target(target),
             IndexedDependencyNodeV1::Paint(paint) => {
                 if let Some(paints) = assessed_paints.as_deref_mut() {
                     paints[paint] = true;
