@@ -177,11 +177,35 @@ fn insert_index(lookup: &mut HashMap<u64, Vec<usize>>, key: u64, index: usize) -
 fn tonal_proposals(anchor: Srgb8, domain: AssignmentDomainV1) -> impl Iterator<Item = Srgb8> {
     let mut previous = None;
     (0..=255_u32).filter_map(move |step| {
+        #[cfg(test)]
+        case_refinement_tests::tonal_conversion();
         let source = color_at_lightness(anchor, f64::from(step) / 255.0);
         let repeated = previous == Some(source);
         previous = Some(source);
         (!repeated && domain.contains(source)).then_some(source)
     })
+}
+
+fn polish_plan(
+    targets: impl IntoIterator<Item = (Srgb8, AssignmentDomainV1)>,
+    maximum: usize,
+) -> Result<Vec<(usize, Srgb8)>, ()> {
+    let mut proposals = Vec::new();
+    if maximum == 0 {
+        return Ok(proposals);
+    }
+    for (target, (anchor, domain)) in targets.into_iter().enumerate() {
+        for source in tonal_proposals(anchor, domain) {
+            if proposals.is_empty() {
+                proposals.try_reserve_exact(maximum).map_err(|_| ())?;
+            }
+            proposals.push((target, source));
+            if proposals.len() == maximum {
+                return Ok(proposals);
+            }
+        }
+    }
+    Ok(proposals)
 }
 
 #[test]
@@ -205,6 +229,42 @@ fn terminal_proposals_count_only_distinct_admitted_sources() {
         .count(),
         0,
         "an off-path source domain reserves no tonal visits"
+    );
+}
+
+#[test]
+fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
+    let anchor = Srgb8::new([128; 3]);
+    let targets = std::iter::once((anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })).chain(
+        std::iter::once_with(|| panic!("the reserve needs no later target")),
+    );
+    assert_eq!(
+        polish_plan(targets, 3).expect("bounded proposal storage"),
+        (0..=2)
+            .map(|value| (0, Srgb8::new([value; 3])))
+            .collect::<Vec<_>>()
+    );
+    let (empty, allocations) = crate::test_support::measured_allocator_events(|| {
+        polish_plan(
+            [(
+                anchor,
+                AssignmentDomainV1::Cube {
+                    lower: [0, 0, 1],
+                    upper: [0, 0, 2],
+                },
+            )],
+            256,
+        )
+    });
+    assert!(empty.expect("empty proposal plan").is_empty());
+    assert_eq!(allocations, crate::test_support::AllocatorEvents::default());
+    assert!(
+        polish_plan(
+            std::iter::once_with(|| panic!("zero work never reads a target")),
+            0
+        )
+        .expect("zero proposal budget")
+        .is_empty()
     );
 }
 
@@ -1158,6 +1218,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
         arena: &mut ProgramEvaluationArenaV1<E>,
+        proposals: &[(usize, Srgb8)],
     ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         let Some(best) = self.best else {
             return Ok(());
@@ -1169,20 +1230,17 @@ impl<'a> ReferenceRuntimeV1<'a> {
         // uses see the selected earlier paints. Tonal proposals only discover
         // points: full-domain traversal, hard checks and typed keys still own
         // acceptance and completeness, including backward graph dependencies.
-        for target in 0..self.context.targets.len() {
-            let anchor = self.context.targets[target].declaration.anchor;
-            for source in tonal_proposals(anchor, self.context.domains[target]) {
-                if self.evidence.visited >= self.budget {
-                    return Ok(());
-                }
-                let best = self.best.expect("polish retains a feasible point");
-                values.copy_from_slice(&self.pending[best].values);
-                // Visit every admitted proposal, even if an earlier coordinate
-                // move has made it the current source. This fixed work set is
-                // exactly what the scheduler reserves; each visit is assessed.
-                values[target] = source;
-                self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+        for &(target, source) in proposals {
+            if self.evidence.visited >= self.budget {
+                return Ok(());
             }
+            let best = self.best.expect("polish retains a feasible point");
+            values.copy_from_slice(&self.pending[best].values);
+            // Visit every admitted proposal, even if an earlier coordinate
+            // move has made it the current source. This fixed work set is
+            // exactly what the scheduler reserves; each visit is assessed.
+            values[target] = source;
+            self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
         }
         Ok(())
     }
@@ -1580,27 +1638,44 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // and spend the same node budget. A short quantum prevents an unknown
         // context from blocking discovery of a better feasible composition.
         let mut capacity_steps = 0_u8;
-        let polish_work = if count > 1 {
-            search
-                .context
-                .targets
-                .iter()
-                .zip(&search.context.domains)
-                .fold(0_u64, |sum, (target, &domain)| {
-                    sum.saturating_add(
-                        tonal_proposals(target.declaration.anchor, domain).count() as u64
-                    )
-                })
+        let maximum_polish_work = if count > 1 {
+            (count as u64)
+                .saturating_mul(256)
                 .min(search.budget / COORDINATE_BUDGET_DIVISOR)
         } else {
             0
         };
+        let mut polish_proposals = None;
         while search.evidence.visited < search.budget {
-            if polish_work != 0
+            if maximum_polish_work != 0
                 && search.best.is_some()
-                && search.budget - search.evidence.visited <= polish_work
+                && search.budget - search.evidence.visited <= maximum_polish_work
             {
-                break;
+                if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
+                    break;
+                }
+                // Most complete searches never reach this reserve. When one
+                // does, cache only the executable prefix, at most a quarter
+                // of the shared budget. Counting and execution reuse the RGBs.
+                if polish_proposals.is_none() {
+                    polish_proposals = Some(
+                        polish_plan(
+                            search
+                                .context
+                                .targets
+                                .iter()
+                                .zip(&search.context.domains)
+                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                        )
+                        .map_err(allocation)?,
+                    );
+                }
+                if search.budget - search.evidence.visited
+                    <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
+                {
+                    break;
+                }
             }
             let needed = search.needed_capacity().map_err(allocation)?;
             let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
@@ -1656,13 +1731,16 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 return Err(ProgramSessionEvaluationError::InternalInvariant);
             }
             search.evidence.completion = CompletionV1::Complete;
-        } else if polish_work != 0 && search.evidence.visited < search.budget {
+        } else if let Some(proposals) = polish_proposals
+            .as_deref()
+            .filter(|proposals| !proposals.is_empty() && search.evidence.visited < search.budget)
+        {
             // Do this after the last domain-search step. Resuming DFS could
             // accept another earlier paint with a still-unsearched suffix and
             // undo the improvement. The exact admitted-proposal count reserves
             // only executable work; the pass consumes the remaining visits.
             // Open regions still keep completeness explicitly unfinished.
-            search.polish(runtime, epoch, scenarios, arena)?;
+            search.polish(runtime, epoch, scenarios, arena, proposals)?;
         }
     }
     let (values, reference_selections) = if let Some(best) = search.best {

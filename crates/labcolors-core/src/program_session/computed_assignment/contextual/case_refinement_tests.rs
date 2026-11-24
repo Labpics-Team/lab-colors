@@ -9,6 +9,11 @@ thread_local! {
     static EAGER: Cell<bool> = const { Cell::new(false) };
     static POINT_CASES: Cell<u64> = const { Cell::new(0) };
     static BOUND_CASES: Cell<u64> = const { Cell::new(0) };
+    static TONAL_CONVERSIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(super) fn tonal_conversion() {
+    TONAL_CONVERSIONS.set(TONAL_CONVERSIONS.get() + 1);
 }
 
 pub(super) fn eager() -> bool {
@@ -569,6 +574,7 @@ fn reference_capacity_and_objective_match_full_joint_enumeration_with_interior_c
         let mut session = owner
             .instantiate(ObservationStreamId::new(8))
             .expect("session");
+        TONAL_CONVERSIONS.set(0);
         session
             .prepare_update(observe(&order))
             .expect("observation")
@@ -580,6 +586,11 @@ fn reference_capacity_and_objective_match_full_joint_enumeration_with_interior_c
             .computed_for_test();
         assert_eq!(&*result.values, &expected.map(gray));
         assert_eq!(result.optimality(), ComputedOptimalityV1::Exact);
+        assert_eq!(
+            TONAL_CONVERSIONS.get(),
+            0,
+            "early complete search does not build terminal proposals"
+        );
         let reports = result.reference_selections().expect("reference reports");
         for (target, report) in reports.iter().enumerate() {
             assert_eq!(report.cases().len(), backdrops.len());
@@ -679,10 +690,15 @@ fn chromatic_suffix_is_refined_at_the_selected_translucent_panel() {
     let support = red_green_support();
     let mut observation = observe_rgb(&support);
     observation.revision = crate::observation::Revision::new(2);
+    TONAL_CONVERSIONS.set(0);
     session
         .prepare_update(observation)
         .expect("field support")
         .commit();
+    assert!(
+        TONAL_CONVERSIONS.get() <= 512,
+        "two tonal walks are computed at most once and reused by the terminal pass"
+    );
     let result = session
         .state()
         .current_verified()
