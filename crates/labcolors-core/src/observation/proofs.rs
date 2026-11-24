@@ -20,19 +20,22 @@ fn equality_requires_the_same_observation_allocation() {
         revision: Revision::new(first_revision),
         backing: first_backing.clone(),
     };
-    let second = RevisionBoundObservationV1 {
+    let alias = RevisionBoundObservationV1 {
         stream: ObservationStreamId::new(second_stream),
         revision: Revision::new(second_revision),
-        backing: if same_allocation {
-            first_backing
-        } else {
-            other_backing
-        },
+        backing: first_backing,
     };
+    let foreign = RevisionBoundObservationV1 {
+        stream: ObservationStreamId::new(second_stream),
+        revision: Revision::new(second_revision),
+        backing: other_backing,
+    };
+    // Choose a borrow so every Arc keeps fixed ownership through payload teardown.
+    let second = if same_allocation { &alias } else { &foreign };
     let coordinates_match = first_stream == second_stream && first_revision == second_revision;
     let expected = same_allocation && coordinates_match;
     assert!(
-        first.is_same_binding_as(&second) == expected,
+        first.is_same_binding_as(second) == expected,
         "observation equality must bind stream revision and allocation identity"
     );
     kani::cover!(
