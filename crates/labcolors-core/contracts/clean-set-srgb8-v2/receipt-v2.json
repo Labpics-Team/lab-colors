@@ -237,11 +237,11 @@
       "sha256": "6104c37efc81e9bb92bbe6c8aa1c8479a16dc0405536bcfd8b9f7d8cb251126c"
     },
     {
-      "bytes": 28681,
+      "bytes": 28827,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
       "role": "program_point_search_source",
-      "sha256": "e82f5cfb5f51de3e0c74f10eb88868e020cf9b2d2ccb88be1224ccda50673476"
+      "sha256": "1f9fc52b0f642a2538e69b5a399517eb73583f200dcfd7068da5ff4c25e3caeb"
     },
     {
       "bytes": 59769,

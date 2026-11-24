@@ -3373,6 +3373,14 @@ class CoreConsumerProjectionTest(unittest.TestCase):
                     else: package["dependencies"].append(copy.deepcopy(dep))
                     with self.assertRaisesRegex(SystemExit, consumer):
                         execute(altered)
+        for floating in ("=0.2", "^0.2.3", ">=0.2.3"):
+            with self.subTest(requirement=floating):
+                altered = copy.deepcopy(metadata)
+                core = next(p for p in altered["packages"] if p["name"] == "labcolors-core")
+                arithmetic = next(dep for dep in core["dependencies"] if dep["name"] == "rustc_apfloat")
+                arithmetic["req"] = floating
+                with self.assertRaisesRegex(SystemExit, "pinned, portable and private"):
+                    execute(altered)
         # The private arithmetic dependency is the only permitted runtime edge,
         # including optional and target-specific declarations.
         for optional in (False, True):

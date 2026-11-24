@@ -33,24 +33,34 @@ fn unconstrained(target: Target) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
-fn a_feasible_authored_point_stays_unfinished_when_its_budget_expires_without_a_proof() {
-    let tone = ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]]).unwrap();
-    let mut declared = unconstrained(color([128; 3], 2.0, Some(tone)).unwrap());
+fn a_feasible_authored_point_stays_unfinished_when_its_budget_expires_without_a_proof()
+-> Result<(), String> {
+    let tone = ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]])
+        .map_err(|error| format!("tone: {error:?}"))?;
+    let mut declared = unconstrained(color([128; 3], 2.0, Some(tone))?);
     declared.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
         legacy_reference_order: vec![TargetId::new(10)],
     });
     declared.computed_budget = Some(1);
-    let compiled = declared.compile().unwrap();
-    let mut session = compiled.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 255)).unwrap().commit();
+    let compiled = declared
+        .compile()
+        .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = compiled
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("light update: {error:?}"))?
+        .commit();
     let result = session
         .state()
         .current_verified()
-        .unwrap()
+        .ok_or("feasible authored color should yield a snapshot")?
         .computed_for_test();
     assert_eq!(result.values.as_ref(), &[Srgb8::new([128; 3])]);
     assert_eq!(result.search.completion, CompletionV1::BudgetExhausted);
     assert_eq!(result.optimality(), ComputedOptimalityV1::Unfinished);
+    Ok(())
 }
 
 #[test]

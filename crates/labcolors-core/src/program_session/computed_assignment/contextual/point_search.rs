@@ -473,7 +473,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             copy(&mut state.buffers.working, &state.buffers.values)
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
             let mut heuristic = state.buffers.scores.iter().copied().fold(0.0_f64, f64::max);
-            for pass in 0..2 {
+            'sweeps: for pass in 0..2 {
                 for position in 0..variables {
                     let variable = if pass == 0 {
                         variables - 1 - position
@@ -486,6 +486,9 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                         continue;
                     };
                     for &case in &context.local_cases.order {
+                        if state.evidence.visited >= origin_limit {
+                            break 'sweeps;
+                        }
                         apply_targets::<E>(context.targets, runtime, &state.buffers.working)?;
                         let (backdrop, alpha) = physical_context(
                             target,
