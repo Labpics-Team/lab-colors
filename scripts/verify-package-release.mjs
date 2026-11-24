@@ -50,6 +50,7 @@ const {
   POINT_SUPPORT_SOURCE_BINDING_SCOPE,
   POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
   POINT_SUPPORT_SOURCE_PATHS,
+  POINT_SUPPORT_SOURCE_NEGATIVE_CONTROLS,
   exactJsonPayloadWithoutTopLevelField,
 } = pointSupportReleaseContract;
 
@@ -396,7 +397,7 @@ export async function validatePointSupportEvidence(artifacts, numericalCapabilit
       POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS,
     ) ||
     !/^[0-9a-f]{64}$/u.test(proof.source_closure_sha256 ?? "") ||
-    proof.source_negative_controls !== 43 ||
+    proof.source_negative_controls !== POINT_SUPPORT_SOURCE_NEGATIVE_CONTROLS ||
     !/^[0-9a-f]{64}$/u.test(proof.proof_payload_sha256 ?? "") ||
     !/^[0-9a-f]{64}$/u.test(proof.verifier_sha256 ?? "") ||
     !Array.isArray(proof.source_files) ||

@@ -1530,7 +1530,7 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
     for backing_field in [
         "arena_slot: ObservationArenaSlotV1,",
         "schema: CanonicalObservationSchemaV1,",
-        "set: ObservedScenarioSet,",
+        "context: AdmittedContextV1,",
     ] {
         assert_eq!(
             observation_backing.matches(backing_field).count(),
@@ -1538,6 +1538,20 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "one backing must own exactly one `{backing_field}`",
         );
     }
+    assert_eq!(
+        normalized_source_scope(
+            OBSERVATION_SOURCE,
+            "enum AdmittedContextV1 {",
+            "/// Canonical immutable schema shared by the compiled recheck",
+        ),
+        concat!(
+            "enum AdmittedContextV1 { ",
+            "Observations(ObservedScenarioSet), ",
+            "Field(DeclaredFieldV1), ",
+            "}",
+        ),
+        "one backing must retain exactly one finite or declared context",
+    );
     let observation_pool = source_scope(
         OBSERVATION_SOURCE,
         "pub(crate) struct ObservationArenaPoolV1 {",
@@ -1787,10 +1801,19 @@ fn shared_observation_ssot_has_one_backing_without_lifecycle_or_adapter_facades(
             "schema-ordered",
             source_scope(
                 SESSION_SOURCE,
-                "pub(crate) fn prepare_schema_ordered",
-                "fn prepare_session_transition",
+                "pub(crate) fn prepare_schema_ordered<",
+                "pub(crate) fn prepare_schema_ordered_field<",
             ),
             "prepare_schema_ordered_observation(",
+        ),
+        (
+            "declared-field",
+            source_scope(
+                SESSION_SOURCE,
+                "pub(crate) fn prepare_schema_ordered_field<",
+                "fn prepare_session_transition",
+            ),
+            "prepare_schema_ordered_field_observation(",
         ),
     ] {
         let owner_preflight = update

@@ -1502,7 +1502,7 @@ fn bijective_source_target_and_candidate_renaming_preserves_joint_evidence() {
                 (
                     observation
                         .physical_values(case_index)
-                        .unwrap()
+                        .expect("case index is within the admitted physical support")
                         .iter()
                         .copied()
                         .collect::<Vec<_>>(),

@@ -28,6 +28,8 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
         cls.sources = cls.verifier["read_source_cone"]()
         cls.point_path = cls.verifier["POINT_SOURCE"]
         cls.observation_path = cls.verifier["OBSERVATION_SOURCE"]
+        cls.field_path = cls.verifier["FIELD_CONTEXT_SOURCE"]
+        cls.gradient_path = cls.verifier["GRADIENT_DOMAIN_SOURCE"]
         cls.numerics_path = cls.verifier["NUMERICS_SOURCE"]
         cls.session_path = cls.verifier["SESSION_SOURCE"]
         cls.proof = json.loads(PROOF.read_text(encoding="utf-8-sig"))
@@ -44,6 +46,21 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             self.proof["verifier_sha256"],
         )
 
+    def test_release_contract_is_generated_from_the_required_source_controls(self) -> None:
+        encoded = self.verifier["source_contract_bytes"]()
+        self.assertEqual(self.verifier["SOURCE_CONTRACT_PATH"].read_bytes(), encoded)
+        contract = json.loads(encoded)
+        self.assertEqual(contract["schema_version"], 1)
+        self.assertEqual(
+            contract["source_paths"],
+            [entry["path"] for entry in self.proof["source_files"]],
+        )
+        self.assertEqual(len(contract["negative_controls"]), self.proof["source_negative_controls"])
+        self.assertEqual(
+            len({json.dumps(control, sort_keys=True) for control in contract["negative_controls"]}),
+            len(contract["negative_controls"]),
+        )
+
     def test_complete_production_dependency_cone_is_bound(self) -> None:
         digest = self.verifier["source_closure_digest"]
         mutate = self.verifier["mutate_source"]
@@ -58,8 +75,28 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             ),
             (
                 self.observation_path,
-                b"        self.backing.set().values(case_index)\n",
-                b"        None\n",
+                b"                set.values(case_index).map(PhysicalValuesV1::from_slice)\n",
+                b"                None\n",
+            ),
+            (
+                self.observation_path,
+                b"            AdmittedContextV1::Field(field) => field.values(case_index),\n",
+                b"            AdmittedContextV1::Field(_) => None,\n",
+            ),
+            (
+                self.observation_path,
+                b"            Some((replaced, value)) if index == replaced => value,\n",
+                b"            Some((replaced, _)) if index == replaced => fixed,\n",
+            ),
+            (
+                self.field_path,
+                b"        let support = self.support.get(case_index)?;\n",
+                b"        let support = self.support.first()?;\n",
+            ),
+            (
+                self.gradient_path,
+                b"            nominal: self.segment.at(region.representative()),\n",
+                b"            nominal: self.segment.at(SegmentCoordinate::ZERO),\n",
             ),
             (
                 self.session_path,
@@ -158,7 +195,7 @@ class PointSupportSurplusCliTests(unittest.TestCase):
         verifier = runpy.run_path(str(VERIFIER), run_name="point_support_cli_test")
         cls.snapshot = {
             path.relative_to(REPO_ROOT): path.read_bytes()
-            for path in (*verifier["SOURCE_CONE_PATHS"], VERIFIER, PROOF)
+            for path in (*verifier["SOURCE_CONE_PATHS"], verifier["SOURCE_CONTRACT_PATH"], VERIFIER, PROOF)
         }
 
     def assert_cli(
@@ -221,6 +258,19 @@ class PointSupportSurplusCliTests(unittest.TestCase):
 
     def test_cli_requires_the_recorded_source_files(self) -> None:
         self.assert_cli(False, {Path("crates/labcolors-core/src/point_support.rs"): None})
+
+    def test_cli_rejects_a_release_contract_with_a_missing_field_control(self) -> None:
+        path = Path("scripts/point-support-source-cone.json")
+        contract = json.loads(self.snapshot[path])
+        contract["negative_controls"] = [
+            control for control in contract["negative_controls"]
+            if control["path"] != "crates/labcolors-core/src/field_context.rs"
+        ]
+        encoded = (json.dumps(contract, sort_keys=True, indent=2) + "\n").encode("utf-8")
+        self.assert_cli(False, {path: encoded})
+
+    def test_cli_requires_the_generated_release_contract(self) -> None:
+        self.assert_cli(False, {Path("scripts/point-support-source-cone.json"): None})
 
 
 if __name__ == "__main__":

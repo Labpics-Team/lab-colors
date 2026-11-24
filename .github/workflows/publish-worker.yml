@@ -308,6 +308,7 @@ jobs:
             POINT_SUPPORT_SOURCE_BINDING_SCOPE: POINT_SUPPORT_SOURCE_SCOPE,
             POINT_SUPPORT_SOURCE_BINDING_EXCLUSIONS: POINT_SUPPORT_SOURCE_EXCLUSIONS,
             POINT_SUPPORT_SOURCE_PATHS,
+            POINT_SUPPORT_SOURCE_NEGATIVE_CONTROLS,
             exactJsonPayloadWithoutTopLevelField,
           } = require(
             `${process.env.GITHUB_WORKSPACE}/scripts/point-support-release-contract.cjs`,
@@ -1023,7 +1024,7 @@ jobs:
             JSON.stringify(point.sourceBinding.exclusions) !==
               JSON.stringify(pointProof.source_binding_exclusions) ||
             point.sourceBinding.closureSha256 !== pointProof.source_closure_sha256 ||
-            pointProof.source_negative_controls !== 43 ||
+            pointProof.source_negative_controls !== POINT_SUPPORT_SOURCE_NEGATIVE_CONTROLS ||
             pointAlgebra?.method !==
               "exact-sparse-integer-polynomial-identities-plus-positive-denominator-order-lemma-v1" ||
             pointAlgebra?.wolfram_language_cross_check?.query_sha256 !==

@@ -1,8 +1,11 @@
 //! Точное номинальное разбиение одного непрозрачного affine sRGB8-сегмента.
 //!
 //! Источник цвета — `a + t (b - a)` при общем вещественном `t ∈ [0, 1]`.
-//! Для непрозрачных stops без transition hint это локальный закон интерполяции
-//! CSS Images 3 §3.4.2: <https://www.w3.org/TR/css-images-3/#coloring-gradient-line>.
+//! Для непрозрачных stops без transition hint и с явно выбранной интерполяцией
+//! в encoded-sRGB (`in srgb`) это локальный закон CSS-градиента:
+//! <https://www.w3.org/TR/css-images-3/#coloring-gradient-line> и
+//! <https://www.w3.org/TR/css-color-4/#interpolation>.
+//! Одна непрозрачность stops не определяет пространство интерполяции.
 //! Округление здесь — выбранный Core nominal byte-law: nearest, half-up
 //! (half-away на неотрицательных каналах), как в `composition.rs`. CSS не задаёт
 //! этим законом точность rasterizer-а. Модуль не описывает renderer error,
@@ -107,13 +110,25 @@ impl OpaqueSrgb8AffineSegment {
     pub(crate) fn partition(self) -> AffineSegmentPartition {
         AffineSegmentPartition {
             segment: self,
-            crossings: std::array::from_fn(|channel| ChannelCrossings {
-                distance: u16::from(self.start[channel].abs_diff(self.end[channel])),
-                index: 0,
-            }),
+            crossings: self.crossings(),
             lower: SegmentCoordinate::ZERO,
             pending_point: Some(SegmentCoordinate::ZERO),
             finished: false,
+        }
+    }
+
+    /// Точный размер для fallible reserve без вычисления RGB и медиант.
+    /// `m` внутренних порогов разделяют `m + 1` интервалов и `m + 2` точек.
+    pub(crate) fn partition_cell_count(self) -> usize {
+        2 * self.crossings().count() + 3
+    }
+
+    fn crossings(self) -> SegmentCrossings {
+        SegmentCrossings {
+            channels: std::array::from_fn(|channel| ChannelCrossings {
+                distance: u16::from(self.start[channel].abs_diff(self.end[channel])),
+                index: 0,
+            }),
         }
     }
 }
@@ -187,6 +202,30 @@ impl ChannelCrossings {
     }
 }
 
+/// Одно слияние общих внутренних границ для подсчёта и построения областей.
+#[derive(Debug, Clone)]
+struct SegmentCrossings {
+    channels: [ChannelCrossings; 3],
+}
+
+impl Iterator for SegmentCrossings {
+    type Item = SegmentCoordinate;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self
+            .channels
+            .iter()
+            .filter_map(|crossing| crossing.peek())
+            .min()?;
+        for crossing in &mut self.channels {
+            if crossing.peek() == Some(next) {
+                crossing.index += 1;
+            }
+        }
+        Some(next)
+    }
+}
+
 /// Ленивое слияние трёх потоков порогов без выделений памяти.
 ///
 /// Descriptor сохраняется рядом с производным разбиением. Выход чередуется:
@@ -197,7 +236,7 @@ impl ChannelCrossings {
 #[derive(Debug, Clone)]
 pub(crate) struct AffineSegmentPartition {
     segment: OpaqueSrgb8AffineSegment,
-    crossings: [ChannelCrossings; 3],
+    crossings: SegmentCrossings,
     lower: SegmentCoordinate,
     pending_point: Option<SegmentCoordinate>,
     finished: bool,
@@ -214,17 +253,7 @@ impl Iterator for AffineSegmentPartition {
             self.finished = coordinate == SegmentCoordinate::ONE;
             SegmentRegion::Point(coordinate)
         } else {
-            let next = self
-                .crossings
-                .iter()
-                .filter_map(|crossing| crossing.peek())
-                .min()
-                .unwrap_or(SegmentCoordinate::ONE);
-            for crossing in &mut self.crossings {
-                if crossing.peek() == Some(next) {
-                    crossing.index += 1;
-                }
-            }
+            let next = self.crossings.next().unwrap_or(SegmentCoordinate::ONE);
             let region = SegmentRegion::OpenInterval {
                 lower: self.lower,
                 upper: next,
@@ -257,7 +286,8 @@ mod tests {
                 + u64::from(end[channel]) * numerator;
             (0..=255)
                 .find(|&byte| 2 * value < (2 * byte + 1) * denominator)
-                .unwrap() as u8
+                .expect("an interpolated byte lies below the 255.5 upper threshold")
+                as u8
         })
     }
 
@@ -285,7 +315,7 @@ mod tests {
         let middle = cells
             .iter()
             .position(|cell| cell.region == SegmentRegion::Point(SegmentCoordinate::ratio(1, 2)))
-            .unwrap();
+            .expect("red-green interpolation has an exact half-coordinate cell");
         assert_eq!(cells[middle - 1].nominal, [128, 127, 0]);
         assert_eq!(cells[middle].nominal, [128, 128, 0]);
         assert_eq!(cells[middle + 1].nominal, [127, 128, 0]);
@@ -294,6 +324,7 @@ mod tests {
     #[test]
     fn equal_endpoints_cover_the_whole_domain_and_iterator_is_fused() {
         let segment = OpaqueSrgb8AffineSegment::new([17, 128, 255], [17, 128, 255]);
+        assert_eq!(segment.partition_cell_count(), 3);
         let mut partition = segment.partition();
         for region in [
             SegmentRegion::Point(SegmentCoordinate::ZERO),
@@ -406,6 +437,7 @@ mod tests {
         thresholds.dedup_by(|(an, ad), (bn, bd)| *an * *bd == *bn * *ad);
         let cells: Vec<_> = segment.partition().collect();
         assert_eq!(cells.len(), 2 * thresholds.len() - 1);
+        assert_eq!(segment.partition_cell_count(), cells.len());
         for (index, &(numerator, denominator)) in thresholds.iter().enumerate() {
             let SegmentRegion::Point(at) = cells[2 * index].region() else {
                 panic!("every boundary is a point");
@@ -468,13 +500,28 @@ mod tests {
     fn lazy_iteration_preserves_descriptor_and_can_continue_from_a_clone() {
         let segment = OpaqueSrgb8AffineSegment::new([71, 247, 121], [252, 10, 119]);
         let mut partition = segment.partition();
-        assert_eq!(partition.next().unwrap().nominal, segment.endpoints().0);
+        assert_eq!(
+            partition
+                .next()
+                .expect("partition starts at its first endpoint")
+                .nominal,
+            segment.endpoints().0
+        );
         assert!(matches!(
-            partition.next().unwrap().region,
+            partition
+                .next()
+                .expect("nonconstant partition continues with an interval")
+                .region,
             SegmentRegion::OpenInterval { .. }
         ));
         let mut cloned = partition.clone();
         assert_eq!(partition.next(), cloned.next());
-        assert_eq!(partition.last().unwrap().nominal, segment.endpoints().1);
+        assert_eq!(
+            partition
+                .last()
+                .expect("partition ends at its second endpoint")
+                .nominal,
+            segment.endpoints().1
+        );
     }
 }

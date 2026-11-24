@@ -86,6 +86,12 @@ try {
     assert.ok(source, `missing build path ${mapping.slice(0, separator)}`);
     return `--remap-path-prefix=${source}=${mapping.slice(separator + 1)}`;
   }).join("\x1f");
+  // wasm-pack leaves earlier hash-named snippets in an existing output tree.
+  // This directory belongs entirely to the generator; each build must have
+  // exactly the snippet imported by its own glue, as the packer requires.
+  const generatedPackage = resolve(ROOT, "packages/colors/pkg");
+  assert.equal(dirname(wasm), generatedPackage, "unexpected WASM output directory");
+  await rm(generatedPackage, { recursive: true, force: true });
   run("wasm-pack", ["build", "--no-opt", "--release", "--target", "web",
     "--out-dir", relative(crate, dirname(wasm)), "--out-name", basename(wasm, "_bg.wasm"), crate, "--locked"], false, buildEnvironment);
   const before = (await readFile(wasm)).length;

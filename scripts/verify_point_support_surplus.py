@@ -23,6 +23,8 @@ if not __debug__:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/point_support.rs"
 OBSERVATION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/observation.rs"
+FIELD_CONTEXT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/field_context.rs"
+GRADIENT_DOMAIN_SOURCE = REPO_ROOT / "crates/labcolors-core/src/gradient_domain.rs"
 LCS_OCCURRENCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/lcs_occurrence.rs"
 NUMERICS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/numerics.rs"
 SESSION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/session.rs"
@@ -48,6 +50,7 @@ PROOF_PATH = (
     / "crates/labcolors-core/contracts/point-support-reference-surplus-q55-bps-proof-v1.json"
 )
 VERIFIER_PATH = Path(__file__).resolve()
+SOURCE_CONTRACT_PATH = REPO_ROOT / "scripts/point-support-source-cone.json"
 
 SCHEMA_VERSION = 2
 SOURCE_BINDING_SCHEMA_VERSION = 2
@@ -92,6 +95,8 @@ EXPECTED_WOLFRAM_RESULT_SHA256 = (
 SOURCE_CONE_PATHS = (
     POINT_SOURCE,
     OBSERVATION_SOURCE,
+    FIELD_CONTEXT_SOURCE,
+    GRADIENT_DOMAIN_SOURCE,
     LCS_OCCURRENCE_SOURCE,
     SESSION_SOURCE,
     NUMERICS_SOURCE,
@@ -178,10 +183,8 @@ def mutate_source(
     return mutated
 
 
-def verify_source_binding() -> tuple[str, int]:
-    sources = read_source_cone()
-    digest = source_closure_digest(sources)
-    mutations = (
+def source_mutations() -> tuple[tuple[Path, bytes, bytes], ...]:
+    return (
         (POINT_SOURCE, b"matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::RequiredFailure(_))", b"false"),
         (POINT_SOURCE, b"matches!(self, Self::Failure(_))", b"false"),
@@ -193,7 +196,13 @@ def verify_source_binding() -> tuple[str, int]:
         (POINT_SOURCE, b"    if !observation.shares_schema_backing_with(&plan.surface_schema) {\n", b"    if observation.shares_schema_backing_with(&plan.surface_schema) {\n"),
         (POINT_SOURCE, b"        _permit: SessionObservationBindingPermitV1,\n", b"        _permit: (),\n"),
         (POINT_SOURCE, b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};", b"use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }"),
-        (OBSERVATION_SOURCE, b"        self.backing.set().values(case_index)\n", b"        None\n"),
+        (OBSERVATION_SOURCE, b"                set.values(case_index).map(PhysicalValuesV1::from_slice)\n", b"                None\n"),
+        (OBSERVATION_SOURCE, b"            AdmittedContextV1::Field(field) => field.values(case_index),\n", b"            AdmittedContextV1::Field(_) => None,\n"),
+        (OBSERVATION_SOURCE, b"            Some((replaced, value)) if index == replaced => value,\n", b"            Some((replaced, _)) if index == replaced => fixed,\n"),
+        (FIELD_CONTEXT_SOURCE, b"        let support = self.support.get(case_index)?;\n", b"        let support = self.support.first()?;\n"),
+        (FIELD_CONTEXT_SOURCE, b"            &self.fixed_values,\n            self.varying_input_index,\n            &support.value,\n", b"            &self.fixed_values,\n            0,\n            &support.value,\n"),
+        (GRADIENT_DOMAIN_SOURCE, b"            ((2 * value + denominator) / (2 * denominator)) as u8\n", b"            ((2 * value) / (2 * denominator)) as u8\n"),
+        (GRADIENT_DOMAIN_SOURCE, b"            nominal: self.segment.at(region.representative()),\n", b"            nominal: self.segment.at(SegmentCoordinate::ZERO),\n"),
         (OBSERVATION_SOURCE, b"            .extend(bindings.iter().map(|binding| binding.value));\n", b"            .extend(bindings.iter().map(|_| ColorSignal::from_srgb8(Srgb8::new([0, 0, 0]))));\n"),
         (OBSERVATION_SOURCE, b"        Shared::ptr_eq(&self.0, &other.0)\n", b"        self == other\n"),
         (OBSERVATION_SOURCE, b"        Self(Shared::clone(&self.0))\n", b"        Self(Shared::from(self.as_slice()))\n"),
@@ -226,6 +235,35 @@ def verify_source_binding() -> tuple[str, int]:
         (WCAG22_PROFILE_SOURCE, b'"normalTextRatio":"4.5"', b'"normalTextRatio":"4.4"'),
         (Q55_PROOF, b'"proof_payload_sha256":"726d4a6038d8d30a76c7051de881b199c9d762dedb7ac609b1ba84b7252b7977"', b'"proof_payload_sha256":"0000000000000000000000000000000000000000000000000000000000000000"'),
     )
+
+
+def source_contract_bytes() -> bytes:
+    """Generate the release readers' contract from the verifier's actual controls."""
+    contract = {
+        "schema_version": 1,
+        "source_paths": sorted(path.relative_to(REPO_ROOT).as_posix() for path in SOURCE_CONE_PATHS),
+        "negative_controls": [
+            {
+                "path": path.relative_to(REPO_ROOT).as_posix(),
+                "before": old.decode("utf-8"),
+                "after": new.decode("utf-8"),
+            }
+            for path, old, new in source_mutations()
+        ],
+    }
+    return (json.dumps(contract, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def verify_source_contract() -> None:
+    assert SOURCE_CONTRACT_PATH.read_bytes() == source_contract_bytes(), (
+        "point-support release source contract drifted; regenerate with --emit-source-contract"
+    )
+
+
+def verify_source_binding() -> tuple[str, int]:
+    sources = read_source_cone()
+    digest = source_closure_digest(sources)
+    mutations = source_mutations()
     for path, old, new in mutations:
         mutated = mutate_source(sources, path, old, new)
         assert source_closure_digest(mutated) != digest, "source mutation escaped complete-file binding"
@@ -747,6 +785,7 @@ def verify_integer_envelope(scale: int, maximum: int) -> dict[str, int | str]:
 
 
 def canonical_proof() -> dict[str, object]:
+    verify_source_contract()
     dependency = verify_q55_dependency()
     scale = int(dependency["q55_scale"])
     maximum = int(dependency["maximum_luminance_upper"])
@@ -792,12 +831,15 @@ def canonical_proof() -> dict[str, object]:
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--emit-source-contract"]:
+        sys.stdout.buffer.write(source_contract_bytes())
+        return 0
     if sys.argv[1:] == ["--source-closure-digest"]:
         print(source_closure_digest())
         return 0
     emit_only = sys.argv[1:] == ["--emit"]
     if sys.argv[1:] not in ([], ["--emit"]):
-        raise ValueError("usage: verify_point_support_surplus.py [--emit|--source-closure-digest]")
+        raise ValueError("usage: verify_point_support_surplus.py [--emit|--emit-source-contract|--source-closure-digest]")
     # Проверка и явная генерация исполняют один независимый replay.
     # Исторический digest или самосогласованный JSON не удостоверяют ни
     # текущие исходники, ни численное содержимое записанного доказательства.

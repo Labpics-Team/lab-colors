@@ -141,10 +141,11 @@ if (frame.state === "modeled") {
 Явное [пространство интерполяции CSS](https://www.w3.org/TR/css-images-4/#linear-gradients)
 сохраняет объявленный encoded-sRGB; отсутствие `in srgb` могло бы изменить
 интерполяцию. Preview отображает результат модели для проверки реального
-интерфейса. `attach`, `set` и `replace` автоматически его не применяют:
-возвращают `rejected` с самим модельным кадром в `proposed` и сохраняют предыдущую
-композицию целиком. При первоначальном `attach` такой кадр доступен через
-`view.lastUpdate.proposed`, а `view.current` остаётся `null`.
+интерфейса. `set` и `replace` автоматически его не применяют: возвращают
+`rejected` с самим модельным кадром в `proposed` и сохраняют предыдущую
+композицию целиком. `attach` возвращает `ColorView`; отказ находится в
+`view.lastUpdate`, модельный кадр — в `view.lastUpdate.proposed`, а
+`view.current` остаётся `null`.
 
 Номинальные `conflict` и `unresolved` сохраняют descriptor и явный
 `scope: "nominal-model"`. У них `coverage.model` равно `"violated"` или

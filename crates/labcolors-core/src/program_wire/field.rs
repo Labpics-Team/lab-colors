@@ -197,7 +197,7 @@ impl ProgramSessionV1 {
         }
         // Exact region count safely bounds the deduplicated physical support.
         // Admission retains constants once and does not construct a dense matrix.
-        let count = field.segment.partition().count();
+        let count = field.segment.partition_cell_count();
         self.reserve_computed_snapshot(count)?;
         let transition = self
             .owner
@@ -230,14 +230,19 @@ mod tests {
             .source_over_occurrence(8, 3, 7, 64.0, 0.2, 1)
             .wcag22_visible_unary(true, 10, 8, 1)
             .output(17, 3);
-        compile_program_wire(&builder.finish_assignment(&[2]).unwrap())
-            .unwrap()
-            .instantiate(1)
-            .unwrap()
+        compile_program_wire(
+            &builder
+                .finish_assignment(&[2])
+                .expect("computed fixture paint is a valid assignment output"),
+        )
+        .expect("the fixture graph and WCAG constraint compile")
+        .instantiate(1)
+        .expect("a compiled fixture instantiates a fresh session")
     }
 
     fn field(from: [u8; 3], to: [u8; 3]) -> ProgramDeclaredFieldV1<'static> {
-        ProgramDeclaredFieldV1::from_rgb8(&[0; 3], 0, Srgb8::new(from), Srgb8::new(to)).unwrap()
+        ProgramDeclaredFieldV1::from_rgb8(&[0; 3], 0, Srgb8::new(from), Srgb8::new(to))
+            .expect("one RGB input and varying index zero define a valid field")
     }
 
     #[test]
@@ -251,20 +256,28 @@ mod tests {
                     ProgramScenarioV1::new(2, vec![Srgb8::new([0, 255, 0])]),
                 ],
             )
-            .unwrap();
+            .expect("fresh endpoint scenarios are admitted");
         assert_eq!(endpoints.state(), ProgramSnapshotStateV1::Ready);
         assert!(endpoints.field_assessment().is_none());
         let rejected = runtime
             .update_declared_field(2, field([255, 0, 0], [0, 255, 0]))
-            .unwrap();
+            .expect("a newer valid field produces a diagnostic snapshot");
         assert_eq!(rejected.state(), ProgramSnapshotStateV1::Unsatisfied);
         assert!(rejected.outputs().is_empty());
-        let scope = rejected.field_assessment().unwrap();
+        let scope = rejected
+            .field_assessment()
+            .expect("declared-field snapshots retain their assessed domain");
         assert_eq!(scope.rendering(), "unknown");
         assert_eq!(scope.domain(), "whole-field");
         assert_eq!(scope.region_count(), 513);
         assert_eq!(scope.witnesses().len(), 511);
-        assert!(rejected.diagnostics().unwrap().witness().is_some());
+        assert!(
+            rejected
+                .diagnostics()
+                .expect("an unsatisfied field retains its violation diagnostics")
+                .witness()
+                .is_some()
+        );
         for witness in scope.witnesses() {
             let (n, d) = witness.coordinate();
             assert!(d > 0 && n <= d);
@@ -283,16 +296,26 @@ mod tests {
     fn nominal_field_matches_full_finite_oracle_without_claiming_observed_pixels() {
         let declared = field([192; 3], [255; 3]);
         let mut modeled = session();
-        let result = modeled.update_declared_field(1, declared).unwrap();
+        let result = modeled
+            .update_declared_field(1, declared)
+            .expect("a fresh valid field is admitted");
         let mut finite = session();
         let points: Vec<_> = (192..=255)
             .map(|value| ProgramScenarioV1::new(u32::from(value), vec![Srgb8::new([value; 3])]))
             .collect();
-        let oracle = finite.update_observed(1, &points).unwrap();
+        let oracle = finite
+            .update_observed(1, &points)
+            .expect("the finite byte oracle is a valid fresh observation");
         assert_eq!(result.state(), ProgramSnapshotStateV1::Ready);
         assert_eq!(result.outputs(), oracle.outputs());
         assert_eq!(result.optimality(), oracle.optimality());
-        assert_eq!(result.field_assessment().unwrap().rendering(), "unknown");
+        assert_eq!(
+            result
+                .field_assessment()
+                .expect("modeled field admission retains its rendering qualification")
+                .rendering(),
+            "unknown"
+        );
         assert!(oracle.field_assessment().is_none());
     }
 
@@ -301,23 +324,26 @@ mod tests {
         let mut runtime = session();
         let original = runtime
             .update_observed(1, &[ProgramScenarioV1::new(1, vec![Srgb8::new([255; 3])])])
-            .unwrap();
+            .expect("the initial finite observation is valid");
         let retained = {
             let proposed = runtime
                 .prepare_declared_field(2, field([192; 3], [255; 3]))
-                .unwrap();
+                .expect("a newer field can be prepared without committing");
             assert_eq!(proposed.snapshot().state(), ProgramSnapshotStateV1::Ready);
             proposed.snapshot().clone()
         };
         // A different context can reuse revision 2 because the proposal was dropped.
         let next = runtime
             .update_observed(2, &[ProgramScenarioV1::new(1, vec![Srgb8::new([224; 3])])])
-            .unwrap();
+            .expect("dropping the field proposal leaves its revision available");
         assert_eq!(next.state(), ProgramSnapshotStateV1::Ready);
         assert!(next.field_assessment().is_none());
         assert!(original.field_assessment().is_none());
         assert_eq!(
-            retained.field_assessment().unwrap().endpoints(),
+            retained
+                .field_assessment()
+                .expect("the retained proposal snapshot keeps its own field descriptor")
+                .endpoints(),
             (Srgb8::new([192; 3]), Srgb8::new([255; 3]))
         );
     }
@@ -327,20 +353,20 @@ mod tests {
         let mut runtime = session();
         let first = runtime
             .update_declared_field(1, field([192; 3], [255; 3]))
-            .unwrap();
+            .expect("the first field establishes revision one");
         assert_eq!(
             runtime.update_declared_field(1, field([255; 3], [192; 3])),
             Err(ProgramRuntimeErrorV1::Update)
         );
         let reversed = runtime
             .update_declared_field(2, field([255; 3], [192; 3]))
-            .unwrap();
+            .expect("a reversed field is admitted at a newer revision");
         assert_eq!(first.outputs(), reversed.outputs());
         assert_ne!(first.field_assessment(), reversed.field_assessment());
         assert!(
             runtime
                 .update_unknown(3, 1)
-                .unwrap()
+                .expect("a newer unknown context is admitted")
                 .field_assessment()
                 .is_none()
         );

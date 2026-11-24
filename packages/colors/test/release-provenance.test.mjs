@@ -50,6 +50,7 @@ test("package-smoke reaches tarball installation without dev dependencies while 
       ...PREPACK_FIXTURE_SCRIPT_FILES,
       "verify-package-release.mjs",
       "point-support-release-contract.cjs",
+      "point-support-source-cone.json",
     ];
     assertPrepackFixtureScriptClosure(scriptFiles);
     for (const file of scriptFiles) {
@@ -985,7 +986,11 @@ test("point-support release validator rejects one changed source byte", async ()
   const fixture = mkdtempSync(join(tmpdir(), "labcolors-point-source-binding-"));
   try {
     const scripts = copyPrepackFixture(fixture);
-    for (const file of ["verify-package-release.mjs", "point-support-release-contract.cjs"]) {
+    for (const file of [
+      "verify-package-release.mjs",
+      "point-support-release-contract.cjs",
+      "point-support-source-cone.json",
+    ]) {
       copyFileSync(join(root, "scripts", file), join(scripts, file));
     }
     const { default: { POINT_SUPPORT_SOURCE_PATHS } } = await import(
@@ -1016,22 +1021,27 @@ test("point-support release validator rejects one changed source byte", async ()
     const healthy = await validate();
     assert.equal(healthy.proofSha256, artifact.sha256);
 
-    const sourcePath = "crates/labcolors-core/src/composition.rs";
-    assert.ok(POINT_SUPPORT_SOURCE_PATHS.includes(sourcePath));
-    const original = readFileSync(join(fixture, sourcePath));
-    const changed = Buffer.from(original);
-    const offset = original.indexOf(0x20);
-    assert.ok(offset >= 0, "the source fixture must contain a space byte");
-    changed[offset] = 0x09;
-    assert.equal(changed.length, original.length);
-    assert.equal(changed.reduce((count, byte, index) => count + (byte !== original[index]), 0), 1);
-    try {
-      writeFileSync(join(fixture, sourcePath), changed);
-      await assert.rejects(validate(), {
-        message: `point-support proof does not bind source bytes: ${sourcePath}`,
-      });
-    } finally {
-      writeFileSync(join(fixture, sourcePath), original);
+    for (const sourcePath of [
+      "crates/labcolors-core/src/composition.rs",
+      "crates/labcolors-core/src/field_context.rs",
+      "crates/labcolors-core/src/gradient_domain.rs",
+    ]) {
+      assert.ok(POINT_SUPPORT_SOURCE_PATHS.includes(sourcePath));
+      const original = readFileSync(join(fixture, sourcePath));
+      const changed = Buffer.from(original);
+      const offset = original.indexOf(0x20);
+      assert.ok(offset >= 0, "the source fixture must contain a space byte");
+      changed[offset] = 0x09;
+      assert.equal(changed.length, original.length);
+      assert.equal(changed.reduce((count, byte, index) => count + (byte !== original[index]), 0), 1);
+      try {
+        writeFileSync(join(fixture, sourcePath), changed);
+        await assert.rejects(validate(), {
+          message: `point-support proof does not bind source bytes: ${sourcePath}`,
+        });
+      } finally {
+        writeFileSync(join(fixture, sourcePath), original);
+      }
     }
     assert.deepEqual(await validate(), healthy);
   } finally {

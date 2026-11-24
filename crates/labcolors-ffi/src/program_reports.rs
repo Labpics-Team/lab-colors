@@ -42,9 +42,9 @@ pub(crate) fn field_assessment(
         input_index: u32::try_from(field.input_index()).map_err(internal)?,
         from: from.into(),
         to: to.into(),
-        source_model: field.source_model().to_owned(),
-        domain: field.domain().to_owned(),
-        rendering: field.rendering().to_owned(),
+        source_model: copy_text(field.source_model(), operation)?,
+        domain: copy_text(field.domain(), operation)?,
+        rendering: copy_text(field.rendering(), operation)?,
         region_count: u32::try_from(field.region_count()).map_err(internal)?,
         witnesses,
     })

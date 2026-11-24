@@ -449,40 +449,58 @@ mod arena {
             &mut self,
             materialize: impl FnOnce(&mut ObservedScenarioSet) -> Result<(), ObservationError>,
         ) -> Result<Shared<ObservationBackingV1>, ObservationError> {
-            for slot in &mut self.slots {
-                let Some(backing) = Shared::get_mut(slot) else {
-                    continue;
-                };
-                if !matches!(backing.context, AdmittedContextV1::Observations(_)) {
-                    backing.context = AdmittedContextV1::Observations(ObservedScenarioSet::empty());
-                }
-                let AdmittedContextV1::Observations(set) = &mut backing.context else {
-                    unreachable!()
-                };
-                materialize(set)?;
-                return Ok(Shared::clone(slot));
+            let slot = self
+                .reusable_slot(|context| matches!(context, AdmittedContextV1::Observations(_)))?;
+            let backing = Shared::get_mut(slot).ok_or(ObservationError::InternalInvariant)?;
+            if !matches!(backing.context, AdmittedContextV1::Observations(_)) {
+                backing.context = AdmittedContextV1::Observations(ObservedScenarioSet::empty());
             }
-            Err(ObservationError::InternalInvariant)
+            let AdmittedContextV1::Observations(set) = &mut backing.context else {
+                unreachable!()
+            };
+            materialize(set)?;
+            Ok(Shared::clone(slot))
         }
 
         pub(super) fn materialize_field<Source: SchemaOrderedFieldSourceV1 + ?Sized>(
             &mut self,
             source: &Source,
         ) -> Result<Shared<ObservationBackingV1>, ObservationError> {
-            for slot in &mut self.slots {
+            let slot =
+                self.reusable_slot(|context| matches!(context, AdmittedContextV1::Field(_)))?;
+            let backing = Shared::get_mut(slot).ok_or(ObservationError::InternalInvariant)?;
+            if !matches!(backing.context, AdmittedContextV1::Field(_)) {
+                backing.context = AdmittedContextV1::Field(DeclaredFieldV1::empty());
+            }
+            let AdmittedContextV1::Field(field) = &mut backing.context else {
+                unreachable!()
+            };
+            field.materialize(source)?;
+            Ok(Shared::clone(slot))
+        }
+
+        fn reusable_slot(
+            &mut self,
+            has_matching_buffers: impl Fn(&AdmittedContextV1) -> bool,
+        ) -> Result<&mut Shared<ObservationBackingV1>, ObservationError> {
+            let mut first_free = None;
+            let mut matching = None;
+            for (index, slot) in self.slots.iter_mut().enumerate() {
                 let Some(backing) = Shared::get_mut(slot) else {
                     continue;
                 };
-                if !matches!(backing.context, AdmittedContextV1::Field(_)) {
-                    backing.context = AdmittedContextV1::Field(DeclaredFieldV1::empty());
+                first_free.get_or_insert(index);
+                if has_matching_buffers(&backing.context) {
+                    matching = Some(index);
+                    break;
                 }
-                let AdmittedContextV1::Field(field) = &mut backing.context else {
-                    unreachable!()
-                };
-                field.materialize(source)?;
-                return Ok(Shared::clone(slot));
             }
-            Err(ObservationError::InternalInvariant)
+            // A retained revision can never be selected. Preserve warm buffers
+            // of the requested kind before converting any other free backing.
+            let index = matching
+                .or(first_free)
+                .ok_or(ObservationError::InternalInvariant)?;
+            Ok(&mut self.slots[index])
         }
 
         pub(super) fn shares_schema_backing_with(

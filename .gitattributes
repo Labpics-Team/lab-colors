@@ -50,6 +50,7 @@ proof/region/v1/fixtures/*.bin binary
 # point-support capsule): CRLF-чекаут ломает byte-exact сверку. Pin к LF.
 scripts/verify_point_support_surplus.py text eol=lf
 scripts/test_point_support_surplus_source_binding.py text eol=lf
+scripts/point-support-source-cone.json text eol=lf
 crates/labcolors-core/contracts/*.json text eol=lf
 crates/labcolors-core/Cargo.toml text eol=lf
 # Корневой LICENSE входит в legal-закрытие clean-set receipt по точным байтам:

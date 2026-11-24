@@ -688,6 +688,12 @@ fn chromatic_suffix_is_refined_at_the_selected_translucent_panel() {
         .current_verified()
         .expect("feasible composition")
         .computed_for_test();
+    if result.optimality() == ComputedOptimalityV1::Unfinished {
+        assert_eq!(
+            result.search.visited, EXECUTION_NODE_LIMIT_V1,
+            "the terminal proposal reserve must describe actual admitted work"
+        );
+    }
     let compose = |source: Srgb8, backdrop: Srgb8| {
         Srgb8::new(std::array::from_fn(|channel| {
             crate::composition::source_over_channel_srgb8(
@@ -747,4 +753,31 @@ fn chromatic_suffix_is_refined_at_the_selected_translucent_panel() {
                 .max(case.virtual_distance_squared())),
         score(result.values[1])
     );
+    let field = crate::program_wire::ProgramDeclaredFieldV1::from_rgb8(
+        &[0; 3],
+        0,
+        Srgb8::new([255, 0, 0]),
+        Srgb8::new([0, 255, 0]),
+    )
+    .expect("public affine source declaration");
+    let mut field_session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("independent field session");
+    field_session
+        .prepare_schema_ordered_field(crate::observation::Revision::new(1), &field)
+        .expect("whole declared field admission")
+        .commit();
+    let field_result = field_session
+        .state()
+        .current_verified()
+        .expect("feasible whole field")
+        .computed_for_test();
+    assert!(field_result.observation.declared_field().is_some());
+    assert_eq!(
+        field_result.observation.physical_case_count(),
+        support.len()
+    );
+    assert_eq!(field_result.values, result.values);
+    assert_eq!(field_result.optimality(), result.optimality());
+    assert_eq!(field_result.search.visited, result.search.visited);
 }

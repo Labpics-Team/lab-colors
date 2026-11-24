@@ -55,7 +55,7 @@ impl DeclaredFieldV1 {
         source: &Source,
     ) -> Result<(), ObservationError> {
         let segment = source.segment();
-        let cell_count = segment.partition().count();
+        let cell_count = segment.partition_cell_count();
         // Reserve before replacing any contents. This is a free arena slot;
         // failed growth cannot mutate an already-issued revision.
         reserve_total(&mut self.fixed_values, source.value_count())?;

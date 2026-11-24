@@ -1,0 +1,274 @@
+{
+  "negative_controls": [
+    {
+      "after": "false",
+      "before": "matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "false",
+      "before": "matches!(self, Self::RequiredFailure(_))",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "false",
+      "before": "matches!(self, Self::Failure(_))",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "            criterion,\n            stability: PointSupportStabilityPolicyV1::Disabled,\n        }\n    }\n}\n\n#[derive(Debug, Clone, PartialEq, Eq)]",
+      "before": "            criterion,\n            stability,\n        }\n    }\n}\n\n#[derive(Debug, Clone, PartialEq, Eq)]",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "NumericalSiteIdV2::Wcag22Srgb8ContrastV1;",
+      "before": "NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1;",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "let current_distance = baseline.distance;",
+      "before": "let current_distance = reference_distance(current_measurement)?;",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "Ok(assessment.bind_unchecked(observation))",
+      "before": "Ok(assessment.bind(observation))",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "            let backdrop = values.first().copied().ok_or(\n",
+      "before": "            let backdrop = values.get(*surface_index).copied().ok_or(\n",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "    if observation.shares_schema_backing_with(&plan.surface_schema) {\n",
+      "before": "    if !observation.shares_schema_backing_with(&plan.surface_schema) {\n",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "        _permit: (),\n",
+      "before": "        _permit: SessionObservationBindingPermitV1,\n",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8 as canonical_measure_wcag22_srgb8};\nfn measure_wcag22_srgb8(foreground: [u8; 3], background: [u8; 3]) -> Wcag22MeasurementV1 { canonical_measure_wcag22_srgb8(background, foreground) }",
+      "before": "use crate::wcag22::{Wcag22CriterionV1, Wcag22MeasurementV1, measure_wcag22_srgb8};",
+      "path": "crates/labcolors-core/src/point_support.rs"
+    },
+    {
+      "after": "                None\n",
+      "before": "                set.values(case_index).map(PhysicalValuesV1::from_slice)\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "            AdmittedContextV1::Field(_) => None,\n",
+      "before": "            AdmittedContextV1::Field(field) => field.values(case_index),\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "            Some((replaced, _)) if index == replaced => fixed,\n",
+      "before": "            Some((replaced, value)) if index == replaced => value,\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "        let support = self.support.first()?;\n",
+      "before": "        let support = self.support.get(case_index)?;\n",
+      "path": "crates/labcolors-core/src/field_context.rs"
+    },
+    {
+      "after": "            &self.fixed_values,\n            0,\n            &support.value,\n",
+      "before": "            &self.fixed_values,\n            self.varying_input_index,\n            &support.value,\n",
+      "path": "crates/labcolors-core/src/field_context.rs"
+    },
+    {
+      "after": "            ((2 * value) / (2 * denominator)) as u8\n",
+      "before": "            ((2 * value + denominator) / (2 * denominator)) as u8\n",
+      "path": "crates/labcolors-core/src/gradient_domain.rs"
+    },
+    {
+      "after": "            nominal: self.segment.at(SegmentCoordinate::ZERO),\n",
+      "before": "            nominal: self.segment.at(region.representative()),\n",
+      "path": "crates/labcolors-core/src/gradient_domain.rs"
+    },
+    {
+      "after": "            .extend(bindings.iter().map(|_| ColorSignal::from_srgb8(Srgb8::new([0, 0, 0]))));\n",
+      "before": "            .extend(bindings.iter().map(|binding| binding.value));\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "        self == other\n",
+      "before": "        Shared::ptr_eq(&self.0, &other.0)\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "        Self(Shared::from(self.as_slice()))\n",
+      "before": "        Self(Shared::clone(&self.0))\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "if expected_input == actual_input",
+      "before": "if expected_input != actual_input",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "None",
+      "before": "Some(observation.revision)",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "unreachable!()",
+      "before": "(self.owner, self.observation)",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "            && self.backing == other.backing\n",
+      "before": "            && Shared::ptr_eq(&self.backing, &other.backing)\n",
+      "path": "crates/labcolors-core/src/observation.rs"
+    },
+    {
+      "after": "    pub(crate) const fn srgb8(self) -> Srgb8 {\n        Srgb8::new([0, 0, 0])\n    }",
+      "before": "    pub(crate) const fn srgb8(self) -> Srgb8 {\n        self.srgb8\n    }",
+      "path": "crates/labcolors-core/src/lcs_occurrence.rs"
+    },
+    {
+      "after": "            Self::Observed(_) => ObservationHeadViewV1::Empty,\n",
+      "before": "            Self::Observed(observation) => ObservationHeadViewV1::Observed(observation),\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "            let (raw_head, observation) = prepared.into_parts();\n            *raw_head = SessionObservationHeadV1::Observed(observation.clone());\n            let raw_observation = observation.clone();\n",
+      "before": "            let (raw_head, observation) = prepared.into_parts();\n            let raw_observation = observation.clone();\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Empty,\n            );\n",
+      "before": "            let retired_raw_head = mem::replace(\n                raw_head,\n                SessionObservationHeadV1::Observed(raw_observation),\n            );\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "                Some(_) => SessionState::Waiting,",
+      "before": "                Some(previous) => SessionState::Stale { previous },",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "            let permit = SessionObservationBindingPermitV1::for_test();",
+      "before": "            let permit = SessionObservationBindingPermitV1::mint(&observation);",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "                SessionDecision::Verified(current) => {\n                    (SessionState::Stale { previous: current }, last_verified)\n                }\n",
+      "before": "                SessionDecision::Verified(current) => {\n                    (SessionState::Ready { current }, last_verified)\n                }\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "                SessionDecision::Violation(_) => (\n                    SessionState::Waiting,\n                    last_verified,\n                ),\n",
+      "before": "                SessionDecision::Violation(cause) => (\n                    SessionState::Failed {\n                        cause,\n                        previous: last_verified,\n                    },\n                    None,\n                ),\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "                unreachable!();\n",
+      "before": "                return Err(SessionUpdateError::EvidenceBindingInvariant);\n",
+      "path": "crates/labcolors-core/src/session.rs"
+    },
+    {
+      "after": "proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable",
+      "before": "proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available",
+      "path": "crates/labcolors-core/src/numerics.rs"
+    },
+    {
+      "after": "f64::from(tint)",
+      "before": "f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))",
+      "path": "crates/labcolors-core/src/composition.rs"
+    },
+    {
+      "after": "        Self { source, opacity: crate::composition::AdmittedOpacityV1::OPAQUE }\n",
+      "before": "        Self { source, opacity }\n",
+      "path": "crates/labcolors-core/src/appearance.rs"
+    },
+    {
+      "after": "let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();",
+      "before": "let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();",
+      "path": "crates/labcolors-core/src/constraints/mod.rs"
+    },
+    {
+      "after": "if actual != *invocation",
+      "before": "if actual == *invocation",
+      "path": "crates/labcolors-core/src/constraints/exact.rs"
+    },
+    {
+      "after": "HardDecision::Violation(Wcag22ViolationV1(()))",
+      "before": "HardDecision::Pass(Wcag22PassV1(()))",
+      "path": "crates/labcolors-core/src/constraints/wcag22.rs"
+    },
+    {
+      "after": "foreground_luminance: kernel::luminance_bounds(background),",
+      "before": "foreground_luminance: kernel::luminance_bounds(foreground),",
+      "path": "crates/labcolors-core/src/wcag22.rs"
+    },
+    {
+      "after": "10 * light_lower > 30 * dark_upper + scale",
+      "before": "10 * light_lower >= 30 * dark_upper + scale",
+      "path": "crates/labcolors-core/src/wcag22/kernel.rs"
+    },
+    {
+      "after": "pub(crate) const Q55_SCALE: u64 = 36028797018963967;",
+      "before": "pub(crate) const Q55_SCALE: u64 = 36028797018963968;",
+      "path": "crates/labcolors-core/src/wcag22/q55_data.rs"
+    },
+    {
+      "after": "NumericalSiteIdV2::PointSupportRetainedReferenceSurplusV1;",
+      "before": "NumericalSiteIdV2::Wcag22Srgb8ContrastV1;",
+      "path": "crates/labcolors-core/src/wcag22_evidence.rs"
+    },
+    {
+      "after": "[0, 0, 0]\n",
+      "before": "self.0\n",
+      "path": "crates/labcolors-core/src/srgb8.rs"
+    },
+    {
+      "after": "const FNV1A_32_PRIME: u32 = 16777621;",
+      "before": "const FNV1A_32_PRIME: u32 = 16777619;",
+      "path": "crates/labcolors-core/src/hash.rs"
+    },
+    {
+      "after": "#[path = \"alternate_point_support.rs\"]\npub(crate) mod point_support;",
+      "before": "pub(crate) mod point_support;",
+      "path": "crates/labcolors-core/src/lib.rs"
+    },
+    {
+      "after": "\"normalTextRatio\":\"4.4\"",
+      "before": "\"normalTextRatio\":\"4.5\"",
+      "path": "crates/labcolors-core/contracts/wcag22-srgb8-v1.json"
+    },
+    {
+      "after": "\"proof_payload_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"",
+      "before": "\"proof_payload_sha256\":\"726d4a6038d8d30a76c7051de881b199c9d762dedb7ac609b1ba84b7252b7977\"",
+      "path": "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json"
+    }
+  ],
+  "schema_version": 1,
+  "source_paths": [
+    "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json",
+    "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
+    "crates/labcolors-core/src/appearance.rs",
+    "crates/labcolors-core/src/appearance/execution_cone.rs",
+    "crates/labcolors-core/src/composition.rs",
+    "crates/labcolors-core/src/constraints/exact.rs",
+    "crates/labcolors-core/src/constraints/mod.rs",
+    "crates/labcolors-core/src/constraints/wcag22.rs",
+    "crates/labcolors-core/src/field_context.rs",
+    "crates/labcolors-core/src/gradient_domain.rs",
+    "crates/labcolors-core/src/hash.rs",
+    "crates/labcolors-core/src/lcs_occurrence.rs",
+    "crates/labcolors-core/src/lib.rs",
+    "crates/labcolors-core/src/numerics.rs",
+    "crates/labcolors-core/src/observation.rs",
+    "crates/labcolors-core/src/point_support.rs",
+    "crates/labcolors-core/src/session.rs",
+    "crates/labcolors-core/src/srgb8.rs",
+    "crates/labcolors-core/src/wcag22.rs",
+    "crates/labcolors-core/src/wcag22/kernel.rs",
+    "crates/labcolors-core/src/wcag22/q55_data.rs",
+    "crates/labcolors-core/src/wcag22_evidence.rs"
+  ]
+}

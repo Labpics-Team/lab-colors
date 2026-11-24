@@ -200,32 +200,45 @@ fn apply_declared_field(
 
 #[test]
 fn declared_field_keeps_exact_interior_tie_coordinate_and_complete_regions() {
-    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B])
+        .expect("distinct fixture ports form a valid schema");
     let source = DeclaredFieldSource {
         values: vec![Srgb8::new([0; 3]), Srgb8::new([19, 29, 39])],
         varying: 0,
         segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
     };
-    apply_declared_field(&mut state, 1, &source).unwrap();
+    apply_declared_field(&mut state, 1, &source)
+        .expect("valid field at the current or next revision is admitted");
     let observation = revision_bound(&state);
-    let field = observation.declared_field().unwrap();
+    let field = observation
+        .declared_field()
+        .expect("declared admission retains its field descriptor");
     assert_eq!(field.segment(), source.segment);
     assert_eq!(observation.physical_case_count(), 511);
     assert_eq!(field.cell_count(), 513);
     let mut regions = 0;
     let mut tie = None;
     for case in 0..observation.physical_case_count() {
-        let values = observation.physical_values(case).unwrap();
+        let values = observation
+            .physical_values(case)
+            .expect("case index is within the admitted physical support");
         assert!(values.as_slice().is_none());
         assert_eq!(values.len(), 2);
         assert_eq!(values[1].srgb8(), source.values[1]);
         assert_eq!(values.iter().len(), 2);
         assert_eq!(
-            values.iter().rev().next().unwrap().srgb8(),
+            values
+                .iter()
+                .next_back()
+                .expect("the two-input field has a last value")
+                .srgb8(),
             source.values[1]
         );
         assert_eq!(observation.provenance(case), Some([].as_slice()));
-        for cell in field.cells(case).unwrap() {
+        for cell in field
+            .cells(case)
+            .expect("each admitted physical case has coordinate cells")
+        {
             regions += 1;
             assert_eq!(cell.nominal(), values[0].srgb8().bytes());
             assert_eq!(source.segment.at(cell.representative()), cell.nominal());
@@ -244,18 +257,21 @@ fn declared_field_keeps_exact_interior_tie_coordinate_and_complete_regions() {
 
 #[test]
 fn reversed_declared_field_conflicts_even_when_physical_support_is_equal() {
-    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut state =
+        TestState::new(STREAM, vec![PORT_A]).expect("distinct fixture ports form a valid schema");
     let forward = DeclaredFieldSource {
         values: vec![Srgb8::new([0; 3])],
         varying: 0,
         segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
     };
     assert_eq!(
-        apply_declared_field(&mut state, 1, &forward).unwrap(),
+        apply_declared_field(&mut state, 1, &forward)
+            .expect("valid field at the current or next revision is admitted"),
         UpdateDisposition::Applied
     );
     assert_eq!(
-        apply_declared_field(&mut state, 1, &forward).unwrap(),
+        apply_declared_field(&mut state, 1, &forward)
+            .expect("valid field at the current or next revision is admitted"),
         UpdateDisposition::Idempotent
     );
     let mut reversed = forward.clone();
@@ -267,34 +283,42 @@ fn reversed_declared_field_conflicts_even_when_physical_support_is_equal() {
         }),
     );
     let old = revision_bound(&state).clone();
-    apply_declared_field(&mut state, 2, &reversed).unwrap();
+    apply_declared_field(&mut state, 2, &reversed)
+        .expect("valid field at the current or next revision is admitted");
     let current = revision_bound(&state);
     assert_eq!(old.physical_case_count(), current.physical_case_count());
     for case in 0..old.physical_case_count() {
         assert_eq!(old.physical_values(case), current.physical_values(case));
     }
     assert_ne!(
-        old.declared_field().unwrap().segment(),
-        current.declared_field().unwrap().segment()
+        old.declared_field()
+            .expect("declared admission retains its field descriptor")
+            .segment(),
+        current
+            .declared_field()
+            .expect("declared admission retains its field descriptor")
+            .segment()
     );
 }
 
 #[test]
 fn constant_declared_field_is_not_collapsed_into_a_finite_observation() {
-    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B])
+        .expect("distinct fixture ports form a valid schema");
     let source = DeclaredFieldSource {
         values: vec![Srgb8::new([7; 3]); 2],
         varying: 0,
         segment: OpaqueSrgb8AffineSegment::new([7; 3], [7; 3]),
     };
-    apply_declared_field(&mut state, 1, &source).unwrap();
+    apply_declared_field(&mut state, 1, &source)
+        .expect("valid field at the current or next revision is admitted");
     let observation = revision_bound(&state);
     assert_eq!(observation.physical_case_count(), 1);
     let regions: Vec<_> = observation
         .declared_field()
-        .unwrap()
+        .expect("constant field remains a declared context")
         .cells(0)
-        .unwrap()
+        .expect("a constant field has cells for its single physical case")
         .iter()
         .map(|cell| cell.region())
         .collect();
@@ -342,7 +366,7 @@ fn constant_declared_field_is_not_collapsed_into_a_finite_observation() {
                 [binding(PORT_A, [7; 3]), binding(PORT_B, [7; 3])],
             )]),
         ))
-        .unwrap();
+        .expect("a newer finite observation replaces the declared field");
     assert_eq!(
         old.physical_values(0),
         revision_bound(&state).physical_values(0)
@@ -358,24 +382,52 @@ fn constant_declared_field_is_not_collapsed_into_a_finite_observation() {
 
 #[test]
 fn retained_field_descriptor_coordinates_and_constants_survive_pool_reuse() {
-    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B])
+        .expect("distinct fixture ports form a valid schema");
     let mut source = DeclaredFieldSource {
         values: vec![Srgb8::new([0; 3]), Srgb8::new([10; 3])],
         varying: 0,
         segment: OpaqueSrgb8AffineSegment::new([0; 3], [2; 3]),
     };
-    apply_declared_field(&mut state, 1, &source).unwrap();
+    apply_declared_field(&mut state, 1, &source)
+        .expect("valid field at the current or next revision is admitted");
     let old = revision_bound(&state).clone();
-    let descriptor = old.declared_field().unwrap().segment();
-    let cells = old.declared_field().unwrap().cells(0).unwrap().to_vec();
+    let descriptor = old
+        .declared_field()
+        .expect("declared admission retains its field descriptor")
+        .segment();
+    let cells = old
+        .declared_field()
+        .expect("declared admission retains its field descriptor")
+        .cells(0)
+        .expect("the retained first physical case has coordinate cells")
+        .to_vec();
     for revision in 2..8 {
         source.values[1] = Srgb8::new([revision as u8; 3]);
         source.segment = OpaqueSrgb8AffineSegment::new([revision as u8; 3], [20; 3]);
-        apply_declared_field(&mut state, revision, &source).unwrap();
+        apply_declared_field(&mut state, revision, &source)
+            .expect("valid field at the current or next revision is admitted");
         assert_eq!(old.revision(), Revision::new(1));
-        assert_eq!(old.declared_field().unwrap().segment(), descriptor);
-        assert_eq!(old.declared_field().unwrap().cells(0).unwrap(), cells);
-        assert_eq!(old.physical_values(0).unwrap()[1].srgb8().bytes(), [10; 3]);
+        assert_eq!(
+            old.declared_field()
+                .expect("declared admission retains its field descriptor")
+                .segment(),
+            descriptor
+        );
+        assert_eq!(
+            old.declared_field()
+                .expect("declared admission retains its field descriptor")
+                .cells(0)
+                .expect("the retained first physical case has coordinate cells"),
+            cells
+        );
+        assert_eq!(
+            old.physical_values(0)
+                .expect("a retained nonempty field still has its first physical case")[1]
+                .srgb8()
+                .bytes(),
+            [10; 3]
+        );
     }
 }
 
@@ -388,19 +440,24 @@ fn declared_field_storage_grows_by_inputs_plus_support_not_their_product() {
                 .map(|i| SurfaceInputPortId::new(i as u32))
                 .collect(),
         )
-        .unwrap();
+        .expect("generated fixture port identifiers are distinct");
         let source = DeclaredFieldSource {
             values: vec![Srgb8::new([17; 3]); input_count],
             varying: input_count - 1,
             segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
         };
-        apply_declared_field(&mut state, 1, &source).unwrap();
+        apply_declared_field(&mut state, 1, &source)
+            .expect("valid field at the current or next revision is admitted");
         let observation = revision_bound(&state);
-        let field = observation.declared_field().unwrap();
+        let field = observation
+            .declared_field()
+            .expect("declared admission retains its field descriptor");
         assert_eq!(field.stored_value_count_for_test(), input_count + 511);
         assert_eq!(field.cell_count(), 513);
         for case in 0..observation.physical_case_count() {
-            let values = observation.physical_values(case).unwrap();
+            let values = observation
+                .physical_values(case)
+                .expect("case index is within the admitted physical support");
             assert_eq!(values.len(), input_count);
             assert_eq!(values.get(input_count), None);
         }
@@ -410,14 +467,60 @@ fn declared_field_storage_grows_by_inputs_plus_support_not_their_product() {
 }
 
 #[test]
+fn lifecycle_declared_field_preserves_revision_order_across_context_kinds() {
+    let field = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([0; 3], [1; 3]),
+    };
+    for context in ["unknown", "finite", "field"] {
+        let mut state = TestState::new(STREAM, vec![PORT_A])
+            .expect("one distinct port forms a valid observation schema");
+        match context {
+            "unknown" => state.apply(unknown_update(STREAM, 2, 1)),
+            "finite" => state.apply(observed_update(
+                STREAM,
+                2,
+                scenarios([scenario(1, [binding(PORT_A, [0; 3])])]),
+            )),
+            "field" => apply_declared_field(&mut state, 2, &field),
+            _ => unreachable!(),
+        }
+        .expect("a first valid context establishes revision two");
+        let before = state.clone();
+        assert_eq!(
+            apply_declared_field(&mut state, 1, &field),
+            Err(ObservationError::RevisionOutOfOrder {
+                current: Revision::new(2),
+                incoming: Revision::new(1),
+            }),
+            "stale field after {context}",
+        );
+        assert_eq!(state, before, "rejected field must retain {context}");
+        assert_eq!(
+            apply_declared_field(&mut state, 3, &field),
+            Ok(UpdateDisposition::Applied),
+            "a newer field after {context} must remain admissible",
+        );
+        assert_eq!(
+            apply_declared_field(&mut state, 3, &field),
+            Ok(UpdateDisposition::Idempotent),
+            "the exact current field remains an idempotent replay",
+        );
+    }
+}
+
+#[test]
 fn malformed_declared_field_is_rejected_before_revision_comparison() {
-    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut state =
+        TestState::new(STREAM, vec![PORT_A]).expect("distinct fixture ports form a valid schema");
     let mut source = DeclaredFieldSource {
         values: vec![Srgb8::new([0; 3])],
         varying: 0,
         segment: OpaqueSrgb8AffineSegment::new([0; 3], [1; 3]),
     };
-    apply_declared_field(&mut state, 2, &source).unwrap();
+    apply_declared_field(&mut state, 2, &source)
+        .expect("valid field at the current or next revision is admitted");
     source.varying = 1;
     assert_eq!(
         apply_declared_field(&mut state, 1, &source),
@@ -678,7 +781,7 @@ fn admission_preserves_correlated_tuples_without_cartesian_product() {
         .map(|case_index| {
             observation
                 .physical_values(case_index)
-                .unwrap()
+                .expect("case index is within the admitted physical support")
                 .iter()
                 .copied()
                 .map(ColorSignal::srgb8)
@@ -724,7 +827,7 @@ fn canonicalization_ignores_declaration_order_and_groups_duplicate_physics() {
         .map(|case_index| {
             observation
                 .physical_values(case_index)
-                .unwrap()
+                .expect("case index is within the admitted physical support")
                 .iter()
                 .copied()
                 .collect()
@@ -803,8 +906,123 @@ fn retained_observations_survive_pool_exhaustion_and_reuse() -> Result<(), Obser
     for (observation, channel) in [(&first, 10), (&third, 30), (revision_bound(&state), 40)] {
         let expected = [ColorSignal::from_srgb8(Srgb8::new([channel; 3]))];
         assert_eq!(
-            observation.physical_values(0).unwrap().as_slice(),
+            observation
+                .physical_values(0)
+                .expect("case index is within the admitted physical support")
+                .as_slice(),
             Some(expected.as_slice())
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn switching_contexts_reuses_warm_buffers_of_both_kinds() -> Result<(), ObservationError> {
+    let finite = OrderedSource::new(vec![
+        ordered_scenario(1, [[10; 3], [20; 3]]),
+        ordered_scenario(2, [[30; 3], [40; 3]]),
+    ]);
+    let field = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3]), Srgb8::new([19, 29, 39])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
+    };
+    for consecutive_fields in [true, false] {
+        let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B])?;
+        let mut order_scratch = Vec::new();
+        let mut revision = 0;
+        let mut apply = |state: &mut TestState, is_field| -> Result<(), ObservationError> {
+            revision += 1;
+            if is_field {
+                apply_declared_field(state, revision, &field)?;
+            } else {
+                let prepared = prepare_ordered(state, revision, &finite, &mut order_scratch)?;
+                let PreparedObservationUpdateV1::Observed(prepared) = prepared else {
+                    panic!("a higher revision prepares the finite fixture");
+                };
+                let (owner, observation) = prepared.into_parts();
+                *owner = TestOwner::Observed(observation);
+            }
+            Ok(())
+        };
+        // Warm two backings of the repeated kind and one of the other kind.
+        // No past revision is retained once the next update commits.
+        for is_field in [
+            !consecutive_fields,
+            consecutive_fields,
+            consecutive_fields,
+            !consecutive_fields,
+        ] {
+            apply(&mut state, is_field)?;
+        }
+        let (result, events) = crate::test_support::measured_allocator_events(|| {
+            for is_field in [consecutive_fields, consecutive_fields, !consecutive_fields] {
+                apply(&mut state, is_field)?;
+            }
+            Ok::<_, ObservationError>(())
+        });
+        result?;
+        assert_eq!(
+            events,
+            crate::test_support::AllocatorEvents::default(),
+            "context switches must preserve warm buffers; consecutive_fields={consecutive_fields}",
+        );
+        assert_eq!(
+            revision_bound(&state).declared_field().is_some(),
+            !consecutive_fields,
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn mixed_retained_contexts_require_a_free_slot_before_replacing_its_kind()
+-> Result<(), ObservationError> {
+    let mut state = TestState::new(STREAM, vec![PORT_A])?;
+    let finite = |revision, channel| {
+        observed_update(
+            STREAM,
+            revision,
+            scenarios([scenario(1, [binding(PORT_A, [channel; 3])])]),
+        )
+    };
+    let field = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
+    };
+    state.apply(finite(1, 10))?;
+    let first = revision_bound(&state).clone();
+    apply_declared_field(&mut state, 2, &field)?;
+    let retained_field = revision_bound(&state).clone();
+    state.apply(finite(3, 30))?;
+    let current_finite = revision_bound(&state).clone();
+    assert_eq!(
+        apply_declared_field(&mut state, 4, &field),
+        Err(ObservationError::InternalInvariant),
+    );
+    let released = first.backing_ptr_for_test();
+    drop(first);
+    apply_declared_field(&mut state, 4, &field)?;
+    let current = revision_bound(&state);
+    assert_eq!(current.backing_ptr_for_test(), released);
+    assert_eq!(current_finite.revision(), Revision::new(3));
+    assert_eq!(
+        current_finite
+            .physical_values(0)
+            .expect("the finite case is retained")[0]
+            .srgb8(),
+        Srgb8::new([30; 3]),
+    );
+    assert_eq!(retained_field.revision(), Revision::new(2));
+    assert_eq!(
+        retained_field.physical_case_count(),
+        current.physical_case_count()
+    );
+    for case in 0..current.physical_case_count() {
+        assert_eq!(
+            retained_field.physical_values(case),
+            current.physical_values(case)
         );
     }
     Ok(())
@@ -858,8 +1076,16 @@ fn schema_and_values_are_aligned_once_while_provenance_remains_complete() {
         .unwrap();
 
     let observation = revision_bound(&state);
-    let first_values = observation.physical_values(0).unwrap().as_slice().unwrap();
-    let second_values = observation.physical_values(1).unwrap().as_slice().unwrap();
+    let first_values = observation
+        .physical_values(0)
+        .expect("case index is within the admitted physical support")
+        .as_slice()
+        .expect("finite observations retain contiguous storage");
+    let second_values = observation
+        .physical_values(1)
+        .expect("case index is within the admitted physical support")
+        .as_slice()
+        .expect("finite observations retain contiguous storage");
     assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
     assert_eq!(
         first_values,
@@ -906,13 +1132,16 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
     assert_eq!(revision_bound(&left).schema(), &[PORT_A]);
     assert_eq!(revision_bound(&right).schema(), &[PORT_B]);
     assert_eq!(
-        revision_bound(&left).physical_values(0).unwrap().as_slice(),
+        revision_bound(&left)
+            .physical_values(0)
+            .expect("case index is within the admitted physical support")
+            .as_slice(),
         Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
     assert_eq!(
         revision_bound(&right)
             .physical_values(0)
-            .unwrap()
+            .expect("case index is within the admitted physical support")
             .as_slice(),
         Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
@@ -1053,7 +1282,7 @@ fn observed_to_unknown_replaces_raw_payload_instead_of_duplicating_it() {
     let old_schema = revision_bound(&state).schema().to_vec();
     let old_values: Vec<_> = revision_bound(&state)
         .physical_values(0)
-        .unwrap()
+        .expect("case index is within the admitted physical support")
         .iter()
         .copied()
         .collect();

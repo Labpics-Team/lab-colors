@@ -174,6 +174,40 @@ fn insert_index(lookup: &mut HashMap<u64, Vec<usize>>, key: u64, index: usize) -
     pushed(lookup.entry(key).or_default(), index)
 }
 
+fn tonal_proposals(anchor: Srgb8, domain: AssignmentDomainV1) -> impl Iterator<Item = Srgb8> {
+    let mut previous = None;
+    (0..=255_u32).filter_map(move |step| {
+        let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+        let repeated = previous == Some(source);
+        previous = Some(source);
+        (!repeated && domain.contains(source)).then_some(source)
+    })
+}
+
+#[test]
+fn terminal_proposals_count_only_distinct_admitted_sources() {
+    let anchor = Srgb8::new([128; 3]);
+    assert_eq!(
+        tonal_proposals(anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })
+            .collect::<Vec<_>>(),
+        (0..=3)
+            .map(|value| Srgb8::new([value; 3]))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        tonal_proposals(
+            anchor,
+            AssignmentDomainV1::Cube {
+                lower: [0, 0, 1],
+                upper: [0, 0, 2]
+            }
+        )
+        .count(),
+        0,
+        "an off-path source domain reserves no tonal visits"
+    );
+}
+
 impl<'a> ReferenceRuntimeV1<'a> {
     fn new<E: ProgramConstraintEvaluatorSetV1>(
         selection: &'a ComputedSelectionV1,
@@ -1137,21 +1171,15 @@ impl<'a> ReferenceRuntimeV1<'a> {
         // acceptance and completeness, including backward graph dependencies.
         for target in 0..self.context.targets.len() {
             let anchor = self.context.targets[target].declaration.anchor;
-            let mut previous = None;
-            for step in 0..=255_u32 {
+            for source in tonal_proposals(anchor, self.context.domains[target]) {
                 if self.evidence.visited >= self.budget {
                     return Ok(());
                 }
-                let source = color_at_lightness(anchor, f64::from(step) / 255.0);
-                if previous == Some(source) {
-                    continue;
-                }
-                previous = Some(source);
                 let best = self.best.expect("polish retains a feasible point");
                 values.copy_from_slice(&self.pending[best].values);
-                if source == values[target] || !self.context.domains[target].contains(source) {
-                    continue;
-                }
+                // Visit every admitted proposal, even if an earlier coordinate
+                // move has made it the current source. This fixed work set is
+                // exactly what the scheduler reserves; each visit is assessed.
                 values[target] = source;
                 self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
             }
@@ -1468,7 +1496,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         for (failed, cell) in proposal_hard_failures.iter_mut().zip(&arena.cells) {
                             *failed = cell.result().is_violation();
                         }
-                        if case_count != search.context.case_refinement.borrow().cases.len() {
+                        let refined_case_count =
+                            search.context.case_refinement.borrow().cases.len();
+                        if case_count != refined_case_count {
                             if search.evidence.visited >= limit {
                                 break 'repair;
                             }
@@ -1477,6 +1507,15 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                                     runtime, epoch, scenarios, &working, arena, true,
                                 )?
                                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                            // Current already failed on the old probe, a subset
+                            // of the enlarged one. Unless that set is complete,
+                            // its retained violation makes probe_cases return
+                            // immediately. A complete set cannot grow either.
+                            debug_assert_ne!(current_failures, 0);
+                            debug_assert_eq!(
+                                search.context.case_refinement.borrow().cases.len(),
+                                refined_case_count
+                            );
                             current_scores.copy_from_slice(&search.legacy_scores);
                             for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells)
                             {
@@ -1542,8 +1581,16 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // context from blocking discovery of a better feasible composition.
         let mut capacity_steps = 0_u8;
         let polish_work = if count > 1 {
-            (count as u64)
-                .saturating_mul(256)
+            search
+                .context
+                .targets
+                .iter()
+                .zip(&search.context.domains)
+                .fold(0_u64, |sum, (target, &domain)| {
+                    sum.saturating_add(
+                        tonal_proposals(target.declaration.anchor, domain).count() as u64
+                    )
+                })
                 .min(search.budget / COORDINATE_BUDGET_DIVISOR)
         } else {
             0
@@ -1612,8 +1659,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         } else if polish_work != 0 && search.evidence.visited < search.budget {
             // Do this after the last domain-search step. Resuming DFS could
             // accept another earlier paint with a still-unsearched suffix and
-            // undo the improvement. Duplicate proposals may leave spare visits;
-            // the retained open regions keep completeness explicitly unfinished.
+            // undo the improvement. The exact admitted-proposal count reserves
+            // only executable work; the pass consumes the remaining visits.
+            // Open regions still keep completeness explicitly unfinished.
             search.polish(runtime, epoch, scenarios, arena)?;
         }
     }
