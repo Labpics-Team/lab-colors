@@ -158,7 +158,7 @@ impl SessionPlanV1 for SentinelPlan {
         }
         let first = observation
             .physical_values(0)
-            .and_then(|values| values.first())
+            .and_then(|values| values.get(0))
             .copied()
             .map(ColorSignal::srgb8)
             .ok_or(SentinelError::EmptyObservation)?;
@@ -341,7 +341,7 @@ impl SessionPlanV1 for RetirementPlan {
         }
         let first = observation
             .physical_values(0)
-            .and_then(|values| values.first())
+            .and_then(|values| values.get(0))
             .copied()
             .map(ColorSignal::srgb8)
             .ok_or(SentinelError::EmptyObservation)?;

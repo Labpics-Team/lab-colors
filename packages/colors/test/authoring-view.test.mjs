@@ -58,6 +58,49 @@ async function fixedProgram(name, source = "#808080", options = { separation: [0
   return c.compile({ [name]: c.fixed(name, source).on(canvas, options) });
 }
 
+test("modeled set and replacement reject the complete proposal without changing the accepted composition", async () => {
+  const h = host(), program = await fixedProgram("ink", "#242424", {});
+  const next = await fixedProgram("newInk", "#ffffff", {});
+  const field = { kind: "affine-srgb8", from: "#000000", to: "#010000" };
+  const view = program.attach(h.root, { canvas: "#ffffff" });
+  try {
+    const current = view.current, sheet = h.sheet, writes = h.state.writes.length;
+    const refused = view.set({ canvas: field });
+    assert.equal(refused.state, "rejected");
+    assert.equal(refused.proposed.state, "modeled");
+    assert.equal(refused.proposed.coverage.rendering, "unknown");
+    assert.equal(view.current, current);
+    assert.equal(view.lastUpdate, refused);
+    assert.equal(h.sheet, sheet);
+    assert.equal(h.state.writes.length, writes);
+    const replacement = view.replace(next, { canvas: field });
+    assert.equal(replacement.state, "rejected");
+    assert.equal(replacement.proposed.state, "modeled");
+    assert.ok(replacement.proposed.values.newInk);
+    assert.equal("view" in replacement, false);
+    assert.equal(view.current, current);
+    assert.equal(h.sheet, sheet);
+    assert.equal(h.state.writes.length, writes);
+    assert.equal(view.set({ canvas: "#283548" }).state, "committed");
+    assert.deepEqual(view.current.context.canvas, [40, 53, 72]);
+    assert.deepEqual(current.context.canvas, [255, 255, 255]);
+  } finally { view.dispose(); program.dispose(); next.dispose(); }
+});
+
+test("an initial modeled attachment remains an unapplied proposal", async () => {
+  const h = host(), program = await fixedProgram("ink", "#ffffff", {});
+  const view = program.attach(h.root, { canvas: { kind: "affine-srgb8", from: "#000000", to: "#010000" } });
+  try {
+    assert.equal(view.current, null);
+    assert.equal(view.lastUpdate.state, "rejected");
+    assert.equal(view.lastUpdate.proposed.state, "modeled");
+    assert.equal(h.sheet, "");
+    assert.equal(h.state.writes.length, 0);
+    assert.equal(view.set({ canvas: "#000000" }).state, "committed");
+    assert.equal(h.state.writes.length, 1);
+  } finally { view.dispose(); program.dispose(); }
+});
+
 test("a missing own context property rejects a view update without reading its prototype", async () => {
   const h = host(), c = colors(), surface = c.surface("toString");
   const program = await c.compile({ ink: c.fixed("ink", "#242424").on(surface) });

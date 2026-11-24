@@ -8,6 +8,75 @@ await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", im
 const hex = (rgb) => "#" + rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("");
 const textPasses = (rgb, background) => evaluateWcag22(hex(rgb), hex(background), "sc-1.4.3-text-default").decision === "pass";
 
+test("a whole affine source resolves as an immutable modeled frame through the real Core", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const program = await c.compile({ ink: c.fixed("ink", "#ffffff").on(canvas) });
+  const from = [0, 0, 0], to = [1, 0, 0];
+  try {
+    const frame = program.resolve({ canvas: { kind: "affine-srgb8", from, to } });
+    assert.equal(frame.state, "modeled");
+    assert.equal(frame.scope, "nominal-model");
+    assert.deepEqual(frame.coverage, { model: "complete", rendering: "unknown",
+      sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" });
+    assert.deepEqual(frame.values.ink.rgb, [255, 255, 255]);
+    assert.equal(frame.field.regionCount, 5);
+    assert.deepEqual(frame.field.witnesses, [
+      { coordinate: [0, 1], nominal: [0, 0, 0] },
+      { coordinate: [1, 2], nominal: [1, 0, 0] },
+    ]);
+    from[0] = 255;
+    to[1] = 255;
+    assert.deepEqual(frame.context.canvas, { kind: "affine-srgb8", from: [0, 0, 0], to: [1, 0, 0] });
+    assert.equal(frame.contextCss.canvas, "linear-gradient(90deg in srgb, rgb(0 0 0 / 1) 0%, rgb(1 0 0 / 1) 100%)");
+    const reversed = program.resolve({ canvas: { kind: "affine-srgb8", from: [1, 0, 0], to: [0, 0, 0] } });
+    assert.equal(reversed.state, "modeled");
+    assert.deepEqual(reversed.values, frame.values);
+    assert.notDeepEqual(reversed.context, frame.context);
+    assert.deepEqual(frame.field.witnesses[1], { coordinate: [1, 2], nominal: [1, 0, 0] });
+    const constant = program.resolve({ canvas: { kind: "affine-srgb8", from: "#010000", to: "#010000" } });
+    assert.equal(constant.state, "modeled", "equal endpoints preserve the declared field kind");
+    assert.equal(constant.field.regionCount, 3);
+    assert.equal(constant.field.witnesses.length, 1);
+    assert.deepEqual(constant.context.canvas, { kind: "affine-srgb8", from: [1, 0, 0], to: [1, 0, 0] });
+  } finally { program.dispose(); }
+});
+
+test("an interior field failure is scoped to the nominal model with a Core coordinate witness", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const program = await c.compile({ ink: c.fixed("ink", "#808080").on(canvas, { separation: [0.1, 2] }) });
+  try {
+    assert.equal(program.resolve({ canvas: "#000000" }).state, "ready");
+    assert.equal(program.resolve({ canvas: "#ffffff" }).state, "ready");
+    const frame = program.resolve({ canvas: { kind: "affine-srgb8", from: "#000000", to: "#ffffff" } });
+    assert.equal(frame.state, "conflict");
+    assert.equal(frame.scope, "nominal-model");
+    assert.equal(frame.coverage.model, "violated");
+    assert.equal(frame.coverage.rendering, "unknown");
+    assert.equal("values" in frame, false);
+    const violation = frame.diagnostics.find((item) => item.requirement === "separation");
+    assert.ok(violation.fieldWitness);
+    assert.equal(violation.fieldWitness.input, "canvas");
+    assert.deepEqual(violation.fieldWitness.coordinate, frame.field.witnesses[violation.caseIndex].coordinate);
+    const [numerator, denominator] = violation.fieldWitness.coordinate;
+    assert.ok(numerator > 0 && numerator < denominator);
+  } finally { program.dispose(); }
+});
+
+test("affine contexts reject multiple fields and retain missing constant inputs as unknown", async () => {
+  const c = colors(), first = c.surface("first"), second = c.surface("second");
+  const program = await c.compile({ a: c.fixed("a", "#000000").on(first), b: c.fixed("b", "#ffffff").on(second) });
+  const field = { kind: "affine-srgb8", from: "#000000", to: "#010000" };
+  try {
+    assert.throws(() => program.resolve({ first: field, second: field }), { code: "color_unsupported_context" });
+    const missing = program.resolve({ first: field });
+    assert.equal(missing.state, "unknown");
+    assert.deepEqual(missing.context.first, { kind: "affine-srgb8", from: [0, 0, 0], to: [1, 0, 0] });
+    assert.equal("coverage" in missing, false);
+    assert.deepEqual(missing.diagnostics, [{ kind: "unknown-input", input: "second" }]);
+    assert.equal(program.resolve({ first: "#ffffff", second: "#000000" }).state, "ready");
+  } finally { program.dispose(); }
+});
+
 test("context inputs require own properties even when their names exist on the prototype", async () => {
   for (const name of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
     const c = colors(), surface = c.surface(name);

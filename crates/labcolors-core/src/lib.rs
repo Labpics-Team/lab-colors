@@ -180,6 +180,9 @@ mod generic_boundary_tests;
 )]
 pub(crate) mod observation;
 
+mod field_context;
+mod gradient_domain;
+
 #[cfg(test)]
 mod observation_tests;
 

@@ -206,6 +206,20 @@ function copyObservedInputs(scenarioIds, surfaces, surfaceCount, operation) {
   ];
 }
 
+function copyDeclaredFieldInputs(surfaces, input, from, to, operation) {
+  const invalid = () => programIngressError(operation, "program_update");
+  const pixels = inspectTypedArrayStorage(surfaces, byteStorage, invalid);
+  const first = inspectTypedArrayStorage(from, byteStorage, invalid);
+  const last = inspectTypedArrayStorage(to, byteStorage, invalid);
+  if (pixels.length % 3 !== 0 || !Number.isInteger(input) || input < 0
+      || input >= pixels.length / 3 || first.length !== 3 || last.length !== 3) throw invalid();
+  return [
+    copyProgramInput(surfaces, byteStorage, operation, "program_update", undefined, pixels),
+    copyProgramInput(from, byteStorage, operation, "program_update", 3, first),
+    copyProgramInput(to, byteStorage, operation, "program_update", 3, last),
+  ];
+}
+
 export function compileProgramWire(bytes, streamId) {
   return compileProgramWireWasm(copyProgramInput(
     bytes, byteStorage, "compileProgramWire", "program_wire",
@@ -232,7 +246,7 @@ function withRuntimeOperation(runtime, operation, callback) {
   }
 }
 
-for (const method of ["updateObserved", "updateObservedWith", "updateUnknown", "free"]) {
+for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredField", "updateDeclaredFieldWith", "updateUnknown", "free"]) {
   const original = ProgramRuntime.prototype[method];
   ProgramRuntime.prototype[method] = function guardedRuntimeOperation(...args) {
     const operation = method === "free" ? "runtimeFree" : method;
@@ -243,9 +257,16 @@ for (const method of ["updateObserved", "updateObservedWith", "updateUnknown", "
         }
         [args[1], args[2]] = copyObservedInputs(args[1], args[2], args[3], operation);
       }
-      if (method === "updateObservedWith") {
-        const accept = args[4];
-        args[4] = snapshot => {
+      if (method === "updateDeclaredField" || method === "updateDeclaredFieldWith") {
+        if (method === "updateDeclaredFieldWith" && typeof args[5] !== "function") {
+          throw programIngressError(operation, "program_update");
+        }
+        [args[1], args[3], args[4]] = copyDeclaredFieldInputs(args[1], args[2], args[3], args[4], operation);
+      }
+      const acceptIndex = method === "updateObservedWith" ? 4 : method === "updateDeclaredFieldWith" ? 5 : null;
+      if (acceptIndex !== null) {
+        const accept = args[acceptIndex];
+        args[acceptIndex] = snapshot => {
           borrowedSnapshots.add(snapshot);
           try {
             return accept(snapshot);
@@ -453,14 +474,14 @@ export function isProgramError(error) {
     const operation = error.operation;
     const code = error.code;
     if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
-    if (operation === "updateObserved" || operation === "updateUnknown") {
+    if (operation === "updateObserved" || operation === "updateDeclaredField" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }
-    if (operation === "updateObservedWith") {
+    if (operation === "updateObservedWith" || operation === "updateDeclaredFieldWith") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code) || code === "program_host_protocol";
     }
     if (operation === "runtimeFree" || operation === "snapshotFree") return code === "program_busy";
-    if (operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "referenceSelections" || operation === "diagnostics") return code === "program_resource_exhausted";
+    if (operation === "copyOutputTable" || operation === "assessmentReport" || operation === "cleanlinessAssessment" || operation === "referenceSelections" || operation === "fieldAssessment" || operation === "diagnostics") return code === "program_resource_exhausted";
     if (operation === "attachProgramWire") return ATTACHMENT_ERROR_CODES.has(code);
     if (operation === "attachmentUpdateObserved" || operation === "attachmentUpdateUnknown") {
       return ATTACHMENT_UPDATE_ERROR_CODES.has(code);

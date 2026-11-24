@@ -5029,6 +5029,13 @@ enum ProgramCandidateScanV1<'a, Evaluation: ProgramConstraintEvaluatorSetV1> {
         indices: &'a [usize],
         physical: Option<&'a CompiledAppearanceConeV1>,
     },
+    // A search probe retains original case ordinals. It may reject a tuple,
+    // but cannot materialize outputs or stand in for a complete-frame scan.
+    Cases {
+        indices: Option<&'a [usize]>,
+        physical: Option<&'a CompiledAppearanceConeV1>,
+        cases: &'a [usize],
+    },
 }
 
 fn prepare_candidate_paints<'program, 'bindings, 'workspace>(
@@ -5059,11 +5066,16 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let (previous, constraint_indices, physical) = match scope {
-        ProgramCandidateScanV1::Full { previous } => (previous, None, None),
+    let (previous, constraint_indices, physical, case_indices) = match scope {
+        ProgramCandidateScanV1::Full { previous } => (previous, None, None, None),
         ProgramCandidateScanV1::Constraints { indices, physical } => {
-            (None, Some(indices), physical)
+            (None, Some(indices), physical, None)
         }
+        ProgramCandidateScanV1::Cases {
+            indices,
+            physical,
+            cases,
+        } => (None, indices, physical, Some(cases)),
     };
     let ProgramCandidateCollectionV1 {
         mut evidence,
@@ -5071,6 +5083,9 @@ where
         mut point_causal,
         mut physical_case,
     } = collection;
+    if case_indices.is_some() && (outputs.is_some() || point_causal.is_some()) {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
     let observation = scenario_set.observation();
     let schema = &epoch.observation_group.schema;
     if !observation.shares_schema_backing_with(schema) {
@@ -5145,7 +5160,9 @@ where
     // reuse exact evidence. A fully unchanged update performs no Paint work.
     let mut workspace = Some(&mut *runtime.workspace);
     let mut prepared_paints = None;
-    for case_index in 0..case_count {
+    let scan_count = case_indices.map_or(case_count, <[usize]>::len);
+    for ordinal in 0..scan_count {
+        let case_index = case_indices.map_or(ordinal, |cases| cases[ordinal]);
         let values = scenario_set
             .physical_values(case_index)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;

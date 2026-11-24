@@ -4,6 +4,52 @@ use labcolors_core::program_wire as core;
 
 use crate::LabColorsError;
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFieldWitness {
+    pub numerator: u16,
+    pub denominator: u16,
+    pub nominal: ProgramRgb8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFieldAssessment {
+    pub input_index: u32,
+    pub from: ProgramRgb8,
+    pub to: ProgramRgb8,
+    pub source_model: String,
+    pub domain: String,
+    pub rendering: String,
+    pub region_count: u32,
+    pub witnesses: Vec<ProgramFieldWitness>,
+}
+
+pub(crate) fn field_assessment(
+    field: &core::ProgramFieldAssessmentV1,
+) -> Result<ProgramFieldAssessment, LabColorsError> {
+    let operation = "fieldAssessment";
+    let mut witnesses = storage(field.witnesses().len(), operation)?;
+    for witness in field.witnesses() {
+        let (numerator, denominator) = witness.coordinate();
+        witnesses.push(ProgramFieldWitness {
+            numerator,
+            denominator,
+            nominal: witness.nominal().into(),
+        });
+    }
+    let (from, to) = field.endpoints();
+    let internal = |_| LabColorsError::new("program_internal", operation);
+    Ok(ProgramFieldAssessment {
+        input_index: u32::try_from(field.input_index()).map_err(internal)?,
+        from: from.into(),
+        to: to.into(),
+        source_model: field.source_model().to_owned(),
+        domain: field.domain().to_owned(),
+        rendering: field.rendering().to_owned(),
+        region_count: u32::try_from(field.region_count()).map_err(internal)?,
+        witnesses,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum ProgramTonalPolarity {
     Darker,

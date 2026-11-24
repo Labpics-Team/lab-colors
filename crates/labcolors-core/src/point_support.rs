@@ -1,7 +1,7 @@
 //! Private C8d full-support recheck for one already-compiled point role table.
 //!
-//! This module is not an authoring root. A private compiler lowers the current
-//! recipe into fixed Paint occurrences plus requirements; the F2 Session is
+//! This module is not an authoring root. A private compiler lowers the authored
+//! composition into fixed Paint occurrences plus requirements; the F2 Session is
 //! the only production owner that may combine those requirements with admitted
 //! observation revisions. Exact final-emission identity, WCAG and retained
 //! stability are three independent axes. A plan must request at least one axis,

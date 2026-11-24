@@ -26,7 +26,7 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   pane.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   const program: ColorProgram<"fill" | "label" | "pane"> = await c.compile({ fill, label, pane });
   const frame = program.resolve({ canvas: "#e6ddd0" });
-  if (frame.state === "ready") {
+  if (frame.state === "ready" || frame.state === "modeled") {
     const rgb: readonly [number, number, number] = frame.values.fill.rgb;
     const completed: "exact" | "unfinished" = frame.optimality;
     const quality: ColorCleanlinessAssessment = frame.cleanliness;
@@ -48,11 +48,31 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
     frame.values;
   }
   const attachmentOptions: ColorAttachOptions = { nonce: "application-supplied-nonce" };
+  const modeled = program.resolve({ canvas: { kind: "affine-srgb8", from: "#ffffff", to: [221, 221, 221] } });
+  if (modeled.state === "modeled") {
+    const complete: "complete" = modeled.coverage.model;
+    const rendering: "unknown" = modeled.coverage.rendering;
+    const background: string = modeled.contextCss.canvas;
+    const descriptor = modeled.context.canvas;
+    const witness: readonly [number, number] | undefined = modeled.field.witnesses[0]?.coordinate;
+    void complete; void rendering; void background; void descriptor; void witness;
+    // @ts-expect-error a modeled frame is not an attach-ready frame.
+    const ready: Extract<typeof frame, { state: "ready" }> = modeled;
+    void ready;
+  }
+  // @ts-expect-error interpolation spaces beyond opaque encoded-sRGB are not implemented.
+  program.resolve({ canvas: { kind: "affine-oklab", from: "#ffffff", to: "#000000" } });
   const view: ColorView<"fill" | "label" | "pane"> = program.attach(element, { canvas: "#283548" }, attachmentOptions);
   // @ts-expect-error a CSP nonce is an explicit string, not a coerced value.
   program.attach(element, { canvas: "#283548" }, { nonce: 123 });
   view.set({ canvas: "#61766a" });
   const next = await c.compile({ primary: fill });
+  const fieldReplacement = view.replace(next, { canvas: { kind: "affine-srgb8", from: "#ffffff", to: "#dddddd" } });
+  if (fieldReplacement.state === "rejected" && fieldReplacement.proposed.state === "modeled") {
+    fieldReplacement.proposed.values.primary;
+    // @ts-expect-error rejected replacement values use the proposed program's names.
+    fieldReplacement.proposed.values.fill;
+  }
   const replacement = view.replace(next, { canvas: "#e6ddd0" });
   if (replacement.state === "committed") {
     const current: ColorView<"primary"> = replacement.view;

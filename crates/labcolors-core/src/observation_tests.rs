@@ -11,13 +11,15 @@ use crate::appearance::{
     PointOpacityError, PointOpacityOverSurfaceV1, ResolvedOccurrence, SurfaceId,
     SurfaceInputPortId, SurfaceSpec,
 };
+use crate::gradient_domain::{OpaqueSrgb8AffineSegment, SegmentCoordinate, SegmentRegion};
 use crate::lcs_occurrence::ColorSignal;
 use crate::observation::{
     CanonicalObservationSchemaV1, ObservationArenaPoolV1, ObservationError, ObservationHeadViewV1,
     ObservationOwnerV1, ObservationPayloadInput, ObservationStreamId, ObservationUpdateInput,
     ObservedScenarioSetInput, PreparedObservationUpdateV1, Revision, RevisionBoundObservationV1,
-    RevisionBoundUnknownV1, ScenarioId, ScenarioInput, SchemaOrderedScenarioSourceV1,
-    SurfaceInputBinding, UnknownReasonId, canonicalize_observation_schema, prepare_observation,
+    RevisionBoundUnknownV1, ScenarioId, ScenarioInput, SchemaOrderedFieldSourceV1,
+    SchemaOrderedScenarioSourceV1, SurfaceInputBinding, UnknownReasonId,
+    canonicalize_observation_schema, prepare_observation, prepare_schema_ordered_field_observation,
     prepare_schema_ordered_observation,
 };
 
@@ -142,6 +144,297 @@ impl TestState {
             TestOwner::Empty | TestOwner::Observed(_) => None,
         }
     }
+}
+
+#[derive(Clone)]
+struct DeclaredFieldSource {
+    values: Vec<Srgb8>,
+    varying: usize,
+    segment: OpaqueSrgb8AffineSegment,
+}
+
+impl SchemaOrderedFieldSourceV1 for DeclaredFieldSource {
+    fn value_count(&self) -> usize {
+        self.values.len()
+    }
+    fn value(&self, index: usize) -> Srgb8 {
+        assert_ne!(
+            index, self.varying,
+            "the descriptor is the sole varying source"
+        );
+        self.values[index]
+    }
+    fn varying_input_index(&self) -> usize {
+        self.varying
+    }
+    fn segment(&self) -> OpaqueSrgb8AffineSegment {
+        self.segment
+    }
+}
+
+fn apply_declared_field(
+    state: &mut TestState,
+    revision: u64,
+    source: &DeclaredFieldSource,
+) -> Result<UpdateDisposition, ObservationError> {
+    match prepare_schema_ordered_field_observation(
+        &mut state.owner,
+        &mut state.arenas,
+        state.stream,
+        &state.schema,
+        Revision::new(revision),
+        source,
+    )? {
+        PreparedObservationUpdateV1::Idempotent(prepared) => {
+            let _owner = prepared.into_owner();
+            Ok(UpdateDisposition::Idempotent)
+        }
+        PreparedObservationUpdateV1::Observed(prepared) => {
+            let (owner, observation) = prepared.into_parts();
+            *owner = TestOwner::Observed(observation);
+            Ok(UpdateDisposition::Applied)
+        }
+        PreparedObservationUpdateV1::Unknown(_) => panic!("a declared field is available"),
+    }
+}
+
+#[test]
+fn declared_field_keeps_exact_interior_tie_coordinate_and_complete_regions() {
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let source = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3]), Srgb8::new([19, 29, 39])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
+    };
+    apply_declared_field(&mut state, 1, &source).unwrap();
+    let observation = revision_bound(&state);
+    let field = observation.declared_field().unwrap();
+    assert_eq!(field.segment(), source.segment);
+    assert_eq!(observation.physical_case_count(), 511);
+    assert_eq!(field.cell_count(), 513);
+    let mut regions = 0;
+    let mut tie = None;
+    for case in 0..observation.physical_case_count() {
+        let values = observation.physical_values(case).unwrap();
+        assert!(values.as_slice().is_none());
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[1].srgb8(), source.values[1]);
+        assert_eq!(values.iter().len(), 2);
+        assert_eq!(
+            values.iter().rev().next().unwrap().srgb8(),
+            source.values[1]
+        );
+        assert_eq!(observation.provenance(case), Some([].as_slice()));
+        for cell in field.cells(case).unwrap() {
+            regions += 1;
+            assert_eq!(cell.nominal(), values[0].srgb8().bytes());
+            assert_eq!(source.segment.at(cell.representative()), cell.nominal());
+            if let SegmentRegion::Point(at) = cell.region() {
+                if at.numerator() == 1 && at.denominator() == 2 {
+                    tie = Some(cell.nominal());
+                }
+            }
+        }
+    }
+    assert_eq!(regions, 513);
+    assert_eq!(tie, Some([128, 128, 0]));
+    assert!(field.cells(511).is_none());
+    assert!(observation.physical_values(511).is_none());
+}
+
+#[test]
+fn reversed_declared_field_conflicts_even_when_physical_support_is_equal() {
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let forward = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
+    };
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &forward).unwrap(),
+        UpdateDisposition::Applied
+    );
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &forward).unwrap(),
+        UpdateDisposition::Idempotent
+    );
+    let mut reversed = forward.clone();
+    reversed.segment = OpaqueSrgb8AffineSegment::new([0, 255, 0], [255, 0, 0]);
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &reversed),
+        Err(ObservationError::RevisionConflict {
+            revision: Revision::new(1)
+        }),
+    );
+    let old = revision_bound(&state).clone();
+    apply_declared_field(&mut state, 2, &reversed).unwrap();
+    let current = revision_bound(&state);
+    assert_eq!(old.physical_case_count(), current.physical_case_count());
+    for case in 0..old.physical_case_count() {
+        assert_eq!(old.physical_values(case), current.physical_values(case));
+    }
+    assert_ne!(
+        old.declared_field().unwrap().segment(),
+        current.declared_field().unwrap().segment()
+    );
+}
+
+#[test]
+fn constant_declared_field_is_not_collapsed_into_a_finite_observation() {
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let source = DeclaredFieldSource {
+        values: vec![Srgb8::new([7; 3]); 2],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([7; 3], [7; 3]),
+    };
+    apply_declared_field(&mut state, 1, &source).unwrap();
+    let observation = revision_bound(&state);
+    assert_eq!(observation.physical_case_count(), 1);
+    let regions: Vec<_> = observation
+        .declared_field()
+        .unwrap()
+        .cells(0)
+        .unwrap()
+        .iter()
+        .map(|cell| cell.region())
+        .collect();
+    assert_eq!(
+        regions,
+        vec![
+            SegmentRegion::Point(SegmentCoordinate::ZERO),
+            SegmentRegion::OpenInterval {
+                lower: SegmentCoordinate::ZERO,
+                upper: SegmentCoordinate::ONE
+            },
+            SegmentRegion::Point(SegmentCoordinate::ONE),
+        ]
+    );
+    let mut moved_input = source.clone();
+    moved_input.varying = 1;
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &moved_input),
+        Err(ObservationError::RevisionConflict {
+            revision: Revision::new(1)
+        })
+    );
+    let finite = observed_update(
+        STREAM,
+        1,
+        scenarios([scenario(
+            1,
+            [binding(PORT_A, [7; 3]), binding(PORT_B, [7; 3])],
+        )]),
+    );
+    assert_eq!(
+        state.apply(finite),
+        Err(ObservationError::RevisionConflict {
+            revision: Revision::new(1)
+        })
+    );
+
+    let old = revision_bound(&state).clone();
+    state
+        .apply(observed_update(
+            STREAM,
+            2,
+            scenarios([scenario(
+                1,
+                [binding(PORT_A, [7; 3]), binding(PORT_B, [7; 3])],
+            )]),
+        ))
+        .unwrap();
+    assert_eq!(
+        old.physical_values(0),
+        revision_bound(&state).physical_values(0)
+    );
+    assert!(revision_bound(&state).declared_field().is_none());
+    assert_eq!(
+        apply_declared_field(&mut state, 2, &source),
+        Err(ObservationError::RevisionConflict {
+            revision: Revision::new(2)
+        })
+    );
+}
+
+#[test]
+fn retained_field_descriptor_coordinates_and_constants_survive_pool_reuse() {
+    let mut state = TestState::new(STREAM, vec![PORT_A, PORT_B]).unwrap();
+    let mut source = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3]), Srgb8::new([10; 3])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([0; 3], [2; 3]),
+    };
+    apply_declared_field(&mut state, 1, &source).unwrap();
+    let old = revision_bound(&state).clone();
+    let descriptor = old.declared_field().unwrap().segment();
+    let cells = old.declared_field().unwrap().cells(0).unwrap().to_vec();
+    for revision in 2..8 {
+        source.values[1] = Srgb8::new([revision as u8; 3]);
+        source.segment = OpaqueSrgb8AffineSegment::new([revision as u8; 3], [20; 3]);
+        apply_declared_field(&mut state, revision, &source).unwrap();
+        assert_eq!(old.revision(), Revision::new(1));
+        assert_eq!(old.declared_field().unwrap().segment(), descriptor);
+        assert_eq!(old.declared_field().unwrap().cells(0).unwrap(), cells);
+        assert_eq!(old.physical_values(0).unwrap()[1].srgb8().bytes(), [10; 3]);
+    }
+}
+
+#[test]
+fn declared_field_storage_grows_by_inputs_plus_support_not_their_product() {
+    let measure = |input_count| {
+        let mut state = TestState::new(
+            STREAM,
+            (0..input_count)
+                .map(|i| SurfaceInputPortId::new(i as u32))
+                .collect(),
+        )
+        .unwrap();
+        let source = DeclaredFieldSource {
+            values: vec![Srgb8::new([17; 3]); input_count],
+            varying: input_count - 1,
+            segment: OpaqueSrgb8AffineSegment::new([255, 0, 0], [0, 255, 0]),
+        };
+        apply_declared_field(&mut state, 1, &source).unwrap();
+        let observation = revision_bound(&state);
+        let field = observation.declared_field().unwrap();
+        assert_eq!(field.stored_value_count_for_test(), input_count + 511);
+        assert_eq!(field.cell_count(), 513);
+        for case in 0..observation.physical_case_count() {
+            let values = observation.physical_values(case).unwrap();
+            assert_eq!(values.len(), input_count);
+            assert_eq!(values.get(input_count), None);
+        }
+        field.stored_value_count_for_test()
+    };
+    assert_eq!(measure(4096) - measure(1), 4095);
+}
+
+#[test]
+fn malformed_declared_field_is_rejected_before_revision_comparison() {
+    let mut state = TestState::new(STREAM, vec![PORT_A]).unwrap();
+    let mut source = DeclaredFieldSource {
+        values: vec![Srgb8::new([0; 3])],
+        varying: 0,
+        segment: OpaqueSrgb8AffineSegment::new([0; 3], [1; 3]),
+    };
+    apply_declared_field(&mut state, 2, &source).unwrap();
+    source.varying = 1;
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &source),
+        Err(ObservationError::DeclaredFieldInputOutOfBounds {
+            input_index: 1,
+            input_count: 1
+        })
+    );
+    source.values.clear();
+    assert_eq!(
+        apply_declared_field(&mut state, 1, &source),
+        Err(ObservationError::DeclaredFieldValueCountMismatch {
+            expected: 1,
+            actual: 0
+        })
+    );
+    assert_eq!(revision_bound(&state).revision(), Revision::new(2));
 }
 
 fn binding(port: SurfaceInputPortId, bytes: [u8; 3]) -> SurfaceInputBinding {
@@ -428,7 +721,14 @@ fn canonicalization_ignores_declaration_order_and_groups_duplicate_physics() {
     );
     assert_eq!(observation.provenance(1).unwrap(), &[ScenarioId::new(4)]);
     let physical_values: Vec<Vec<ColorSignal>> = (0..observation.physical_case_count())
-        .map(|case_index| observation.physical_values(case_index).unwrap().to_vec())
+        .map(|case_index| {
+            observation
+                .physical_values(case_index)
+                .unwrap()
+                .iter()
+                .copied()
+                .collect()
+        })
         .collect();
     assert_eq!(
         physical_values,
@@ -502,7 +802,10 @@ fn retained_observations_survive_pool_exhaustion_and_reuse() -> Result<(), Obser
     assert_eq!(revision_bound(&state).backing_ptr_for_test(), released);
     for (observation, channel) in [(&first, 10), (&third, 30), (revision_bound(&state), 40)] {
         let expected = [ColorSignal::from_srgb8(Srgb8::new([channel; 3]))];
-        assert_eq!(observation.physical_values(0), Some(expected.as_slice()));
+        assert_eq!(
+            observation.physical_values(0).unwrap().as_slice(),
+            Some(expected.as_slice())
+        );
     }
     Ok(())
 }
@@ -555,8 +858,8 @@ fn schema_and_values_are_aligned_once_while_provenance_remains_complete() {
         .unwrap();
 
     let observation = revision_bound(&state);
-    let first_values: &[ColorSignal] = observation.physical_values(0).unwrap();
-    let second_values: &[ColorSignal] = observation.physical_values(1).unwrap();
+    let first_values = observation.physical_values(0).unwrap().as_slice().unwrap();
+    let second_values = observation.physical_values(1).unwrap().as_slice().unwrap();
     assert_eq!(observation.schema(), &[PORT_A, PORT_B]);
     assert_eq!(
         first_values,
@@ -603,11 +906,14 @@ fn keyed_schema_is_intrinsic_to_revision_bound_observation_identity() {
     assert_eq!(revision_bound(&left).schema(), &[PORT_A]);
     assert_eq!(revision_bound(&right).schema(), &[PORT_B]);
     assert_eq!(
-        revision_bound(&left).physical_values(0),
+        revision_bound(&left).physical_values(0).unwrap().as_slice(),
         Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
     assert_eq!(
-        revision_bound(&right).physical_values(0),
+        revision_bound(&right)
+            .physical_values(0)
+            .unwrap()
+            .as_slice(),
         Some(&[ColorSignal::from_srgb8(Srgb8::new([7, 8, 9]))][..])
     );
 
@@ -745,7 +1051,12 @@ fn observed_to_unknown_replaces_raw_payload_instead_of_duplicating_it() {
         .unwrap();
     let old_revision = revision_bound(&state).revision();
     let old_schema = revision_bound(&state).schema().to_vec();
-    let old_values = revision_bound(&state).physical_values(0).unwrap().to_vec();
+    let old_values: Vec<_> = revision_bound(&state)
+        .physical_values(0)
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
     state.apply(unknown_update(STREAM, 2, 9)).unwrap();
 
     assert!(state.current_observation().is_none());

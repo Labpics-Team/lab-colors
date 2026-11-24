@@ -6,12 +6,121 @@
 
 use crate::shared::Shared;
 use core::cmp::Ordering;
-use core::ops::Range;
+use core::ops::{Index, Range};
+use std::iter::FusedIterator;
 use std::num::NonZeroUsize;
 
 use crate::Srgb8;
 use crate::appearance::SurfaceInputPortId;
+use crate::field_context::DeclaredFieldV1;
+pub(crate) use crate::field_context::{DeclaredFieldViewV1, SchemaOrderedFieldSourceV1};
 use crate::lcs_occurrence::ColorSignal;
+
+/// Schema-ordered values borrowed from one admitted physical case. A declared
+/// field replaces one shared constant slot without materializing a dense tuple.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhysicalValuesV1<'a> {
+    fixed: &'a [ColorSignal],
+    replacement: Option<(usize, &'a ColorSignal)>,
+}
+
+impl<'a> PhysicalValuesV1<'a> {
+    fn from_slice(fixed: &'a [ColorSignal]) -> Self {
+        Self {
+            fixed,
+            replacement: None,
+        }
+    }
+
+    pub(crate) fn with_override(
+        fixed: &'a [ColorSignal],
+        index: usize,
+        value: &'a ColorSignal,
+    ) -> Self {
+        Self {
+            fixed,
+            replacement: Some((index, value)),
+        }
+    }
+
+    pub(crate) const fn len(self) -> usize {
+        self.fixed.len()
+    }
+
+    pub(crate) fn get(self, index: usize) -> Option<&'a ColorSignal> {
+        let fixed = self.fixed.get(index)?;
+        Some(match self.replacement {
+            Some((replaced, value)) if index == replaced => value,
+            _ => fixed,
+        })
+    }
+
+    /// Finite observations retain their original shared, contiguous backing.
+    /// A compact field case has no equivalent borrowed contiguous slice.
+    pub(crate) fn as_slice(self) -> Option<&'a [ColorSignal]> {
+        self.replacement.is_none().then_some(self.fixed)
+    }
+
+    pub(crate) fn iter(self) -> PhysicalValuesIterV1<'a> {
+        PhysicalValuesIterV1 {
+            values: self,
+            indices: 0..self.len(),
+        }
+    }
+}
+
+impl Index<usize> for PhysicalValuesV1<'_> {
+    type Output = ColorSignal;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index)
+            .expect("physical input index is in the admitted schema")
+    }
+}
+
+impl PartialEq for PhysicalValuesV1<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for PhysicalValuesV1<'_> {}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PhysicalValuesIterV1<'a> {
+    values: PhysicalValuesV1<'a>,
+    indices: Range<usize>,
+}
+
+impl<'a> Iterator for PhysicalValuesIterV1<'a> {
+    type Item = &'a ColorSignal;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.values.get(self.indices.next()?)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.indices.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for PhysicalValuesIterV1<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.values.get(self.indices.next_back()?)
+    }
+}
+
+impl ExactSizeIterator for PhysicalValuesIterV1<'_> {}
+impl FusedIterator for PhysicalValuesIterV1<'_> {}
+
+impl<'a> IntoIterator for PhysicalValuesV1<'a> {
+    type Item = &'a ColorSignal;
+    type IntoIter = PhysicalValuesIterV1<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// Stable compile-time identity of one atomic observation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -215,6 +324,14 @@ impl ObservedScenarioSet {
     }
 }
 
+/// Finite observations and an analytic declared source remain distinct after
+/// admission, while evaluators share the same physical case value projection.
+#[derive(Debug, PartialEq, Eq)]
+enum AdmittedContextV1 {
+    Observations(ObservedScenarioSet),
+    Field(DeclaredFieldV1),
+}
+
 /// Canonical immutable schema shared by the compiled recheck and every
 /// admitted observation backing created for it.
 #[derive(Debug, PartialEq, Eq)]
@@ -269,8 +386,9 @@ impl ObservationArenaSlotV1 {
 
 mod arena {
     use super::{
-        CanonicalObservationSchemaV1, OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationArenaSlotV1,
-        ObservationError, ObservedScenarioSet,
+        AdmittedContextV1, CanonicalObservationSchemaV1, DeclaredFieldV1,
+        OBSERVATION_ARENA_SLOT_COUNT_V1, ObservationArenaSlotV1, ObservationError,
+        ObservedScenarioSet, SchemaOrderedFieldSourceV1,
     };
     use crate::shared::Shared;
 
@@ -280,7 +398,7 @@ mod arena {
     pub(super) struct ObservationBackingV1 {
         arena_slot: ObservationArenaSlotV1,
         schema: CanonicalObservationSchemaV1,
-        set: ObservedScenarioSet,
+        context: AdmittedContextV1,
     }
 
     impl ObservationBackingV1 {
@@ -292,8 +410,15 @@ mod arena {
             &self.schema
         }
 
-        pub(super) const fn set(&self) -> &ObservedScenarioSet {
-            &self.set
+        pub(super) const fn context(&self) -> &AdmittedContextV1 {
+            &self.context
+        }
+
+        pub(super) const fn set(&self) -> Option<&ObservedScenarioSet> {
+            match &self.context {
+                AdmittedContextV1::Observations(set) => Some(set),
+                AdmittedContextV1::Field(_) => None,
+            }
         }
     }
 
@@ -314,7 +439,7 @@ mod arena {
                     Shared::new(ObservationBackingV1 {
                         arena_slot,
                         schema: schema.share_for_observation(),
-                        set: ObservedScenarioSet::empty(),
+                        context: AdmittedContextV1::Observations(ObservedScenarioSet::empty()),
                     })
                 }),
             }
@@ -328,7 +453,33 @@ mod arena {
                 let Some(backing) = Shared::get_mut(slot) else {
                     continue;
                 };
-                materialize(&mut backing.set)?;
+                if !matches!(backing.context, AdmittedContextV1::Observations(_)) {
+                    backing.context = AdmittedContextV1::Observations(ObservedScenarioSet::empty());
+                }
+                let AdmittedContextV1::Observations(set) = &mut backing.context else {
+                    unreachable!()
+                };
+                materialize(set)?;
+                return Ok(Shared::clone(slot));
+            }
+            Err(ObservationError::InternalInvariant)
+        }
+
+        pub(super) fn materialize_field<Source: SchemaOrderedFieldSourceV1 + ?Sized>(
+            &mut self,
+            source: &Source,
+        ) -> Result<Shared<ObservationBackingV1>, ObservationError> {
+            for slot in &mut self.slots {
+                let Some(backing) = Shared::get_mut(slot) else {
+                    continue;
+                };
+                if !matches!(backing.context, AdmittedContextV1::Field(_)) {
+                    backing.context = AdmittedContextV1::Field(DeclaredFieldV1::empty());
+                }
+                let AdmittedContextV1::Field(field) = &mut backing.context else {
+                    unreachable!()
+                };
+                field.materialize(source)?;
                 return Ok(Shared::clone(slot));
             }
             Err(ObservationError::InternalInvariant)
@@ -375,15 +526,38 @@ impl RevisionBoundObservationV1 {
     }
 
     pub(crate) fn physical_case_count(&self) -> usize {
-        self.backing.set().cases.len()
+        match self.backing.context() {
+            AdmittedContextV1::Observations(set) => set.cases.len(),
+            AdmittedContextV1::Field(field) => field.physical_case_count(),
+        }
     }
 
-    pub(crate) fn physical_values(&self, case_index: usize) -> Option<&[ColorSignal]> {
-        self.backing.set().values(case_index)
+    pub(crate) fn physical_values(&self, case_index: usize) -> Option<PhysicalValuesV1<'_>> {
+        match self.backing.context() {
+            AdmittedContextV1::Observations(set) => {
+                set.values(case_index).map(PhysicalValuesV1::from_slice)
+            }
+            AdmittedContextV1::Field(field) => field.values(case_index),
+        }
     }
 
     pub(crate) fn provenance(&self, case_index: usize) -> Option<&[ScenarioId]> {
-        self.backing.set().provenance(case_index)
+        match self.backing.context() {
+            AdmittedContextV1::Observations(set) => set.provenance(case_index),
+            // A valid field case has no observed scenario IDs. Its provenance
+            // is the exact coordinate domain, available through declared_field.
+            // None remains an invalid case ordinal, including for diagnostics.
+            AdmittedContextV1::Field(field) => {
+                (case_index < field.physical_case_count()).then_some(&[])
+            }
+        }
+    }
+
+    pub(crate) fn declared_field(&self) -> Option<DeclaredFieldViewV1<'_>> {
+        match self.backing.context() {
+            AdmittedContextV1::Observations(_) => None,
+            AdmittedContextV1::Field(field) => Some(field.view()),
+        }
     }
 
     pub(crate) fn validate_surface_schema(
@@ -426,7 +600,10 @@ impl RevisionBoundObservationV1 {
         scenarios: &[ScenarioInput],
     ) -> bool {
         self.backing.schema() == schema
-            && canonical_input_matches_set(self.backing.set(), scenarios)
+            && self
+                .backing
+                .set()
+                .is_some_and(|set| canonical_input_matches_set(set, scenarios))
     }
 
     fn has_schema_ordered_input<Source: SchemaOrderedScenarioSourceV1 + ?Sized>(
@@ -436,12 +613,9 @@ impl RevisionBoundObservationV1 {
         order: &[usize],
     ) -> bool {
         self.backing.schema() == schema
-            && schema_ordered_input_matches_set(
-                self.backing.set(),
-                source,
-                order,
-                schema.as_slice().len(),
-            )
+            && self.backing.set().is_some_and(|set| {
+                schema_ordered_input_matches_set(set, source, order, schema.as_slice().len())
+            })
     }
 
     #[cfg(test)]
@@ -481,7 +655,7 @@ impl<'a> NonEmptyScenarioSetV1<'a> {
         self.len
     }
 
-    pub(crate) fn physical_values(self, case_index: usize) -> Option<&'a [ColorSignal]> {
+    pub(crate) fn physical_values(self, case_index: usize) -> Option<PhysicalValuesV1<'a>> {
         self.observation.physical_values(case_index)
     }
 }
@@ -551,6 +725,14 @@ pub(crate) enum ObservationError {
         scenario: ScenarioId,
         expected: usize,
         actual: usize,
+    },
+    DeclaredFieldValueCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    DeclaredFieldInputOutOfBounds {
+        input_index: usize,
+        input_count: usize,
     },
     DuplicateSurfaceInputBinding {
         scenario: ScenarioId,
@@ -851,6 +1033,70 @@ pub(crate) fn prepare_schema_ordered_observation<
     let backing = arenas.materialize_into(|set| {
         materialize_schema_ordered_scenarios_into(set, schema.as_slice(), source, order_scratch)
     })?;
+    Ok(PreparedObservationUpdateV1::Observed(PreparedObservedV1 {
+        owner,
+        observation: RevisionBoundObservationV1 {
+            stream,
+            revision,
+            backing,
+        },
+    }))
+}
+
+/// Admit an analytic field directly. Descriptor identity and all fixed inputs
+/// are revision-bound; equal byte support alone is never an exact replay.
+pub(crate) fn prepare_schema_ordered_field_observation<
+    'owner,
+    Owner: ObservationOwnerV1,
+    Source: SchemaOrderedFieldSourceV1 + ?Sized,
+>(
+    owner: &'owner mut Owner,
+    arenas: &mut ObservationArenaPoolV1,
+    stream: ObservationStreamId,
+    schema: &CanonicalObservationSchemaV1,
+    revision: Revision,
+    source: &Source,
+) -> Result<PreparedObservationUpdateV1<'owner, Owner>, ObservationError> {
+    if !arenas.shares_schema_backing_with(schema) {
+        return Err(ObservationError::InternalInvariant);
+    }
+    let expected = schema.as_slice().len();
+    let actual = source.value_count();
+    if actual != expected {
+        return Err(ObservationError::DeclaredFieldValueCountMismatch { expected, actual });
+    }
+    let input_index = source.varying_input_index();
+    if input_index >= expected {
+        return Err(ObservationError::DeclaredFieldInputOutOfBounds {
+            input_index,
+            input_count: expected,
+        });
+    }
+    let current_revision = owner.observation_head().revision();
+    if let Some(current) = current_revision {
+        if revision < current {
+            return Err(ObservationError::RevisionOutOfOrder {
+                current,
+                incoming: revision,
+            });
+        }
+    }
+    if current_revision == Some(revision) {
+        let exact = matches!(
+            owner.observation_head(),
+            ObservationHeadViewV1::Observed(current)
+                if current.backing.schema() == schema
+                    && matches!(current.backing.context(), AdmittedContextV1::Field(field) if field.matches(source))
+        );
+        return if exact {
+            Ok(PreparedObservationUpdateV1::Idempotent(
+                PreparedIdempotentV1 { owner },
+            ))
+        } else {
+            Err(ObservationError::RevisionConflict { revision })
+        };
+    }
+    let backing = arenas.materialize_field(source)?;
     Ok(PreparedObservationUpdateV1::Observed(PreparedObservedV1 {
         owner,
         observation: RevisionBoundObservationV1 {

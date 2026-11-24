@@ -155,6 +155,21 @@ export interface ProgramReferenceSelectionV1 {
   readonly capacity: ProgramReferenceCapacityV1 | null;
   readonly cases: ReadonlyArray<ProgramReferenceCaseV1>;
 }
+
+/** Scope of a declared model; unknown rendering is not a pixel guarantee. */
+export interface ProgramFieldAssessmentV1 {
+  readonly inputIndex: number;
+  readonly from: readonly [number, number, number];
+  readonly to: readonly [number, number, number];
+  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1";
+  readonly domain: "whole-field";
+  readonly rendering: "unknown";
+  readonly regionCount: number;
+  readonly witnesses: ReadonlyArray<{
+    readonly coordinate: readonly [number, number];
+    readonly nominal: readonly [number, number, number];
+  }>;
+}
 /** Историческое свидетельство одного Ready-снимка; без права публикации. */
 export interface ProgramAssessmentReportV1 {
   /** Независимая копия bytes; её изменение не меняет Core-отчёт. */
@@ -414,6 +429,16 @@ export function reportTonalHierarchy(constraintId, caseIndex, strongerOccurrence
 export function reportReferenceCapacity(ratioLower, ratioUpper, complete) {
   return reportFreeze({ratioLower, ratioUpper, complete});
 }
+export function reportFieldWitness(numerator, denominator, red, green, blue) {
+  return reportFreeze({coordinate: reportFreeze([numerator, denominator]),
+    nominal: reportFreeze([red, green, blue])});
+}
+export function reportField(inputIndex, colors, sourceModel, domain, rendering, regionCount, witnesses) {
+  return reportFreeze({inputIndex,
+    from: reportFreeze([colors[0], colors[1], colors[2]]),
+    to: reportFreeze([colors[3], colors[4], colors[5]]),
+    sourceModel, domain, rendering, regionCount, witnesses: reportFreeze(witnesses)});
+}
 export function reportReferenceCase(caseIndex, colors, referenceContrast, actualContrast,
     polarity, strengthLoss, virtualDistanceSquared) {
   return reportFreeze({caseIndex,
@@ -481,6 +506,24 @@ extern "C" {
     fn report_array_freeze(array: &js_sys::Array) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportArrayPush)]
     fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFieldWitness)]
+    fn report_field_witness(
+        numerator: u16,
+        denominator: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportField)]
+    fn report_field(
+        input_index: usize,
+        colors: &[u8],
+        source_model: &str,
+        domain: &str,
+        rendering: &str,
+        region_count: usize,
+        witnesses: &js_sys::Array,
+    ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportScenario)]
     fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSummary)]
@@ -713,6 +756,8 @@ enum ProgramOperation {
     Diagnostics,
     CompileProgramWire,
     UpdateObserved,
+    UpdateDeclaredField,
+    UpdateDeclaredFieldWith,
     UpdateObservedWith,
     UpdateUnknown,
     CopyOutputTable,
@@ -724,6 +769,7 @@ enum ProgramOperation {
     AssessmentReport,
     CleanlinessAssessment,
     ReferenceSelections,
+    FieldAssessment,
 }
 
 impl ProgramOperation {
@@ -732,6 +778,8 @@ impl ProgramOperation {
             Self::Diagnostics => "diagnostics",
             Self::CompileProgramWire => "compileProgramWire",
             Self::UpdateObserved => "updateObserved",
+            Self::UpdateDeclaredField => "updateDeclaredField",
+            Self::UpdateDeclaredFieldWith => "updateDeclaredFieldWith",
             Self::UpdateObservedWith => "updateObservedWith",
             Self::UpdateUnknown => "updateUnknown",
             Self::CopyOutputTable => "copyOutputTable",
@@ -743,6 +791,7 @@ impl ProgramOperation {
             Self::AssessmentReport => "assessmentReport",
             Self::CleanlinessAssessment => "cleanlinessAssessment",
             Self::ReferenceSelections => "referenceSelections",
+            Self::FieldAssessment => "fieldAssessment",
         }
     }
 }
@@ -974,6 +1023,16 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    /// Scope is preserved on positive and negative declared-field results.
+    #[wasm_bindgen(js_name = fieldAssessment, unchecked_return_type = "ProgramFieldAssessmentV1 | null")]
+    pub fn field_assessment(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project_field(self.inner.field_assessment()).map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::FieldAssessment,
+            )
+        })
+    }
     /// Копирует typed attempt witness текущего Unsatisfied/Incomplete; иначе null.
     #[wasm_bindgen(unchecked_return_type = "ProgramDiagnosticsV1 | null")]
     pub fn diagnostics(&self) -> Result<JsValue, JsValue> {
@@ -1124,6 +1183,50 @@ pub fn compile_program_wire(
 
 #[wasm_bindgen]
 impl ProgramRuntime {
+    /// Prepares the model without publishing it until the host explicitly accepts.
+    #[wasm_bindgen(js_name = updateDeclaredFieldWith, unchecked_return_type = "ProgramSnapshot | undefined")]
+    pub fn update_declared_field_with(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] varying_input: JsValue,
+        from: &[u8],
+        to: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "(snapshot: ProgramSnapshot) => boolean")]
+        accept: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let operation = ProgramOperation::UpdateDeclaredFieldWith;
+        let revision =
+            u64::try_from(revision).map_err(|_| to_program_js_error(E::Update, operation))?;
+        let field = checked_declared_field(surfaces, varying_input, from, to, operation)?;
+        let prepared = self
+            .inner
+            .prepare_declared_field(revision, field)
+            .map_err(|error| to_program_js_error(error, operation))?;
+        accept_program_update(prepared, accept, operation)
+    }
+    /// One opaque affine source over the complete normalized interval.
+    /// Core derives coverage; no support samples are supplied by JavaScript.
+    #[wasm_bindgen(js_name = updateDeclaredField)]
+    pub fn update_declared_field(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] varying_input: JsValue,
+        from: &[u8],
+        to: &[u8],
+    ) -> Result<ProgramSnapshot, JsValue> {
+        use labcolors_core::program_wire::ProgramRuntimeErrorV1 as E;
+        let operation = ProgramOperation::UpdateDeclaredField;
+        let revision =
+            u64::try_from(revision).map_err(|_| to_program_js_error(E::Update, operation))?;
+        let field = checked_declared_field(surfaces, varying_input, from, to, operation)?;
+        self.inner
+            .update_declared_field(revision, field)
+            .map(|inner| ProgramSnapshot { inner })
+            .map_err(|error| to_program_js_error(error, operation))
+    }
     /// Атомарный observed update. `surfaces` — row-major
     /// `scenario_ids.len() × surface_count × 3` bytes.
     #[wasm_bindgen(js_name = updateObserved)]
@@ -1183,28 +1286,7 @@ impl ProgramRuntime {
             .inner
             .prepare_observed_view(revision, observation)
             .map_err(|error| to_program_js_error(error, operation))?;
-        let mut snapshot = JsValue::UNDEFINED;
-        let accepted = prepared.commit_with(|inner| -> Result<bool, JsValue> {
-            // The JS wrapper is allocated before host acceptance. After true,
-            // only the already prepared Core transition is published.
-            snapshot = ProgramSnapshot { inner }.into();
-            accept
-                .call1(&JsValue::UNDEFINED, &snapshot)?
-                .as_bool()
-                .ok_or_else(|| {
-                    program_error(
-                        "Program acceptance callback must return a boolean",
-                        "program_host_protocol",
-                        operation.key(),
-                    )
-                    .into()
-                })
-        })?;
-        Ok(if accepted {
-            snapshot
-        } else {
-            JsValue::UNDEFINED
-        })
+        accept_program_update(prepared, accept, operation)
     }
 
     #[wasm_bindgen(js_name = updateUnknown)]
@@ -1223,6 +1305,56 @@ impl ProgramRuntime {
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateUnknown))
     }
+}
+
+fn checked_declared_field<'a>(
+    surfaces: &'a [u8],
+    varying_input: JsValue,
+    from: &[u8],
+    to: &[u8],
+    operation: ProgramOperation,
+) -> Result<labcolors_core::program_wire::ProgramDeclaredFieldV1<'a>, JsValue> {
+    use labcolors_core::program_wire::{ProgramDeclaredFieldV1, ProgramRuntimeErrorV1 as E};
+    let invalid = || to_program_js_error(E::Update, operation);
+    let input = checked_u32(varying_input).ok_or_else(invalid)? as usize;
+    let from: [u8; 3] = from.try_into().map_err(|_| invalid())?;
+    let to: [u8; 3] = to.try_into().map_err(|_| invalid())?;
+    ProgramDeclaredFieldV1::from_rgb8(
+        surfaces,
+        input,
+        labcolors_core::Srgb8::new(from),
+        labcolors_core::Srgb8::new(to),
+    )
+    .map_err(|_| invalid())
+}
+
+fn accept_program_update(
+    prepared: labcolors_core::program_wire::PreparedProgramUpdateV1<'_>,
+    accept: &js_sys::Function,
+    operation: ProgramOperation,
+) -> Result<JsValue, JsValue> {
+    let mut snapshot = JsValue::UNDEFINED;
+    let accepted = prepared.commit_with(|inner| -> Result<bool, JsValue> {
+        // Allocate the JS wrapper before host acceptance. After true, only the
+        // already prepared Core transition is published, without recomputation.
+        snapshot = ProgramSnapshot { inner }.into();
+        accept
+            .call1(&JsValue::UNDEFINED, &snapshot)?
+            .as_bool()
+            .ok_or_else(|| {
+                program_error(
+                    "Program acceptance callback must return a boolean",
+                    "program_host_protocol",
+                    operation.key(),
+                )
+                .into()
+            })
+    })?;
+    Ok(if accepted {
+        snapshot
+    } else {
+        JsValue::UNDEFINED
+    })
 }
 
 /// Синхронный WASM-адаптер point sink, принадлежащего consumer.
