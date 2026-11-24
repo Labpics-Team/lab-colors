@@ -1630,16 +1630,17 @@ impl<Evaluation: ProgramConstraintEvaluatorSetV1> ComputedVerifiedV1<Evaluation>
         self.reference_selections.as_ref()
     }
     pub(super) fn optimality(&self) -> ComputedOptimalityV1 {
+        // Each verified component retains its own search proof through observation reuse.
+        // Completing the byte domain suffices only for a discrete selection policy.
         if self
-            .selection_components
+            .components
             .iter()
-            .any(|component| component.mode() == ProgramSelectionModeV1::JointPointV1)
+            .zip(self.selection_components.iter())
+            .all(|(verified, component)| verified.proves_optimum(component.mode()))
         {
-            return ComputedOptimalityV1::Unfinished;
-        }
-        match self.search.completion {
-            CompletionV1::AuthoredExact | CompletionV1::Complete => ComputedOptimalityV1::Exact,
-            CompletionV1::BudgetExhausted => ComputedOptimalityV1::Unfinished,
+            ComputedOptimalityV1::Exact
+        } else {
+            ComputedOptimalityV1::Unfinished
         }
     }
 }

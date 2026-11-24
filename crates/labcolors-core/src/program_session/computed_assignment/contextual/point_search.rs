@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v3.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.continuous-unfinished\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v4.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -432,9 +432,8 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
             }
         };
     if authored_optimal {
-        // Each primary term is zero or constant and the source profile is
-        // zero by identity. The public source-domain
-        // optimality remains Unfinished for this discovery implementation.
+        // Each primary term is zero or constant over the complete continuous
+        // source domain. The authored tuple also minimizes every source distance.
         state.evidence.completion = CompletionV1::AuthoredExact;
     } else {
         let seed_limit = (selection.budget / COORDINATE_BUDGET_DIVISOR).max(state.evidence.visited);

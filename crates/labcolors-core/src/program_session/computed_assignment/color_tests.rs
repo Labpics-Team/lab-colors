@@ -33,6 +33,27 @@ fn unconstrained(target: Target) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn a_feasible_authored_point_stays_unfinished_when_its_budget_expires_without_a_proof() {
+    let tone = ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]]).unwrap();
+    let mut declared = unconstrained(color([128; 3], 2.0, Some(tone)).unwrap());
+    declared.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+        legacy_reference_order: vec![TargetId::new(10)],
+    });
+    declared.computed_budget = Some(1);
+    let compiled = declared.compile().unwrap();
+    let mut session = compiled.instantiate(ObservationStreamId::new(8)).unwrap();
+    session.prepare_update(update(1, 255)).unwrap().commit();
+    let result = session
+        .state()
+        .current_verified()
+        .unwrap()
+        .computed_for_test();
+    assert_eq!(result.values.as_ref(), &[Srgb8::new([128; 3])]);
+    assert_eq!(result.search.completion, CompletionV1::BudgetExhausted);
+    assert_eq!(result.optimality(), ComputedOptimalityV1::Unfinished);
+}
+
+#[test]
 fn opaque_blue_changes_locally_and_keeps_color_character() -> Result<(), String> {
     let source = Srgb8::new([0, 103, 244]);
     let identity = ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())

@@ -879,6 +879,16 @@ pub(super) struct VerifiedComponentV1 {
     reports: std::ops::Range<usize>,
 }
 
+impl VerifiedComponentV1 {
+    pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
+        match self.search.completion {
+            CompletionV1::AuthoredExact => true,
+            CompletionV1::Complete => mode != ProgramSelectionModeV1::JointPointV1,
+            CompletionV1::BudgetExhausted => false,
+        }
+    }
+}
+
 fn local_support<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,

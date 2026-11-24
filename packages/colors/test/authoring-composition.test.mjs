@@ -69,6 +69,7 @@ test("an independent implicit-reference component neither changes Point choice n
     for (const aside of ["#ffffff", "#808080", "#000000"]) {
       const frame = extended.program.resolve({ canvas: "#000000", aside });
       assert.equal(frame.state, "ready");
+      assert.equal(frame.optimality, "unfinished", "the Point hierarchy has only a byte-domain result");
       assert.deepEqual(frame.values.a, baseline.values.a);
       assert.deepEqual(frame.values.b, baseline.values.b);
       assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
@@ -85,13 +86,36 @@ test("ordinary Point search constructs a readable first result from an infeasibl
   try {
     const white = program.resolve({ canvas: "#ffffff" });
     assert.equal(white.state, "ready");
+    assert.equal(white.optimality, "unfinished", "the feasible byte repair has no continuous proof");
     assert.ok(textPasses(white.values.ink.rgb, [255, 255, 255]));
     assert.notDeepEqual(white.values.ink.rgb, [238, 238, 238]);
     assert.equal(white.selection[0].mode, "joint-point-v1");
     const black = program.resolve({ canvas: "#000000" });
     assert.equal(black.state, "ready");
+    assert.equal(black.optimality, "exact", "the authored color satisfies contrast and has zero loss");
     assert.ok(textPasses(black.values.ink.rgb, [0, 0, 0]));
     assert.deepEqual(program.resolve({ canvas: "#ffffff" }).values, white.values);
     assert.ok(Object.isFrozen(white.values));
+  } finally { program.dispose(); }
+});
+
+test("an independent completed reference search preserves the proven optimum of a constant Point use", async () => {
+  const c = colors({ reference: { canvas: "#ffffff", paper: "#ffffff" } });
+  const canvas = c.surface("canvas"), paper = c.surface("paper");
+  const overlay = c.role("overlay", "#888888").on(canvas, {
+    opacity: 0, tone: { from: canvas, curve: [[0, 0.55], [1, 0.55]] },
+  });
+  const ink = c.role("ink", "#222222").on(paper, { contrast: "wcag22-text" });
+  const program = await c.compile({ overlay, ink });
+  try {
+    // Only the ink's support changes. The reused Point proof stays attached to its own component.
+    for (const paper of ["#ffffff", "#000000", "#000000", "#ffffff"]) {
+      const frame = program.resolve({ canvas: "#ffffff", paper });
+      assert.equal(frame.state, "ready");
+      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
+      assert.equal(frame.optimality, "exact");
+      assert.deepEqual(frame.values.overlay.rgb, [136, 136, 136]);
+      if (paper === "#000000") assert.notDeepEqual(frame.values.ink.rgb, [34, 34, 34]);
+    }
   } finally { program.dispose(); }
 });
