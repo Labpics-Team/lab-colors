@@ -17,6 +17,7 @@ test("terminal tar inventory is exact and excludes retired roots", () => {
     "evidence/wcag22-srgb8-v1.json", "evidence/wcag22-srgb8-q55-v1.bin",
     "evidence/wcag22-srgb8-q55-proof-v1.json",
     "evidence/point-support-reference-surplus-q55-bps-proof-v1.json",
+    "pkg/dependency-licenses.json", "pkg/THIRD-PARTY-NOTICES.md",
     "pkg/labcolors.js", "pkg/labcolors.d.ts", "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts", "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js",
   ]);

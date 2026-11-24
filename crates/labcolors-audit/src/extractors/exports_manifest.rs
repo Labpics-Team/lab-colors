@@ -637,8 +637,10 @@ mod tests {
             );
         }
         assert!(
-            core.dependencies.is_empty(),
-            "Core must not depend on repository parsers"
+            core.dependencies
+                .iter()
+                .all(|dep| dep.name == "rustc_apfloat"),
+            "Core may depend only on its private certified arithmetic implementation"
         );
     }
 

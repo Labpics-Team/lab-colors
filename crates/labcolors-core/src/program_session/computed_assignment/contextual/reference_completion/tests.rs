@@ -577,7 +577,7 @@ fn both_adjustable_parent_and_child_are_jointly_realized_with_nested_opacity() -
         Some([Srgb8::new([242; 3]), Srgb8::new([3; 3])].as_slice())
     );
     assert!(result.rgb8_search_exhausted());
-    assert_eq!(result.visited(), 9); // the complete 3Р“вЂ”3 tuple domain, without a duplicate hint
+    assert_eq!(result.visited(), 9); // the complete 3 by 3 tuple domain, without a duplicate hint
     assert_eq!(
         result.continuous_optimality(),
         ComputedOptimalityV1::Unfinished
@@ -1066,7 +1066,7 @@ fn independent_full_rgb_components_do_not_starve_first_text_repair() -> Result<(
             singleton_output = Some(emitted[0]);
         }
         if additional == 2 {
-            // Old whole-Program traversal spent 27Р“вЂ”27 suffix combinations on
+            // Old whole-Program traversal spent 27 by 27 suffix combinations on
             // the failing first color; even its full 384-visit budget missed
             // the next first-color proposal. Every domain remains the full cube.
             assert!(
