@@ -29,19 +29,8 @@ impl CompiledAppearanceGraph {
         workspace: &'workspace mut ContinuousAppearanceWorkspace,
     ) -> Result<PreparedContinuousAppearancePaints<'program, 'bindings, 'workspace>, BindingError>
     {
-        if scope.is_some_and(|cone| !Arc::ptr_eq(&self.instance, &cone.graph_instance)) {
-            return Err(BindingError::IncompatibleEvaluationCone);
-        }
+        self.validate_preparation(scope, bindings, workspace)?;
         let program = self.program();
-        if bindings
-            .graph_instance
-            .as_ref()
-            .is_some_and(|instance| Arc::ptr_eq(instance, &self.instance))
-        {
-            workspace.validate_shape(program)?;
-        } else {
-            program.validate_admitted_workspace(bindings, workspace)?;
-        }
         let order = if let Some(cone) = scope {
             workspace.cone.prepare(self, cone);
             workspace.cone.paints.as_slice()

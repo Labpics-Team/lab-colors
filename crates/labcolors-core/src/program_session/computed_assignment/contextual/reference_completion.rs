@@ -359,15 +359,22 @@ struct ReferenceCompletionStorageV1 {
 
 /// Epoch and observation authorize the operation; scratch is only borrowed
 /// during preparation/execution and is never retained by immutable results.
-pub(crate) struct PreparedReferenceCompletionV1<
+pub(in crate::program_session) struct PreparedObservationV1<
     'program,
     'scratch,
     E: ProgramConstraintEvaluatorSetV1,
+    const ALL_TONES: bool,
 > {
     epoch: &'program ProgramEpochV1<E>,
     observation: RevisionBoundObservationV1,
     scratch: &'scratch mut ReferenceCompletionStorageV1,
 }
+
+// A selection fills tones only for the active component. Only the full form
+// can measure or realize a complete tuple for the incoming revision.
+pub(in crate::program_session) type PreparedPointSelectionV1<'p, 's, E> =
+    PreparedObservationV1<'p, 's, E, false>;
+type PreparedReferenceCompletionV1<'p, 's, E> = PreparedObservationV1<'p, 's, E, true>;
 
 /// The caller passes the admitted incoming observation, before Session commit.
 /// This function never reads a Session head or derives a reference from a frame.
@@ -385,7 +392,11 @@ pub(in crate::program_session) fn prepare<
     }
     let prepared = prepare_selection(epoch, observation, scratch)?;
     prepared.scratch.refresh_tones(epoch, observation)?;
-    Ok(prepared)
+    Ok(PreparedObservationV1 {
+        epoch: prepared.epoch,
+        observation: prepared.observation,
+        scratch: prepared.scratch,
+    })
 }
 
 pub(in crate::program_session) fn prepare_selection<
@@ -396,7 +407,7 @@ pub(in crate::program_session) fn prepare_selection<
     epoch: &'program ProgramEpochV1<E>,
     observation: &RevisionBoundObservationV1,
     scratch: &'scratch mut ReferenceCompletionScratchV1<E>,
-) -> Result<PreparedReferenceCompletionV1<'program, 'scratch, E>, Error<E>> {
+) -> Result<PreparedPointSelectionV1<'program, 'scratch, E>, Error<E>> {
     if !core::ptr::eq(scratch.owner_generation.as_ptr(), epoch)
         || !observation.shares_schema_backing_with(&epoch.observation_group.schema)
     {
@@ -412,10 +423,7 @@ pub(in crate::program_session) fn prepare_selection<
         .storage
         .as_mut()
         .ok_or(Error::<E>::ResourceExhausted)?;
-    // Every prepare initializes observation-derived values, including after an
-    // error or rollback. Vec capacities and the compiled reference are reused.
-
-    Ok(PreparedReferenceCompletionV1 {
+    Ok(PreparedObservationV1 {
         epoch,
         observation: observation.clone(),
         scratch: storage,
@@ -594,7 +602,7 @@ fn sort_profile<E: ProgramConstraintEvaluatorSetV1>(
     Ok(())
 }
 
-impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E> {
+impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
     pub(super) fn refresh_point_component(
         &mut self,
         component: &ComputedComponentV1,
@@ -787,7 +795,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
         }
         Ok(())
     }
+}
 
+impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E> {
     /// The compiled variable order belongs to this prepared operation. Solvers
     /// consume these identities rather than assuming declaration/creation order.
     pub(crate) fn sources(&self) -> impl ExactSizeIterator<Item = (TargetId, Srgb8)> + '_ {

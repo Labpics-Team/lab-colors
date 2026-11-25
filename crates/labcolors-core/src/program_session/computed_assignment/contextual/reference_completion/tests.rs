@@ -1698,13 +1698,16 @@ fn authored_material_minimum(
     let mut standalone = owner
         .prepare_reference_completion(&session)
         .map_err(fixture_error)?;
-    let mut prepared = prepare(
+    let mut prepared = prepare_selection(
         standalone.epoch,
         &standalone.observation,
         &mut standalone.scratch,
     )
     .map_err(fixture_error)?;
     let cases: Vec<_> = (0..backgrounds.len()).collect();
+    prepared
+        .refresh_point_component(&selection.components[0], &cases)
+        .map_err(fixture_error)?;
     prepared
         .authored_point_optimal(&selection.components[0], &cases)
         .map_err(fixture_error)

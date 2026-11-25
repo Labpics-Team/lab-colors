@@ -3,7 +3,7 @@
 
 use super::*;
 
-impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E> {
+impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
     /// The caller must first establish hard feasibility of the authored tuple.
     /// Its source distances are exactly zero by source identity. Each primary
     /// distance below either attains zero or is invariant throughout a box
