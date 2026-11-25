@@ -4,9 +4,11 @@
 mod metadata;
 mod program;
 mod program_reports;
+mod raster_reference;
 pub use metadata::*;
 pub use program::*;
 pub use program_reports::*;
+pub use raster_reference::*;
 
 use labcolors_core::alpha::{composite_hex, min_alpha_hex};
 use labcolors_core::{

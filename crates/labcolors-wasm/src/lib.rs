@@ -7,6 +7,7 @@
 mod error;
 mod program_diagnostics_projection;
 mod program_report_projection;
+mod raster_reference;
 mod terminal_projection;
 
 use std::cell::{Cell, RefCell};

@@ -49,6 +49,7 @@
     "authoring-program.js",
     "authoring-css.js",
     "authoring-view.js",
+    "authoring-raster.js",
     "wcag22.d.ts",
     "program-wire/abi-v1.js",
     "program-wire/abi-v1.d.ts",

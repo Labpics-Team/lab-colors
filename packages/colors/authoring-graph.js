@@ -15,7 +15,7 @@ const criteria = Object.freeze({
 });
 
 /** Only topology, identity maps and encoding: numerical work belongs to Program. */
-export function lowerColorSystem(entries, options) {
+export function lowerColorSystem(entries, options, rasterProposal) {
   const builder = new ProgramWireBuilderV3();
   let nextId = 1;
   const id = () => nextId++;
@@ -91,6 +91,19 @@ export function lowerColorSystem(entries, options) {
     nodes.set(node, compiled);
     targets.set(target, node);
     occurrences.set(occurrence, node);
+    const requested = rasterProposal?.paints.get(node.handle);
+    if (requested !== undefined) {
+      // An opaque occurrence of the same base paint pins the actual source,
+      // including when the declared use subsequently applies material opacity.
+      let checked = occurrence;
+      if (rasterProposal.kind === "try-inverse" && paint !== basePaint) {
+        checked = id();
+        builder.pointOccurrence(checked, basePaint, asSurface(node.against));
+      }
+      const constraint = id();
+      builder.exactVisibleUnary(true, constraint, checked, [requested >>> 16, (requested >>> 8) & 255, requested & 255]);
+      constraints.set(constraint, { node, requirement: "visible-reference" });
+    }
     if (policy.contrast !== undefined) {
       const constraint = id();
       builder.wcag22VisibleUnary(true, constraint, occurrence, criteria[policy.contrast]);

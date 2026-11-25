@@ -10,7 +10,7 @@ test("terminal tar inventory is exact and excludes retired roots", () => {
   const required = new Set([
     "LICENSE", "NOTICE.md", "LICENSES/CC-BY-4.0.txt", "LICENSES/CC-BY-SA-4.0.txt", "build-metadata.json", "index.js", "index.d.ts", "wcag22.d.ts",
     "authoring.js", "authoring.d.ts", "authoring-graph.js", "authoring-frame.js",
-    "authoring-program.js", "authoring-css.js", "authoring-view.js",
+    "authoring-program.js", "authoring-css.js", "authoring-view.js", "authoring-raster.js",
     "program-wire/abi-v1.js", "program-wire/abi-v1.d.ts",
     "program-wire/encoding.js", "program-wire/abi-v2.js", "program-wire/abi-v2.d.ts",
     "program-wire/abi-v3.js", "program-wire/abi-v3.d.ts",

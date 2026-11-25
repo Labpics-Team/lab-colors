@@ -1,9 +1,11 @@
+import { verifyRasterRestoration } from "./browser-raster-reference.mjs";
+
 const NONCE = "Y29sb3JzLWF1dGhvcmluZy1wcm9vZg==";
 const CHECKS = {
   ownership: ["independent-modules", "independent-roots", "independent-dispose",
     "cascade-rollback", "cascade-recovery", "important-rollback", "important-recovery"],
   csp: ["csp-refusal"],
-  nonce: ["nonce-acceptance", "field-preview", "positioned-preview", "preview-solid-update"],
+  nonce: ["nonce-acceptance", "field-preview", "positioned-preview", "preview-solid-update", "raster-reference"],
 };
 
 /** The same installed tarball is served under two complete module URL trees. */
@@ -23,13 +25,13 @@ export function authoringBrowserCases(browserCleanup) {
     scenario(origin) {
       return `const done=arguments[arguments.length-1];
         const browserCleanup=${browserCleanup.toString()};
-        (${browserAuthoringConsumer.toString()})(${JSON.stringify(origin)},${JSON.stringify(mode)},${JSON.stringify(NONCE)},browserCleanup)
+        (${browserAuthoringConsumer.toString()})(${JSON.stringify(origin)},${JSON.stringify(mode)},${JSON.stringify(NONCE)},browserCleanup,${verifyRasterRestoration.toString()})
           .then(proof=>done({proof}),error=>done({proof:browserCleanup(error,[])}));`;
     },
   }));
 }
 
-async function browserAuthoringConsumer(origin, mode, nonce, cleanup) {
+async function browserAuthoringConsumer(origin, mode, nonce, cleanup, verifyRaster) {
   const resources = [];
   const evidence = { acquired: [], released: [], readback: {} };
   const result = { mode, checks: [] };
@@ -140,6 +142,8 @@ async function browserAuthoringConsumer(origin, mode, nonce, cleanup) {
       const solid = preview.set({ canvas: "#ffffff" });
       check("preview-solid-update", solid.frame.state === "ready" && computed.backgroundImage === "none"
         && computed.backgroundColor === "rgb(255, 255, 255)", read(second));
+      const raster = await verifyRaster(api);
+      check("raster-reference", raster.restored === "restored", raster);
     }
   } catch (error) { primary = error; }
   const outcome = cleanup(primary, resources.toReversed());
