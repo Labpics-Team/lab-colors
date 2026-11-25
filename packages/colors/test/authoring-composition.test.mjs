@@ -156,6 +156,8 @@ test("a translucent warm fill keeps dark ink when both paints must move to make 
     assert.ok(textPasses(frame.values.ink.rgb, visible));
     // Black is within 0.27 L of the authored ink and admits a warm fill.
     // Inverting the ink to a pale gray loses more than this feasible assignment.
-    assert.ok(Math.abs(grayL(frame.values.ink.rgb[0]) - grayL(36)) < 0.27);
+    const [r, g, b] = frame.values.ink.rgb;
+    assert.ok(r === g && g === b);
+    assert.ok(Math.abs(grayL(r) - grayL(36)) < 0.27);
   } finally { program.dispose(); }
 });
