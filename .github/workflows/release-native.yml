@@ -33,7 +33,7 @@ jobs:
       - name: identify the successful native build on main history
         id: source
         run: python3 scripts/publish-native.py identify
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.conformance_run_id }}
