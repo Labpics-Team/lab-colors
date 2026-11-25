@@ -5,7 +5,7 @@ use crate::field_context::{FieldStops, ProgramGradientStopV1};
 use crate::gradient_domain::OpaqueSrgb8AffineSegment;
 use crate::observation::SchemaOrderedFieldSourceV1;
 
-/// One opaque encoded-sRGB affine input over the entire real interval [0, 1].
+/// One opaque encoded-sRGB input, affine between stops over the entire real interval [0, 1].
 ///
 /// Other inputs are constant. Root RGB8 uses nearest half-up rounding; each
 /// material uses the Program's existing composition law. This declaration

@@ -64,6 +64,21 @@ test("one composition covers every positioned segment and retains a tie-only wit
   } finally { program.dispose(); }
 });
 
+test("a role adapts once across all gradient segments when the stop list changes", async () => {
+  const c = colors(), canvas = c.surface("canvas"), ink = c.role("ink", "#666666").on(canvas, {contrast: "wcag22-text"});
+  const program = await c.compile({ink});
+  const gradient = gray => ({canvas: {kind: "linear-srgb8",
+    stops: gray.map((value, i) => ({at: [0, 0.35, 1][i], color: [value, value, value]}))}});
+  try {
+    const light = program.resolve(gradient([255, 221, 238])), dark = program.resolve(gradient([17, 51, 34]));
+    for (const [frame, lo, hi] of [[light, 221, 255], [dark, 17, 51]]) {
+      assert.equal(frame.state, "modeled");
+      for (let gray = lo; gray <= hi; gray++) assert.ok(textPasses(frame.values.ink.rgb, [gray, gray, gray]));
+    }
+    assert.notDeepEqual(light.values.ink.rgb, dark.values.ink.rgb);
+  } finally { program.dispose(); }
+});
+
 test("an interior field failure is scoped to the nominal model with a Core coordinate witness", async () => {
   const c = colors(), canvas = c.surface("canvas");
   const program = await c.compile({ ink: c.fixed("ink", "#808080").on(canvas, { separation: [0.1, 2] }) });

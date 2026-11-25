@@ -64,7 +64,9 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   program.resolve({ canvas: { kind: "affine-oklab", from: "#ffffff", to: "#000000" } });
   const view: ColorView<"fill" | "label" | "pane"> = program.attach(element, { canvas: "#283548" }, attachmentOptions);
   const preview = program.preview(element, undefined, attachmentOptions);
-  const previewUpdate = preview.set({ canvas: { kind: "affine-srgb8", from: "#ffffff", to: "#dddddd" } });
+  const previewUpdate = preview.set({ canvas: { kind: "linear-srgb8", stops: [
+    { at: 0, color: "#ffffff" }, { at: 0.35, color: [222, 223, 224] }, { at: 1, color: "#dddddd" },
+  ] } });
   if (previewUpdate.state === "committed" && previewUpdate.frame.state === "modeled") {
     const coverage: "unknown" = previewUpdate.frame.coverage.rendering;
     void coverage;
