@@ -144,16 +144,18 @@ const frame = program.resolve({ canvas: { kind: "linear-srgb8", stops: [
 и `coordinate: [1, 2]` обозначают середину между второй и третьей остановками.
 Форма с двумя остановками в 0 и 1 эквивалентна `from` и `to`.
 
-Core выводит точную поддержку модели
-`opaque-affine-encoded-srgb8-half-up-v1`: округляет исходное поле в sRGB8 и
-использует обычную композицию с округлением после каждого слоя. Отдельные точки
+В каждом сегменте Core округляет поле в sRGB8 и использует обычную
+композицию с округлением после каждого слоя. Отдельные точки
 переходов сохраняются наряду с открытыми интервалами. Передавать `samples` или
 разбивать градиент на пользовательские сценарии не требуется и не допускается.
 Этот закон округления описывает модель Core; погрешность браузерного rasterizer
 остаётся неизвестной.
 
-Успешный ответ для поля имеет `state: "modeled"`, `scope: "nominal-model"` и
-`coverage: { model: "complete", rendering: "unknown", sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" }`.
+Успешный ответ для поля имеет `state: "modeled"` и `scope: "nominal-model"`.
+В `coverage` значение `model` равно `"complete"`, а `rendering` равно
+`"unknown"`. Для двух остановок `sourceModel` равен
+`"opaque-affine-encoded-srgb8-half-up-v1"`, для трёх и более он указывает
+кусочно-линейную модель, описанную выше.
 Он содержит `values`, `optimality`, `reference`, `cleanliness` и полный descriptor
 в `context`. `contextCss` содержит CSS исходных поверхностей. Для интерактивного
 предпросмотра подключите элемент, использующий `background: var(--canvas)`
