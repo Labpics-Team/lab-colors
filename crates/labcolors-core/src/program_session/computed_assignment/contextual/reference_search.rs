@@ -714,8 +714,6 @@ impl<'a> ReferenceRuntimeV1<'a> {
         self.assess_tuple_inner(runtime, epoch, scenarios, values, arena, false)
     }
 
-    // Keep the whole-tuple assessment shared across WASM proposal and traversal calls.
-    #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn assess_tuple_inner<E: ProgramConstraintEvaluatorSetV1>(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,

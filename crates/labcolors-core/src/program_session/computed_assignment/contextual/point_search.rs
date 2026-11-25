@@ -241,8 +241,6 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         }
     }
 
-    // The WASM proposal loops and domain traversal share this full assessment.
-    #[cfg_attr(target_arch = "wasm32", inline(never))]
     fn assess(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
