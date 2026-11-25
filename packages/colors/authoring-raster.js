@@ -1,4 +1,4 @@
-import { RasterReference, rasterPaintProposal } from "./pkg/labcolors.js";
+import { captureRasterReference as captureReferenceBitmap, rasterPaintProposal } from "./pkg/labcolors.js";
 import { ProgramWireError, PROGRAM_WIRE_TOO_MANY_ENTRIES } from "./program-wire/encoding.js";
 import { authoringError } from "./authoring.js";
 import { copyColorFrame, parseColorContext, resolveColorContext, updateColorSnapshot } from "./authoring-frame.js";
@@ -75,7 +75,7 @@ export function captureRasterReference(draw, authoredReference, graph, runtime, 
     return [use, { rgb: cases[0].actualVisible, opacity: node.policy.opacity, variableBackdrop: node.against.kind === "use" }];
   }));
   const reference = readBitmap(draw, original);
-  const field = RasterReference.capture(reference.width, reference.height, reference.data);
+  const field = captureReferenceBitmap(reference.width, reference.height, reference.data);
   if (field === undefined) {
     authoringError("raster.reference", "the reference requires its full opaque backdrop", "color_unsupported_context");
   }
@@ -136,7 +136,7 @@ export function captureRasterReference(draw, authoredReference, graph, runtime, 
             // Preserve the ordinary result before the renderer may reuse its storage.
             retainedNormal ??= retain(normal);
             image = readBitmap(draw, candidate);
-            choice.inspect(field, image.width, image.height, image.data);
+            choice.inspect(image.width, image.height, image.data);
           } finally { proposal.free(); }
         }
       } finally {

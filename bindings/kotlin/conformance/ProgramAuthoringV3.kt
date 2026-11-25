@@ -191,8 +191,34 @@ private fun verifyDeclaredField(wire: ByteArray) {
     check(ownedReport == expected)
 }
 
+private fun verifyRasterReference() {
+    val original = rgb(120, 120, 120, 255, 30, 31, 32, 255)
+    val changed = original.copyOf().apply { this[4] = 29 }
+    check(captureRasterReference(2u, 1u, changed.copyOf(4)) == null)
+    check(paintProposal(rgb(120, 120, 120), rgb(159, 159, 159), 0.5) == 0x515151u)
+    check(paintProposal(rgb(0, 0, 0), rgb(255, 255, 255), 0.5) == null)
+    val choice = requireNotNull(captureRasterReference(2u, 1u, original)).use { reference ->
+        reference.start(2u, 1u, original, true).use { check(it.action() == "preserved") }
+        reference.start(2u, 1u, changed, true).use {
+            it.proposalLimit()
+            it.refused(false)
+            check(it.action() == "proposal-limit")
+        }
+        reference.start(2u, 1u, changed, true)
+    }
+    // The choice retains its captured reference after the native wrapper closes.
+    choice.use {
+        check(it.action() == "try-inverse")
+        it.inspect(2u, 1u, changed)
+        check(it.action() == "try-visible")
+        it.inspect(2u, 1u, original)
+        check(it.action() == "restored")
+    }
+}
+
 /** The same external consumer checks run against installed Android and JVM packages. */
 fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
+    verifyRasterReference()
     verifyPublishedV03AuthoringAbi()
     verifyAuthoredComposition()
     val referenceOptions = ProgramWireColorOptionsV3(referenceAppearance = 5u)

@@ -13,7 +13,14 @@ export async function verifyRasterRestoration(api) {
     context.fillStyle = `rgb(${surround} ${surround} ${surround})`;
     context.fillRect(0, 0, 64, 40);
     const base = frame.context.base;
-    context.fillStyle = Array.isArray(base) ? `rgb(${base.join(" ")})` : `rgb(${base.from.join(" ")})`;
+    if (Array.isArray(base)) {
+      context.fillStyle = `rgb(${base.join(" ")})`;
+    } else {
+      const gradient = context.createLinearGradient(5, 0, 53, 0);
+      const stops = base.stops ?? [{ at: 0, color: base.from }, { at: 1, color: base.to }];
+      for (const { at, color } of stops) gradient.addColorStop(at, `rgb(${color.join(" ")})`);
+      context.fillStyle = gradient;
+    }
     context.fillRect(5, 6, 48, 23);
     context.fillStyle = frame.values.film.css;
     context.fillRect(5, 6, 48, 23);
@@ -53,6 +60,14 @@ export async function verifyRasterRestoration(api) {
     const affine = reference.resolve({ base: { kind: "affine-srgb8", from: "#a0a0a0", to: "#a0a0a0" } });
     if (affine.relation !== "preserved" || affine.frame.state !== "modeled") {
       throw new Error("the renderer bitmap must remain comparable for a modeled ready frame");
+    }
+
+    const piecewise = reference.resolve({ base: { kind: "linear-srgb8", stops: [
+      { at: 0, color: "#8c8c8c" }, { at: 0.25, color: "#8c8c8c" }, { at: 1, color: "#8c8c8c" },
+    ] } });
+    if (piecewise.relation !== "restored" || piecewise.frame.state !== "modeled"
+      || piecewise.frame.context.base.stops.length !== 3 || count(originalBytes, piecewise.image.data) !== 0) {
+      throw new Error("raster restoration lost the positioned field or its rendered appearance");
     }
 
     const layers = api.colors({ reference: { base: "#a0a0a0", outside: "#000000" } });

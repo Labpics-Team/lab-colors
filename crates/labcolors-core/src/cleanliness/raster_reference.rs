@@ -95,6 +95,16 @@ pub enum RasterTrial {
     NotReady,
 }
 
+impl From<Option<bool>> for RasterTrial {
+    fn from(same_field: Option<bool>) -> Self {
+        match same_field {
+            Some(true) => Self::SameField,
+            Some(false) => Self::DifferentField,
+            None => Self::Incomparable,
+        }
+    }
+}
+
 /// Next proposal to render, or a final decision for this update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RasterAction {
@@ -118,6 +128,25 @@ pub enum RasterAction {
     ProposalLimit,
     /// Return the ordinary frame. Neither trial supplied a ready frame.
     NoReadyProposal,
+}
+
+impl RasterAction {
+    /// Stable instruction or outcome shared by the renderer adapters.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TryInverse => "try-inverse",
+            Self::TryVisible => "try-visible",
+            Self::Preserved => "preserved",
+            Self::Restored => "restored",
+            Self::IncomparableBitmap => "incomparable-bitmap",
+            Self::NoReferencePaints => "no-reference-paints",
+            Self::DifferentBitmap => "different-bitmap",
+            Self::SearchLimit => "search-limit",
+            Self::ProposalLimit => "proposal-limit",
+            Self::NoReadyProposal => "no-ready-proposal",
+        }
+    }
 }
 
 /// Finite selection protocol for one ready ordinary frame and its reference.
