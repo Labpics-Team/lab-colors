@@ -157,6 +157,8 @@ fn read_module(file: &str) -> String {
 // deliberate, reviewable assertion that the const is non-perceptual.
 // ─────────────────────────────────────────────────────────────────────────────
 const STRUCTURAL_NONPOLICY_ALLOWLIST: &[&str] = &[
+    // Number of exact RGB projections retained per thread (spaces/oklab.rs).
+    "LMS_ROOT_CACHE_SLOTS",
     // Upper bound on live curve-plan cache entries — a memory-footprint bound,
     // not a perceptual magnitude (semantic.rs).
     "CURVE_PLAN_CACHE_CAP",

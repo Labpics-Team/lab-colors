@@ -74,15 +74,17 @@ fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
     // Point colors and interval corners share the exact same three roots.
     // A bounded, per-thread working set retains only this pure projection.
     type Slot = Cell<Option<(crate::Srgb8, [f64; 3])>>;
-    const INDEX_BITS: u32 = 8;
-    const SLOTS: usize = 1 << INDEX_BITS;
+    // This power of two caps the per-thread cache at 8 KiB with 32-byte slots.
+    const LMS_ROOT_CACHE_SLOTS: usize = 1 << 8;
     thread_local! {
-        static ROOTS: [Slot; SLOTS] = const { [const { Cell::new(None) }; SLOTS] };
+        static ROOTS: [Slot; LMS_ROOT_CACHE_SLOTS] = const { [const { Cell::new(None) }; LMS_ROOT_CACHE_SLOTS] };
     }
     let [r, g, b] = rgb.bytes();
     let key = u32::from_be_bytes([0, r, g, b]);
-    // Multiplicative hashing spreads consecutive colors and grayscale ramps.
-    let index = (key.wrapping_mul(0x9e37_79b1) >> (u32::BITS - INDEX_BITS)) as usize;
+    // The high bits of a product with xxHash's PRIME32_1 spread RGB keys over
+    // the slots. Only the full RGB equality below can reuse a projection.
+    let index =
+        (key.wrapping_mul(0x9e37_79b1) >> (u32::BITS - LMS_ROOT_CACHE_SLOTS.ilog2())) as usize;
     ROOTS.with(|slots| {
         let slot = &slots[index];
         if let Some((color, roots)) = slot.get() {
