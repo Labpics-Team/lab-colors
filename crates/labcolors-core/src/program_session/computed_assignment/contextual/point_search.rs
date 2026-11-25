@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v6.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v7.paired-source-tones.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -554,6 +554,24 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         state.evidence.completion = CompletionV1::AuthoredExact;
     } else {
         let seed_limit = (selection.budget / COORDINATE_BUDGET_DIVISOR).max(state.evidence.visited);
+        if !state.has_best && variables >= 2 {
+            let proposals = component
+                .point_constraints()
+                .iter()
+                .filter_map(|&index| paired_tones(context.targets, &epoch.constraints[index]))
+                .flatten();
+            for (_, [(left, first), (right, second)]) in
+                (state.evidence.visited..seed_limit).zip(proposals)
+            {
+                state
+                    .buffers
+                    .values
+                    .copy_from_slice(&state.buffers.authored);
+                state.buffers.values[left] = first;
+                state.buffers.values[right] = second;
+                state.assess(runtime, epoch, scenarios, arena)?;
+            }
+        }
         // Independent contextual starts and physical coordinate repair share
         // the component's existing cap; no conditional subsolver runs here.
         for origin in 0..=context.local_cases.order.len() {
