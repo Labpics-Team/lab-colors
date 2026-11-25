@@ -7,7 +7,7 @@ export type {
   ColorAdaptiveRole, ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
   ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
-  ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection, ColorSelectionComponent,
+  ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection, ColorSelectionComponent, ColorRasterResult, ColorRasterReference,
   ColorAffineSrgb8Field, ResolvedColorAffineSrgb8Field, ColorLinearSrgb8Field, ResolvedColorLinearSrgb8Field, ResolvedColorContext,
   ColorFieldWitness, ColorFieldAssessment, ColorFieldModelScope, ModeledColorFrame,
 } from "./authoring.js";

@@ -283,7 +283,26 @@ export interface ColorView<Name extends string = string, State extends Displayab
   dispose(): void;
 }
 
+/** Result for one complete, opaque sRGB8 reference bitmap in the same renderer context. */
+export type ColorRasterResult<Name extends string = string> =
+  | Readonly<{ state: "ready"; scope: "renderer-bitmap"; image: ImageData;
+      frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }> } & (
+        | { relation: "preserved" | "restored"; basis: "exact-bitmap-identity" }
+        | { relation: "unavailable"; reason: "incomparable-bitmap" | "no-reference-paints"
+            | "different-bitmap" | "search-limit" | "proposal-limit" | "no-ready-proposal" }
+      )>
+  | Readonly<{ state: "unavailable"; proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
+
+export interface ColorRasterReference<Name extends string = string> {
+  resolve(surfaces: ColorContext): ColorRasterResult<Name>;
+  dispose(): void;
+}
+
 export interface ColorProgram<Name extends string = string> {
+  /** Capture the authored reference using the application's complete opaque bitmap renderer.
+   * Reuse only in the same viewing context. Each returned frame has passed its own V3 graph.
+   */
+  captureRaster(draw: (frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }>) => ImageData): ColorRasterReference<Name>;
   readonly inputs: readonly string[];
   readonly outputs: readonly Name[];
   /** Явные данные контекста; поле возвращает modeled, недоступный результат не выдаёт старые outputs за свежие. */

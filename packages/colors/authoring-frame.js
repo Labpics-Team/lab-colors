@@ -206,6 +206,20 @@ export function copyReadyColorFrame(snapshot, graph, context, field = copyFieldA
     values: Object.freeze(Object.fromEntries(pairs)) });
 }
 
+const scenario = new Uint32Array([1]);
+
+export function updateColorSnapshot(runtime, graph, context, revision) {
+  if (context.unknown.length > 0) return runtime.updateUnknown(revision, 1);
+  if (context.field === undefined) return runtime.updateObserved(revision, scenario, context.rgb, graph.inputs.length);
+  return updateColorField(runtime, revision, context);
+}
+
+export function resolveColorContext(runtime, graph, context, revision) {
+  const snapshot = updateColorSnapshot(runtime, graph, context, revision);
+  try { return copyColorFrame(snapshot, graph, context); }
+  finally { snapshot.free(); }
+}
+
 export function copyColorFrame(snapshot, graph, context) {
   if (snapshot.state === "ready") return copyReadyColorFrame(snapshot, graph, context);
   const revision = snapshot.revision;
