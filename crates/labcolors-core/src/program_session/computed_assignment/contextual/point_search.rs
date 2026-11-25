@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v7.material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v8.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -408,7 +408,6 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
 
     fn polish_materials(
         &mut self,
-        mut remaining_materials: u64,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
@@ -418,17 +417,14 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         // band oblique to both a constant-hue ray and the segment to the anchor.
         // Move several channels together. Only assess() may retain a tuple.
         self.buffers.values.copy_from_slice(&self.buffers.best);
-        for variable in 0..self.component.point_variable_count() {
-            let local = self.component.point_variable(variable);
-            if self.context.opaque[local] {
-                continue;
-            }
-            let limit =
-                self.evidence.visited + (self.budget - self.evidence.visited) / remaining_materials;
-            remaining_materials -= 1;
-            'scales: for bit in (0..u8::BITS).rev() {
-                let stride = 1_u8 << bit;
-                loop {
+        for bit in (0..u8::BITS).rev() {
+            let stride = 1_u8 << bit;
+            loop {
+                let mut improved = false;
+                // A changed fill makes different inks feasible and vice versa.
+                // Revisit the connected paints before reducing the mesh width.
+                for variable in 0..self.component.point_variable_count() {
+                    let local = self.component.point_variable(variable);
                     let center = self.buffers.best[local];
                     let [red, green, blue] = center
                         .bytes()
@@ -436,8 +432,8 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                     for r in red.into_iter().flatten() {
                         for g in green.into_iter().flatten() {
                             for b in blue.into_iter().flatten() {
-                                if self.evidence.visited >= limit {
-                                    break 'scales;
+                                if self.evidence.visited >= self.budget {
+                                    return Ok(());
                                 }
                                 let source = Srgb8::new([r, g, b]);
                                 if source == center || !self.context.domains[local].contains(source)
@@ -449,12 +445,13 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                             }
                         }
                     }
-                    if self.buffers.best[local] == center {
-                        break;
-                    }
+                    self.buffers.values[local] = self.buffers.best[local];
+                    improved |= self.buffers.best[local] != center;
+                }
+                if !improved {
+                    break;
                 }
             }
-            self.buffers.values[local] = self.buffers.best[local];
         }
         Ok(())
     }
@@ -870,7 +867,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 state.polish_toward_authored(runtime, epoch, scenarios, arena)?;
             }
             if materials != 0 {
-                state.polish_materials(materials, runtime, epoch, scenarios, arena)?;
+                state.polish_materials(runtime, epoch, scenarios, arena)?;
             }
         }
     }
