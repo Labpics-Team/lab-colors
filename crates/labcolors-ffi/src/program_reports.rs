@@ -141,6 +141,16 @@ pub enum ProgramConstraintAssessment {
     TonalHierarchy {
         verdict: ProgramAssessmentVerdict,
     },
+    VisiblePairSeparation {
+        verdict: ProgramAssessmentVerdict,
+        left: ProgramRgb8,
+        right: ProgramRgb8,
+        distance: f64,
+        distance_lower: f64,
+        distance_upper: f64,
+        minimum: f64,
+        maximum: f64,
+    },
 }
 
 impl From<core::ProgramConstraintAssessmentV1> for ProgramConstraintAssessment {
@@ -158,6 +168,22 @@ impl From<core::ProgramConstraintAssessmentV1> for ProgramConstraintAssessment {
                 rejected_blue_lower: rejected_blue_interval[0],
                 rejected_blue_upper: rejected_blue_interval[1],
             },
+            C::VisiblePairSeparation {
+                verdict,
+                measurement,
+            } => {
+                let [left, right] = measurement.colors();
+                Self::VisiblePairSeparation {
+                    verdict: verdict.into(),
+                    left: left.into(),
+                    right: right.into(),
+                    distance: measurement.distance(),
+                    distance_lower: measurement.distance_bounds()[0],
+                    distance_upper: measurement.distance_bounds()[1],
+                    minimum: measurement.minimum(),
+                    maximum: measurement.maximum(),
+                }
+            }
             C::VisibleSeparation {
                 verdict,
                 measurement,

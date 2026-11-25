@@ -718,6 +718,21 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
         }
     }
 
+    pub(crate) const fn pair_separation(
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::VisibleRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::PairSeparation(bounds),
+            },
+            mode: PhantomData,
+        }
+    }
+
     pub(crate) const fn exact_visible_distinction_hard(
         id: ConstraintId,
         relation: DirectedRelationV1<OccurrenceId>,
@@ -5017,11 +5032,14 @@ fn canonicalize_program_report_cells<Evaluation>(
     });
 }
 
-fn resolve_visible_relation_endpoint(
-    evaluation: &AppearanceEvaluationView<'_, '_>,
+fn resolve_visible_relation_endpoint<'view>(
+    evaluation: &'view AppearanceEvaluationView<'_, '_>,
     contexts: &[CompiledOccurrenceContextV1],
     endpoint: CompiledVisibleRelationEndpointV1,
-) -> Option<(Srgb8, ProgramVisibleRelationBindingV1)> {
+) -> Option<(
+    &'view crate::appearance::ResolvedOccurrence,
+    ProgramVisibleRelationBindingV1,
+)> {
     let source = evaluation.occurrence_at(endpoint.slot)?;
     let context = contexts.get(endpoint.occurrence_context_index)?;
     if !coordinate_pair_matches(
@@ -5034,7 +5052,7 @@ fn resolve_visible_relation_endpoint(
     }
     let point = ProgramPointOccurrenceV1::from_resolved(source, context.context);
     Some((
-        Srgb8::new(source.visible()),
+        source,
         ProgramVisibleRelationBindingV1 {
             occurrence: endpoint.occurrence,
             physical: point.binding(),
@@ -5519,6 +5537,7 @@ where
                             .assess(
                                 reference_value.source(),
                                 candidate_value.source(),
+                                [0; 2],
                                 runtime.family_artifacts,
                             )
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -5558,14 +5577,14 @@ where
                         candidates.len(),
                     )
                     .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
-                    let (reference_visible, reference_binding) = resolve_visible_relation_endpoint(
+                    let (reference_pixel, reference_binding) = resolve_visible_relation_endpoint(
                         &evaluation,
                         &epoch.occurrence_contexts,
                         *reference,
                     )
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     for candidate in candidates.iter().copied() {
-                        let (candidate_visible, candidate_binding) =
+                        let (candidate_pixel, candidate_binding) =
                             resolve_visible_relation_endpoint(
                                 &evaluation,
                                 &epoch.occurrence_contexts,
@@ -5574,8 +5593,9 @@ where
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                         let (measurement, decision) = invocation
                             .assess(
-                                reference_visible,
-                                candidate_visible,
+                                Srgb8::new(reference_pixel.visible()),
+                                Srgb8::new(candidate_pixel.visible()),
+                                reference_pixel.distance_radii(candidate_pixel),
                                 runtime.family_artifacts,
                             )
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -5628,13 +5648,12 @@ where
                             pair[1],
                         )
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                        let backdrop = evaluation
-                            .occurrence_at(pair[0].slot)
-                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
-                            .certificate()
-                            .backdrop_rgb();
-                        let measurement =
-                            hierarchy.measure_pair(index, stronger, weaker, Srgb8::new(backdrop));
+                        let measurement = hierarchy.measure_pair(
+                            index,
+                            Srgb8::new(stronger.visible()),
+                            Srgb8::new(weaker.visible()),
+                            Srgb8::new(stronger.certificate().backdrop_rgb()),
+                        );
                         let decision = if measurement.satisfied() {
                             ProgramRelationMemberDecisionV1::Pass(
                                 CoreRelationPassV1::TonalHierarchy,
@@ -6066,6 +6085,9 @@ where
 {
     Ok(match invocation {
         CoreRelationInvocationV1::ExactSrgb8 => CompiledCoreRelationInvocationV1::ExactSrgb8,
+        CoreRelationInvocationV1::PairSeparation(bounds) => {
+            CompiledCoreRelationInvocationV1::PairSeparation(bounds)
+        }
         CoreRelationInvocationV1::ExactSrgb8Distinction => {
             CompiledCoreRelationInvocationV1::ExactSrgb8Distinction
         }
@@ -7239,26 +7261,33 @@ where
                         },
                     )?);
                 }
-                dependency_scratch.scan(dependency_index, [reference_id])?;
-                if let Some(target) = dependency_scratch
-                    .queue
-                    .iter()
-                    .filter_map(|node| match *node {
-                        IndexedDependencyNodeV1::Target(index) => {
-                            let target = &program.targets[index];
-                            target.intent.is_solver_dependent().then_some(target.id)
-                        }
-                        _ => None,
-                    })
-                    .min()
-                {
-                    return Err(
-                        ProgramCompileError::SolverDependentVisibleRelationReference {
-                            constraint: constraint.id,
-                            reference: reference_id,
-                            target,
-                        },
-                    );
+                // Directed legacy relations bind an immutable reference. Geometric
+                // separation compares two outputs of the same proposed assignment.
+                if !matches!(
+                    invocation,
+                    CompiledCoreRelationInvocationV1::PairSeparation(_)
+                ) {
+                    dependency_scratch.scan(dependency_index, [reference_id])?;
+                    if let Some(target) = dependency_scratch
+                        .queue
+                        .iter()
+                        .filter_map(|node| match *node {
+                            IndexedDependencyNodeV1::Target(index) => {
+                                let target = &program.targets[index];
+                                target.intent.is_solver_dependent().then_some(target.id)
+                            }
+                            _ => None,
+                        })
+                        .min()
+                    {
+                        return Err(
+                            ProgramCompileError::SolverDependentVisibleRelationReference {
+                                constraint: constraint.id,
+                                reference: reference_id,
+                                target,
+                            },
+                        );
+                    }
                 }
                 CompiledProgramConstraintBodyV1::VisibleRelation {
                     reference,

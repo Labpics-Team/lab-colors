@@ -592,6 +592,54 @@ fn visible_relation(with_parent: bool) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn visible_pair_separation_is_symmetric_and_selects_both_computed_endpoints() {
+    let pair = |reverse: bool, minimum: f64| {
+        let mut p = program(
+            target(10, 61, 60, 62, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        duplicate_use(&mut p, target(20, 61, 60, 62, 1));
+        let (a, b) = if reverse { (15, 5) } else { (5, 15) };
+        p.constraints.hard = vec![ConstraintInvocation::pair_separation(
+            ConstraintId::new(6),
+            DirectedRelationV1::try_new(OccurrenceId::new(a), vec![OccurrenceId::new(b)])
+                .expect("different uses"),
+            VisibleSeparationBoundsV1::new(minimum, 2.0).expect("valid interval"),
+        )];
+        compile_assignment(p, 1024).expect("two computed endpoints")
+    };
+    // Only the outer pair fits. Adjusting either source alone never satisfies it.
+    let distance =
+        |a: u8, b: u8| squared_distance(lab(Srgb8::new([a; 3])), lab(Srgb8::new([b; 3]))).sqrt();
+    let threshold = distance(60, 62);
+    assert!(threshold > distance(60, 61).max(distance(61, 62)));
+    let owner = pair(false, threshold);
+    let reversed = pair(true, threshold);
+    assert_eq!(owner.content_identity(), reversed.content_identity());
+    assert_ne!(
+        owner.content_identity(),
+        pair(false, 0.0).content_identity()
+    );
+    for compiled in [owner, reversed] {
+        let mut session = compiled
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        session
+            .prepare_update(update(1, 255))
+            .expect("resolve")
+            .commit();
+        let ready = session.state().current_verified().expect("feasible pair");
+        let values = &ready.computed_for_test().values;
+        assert_eq!(
+            distance(values[0].bytes()[0], values[1].bytes()[0]),
+            threshold
+        );
+        assert!(values.iter().all(|rgb| rgb.bytes()[0] != 61));
+    }
+}
+
+#[test]
 fn opaque_visible_relation_endpoints_do_not_depend_on_their_backdrop() {
     let owner = compile_assignment(visible_relation(false), 3).expect("standalone relation");
     let mut standalone = owner

@@ -86,6 +86,7 @@ mod release_tag {
     pub(super) const FAMILY_CATEGORY_RELATION_RELEASE_V1: u8 = 1;
     pub(super) const FAMILY_CATEGORY_RELATION_CAPABILITY_V1: u8 = 1;
     pub(super) const VISIBLE_SEPARATION_FAMILY_V1: u8 = 10;
+    pub(super) const PAIR_SEPARATION_FAMILY_V1: u8 = 12;
     pub(super) const NOMINAL_SRGB8_VISIBLE_FAMILY_V1: u8 = 11;
     pub(super) const VISIBLE_SEPARATION_IDENTITY_V1: u8 = 1;
     pub(super) const VISIBLE_SEPARATION_RELEASE_V1: u8 = 1;
@@ -695,6 +696,11 @@ fn constraint_color(
             color.push_u8(release_tag::NOMINAL_SRGB8_VISIBLE_FAMILY_V1)?;
             color.push_bytes(&release)?;
         }
+        ProgramConstraintContentV1::PairSeparation { bounds } => {
+            color.push_u8(release_tag::PAIR_SEPARATION_FAMILY_V1)?;
+            color.push_u64(bounds.minimum().to_bits())?;
+            color.push_u64(bounds.maximum().to_bits())?;
+        }
         ProgramConstraintContentV1::VisibleSeparation {
             identity,
             release,
@@ -1113,7 +1119,11 @@ where
             graph.add_edge(
                 vertex,
                 context.occurrences.get(relation.reference())?,
-                EdgeRoleV1::VisibleReference,
+                if matches!(invocation, CoreRelationInvocationV1::PairSeparation(_)) {
+                    EdgeRoleV1::VisibleCandidate
+                } else {
+                    EdgeRoleV1::VisibleReference
+                },
             )?;
             for candidate in relation.candidates().iter().copied() {
                 graph.add_edge(

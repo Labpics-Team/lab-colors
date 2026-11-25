@@ -1959,6 +1959,21 @@ impl DraftV1 {
             ),
         ));
     }
+    pub(crate) fn separate_visible_pair(
+        &mut self,
+        id: ConstraintIdV1,
+        relation: DirectedRelationV1<OccurrenceId>,
+        bounds: VisibleSeparationBoundsV1,
+    ) {
+        self.inner.push_hard_constraint(
+            crate::program_session::ConstraintInvocation::pair_separation(
+                id.into_core(),
+                relation,
+                bounds,
+            ),
+        );
+    }
+
     pub(crate) fn preserve_tonal_hierarchy(
         &mut self,
         id: ConstraintIdV1,
@@ -3747,6 +3762,7 @@ impl FamilyCategoryRelationMeasurementV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMeasurementV1 {
+    PairSeparation(ProgramVisibleSeparationMeasurementV1),
     TonalHierarchy(crate::constraints::TonalHierarchyPairMeasurementV1),
     ExactSrgb8(ExactSrgb8RelationMeasurementV1),
     ExactSrgb8Distinction(ExactSrgb8RelationMeasurementV1),
@@ -3763,6 +3779,8 @@ pub(crate) enum FamilyCategoryViolationKindV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelationMemberProofV1 {
+    PairSeparationPass,
+    PairSeparationViolation,
     TonalHierarchyPass,
     TonalHierarchyViolation,
     ExactSrgb8Pass,
@@ -3775,6 +3793,9 @@ pub(crate) enum RelationMemberProofV1 {
 
 const fn project_relation_measurement(value: CoreRelationMeasurementV1) -> RelationMeasurementV1 {
     match value {
+        CoreRelationMeasurementV1::PairSeparation(value) => {
+            RelationMeasurementV1::PairSeparation(value)
+        }
         CoreRelationMeasurementV1::TonalHierarchy(value) => {
             RelationMeasurementV1::TonalHierarchy(value)
         }
@@ -3809,6 +3830,12 @@ const fn project_relation_verdict(value: ProgramRelationMemberDecisionV1) -> Ver
 
 const fn project_relation_proof(value: ProgramRelationMemberDecisionV1) -> RelationMemberProofV1 {
     match value {
+        ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::PairSeparation) => {
+            RelationMemberProofV1::PairSeparationPass
+        }
+        ProgramRelationMemberDecisionV1::Violation(CoreRelationViolationV1::PairSeparation) => {
+            RelationMemberProofV1::PairSeparationViolation
+        }
         ProgramRelationMemberDecisionV1::Pass(CoreRelationPassV1::TonalHierarchy) => {
             RelationMemberProofV1::TonalHierarchyPass
         }

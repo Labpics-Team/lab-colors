@@ -658,6 +658,7 @@ const KIND_WCAG22_VISIBLE_UNARY: u8 = 9;
 const KIND_CLEAN_SET: u8 = 10;
 const KIND_VISIBLE_SEPARATION: u8 = 11;
 const KIND_NOMINAL_SRGB8_VISIBLE: u8 = 12;
+const KIND_VISIBLE_PAIR_SEPARATION: u8 = 14;
 
 fn decode_constraint(
     reader: &mut WireReader<'_>,
@@ -670,6 +671,25 @@ fn decode_constraint(
     let kind = reader.read_u8()?;
     let hard = matches!(mode, ConstraintModeV1::Hard);
     match kind {
+        KIND_VISIBLE_PAIR_SEPARATION if hard && version == PROGRAM_WIRE_VERSION_V3 => {
+            let left = crate::appearance::OccurrenceId::new(reader.read_u32()?);
+            let right = crate::appearance::OccurrenceId::new(reader.read_u32()?);
+            let bounds = crate::constraints::VisibleSeparationBoundsV1::new(
+                reader.read_f64_bits()?,
+                reader.read_f64_bits()?,
+            )
+            .ok_or_else(|| reader.declaration_error(entry_offset))?;
+            let mut peer = Vec::new();
+            peer.try_reserve_exact(1).map_err(|_| {
+                ProgramWireErrorV1::AssignmentResourceExhausted {
+                    section: reader.section,
+                }
+            })?;
+            peer.push(right);
+            let relation = DirectedRelationV1::try_new(left, peer)
+                .map_err(|_| reader.declaration_error(entry_offset))?;
+            draft.separate_visible_pair(id, relation, bounds);
+        }
         13 if hard && version == PROGRAM_WIRE_VERSION_V3 => {
             let count = reader.read_count()?;
             let mut occurrences = Vec::new();

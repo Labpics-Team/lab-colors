@@ -1,3 +1,4 @@
+use super::{ProgramVisibleSeparationMeasurementV1, VisibleSeparationBoundsV1};
 use crate::Srgb8;
 use crate::constraints::{FamilyMembershipV2, HardDecision, ProgramConstraintContentV1};
 use crate::family::{
@@ -497,6 +498,7 @@ impl CompiledCoreIntrinsicUnaryInvocationV1 {
 /// Закрытый registry однородных directional-профилей Core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationInvocationV1 {
+    PairSeparation(VisibleSeparationBoundsV1),
     ExactSrgb8,
     ExactSrgb8Distinction,
     FamilyCategory { family: FamilyId },
@@ -506,6 +508,7 @@ pub(crate) enum CoreRelationInvocationV1 {
 /// компиляции, runtime lookup не читает opaque FamilyId.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompiledCoreRelationInvocationV1 {
+    PairSeparation(VisibleSeparationBoundsV1),
     ExactSrgb8,
     ExactSrgb8Distinction,
     FamilyCategory {
@@ -516,6 +519,7 @@ pub(crate) enum CompiledCoreRelationInvocationV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationMeasurementV1 {
+    PairSeparation(ProgramVisibleSeparationMeasurementV1),
     TonalHierarchy(crate::constraints::TonalHierarchyPairMeasurementV1),
     ExactSrgb8(ExactSrgb8RelationMeasurementV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionMeasurementV1),
@@ -527,6 +531,7 @@ pub(crate) enum CoreRelationMeasurementV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationPassV1 {
+    PairSeparation,
     TonalHierarchy,
     ExactSrgb8(ExactSrgb8RelationPassV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionPassV1),
@@ -535,6 +540,7 @@ pub(crate) enum CoreRelationPassV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CoreRelationViolationV1 {
+    PairSeparation,
     TonalHierarchy,
     ExactSrgb8(ExactSrgb8RelationViolationV1),
     ExactSrgb8Distinction(ExactSrgb8DistinctionViolationV1),
@@ -556,6 +562,7 @@ impl CoreRelationInvocationV1 {
 
     pub(crate) const fn content(self) -> ProgramConstraintContentV1 {
         match self {
+            Self::PairSeparation(bounds) => ProgramConstraintContentV1::PairSeparation { bounds },
             Self::ExactSrgb8 => {
                 let profile = ExactSrgb8RelationV1;
                 ProgramConstraintContentV1::ExactSrgb8Relation {
@@ -598,12 +605,27 @@ impl CompiledCoreRelationInvocationV1 {
         self,
         reference: Srgb8,
         candidate: Srgb8,
+        radii: [u8; 2],
         families: &BoundFamilyArtifactBundleV2,
     ) -> Option<(
         CoreRelationMeasurementV1,
         HardDecision<CoreRelationPassV1, CoreRelationViolationV1>,
     )> {
         match self {
+            Self::PairSeparation(bounds) => {
+                let measurement = ProgramVisibleSeparationMeasurementV1::between(
+                    reference, candidate, radii, bounds,
+                );
+                let decision = if measurement.satisfied() {
+                    HardDecision::Pass(CoreRelationPassV1::PairSeparation)
+                } else {
+                    HardDecision::Violation(CoreRelationViolationV1::PairSeparation)
+                };
+                Some((
+                    CoreRelationMeasurementV1::PairSeparation(measurement),
+                    decision,
+                ))
+            }
             Self::ExactSrgb8 => {
                 let (measurement, decision) = ExactSrgb8RelationV1.assess(reference, candidate);
                 let decision = match decision {

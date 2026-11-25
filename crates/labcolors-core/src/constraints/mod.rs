@@ -541,6 +541,9 @@ impl<Evaluation> ProgramPointEvaluatorV1 for Evaluation where
 /// изменение production evaluator-а остаётся явной сменой схемы.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ProgramConstraintContentV1 {
+    PairSeparation {
+        bounds: VisibleSeparationBoundsV1,
+    },
     NominalSrgb8Visible {
         release: [u8; 32],
     },

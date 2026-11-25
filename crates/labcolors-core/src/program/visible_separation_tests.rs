@@ -43,6 +43,53 @@ fn raw_wire_rejects_nonfinite_reversed_and_out_of_range_bounds() -> Result<(), S
 }
 
 #[test]
+fn pair_separation_wire_rejects_invalid_members_bounds_modes_and_versions() -> Result<(), String> {
+    let bytes = |right, minimum: f64, maximum: f64, hard| -> Result<Vec<u8>, String> {
+        let mut builder = declaration(0.0, 2.0, true);
+        builder.source_over_occurrence(9, 3, 7, 64.0, 0.2, 1);
+        let section = builder.constraint_section(hard);
+        push_u32(section, 12);
+        section.push(KIND_VISIBLE_PAIR_SEPARATION);
+        push_u32(section, 8);
+        push_u32(section, right);
+        section.extend(minimum.to_le_bytes());
+        section.extend(maximum.to_le_bytes());
+        wire(builder, &[2])
+    };
+    assert!(compile_program_wire(&bytes(9, 0.0, 2.0, true)?).is_ok());
+    for wire in [
+        bytes(8, 0.0, 2.0, true)?,
+        bytes(9, f64::NAN, 2.0, true)?,
+        bytes(9, -0.1, 2.0, true)?,
+        bytes(9, 1.0, 0.5, true)?,
+        bytes(9, 0.0, 2.1, true)?,
+        bytes(9, 0.0, 2.0, false)?,
+    ] {
+        assert!(matches!(
+            compile_program_wire(&wire),
+            Err(ProgramRuntimeErrorV1::Wire)
+        ));
+    }
+    for version in [1_u16, 2] {
+        let mut builder = ProgramWireBuilderV1::new();
+        let section = builder.constraint_section(true);
+        push_u32(section, 12);
+        section.push(KIND_VISIBLE_PAIR_SEPARATION);
+        push_u32(section, 8);
+        push_u32(section, 9);
+        section.extend(0.0_f64.to_le_bytes());
+        section.extend(2.0_f64.to_le_bytes());
+        let mut bytes = builder.finish().map_err(|e| format!("wire: {e:?}"))?;
+        bytes[4..6].copy_from_slice(&version.to_le_bytes());
+        assert!(matches!(
+            compile_program_wire(&bytes),
+            Err(ProgramRuntimeErrorV1::Wire)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn separation_is_v3_only_and_both_bounds_change_content_identity() -> Result<(), String> {
     let make = |minimum, maximum| -> Result<_, String> {
         compile_program_wire(&wire(declaration(minimum, maximum, true), &[2])?)
