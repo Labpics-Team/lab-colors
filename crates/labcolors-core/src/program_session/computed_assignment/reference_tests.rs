@@ -563,6 +563,7 @@ fn singleton(anchor: Srgb8, reference: u8, alpha: f64) -> Program<Wcag22Srgb8V1>
 
 #[test]
 fn reference_adapts_a_translucent_backdrop_with_an_adaptive_foreground() {
+    use crate::color_intent::reference_transport::contrast_ratio;
     use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
 
     let mut p = singleton(Srgb8::new([13, 110, 253]), 255, 0.55);
@@ -605,18 +606,28 @@ fn reference_adapts_a_translucent_backdrop_with_an_adaptive_foreground() {
     let ObservationPayloadInput::Scenarios(set) = &mut incoming.payload else {
         unreachable!()
     };
-    set.scenarios[0].bindings[0] = SurfaceInputBinding::new(
-        SurfaceInputPortId::new(2),
-        ColorSignal::from_srgb8(Srgb8::new([217, 195, 166])),
-    );
+    let paper = Srgb8::new([217, 195, 166]);
+    set.scenarios[0].bindings[0] =
+        SurfaceInputBinding::new(SurfaceInputPortId::new(2), ColorSignal::from_srgb8(paper));
     session
         .prepare_update(incoming)
         .expect("surface accepted")
         .commit();
-    assert!(
-        session.state().current_verified().is_some(),
-        "a darker source under the authored foreground satisfies both contrasts"
+    let frame = session
+        .state()
+        .current_verified()
+        .expect("verified paints")
+        .computed_for_test();
+    let fill = frame.arena.storage.outputs[0].paint.source();
+    let ink = frame.arena.storage.outputs[1].paint.source();
+    let visible = Srgb8::new(
+        crate::composition::source_over_srgb8(fill.bytes(), 0.55, paper.bytes())
+            .expect("finite material opacity"),
     );
+    assert_ne!(fill.bytes(), [13, 110, 253]);
+    assert!(contrast_ratio(visible, paper) >= 3.0);
+    assert!(contrast_ratio(ink, visible) >= 4.5);
+    assert_eq!(frame.optimality(), ComputedOptimalityV1::Unfinished);
 }
 
 fn gray_cases(revision: u64, backdrops: &[u8]) -> crate::observation::ObservationUpdateInput {

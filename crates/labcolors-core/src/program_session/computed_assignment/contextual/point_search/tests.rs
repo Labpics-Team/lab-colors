@@ -139,8 +139,10 @@ fn unavailable_subnormal_witness_leaves_the_refined_region_comparable() -> Resul
         !measured::<Wcag22Srgb8V1>(witness.map(|_| ()).map_err(Into::into))
             .map_err(fixture_error)?
     );
-    let refined = tiny
-        .oklab()
+    let mut transforms =
+        crate::certified_numeric::PointTransformCache::new().map_err(fixture_error)?;
+    let refined = crate::certified_numeric::CertifiedOklabCacheV1::default()
+        .evaluate(tiny, &mut transforms)
         .and_then(|lab| source_distance_squared(lab, preferred));
     assert!(
         measured::<Wcag22Srgb8V1>(refined.map(|_| ()).map_err(Into::into))
