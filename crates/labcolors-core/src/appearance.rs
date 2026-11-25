@@ -1730,7 +1730,7 @@ impl ResolvedOccurrence {
 /// Owned point-target для evaluator-ов финального видимого результата.
 /// Ссылки на occurrence/certificate здесь нет: evaluator структурно не может
 /// подменить скомпозитированный stimulus authored source-цветом.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ModeledSrgb8PointOccurrence {
     visible: [u8; 3],
     backdrop: [u8; 3],

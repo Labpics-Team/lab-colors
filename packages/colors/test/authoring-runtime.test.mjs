@@ -79,6 +79,27 @@ test("a role adapts once across all gradient segments when the stop list changes
   } finally { program.dispose(); }
 });
 
+test("a changed material field recovers the same frame after an unknown observation as an independent program", async () => {
+  const c = colors({ reference: { canvas: "#e6ddd0" } }), canvas = c.surface("canvas");
+  const fill = c.role("fill", "#0067f4").on(canvas, { separation: [0.1, 2], opacity: 0.9 });
+  const label = c.role("label", "#242424").on(fill, { contrast: "wcag22-text" });
+  const gradient = end => ({ canvas: { kind: "affine-srgb8", from: "#d7c5a8", to: end } });
+  const program = await c.compile({ fill, label }), fresh = await c.compile({ fill, label });
+  try {
+    assert.equal(program.resolve(gradient("#dbc9a9")).state, "modeled");
+    const unknown = program.resolve({ canvas: null });
+    assert.ok(unknown.diagnostics.some(item => item.kind === "unknown-input" && item.input === "canvas"));
+    assert.equal("values" in unknown, false);
+    const changed = gradient("#dbcaac");
+    const actual = program.resolve(changed), expected = fresh.resolve(changed);
+    assert.equal(actual.state, "modeled");
+    assert.deepEqual(actual, { ...expected, revision: actual.revision });
+  } finally {
+    program.dispose();
+    fresh.dispose();
+  }
+});
+
 test("an interior field failure is scoped to the nominal model with a Core coordinate witness", async () => {
   const c = colors(), canvas = c.surface("canvas");
   const program = await c.compile({ ink: c.fixed("ink", "#808080").on(canvas, { separation: [0.1, 2] }) });

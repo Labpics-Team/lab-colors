@@ -42,6 +42,7 @@ struct ContextV1<'a> {
     preferred_rgb: Vec<Srgb8>,
     local_cases: LocalCasesV1,
     case_refinement: RefCell<CaseRefinementV1>,
+    probe: RefCell<SearchProbe>,
     score_extrema: RefCell<Vec<usize>>,
     identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     visible_labs: RefCell<Vec<Option<VisibleLabV1>>>,
@@ -273,6 +274,7 @@ impl<'a> ContextV1<'a> {
             preferred_rgb,
             local_cases,
             case_refinement,
+            probe: RefCell::new(SearchProbe::default()),
             score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
@@ -669,6 +671,7 @@ fn assess_observed_cases<E: ProgramConstraintEvaluatorSetV1>(
 ) -> Result<usize, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     apply_targets::<E>(context.targets, runtime, values)?;
     arena.clear();
+    let mut probe = context.probe.borrow_mut();
     let hard_failed = scan_program_candidate_scoped(
         runtime,
         epoch,
@@ -676,10 +679,7 @@ fn assess_observed_cases<E: ProgramConstraintEvaluatorSetV1>(
         0,
         ProgramEvaluationPhaseV1::Hard,
         ProgramCandidateCollectionV1 {
-            evidence: ProgramConstraintEvidenceCaptureV1::Report {
-                cells: &mut arena.cells,
-                relation_members: &mut arena.relation_members,
-            },
+            evidence: ProgramConstraintEvidenceCaptureV1::Search(&mut probe),
             outputs: None,
             point_causal: None,
             physical_case: Some(collector),
@@ -703,20 +703,20 @@ fn assess_observed_cases<E: ProgramConstraintEvaluatorSetV1>(
     )?;
     if cases.is_none() {
         let witness = context.case_refinement.borrow().first_case(
-            arena
+            probe
                 .cells
                 .iter()
-                .filter(|cell| cell.result().is_violation())
-                .map(|cell| cell.case_index()),
+                .filter(|cell| cell.violation)
+                .map(|cell| cell.case),
         );
         if let Some(case) = witness {
             context.case_refinement.borrow_mut().add(case);
         }
     }
-    let hard_violations = arena
+    let hard_violations = probe
         .cells
         .iter()
-        .filter(|cell| context.represents_case(cell.case_index()) && cell.result().is_violation())
+        .filter(|cell| context.represents_case(cell.case) && cell.violation)
         .count();
     Ok(context
         .domains
