@@ -147,6 +147,17 @@ fn pushed<T>(values: &mut Vec<T>, value: T) -> Result<(), ()> {
     Ok(())
 }
 
+// Every repair direction and physical case walks the same authored source
+// tones. Generate the prefix actually reached under the shared search budget.
+fn source_tone_step(tones: &mut Vec<Srgb8>, anchor: Srgb8, step: u8) -> Result<Srgb8, ()> {
+    let index = usize::from(step);
+    for next in tones.len()..=index {
+        let source = color_at_lightness(anchor, next as f64 / 255.0);
+        pushed(tones, source)?;
+    }
+    Ok(tones[index])
+}
+
 fn sign(value: TonalPolarityV1) -> i8 {
     match value {
         TonalPolarityV1::Darker => -1,
@@ -359,11 +370,17 @@ impl<'a> ReferenceRuntimeV1<'a> {
     // to white/black outside its identity. Project a bounded source tonal walk
     // in the actual visible space instead; this is only a proposal, not a
     // capacity witness or a restriction of the searched RGB domain.
-    fn source_hint(&self, target: usize, point: AppearancePointV1, preferred: [f64; 3]) -> Srgb8 {
+    fn source_hint(
+        &self,
+        target: usize,
+        point: AppearancePointV1,
+        preferred: [f64; 3],
+        tones: &mut Vec<Srgb8>,
+    ) -> Result<Srgb8, ()> {
         let compiled = &self.context.targets[target];
         let anchor = compiled.declaration.anchor;
         let Some(intent) = compiled.effective_intent() else {
-            return anchor;
+            return Ok(anchor);
         };
         let distance_to = |source: Srgb8| {
             let visible = Srgb8::new(std::array::from_fn(|channel| {
@@ -384,15 +401,15 @@ impl<'a> ReferenceRuntimeV1<'a> {
         };
         let mut best = anchor;
         let mut distance = distance_to(anchor);
-        for step in 0..=255_u32 {
-            let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+        for step in 0..=u8::MAX {
+            let source = source_tone_step(tones, anchor, step)?;
             let next = distance_to(source);
             if next < distance {
                 distance = next;
                 best = source;
             }
         }
-        best
+        Ok(best)
     }
 
     fn capacity_hash(&self, target: usize, values: &[Srgb8], points: &[AppearancePointV1]) -> u64 {
@@ -1453,6 +1470,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let seed_limit = (search.budget / COORDINATE_BUDGET_DIVISOR).max(search.evidence.visited);
         let initial_appearance = cloned(&search.appearance).map_err(allocation)?;
         let mut seed_values = cloned(&authored).map_err(allocation)?;
+        let mut source_tones = buffer(count, Vec::new()).map_err(allocation)?;
         let mut proposal = cloned(&working).map_err(allocation)?;
         let mut current_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
         let mut proposal_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
@@ -1516,7 +1534,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                         let preferred = search
                             .virtual_lab(target, case, point.backdrop, direction)
                             .map_err(allocation)?;
-                        search.source_hint(target, point, preferred)
+                        search
+                            .source_hint(target, point, preferred, &mut source_tones[target])
+                            .map_err(allocation)?
                     } else {
                         inverse_hint(
                             search.context.preferred_rgb[case * count + target],
@@ -1559,11 +1579,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     }
                     let anchor = search.context.targets[target].declaration.anchor;
                     let mut previous = None;
-                    for step in 0..=255_u32 {
+                    for step in 0..=u8::MAX {
                         if search.evidence.visited >= limit {
                             break 'repair;
                         }
-                        let source = color_at_lightness(anchor, f64::from(step) / 255.0);
+                        let source = source_tone_step(&mut source_tones[target], anchor, step)
+                            .map_err(allocation)?;
                         if previous == Some(source) {
                             continue;
                         }

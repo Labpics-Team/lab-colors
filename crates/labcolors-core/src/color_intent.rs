@@ -5,8 +5,8 @@
 //! конечных sRGB8 значениях, в том числе после поиска и квантования.
 
 use crate::Srgb8;
-use crate::spaces::oklab::{oklab_to_srgb_linear, srgb_linear_to_oklab};
-use crate::spaces::srgb::{srgb_linear_from_srgb8, srgb8_from_linear};
+use crate::spaces::oklab::{oklab_to_srgb_linear, srgb8_to_oklab};
+use crate::spaces::srgb::srgb8_from_linear;
 
 pub(crate) mod reference_transport;
 
@@ -64,7 +64,7 @@ fn checked_range(value: [f64; 2], maximum: f64) -> Result<[f64; 2], ColorIntentE
 }
 
 pub(crate) fn oklab(rgb: Srgb8) -> [f64; 3] {
-    srgb_linear_to_oklab(srgb_linear_from_srgb8(rgb))
+    srgb8_to_oklab(rgb)
 }
 
 fn chroma(lab: [f64; 3]) -> f64 {

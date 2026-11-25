@@ -949,7 +949,7 @@ pub(super) fn compile_selection(
 }
 
 fn lab(rgb: Srgb8) -> [f64; 3] {
-    crate::spaces::oklab::srgb_linear_to_oklab(crate::spaces::srgb::srgb_linear_from_srgb8(rgb))
+    crate::spaces::oklab::srgb8_to_oklab(rgb)
 }
 
 fn squared_distance(a: [f64; 3], b: [f64; 3]) -> f64 {

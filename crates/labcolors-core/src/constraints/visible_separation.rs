@@ -118,9 +118,9 @@ fn measure(
     backdrop: Srgb8,
     bounds: VisibleSeparationBoundsV1,
 ) -> ProgramVisibleSeparationMeasurementV1 {
-    use crate::spaces::{oklab::srgb_linear_to_oklab, srgb::srgb_linear_from_srgb8};
-    let left = srgb_linear_to_oklab(srgb_linear_from_srgb8(visible));
-    let right = srgb_linear_to_oklab(srgb_linear_from_srgb8(backdrop));
+    use crate::spaces::oklab::srgb8_to_oklab;
+    let left = srgb8_to_oklab(visible);
+    let right = srgb8_to_oklab(backdrop);
     let delta: [f64; 3] = std::array::from_fn(|index| left[index] - right[index]);
     let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
     ProgramVisibleSeparationMeasurementV1 {
