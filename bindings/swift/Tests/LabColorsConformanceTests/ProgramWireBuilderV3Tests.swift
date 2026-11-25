@@ -16,6 +16,7 @@ private struct AuthoringV3Fixture: Decodable {
     let composeReference: String
     let composeEmpty: String
     let composeReferenceEmpty: String
+    let visiblePairSeparation: String
 }
 
 private final class RejectingFieldHost: ProgramUpdateHost, @unchecked Sendable {
@@ -105,6 +106,8 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertEqual(try referenceProgram(hierarchy: true), try bytes(expected.referenceHierarchy))
         XCTAssertEqual(try ProgramWireBuilderV3().assignment([], options: ProgramWireAssignmentOptionsV3(reference: [])).finish(),
             try bytes(expected.referenceEmpty))
+        XCTAssertEqual(try ProgramWireBuilderV3().visiblePairSeparationHard(0x01020304,
+            left: 0x10203040, right: .max, minimum: -0.0, maximum: 0.75).finish(), try bytes(expected.visiblePairSeparation))
     }
 
     func testCompositionUsesIndependentVectorsAndUnchangedAssignmentFieldGrammar() throws {
@@ -257,6 +260,30 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertNotEqual(try light.outputRgb(index: 0), try dark.outputRgb(index: 0))
     }
 
+    func testVisiblePairComparesFinalColorsOnTheirOwnSurfaces() throws {
+        let wire = try ProgramWireBuilderV3().source(1, rgb: [0, 0, 0]).fixedTarget(2, source: 1)
+            .opacityInput(3, value: 0.5).solidPaint(4, target: 2).opacityPaint(5, source: 4, opacity: 3)
+            .surfaceInputPort(6).surfaceInputPort(7).inputSurface(8, input: 6).inputSurface(9, input: 7)
+            .pointOccurrence(10, paint: 5, surface: 8).pointOccurrence(11, paint: 5, surface: 9)
+            .visiblePairSeparationHard(12, left: 10, right: 11, minimum: 0.25, maximum: 2)
+            .output(13, paint: 5).assignment([]).finish()
+        let runtime = try compileProgramWire(bytes: wire, streamId: 1)
+        let distinct = try runtime.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([0, 0, 0, 200, 200, 200]), surfaceCount: 2)
+        XCTAssertEqual(distinct.state(), "ready")
+        let cell = try XCTUnwrap(try distinct.assessmentReport()?.cells.first)
+        guard case let .visiblePairSeparation(verdict, left, right, _, lower, upper, minimum, maximum) = cell.assessment else {
+            return XCTFail("expected the declared pair separation")
+        }
+        XCTAssertEqual(cell.constraintId, 12)
+        XCTAssertEqual(verdict, .pass)
+        XCTAssertEqual(left, ProgramRgb8(red: 0, green: 0, blue: 0))
+        XCTAssertEqual(right, ProgramRgb8(red: 100, green: 100, blue: 100))
+        XCTAssertGreaterThanOrEqual(lower, minimum)
+        XCTAssertLessThanOrEqual(upper, maximum)
+        let same = try runtime.updateObserved(revision: 2, scenarioIds: [1], surfaces: Data(repeating: 0, count: 6), surfaceCount: 2)
+        XCTAssertEqual(same.state(), "unsatisfied")
+    }
+
     func testFixedOnlyV3ChecksTheAuthoredTupleAndReportsARealConflict() throws {
         let runtime = try compileProgramWire(bytes: bytes(fixtureV3().fixedOnly), streamId: 1)
         let valid = try runtime.updateObserved(revision: 1, scenarioIds: [1], surfaces: Data([255, 255, 255]), surfaceCount: 1)
@@ -407,6 +434,12 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
         XCTAssertThrowsError(try builder.computedTarget(21, domain: .gray(lower: 0, upper: 255), anchor: [1, 2, 3], maxDelta: Double.greatestFiniteMagnitude))
         XCTAssertThrowsError(try builder.visibleSeparationHard(81, occurrence: 61, minimum: 1, maximum: 0.5))
         XCTAssertThrowsError(try builder.visibleSeparationHard(81, occurrence: 61, minimum: 0, maximum: .nan))
+        XCTAssertThrowsError(try builder.visiblePairSeparationHard(81, left: 61, right: 61, minimum: 0, maximum: 2))
+        let invalidBounds: [(Double, Double)] = [(-0.01, 2), (0, 2.01), (1, 0.5), (.nan, 2), (0, .infinity)]
+        for (minimum, maximum) in invalidBounds {
+            XCTAssertThrowsError(try builder.visiblePairSeparationHard(81, left: 61, right: 62, minimum: minimum, maximum: maximum))
+            XCTAssertEqual(try builder.finish(), before)
+        }
         XCTAssertThrowsError(try builder.assignment(Array(repeating: 21, count: 4097)))
         let invalidHierarchies: [[UInt32]] = [[], [3], [3, 3], Array(0...4096)]
         for occurrences in invalidHierarchies {
@@ -456,7 +489,8 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
                     chroma: [value, 1], lightness: [value, 1]), maxChange: value,
                     tone: ProgramWireToneV3(from: 31, curve: [[value, value], [1, 1]])))
                 .computedTarget(22, domain: .gray(lower: 0, upper: 255), anchor: [1, 2, 3], maxDelta: value)
-                .visibleSeparationHard(81, occurrence: 61, minimum: value, maximum: value).finish()
+                .visibleSeparationHard(81, occurrence: 61, minimum: value, maximum: value)
+                .visiblePairSeparationHard(82, left: 61, right: 62, minimum: value, maximum: value).finish()
         }
         XCTAssertEqual(try zero(-0.0), try zero(0.0))
     }

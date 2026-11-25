@@ -1664,6 +1664,9 @@ impl PointOccurrenceAbsenceReplayV1<'_> {
 /// могут разойтись между двумя независимо записываемыми копиями.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ResolvedOccurrence {
+    // Nonzero raster uncertainty belongs to the nearest layer that actually
+    // contributes paint. Transparent descendants inherit that same pixel.
+    emission_origin: OccurrenceId,
     id: OccurrenceId,
     subject: PaintId,
     against: SurfaceId,
@@ -1672,6 +1675,14 @@ pub(crate) struct ResolvedOccurrence {
 }
 
 impl ResolvedOccurrence {
+    pub(crate) fn distance_radii(&self, other: &Self) -> [u8; 2] {
+        if self.emission_origin == other.emission_origin {
+            [0; 2]
+        } else {
+            [self.emission.visible_radius, other.emission.visible_radius]
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn id(&self) -> OccurrenceId {
         self.id

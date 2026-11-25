@@ -1040,6 +1040,7 @@ enum RegionConstraintV1 {
     },
     Separation {
         slot: CompiledOccurrenceSlotV1,
+        other: Option<CompiledOccurrenceSlotV1>,
         bounds: crate::constraints::VisibleSeparationBoundsV1,
     },
 }
@@ -1067,7 +1068,12 @@ impl RegionConstraintV1 {
         };
         Some(RegionPointV1 {
             visible: point.visible(),
-            backdrop: point.certificate().backdrop_rgb(),
+            backdrop: match self {
+                Self::Separation {
+                    other: Some(peer), ..
+                } => evaluation.occurrence_at(peer)?.visible(),
+                _ => point.certificate().backdrop_rgb(),
+            },
             weaker,
         })
     }
@@ -1150,7 +1156,11 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                 CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
                     occurrences, ..
                 } => occurrences.len().checked_sub(1).ok_or(())?,
-                CompiledProgramConstraintBodyV1::VisibleUnary { .. } => 1,
+                CompiledProgramConstraintBodyV1::VisibleUnary { .. }
+                | CompiledProgramConstraintBodyV1::VisibleRelation {
+                    invocation: CompiledCoreRelationInvocationV1::PairSeparation(_),
+                    ..
+                } => 1,
                 _ => 0,
             }
         };
@@ -1162,6 +1172,21 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
         let constraint = &epoch.constraints[index];
         if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
             continue;
+        }
+        if let CompiledProgramConstraintBodyV1::VisibleRelation {
+            reference,
+            candidates,
+            invocation: CompiledCoreRelationInvocationV1::PairSeparation(bounds),
+        } = &constraint.body
+        {
+            let [peer] = candidates.as_ref() else {
+                return Err(());
+            };
+            result.push(RegionConstraintV1::Separation {
+                slot: reference.slot,
+                other: Some(peer.slot),
+                bounds: *bounds,
+            });
         }
         if let CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
             occurrences,
@@ -1193,7 +1218,11 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                 release: crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
             } => result.push(RegionConstraintV1::NominalSrgb8Visible { slot }),
             ProgramConstraintContentV1::VisibleSeparation { bounds, .. } => {
-                result.push(RegionConstraintV1::Separation { slot, bounds })
+                result.push(RegionConstraintV1::Separation {
+                    slot,
+                    other: None,
+                    bounds,
+                })
             }
             _ => {}
         }

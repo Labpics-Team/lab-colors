@@ -31,6 +31,10 @@ pub enum ProgramConstraintAssessmentV1 {
         verdict: ProgramAssessmentVerdictV1,
         measurement: crate::constraints::ProgramVisibleSeparationMeasurementV1,
     },
+    VisiblePairSeparation {
+        verdict: ProgramAssessmentVerdictV1,
+        measurement: crate::constraints::ProgramVisibleSeparationMeasurementV1,
+    },
     ExactSrgb8 {
         verdict: ProgramAssessmentVerdictV1,
     },
@@ -403,19 +407,31 @@ impl ProgramAssessmentReportScratchV1 {
         let mut cleanliness = ProgramCleanlinessAssessmentV1::default();
         self.cells.extend(verified.cells().map(|cell| {
             let mut assessment = copy_assessment(cell.result());
-            if matches!(cell.subject(), crate::program_session::ProgramConstraintSubjectV1::ComputedVisibleRelation) {
-                let verdict = if cell.result().is_violation() { ProgramAssessmentVerdictV1::Violation } else { ProgramAssessmentVerdictV1::Pass };
-                assessment = ProgramConstraintAssessmentV1::TonalHierarchy { verdict };
+            if let ProgramConstraintAssessmentV1::Relation { verdict } = assessment {
                 let span = match cell.result() {
                     ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::Relation(span))
                     | ProgramConstraintResultV1::Violation(ProgramConstraintViolationEvidenceV1::Relation(span)) => *span,
-                    _ => unreachable!("compiled computed relation owns relation evidence"),
+                    _ => unreachable!("relation verdict has a member span"),
                 };
-                for member in verified.relation_members(span) {
-                    if let crate::program_session::ProgramRelationMemberEvidenceV1::TonalHierarchy { stronger, weaker, measurement: crate::constraints::CoreRelationMeasurementV1::TonalHierarchy(measurement), .. } = member {
-                        self.tonal_hierarchy.push(ProgramTonalHierarchyPairV1 {
-                            constraint_id: cell.constraint().value(), case_index: cell.case_index(), stronger_occurrence_id: stronger.occurrence().value(), weaker_occurrence_id: weaker.occurrence().value(), measurement: *measurement,
-                        });
+                let members = verified.relation_members(span);
+                if let [crate::program_session::ProgramRelationMemberEvidenceV1::Visible {
+                    measurement: crate::constraints::CoreRelationMeasurementV1::PairSeparation(measurement), ..
+                }] = members {
+                    assessment = ProgramConstraintAssessmentV1::VisiblePairSeparation { verdict, measurement: *measurement };
+                } else if matches!(cell.subject(), crate::program_session::ProgramConstraintSubjectV1::ComputedVisibleRelation) {
+                    assessment = ProgramConstraintAssessmentV1::TonalHierarchy { verdict };
+                    for member in members {
+                        if let crate::program_session::ProgramRelationMemberEvidenceV1::TonalHierarchy {
+                            stronger, weaker, measurement: crate::constraints::CoreRelationMeasurementV1::TonalHierarchy(measurement), ..
+                        } = member {
+                            self.tonal_hierarchy.push(ProgramTonalHierarchyPairV1 {
+                                constraint_id: cell.constraint().value(),
+                                case_index: cell.case_index(),
+                                stronger_occurrence_id: stronger.occurrence().value(),
+                                weaker_occurrence_id: weaker.occurrence().value(),
+                                measurement: *measurement,
+                            });
+                        }
                     }
                 }
             }

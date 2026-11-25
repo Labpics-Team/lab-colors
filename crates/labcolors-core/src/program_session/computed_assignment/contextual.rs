@@ -11,6 +11,81 @@ use std::cell::{RefCell, RefMut};
 // for unrestricted domain search; mathematical acceptance never uses this split.
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
+// On the two authored hue/chroma rays, d² = ΔL² + Δa² + Δb². Split the
+// required lightness gap between the two sources, respecting their available
+// travel. Gamut mapping, byte rounding and compositing make these hints only.
+fn paired_tones<'a, Invocation>(
+    targets: ComputedTargetsV1<'a>,
+    constraint: &CompiledPointConstraint<Invocation>,
+) -> Option<impl Iterator<Item = [(usize, Srgb8); 2]> + 'a> {
+    let CompiledProgramConstraintBodyV1::VisibleRelation {
+        reference,
+        candidates,
+        invocation: CompiledCoreRelationInvocationV1::PairSeparation(bounds),
+    } = &constraint.body
+    else {
+        return None;
+    };
+    let [peer] = candidates.as_ref() else {
+        return None;
+    };
+    let source = |slot| {
+        targets
+            .iter()
+            .enumerate()
+            .find(|(_, target)| target.appearance == Some(slot))
+    };
+    let mut sources = [source(reference.slot)?, source(peer.slot)?];
+    sources.sort_unstable_by_key(|(local, _)| *local);
+    let [(left_index, left), (right_index, right)] = sources;
+    let [l1, a1, b1] = left.anchor_lab;
+    let [l2, a2, b2] = right.anchor_lab;
+    let chromatic_squared = (a1 - a2).powi(2) + (b1 - b2).powi(2);
+    let travel = |target: &CompiledComputedTargetV1| {
+        let radius = f64::from_bits(target.declaration.max_delta_bits);
+        [
+            (target.anchor_lab[0] - radius).max(0.0),
+            (target.anchor_lab[0] + radius).min(1.0),
+        ]
+    };
+    let [low1, high1] = travel(left);
+    let [low2, high2] = travel(right);
+    let lightness_gap = |distance: f64| (distance * distance - chromatic_squared).max(0.0).sqrt();
+    let min_gap = lightness_gap(bounds.minimum());
+    let max_gap = lightness_gap(bounds.maximum());
+    let gaps = [(min_gap, max_gap), (-max_gap, -min_gap)]
+        .into_iter()
+        .flat_map(move |(min, max)| {
+            // A broad declaration can extend beyond both sources' available travel.
+            let min = min.max(low1 - high2);
+            let max = max.min(high1 - low2);
+            let middle = min.midpoint(max);
+            [
+                (min <= max).then_some(middle),
+                (min < middle).then_some(min),
+                (middle < max).then_some(max),
+            ]
+            .into_iter()
+            .flatten()
+        });
+    Some(gaps.filter_map(move |gap| {
+        // L1' - L2' = gap. The midpoint minimizes the larger movement;
+        // clamping it to the intersection lets the freer source travel farther.
+        let low = low1.max(low2 + gap);
+        let high = high1.min(high2 + gap);
+        if low > high {
+            return None;
+        }
+        let first = l1.midpoint(l2 + gap).clamp(low, high);
+        let colors = [
+            color_at_lightness(left.declaration.anchor, first),
+            color_at_lightness(right.declaration.anchor, (first - gap).clamp(0.0, 1.0)),
+        ];
+        (left.search_domain().contains(colors[0]) && right.search_domain().contains(colors[1]))
+            .then_some([(left_index, colors[0]), (right_index, colors[1])])
+    }))
+}
+
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] = b"labcolors.assignment-execution.v17.nominal-visible-boxes.continuous-preferred-point.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
@@ -20,7 +95,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v9.independent-depth-and-sibling-directions.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v10.paired-source-tones.independent-depth-and-sibling-directions.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());

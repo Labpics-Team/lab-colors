@@ -246,10 +246,14 @@ fn project_assessment(assessment: ProgramConstraintAssessmentV1) -> Result<JsVal
         Assessment::VisibleSeparation {
             verdict,
             measurement,
+        }
+        | Assessment::VisiblePairSeparation {
+            verdict,
+            measurement,
         } => {
-            let [vr, vg, vb] = measurement.visible().bytes();
-            let [br, bg, bb] = measurement.backdrop().bytes();
+            let [[vr, vg, vb], [br, bg, bb]] = measurement.colors().map(|color| color.bytes());
             report_separation(
+                matches!(assessment, Assessment::VisiblePairSeparation { .. }),
                 verdict_key(verdict),
                 vr,
                 vg,

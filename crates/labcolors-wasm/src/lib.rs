@@ -76,6 +76,11 @@ export type ProgramConstraintAssessmentV1 =
       distance: number; distanceBounds: readonly [number, number]; minimum: number; maximum: number;
     }>
   | Readonly<{
+      kind: "visible-pair-separation"; verdict: ProgramAssessmentVerdictV1;
+      left: readonly [number, number, number]; right: readonly [number, number, number];
+      distance: number; distanceBounds: readonly [number, number]; minimum: number; maximum: number;
+    }>
+  | Readonly<{
       kind: "exact-srgb8" | "wcag22-srgb8" | "intrinsic-unary" | "relation" | "tonal-hierarchy";
       verdict: ProgramAssessmentVerdictV1;
     }>
@@ -395,11 +400,10 @@ export function diagnosticWitness(caseScenarioIds, targets, violations) {
 export function diagnosticsProjection(searchVisited, searchBudget, witness) {
   return reportFreeze({searchVisited, searchBudget, witness});
 }
-export function reportSeparation(verdict, vr, vg, vb, br, bg, bb, distance, distanceLower, distanceUpper, minimum, maximum) {
+export function reportSeparation(pair, verdict, vr, vg, vb, br, bg, bb, distance, distanceLower, distanceUpper, minimum, maximum) {
+  const left = reportFreeze([vr, vg, vb]), right = reportFreeze([br, bg, bb]);
   return reportFreeze({
-    kind: "visible-separation", verdict,
-    visible: reportFreeze([vr, vg, vb]),
-    backdrop: reportFreeze([br, bg, bb]),
+    ...(pair ? {kind: "visible-pair-separation", left, right} : {kind: "visible-separation", visible: left, backdrop: right}), verdict,
     distance, distanceBounds: reportFreeze([distanceLower, distanceUpper]), minimum, maximum,
   });
 }
@@ -606,6 +610,7 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSeparation)]
     fn report_separation(
+        pair: bool,
         verdict: &str,
         visible_red: u8,
         visible_green: u8,

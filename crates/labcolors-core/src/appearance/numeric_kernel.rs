@@ -60,6 +60,11 @@ impl AppearanceNumericKernel for ByteAppearanceKernel {
             same_as_backdrop: subject.opacity().bits() == 0,
         };
         ResolvedOccurrence {
+            emission_origin: if emission.same_as_backdrop {
+                backdrop_occurrence.map_or(spec.id, |parent| parent.emission_origin)
+            } else {
+                spec.id
+            },
             id: spec.id,
             subject: spec.subject_id,
             against: spec.against_id,

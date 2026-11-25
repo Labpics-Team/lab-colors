@@ -1472,6 +1472,22 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut seed_values = cloned(&authored).map_err(allocation)?;
         let mut source_tones = buffer(count, Vec::new()).map_err(allocation)?;
         let mut proposal = cloned(&working).map_err(allocation)?;
+        if search.best.is_none() && count >= 2 {
+            let targets = search.context.targets;
+            let proposals = component
+                .constraints
+                .iter()
+                .filter_map(|&index| paired_tones(targets, &epoch.constraints[index]))
+                .flatten();
+            for (_, [(left, first), (right, second)]) in
+                (search.evidence.visited..seed_limit).zip(proposals)
+            {
+                proposal.copy_from_slice(&authored);
+                proposal[left] = first;
+                proposal[right] = second;
+                search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?;
+            }
+        }
         let mut current_hard_failures =
             buffer(search.context.probe.borrow().cells.len(), false).map_err(allocation)?;
         let mut proposal_hard_failures =
