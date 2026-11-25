@@ -559,7 +559,7 @@ pub struct ProgramDiagnostics {
     pub witness: Option<ProgramAttemptWitness>,
 }
 
-pub(crate) fn storage<T>(length: usize, operation: &str) -> Result<Vec<T>, LabColorsError> {
+fn storage<T>(length: usize, operation: &str) -> Result<Vec<T>, LabColorsError> {
     let mut output = Vec::new();
     output
         .try_reserve_exact(length)

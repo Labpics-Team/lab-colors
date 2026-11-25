@@ -722,7 +722,9 @@ fn native_gradient_stops_replay_and_local_witness_survive_solids() -> TestResult
             color: rgb(3),
         },
     ];
-    let snapshot = runtime.update_gradient(1, vec![9; 3], 0, stops.clone())?;
+    let positions = stops.iter().map(|stop| stop.at).collect();
+    let colors = vec![0, 0, 0, 1, 1, 1, 3, 3, 3];
+    let snapshot = runtime.update_gradient(1, vec![9; 3], 0, positions, colors.clone())?;
     let report = snapshot.gradient_assessment()?.ok_or("gradient scope")?;
     assert_eq!(report.stops, stops);
     assert_eq!(report.region_count, 11);
@@ -740,11 +742,10 @@ fn native_gradient_stops_replay_and_local_witness_survive_solids() -> TestResult
     assert!(
         matches!(snapshot.field_assessment(), Err(LabColorsError::Refused { code, .. }) if code == "program_gradient_assessment_required")
     );
-    let mut moved = stops;
-    moved[1].at = 0.75;
+    let moved = vec![0.0, 0.75, 1.0];
     assert!(
         runtime
-            .update_gradient(1, vec![9; 3], 0, moved.clone())
+            .update_gradient(1, vec![9; 3], 0, moved.clone(), colors.clone())
             .is_err()
     );
     assert!(!runtime.update_gradient_with(
@@ -752,6 +753,7 @@ fn native_gradient_stops_replay_and_local_witness_survive_solids() -> TestResult
         vec![0; 3],
         0,
         moved,
+        colors,
         Box::new(Capture {
             snapshots: Arc::new(Mutex::new(Vec::new())),
             decision: Decision::Refuse,

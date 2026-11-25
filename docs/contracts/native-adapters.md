@@ -93,11 +93,11 @@ Computed V3 с `assignment` принимает один непрозрачный
 descriptor `from → to`. V1/V2 возвращают `program_update`; нескольких полей,
 прозрачных stops и другого пространства интерполяции этот API не представляет.
 
-`update_gradient(revision, surfaces, varying_input, stops)` принимает список
+Перегрузки SDK `updateGradient` и `updateGradientWith` принимают список
 `ProgramGradientStop(at, color)` с непрозрачными RGB8 и строго возрастающими
-позициями от 0 до 1 включительно. `update_gradient_with(..., accept)`
-использует тот же протокол атомарного обновления. В Swift и Kotlin эти методы
-называются `updateGradient` и `updateGradientWith`.
+позициями от 0 до 1 включительно. Операция `update_gradient` в UniFFI получает
+раздельные массивы позиций и RGB-байтов. `update_gradient_with(..., accept)`
+использует тот же протокол атомарного обновления.
 
 `gradientAssessment()` сохраняет все позиции, цвета и порядок остановок.
 Каждый `ProgramGradientWitness` указывает `segmentIndex` и `local` с точной

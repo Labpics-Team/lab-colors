@@ -135,23 +135,6 @@ fn observation<'a>(
     })
 }
 
-fn gradient_input(
-    stops: &[crate::ProgramGradientStop],
-    operation: &str,
-) -> Result<(Vec<f64>, Vec<u8>), LabColorsError> {
-    let mut positions = crate::program_reports::storage(stops.len(), operation)?;
-    let bytes = stops
-        .len()
-        .checked_mul(3)
-        .ok_or_else(|| LabColorsError::new("program_resource_exhausted", operation))?;
-    let mut colors = crate::program_reports::storage(bytes, operation)?;
-    for stop in stops {
-        positions.push(stop.at);
-        colors.extend([stop.color.red, stop.color.green, stop.color.blue]);
-    }
-    Ok((positions, colors))
-}
-
 #[derive(uniffi::Object)]
 pub struct ProgramRuntime {
     inner: Mutex<core::ProgramSessionV1>,
@@ -246,11 +229,11 @@ impl ProgramRuntime {
         revision: u64,
         surfaces: Vec<u8>,
         varying_input: u32,
-        stops: Vec<crate::ProgramGradientStop>,
+        positions: Vec<f64>,
+        colors: Vec<u8>,
     ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
         let operation = "updateGradient";
         let mut inner = enter(&self.inner, operation, "program_busy")?;
-        let (positions, colors) = gradient_input(&stops, operation)?;
         let field = core::ProgramDeclaredFieldV1::from_gradient_rgb8(
             &surfaces,
             varying_input as usize,
@@ -270,12 +253,12 @@ impl ProgramRuntime {
         revision: u64,
         surfaces: Vec<u8>,
         varying_input: u32,
-        stops: Vec<crate::ProgramGradientStop>,
+        positions: Vec<f64>,
+        colors: Vec<u8>,
         accept: Box<dyn ProgramUpdateHost>,
     ) -> Result<bool, LabColorsError> {
         let operation = "updateGradientWith";
         let mut inner = enter(&self.inner, operation, "program_busy")?;
-        let (positions, colors) = gradient_input(&stops, operation)?;
         let field = core::ProgramDeclaredFieldV1::from_gradient_rgb8(
             &surfaces,
             varying_input as usize,
