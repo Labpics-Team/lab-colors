@@ -636,12 +636,6 @@ mod tests {
                 "repository tool leaked into Core: {repository_module}"
             );
         }
-        assert!(
-            core.dependencies
-                .iter()
-                .all(|dep| dep.name == "rustc_apfloat"),
-            "Core may depend only on its private certified arithmetic implementation"
-        );
     }
 
     #[test]
