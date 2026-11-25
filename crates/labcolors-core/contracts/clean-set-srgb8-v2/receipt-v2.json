@@ -6,25 +6,25 @@
   },
   "artifacts": [
     {
-      "bytes": 4392,
+      "bytes": 3989,
       "license": "MIT",
       "path": "crates/labcolors-core/src/appearance/certified.rs",
       "role": "appearance_certified_source",
-      "sha256": "6df6fe77666e25cceb89f6695a618073f251318d431e772479416597c3501f59"
+      "sha256": "f56796f17854a94e34c78d019ec97fa6181f0c4c15e5bf2d8bb7e22aecd962e7"
     },
     {
-      "bytes": 4387,
+      "bytes": 3984,
       "license": "MIT",
       "path": "crates/labcolors-core/src/appearance/continuous.rs",
       "role": "appearance_continuous_source",
-      "sha256": "accdf61195319e595a2f5d1fe2fbcf86a0dc47c7255b576a1a5feff706c20634"
+      "sha256": "6e1d5311dda3078d96755a237e948d593c054352f83d4de945ee8afa7ca393bf"
     },
     {
-      "bytes": 9853,
+      "bytes": 10424,
       "license": "MIT",
       "path": "crates/labcolors-core/src/appearance/execution_cone.rs",
       "role": "appearance_execution_cone_source",
-      "sha256": "60c7280156e32c58963e578df4631f3b1eaed32aaf0886e9bd131b83b5af7b2f"
+      "sha256": "0730691de9669b04b169c222790b6bc1cad87a26fdbb336a78e61128a0e02844"
     },
     {
       "bytes": 103164,
@@ -160,11 +160,11 @@
       "sha256": "444dfc35de1ea05414a1435318f62f89602cde7161b987f7fe7b93a1a391b16e"
     },
     {
-      "bytes": 5470,
+      "bytes": 5465,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion/authored_optimum.rs",
       "role": "program_authored_optimum_source",
-      "sha256": "bd2f40108fba64be0cd468d032a1f357f2a57746995434d9195d835bb99804e4"
+      "sha256": "f2913f016d4973b57164ed2510e1da01b215e8f8f06c52ad481f7384511488e9"
     },
     {
       "bytes": 68292,
@@ -237,18 +237,18 @@
       "sha256": "bc5ae38bbdbe3b636f36f53bac27d65b4177f5a9db02f5a8e9c8b06bb1cb1806"
     },
     {
-      "bytes": 34897,
+      "bytes": 34867,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
       "role": "program_point_search_source",
-      "sha256": "02a21764a4634c442977550a0f2f3929fd4ce8ccbc4379c840dbd44d9e100cdd"
+      "sha256": "bb2f9e480a9df292e522235049bcabfdbe3ceaab1d1c2284712b1f241bb3ac1c"
     },
     {
-      "bytes": 59650,
+      "bytes": 60081,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion.rs",
       "role": "program_prepared_composition_source",
-      "sha256": "d26f3c2dbc9c349e6efe3c50d33c75343184eab596568f0d0138ee2130d61a0a"
+      "sha256": "9c05727fa899067c878713753f9f5af088d1c35ef143a2e24994a79283e4e912"
     },
     {
       "bytes": 12920,

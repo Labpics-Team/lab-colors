@@ -237,6 +237,29 @@ impl AppearanceConeWorkspaceV1 {
 }
 
 impl CompiledAppearanceGraph {
+    /// Cone identity precedes binding schema and workspace shape. Bindings admitted
+    /// by this graph already have its schema; another graph can share that schema.
+    pub(super) fn validate_preparation<K: AppearanceNumericKernel>(
+        &self,
+        scope: Option<&CompiledAppearanceConeV1>,
+        bindings: &AdmittedAppearanceBindings,
+        workspace: &AppearanceWorkspace<K>,
+    ) -> Result<(), BindingError> {
+        if scope.is_some_and(|cone| !Arc::ptr_eq(&self.instance, &cone.graph_instance)) {
+            return Err(BindingError::IncompatibleEvaluationCone);
+        }
+        let program = self.program();
+        if bindings
+            .graph_instance
+            .as_ref()
+            .is_some_and(|instance| Arc::ptr_eq(instance, &self.instance))
+        {
+            workspace.validate_shape(program)
+        } else {
+            program.validate_admitted_workspace(bindings, workspace)
+        }
+    }
+
     /// Roots and bindings retain their graph identity. Every scoped pass builds
     /// fresh membership in the already allocated workspace and hides other slots.
     pub(crate) fn prepare_scoped_surface_cases<'program, 'bindings, 'workspace>(
@@ -245,19 +268,8 @@ impl CompiledAppearanceGraph {
         bindings: &'bindings AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<PreparedAppearancePaints<'program, 'bindings, 'workspace>, BindingError> {
-        if !Arc::ptr_eq(&self.instance, &cone.graph_instance) {
-            return Err(BindingError::IncompatibleEvaluationCone);
-        }
+        self.validate_preparation(Some(cone), bindings, workspace)?;
         let program = self.program();
-        if bindings
-            .graph_instance
-            .as_ref()
-            .is_some_and(|owner| Arc::ptr_eq(owner, &self.instance))
-        {
-            workspace.validate_shape(program)?;
-        } else {
-            program.validate_admitted_workspace(bindings, workspace)?;
-        }
         workspace.cone.prepare(self, cone);
         program.execute_paints_in_order::<ByteAppearanceKernel, _, _>(
             &workspace.cone.paints,

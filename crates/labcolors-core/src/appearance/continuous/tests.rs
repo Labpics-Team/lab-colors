@@ -358,7 +358,7 @@ fn continuous_endpoints_preserve_subnormal_source_and_backdrop() -> Result<(), B
 fn continuous_preparation_rejects_foreign_cone_schema_and_shape_before_reading_sources()
 -> Result<(), BindingError> {
     let (graph, bindings) = nested_graph()?;
-    let (foreign_graph, _) = nested_graph()?;
+    let (foreign_graph, compatible_bindings) = nested_graph()?;
     let mut compiler = AppearanceConeCompilerV1::new(&foreign_graph)?;
     compiler.occurrence(OccurrenceId::new(1))?;
     let foreign_cone = compiler.finish()?;
@@ -373,6 +373,12 @@ fn continuous_preparation_rejects_foreign_cone_schema_and_shape_before_reading_s
         ),
         Err(BindingError::IncompatibleEvaluationCone)
     ));
+    graph.prepare_continuous_surface_cases(
+        None,
+        &compatible_bindings,
+        |index| lift(compatible_bindings.paint_inputs[index].1),
+        &mut workspace,
+    )?;
     let different_graph = point_opacity_over_surface_declarative_spec()
         .compile()
         .expect("fixture declares an acyclic appearance graph");

@@ -3,7 +3,7 @@
 //! This byte-domain discovery is not a proof about the continuous source domain.
 
 use super::reference_completion::{
-    PointMeasurementPrecisionV1, PointMeasurementV1, PreparedReferenceCompletionV1,
+    PointMeasurementPrecisionV1, PointMeasurementV1, PreparedPointSelectionV1,
 };
 use super::*;
 use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
@@ -88,7 +88,7 @@ fn sorted_order(buffers: &mut BuffersV1) -> Option<Ordering> {
 }
 
 fn compare_primary<E: ProgramConstraintEvaluatorSetV1>(
-    prepared: &PreparedReferenceCompletionV1<'_, '_, E>,
+    prepared: &PreparedPointSelectionV1<'_, '_, E>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
@@ -120,7 +120,7 @@ fn compare_primary<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 fn compare<E: ProgramConstraintEvaluatorSetV1>(
-    prepared: &PreparedReferenceCompletionV1<'_, '_, E>,
+    prepared: &PreparedPointSelectionV1<'_, '_, E>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
@@ -147,7 +147,7 @@ fn compare<E: ProgramConstraintEvaluatorSetV1>(
 struct SearchV1<'a, 'context, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
     context: &'a ContextV1<'context>,
     component: &'a ComputedComponentV1,
-    prepared: &'a mut PreparedReferenceCompletionV1<'program, 'scratch, E>,
+    prepared: &'a mut PreparedPointSelectionV1<'program, 'scratch, E>,
     buffers: &'a mut BuffersV1,
     evidence: SearchEvidenceV1,
     budget: u64,
@@ -451,7 +451,7 @@ pub(in crate::program_session) fn select_component<E: ProgramConstraintEvaluator
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
-    prepared: &mut PreparedReferenceCompletionV1<'_, '_, E>,
+    prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut buffers = prepared.take_point_buffers();
     let result = search(
@@ -476,7 +476,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
-    prepared: &mut PreparedReferenceCompletionV1<'_, '_, E>,
+    prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
     buffers: &mut BuffersV1,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let context = ContextV1::point::<E>(selection, component, scenarios)?;
