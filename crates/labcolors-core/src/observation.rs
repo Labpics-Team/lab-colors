@@ -429,14 +429,14 @@ mod arena {
     /// доказывает, что освобождённый слот можно перезаписать.
     #[derive(Debug)]
     pub(crate) struct ObservationArenaPoolV1 {
-        field_scratch: crate::field_context::FieldPartitionScratch,
+        field_scratch: Option<crate::field_context::FieldPartitionScratch>,
         slots: [Shared<ObservationBackingV1>; OBSERVATION_ARENA_SLOT_COUNT_V1],
     }
 
     impl ObservationArenaPoolV1 {
         pub(crate) fn new(schema: &CanonicalObservationSchemaV1) -> Self {
             Self {
-                field_scratch: Default::default(),
+                field_scratch: None,
                 slots: ObservationArenaSlotV1::ALL.map(|arena_slot| {
                     Shared::new(ObservationBackingV1 {
                         arena_slot,
@@ -479,7 +479,10 @@ mod arena {
             let AdmittedContextV1::Field(field) = &mut backing.context else {
                 unreachable!()
             };
-            field.materialize(source, &mut self.field_scratch)?;
+            field.materialize(
+                source,
+                self.field_scratch.get_or_insert_with(Default::default),
+            )?;
             Ok(Shared::clone(slot))
         }
 
