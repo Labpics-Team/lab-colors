@@ -103,6 +103,13 @@ struct FieldSupportV1 {
     witness: FieldCell,
 }
 
+/// Shared by arena slots. Neither transient index belongs to an accepted snapshot.
+#[derive(Debug, Default)]
+pub(crate) struct FieldPartitionScratch {
+    witnesses: HashMap<[u8; 3], FieldCell>,
+    segment_sizes: HashMap<([u8; 3], [u8; 3]), usize>,
+}
+
 /// Private reusable storage. Constants are stored once, regardless of support
 /// size. Each reachable byte color retains its earliest segment and exact witness.
 #[derive(Debug, PartialEq, Eq)]
@@ -128,6 +135,7 @@ impl DeclaredFieldV1 {
     pub(crate) fn materialize<Source: SchemaOrderedFieldSourceV1 + ?Sized>(
         &mut self,
         source: &Source,
+        scratch: &mut FieldPartitionScratch,
     ) -> Result<(), ObservationError> {
         let stops = source.stops();
         // Reserve before replacing any contents. This is a free arena slot;
@@ -146,8 +154,12 @@ impl DeclaredFieldV1 {
                     source.value(index)
                 })
             }));
-        let mut witnesses = HashMap::new();
-        let mut segment_sizes = HashMap::new();
+        let FieldPartitionScratch {
+            witnesses,
+            segment_sizes,
+        } = scratch;
+        witnesses.clear();
+        segment_sizes.clear();
         self.region_count = 1;
         for (segment_index, segment) in stops.segments().enumerate() {
             // Positions change the witness's global placement, not the local byte
@@ -187,14 +199,11 @@ impl DeclaredFieldV1 {
         }
         reserve_total(&mut self.support, witnesses.len())?;
         self.support.clear();
-        self.support.extend(
-            witnesses
-                .into_iter()
-                .map(|(color, witness)| FieldSupportV1 {
-                    value: ColorSignal::from_srgb8(Srgb8::new(color)),
-                    witness,
-                }),
-        );
+        self.support
+            .extend(witnesses.drain().map(|(color, witness)| FieldSupportV1 {
+                value: ColorSignal::from_srgb8(Srgb8::new(color)),
+                witness,
+            }));
         self.support
             .sort_unstable_by_key(|entry| entry.witness.local.nominal());
         Ok(())
