@@ -18,6 +18,8 @@ const contextual = {
 
 test("V3 independent wire vectors cover native and JavaScript authoring", () => {
   assert.equal(fixture.schemaVersion, 1);
+  assert.equal(hex(new ProgramWireBuilderV3().visiblePairSeparationHard(0x01020304, 0x10203040, 0xffffffff, -0, 0.75)),
+    fixture.visiblePairSeparation);
   assert.equal(hex(graph(new ProgramWireBuilderV3().computedTarget(21,
     { kind: "box", lower: [0, 0, 0], upper: [15, 15, 15] }, [8, 9, 10], 2)).assignment([21])), fixture.computedBox);
   assert.equal(hex(graph(new ProgramWireBuilderV3().computedTarget(21,

@@ -40,6 +40,8 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   pointOccurrence(id: number, paint: number, surface: number): this;
   /** Включённые границы 0..2 расстояния Oklab: final visible против actual backdrop. Порог задаёт клиент. */
   visibleSeparationHard(id: number, occurrence: number, minimum: number, maximum: number): this;
+  /** Включённый диапазон 0..2 расстояния Oklab между двумя разными конечными видимыми применениями. */
+  visiblePairSeparationHard(id: number, left: number, right: number, minimum: number, maximum: number): this;
   /** Сильнее → слабее на одной поверхности; сохраняет reference CRstrong/CRweak, не модель salience. */
   preserveTonalHierarchy(id: number, occurrences: readonly number[]): this;
   /** Опора может лежать вне domain; конечный неотрицательный допуск имеет конечный квадрат. */

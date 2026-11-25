@@ -98,6 +98,10 @@ function fieldScope(field, model) {
     coverage: Object.freeze({ model, rendering: field.rendering, sourceModel: field.sourceModel }) };
 }
 
+function authoredUse(node, graph) {
+  return Object.freeze({ role: node.role.id, use: node.handle, outputs: graph.outputNames.get(node) });
+}
+
 export function copyReadyColorFrame(snapshot, graph, context, field = copyFieldAssessment(snapshot, context)) {
   const optimality = snapshot.optimality;
   if (optimality !== "exact" && optimality !== "unfinished") {
@@ -130,7 +134,7 @@ export function copyReadyColorFrame(snapshot, graph, context, field = copyFieldA
       if (node === undefined) {
         authoringError("resolution.selection", "Core selection refers to an undeclared use", "color_core_contract");
       }
-      return Object.freeze({ role: node.role.id, use: node.handle, outputs: graph.outputNames.get(node) });
+      return authoredUse(node, graph);
     })),
   })));
   const table = snapshot.copyOutputTable();
@@ -196,14 +200,19 @@ function copyDiagnostics(snapshot, graph, field) {
         || !constraint.nodes.includes(stronger) || !constraint.nodes.includes(weaker)) {
         authoringError("resolution.diagnostics", "Core witness refers to an undeclared relation", "color_core_contract");
       }
-      const member = (node) => Object.freeze({ role: node.role.id, use: node.handle,
-        outputs: graph.outputNames.get(node) });
       items.push(Object.freeze({ kind: "relation", requirement: "tonal-hierarchy", evidence: "candidate-witness",
-        stronger: member(stronger), weaker: member(weaker), caseIndex: violation.caseIndex,
+        stronger: authoredUse(stronger, graph), weaker: authoredUse(weaker, graph), caseIndex: violation.caseIndex,
         ...(fieldWitness === undefined ? {} : { fieldWitness }),
         requiredRatio: violation.requiredRatio, actualRatio: violation.actualRatio,
         requiredGap: violation.requiredGap, actualGap: violation.actualGap,
         strongerPolarity: violation.strongerPolarity, weakerPolarity: violation.weakerPolarity }));
+      continue;
+    }
+    if (constraint?.requirement === "visible-pair-separation") {
+      const [left, right] = constraint.nodes;
+      items.push(Object.freeze({ kind: "relation", requirement: constraint.requirement, evidence: "candidate-witness",
+        left: authoredUse(left, graph), right: authoredUse(right, graph), range: constraint.bounds,
+        caseIndex: violation.caseIndex, ...(fieldWitness === undefined ? {} : { fieldWitness }) }));
       continue;
     }
     const node = constraint?.node ?? graph.targets.get(violation.targetId);

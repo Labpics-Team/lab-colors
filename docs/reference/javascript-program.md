@@ -67,6 +67,36 @@ Hue-граница — `0..180` градусов, диапазоны chroma и l
 
 ### Исходная композиция и отношения
 
+Чтобы два цвета сохраняли нужное различие на своих подложках, передайте их
+применения и включённый диапазон расстояния в `separate(left, right, [min, max])`.
+Подложкой каждого применения может служить входная поверхность или другое
+применение. Декларация работает без `reference`.
+
+```js
+const c = colors();
+const ink = c.role("подпись", "#404040").on(c.surface("paper"));
+const mark = c.fixed("отметка", "#000000").on(c.surface("rail"), { opacity: 0.5 });
+c.separate(ink, mark, [0.18, 0.55]);
+const program = await c.compile({ ink, mark });
+const frame = program.resolve({ paper: "#ffeedd", rail: "#808080" });
+```
+
+Core сравнивает конечные цвета после наложения каждого материала на собственную
+подложку. Весь диапазон возможных расстояний с учётом точности вывода должен
+поместиться между `min` и `max`. Обе границы задаёт автор в пределах `0..2`,
+в том числе `[0, 0]` для совпадения. Единица измерения — евклидово расстояние
+Oklab при светлоте в масштабе `0..1`. Значения в примере относятся к этой паре.
+Выбор порога человеческой различимости требует отдельного основания.
+[Определение ΔEOK в CSS Color 4](https://www.w3.org/TR/css-color-4/#color-difference-OK)
+
+Участники должны быть двумя разными применениями одной декларации. Повторно
+использовать одну роль на разных поверхностях можно. При экспорте одного
+участника компилятор включает и второго, связанные с ним отношения и нужные
+подложки. В случае нарушения `frame.diagnostics` содержит
+`{ kind: "relation", requirement: "visible-pair-separation", left, right, range, caseIndex }`.
+У каждого участника есть `role`, исходный `use` и список экспортированных
+`outputs`. У скрытого применения список пуст.
+
 ```js
 const c = colors({ reference: { canvas: "#ffffff" } });
 const canvas = c.surface("canvas");
@@ -700,6 +730,8 @@ RGB8 её статус остаётся `unfinished`. Для всей компо
 
 `colorTarget(..., { referenceAppearance: occurrenceId })` связывает применение
 с окружением из `assignment(order, { reference: [[portId, rgb], ...] })`.
+`visiblePairSeparationHard(id, left, right, minimum, maximum)` задаёт обязательный
+диапазон расстояния между конечными цветами двух разных occurrence по их ID.
 `preserveTonalHierarchy(id, occurrenceIds)` передаёт Core только участников;
 порог отношения клиент не рассчитывает. `assessmentReport().referenceSelections`
 и `snapshot.referenceSelections()` содержат одинаковые данные выбора. Отдельный

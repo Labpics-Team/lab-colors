@@ -129,6 +129,12 @@ function surface(value, owner, path) {
   return node;
 }
 
+function localUse(value, owner, path) {
+  const node = uses.get(value);
+  if (node === undefined || node.owner !== owner) authoringError(path, "expected a local use", "color_foreign_reference");
+  return node;
+}
+
 function usePolicy(value = {}, owner) {
   const path = "role.on.policy";
   allowedKeys(value, ["contrast", "opacity", "tone", "separation"], path);
@@ -172,8 +178,17 @@ export function colors(options = {}) {
   const owner = {};
   const roleNames = new Set();
   const surfaceNames = new Set();
-  const hierarchies = [];
+  const relationsByUse = new WeakMap();
   let nextOrdinal = 0;
+
+  function declareRelation(requirement, nodes, bounds) {
+    const relation = Object.freeze({ requirement, nodes: Object.freeze(nodes), bounds, ordinal: nextOrdinal++ });
+    for (const node of nodes) {
+      const relations = relationsByUse.get(node);
+      if (relations === undefined) relationsByUse.set(node, [relation]);
+      else relations.push(relation);
+    }
+  }
 
   const declareRole = (id, anchor, options, adaptive) => {
     const checkedId = roleId(id);
@@ -210,31 +225,33 @@ export function colors(options = {}) {
     },
     role(id, anchor, options) { return declareRole(id, anchor, options, true); },
     fixed(id, anchor) { return declareRole(id, anchor, undefined, false); },
+    separate(left, right, bounds) {
+      const first = localUse(left, owner, "separate.left"), second = localUse(right, owner, "separate.right");
+      if (first === second) authoringError("separate", "members must be distinct uses");
+      declareRelation("visible-pair-separation", [first, second], range(bounds, "separate.range", 0, 2));
+    },
     preserveTonalHierarchy(members) {
       const path = "preserveTonalHierarchy";
       if (reference === undefined) authoringError(path, "requires an authored reference context");
-      const nodes = array(members, path, 2, MAX_SECTION_ENTRIES_V1).map((handle, index) => {
-        const node = uses.get(handle);
-        if (node === undefined || node.owner !== owner) authoringError(`${path}[${index}]`, "expected a local use", "color_foreign_reference");
-        return node;
-      });
+      const nodes = array(members, path, 2, MAX_SECTION_ENTRIES_V1)
+        .map((handle, index) => localUse(handle, owner, `${path}[${index}]`));
       if (new Set(nodes).size !== nodes.length) authoringError(path, "members must be distinct uses");
       if (nodes.some((node) => node.against !== nodes[0].against)) authoringError(path, "members must share the same surface");
       // Core derives the visible gaps and validates their direction from the reference composition.
-      hierarchies.push(Object.freeze(nodes));
+      declareRelation("tonal-hierarchy", nodes);
     },
     async compile(outputs) {
       const entries = keys(outputs, "compile.outputs").map((key) => {
         const checkedKey = name(key, "compile.output");
-        const node = uses.get(read(outputs, key, `compile.outputs.${key}`));
-        if (node === undefined || node.owner !== owner) authoringError(`compile.outputs.${key}`, "expected a local use", "color_foreign_reference");
+        const node = localUse(read(outputs, key, `compile.outputs.${key}`), owner, `compile.outputs.${key}`);
         return Object.freeze({ name: checkedKey, node });
       });
       if (entries.length === 0 || entries.length > MAX_SECTION_ENTRIES_V1) authoringError("compile.outputs", "expected a bounded non-empty output map");
       for (const key of reference?.keys() ?? []) {
         if (!surfaceNames.has(key)) authoringError(`colors.options.reference.${key}`, "unknown surface");
       }
-      const compiledOptions = Object.freeze({ ...systemOptions, hierarchies: Object.freeze([...hierarchies]) });
+      // The relation lists are append-only. Capture this declaration before the asynchronous import.
+      const compiledOptions = Object.freeze({ ...systemOptions, relationsByUse, beforeOrdinal: nextOrdinal });
       const { compileColorSystem } = await import("./authoring-program.js");
       return compileColorSystem(Object.freeze(entries), compiledOptions);
     },
