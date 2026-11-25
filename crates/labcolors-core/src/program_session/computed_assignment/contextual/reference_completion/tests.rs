@@ -186,7 +186,7 @@ pub(in crate::program_session) fn incoming_test_hook<E: ProgramConstraintEvaluat
     let old_tone = old.use_tones()[0].per_case_bits[0];
     let old_measurement = old.point_evidence().0.preferences[0].visible_lab;
     let buffers = retained_buffers(plan);
-    let new = realize_incoming(plan, epoch, incoming, &anchor, &anchor, 1)
+    let new = realize_incoming(plan, epoch, incoming, &anchor, &anchor, 27)
         .unwrap_or_else(|_| panic!("incoming observation operation"));
     assert_eq!(retained_buffers(plan), buffers);
     // Both borrows of the mutable plan have ended while the first result is
@@ -1265,7 +1265,7 @@ fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result
         .as_mut()
         .ok_or("missing declared color intent")?
         .tone = Some(curve.clone());
-    let (_owner, mut session) = fixture_session(p, 1)?;
+    let (_owner, mut session) = fixture_session(p, 27)?;
     session.commit(update(1, 255)).map_err(fixture_error)?;
     assert!(session.plan().reference_completion.storage.is_none());
     let crate::observation::ObservationHeadViewV1::Observed(previous) = session.raw_head() else {
@@ -1273,7 +1273,7 @@ fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result
     };
     let previous = previous.clone();
     INCOMING_RECEIPTS.with(|values| values.borrow_mut().clear());
-    let updates = [(2, 250, false), (3, 245, true)];
+    let updates = [(2, 250, false), (3, 206, true)];
     for (revision, backdrop, commit) in updates {
         assert_eq!(
             session.raw_head().revision(),
@@ -1310,7 +1310,22 @@ fn incoming_transaction_uses_new_observation_reuses_scratch_and_keeps_old_result
         assert_eq!(receipt.old_tone, tone(255));
         assert_eq!(receipt.new_tone, tone(backdrop));
         assert_ne!(receipt.old_tone, receipt.new_tone);
-        assert_eq!(receipt.emitted, [Srgb8::new([80, 89, 109])]);
+        let passes = |color: [u8; 3]| {
+            matches!(
+                evaluate_wcag22_srgb8(color, [backdrop; 3], Wcag22CriterionV1::Sc143TextDefault),
+                Ok(Wcag22AssessmentV1::Evaluated {
+                    decision: Wcag22ApplicableDecisionV1::Pass,
+                    ..
+                })
+            )
+        };
+        let [paint] = receipt.emitted.as_slice() else {
+            panic!("expected one emitted paint")
+        };
+        let authored = [80, 89, 109];
+        assert_eq!(passes(authored), revision == 2);
+        assert_eq!(paint.bytes() == authored, revision == 2);
+        assert!(passes(paint.bytes()));
     }
     assert_ne!(receipts[0].new_tone, receipts[1].new_tone);
     assert_eq!(previous.revision().value(), 1);

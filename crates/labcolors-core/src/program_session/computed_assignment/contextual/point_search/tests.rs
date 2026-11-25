@@ -126,6 +126,30 @@ fn joint_gray() -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn unavailable_subnormal_witness_leaves_the_refined_region_comparable() -> Result<(), String> {
+    use crate::certified_numeric::{CertifiedRgbV1, source_distance_squared};
+
+    let tiny = CertifiedRgbV1::from_encoded([f64::from_bits(1); 3]).map_err(fixture_error)?;
+    let preferred = CertifiedRgbV1::from_encoded([128.0; 3])
+        .and_then(CertifiedRgbV1::oklab)
+        .map_err(fixture_error)?;
+    let witness = tiny.region_loss_witness(preferred);
+    assert!(witness.is_err());
+    assert!(
+        !measured::<Wcag22Srgb8V1>(witness.map(|_| ()).map_err(Into::into))
+            .map_err(fixture_error)?
+    );
+    let refined = tiny
+        .oklab()
+        .and_then(|lab| source_distance_squared(lab, preferred));
+    assert!(
+        measured::<Wcag22Srgb8V1>(refined.map(|_| ()).map_err(Into::into))
+            .map_err(fixture_error)?
+    );
+    Ok(())
+}
+
+#[test]
 fn public_joint_point_matches_tiny_symmetric_oracle_and_bootstraps_feasibility()
 -> Result<(), String> {
     let mut oracle = Vec::new();
