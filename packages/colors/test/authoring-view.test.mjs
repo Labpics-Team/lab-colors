@@ -105,7 +105,10 @@ test("preview preserves adjacent positions in its CSS and retains the entire acc
     assert.ok(h.sheet.includes("calc(0.5000000000000001 * 100%)"));
     assert.equal(current.coverage.rendering, "unknown");
     assert.equal(view.set({canvas: "#000000"}).frame.state, "ready");
-    assert.equal(current.context.canvas.stops[2].at, next);
+    assert.deepEqual(current.context.canvas.stops, [
+      { at: 0, color: [1, 2, 3] }, { at, color: [2, 3, 4] },
+      { at: next, color: [17, 17, 17] }, { at: 1, color: [1, 2, 3] },
+    ]);
   } finally { view.dispose(); program.dispose(); }
 });
 

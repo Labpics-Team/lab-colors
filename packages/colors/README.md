@@ -102,11 +102,12 @@ if (update.state === "rejected") {
 на месте. `view.current` — принятый кадр, `view.lastUpdate` — исход последней
 попытки.
 
-Для предпросмотра текста и материалов над градиентом подключите отдельный элемент
-через `program.preview`.
+Для предпросмотра текста и материалов над градиентом освободите подключение
+и откройте предпросмотр на том же элементе.
 
 ```js
-const preview = program.preview(element, { canvas: { kind: "linear-srgb8", stops: [
+view.dispose();
+const preview = program.preview(root, { canvas: { kind: "linear-srgb8", stops: [
   { at: 0, color: "#f4eadb" }, { at: 0.35, color: "#d7c5a8" }, { at: 1, color: "#fff3db" },
 ] } });
 ```
