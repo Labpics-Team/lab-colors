@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v5.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v6.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -289,6 +289,123 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         Ok(Some((0, retain)))
     }
 
+    fn discover_material_sources(
+        &mut self,
+        seed_limit: u64,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        // A desired visible tone can lie outside the gamut a translucent source
+        // can produce. Probe the physical source itself with independently varied
+        // lightness and chroma. Hold other paints at their authored values first,
+        // then try either domain endpoint of one companion to cross a joint
+        // constraint boundary. Only the complete tuple can become an incumbent.
+        let component = self.component;
+        let context = self.context;
+        let variables = component.point_variable_count();
+        let endpoints = (0..variables).flat_map(|v| {
+            let local = component.point_variable(v);
+            let (low, high) = context.domains[local].bounds();
+            [(local, low), (local, high)].map(|(local, rgb)| (local, Srgb8::new(rgb)))
+        });
+        let mut remaining = seed_limit.saturating_sub(self.evidence.visited);
+        self.buffers.values.copy_from_slice(&self.buffers.authored);
+        for companion in std::iter::once(None).chain(endpoints.map(Some)) {
+            if remaining == 0 {
+                break;
+            }
+            if let Some((local, source)) = companion {
+                if source == self.buffers.authored[local] {
+                    continue;
+                }
+                self.buffers.values[local] = source;
+            }
+            for variable in 0..variables {
+                let local = self.component.point_variable(variable);
+                if companion.is_some_and(|(other, _)| other == local) {
+                    continue;
+                }
+                let anchor = self.buffers.authored[local];
+                let chroma_steps = if anchor.is_achromatic() { 0 } else { 8 };
+                for chroma_step in 0..=chroma_steps {
+                    let chroma = 1.0 - f64::from(chroma_step) / 8.0;
+                    let mut previous = None;
+                    for index in 0..=128_u8 {
+                        // Count even a duplicate or out-of-domain hint so a small
+                        // budget also bounds the cost of constructing proposals.
+                        if remaining == 0 {
+                            return Ok(());
+                        }
+                        remaining -= 1;
+                        let step = if index == 0 {
+                            128
+                        } else {
+                            (index - 1).reverse_bits() >> 1
+                        };
+                        let source = crate::color_intent::source_tone(
+                            anchor,
+                            f64::from(step) / 128.0,
+                            chroma,
+                        );
+                        if previous == Some(source) || !self.context.domains[local].contains(source)
+                        {
+                            continue;
+                        }
+                        previous = Some(source);
+                        self.buffers.values[local] = source;
+                        self.assess(runtime, epoch, scenarios, arena)?;
+                    }
+                }
+                self.buffers.values[local] = anchor;
+            }
+            if let Some((local, _)) = companion {
+                self.buffers.values[local] = self.buffers.authored[local];
+            }
+        }
+        Ok(())
+    }
+
+    fn polish_toward_authored(
+        &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        self.buffers.values.copy_from_slice(&self.buffers.best);
+        for variable in 0..self.component.point_variable_count() {
+            if self.evidence.visited >= self.budget {
+                break;
+            }
+            let local = self.component.point_variable(variable);
+            let from = self.buffers.values[local].bytes();
+            let to = self.buffers.authored[local].bytes();
+            let steps = u16::from(
+                from.into_iter()
+                    .zip(to)
+                    .map(|(a, b)| a.abs_diff(b))
+                    .max()
+                    .unwrap_or(0),
+            );
+            // Try the exact authored paint first; feasibility along the segment
+            // need not be monotone on a colored material or a multi-case input.
+            for step in (1..=steps).rev() {
+                if self.evidence.visited >= self.budget {
+                    return Ok(());
+                }
+                self.buffers.values[local] = Srgb8::new(std::array::from_fn(|i| {
+                    ((u16::from(from[i]) * (steps - step) + u16::from(to[i]) * step + steps / 2)
+                        / steps) as u8
+                }));
+                self.assess(runtime, epoch, scenarios, arena)?;
+            }
+            self.buffers.values[local] = self.buffers.best[local];
+        }
+        Ok(())
+    }
+
     fn region_worse(
         &mut self,
         node: RegionNodeV1,
@@ -548,6 +665,16 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 }
             }
         }
+        let mut tree_limit = selection.budget;
+        if !state.has_best {
+            state.discover_material_sources(seed_limit, runtime, epoch, scenarios, arena)?;
+            if state.has_best {
+                // Leave at most one source-byte walk per variable after discovery. A
+                // late change to a fill can make an earlier text adjustment unnecessary.
+                tree_limit -=
+                    (variables as u64 * 255).min(selection.budget / COORDINATE_BUDGET_DIVISOR);
+            }
+        }
         let constraints = region_constraints(epoch, context.constraint_indices)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         let mut bounds = BoundsV1 {
@@ -578,7 +705,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         if let Some(node) = region_node(
             0,
             context.domains[0],
-            selection.budget,
+            tree_limit,
             context.preferred[seed * count],
             &mut state.evidence,
         ) {
@@ -612,14 +739,12 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 if volume > 16 {
                     let (a, b) = node.domain.split();
                     let preferred = context.preferred[seed * count + depth];
-                    let Some(a) =
-                        region_node(depth, a, selection.budget, preferred, &mut state.evidence)
+                    let Some(a) = region_node(depth, a, tree_limit, preferred, &mut state.evidence)
                     else {
                         complete = false;
                         break;
                     };
-                    let Some(b) =
-                        region_node(depth, b, selection.budget, preferred, &mut state.evidence)
+                    let Some(b) = region_node(depth, b, tree_limit, preferred, &mut state.evidence)
                     else {
                         complete = false;
                         break;
@@ -641,7 +766,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 }
                 continue;
             };
-            if state.evidence.visited >= selection.budget {
+            if state.evidence.visited >= tree_limit {
                 complete = false;
                 break;
             }
@@ -665,7 +790,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 if let Some(next) = region_node(
                     next_depth,
                     context.domains[next_depth],
-                    selection.budget,
+                    tree_limit,
                     context.preferred[seed * count + next_depth],
                     &mut state.evidence,
                 ) {
@@ -680,6 +805,8 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         }
         if complete {
             state.evidence.completion = CompletionV1::Complete;
+        } else if tree_limit < selection.budget {
+            state.polish_toward_authored(runtime, epoch, scenarios, arena)?;
         }
     }
     let values = if state.has_best {
