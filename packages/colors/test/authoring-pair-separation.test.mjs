@@ -132,3 +132,39 @@ test("an exact pair equality includes the material emission allowance", async ()
     assert.equal(frame.diagnostics[0].requirement, "visible-pair-separation");
   } finally { program.dispose(); }
 });
+
+test("transparent descendants and siblings preserve the same uncertain raster color", async () => {
+  const c = colors(), paper = c.surface("paper");
+  const film = c.fixed("плёнка", "#000000").on(paper, { opacity: 0.5 });
+  const clear = c.fixed("прозрачный слой", "#ff8800");
+  const child = clear.on(film, { opacity: 0 });
+  const grandchild = clear.on(child, { opacity: 0 });
+  const sibling = c.fixed("второй слой", "#0077ff").on(film, { opacity: 0 });
+  c.separate(film, child, [0, 0]);
+  c.separate(sibling, grandchild, [0, 0]);
+  const program = await c.compile({ film, child, grandchild, sibling });
+  try {
+    for (const background of ["#808080", "#fedcba", "#808080"]) {
+      const frame = program.resolve({ paper: background });
+      assert.equal(frame.state, "ready");
+      assert.equal(frame.values.film.opacity, 0.5);
+      assert.equal(frame.values.child.opacity, 0);
+      assert.equal(frame.values.grandchild.opacity, 0);
+      assert.equal(frame.values.sibling.opacity, 0);
+    }
+  } finally { program.dispose(); }
+});
+
+test("two independent translucent rasters can differ despite identical nominal colors and radii", async () => {
+  const c = colors();
+  const blackFilm = c.fixed("black film", "#000000").on(c.surface("light"), { opacity: 0.5 });
+  const whiteFilm = c.fixed("white film", "#ffffff").on(c.surface("dark"), { opacity: 0.5 });
+  c.separate(blackFilm, whiteFilm, [0, 0]);
+  const program = await c.compile({ blackFilm, whiteFilm });
+  try {
+    // Both nominally round to #808080. Edge rendered the black film as #7f7f7f and the white film as #808080.
+    const frame = program.resolve({ light: "#ffffff", dark: "#000000" });
+    assert.equal(frame.state, "conflict");
+    assert.ok(frame.diagnostics.some((item) => item.requirement === "visible-pair-separation"));
+  } finally { program.dispose(); }
+});
