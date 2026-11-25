@@ -122,7 +122,13 @@ test("an independent completed reference search preserves the proven optimum of 
 
 test("ordinary composition adapts nested paints on translucent material from their authored colors", async () => {
   const paper = [217, 195, 166];
-  for (const anchor of ["#0d6efd", "#0066cc"]) {
+  // Exhausting the 256³ source bytes under the same ±3 emission bounds,
+  // visible identity and contrast gives these visible colors at minimum Point
+  // distance. Keeping white achieves zero loss for the other paint.
+  for (const [anchor, closestVisible] of [
+    ["#0d6efd", [98, 104, 147]],
+    ["#0066cc", [98, 106, 134]],
+  ]) {
     const c = colors(), surface = c.surface("paper");
     const panel = c.role("action", anchor).on(surface, { opacity: 0.55, contrast: "wcag22-ui" });
     const text = c.role("caption", "#ffffff").on(panel, { contrast: "wcag22-text" });
@@ -134,7 +140,7 @@ test("ordinary composition adapts nested paints on translucent material from the
       const paint = frame.values.panel;
       assert.equal(paint.opacity, 0.55);
       const visible = paint.rgb.map((channel, i) => Math.round(paper[i] + paint.opacity * (channel - paper[i])));
-      assert.ok(visible[2] > Math.max(visible[0], visible[1]), "the material stays blue over the warm paper");
+      assert.deepEqual(visible, closestVisible);
       assert.equal(evaluateWcag22(hex(visible), hex(paper), "sc-1.4.11-ui-component-or-state").decision, "pass");
       assert.deepEqual(frame.values.text.rgb, [255, 255, 255]);
       assert.ok(textPasses(frame.values.text.rgb, visible));
