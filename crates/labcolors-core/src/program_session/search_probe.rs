@@ -77,11 +77,16 @@ impl SearchProbe {
 mod tests {
     use super::*;
     use crate::appearance::PointOpacityOverSurfaceV1;
+    use crate::composition::AdmittedOpacityV1;
     use crate::emission::PointEmissionV1;
 
     #[test]
     fn collisions_recheck_the_whole_physical_target_and_errors_leave_no_verdict() {
-        let occurrence = PointOpacityOverSurfaceV1::evaluate([130; 3], 1.0, [32; 3]).unwrap();
+        let occurrence = PointOpacityOverSurfaceV1::evaluate_admitted(
+            [130; 3],
+            AdmittedOpacityV1::OPAQUE,
+            [32; 3],
+        );
         let encoded = occurrence.modeled_srgb8_point();
         let target = |emission| ProgramPointTargetV1::new(encoded, emission);
         let exact = target(PointEmissionV1::default());
