@@ -29,7 +29,8 @@ impl CompiledAppearanceGraph {
         workspace: &'workspace mut ContinuousAppearanceWorkspace,
     ) -> Result<PreparedContinuousAppearancePaints<'program, 'bindings, 'workspace>, BindingError>
     {
-        let program = self.validated_preparation_program(scope, bindings, workspace)?;
+        self.validate_preparation(scope, bindings, workspace)?;
+        let program = self.program();
         let order = if let Some(cone) = scope {
             workspace.cone.prepare(self, cone);
             workspace.cone.paints.as_slice()

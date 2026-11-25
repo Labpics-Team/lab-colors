@@ -239,12 +239,12 @@ impl AppearanceConeWorkspaceV1 {
 impl CompiledAppearanceGraph {
     /// Cone identity precedes binding schema and workspace shape. Bindings admitted
     /// by this graph already have its schema; another graph can share that schema.
-    pub(super) fn validated_preparation_program<K: AppearanceNumericKernel>(
+    pub(super) fn validate_preparation<K: AppearanceNumericKernel>(
         &self,
         scope: Option<&CompiledAppearanceConeV1>,
         bindings: &AdmittedAppearanceBindings,
         workspace: &AppearanceWorkspace<K>,
-    ) -> Result<CompiledAppearanceProgram<'_>, BindingError> {
+    ) -> Result<(), BindingError> {
         if scope.is_some_and(|cone| !Arc::ptr_eq(&self.instance, &cone.graph_instance)) {
             return Err(BindingError::IncompatibleEvaluationCone);
         }
@@ -254,11 +254,10 @@ impl CompiledAppearanceGraph {
             .as_ref()
             .is_some_and(|instance| Arc::ptr_eq(instance, &self.instance))
         {
-            workspace.validate_shape(program)?;
+            workspace.validate_shape(program)
         } else {
-            program.validate_admitted_workspace(bindings, workspace)?;
+            program.validate_admitted_workspace(bindings, workspace)
         }
-        Ok(program)
     }
 
     /// Roots and bindings retain their graph identity. Every scoped pass builds
@@ -269,7 +268,8 @@ impl CompiledAppearanceGraph {
         bindings: &'bindings AdmittedAppearanceBindings,
         workspace: &'workspace mut AppearanceWorkspace,
     ) -> Result<PreparedAppearancePaints<'program, 'bindings, 'workspace>, BindingError> {
-        let program = self.validated_preparation_program(Some(cone), bindings, workspace)?;
+        self.validate_preparation(Some(cone), bindings, workspace)?;
+        let program = self.program();
         workspace.cone.prepare(self, cone);
         program.execute_paints_in_order::<ByteAppearanceKernel, _, _>(
             &workspace.cone.paints,
