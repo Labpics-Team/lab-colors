@@ -82,6 +82,28 @@ private fun verifyAuthoredComposition() {
     }
 }
 
+private fun verifyVisiblePairComparesFinalColorsOnTheirOwnSurfaces() {
+    val wire = ProgramWireBuilderV3().apply {
+        source(1u, rgb(0, 0, 0)); fixedTarget(2u, 1u)
+        opacityInput(3u, 0.5); solidPaint(4u, 2u); opacityPaint(5u, 4u, 3u)
+        surfaceInputPort(6u); surfaceInputPort(7u); inputSurface(8u, 6u); inputSurface(9u, 7u)
+        pointOccurrence(10u, 5u, 8u); pointOccurrence(11u, 5u, 9u)
+        visiblePairSeparationHard(12u, 10u, 11u, 0.25, 2.0)
+        output(13u, 5u); assignment(emptyList())
+    }.finish()
+    compileProgramWire(wire, 1u).use { runtime ->
+        runtime.updateObserved(1uL, listOf(1u), rgb(0, 0, 0, 200, 200, 200), 2u).use { distinct ->
+            check(distinct.state() == "ready")
+            val cell = requireNotNull(distinct.assessmentReport()).cells.single()
+            val pair = cell.assessment as ProgramConstraintAssessment.VisiblePairSeparation
+            check(cell.constraintId == 12u && pair.verdict == ProgramAssessmentVerdict.PASS)
+            check(pair.left == ProgramRgb8(0u, 0u, 0u) && pair.right == ProgramRgb8(100u, 100u, 100u))
+            check(pair.distanceLower >= pair.minimum && pair.distanceUpper <= pair.maximum)
+        }
+        runtime.updateObserved(2uL, listOf(1u), ByteArray(6), 2u).use { check(it.state() == "unsatisfied") }
+    }
+}
+
 private fun verifyPublishedV03AuthoringAbi() {
     // Эти JVM-сигнатуры взяты из опубликованного SDK v0.3: пересборка Kotlin-клиента скрыла бы их потерю.
     val optionsType = ProgramWireColorOptionsV3::class.java
@@ -182,6 +204,7 @@ private fun verifyDeclaredField(wire: ByteArray) {
 fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     verifyPublishedV03AuthoringAbi()
     verifyAuthoredComposition()
+    verifyVisiblePairComparesFinalColorsOnTheirOwnSurfaces()
     val referenceOptions = ProgramWireColorOptionsV3(referenceAppearance = 5u)
     check(referenceOptions.copy() == referenceOptions)
     check(referenceOptions.copy(maxChange = 1.0).referenceAppearance == 5u)
@@ -225,6 +248,8 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     }
     for ((name, actual) in mapOf("computedBox" to box, "computedGray" to gray,
         "contextual" to contextual, "fixedOnly" to fixed, "encodingOnly" to encodingOnly,
+        "visiblePairSeparation" to ProgramWireBuilderV3().visiblePairSeparationHard(0x01020304u,
+            0x10203040u, UInt.MAX_VALUE, -0.0, 0.75).finish(),
         "referenceSingleton" to referenceProgram(false), "referenceHierarchy" to referenceProgram(true),
         "referenceEmpty" to ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3(emptyList())).finish())) {
         bytesEqual(requireNotNull(fixtures[name]) { "missing independent wire fixture $name" }.wireBytes(), actual)
@@ -252,6 +277,12 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     rejects { builder.computedTarget(2u, ProgramWireDomainV3.Gray(30u, 20u), rgb(1, 2, 3), 2.0) }
     rejects { builder.computedTarget(2u, ProgramWireDomainV3.Gray(0u, 255u), rgb(1, 2, 3), Double.MAX_VALUE) }
     rejects { builder.visibleSeparationHard(3u, 61u, 0.5, 0.4) }
+    rejects { builder.visiblePairSeparationHard(3u, 61u, 61u, 0.0, 2.0) }
+    for ((minimum, maximum) in listOf(-0.01 to 2.0, 0.0 to 2.01, 1.0 to 0.5, Double.NaN to 2.0, 0.0 to Double.POSITIVE_INFINITY)) {
+        rejects { builder.visiblePairSeparationHard(3u, 61u, 62u, minimum, maximum) }
+    }
+    fun zeroPair(value: Double) = ProgramWireBuilderV3().visiblePairSeparationHard(3u, 61u, 62u, value, value).finish()
+    bytesEqual(zeroPair(0.0), zeroPair(-0.0))
     rejects { builder.assignment(List(4097) { 1u }) }
     rejects { builder.compose(List(4097) { 1u }) }
     rejects { builder.preserveTonalHierarchy(7u, emptyList()) }

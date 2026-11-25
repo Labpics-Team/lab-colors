@@ -72,6 +72,9 @@ if __name__ == "__main__":
     ]).hex()
     fixture["composeEmpty"] = composition([]).hex()
     fixture["composeReferenceEmpty"] = composition([], []).hex()
+    pair = [[] for _ in range(14)]
+    pair[11].append(struct.pack("<IBIIdd", 0x01020304, 14, 0x10203040, 0xFFFFFFFF, 0.0, 0.75))
+    fixture["visiblePairSeparation"] = encode(pair).hex()
     if arguments.check:
         if original != fixture:
             raise SystemExit("reference-authoring vectors differ; regenerate with this script")

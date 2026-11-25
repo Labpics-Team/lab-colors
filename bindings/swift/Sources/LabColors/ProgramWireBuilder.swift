@@ -382,11 +382,25 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
         return self
     }
 
-    @discardableResult public func visibleSeparationHard(_ id: UInt32, occurrence: UInt32, minimum: Double, maximum: Double) throws -> Self {
+    private func separationBounds(_ minimum: Double, _ maximum: Double) throws -> (Double, Double) {
         let lower = try bounded(minimum, maximum: 2), upper = try bounded(maximum, maximum: 2)
         guard lower <= upper else { throw ProgramWireError.invalidDeclaration("separation bounds must be increasing") }
+        return (lower, upper)
+    }
+
+    @discardableResult public func visibleSeparationHard(_ id: UInt32, occurrence: UInt32, minimum: Double, maximum: Double) throws -> Self {
+        let (lower, upper) = try separationBounds(minimum, maximum)
         try append(11) { b in
             b.u32(id); b.u8(11); b.u32(occurrence); b.f64(lower); b.f64(upper)
+        }
+        return self
+    }
+
+    @discardableResult public func visiblePairSeparationHard(_ id: UInt32, left: UInt32, right: UInt32, minimum: Double, maximum: Double) throws -> Self {
+        guard left != right else { throw ProgramWireError.invalidDeclaration("pair occurrences must be distinct") }
+        let (lower, upper) = try separationBounds(minimum, maximum)
+        try append(11) { b in
+            b.u32(id); b.u8(14); b.u32(left); b.u32(right); b.f64(lower); b.f64(upper)
         }
         return self
     }

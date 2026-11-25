@@ -112,6 +112,9 @@ Builder принадлежит одному вызывающему контек�
 `occurrenceSurface` позволяет использовать результат слоя как следующую
 поверхность. `visibleSeparationHard(id, occurrence, minimum, maximum)` задаёт
 интервал расстояния Oklab от видимого цвета до его подложки, `0..2`.
+`visiblePairSeparationHard(id, left, right, minimum, maximum)` сравнивает итоговые
+цвета двух разных `pointOccurrence` с учётом их подложек и прозрачности. Обе
+границы входят в интервал и удовлетворяют `0 ≤ minimum ≤ maximum ≤ 2`.
 
 Для собственной конечной области поиска есть
 `computedTarget(id, ProgramWireDomainV3.Box(lower, upper), anchor, maxDelta)`

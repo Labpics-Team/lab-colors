@@ -19,6 +19,11 @@
 предпочтений. Неуказанные настройки идентичности сохраняют дефолты Core.
 Пустой `assignment` допустим для графа из фиксированных цветов.
 
+`visiblePairSeparationHard(_:left:right:minimum:maximum:)` задаёт включённый
+диапазон расстояния Oklab между итоговыми цветами двух разных `pointOccurrence`.
+Каждое применение учитывает собственную подложку и прозрачность. Обе границы
+конечны и удовлетворяют `0 ≤ minimum ≤ maximum ≤ 2`.
+
 `ProgramWireColorOptionsV3(referenceAppearance: occurrenceId)` объявляет
 исходный вид применения. Его нельзя совмещать с `appearance`.
 `assignment(_:options:)` принимает `ProgramWireAssignmentOptionsV3(reference:)`:
