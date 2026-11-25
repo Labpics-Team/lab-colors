@@ -282,7 +282,7 @@ pub(crate) type PointViolation<Evaluation> = <Evaluation as HardClassifier<
 /// Program-only encoded point. Appearance context and every derived view stay
 /// outside this capability, so an encoded evaluator cannot acquire either
 /// dependency through its target type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProgramPointTargetV1 {
     encoded: ModeledSrgb8PointOccurrence,
     emission: crate::emission::PointEmissionV1,

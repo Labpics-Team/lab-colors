@@ -1472,8 +1472,10 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut seed_values = cloned(&authored).map_err(allocation)?;
         let mut source_tones = buffer(count, Vec::new()).map_err(allocation)?;
         let mut proposal = cloned(&working).map_err(allocation)?;
-        let mut current_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
-        let mut proposal_hard_failures = buffer(arena.cells.len(), false).map_err(allocation)?;
+        let mut current_hard_failures =
+            buffer(search.context.probe.borrow().cells.len(), false).map_err(allocation)?;
+        let mut proposal_hard_failures =
+            buffer(search.context.probe.borrow().cells.len(), false).map_err(allocation)?;
         let mut proposal_scores = buffer(count, 0.0).map_err(allocation)?;
         let mut repair_order = Vec::new();
         repair_order
@@ -1554,8 +1556,11 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                 continue;
             }
             current_scores.copy_from_slice(&search.legacy_scores);
-            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells) {
-                *failed = cell.result().is_violation();
+            for (failed, cell) in current_hard_failures
+                .iter_mut()
+                .zip(&search.context.probe.borrow().cells)
+            {
+                *failed = cell.violation;
             }
             // The legacy distance only guides repair. Every hard-valid point
             // is retained and compared by the unchanged typed reference key.
@@ -1608,9 +1613,12 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                             break 'repair;
                         }
                         proposal_scores.copy_from_slice(&search.legacy_scores);
-                        let proposal_cell_count = arena.cells.len();
-                        for (failed, cell) in proposal_hard_failures.iter_mut().zip(&arena.cells) {
-                            *failed = cell.result().is_violation();
+                        let proposal_cell_count = search.context.probe.borrow().cells.len();
+                        for (failed, cell) in proposal_hard_failures
+                            .iter_mut()
+                            .zip(&search.context.probe.borrow().cells)
+                        {
+                            *failed = cell.violation;
                         }
                         let refined_case_count =
                             search.context.case_refinement.borrow().cases.len();
@@ -1633,9 +1641,11 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                                 refined_case_count
                             );
                             current_scores.copy_from_slice(&search.legacy_scores);
-                            for (failed, cell) in current_hard_failures.iter_mut().zip(&arena.cells)
+                            for (failed, cell) in current_hard_failures
+                                .iter_mut()
+                                .zip(&search.context.probe.borrow().cells)
                             {
-                                *failed = cell.result().is_violation();
+                                *failed = cell.violation;
                             }
                         }
                         // With equal failure counts, exchanging a violated

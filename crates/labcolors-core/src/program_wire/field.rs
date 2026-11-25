@@ -144,7 +144,7 @@ impl ProgramFieldAssessmentV1 {
         )
     }
 
-    /// All positive-width segments, in authored order.
+    /// All stops in position order. Segment `i` spans stops `i` and `i + 1`.
     pub fn stops(&self) -> &[ProgramGradientStopV1] {
         &self.stops
     }

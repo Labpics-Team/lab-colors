@@ -120,6 +120,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "program_wire_decoder_source": "crates/labcolors-core/src/program/wire.rs",
     "program_wire_facade_source": "crates/labcolors-core/src/program_wire.rs",
     "program_wire_field_source": "crates/labcolors-core/src/program_wire/field.rs",
+    "program_search_probe_source": "crates/labcolors-core/src/program_session/search_probe.rs",
     "program_source": "crates/labcolors-core/src/program_session.rs",
     "program_tests": "crates/labcolors-core/src/program_clean_set_tests.rs",
     "runtime_codec": CODEC_PATH,
