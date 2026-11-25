@@ -16,13 +16,21 @@ struct PointVerdict {
     violation: bool,
 }
 
-#[derive(Default)]
 pub(super) struct SearchProbe {
     pub(super) cells: Vec<SearchCell>,
+    cache_field_points: bool,
     points: Option<Vec<Option<PointVerdict>>>,
 }
 
 impl SearchProbe {
+    pub(super) fn new(physical_cases: usize) -> Self {
+        Self {
+            cells: Vec::new(),
+            cache_field_points: physical_cases > 1,
+            points: None,
+        }
+    }
+
     pub(super) fn begin(&mut self, cases: usize, constraints: usize) -> Result<(), ()> {
         self.cells.clear();
         let len = cases.checked_mul(constraints).ok_or(())?;
@@ -38,6 +46,11 @@ impl SearchProbe {
         target: ProgramPointTargetV1,
         assess: impl FnOnce() -> Result<bool, E>,
     ) -> Result<bool, E> {
+        // A solid local backdrop needs no field cache, even when another
+        // component in the same program spans many physical observations.
+        if !self.cache_field_points {
+            return assess();
+        }
         // Power-of-two capacity bounds working memory independently of the
         // number of cases and source tuples examined. With no memory for the
         // optional cache, the original evaluator remains available.
@@ -90,7 +103,15 @@ mod tests {
         let encoded = occurrence.modeled_srgb8_point();
         let target = |emission| ProgramPointTargetV1::new(encoded, emission);
         let exact = target(PointEmissionV1::default());
-        let mut probe = SearchProbe::default();
+        let mut solid = SearchProbe::new(1);
+        assert_eq!(
+            solid.point_verdict(0, exact, || Ok::<_, ()>(false)),
+            Ok(false)
+        );
+        assert_eq!(solid.point_verdict(0, exact, || Err(())), Err(()));
+        assert!(solid.points.is_none());
+
+        let mut probe = SearchProbe::new(2);
         assert_eq!(
             probe.point_verdict(0, exact, || Ok::<_, ()>(false)),
             Ok(false)

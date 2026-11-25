@@ -265,6 +265,7 @@ impl<'a> ContextV1<'a> {
         let case_refinement = RefCell::new(
             CaseRefinementV1::new(&local_cases, scenarios.len().get()).map_err(allocation)?,
         );
+        let physical_cases = component.map_or(scenarios.len().get(), |_| local_cases.order.len());
         Ok(Self {
             targets,
             constraint_indices: component.map(|component| component.constraints.as_ref()),
@@ -274,7 +275,7 @@ impl<'a> ContextV1<'a> {
             preferred_rgb,
             local_cases,
             case_refinement,
-            probe: RefCell::new(SearchProbe::default()),
+            probe: RefCell::new(SearchProbe::new(physical_cases)),
             score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
