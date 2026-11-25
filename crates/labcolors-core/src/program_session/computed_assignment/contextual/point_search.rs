@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v6.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v8.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -406,6 +406,56 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         Ok(())
     }
 
+    fn polish_materials(
+        &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        // With a colored backdrop the admissible sources can lie in a narrow
+        // band oblique to both a constant-hue ray and the segment to the anchor.
+        // Move several channels together. Only assess() may retain a tuple.
+        self.buffers.values.copy_from_slice(&self.buffers.best);
+        for bit in (0..u8::BITS).rev() {
+            let stride = 1_u8 << bit;
+            loop {
+                let mut improved = false;
+                // A changed fill makes different inks feasible and vice versa.
+                // Revisit the connected paints before reducing the mesh width.
+                for variable in 0..self.component.point_variable_count() {
+                    let local = self.component.point_variable(variable);
+                    let center = self.buffers.best[local];
+                    let [red, green, blue] = center
+                        .bytes()
+                        .map(|v| [v.checked_sub(stride), Some(v), v.checked_add(stride)]);
+                    for r in red.into_iter().flatten() {
+                        for g in green.into_iter().flatten() {
+                            for b in blue.into_iter().flatten() {
+                                if self.evidence.visited >= self.budget {
+                                    return Ok(());
+                                }
+                                let source = Srgb8::new([r, g, b]);
+                                if source == center || !self.context.domains[local].contains(source)
+                                {
+                                    continue;
+                                }
+                                self.buffers.values[local] = source;
+                                self.assess(runtime, epoch, scenarios, arena)?;
+                            }
+                        }
+                    }
+                    self.buffers.values[local] = self.buffers.best[local];
+                    improved |= self.buffers.best[local] != center;
+                }
+                if !improved {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn region_worse(
         &mut self,
         node: RegionNodeV1,
@@ -665,16 +715,23 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                 }
             }
         }
-        let mut tree_limit = selection.budget;
+        let mut segment_polish = false;
         if !state.has_best {
             state.discover_material_sources(seed_limit, runtime, epoch, scenarios, arena)?;
-            if state.has_best {
-                // Leave at most one source-byte walk per variable after discovery. A
-                // late change to a fill can make an earlier text adjustment unnecessary.
-                tree_limit -=
-                    (variables as u64 * 255).min(selection.budget / COORDINATE_BUDGET_DIVISOR);
-            }
+            // A late change to a fill can make an earlier text adjustment unnecessary.
+            segment_polish = state.has_best;
         }
+        let materials = (0..variables)
+            .filter(|&variable| !context.opaque[component.point_variable(variable)])
+            .count() as u64;
+        let polish_work = if state.has_best {
+            let segments = if segment_polish { variables as u64 } else { 0 };
+            (segments + 2 * materials) * u64::from(u8::MAX)
+        } else {
+            0
+        };
+        let tree_limit =
+            selection.budget - polish_work.min(selection.budget / COORDINATE_BUDGET_DIVISOR);
         let constraints = region_constraints(epoch, context.constraint_indices)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         let mut bounds = BoundsV1 {
@@ -806,7 +863,12 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         if complete {
             state.evidence.completion = CompletionV1::Complete;
         } else if tree_limit < selection.budget {
-            state.polish_toward_authored(runtime, epoch, scenarios, arena)?;
+            if segment_polish {
+                state.polish_toward_authored(runtime, epoch, scenarios, arena)?;
+            }
+            if materials != 0 {
+                state.polish_materials(runtime, epoch, scenarios, arena)?;
+            }
         }
     }
     let values = if state.has_best {

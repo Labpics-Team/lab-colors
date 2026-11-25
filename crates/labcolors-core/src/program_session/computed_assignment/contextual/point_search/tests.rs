@@ -785,6 +785,13 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() -> Result<
     for (p, budget, backdrops) in [
         (joint_gray(), 128, vec![[255; 3]]),
         (small_alpha_program(), 64, vec![[128; 3]]),
+        (translucent_child_over_variable_parent(), 1, vec![[192; 3]]),
+        (translucent_child_over_variable_parent(), 17, vec![[192; 3]]),
+        (
+            translucent_child_over_variable_parent(),
+            255,
+            vec![[192; 3]],
+        ),
         (
             translucent_child_over_variable_parent(),
             4096,
@@ -824,6 +831,7 @@ fn screened_search_preserves_refined_tuple_and_every_budget_counter() -> Result<
                         .current_verified()
                         .expect("the feasible update produced a verified assignment")
                         .computed_for_test();
+                    assert!(current.search.visited <= budget);
                     history.push((
                         current
                             .arena

@@ -122,7 +122,13 @@ test("an independent completed reference search preserves the proven optimum of 
 
 test("ordinary composition adapts nested paints on translucent material from their authored colors", async () => {
   const paper = [217, 195, 166];
-  for (const anchor of ["#0d6efd", "#0066cc"]) {
+  // Exhausting the 256³ source bytes under the same ±3 emission bounds,
+  // visible identity and contrast gives these source paints at minimum
+  // continuous Point distance. Several nearby paints round to the same pixel.
+  for (const [anchor, closestSource, closestVisible] of [
+    ["#0d6efd", [0, 29, 132], [98, 104, 147]],
+    ["#0066cc", [0, 33, 108], [98, 106, 134]],
+  ]) {
     const c = colors(), surface = c.surface("paper");
     const panel = c.role("action", anchor).on(surface, { opacity: 0.55, contrast: "wcag22-ui" });
     const text = c.role("caption", "#ffffff").on(panel, { contrast: "wcag22-text" });
@@ -133,8 +139,9 @@ test("ordinary composition adapts nested paints on translucent material from the
       assert.equal(frame.optimality, "unfinished");
       const paint = frame.values.panel;
       assert.equal(paint.opacity, 0.55);
+      assert.deepEqual(paint.rgb, closestSource);
       const visible = paint.rgb.map((channel, i) => Math.round(paper[i] + paint.opacity * (channel - paper[i])));
-      assert.ok(visible[2] > Math.max(visible[0], visible[1]), "the material stays blue over the warm paper");
+      assert.deepEqual(visible, closestVisible);
       assert.equal(evaluateWcag22(hex(visible), hex(paper), "sc-1.4.11-ui-component-or-state").decision, "pass");
       assert.deepEqual(frame.values.text.rgb, [255, 255, 255]);
       assert.ok(textPasses(frame.values.text.rgb, visible));
@@ -159,5 +166,33 @@ test("a translucent warm fill keeps dark ink when both paints must move to make 
     const [r, g, b] = frame.values.ink.rgb;
     assert.ok(r === g && g === b);
     assert.ok(Math.abs(grayL(r) - grayL(36)) < 0.27);
+  } finally { program.dispose(); }
+});
+
+test("moving a translucent fill reopens the choice of its neutral ink", async () => {
+  const c = colors(), surface = c.surface("paper");
+  const fill = c.role("fill", "#0066cc").on(surface, { opacity: 0.55, contrast: "wcag22-ui" });
+  const ink = c.role("ink", "#555555").on(fill, { contrast: "wcag22-text" });
+  const program = await c.compile({ fill, ink });
+  try {
+    const paper = [250, 244, 238];
+    const frame = program.resolve({ paper });
+    assert.equal(frame.state, "ready");
+    const paint = frame.values.fill;
+    assert.equal(paint.opacity, 0.55);
+    const visible = paint.rgb.map((v, i) => Math.round(paper[i] + paint.opacity * (v - paper[i])));
+    const low = visible.map((v) => Math.max(0, v - 3));
+    const high = visible.map((v) => Math.min(255, v + 3));
+    assert.equal(evaluateWcag22(hex(high), hex(paper), "sc-1.4.11-ui-component-or-state").decision, "pass");
+    // Compare every neutral ink against both ends of the fill's emission range.
+    // For fixed fill, a smaller ink loss strictly improves the full sorted profile.
+    const distance = (gray) => Math.abs(grayL(gray) - grayL(85));
+    const neutral = (gray) => [gray, gray, gray];
+    const admissible = Array.from({ length: 256 }, (_, gray) => gray)
+      .filter((gray) => textPasses(neutral(gray), low) && textPasses(neutral(gray), high));
+    const closest = admissible.reduce((a, b) => distance(a) < distance(b) ? a : b);
+    assert.deepEqual(frame.values.ink.rgb, neutral(closest));
+    // Independently feasible pair: source #0022ba with ink #1b1b1b.
+    assert.ok(distance(closest) <= distance(27));
   } finally { program.dispose(); }
 });
