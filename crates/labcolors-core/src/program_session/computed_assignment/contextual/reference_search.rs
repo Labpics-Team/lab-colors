@@ -1479,23 +1479,25 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         for siblings in opposite_siblings.chunk_by_mut(|left, right| left.0 == right.0) {
             siblings.reverse();
         }
+        let sibling_orders = 1 + usize::from(opposite_siblings != repair_order);
+        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[count - 1].0);
+        let trajectories = sibling_orders * depth_orders;
         let starts = search
             .context
             .local_cases
             .order
             .len()
-            .checked_mul(4)
-            .and_then(|count| count.checked_add(2))
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .and_then(|seeds| seeds.checked_mul(trajectories))
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
         // Each branch gets its own repair trajectory. A jointly infeasible
         // branch can be close to a feasible composition even when no single
         // coordinate move from the authored paints improves the failure count.
-        // Both sibling directions restart from that same branch, beginning
-        // downstream: an upstream repair may consume capacity needed by a
-        // downstream relation. Reversing a flat order couples these independent
-        // choices and misses both possible downstream-first sibling repairs.
-        // Only dependency depth orders different levels; equal-depth uses retain
-        // authored preference. Numeric occurrence IDs cannot order siblings.
+        // Reverse dependency depth and sibling order independently. An upstream
+        // move can satisfy both a backdrop and its authored foreground. Other
+        // compositions need to repair a downstream relation first. On a chain
+        // only depth varies; on a single level only sibling order varies.
         // All starts share the existing quarter-budget; unused work passes on.
         for start in 0..starts {
             if search.evidence.visited >= seed_limit {
@@ -1503,8 +1505,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             let limit = search.evidence.visited
                 + (seed_limit - search.evidence.visited) / (starts - start) as u64;
-            let seed = start / 2;
-            if seed > 0 && start % 2 == 0 {
+            let seed = start / trajectories;
+            let trajectory = start % trajectories;
+            if seed > 0 && trajectory == 0 {
                 let case = search.context.local_cases.order[(seed - 1) / 2];
                 let direction = if seed % 2 == 1 { -1 } else { 1 };
                 for target in 0..count {
@@ -1536,15 +1539,16 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             // The legacy distance only guides repair. Every hard-valid point
             // is retained and compared by the unchanged typed reference key.
-            let order = if start % 2 == 0 {
+            let order = if trajectory % sibling_orders == 0 {
                 &repair_order
             } else {
                 &opposite_siblings
             };
+            let downstream_first = trajectory < sibling_orders;
             'repair: for pass in 0.. {
                 let mut changed = false;
                 for position in 0..count {
-                    let coordinate = if pass % 2 == 0 {
+                    let coordinate = if (pass % 2 == 0) == downstream_first {
                         count - 1 - position
                     } else {
                         position

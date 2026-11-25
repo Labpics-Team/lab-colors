@@ -119,3 +119,43 @@ test("an independent completed reference search preserves the proven optimum of 
     }
   } finally { program.dispose(); }
 });
+
+test("ordinary composition adapts nested paints on translucent material from their authored colors", async () => {
+  const paper = [217, 195, 166];
+  for (const anchor of ["#0d6efd", "#0066cc"]) {
+    const c = colors(), surface = c.surface("paper");
+    const panel = c.role("action", anchor).on(surface, { opacity: 0.55, contrast: "wcag22-ui" });
+    const text = c.role("caption", "#ffffff").on(panel, { contrast: "wcag22-text" });
+    const program = await c.compile({ panel, text });
+    try {
+      const frame = program.resolve({ paper });
+      assert.equal(frame.state, "ready");
+      assert.equal(frame.optimality, "unfinished");
+      const paint = frame.values.panel;
+      assert.equal(paint.opacity, 0.55);
+      const visible = paint.rgb.map((channel, i) => Math.round(paper[i] + paint.opacity * (channel - paper[i])));
+      assert.ok(visible[2] > Math.max(visible[0], visible[1]), "the material stays blue over the warm paper");
+      assert.equal(evaluateWcag22(hex(visible), hex(paper), "sc-1.4.11-ui-component-or-state").decision, "pass");
+      assert.deepEqual(frame.values.text.rgb, [255, 255, 255]);
+      assert.ok(textPasses(frame.values.text.rgb, visible));
+    } finally { program.dispose(); }
+  }
+});
+
+test("a translucent warm fill keeps dark ink when both paints must move to make it readable", async () => {
+  const c = colors(), surface = c.surface("paper");
+  const fill = c.role("fill", "#ce7332").on(surface, { opacity: 0.72, separation: [0.02, 0.6] });
+  const ink = c.role("ink", "#242424").on(fill, { contrast: "wcag22-text" });
+  const program = await c.compile({ fill, ink });
+  try {
+    const frame = program.resolve({ paper: "#000000" });
+    assert.equal(frame.state, "ready");
+    assert.equal(frame.optimality, "unfinished");
+    const paint = frame.values.fill;
+    const visible = paint.rgb.map((channel) => Math.round(paint.opacity * channel));
+    assert.ok(textPasses(frame.values.ink.rgb, visible));
+    // Black is within 0.27 L of the authored ink and admits a warm fill.
+    // Inverting the ink to a pale gray loses more than this feasible assignment.
+    assert.ok(Math.abs(grayL(frame.values.ink.rgb[0]) - grayL(36)) < 0.27);
+  } finally { program.dispose(); }
+});

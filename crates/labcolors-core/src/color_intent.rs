@@ -302,24 +302,29 @@ fn in_gamut(rgb: [f64; 3]) -> bool {
 /// Эта опора не сужает пространство решения и не является прошедшим result.
 /// Solver проверяет полученные bytes теми же constraints, что любой RGB-кандидат.
 pub(crate) fn color_at_lightness(source: Srgb8, lightness: f64) -> Srgb8 {
+    source_tone(source, lightness, 1.0)
+}
+
+pub(crate) fn source_tone(source: Srgb8, lightness: f64, chroma_scale: f64) -> Srgb8 {
     debug_assert!(lightness.is_finite() && (0.0..=1.0).contains(&lightness));
+    debug_assert!((0.0..=1.0).contains(&chroma_scale));
     if lightness == 0.0 {
         return Srgb8::new([0; 3]);
     }
     if lightness == 1.0 {
         return Srgb8::new([255; 3]);
     }
-    if source.is_achromatic() {
+    if source.is_achromatic() || chroma_scale == 0.0 {
         return srgb8_from_linear([lightness * lightness * lightness; 3]);
     }
     let [_, a, b] = oklab(source);
     let project = |scale| oklab_to_srgb_linear([lightness, a * scale, b * scale]);
-    let uncompressed = project(1.0);
+    let uncompressed = project(chroma_scale);
     if in_gamut(uncompressed) {
         return srgb8_from_linear(uncompressed);
     }
     let mut lower = 0.0;
-    let mut upper = 1.0;
+    let mut upper = chroma_scale;
     let mut rgb = project(lower);
     // 64 bisections exceed the 53-bit significand on this bounded interval.
     // Stopping when adjacent endpoints share a midpoint avoids useless work.
