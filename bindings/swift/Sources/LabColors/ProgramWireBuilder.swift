@@ -315,6 +315,12 @@ public struct ProgramWireAssignmentOptionsV3 {
     public init(reference: [ProgramWireReferenceInputV3]? = nil) { self.reference = reference }
 }
 
+public struct ProgramWireComposeOptionsV3 {
+    /// nil omits the reference; an empty array explicitly declares a reference without input ports.
+    public let reference: [ProgramWireReferenceInputV3]?
+    public init(reference: [ProgramWireReferenceInputV3]? = nil) { self.reference = reference }
+}
+
 /// LCPW v3 передаёт domain, опоры и предпочтения. Выбор и композицию выполняет Core.
 public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
     fileprivate override var wireVersion: UInt16 { 3 }
@@ -421,11 +427,22 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
 
     @discardableResult public func assignment(_ targetsInPreferenceOrder: [UInt32],
         options: ProgramWireAssignmentOptionsV3 = ProgramWireAssignmentOptionsV3()) throws -> Self {
-        guard targetsInPreferenceOrder.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
+        try selectionV3(targetsInPreferenceOrder, reference: options.reference, tag: 3)
+    }
+
+    /// Every computed target appears once. Core composes whole physical components;
+    /// declaration order only preserves compatibility for implicit-reference components.
+    @discardableResult public func compose(_ targets: [UInt32],
+        options: ProgramWireComposeOptionsV3 = ProgramWireComposeOptionsV3()) throws -> Self {
+        try selectionV3(targets, reference: options.reference, tag: 5)
+    }
+
+    private func selectionV3(_ targets: [UInt32], reference: [ProgramWireReferenceInputV3]?, tag: UInt8) throws -> Self {
+        guard targets.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
         try selection { b in
-            b.u8(options.reference == nil ? 3 : 4); b.u8(0); b.u32(UInt32(targetsInPreferenceOrder.count))
-            for target in targetsInPreferenceOrder { b.u32(target) }
-            if let reference = options.reference {
+            b.u8(reference == nil ? tag : tag + 1); b.u8(0); b.u32(UInt32(targets.count))
+            for target in targets { b.u32(target) }
+            if let reference = reference {
                 guard reference.count <= maximumEntries else { throw ProgramWireError.tooManyEntries }
                 var ports = Set<UInt32>()
                 b.u32(UInt32(reference.count))

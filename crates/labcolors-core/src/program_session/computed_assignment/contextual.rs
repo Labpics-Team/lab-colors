@@ -12,7 +12,7 @@ use std::cell::{RefCell, RefMut};
 const COORDINATE_BUDGET_DIVISOR: u64 = 4;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v15.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-execution.v17.nominal-visible-boxes.continuous-preferred-point.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -20,7 +20,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v6.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
+    const DOMAIN: &[u8] = b"labcolors.assignment-reference.v9.independent-depth-and-sibling-directions.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -46,12 +46,13 @@ struct ContextV1<'a> {
     identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     visible_labs: RefCell<Vec<Option<VisibleLabV1>>>,
     opaque: Vec<bool>,
+    point_equivalence: Option<&'a PointEquivalenceV1>,
 }
 
 #[derive(Default)]
 struct LocalCasesV1 {
     order: Vec<usize>,
-    representatives: Vec<bool>,
+    representatives: Vec<usize>,
 }
 
 // Search probes use a growing subset of canonical local cases. Its maxima
@@ -120,6 +121,7 @@ impl CaseRefinementV1 {
 pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
+    mut record_duplicate: impl FnMut(usize, usize),
 ) -> Result<Vec<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let count = scenarios.len().get();
     let mut cases = Vec::new();
@@ -143,7 +145,13 @@ pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
             .cmp(component.inputs.iter().map(|&input| right[input]))
     };
     cases.sort_unstable_by(|left, right| compare(left.1, right.1));
-    cases.dedup_by(|left, right| compare(left.1, right.1) == Ordering::Equal);
+    cases.dedup_by(|later, retained| {
+        if compare(later.1, retained.1) != Ordering::Equal {
+            return false;
+        }
+        record_duplicate(later.0, retained.0);
+        true
+    });
     let mut order = Vec::new();
     order
         .try_reserve_exact(cases.len())
@@ -158,11 +166,13 @@ fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
 ) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let order = local_case_order::<E>(component, scenarios)?;
-    let mut representatives = buffer(scenarios.len().get(), false)
+    let mut representatives = buffer(scenarios.len().get(), 0)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let order = local_case_order::<E>(component, scenarios, |case, representative| {
+        representatives[case] = representative;
+    })?;
     for &case in &order {
-        representatives[case] = true;
+        representatives[case] = case;
     }
     Ok(LocalCasesV1 {
         order,
@@ -184,19 +194,32 @@ impl<'a> ContextV1<'a> {
             .checked_mul(scenarios.len().get())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
         let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+        let local_cases = if let Some(component) = component {
+            local_cases::<E>(component, scenarios)?
+        } else {
+            LocalCasesV1::default()
+        };
+        let joint_point = component
+            .is_some_and(|component| component.mode == ProgramSelectionModeV1::JointPointV1);
         let mut preferred = buffer(cells, [0.0; 3]).map_err(allocation)?;
         let mut preferred_rgb = buffer(cells, Srgb8::new([0; 3])).map_err(allocation)?;
         let mut opaque = buffer(count, true).map_err(allocation)?;
         for (index, target) in targets.iter().enumerate() {
             opaque[index] = target.opaque;
         }
-        for case in 0..scenarios.len().get() {
+        for case in (0..scenarios.len().get())
+            .filter(|&case| !joint_point || local_cases.representatives[case] == case)
+        {
             let inputs = scenarios
                 .physical_values(case)
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             for (index, target) in targets.iter().enumerate() {
+                #[cfg(test)]
+                if joint_point {
+                    point_search::tests::refreshed_point_seed(target.id);
+                }
                 let mut rgb = target.effective_anchor();
-                let mut reference_lightness = None;
+                let mut preferred_lab = target.anchor_lab;
                 if let Some(intent) = target.effective_intent() {
                     if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
                         let source = if !target.declaration.reference_appearance
@@ -207,19 +230,28 @@ impl<'a> ContextV1<'a> {
                             rgb
                         };
                         rgb = curve.preferred_color(source, inputs[input].srgb8());
-                        if target.declaration.reference_appearance {
-                            reference_lightness =
-                                Some(curve.preferred_lightness(inputs[input].srgb8()));
-                        }
+                        // Gamut compression and RGB8 rounding produce only a
+                        // search seed. Tone replaces L, retaining the authored
+                        // chromatic preference even outside the source gamut.
+                        preferred_lab[0] = curve.preferred_lightness(inputs[input].srgb8());
                     }
                 }
                 let cell = case * count + index;
                 preferred_rgb[cell] = rgb;
-                preferred[cell] = lab(rgb);
-                if let Some(lightness) = reference_lightness {
-                    // RGB8 is a seed, not the continuous reference-tone target.
-                    preferred[cell][0] = lightness;
+                preferred[cell] = preferred_lab;
+            }
+        }
+        if joint_point {
+            // The legacy hard observer and public reports address physical
+            // cases directly. Reuse each local preference for its duplicate
+            // cases without repeating tone, gamut, or Oklab calculations.
+            for (case, &representative) in local_cases.representatives.iter().enumerate() {
+                if representative == case {
+                    continue;
                 }
+                let start = representative * count;
+                preferred.copy_within(start..start + count, case * count);
+                preferred_rgb.copy_within(start..start + count, case * count);
             }
         }
         let mut domains = Vec::new();
@@ -229,11 +261,6 @@ impl<'a> ContextV1<'a> {
         for target in targets.iter() {
             domains.push(target.search_domain());
         }
-        let local_cases = if let Some(component) = component {
-            local_cases::<E>(component, scenarios)?
-        } else {
-            LocalCasesV1::default()
-        };
         let case_refinement = RefCell::new(
             CaseRefinementV1::new(&local_cases, scenarios.len().get()).map_err(allocation)?,
         );
@@ -250,11 +277,29 @@ impl<'a> ContextV1<'a> {
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
             opaque,
+            point_equivalence: None,
         })
     }
 
+    fn point<E: ProgramConstraintEvaluatorSetV1>(
+        selection: &'a ComputedSelectionV1,
+        component: &'a ComputedComponentV1,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+    ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let mut context = Self::new::<E>(selection, Some(component), scenarios)?;
+        context.point_equivalence = component.point_equivalence.as_ref();
+        context.constraint_indices = Some(component.point_constraints());
+        Ok(context)
+    }
+
+    fn represents_target(&self, local: usize) -> bool {
+        self.point_equivalence
+            .is_none_or(|equivalence| equivalence.representatives[local] == local)
+    }
+
     fn represents_case(&self, case: usize) -> bool {
-        self.local_cases.representatives.is_empty() || self.local_cases.representatives[case]
+        self.local_cases.representatives.is_empty()
+            || self.local_cases.representatives[case] == case
     }
 
     fn exact_optimum(&self, values: &[Srgb8], scores: &[f64]) -> bool {
@@ -430,6 +475,9 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
                         1.0
                     },
                 };
+            }
+            if !context.represents_target(index) {
+                continue;
             }
             let delta = f64::from_bits(target.declaration.max_delta_bits);
             let identity_failed = target.effective_intent().is_some_and(|intent| {
@@ -674,7 +722,10 @@ fn assess_observed_cases<E: ProgramConstraintEvaluatorSetV1>(
         .domains
         .iter()
         .zip(values)
-        .filter(|(domain, value)| !domain.contains(**value))
+        .enumerate()
+        .filter(|(index, (domain, value))| {
+            context.represents_target(*index) && !domain.contains(**value)
+        })
         .count()
         + hard_violations.max(usize::from(hard_failed)))
 }
@@ -1516,6 +1567,8 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 mod conditional;
+pub(super) mod point_search;
+pub(crate) mod reference_completion;
 mod reference_search;
 mod refinement;
 

@@ -23,6 +23,7 @@ def validate(ci, package, release):
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
     for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
+                    'node "$GITHUB_WORKSPACE/scripts/wasm-build-licenses.mjs"',
                     "node scripts/record-wasm-measurement.mjs", "node scripts/check-wasm-size-budget.mjs",
                     "npm run typecheck", "npm test", "npm run release:verify",
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
@@ -56,6 +57,10 @@ def validate(ci, package, release):
     if any(value not in measurement for value in required) or "continue-on-error:" in measurement:
         raise AssertionError("canonical measurement lost its reproduced source or bounded lifetime")
     build = next(block for block in blocks if "node scripts/record-wasm-measurement.mjs" in block)
+    if ('--message-format=json-render-diagnostics > "$messages"' not in build
+            or build.index('node "$GITHUB_WORKSPACE/scripts/wasm-build-licenses.mjs"')
+            < build.index('mv -- "$optimized" "$wasm"')):
+        raise AssertionError("dependency licenses must describe the final WASM and actual Cargo build")
     if ("        id: runtime-build\n" not in build
             or build.index("node scripts/record-wasm-measurement.mjs") < build.index("diff --no-dereference --recursive")
             or owner.index(measurement) < owner.index(build)

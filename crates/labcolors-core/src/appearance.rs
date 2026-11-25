@@ -6,10 +6,11 @@
 //! идентичность. Клиентский словарь, recipe-роли и perception-утверждения сюда
 //! не входят.
 //!
-//! Единственная операция композиции — версионированный exact-композитор
-//! [`crate::composition`]. `Opacity` только умножает straight
-//! alpha уже материализованного Paint и никогда не композитит промежуточный
-//! результат.
+//! Единственная операция композиции — source-over из [`crate::composition`].
+//! Закрытый numeric kernel выбирает continuous-значения либо RGB8 с точными
+//! сертификатами; compiled проход и порядок операций общие. `Opacity` только
+//! умножает straight alpha уже материализованного Paint и никогда не композитит
+//! промежуточный результат.
 //!
 //! Code-owned adapter представлен sealed borrowed IR и исполняется тем же
 //! evaluator-ом, что результат декларативной компиляции. Структурное равенство
@@ -28,9 +29,16 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+mod certified;
+mod continuous;
 mod execution_cone;
+mod numeric_kernel;
 pub(crate) use execution_cone::{AppearanceConeCompilerV1, CompiledAppearanceConeV1};
 use execution_cone::{AppearanceConeWorkspaceV1, AppearanceExecutionOrderV1};
+use numeric_kernel::{AppearanceNumericKernel, ByteAppearanceKernel};
+pub(crate) use numeric_kernel::{
+    ContinuousColorAdmissionErrorV1, ContinuousPointPaintValueV1, ContinuousSrgbV1,
+};
 
 use crate::Srgb8;
 pub(crate) use crate::composition::CompositionProfileV1;
@@ -808,7 +816,7 @@ impl CompiledSurfaceSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CompiledOccurrenceSpec {
+pub(crate) struct CompiledOccurrenceSpec {
     id: OccurrenceId,
     subject_id: PaintId,
     subject: usize,
@@ -1107,7 +1115,7 @@ impl PointOpacityOverSurfaceV1 {
         let mut paints = [None; 2];
         let mut surfaces = [None; 2];
         let mut occurrences = [None; 1];
-        POINT_OPACITY_OVER_SURFACE_V1.execute_into(
+        POINT_OPACITY_OVER_SURFACE_V1.execute_into::<ByteAppearanceKernel, _, _, _>(
             |input_index| {
                 debug_assert_eq!(input_index, 0);
                 EncodedPointPaintValueV1::opaque(Srgb8::new(source))
@@ -1293,6 +1301,11 @@ impl AdmittedAppearanceBindings {
         Ok(())
     }
 
+    /// Canonical position of a prebound target in this admitted binding set.
+    pub(crate) fn paint_input_index(&self, slot: CompiledPaintInputSlotV1) -> Option<usize> {
+        self.paint_input_at(slot).map(|_| slot.index)
+    }
+
     /// Читает одно заранее связанное значение Target без поиска и аллокации.
     ///
     /// Slot минтит тот же compiled graph, которому принадлежат bindings.
@@ -1304,6 +1317,13 @@ impl AdmittedAppearanceBindings {
     ) -> Option<EncodedPointPaintValueV1> {
         let (bound, value) = self.paint_inputs.get(slot.index)?;
         (*bound == slot.id).then_some(*value)
+    }
+
+    /// Borrow atomic admitted Paint inputs in the compiled canonical order.
+    /// Numeric interpretations may lift these values without repeating source
+    /// selection or splitting the declared (RGB, alpha) pair.
+    pub(crate) fn paint_inputs_canonical(&self) -> &[(PaintInputId, EncodedPointPaintValueV1)] {
+        &self.paint_inputs
     }
 
     /// Borrow the admitted Surface-input slice in its exact canonical order.
@@ -1348,24 +1368,26 @@ impl AdmittedAppearanceBindings {
 /// Источник и straight alpha изменяются только вместе: это не позволяет solver-у
 /// создать не объявленную клиентом декартову комбинацию двух независимых осей.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EncodedPointPaintValueV1 {
-    source: Srgb8,
+pub(crate) struct PointPaintValueV1<C> {
+    source: C,
     opacity: crate::composition::AdmittedOpacityV1,
 }
 
-impl EncodedPointPaintValueV1 {
+pub(crate) type EncodedPointPaintValueV1 = PointPaintValueV1<Srgb8>;
+
+impl<C: Copy> PointPaintValueV1<C> {
     pub(crate) const fn from_admitted(
-        source: Srgb8,
+        source: C,
         opacity: crate::composition::AdmittedOpacityV1,
     ) -> Self {
         Self { source, opacity }
     }
 
-    pub(crate) const fn opaque(source: Srgb8) -> Self {
+    pub(crate) const fn opaque(source: C) -> Self {
         Self::from_admitted(source, crate::composition::AdmittedOpacityV1::OPAQUE)
     }
 
-    pub(crate) const fn source(self) -> Srgb8 {
+    pub(crate) const fn source(self) -> C {
         self.source
     }
 
@@ -1384,14 +1406,16 @@ impl EncodedPointPaintValueV1 {
 /// значение. Тип alpha делает повторную admission перед каждым occurrence
 /// невозможной; его биты без потерь переходят в certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EncodedPointPaintV1 {
+pub(crate) struct PointPaintV1<C> {
     id: PaintId,
-    source: Srgb8,
+    source: C,
     opacity: crate::composition::AdmittedOpacityV1,
 }
 
-impl EncodedPointPaintV1 {
-    pub(crate) const fn from_value(id: PaintId, value: EncodedPointPaintValueV1) -> Self {
+pub(crate) type EncodedPointPaintV1 = PointPaintV1<Srgb8>;
+
+impl<C: Copy> PointPaintV1<C> {
+    pub(crate) const fn from_value(id: PaintId, value: PointPaintValueV1<C>) -> Self {
         Self {
             id,
             source: value.source(),
@@ -1403,7 +1427,7 @@ impl EncodedPointPaintV1 {
         self.id
     }
 
-    pub(crate) const fn source(self) -> Srgb8 {
+    pub(crate) const fn source(self) -> C {
         self.source
     }
 
@@ -1415,8 +1439,8 @@ impl EncodedPointPaintV1 {
         self.opacity.bits()
     }
 
-    pub(crate) const fn value(self) -> EncodedPointPaintValueV1 {
-        EncodedPointPaintValueV1::from_admitted(self.source, self.opacity)
+    pub(crate) const fn value(self) -> PointPaintValueV1<C> {
+        PointPaintValueV1::from_admitted(self.source, self.opacity)
     }
 }
 
@@ -1799,15 +1823,21 @@ impl AppearanceWorkspaceShape {
 }
 
 #[derive(Debug)]
-pub(crate) struct AppearanceWorkspace {
+pub(crate) struct AppearanceWorkspace<K: AppearanceNumericKernel = ByteAppearanceKernel> {
     shape: AppearanceWorkspaceShape,
-    paints: Vec<Option<EncodedPointPaintV1>>,
-    surfaces: Vec<Option<Srgb8>>,
-    occurrences: Vec<Option<ResolvedOccurrence>>,
+    paints: Vec<Option<PointPaintV1<K::Color>>>,
+    surfaces: Vec<Option<K::Color>>,
+    occurrences: Vec<Option<K::Occurrence>>,
     cone: AppearanceConeWorkspaceV1,
 }
 
-impl AppearanceWorkspace {
+pub(crate) type ContinuousAppearanceWorkspace =
+    AppearanceWorkspace<numeric_kernel::ContinuousAppearanceKernel>;
+
+pub(crate) type CertifiedAppearanceWorkspace =
+    AppearanceWorkspace<numeric_kernel::CertifiedAppearanceKernel>;
+
+impl<K: AppearanceNumericKernel> AppearanceWorkspace<K> {
     fn for_program(program: CompiledAppearanceProgram<'_>) -> Result<Self, BindingError> {
         let shape = AppearanceWorkspaceShape::of(program);
         let mut workspace = Self {
@@ -1882,13 +1912,14 @@ impl<'program> PreparedAppearancePaints<'program, '_, '_> {
         } else {
             self.program.render_topo
         };
-        self.program.execute_render_in_order(
-            order,
-            value_at,
-            &self.workspace.paints,
-            &mut self.workspace.surfaces,
-            &mut self.workspace.occurrences,
-        );
+        self.program
+            .execute_render_in_order::<ByteAppearanceKernel, _>(
+                order,
+                value_at,
+                &self.workspace.paints,
+                &mut self.workspace.surfaces,
+                &mut self.workspace.occurrences,
+            );
         AppearanceEvaluationView {
             graph_instance: self.graph_instance,
             program: self.program,
@@ -2284,6 +2315,10 @@ impl CompiledAppearanceGraph {
         true
     }
 
+    pub(crate) fn surface_input_index(&self, input: SurfaceInputPortId) -> Option<usize> {
+        self.surface_input_ports.binary_search(&input).ok()
+    }
+
     /// Canonical physical Surface-input schema accepted by this program.
     pub(crate) fn surface_input_ports(
         &self,
@@ -2353,7 +2388,7 @@ impl CompiledAppearanceGraph {
         bindings.validate_surface_input_schema(expected_inputs)?;
         let program = self.program();
         program.validate_admitted_workspace(bindings, workspace)?;
-        program.execute_paints_into(
+        program.execute_paints_into::<ByteAppearanceKernel, _, _>(
             |index| bindings.paint_inputs[index].1,
             |index| bindings.opacities[index].1,
             &mut workspace.paints,
@@ -2489,10 +2524,10 @@ impl<'program> CompiledAppearanceProgram<'program> {
         })
     }
 
-    fn validate_admitted_workspace(
+    fn validate_admitted_workspace<K: AppearanceNumericKernel>(
         self,
         bindings: &AdmittedAppearanceBindings,
-        workspace: &AppearanceWorkspace,
+        workspace: &AppearanceWorkspace<K>,
     ) -> Result<(), BindingError> {
         if !bindings.matches_schema(self.input_schema()) {
             return Err(BindingError::IncompatibleAdmittedBindings);
@@ -2514,7 +2549,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
 
         // Компилятор закрепил позиции входов в канонической схеме. Полная
         // проверка выше не даёт применить эти позиции к чужим bindings.
-        self.execute_into(
+        self.execute_into::<ByteAppearanceKernel, _, _, _>(
             |input_index| paint_inputs[input_index].1,
             |port_index| surfaces[port_index].1,
             |opacity_index| opacities[opacity_index].1,
@@ -2534,21 +2569,22 @@ impl<'program> CompiledAppearanceProgram<'program> {
     /// Полный fresh pass compiled IR. Static adapter использует stack arrays,
     /// generic admission — владеющие buffers. Подготовленный многосценарный
     /// pass разделяет те же Paint/render операции, не владея другой физикой.
-    fn execute_into<P, S, O>(
+    fn execute_into<K, P, S, O>(
         &self,
         paint_input_value: P,
         surface_value: S,
         opacity_value: O,
-        resolved_paints: &mut [Option<EncodedPointPaintV1>],
-        resolved_surfaces: &mut [Option<Srgb8>],
-        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+        resolved_paints: &mut [Option<PointPaintV1<K::Color>>],
+        resolved_surfaces: &mut [Option<K::Color>],
+        resolved_occurrences: &mut [Option<K::Occurrence>],
     ) where
-        P: Fn(usize) -> EncodedPointPaintValueV1,
-        S: Fn(usize) -> Srgb8,
+        K: AppearanceNumericKernel,
+        P: Fn(usize) -> PointPaintValueV1<K::Color>,
+        S: Fn(usize) -> K::Color,
         O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
-        self.execute_paints_into(paint_input_value, opacity_value, resolved_paints);
-        self.execute_render_into(
+        self.execute_paints_into::<K, _, _>(paint_input_value, opacity_value, resolved_paints);
+        self.execute_render_into::<K, _>(
             surface_value,
             resolved_paints,
             resolved_surfaces,
@@ -2556,16 +2592,17 @@ impl<'program> CompiledAppearanceProgram<'program> {
         );
     }
 
-    fn execute_paints_into<P, O>(
+    fn execute_paints_into<K, P, O>(
         &self,
         paint_input_value: P,
         opacity_value: O,
-        resolved_paints: &mut [Option<EncodedPointPaintV1>],
+        resolved_paints: &mut [Option<PointPaintV1<K::Color>>],
     ) where
-        P: Fn(usize) -> EncodedPointPaintValueV1,
+        K: AppearanceNumericKernel,
+        P: Fn(usize) -> PointPaintValueV1<K::Color>,
         O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
-        self.execute_paints_in_order(
+        self.execute_paints_in_order::<K, _, _>(
             self.paint_topo,
             paint_input_value,
             opacity_value,
@@ -2573,14 +2610,15 @@ impl<'program> CompiledAppearanceProgram<'program> {
         );
     }
 
-    fn execute_paints_in_order<P, O>(
+    fn execute_paints_in_order<K, P, O>(
         &self,
         order: &[usize],
         paint_input_value: P,
         opacity_value: O,
-        resolved_paints: &mut [Option<EncodedPointPaintV1>],
+        resolved_paints: &mut [Option<PointPaintV1<K::Color>>],
     ) where
-        P: Fn(usize) -> EncodedPointPaintValueV1,
+        K: AppearanceNumericKernel,
+        P: Fn(usize) -> PointPaintValueV1<K::Color>,
         O: Fn(usize) -> crate::composition::AdmittedOpacityV1,
     {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
@@ -2590,7 +2628,7 @@ impl<'program> CompiledAppearanceProgram<'program> {
             PAINT_NODE_EVALUATIONS.with(|count| count.set(count.get() + 1));
             let paint = match self.paints[index] {
                 CompiledPaintSpec::Input { id, input_index } => {
-                    EncodedPointPaintV1::from_value(id, paint_input_value(input_index))
+                    PointPaintV1::from_value(id, paint_input_value(input_index))
                 }
                 CompiledPaintSpec::Opacity {
                     id,
@@ -2601,9 +2639,9 @@ impl<'program> CompiledAppearanceProgram<'program> {
                     // раньше зависимого Opacity-узла.
                     let source = resolved_paints[source].unwrap_or_else(|| unreachable!());
                     let value = source.value();
-                    EncodedPointPaintV1::from_value(
+                    PointPaintV1::from_value(
                         id,
-                        EncodedPointPaintValueV1::from_admitted(
+                        PointPaintValueV1::from_admitted(
                             value.source(),
                             value.opacity().multiply(opacity_value(opacity_index)),
                         ),
@@ -2614,16 +2652,17 @@ impl<'program> CompiledAppearanceProgram<'program> {
         }
     }
 
-    fn execute_render_into<S>(
+    fn execute_render_into<K, S>(
         &self,
         surface_value: S,
-        resolved_paints: &[Option<EncodedPointPaintV1>],
-        resolved_surfaces: &mut [Option<Srgb8>],
-        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+        resolved_paints: &[Option<PointPaintV1<K::Color>>],
+        resolved_surfaces: &mut [Option<K::Color>],
+        resolved_occurrences: &mut [Option<K::Occurrence>],
     ) where
-        S: Fn(usize) -> Srgb8,
+        K: AppearanceNumericKernel,
+        S: Fn(usize) -> K::Color,
     {
-        self.execute_render_in_order(
+        self.execute_render_in_order::<K, _>(
             self.render_topo,
             surface_value,
             resolved_paints,
@@ -2632,15 +2671,16 @@ impl<'program> CompiledAppearanceProgram<'program> {
         );
     }
 
-    fn execute_render_in_order<S>(
+    fn execute_render_in_order<K, S>(
         &self,
         order: &[RenderNode],
         surface_value: S,
-        resolved_paints: &[Option<EncodedPointPaintV1>],
-        resolved_surfaces: &mut [Option<Srgb8>],
-        resolved_occurrences: &mut [Option<ResolvedOccurrence>],
+        resolved_paints: &[Option<PointPaintV1<K::Color>>],
+        resolved_surfaces: &mut [Option<K::Color>],
+        resolved_occurrences: &mut [Option<K::Occurrence>],
     ) where
-        S: Fn(usize) -> Srgb8,
+        K: AppearanceNumericKernel,
+        S: Fn(usize) -> K::Color,
     {
         debug_assert_eq!(resolved_paints.len(), self.paints.len());
         debug_assert_eq!(resolved_surfaces.len(), self.surfaces.len());
@@ -2651,10 +2691,8 @@ impl<'program> CompiledAppearanceProgram<'program> {
                 RenderNode::Surface(index) => {
                     let value = match self.surfaces[index] {
                         CompiledSurfaceSpec::Input { port_index, .. } => surface_value(port_index),
-                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => Srgb8::new(
-                            resolved_occurrences[occurrence]
-                                .unwrap_or_else(|| unreachable!())
-                                .visible(),
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => K::visible(
+                            resolved_occurrences[occurrence].unwrap_or_else(|| unreachable!()),
                         ),
                     };
                     resolved_surfaces[index] = Some(value);
@@ -2664,40 +2702,15 @@ impl<'program> CompiledAppearanceProgram<'program> {
                     let subject = resolved_paints[spec.subject].unwrap_or_else(|| unreachable!());
                     let backdrop =
                         resolved_surfaces[spec.against].unwrap_or_else(|| unreachable!());
-                    let certificate = SourceOverCertificateV1::compose(
-                        spec.profile,
-                        subject.source().bytes(),
-                        subject.opacity(),
-                        backdrop.bytes(),
-                    );
-                    let backdrop_radius = match self.surfaces[spec.against] {
-                        CompiledSurfaceSpec::Input { .. } => 0,
-                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => {
+                    let backdrop_occurrence = match self.surfaces[spec.against] {
+                        CompiledSurfaceSpec::Input { .. } => None,
+                        CompiledSurfaceSpec::FromOccurrence { occurrence, .. } => Some(
                             resolved_occurrences[occurrence]
-                                .unwrap_or_else(|| unreachable!("render order is compiled"))
-                                .emission
-                                .visible_radius
-                        }
-                    };
-                    let emission = crate::emission::PointEmissionV1 {
-                        visible_radius: crate::emission::radius_after(
-                            spec.raster_precision,
-                            subject.source().bytes(),
-                            subject.opacity(),
-                            backdrop.bytes(),
-                            certificate.output_rgb(),
-                            backdrop_radius,
+                                .unwrap_or_else(|| unreachable!("render order is compiled")),
                         ),
-                        backdrop_radius,
-                        same_as_backdrop: subject.opacity().bits() == 0,
                     };
-                    resolved_occurrences[index] = Some(ResolvedOccurrence {
-                        id: spec.id,
-                        subject: spec.subject_id,
-                        against: spec.against_id,
-                        certificate,
-                        emission,
-                    });
+                    resolved_occurrences[index] =
+                        Some(K::compose(spec, subject, backdrop, backdrop_occurrence));
                 }
             }
         }

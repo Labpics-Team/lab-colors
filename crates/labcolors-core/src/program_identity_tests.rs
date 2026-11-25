@@ -1121,8 +1121,23 @@ fn complete_program_schema_v9_digest_is_cross_platform_golden() {
     assert_eq!(schema.1.len(), 37);
     assert_eq!(schema.1, (1_u8..=37).collect::<Vec<_>>());
 
+    let identity_for_release = |release| {
+        crate::program_session::content_identity_with_clean_set_release_for_test(
+            &declaration,
+            release,
+        )
+        .expect("complete V9 fixture contains the declared convention")
+    };
+    let current =
+        identity_for_release(crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2);
+    assert_eq!(compiled.content_identity().as_bytes(), current.as_bytes());
+    let published = identity_for_release([
+        0x05, 0xa3, 0xea, 0x67, 0x83, 0x4b, 0xec, 0xa6, 0xfc, 0x1e, 0xf4, 0xb8, 0x53, 0x09, 0x2c,
+        0xd9, 0x92, 0xdb, 0xa0, 0x4c, 0x40, 0x60, 0xd8, 0x77, 0x35, 0x8e, 0x8e, 0xa2, 0xdd, 0xe8,
+        0x82, 0x90,
+    ]);
     assert_eq!(
-        compiled.content_identity().as_bytes(),
+        published.as_bytes(),
         &[
             178, 246, 19, 179, 36, 44, 124, 14, 60, 229, 29, 229, 231, 252, 68, 30, 95, 104, 184,
             122, 216, 47, 195, 154, 39, 242, 112, 98, 102, 48, 172, 187,

@@ -33,6 +33,37 @@ fn unconstrained(target: Target) -> Program<Wcag22Srgb8V1> {
 }
 
 #[test]
+fn a_feasible_authored_point_stays_unfinished_when_its_budget_expires_without_a_proof()
+-> Result<(), String> {
+    let tone = ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]])
+        .map_err(|error| format!("tone: {error:?}"))?;
+    let mut declared = unconstrained(color([128; 3], 2.0, Some(tone))?);
+    declared.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+        legacy_reference_order: vec![TargetId::new(10)],
+    });
+    declared.computed_budget = Some(1);
+    let compiled = declared
+        .compile()
+        .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = compiled
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("light update: {error:?}"))?
+        .commit();
+    let result = session
+        .state()
+        .current_verified()
+        .ok_or("feasible authored color should yield a snapshot")?
+        .computed_for_test();
+    assert_eq!(result.values.as_ref(), &[Srgb8::new([128; 3])]);
+    assert_eq!(result.search.completion, CompletionV1::BudgetExhausted);
+    assert_eq!(result.optimality(), ComputedOptimalityV1::Unfinished);
+    Ok(())
+}
+
+#[test]
 fn opaque_blue_changes_locally_and_keeps_color_character() -> Result<(), String> {
     let source = Srgb8::new([0, 103, 244]);
     let identity = ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
@@ -153,6 +184,54 @@ fn client_tone_curve_changes_the_whole_gray_surface_without_theme_names() -> Res
 }
 
 #[test]
+fn tone_preserves_the_full_authored_preference_before_gamut_mapping() -> Result<(), String> {
+    let source = Srgb8::new([0, 103, 244]);
+    let curve = ToneCurveV1::new(2, vec![[0.0, 0.9], [1.0, 0.9]])
+        .map_err(|error| format!("tone curve: {error:?}"))?;
+    let backdrop = Srgb8::new([255; 3]);
+    let seed = curve.preferred_color(source, backdrop);
+    assert_eq!(seed, Srgb8::new([204, 223, 255]));
+    let more_chromatic = Srgb8::new([204, 222, 255]);
+    let identity = ColorIdentityDomainV1::new(source, false, IdentityOptionsV1::default())
+        .map_err(|error| format!("identity: {error:?}"))?;
+    assert!(identity.contains(seed) && identity.contains(more_chromatic));
+    let [_, a, b] = lab(source);
+    let preferred = [curve.preferred_lightness(backdrop), a, b];
+    assert!(
+        squared_distance(lab(more_chromatic), preferred) < squared_distance(lab(seed), preferred),
+        "a slightly darker color better preserves the complete authored preference"
+    );
+    let mut target = color(source.bytes(), 2.0, Some(curve))?;
+    let TargetIntentV1::Computed(value) = &mut target.intent else {
+        return Err("computed fixture".into());
+    };
+    value.domain = AssignmentDomainV1::Cube {
+        lower: more_chromatic.bytes(),
+        upper: seed.bytes(),
+    };
+    let owner = compile_assignment(unconstrained(target), 128)
+        .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("update: {error:?}"))?
+        .commit();
+    assert_eq!(rgb(&session), more_chromatic);
+    assert_eq!(
+        session
+            .state()
+            .current_verified()
+            .ok_or("ready tuple")?
+            .computed_for_test()
+            .optimality(),
+        ComputedOptimalityV1::Exact
+    );
+    Ok(())
+}
+
+#[test]
 fn neutral_opaque_search_intersects_the_authored_domain() -> Result<(), String> {
     for source in [[140; 3], [140, 141, 140]] {
         let mut target = color([128; 3], 2.0, None)?;
@@ -254,7 +333,8 @@ fn multi_case_tone_optimizes_worst_case_and_matches_all_gray_values() -> Result<
     let source = Srgb8::new([128; 3]);
     let curve = ToneCurveV1::new(2, vec![[0.0, 0.2], [1.0, 0.8]])
         .map_err(|error| format!("tone curve: {error:?}"))?;
-    let preferred = [0, 255].map(|g| lab(curve.preferred_color(source, Srgb8::new([g; 3]))));
+    let [_, a, b] = lab(source);
+    let preferred = [0, 255].map(|g| [curve.preferred_lightness(Srgb8::new([g; 3])), a, b]);
     let oracle = (0..=255_u8)
         .map(|g| Srgb8::new([g; 3]))
         .min_by(|a, b| {

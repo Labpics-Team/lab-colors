@@ -3,13 +3,33 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { coreLicenseInputs } from "./package-licenses.mjs";
+import { coreLicenseInputs } from "./core-licenses.mjs";
 import { workspaceLicense } from "./cargo-workspace.mjs";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const NOTICE_NAME = /^(?:licen[cs]e|copying|copyright|notice|unlicense)(?:[._-].*)?$/iu;
 const NOTICE_DIRECTORY = /^licen[cs]es$/iu;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+// Cargo metadata describes the whole workspace; only compiler-artifact IDs
+// identify the dependencies that participated in this product build.
+export function compiledLicenseComponents(metadata, identities, product) {
+  const packages = new Map(metadata.packages.map((pkg) => [pkg.id, pkg]));
+  if (packages.size !== metadata.packages.length || !Array.isArray(identities) ||
+      identities.length === 0 || new Set(identities).size !== identities.length ||
+      identities.some((id) => typeof id !== "string" || !id)) {
+    throw new Error("build package identities are missing or ambiguous");
+  }
+  if (!identities.some((id) => packages.get(id)?.name === product &&
+      metadata.workspace_members.includes(id))) throw new Error(`${product} product artifact is missing`);
+  return [...identities].sort().map((id) => {
+    const pkg = packages.get(id);
+    if (!pkg?.license) throw new Error(`compiled dependency license is missing: ${id}`);
+    return { type: "library", name: pkg.name, version: pkg.version,
+      "bom-ref": `cargo:${pkg.name}@${pkg.version}#${pkg.source ?? "workspace"}`,
+      licenses: [{ expression: pkg.license }] };
+  });
+}
 
 export function licenseInventory(sbom) {
   const refs = new Set();

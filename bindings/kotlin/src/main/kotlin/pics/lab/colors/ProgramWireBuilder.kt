@@ -58,6 +58,11 @@ data class ProgramWireAssignmentOptionsV3(
     val reference: List<ProgramWireReferenceInputV3>? = null,
 )
 
+data class ProgramWireComposeOptionsV3(
+    /** null omits the reference; an empty list explicitly declares a reference without input ports. */
+    val reference: List<ProgramWireReferenceInputV3>? = null,
+)
+
 private class WireBytes {
     private var bytes = ByteArray(32)
     var size = 0
@@ -311,13 +316,18 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         }
     }
     internal fun assignmentV3(targets: List<UInt>, options: ProgramWireAssignmentOptionsV3) {
-        if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("assignment is already declared")
+        selectionV3(targets, options.reference, 3, "assignment")
+    }
+    internal fun composeV3(targets: List<UInt>, options: ProgramWireComposeOptionsV3) {
+        selectionV3(targets, options.reference, 5, "compose")
+    }
+    private fun selectionV3(targets: List<UInt>, reference: List<ProgramWireReferenceInputV3>?, tag: Int, operation: String) {
+        if (sections[3].count != 0) throw ProgramWireException.InvalidDeclaration("$operation is already declared")
         v3Entry(3) { out ->
             val size = targets.size
-            if (size < 0) throw ProgramWireException.InvalidDeclaration("invalid assignment length")
+            if (size < 0) throw ProgramWireException.InvalidDeclaration("invalid $operation length")
             if (size > 4096) throw ProgramWireException.TooManyEntries()
-            val reference = options.reference
-            out.u8(if (reference != null) 4 else 3); out.u8(0); out.u32(size.toUInt())
+            out.u8(if (reference != null) tag + 1 else tag); out.u8(0); out.u32(size.toUInt())
             for (index in 0 until size) out.u32(targets[index])
             if (reference != null) {
                 val referenceSize = reference.size
@@ -356,7 +366,7 @@ class ProgramWireBuilderV2 : ProgramWireBuilderV1(2) {
     }
 }
 
-/** LCPW v3 передаёт Core характер цвета, контекст и порядок предпочтений. */
+/** LCPW v3 передаёт Core характер цвета и контекст; выбор и композиция принадлежат Core. */
 class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
     fun colorTarget(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3 = ProgramWireColorOptionsV3()): ProgramWireBuilderV3 {
         colorTargetV3(id, anchor, options)
@@ -383,6 +393,13 @@ class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
 
     fun assignment(targetsInPreferenceOrder: List<UInt>, options: ProgramWireAssignmentOptionsV3): ProgramWireBuilderV3 {
         assignmentV3(targetsInPreferenceOrder, options)
+        return this
+    }
+
+    /** Every computed target appears once. Core composes whole physical components;
+     * declaration order only preserves compatibility for implicit-reference components. */
+    fun compose(targets: List<UInt>, options: ProgramWireComposeOptionsV3 = ProgramWireComposeOptionsV3()): ProgramWireBuilderV3 {
+        composeV3(targets, options)
         return this
     }
 }

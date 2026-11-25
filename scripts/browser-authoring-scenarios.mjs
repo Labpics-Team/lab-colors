@@ -3,7 +3,7 @@ const CHECKS = {
   ownership: ["independent-modules", "independent-roots", "independent-dispose",
     "cascade-rollback", "cascade-recovery", "important-rollback", "important-recovery"],
   csp: ["csp-refusal"],
-  nonce: ["nonce-acceptance"],
+  nonce: ["nonce-acceptance", "field-preview", "preview-solid-update"],
 };
 
 /** The same installed tarball is served under two complete module URL trees. */
@@ -121,6 +121,16 @@ async function browserAuthoringConsumer(origin, mode, nonce, cleanup) {
       check("nonce-acceptance", view.lastUpdate.state === "committed"
         && view.current.values.ink.rgb.join() === "255,0,0" && read(first).color === "rgb(255, 0, 0)"
         && style.nonce === nonce && style.sheet !== null && !style.sheet.disabled, read(first));
+      const field = { kind: "affine-srgb8", from: "#f4eadb", to: "#d7c5a8" };
+      const preview = program.preview(second, { canvas: field }, { nonce });
+      own("authoring-preview", preview, () => preview.dispose(), () => preview.current === null && !styleFor(second));
+      const computed = getComputedStyle(second);
+      check("field-preview", preview.lastUpdate.state === "committed" && preview.current.state === "modeled"
+        && preview.current.coverage.rendering === "unknown" && computed.backgroundImage.startsWith("linear-gradient(")
+        && read(second).canvas === preview.current.contextCss.canvas && computed.color === "rgb(255, 0, 0)", read(second));
+      const solid = preview.set({ canvas: "#ffffff" });
+      check("preview-solid-update", solid.frame.state === "ready" && computed.backgroundImage === "none"
+        && computed.backgroundColor === "rgb(255, 255, 255)", read(second));
     }
   } catch (error) { primary = error; }
   const outcome = cleanup(primary, resources.toReversed());

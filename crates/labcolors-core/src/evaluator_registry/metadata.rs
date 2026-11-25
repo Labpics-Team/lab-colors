@@ -4,7 +4,7 @@
 //!
 //! WIRE NOTE: These types have no serde derives. Serialization/deserialization
 //! is performed by mirror types in labcolors-wasm via manual From/Into conversions.
-//! This preserves core's zero-dependency invariant.
+//! This keeps serialization at the transport boundary.
 
 /// Domain bounds within which an evaluator's verdict is valid.
 /// An invocation outside these bounds is a protocol error, not a violation.

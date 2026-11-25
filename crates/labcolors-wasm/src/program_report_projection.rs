@@ -82,6 +82,7 @@ pub(super) fn project(report: Option<&ProgramAssessmentReportV1>) -> Result<JsVa
         report_array_push(&tonal_hierarchy, &record)?;
     }
     let reference_selections = reference_selections(report)?;
+    let selection_components = selection_components(report)?;
     report_projection(
         &report.content_identity(),
         report.stream_id(),
@@ -91,7 +92,32 @@ pub(super) fn project(report: Option<&ProgramAssessmentReportV1>) -> Result<JsVa
         &cleanliness,
         &tonal_hierarchy,
         &reference_selections,
+        &selection_components,
     )
+}
+
+pub(super) fn project_selection_components(
+    report: Option<&ProgramAssessmentReportV1>,
+) -> Result<JsValue, JsValue> {
+    let Some(report) = report else {
+        return Ok(JsValue::NULL);
+    };
+    report_array_freeze(&selection_components(report)?)
+}
+
+fn selection_components(report: &ProgramAssessmentReportV1) -> Result<js_sys::Array, JsValue> {
+    use labcolors_core::program_wire::ProgramSelectionModeV1;
+    let components = report_array()?;
+    for component in report.selection_components() {
+        let mode = match component.mode() {
+            ProgramSelectionModeV1::OrderedV1 => "ordered-v1",
+            ProgramSelectionModeV1::JointPointV1 => "joint-point-v1",
+            ProgramSelectionModeV1::OrderedReferenceV1 => "ordered-reference-v1",
+        };
+        let record = super::report_selection_component(mode, component.targets())?;
+        report_array_push(&components, &record)?;
+    }
+    Ok(components)
 }
 
 /// Копирует только объяснение адаптации, без всех assessment cells.

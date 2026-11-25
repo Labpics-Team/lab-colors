@@ -250,14 +250,14 @@ test("output order, aliases and an unexported backdrop do not change graph prefe
     try {
       const frame = program.resolve({ canvas: "#283548" });
       assert.equal(frame.state, "ready");
-      assert.equal(frame.optimality, "exact", "the bounded neutral domains complete this preference comparison");
+      assert.equal(frame.optimality, "unfinished", "finite Point discovery does not certify a continuous optimum");
       assert.deepEqual(Object.keys(frame.values), Object.keys(outputs), "export order remains a readout property");
       frames.push(frame);
     } finally { program.dispose(); }
   }
   const first = frames[0];
   assert.equal(textPasses(first.values.label.rgb, first.values.panel.rgb), true);
-  assert.notDeepEqual(first.values.label.rgb, [36, 36, 36], "the earlier panel preference can require changing its later label");
+  assert.notDeepEqual(first.values.label.rgb, [36, 36, 36], "the connected fill and label must adapt together");
   for (const frame of frames.slice(1)) {
     assert.deepEqual(frame.values.label, first.values.label);
     if (frame.values.panel !== undefined) assert.deepEqual(frame.values.panel, first.values.panel);

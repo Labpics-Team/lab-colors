@@ -7,7 +7,7 @@ export type {
   ColorAdaptiveRole, ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
   ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
-  ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection,
+  ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection, ColorSelectionComponent,
   ColorAffineSrgb8Field, ResolvedColorAffineSrgb8Field, ResolvedColorContext,
   ColorFieldWitness, ColorFieldAssessment, ColorFieldModelScope, ModeledColorFrame,
 } from "./authoring.js";
@@ -97,7 +97,7 @@ export type ProgramError = Error & (
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
   | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" | "updateDeclaredFieldWith" }>
   | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
-  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "referenceSelections" | "fieldAssessment" | "diagnostics" }>
+  | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "referenceSelections" | "selectionComponents" | "fieldAssessment" | "diagnostics" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>
   | Readonly<{
       code: ProgramAttachmentUpdateErrorCode;

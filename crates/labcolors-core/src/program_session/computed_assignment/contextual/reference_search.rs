@@ -1347,6 +1347,52 @@ fn reports(
     Ok(reports.into())
 }
 
+pub(super) fn reports_for_values<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1<'_>,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    capacity: impl FnMut(usize) -> Result<Option<ProgramReferenceCapacityV1>, ()>,
+) -> Result<
+    std::sync::Arc<[ProgramReferenceSelectionV1]>,
+    ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
+> {
+    let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+    let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
+    let mut appearance =
+        buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
+    observe_selected(
+        context,
+        runtime,
+        epoch,
+        scenarios,
+        values,
+        &mut scores,
+        &mut appearance,
+    )?;
+    reports(context, &appearance, capacity).map_err(allocation)
+}
+
+fn observe_selected<E: ProgramConstraintEvaluatorSetV1>(
+    context: &ContextV1<'_>,
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenarios: NonEmptyScenarioSetV1<'_>,
+    values: &[Srgb8],
+    scores: &mut [f64],
+    appearance: &mut [AppearancePointV1],
+) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    apply_targets::<E>(context.targets, runtime, values)?;
+    let mut collector = IntentScoreCollectorV1::new(context, values, scores);
+    collector.appearance = Some(appearance);
+    observe_intents(context, runtime, epoch, scenarios, &mut collector)?;
+    if collector.violations() != 0 {
+        return Err(ProgramSessionEvaluationError::InternalInvariant);
+    }
+    Ok(())
+}
+
 pub(in crate::program_session::computed_assignment) fn refresh_reports<
     E: ProgramConstraintEvaluatorSetV1,
 >(
@@ -1361,30 +1407,17 @@ pub(in crate::program_session::computed_assignment) fn refresh_reports<
     std::sync::Arc<[ProgramReferenceSelectionV1]>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
 > {
-    let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
-    let mut scores = buffer(context.targets.len(), 0.0).map_err(allocation)?;
-    let mut appearance =
-        buffer(context.preferred.len(), AppearancePointV1::default()).map_err(allocation)?;
-    apply_targets::<E>(context.targets, runtime, values)?;
-    let mut collector = IntentScoreCollectorV1::new(&context, values, &mut scores);
-    collector.appearance = Some(&mut appearance);
-    observe_intents(&context, runtime, epoch, scenarios, &mut collector)?;
-    if collector.violations() != 0 {
-        return Err(ProgramSessionEvaluationError::InternalInvariant);
-    }
-    drop(collector);
     // Capacity and search completeness describe the same local support. Case
     // indexes and appearances describe this observation and must be rebuilt.
     let mut previous = previous.iter();
-    reports(&context, &appearance, |target| {
+    reports_for_values(&context, runtime, epoch, scenarios, values, |target| {
         let report = previous.next().ok_or(())?;
         if report.target_id != context.targets[target].id.value() {
             return Err(());
         }
         Ok(report.capacity)
     })
-    .map_err(allocation)
 }
 
 fn interval_distance(left: [f64; 2], right: [f64; 2]) -> f64 {
@@ -1446,23 +1479,25 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         for siblings in opposite_siblings.chunk_by_mut(|left, right| left.0 == right.0) {
             siblings.reverse();
         }
+        let sibling_orders = 1 + usize::from(opposite_siblings != repair_order);
+        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[count - 1].0);
+        let trajectories = sibling_orders * depth_orders;
         let starts = search
             .context
             .local_cases
             .order
             .len()
-            .checked_mul(4)
-            .and_then(|count| count.checked_add(2))
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(1))
+            .and_then(|seeds| seeds.checked_mul(trajectories))
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
         // Each branch gets its own repair trajectory. A jointly infeasible
         // branch can be close to a feasible composition even when no single
         // coordinate move from the authored paints improves the failure count.
-        // Both sibling directions restart from that same branch, beginning
-        // downstream: an upstream repair may consume capacity needed by a
-        // downstream relation. Reversing a flat order couples these independent
-        // choices and misses both possible downstream-first sibling repairs.
-        // Only dependency depth orders different levels; equal-depth uses retain
-        // authored preference. Numeric occurrence IDs cannot order siblings.
+        // Reverse dependency depth and sibling order independently. An upstream
+        // move can satisfy both a backdrop and its authored foreground. Other
+        // compositions need to repair a downstream relation first. On a chain
+        // only depth varies; on a single level only sibling order varies.
         // All starts share the existing quarter-budget; unused work passes on.
         for start in 0..starts {
             if search.evidence.visited >= seed_limit {
@@ -1470,8 +1505,9 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             let limit = search.evidence.visited
                 + (seed_limit - search.evidence.visited) / (starts - start) as u64;
-            let seed = start / 2;
-            if seed > 0 && start % 2 == 0 {
+            let seed = start / trajectories;
+            let trajectory = start % trajectories;
+            if seed > 0 && trajectory == 0 {
                 let case = search.context.local_cases.order[(seed - 1) / 2];
                 let direction = if seed % 2 == 1 { -1 } else { 1 };
                 for target in 0..count {
@@ -1503,15 +1539,16 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             }
             // The legacy distance only guides repair. Every hard-valid point
             // is retained and compared by the unchanged typed reference key.
-            let order = if start % 2 == 0 {
+            let order = if trajectory % sibling_orders == 0 {
                 &repair_order
             } else {
                 &opposite_siblings
             };
+            let downstream_first = trajectory < sibling_orders;
             'repair: for pass in 0.. {
                 let mut changed = false;
                 for position in 0..count {
-                    let coordinate = if pass % 2 == 0 {
+                    let coordinate = if (pass % 2 == 0) == downstream_first {
                         count - 1 - position
                     } else {
                         position
@@ -1749,15 +1786,15 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         // of every physical case. Recompose only the selected report, without
         // running another search or another constraint evaluator. The caller
         // still performs the normal full-tuple validation before publication.
-        apply_targets::<E>(search.context.targets, runtime, &values)?;
-        let mut collector =
-            IntentScoreCollectorV1::new(&search.context, &values, &mut search.legacy_scores);
-        collector.appearance = Some(&mut search.appearance);
-        observe_intents(&search.context, runtime, epoch, scenarios, &mut collector)?;
-        if collector.violations() != 0 {
-            return Err(ProgramSessionEvaluationError::InternalInvariant);
-        }
-        drop(collector);
+        observe_selected(
+            &search.context,
+            runtime,
+            epoch,
+            scenarios,
+            &values,
+            &mut search.legacy_scores,
+            &mut search.appearance,
+        )?;
         (
             Some(values),
             Some(search.reference_reports(best).map_err(allocation)?),

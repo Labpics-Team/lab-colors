@@ -1160,6 +1160,29 @@ impl ObservationGroup {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ComputedSelectionPolicyV1 {
+    Ordered(Vec<TargetId>),
+    AuthoredComposition {
+        legacy_reference_order: Vec<TargetId>,
+    },
+}
+
+impl ComputedSelectionPolicyV1 {
+    pub(crate) fn legacy_order(&self) -> &[TargetId] {
+        match self {
+            Self::Ordered(order) => order,
+            Self::AuthoredComposition {
+                legacy_reference_order,
+            } => legacy_reference_order,
+        }
+    }
+
+    pub(crate) fn authored_composition(&self) -> bool {
+        matches!(self, Self::AuthoredComposition { .. })
+    }
+}
+
 /// Immutable generic point Program.
 pub struct Program<Evaluation>
 where
@@ -1170,7 +1193,7 @@ where
     targets: Vec<Target>,
     families: Vec<FamilyDeclarationV2>,
     joint_selection: Option<MaterialisedSelectionV1>,
-    assignment: Option<Vec<TargetId>>,
+    assignment: Option<ComputedSelectionPolicyV1>,
     reference_inputs: Option<Vec<(SurfaceInputPortId, Srgb8)>>,
     #[cfg(test)]
     computed_budget: Option<u64>,
@@ -1286,7 +1309,12 @@ where
     }
 
     pub fn compile(mut self) -> Result<CompiledProgram<Evaluation>, ProgramCompileError> {
-        computed_assignment::assign_preference(&mut self.targets, self.assignment.as_deref())?;
+        computed_assignment::assign_preference(
+            &mut self.targets,
+            self.assignment
+                .as_ref()
+                .map(ComputedSelectionPolicyV1::legacy_order),
+        )?;
         prepare_program(self).map(|epoch| CompiledProgram {
             owner_generation: Shared::new(epoch),
         })
@@ -1352,7 +1380,13 @@ impl CoreProgramDraftV1 {
     }
 
     pub(crate) fn set_assignment(&mut self, order: Vec<TargetId>) {
-        self.program.assignment = Some(order);
+        self.program.assignment = Some(ComputedSelectionPolicyV1::Ordered(order));
+    }
+
+    pub(crate) fn set_composition(&mut self, legacy_reference_order: Vec<TargetId>) {
+        self.program.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+            legacy_reference_order,
+        });
     }
 
     pub(crate) fn set_reference_appearance(&mut self, id: TargetId) {
@@ -2292,6 +2326,9 @@ where
     required_family_releases: Box<[crate::family::SemanticFamilyReleaseIdV2]>,
     graph: CompiledAppearanceGraph,
     binding_template: AdmittedAppearanceBindings,
+    // Retain authored canonical inputs for lazy private continuous preparation.
+    // The established ordered path still evaluates only its byte reference.
+    reference_inputs: Option<Box<[(SurfaceInputPortId, Srgb8)]>>,
     observation_group: CompiledObservationGroupV1,
     occurrence_contexts: Box<[CompiledOccurrenceContextV1]>,
     // Полная таблица контекстов Occurrence сохраняется для presentation binding;
@@ -2628,6 +2665,9 @@ where
                 workspace,
                 presentation_cache,
                 evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                reference_completion: computed_assignment::ReferenceCompletionScratchV1::empty(
+                    &self.owner_generation,
+                ),
                 family_artifacts,
             },
         ))
@@ -4412,6 +4452,9 @@ where
     workspace: AppearanceWorkspace,
     presentation_cache: ProgramPresentationCacheV1,
     evaluation_arenas: ProgramEvaluationArenaPoolV1<Evaluation>,
+    // Initialized only by the private incoming continuous operation.
+    // This scratch retains no epoch lease and does not affect ordinary search.
+    reference_completion: computed_assignment::ReferenceCompletionScratchV1<Evaluation>,
     // Последнее owning-поле Plan: Session сначала уничтожает evidence/arenas,
     // затем executable artifact storage этой generation.
     family_artifacts: BoundFamilyArtifactBundleV2,
@@ -4473,6 +4516,8 @@ where
         _permit: SessionObservationBindingPermitV1,
     ) -> Result<SessionDecision<Self::Verified, Self::Violation, Self::Incomplete>, Self::Error>
     {
+        #[cfg(test)]
+        computed_assignment::reference_completion_incoming_test_hook(self, &owner.0, &observation);
         if matches!(
             owner.0.target_selection,
             CompiledTargetSelectionV1::Computed(_)
@@ -4529,6 +4574,7 @@ where
         workspace,
         presentation_cache,
         evaluation_arenas,
+        reference_completion: _,
         family_artifacts,
     } = plan;
     let mut arena = evaluation_arenas
@@ -5859,7 +5905,10 @@ where
         &graph,
         &mut program.targets,
         program.joint_selection.as_ref(),
-        program.assignment.as_deref(),
+        program
+            .assignment
+            .as_ref()
+            .map(ComputedSelectionPolicyV1::legacy_order),
         computed_budget,
     )?;
     if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
@@ -5882,8 +5931,8 @@ where
         &point_presentations,
         reference.as_ref(),
     )?;
-    if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
-        computed_assignment::compile_components(
+    let partition = if let CompiledTargetSelectionV1::Computed(selection) = &mut target_selection {
+        Some(computed_assignment::partition_components(
             selection,
             &program,
             &graph,
@@ -5891,8 +5940,10 @@ where
             &constraints,
             &dependency_index,
             &mut dependency_scratch,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
     validate_compiled_family_usage(&program.families, &constraints)?;
     validate_terminal_dependency_cone(
         &program,
@@ -5918,15 +5969,47 @@ where
         .collect::<Vec<_>>();
     let field = compile_field_program_v1(&mut program.field, &terminal_operators)
         .map_err(ProgramCompileError::Field)?;
-    let content_identity = identity::compile_owner_identity(&program)?;
+    let preferences = match (&target_selection, &partition) {
+        (CompiledTargetSelectionV1::Computed(selection), Some(partition))
+            if program
+                .assignment
+                .as_ref()
+                .is_some_and(ComputedSelectionPolicyV1::authored_composition) =>
+        {
+            selection.identity_preferences(partition)?
+        }
+        _ => Vec::new(),
+    };
+    let compiled_identity = identity::compile_owner_identity_and_layout(&program, &preferences)?;
+    let content_identity = compiled_identity.content;
+    if let (CompiledTargetSelectionV1::Computed(selection), Some(mut partition)) =
+        (&mut target_selection, partition)
+    {
+        if let Some(layout) = &compiled_identity.execution {
+            selection.canonicalize_execution(layout, &mut partition)?;
+        }
+        computed_assignment::compile_components(
+            selection,
+            partition,
+            &program,
+            &graph,
+            &constraints,
+            &dependency_index,
+            &mut dependency_scratch,
+        )?;
+        if let Some(layout) = &compiled_identity.execution {
+            selection.canonicalize_inputs(layout, &graph)?;
+        }
+    }
     let families = program.families.into_boxed_slice();
-    Ok(ProgramEpochV1 {
+    let mut epoch = ProgramEpochV1 {
         content_identity,
         evaluator: program.evaluator,
         families,
         required_family_releases,
         graph,
         binding_template,
+        reference_inputs: program.reference_inputs.map(Vec::into_boxed_slice),
         observation_group: CompiledObservationGroupV1 {
             id: program.observation_group.id,
             schema: observation_schema,
@@ -5941,7 +6024,9 @@ where
         field,
         field_outputs,
         target_selection,
-    })
+    };
+    computed_assignment::prepare_point_anchors(&mut epoch)?;
+    Ok(epoch)
 }
 
 fn canonical_required_family_releases(
@@ -6411,7 +6496,7 @@ where
             index,
             scratch,
             constraint,
-            &mut constrained_targets,
+            &mut |target| constrained_targets[target] = true,
             Some(&mut assessed_paints),
         )?;
     }
@@ -6448,7 +6533,7 @@ where
                 index,
                 scratch,
                 constraint,
-                &mut per_constraint_targets,
+                &mut |target| per_constraint_targets[target] = true,
                 None,
             )?;
             if program.targets.iter().enumerate().all(|(index, target)| {
@@ -6470,7 +6555,7 @@ fn mark_constraint_coverage<Invocation, Evaluation>(
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
     constraint: &CompiledPointConstraint<Invocation>,
-    constrained_targets: &mut [bool],
+    mark_target: &mut impl FnMut(usize),
     assessed_paints: Option<&mut [bool]>,
 ) -> Result<(), ProgramCompileError>
 where
@@ -6483,9 +6568,7 @@ where
                 .targets
                 .binary_search_by_key(target_id, |candidate| candidate.id)
                 .map_err(|_| ProgramCompileError::InternalInvariant)?;
-            *constrained_targets
-                .get_mut(ordinal)
-                .ok_or(ProgramCompileError::InternalInvariant)? = true;
+            mark_target(ordinal);
             Ok(())
         }
         CompiledProgramConstraintBodyV1::IntrinsicRelation {
@@ -6500,9 +6583,7 @@ where
                     .targets
                     .binary_search_by_key(&target, |candidate| candidate.id)
                     .map_err(|_| ProgramCompileError::InternalInvariant)?;
-                *constrained_targets
-                    .get_mut(ordinal)
-                    .ok_or(ProgramCompileError::InternalInvariant)? = true;
+                mark_target(ordinal);
             }
             Ok(())
         }
@@ -6511,7 +6592,7 @@ where
                 index,
                 scratch,
                 [*occurrence],
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6524,7 +6605,7 @@ where
             scratch,
             std::iter::once(reference.occurrence)
                 .chain(candidates.iter().map(|candidate| candidate.occurrence)),
-            constrained_targets,
+            mark_target,
             assessed_paints,
         ),
         CompiledProgramConstraintBodyV1::ComputedVisibleRelation { occurrences, .. } => {
@@ -6532,7 +6613,7 @@ where
                 index,
                 scratch,
                 occurrences.iter().map(|endpoint| endpoint.occurrence),
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6541,7 +6622,7 @@ where
                 index,
                 scratch,
                 [*terminal],
-                constrained_targets,
+                mark_target,
                 assessed_paints,
             )
         }
@@ -6552,13 +6633,10 @@ fn merge_visible_constraint_coverage(
     index: &IndexedProgramDependenciesV1,
     scratch: &mut ProgramDependencyScratchV1,
     roots: impl IntoIterator<Item = OccurrenceId>,
-    constrained_targets: &mut [bool],
+    mark_target: &mut impl FnMut(usize),
     assessed_paints: Option<&mut [bool]>,
 ) -> Result<(), ProgramCompileError> {
     scratch.scan(index, roots)?;
-    if scratch.targets.len() != constrained_targets.len() {
-        return Err(ProgramCompileError::InternalInvariant);
-    }
     if assessed_paints
         .as_ref()
         .is_some_and(|paints| scratch.paints.len() != paints.len())
@@ -6568,7 +6646,7 @@ fn merge_visible_constraint_coverage(
     let mut assessed_paints = assessed_paints;
     for node in &scratch.queue {
         match *node {
-            IndexedDependencyNodeV1::Target(target) => constrained_targets[target] = true,
+            IndexedDependencyNodeV1::Target(target) => mark_target(target),
             IndexedDependencyNodeV1::Paint(paint) => {
                 if let Some(paints) = assessed_paints.as_deref_mut() {
                     paints[paint] = true;

@@ -23,7 +23,9 @@ pub(super) fn compile_assignment<E: ProgramConstraintEvaluatorSetV1>(
         })
         .collect();
     order.sort_unstable_by_key(|entry| entry.0);
-    program.assignment = Some(order.into_iter().map(|entry| entry.1).collect());
+    program.assignment = Some(ComputedSelectionPolicyV1::Ordered(
+        order.into_iter().map(|entry| entry.1).collect(),
+    ));
     program.computed_budget = Some(budget);
     program.compile()
 }

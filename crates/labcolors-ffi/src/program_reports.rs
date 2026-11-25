@@ -249,6 +249,20 @@ pub struct ProgramAssessmentReport {
     pub cleanliness: ProgramCleanlinessAssessment,
     pub tonal_hierarchy: Vec<ProgramTonalHierarchyPair>,
     pub reference_selections: Vec<ProgramReferenceSelection>,
+    pub selection_components: Vec<ProgramSelectionComponent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ProgramSelectionMode {
+    OrderedV1,
+    JointPointV1,
+    OrderedReferenceV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramSelectionComponent {
+    pub targets: Vec<u32>,
+    pub mode: ProgramSelectionMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -579,7 +593,29 @@ pub(crate) fn assessment_report(
         cleanliness: cleanliness_assessment(report.cleanliness(), operation)?,
         tonal_hierarchy,
         reference_selections: reference_selections(report.reference_selections(), operation)?,
+        selection_components: selection_components(report.selection_components(), operation)?,
     }))
+}
+
+pub(crate) fn selection_components(
+    components: &[core::ProgramSelectionComponentV1],
+    operation: &str,
+) -> Result<Vec<ProgramSelectionComponent>, LabColorsError> {
+    let mut projected = storage(components.len(), operation)?;
+    for component in components {
+        let mode = match component.mode() {
+            core::ProgramSelectionModeV1::OrderedV1 => ProgramSelectionMode::OrderedV1,
+            core::ProgramSelectionModeV1::JointPointV1 => ProgramSelectionMode::JointPointV1,
+            core::ProgramSelectionModeV1::OrderedReferenceV1 => {
+                ProgramSelectionMode::OrderedReferenceV1
+            }
+        };
+        projected.push(ProgramSelectionComponent {
+            targets: copy_slice(component.targets(), operation)?,
+            mode,
+        });
+    }
+    Ok(projected)
 }
 
 pub(crate) fn reference_selections(

@@ -176,14 +176,19 @@
       "path": "crates/labcolors-core/src/numerics.rs"
     },
     {
-      "after": "f64::from(tint)",
-      "before": "f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))",
+      "after": "    tint\n",
+      "before": "    backdrop + alpha * (tint - backdrop)\n",
       "path": "crates/labcolors-core/src/composition.rs"
     },
     {
       "after": "        Self { source, opacity: crate::composition::AdmittedOpacityV1::OPAQUE }\n",
       "before": "        Self { source, opacity }\n",
       "path": "crates/labcolors-core/src/appearance.rs"
+    },
+    {
+      "after": "        Srgb8::new([0, 0, 0])\n",
+      "before": "        Srgb8::new(occurrence.visible())\n",
+      "path": "crates/labcolors-core/src/appearance/numeric_kernel.rs"
     },
     {
       "after": "let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();",
@@ -252,6 +257,7 @@
     "crates/labcolors-core/contracts/wcag22-srgb8-v1.json",
     "crates/labcolors-core/src/appearance.rs",
     "crates/labcolors-core/src/appearance/execution_cone.rs",
+    "crates/labcolors-core/src/appearance/numeric_kernel.rs",
     "crates/labcolors-core/src/composition.rs",
     "crates/labcolors-core/src/constraints/exact.rs",
     "crates/labcolors-core/src/constraints/mod.rs",

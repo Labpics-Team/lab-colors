@@ -156,6 +156,11 @@ export interface ProgramReferenceSelectionV1 {
   readonly cases: ReadonlyArray<ProgramReferenceCaseV1>;
 }
 
+export interface ProgramSelectionComponentV1 {
+  readonly mode: "ordered-v1" | "joint-point-v1" | "ordered-reference-v1";
+  readonly targets: ReadonlyArray<number>;
+}
+
 /** Scope of a declared model; unknown rendering is not a pixel guarantee. */
 export interface ProgramFieldAssessmentV1 {
   readonly inputIndex: number;
@@ -181,6 +186,7 @@ export interface ProgramAssessmentReportV1 {
   readonly cleanliness: ProgramCleanlinessAssessmentV1;
   readonly tonalHierarchy: ReadonlyArray<ProgramTonalHierarchyPairV1>;
   readonly referenceSelections: ReadonlyArray<ProgramReferenceSelectionV1>;
+  readonly selectionComponents: ReadonlyArray<ProgramSelectionComponentV1>;
 }
 
 export type Wcag22CriterionV1 =
@@ -451,7 +457,12 @@ export function reportReferenceCase(caseIndex, colors, referenceContrast, actual
 export function reportReferenceSelection(targetId, occurrenceId, preference, capacity, cases) {
   return reportFreeze({targetId, occurrenceId, preference, capacity, cases: reportFreeze(cases)});
 }
-export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness, tonalHierarchy, referenceSelections) {
+export function reportSelectionComponent(mode, targets) {
+  const copy = [];
+  for (let i = 0; i < targets.length; i++) reportPush.call(copy, targets[i]);
+  return reportFreeze({mode, targets: reportFreeze(copy)});
+}
+export function reportProjection(contentIdentity, streamId, revision, scenarioProvenance, cells, cleanliness, tonalHierarchy, referenceSelections, selectionComponents) {
   return reportFreeze({
     contentIdentity: new ReportBytes(contentIdentity),
     streamId, revision,
@@ -460,6 +471,7 @@ export function reportProjection(contentIdentity, streamId, revision, scenarioPr
     cleanliness,
     tonalHierarchy: reportFreeze(tonalHierarchy),
     referenceSelections: reportFreeze(referenceSelections),
+    selectionComponents: reportFreeze(selectionComponents),
   });
 }
 "#)]
@@ -637,6 +649,7 @@ extern "C" {
         cleanliness: &JsValue,
         tonal_hierarchy: &js_sys::Array,
         reference_selections: &js_sys::Array,
+        selection_components: &js_sys::Array,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportTonalHierarchy)]
     fn report_tonal_hierarchy(
@@ -676,6 +689,8 @@ extern "C" {
         capacity: &JsValue,
         cases: &js_sys::Array,
     ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportSelectionComponent)]
+    fn report_selection_component(mode: &str, targets: &[u32]) -> Result<JsValue, JsValue>;
 }
 
 fn to_certificate_js_error(error: labcolors_core::certificate::CertificateErrorV1) -> JsValue {
@@ -769,6 +784,7 @@ enum ProgramOperation {
     AssessmentReport,
     CleanlinessAssessment,
     ReferenceSelections,
+    SelectionComponents,
     FieldAssessment,
 }
 
@@ -791,6 +807,7 @@ impl ProgramOperation {
             Self::AssessmentReport => "assessmentReport",
             Self::CleanlinessAssessment => "cleanlinessAssessment",
             Self::ReferenceSelections => "referenceSelections",
+            Self::SelectionComponents => "selectionComponents",
             Self::FieldAssessment => "fieldAssessment",
         }
     }
@@ -1076,6 +1093,18 @@ impl ProgramSnapshot {
                 to_program_js_error(
                     labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
                     ProgramOperation::ReferenceSelections,
+                )
+            })
+    }
+
+    /// Compiled component policies from Core; outside Ready the report is absent.
+    #[wasm_bindgen(js_name = selectionComponents, unchecked_return_type = "ReadonlyArray<ProgramSelectionComponentV1> | null")]
+    pub fn selection_components(&self) -> Result<JsValue, JsValue> {
+        program_report_projection::project_selection_components(self.inner.assessment_report())
+            .map_err(|_| {
+                to_program_js_error(
+                    labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                    ProgramOperation::SelectionComponents,
                 )
             })
     }

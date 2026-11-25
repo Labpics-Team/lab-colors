@@ -1,6 +1,6 @@
 [package]
 name = "labcolors-core"
-description = "Dependency-free core compiler and runtime resolver for client-owned color-token contracts."
+description = "Core compiler and runtime resolver for client-owned color-token contracts."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -19,6 +19,9 @@ private-fixture = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(labcolors_private_fixture_unshared_v1)'] }
+
+[dependencies]
+rustc_apfloat = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"

@@ -36,9 +36,9 @@ RESEARCH_CAPSULE_PATH = (
     "plans/lab-colors/evidence/nominal-source-release-v2-20261007/public-proof-capsule"
 )
 RESEARCH_RELEASE_PATH = f"{RESEARCH_CAPSULE_PATH}/release-v2.json"
-RESEARCH_COMMIT = "58ca2b958ea5ab2713f23bf58ae459520b7a2576"
+RESEARCH_COMMIT = "d07484abcaaac5367c07cd1a75830fd0dc725ae9"
 RESEARCH_RELEASE_SHA256 = (
-    "05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290"
+    "a8143b9eec6ec715ee4abdb0605ca57d109b271d0552e80fb81ae5cd44481674"
 )
 
 RELEASE_ID = "exact-nominal-srgb8-point-clean-set-v2"
@@ -83,6 +83,12 @@ EXCLUDED_CLAIMS = (
 PRODUCT_ARTIFACT_PATHS = {
     "appearance_executor_source": "crates/labcolors-core/src/appearance.rs",
     "appearance_execution_cone_source": "crates/labcolors-core/src/appearance/execution_cone.rs",
+    "appearance_numeric_kernel_source": "crates/labcolors-core/src/appearance/numeric_kernel.rs",
+    "appearance_certified_source": "crates/labcolors-core/src/appearance/certified.rs",
+    "appearance_continuous_source": "crates/labcolors-core/src/appearance/continuous.rs",
+    "certified_numeric_source": "crates/labcolors-core/src/certified_numeric.rs",
+    "certified_numeric_model_source": "crates/labcolors-core/src/certified_numeric/model.rs",
+    "certified_numeric_screening_source": "crates/labcolors-core/src/certified_numeric/screening.rs",
     "classifier_source": "crates/labcolors-core/src/clean_set.rs",
     "classifier_tests": "crates/labcolors-core/src/clean_set_tests.rs",
     "colored_graph_source": "crates/labcolors-core/src/colored_graph.rs",
@@ -102,9 +108,13 @@ PRODUCT_ARTIFACT_PATHS = {
     "program_reference_source": "crates/labcolors-core/src/program_session/reference.rs",
     "program_computed_assignment_source": "crates/labcolors-core/src/program_session/computed_assignment.rs",
     "program_computed_components_source": "crates/labcolors-core/src/program_session/computed_assignment/components.rs",
+    "program_point_equivalence_source": "crates/labcolors-core/src/program_session/computed_assignment/components/point_equivalence.rs",
     "program_computed_contextual_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
     "program_computed_conditional_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/conditional.rs",
     "program_computed_reference_search_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search.rs",
+    "program_point_search_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
+    "program_prepared_composition_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion.rs",
+    "program_authored_optimum_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion/authored_optimum.rs",
     "program_computed_refinement_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/refinement.rs",
     "program_computed_witness_source": "crates/labcolors-core/src/program_session/computed_assignment/witness.rs",
     "program_wire_decoder_source": "crates/labcolors-core/src/program/wire.rs",

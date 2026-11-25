@@ -154,40 +154,12 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   }
 
   assignment(targetsInPreferenceOrder, options = {}) {
-    if (this.section("jointSelection").count !== 0) invalid("assignment is already declared");
-    const length = inputArrayLength(targetsInPreferenceOrder, "assignment targets");
-    if (length > MAX_SECTION_ENTRIES_V1) invalid("too many assignment targets");
-    const targets = indexedValues(targetsInPreferenceOrder, length, "assignment targets")
-      .map((target) => u32Value(target, "assignment target"));
-    const rawReference = inputProperty(options, "reference", "assignment options");
-    let reference;
-    if (rawReference !== undefined) {
-      const referenceLength = inputArrayLength(rawReference, "assignment reference");
-      if (referenceLength > MAX_SECTION_ENTRIES_V1) invalid("too many reference inputs");
-      reference = indexedValues(rawReference, referenceLength, "assignment reference").map((entry) => {
-        if (inputArrayLength(entry, "reference input") !== 2) invalid("reference input must contain a port and RGB");
-        const [port, rgb] = indexedValues(entry, 2, "reference input");
-        return [u32Value(port, "reference input port"), rgb24(rgb, "reference input RGB")];
-      });
-      if (new Set(reference.map(([port]) => port)).size !== reference.length) invalid("reference input ports must be distinct");
-    }
-    const payload = new ByteSink();
-    payload.u8(reference === undefined ? 3 : 4);
-    payload.u8(0);
-    payload.u32(targets.length);
-    for (const target of targets) payload.u32(target);
-    if (reference !== undefined) {
-      payload.u32(reference.length);
-      for (const [port, rgb] of reference) {
-        payload.u32(port);
-        payload.rgb24(rgb);
-      }
-    }
-    // Getter мог принять вложенное assignment; внешнее не заменяет его.
-    if (this.section("jointSelection").count !== 0) invalid("assignment is already declared");
-    const output = this.entry("jointSelection");
-    for (const byte of payload.bytes) output.u8(byte);
-    return this;
+    return selection(this, targetsInPreferenceOrder, options, 3, "assignment");
+  }
+
+  /** Core composes whole physical components; declaration order only preserves legacy reference behavior. */
+  compose(targets, options = {}) {
+    return selection(this, targets, options, 5, "compose");
   }
 
   finish() {
@@ -195,6 +167,43 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint16(4, 3, true);
     return bytes;
   }
+}
+
+function selection(builder, declaredTargets, options, tag, operation) {
+  if (builder.section("jointSelection").count !== 0) invalid(`${operation} is already declared`);
+  const length = inputArrayLength(declaredTargets, `${operation} targets`);
+  if (length > MAX_SECTION_ENTRIES_V1) invalid(`too many ${operation} targets`);
+  const targets = indexedValues(declaredTargets, length, `${operation} targets`)
+    .map((target) => u32Value(target, `${operation} target`));
+  const rawReference = inputProperty(options, "reference", `${operation} options`);
+  let reference;
+  if (rawReference !== undefined) {
+    const referenceLength = inputArrayLength(rawReference, `${operation} reference`);
+    if (referenceLength > MAX_SECTION_ENTRIES_V1) invalid("too many reference inputs");
+    reference = indexedValues(rawReference, referenceLength, `${operation} reference`).map((entry) => {
+      if (inputArrayLength(entry, "reference input") !== 2) invalid("reference input must contain a port and RGB");
+      const [port, rgb] = indexedValues(entry, 2, "reference input");
+      return [u32Value(port, "reference input port"), rgb24(rgb, "reference input RGB")];
+    });
+    if (new Set(reference.map(([port]) => port)).size !== reference.length) invalid("reference input ports must be distinct");
+  }
+  const payload = new ByteSink();
+  payload.u8(reference === undefined ? tag : tag + 1);
+  payload.u8(0);
+  payload.u32(targets.length);
+  for (const target of targets) payload.u32(target);
+  if (reference !== undefined) {
+    payload.u32(reference.length);
+    for (const [port, rgb] of reference) {
+      payload.u32(port);
+      payload.rgb24(rgb);
+    }
+  }
+  // Getter мог принять вложенную selection; внешняя не заменяет её.
+  if (builder.section("jointSelection").count !== 0) invalid(`${operation} is already declared`);
+  const output = builder.entry("jointSelection");
+  for (const byte of payload.bytes) output.u8(byte);
+  return builder;
 }
 
 function bounded(value, maximum, what) {

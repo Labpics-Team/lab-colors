@@ -8,8 +8,7 @@ class AuthoringV3Test {
     @Test fun installedPackageAuthorsAndExecutesComputedColors() {
         val fixture = JSONObject(asset("program-authoring-v3.json"))
         check(fixture.getInt("schemaVersion") == 1)
-        verifyProgramAuthoringV3(listOf("computedBox", "computedGray", "contextual", "encodingOnly", "fixedOnly",
-            "referenceSingleton", "referenceHierarchy", "referenceEmpty")
+        verifyProgramAuthoringV3(fixture.keys().asSequence().filter { it != "schemaVersion" && it != "provenance" }
             .associateWith { fixture.getString(it) })
     }
 }

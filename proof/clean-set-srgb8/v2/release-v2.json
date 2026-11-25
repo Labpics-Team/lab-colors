@@ -17,7 +17,7 @@
   "proof_capsule": {
     "bytes": 11919,
     "manifest": "PROOF-MANIFEST.json",
-    "sha256": "bdf646418f75fcc99821b6c39c680deb4c64ac28303223ee043232483a2d4971"
+    "sha256": "fee0476a33c8d0f6c222a462d9a599159b15e522ca9e0556218683de922149ca"
   },
   "release_id": "exact-nominal-srgb8-point-clean-set-v2",
   "runtime_contract": {

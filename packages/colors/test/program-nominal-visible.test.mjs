@@ -49,6 +49,19 @@ function resolve(builder, backdrop, check) {
   }
 }
 
+test("ordered assignment finishes the discrete search for a conforming chromatic color", () => {
+  const builder = new ProgramWireBuilderV3()
+    .colorTarget(1, [40, 70, 190], { appearance: 5 }).surfaceInputPort(2)
+    .solidPaint(3, 1).inputSurface(4, 2).pointOccurrence(5, 3, 4)
+    .nominalSrgb8Visible(true, 6, 5).output(7, 3).assignment([1]);
+  resolve(builder, [255, 255, 255], (snapshot) => {
+    assert.equal(snapshot.state, "ready");
+    assert.equal(snapshot.optimality, "exact");
+    assert.deepEqual([...snapshot.outputRgb(0)], [46, 79, 200]);
+    assert.equal(snapshot.cleanlinessAssessment().status, "conforms");
+  });
+});
+
 test("visible nominal keeps white and transparent materials without presentation authority", () => {
   for (const opacity of [1, 0.5, 0]) {
     resolve(point([255, 255, 255], opacity, true), [255, 255, 255], snapshot => {

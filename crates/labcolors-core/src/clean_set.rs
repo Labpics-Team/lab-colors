@@ -35,8 +35,8 @@ const _: () = {
 #[cfg(test)]
 pub(crate) const EXACT_NOMINAL_SRGB8_CLEAN_SET_ACCEPTED_COUNT_V2: u32 = 8_342_111;
 pub(crate) const EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2: [u8; 32] = [
-    0x05, 0xa3, 0xea, 0x67, 0x83, 0x4b, 0xec, 0xa6, 0xfc, 0x1e, 0xf4, 0xb8, 0x53, 0x09, 0x2c, 0xd9,
-    0x92, 0xdb, 0xa0, 0x4c, 0x40, 0x60, 0xd8, 0x77, 0x35, 0x8e, 0x8e, 0xa2, 0xdd, 0xe8, 0x82, 0x90,
+    0xa8, 0x14, 0x3b, 0x9e, 0xec, 0x6e, 0xc7, 0x15, 0xee, 0x4a, 0xbd, 0xb0, 0x60, 0x5c, 0xa5, 0x7d,
+    0x10, 0x9b, 0x27, 0x1d, 0x05, 0x52, 0xe8, 0x0f, 0xb8, 0x1a, 0xe5, 0xcd, 0x44, 0x48, 0x16, 0x74,
 ];
 #[cfg(test)]
 pub(crate) const EXACT_NOMINAL_SRGB8_CLEAN_SET_CODEC_SHA256_V2: [u8; 32] = [
@@ -101,6 +101,27 @@ impl ClosedRejectedBlueIntervalV1 {
 pub(crate) struct ExactNominalSrgb8CleanSetV2;
 
 impl ExactNominalSrgb8CleanSetV2 {
+    /// The rejected chromatic body is the preimage of the convex scaled
+    /// object-colour solid under a linear map of decoded RGB (NOMINAL-SPEC.md).
+    /// Monotone channel decoding maps the box into the hull of its eight
+    /// corners. All eight being inside excludes the whole box, except for the
+    /// separately accepted neutral axis, which can cross its interior.
+    pub(crate) fn intersects_box(self, lower: [u8; 3], upper: [u8; 3]) -> bool {
+        if lower[0].max(lower[1]).max(lower[2]) <= upper[0].min(upper[1]).min(upper[2]) {
+            return true;
+        }
+        for red in [lower[0], upper[0]] {
+            for green in [lower[1], upper[1]] {
+                match self.rejected_blue_interval(red, green) {
+                    RejectedBlueIntervalV1::Closed { lo, hi }
+                        if lo <= lower[2] && upper[2] <= hi => {}
+                    _ => return true,
+                }
+            }
+        }
+        false
+    }
+
     pub(crate) fn classify(self, color: Srgb8) -> ExactNominalSrgb8CleanSetDecisionV1 {
         // Нейтральная ось входит в declared set отдельным exact union: таблица
         // описывает только chromatic complement и не вправе её исключить.

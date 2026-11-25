@@ -125,6 +125,70 @@ fn terminal_chain() -> AppearanceGraphSpec {
 }
 
 #[test]
+fn certified_opacity_endpoints_preserve_visible_and_backdrop_independently()
+-> Result<(), BindingError> {
+    use crate::appearance::{AppearanceConeCompilerV1, PointPaintValueV1};
+    use crate::certified_numeric::{CertifiedRgbV1, NumericUncertaintyV1};
+    use crate::composition::AdmittedOpacityV1;
+
+    let graph = terminal_chain()
+        .compile()
+        .expect("acyclic occurrence chain");
+    let bindings = graph.admit_bindings(&AppearanceBindings::new(
+        vec![(SOURCE, opaque([42; 3]))],
+        vec![(CONTEXT, Srgb8::new([82; 3]))],
+        vec![],
+    ))?;
+    let first = graph
+        .bind_occurrence(FILL_OCCURRENCE)
+        .expect("first occurrence");
+    let next = graph
+        .bind_occurrence(OTHER_OCCURRENCE)
+        .expect("nested occurrence");
+    let mut compiler = AppearanceConeCompilerV1::new(&graph)?;
+    compiler.occurrence(OTHER_OCCURRENCE)?;
+    let cone = compiler.finish()?;
+    let mut workspace = graph.new_certified_workspace()?;
+    let known = CertifiedRgbV1::from_encoded([15.5, 42.0, 251.25]).expect("physical fixture RGB");
+    let error = Err(NumericUncertaintyV1::Underflow);
+    let agrees =
+        |actual: Result<CertifiedRgbV1, NumericUncertaintyV1>, expected| match (actual, expected) {
+            (Ok(a), Ok(b)) => a.proves_equal(b),
+            (Err(a), Err(b)) => a == b,
+            _ => false,
+        };
+    for scope in [None, Some(&cone)] {
+        for (alpha, source, backdrop, visible) in [
+            (0.0, error, Ok(known), Ok(known)),
+            (0.0, Ok(known), error, error),
+            (1.0, Ok(known), error, Ok(known)),
+            (1.0, error, Ok(known), error),
+            (0.5, Ok(known), error, error),
+            (0.5, error, Ok(known), error),
+        ] {
+            let alpha = AdmittedOpacityV1::new(alpha).expect("physical fixture opacity");
+            let mut paints = graph.prepare_certified_surface_cases(
+                scope,
+                &bindings,
+                |_| PointPaintValueV1::from_admitted(source, alpha),
+                &mut workspace,
+            )?;
+            let view = paints.evaluate_surface_inputs_canonical(|_| backdrop);
+            let parent = view
+                .occurrence_at(first)
+                .expect("first occurrence was evaluated");
+            let child = view
+                .occurrence_at(next)
+                .expect("nested occurrence was evaluated");
+            assert!(agrees(parent.backdrop, backdrop));
+            assert!(agrees(parent.visible, visible));
+            assert!(agrees(child.backdrop, visible));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn presentation_root_authority_is_minted_only_for_a_terminal_occurrence() {
     let graph = terminal_chain().compile().unwrap();
     assert!(matches!(

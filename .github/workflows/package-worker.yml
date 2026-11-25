@@ -98,14 +98,17 @@ jobs:
           set -euo pipefail
           export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace/lab-colors"$'\x1f'"--remap-path-prefix=$CARGO_HOME=/cargo-home"
           build_runtime() {
+            local messages="$RUNNER_TEMP/wasm-build-$GITHUB_JOB.jsonl"
             wasm-pack build --no-opt --release --target web \
               --out-dir ../../packages/colors/pkg --out-name labcolors \
-              crates/labcolors-wasm --locked
+              crates/labcolors-wasm --locked --message-format=json-render-diagnostics > "$messages"
             local wasm=packages/colors/pkg/labcolors_bg.wasm
             local optimized=packages/colors/pkg/labcolors_bg.wasm-opt.wasm
             node "$BINARYEN_ROOT/wasm-opt.js" "$wasm" -o "$optimized" \
               --flatten --rereloop -Oz --converge --enable-bulk-memory --enable-nontrapping-float-to-int
             mv -- "$optimized" "$wasm"
+            node "$GITHUB_WORKSPACE/scripts/wasm-build-licenses.mjs" "$messages" "$PWD"
+            rm -- "$messages"
           }
 
           rm -rf packages/colors/pkg
@@ -185,6 +188,7 @@ jobs:
           npm ci
           npm run typecheck
           npm test
+          node --test ../../scripts/test_distribution_notices.mjs
       - name: verify byte-exact npm release artifact
         id: verified-release
         working-directory: packages/colors

@@ -14,6 +14,9 @@ thread_local! {
     static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
     static REALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
     static DEALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
+    static ALLOCATED_BYTES: Cell<usize> = const { Cell::new(0) };
+    static LIVE_BYTE_DELTA: Cell<i128> = const { Cell::new(0) };
+    static PEAK_EXTRA_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 struct TestAllocator;
@@ -22,6 +25,19 @@ struct TestAllocator;
 static TEST_ALLOCATOR: TestAllocator = TestAllocator;
 
 impl TestAllocator {
+    fn record_bytes(allocated: usize, freed: usize) {
+        if COUNT_ALLOCATIONS.try_with(Cell::get) != Ok(true) {
+            return;
+        }
+        let _ = ALLOCATED_BYTES.try_with(|count| count.set(count.get().saturating_add(allocated)));
+        let _ = LIVE_BYTE_DELTA.try_with(|live| {
+            let next = live.get() + allocated as i128 - freed as i128;
+            live.set(next);
+            let _ =
+                PEAK_EXTRA_BYTES.try_with(|peak| peak.set(peak.get().max(next.max(0) as usize)));
+        });
+    }
+
     fn record(counter: &'static std::thread::LocalKey<Cell<usize>>) {
         let active = match COUNT_ALLOCATIONS.try_with(Cell::get) {
             Ok(active) => active,
@@ -41,17 +57,26 @@ unsafe impl GlobalAlloc for TestAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         Self::record(&ALLOC_COUNT);
         // SAFETY: `layout` без изменений передаётся от вызывающего allocator-а.
-        unsafe { System.alloc(layout) }
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            Self::record_bytes(layout.size(), 0);
+        }
+        pointer
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         Self::record(&ALLOC_COUNT);
         // SAFETY: `layout` без изменений передаётся от вызывающего allocator-а.
-        unsafe { System.alloc_zeroed(layout) }
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            Self::record_bytes(layout.size(), 0);
+        }
+        pointer
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         Self::record(&DEALLOC_COUNT);
+        Self::record_bytes(0, layout.size());
         // SAFETY: `ptr` и `layout` получены от делегированного allocator-а `System`.
         unsafe { System.dealloc(ptr, layout) }
     }
@@ -59,7 +84,11 @@ unsafe impl GlobalAlloc for TestAllocator {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         Self::record(&REALLOC_COUNT);
         // SAFETY: аргументы без изменений передаются от вызывающего allocator-а.
-        unsafe { System.realloc(ptr, layout, new_size) }
+        let pointer = unsafe { System.realloc(ptr, layout, new_size) };
+        if !pointer.is_null() {
+            Self::record_bytes(new_size, layout.size());
+        }
+        pointer
     }
 }
 
@@ -68,6 +97,29 @@ pub(crate) struct AllocatorEvents {
     pub(crate) alloc: usize,
     pub(crate) realloc: usize,
     pub(crate) dealloc: usize,
+}
+
+/// Requested heap bytes on the measured thread, excluding stack and allocator overhead.
+/// Every successful allocation or resize contributes its full requested size to
+/// `allocated`. Releasing a pre-existing block can make `live_delta` negative.
+/// `peak_extra` is the largest net increase above the starting live baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// FFI integration tests include this allocator but only inspect event counts.
+#[allow(dead_code)]
+pub(crate) struct AllocatorBytes {
+    pub(crate) allocated: usize,
+    pub(crate) peak_extra: usize,
+    pub(crate) live_delta: i128,
+}
+
+#[allow(dead_code)] // Optional byte telemetry for consumers of the shared test helper.
+pub(crate) fn current_allocator_bytes() -> AllocatorBytes {
+    assert_allocator_measurement_is_active();
+    AllocatorBytes {
+        allocated: ALLOCATED_BYTES.with(Cell::get),
+        peak_extra: PEAK_EXTRA_BYTES.with(Cell::get),
+        live_delta: LIVE_BYTE_DELTA.with(Cell::get),
+    }
 }
 
 fn assert_allocator_measurement_is_active() {
@@ -84,6 +136,9 @@ pub(crate) fn reset_allocator_events() {
     ALLOC_COUNT.with(|count| count.set(0));
     REALLOC_COUNT.with(|count| count.set(0));
     DEALLOC_COUNT.with(|count| count.set(0));
+    ALLOCATED_BYTES.with(|count| count.set(0));
+    LIVE_BYTE_DELTA.with(|count| count.set(0));
+    PEAK_EXTRA_BYTES.with(|count| count.set(0));
 }
 
 pub(crate) fn current_allocator_events() -> AllocatorEvents {
@@ -164,14 +219,41 @@ fn allocator_event_counter_distinguishes_alloc_realloc_and_dealloc() {
     let ((), checkpointed) = measured_allocator_events(|| {
         let mut buffer = Vec::<u8>::with_capacity(64);
         assert_eq!(current_allocator_events().alloc, 1);
+        let old_capacity = buffer.capacity();
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: old_capacity,
+                peak_extra: old_capacity,
+                live_delta: old_capacity as i128,
+            }
+        );
         reset_allocator_events();
         assert_eq!(current_allocator_events(), AllocatorEvents::default());
         let additional = buffer.capacity() + 1;
         buffer.reserve_exact(additional);
         assert_eq!(current_allocator_events().realloc, 1);
+        let extra = buffer.capacity() - old_capacity;
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: buffer.capacity(),
+                peak_extra: extra,
+                live_delta: extra as i128,
+            }
+        );
         reset_allocator_events();
+        let grown_capacity = buffer.capacity();
         drop(buffer);
         assert_eq!(current_allocator_events().dealloc, 1);
+        assert_eq!(
+            current_allocator_bytes(),
+            AllocatorBytes {
+                allocated: 0,
+                peak_extra: 0,
+                live_delta: -(grown_capacity as i128),
+            }
+        );
     });
     assert_eq!(
         checkpointed,

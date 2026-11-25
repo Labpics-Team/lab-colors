@@ -57,6 +57,40 @@ test("a conforming authored color is retained by the same automatic search", asy
   } finally { program.dispose(); }
 });
 
+test("joint point search repairs a nominal color and identifies an incompatible maxChange", async () => {
+  const { program } = await point([40, 70, 190]);
+  try {
+    const frame = program.resolve({ canvas: "#ffffff" });
+    assert.equal(frame.state, "ready");
+    assert.equal(frame.selection[0].mode, "joint-point-v1");
+    assert.equal(frame.optimality, "unfinished");
+    assert.deepEqual(frame.values.material.rgb, [46, 79, 200]);
+    assert.equal(frame.cleanliness.status, "conforms");
+  } finally { program.dispose(); }
+
+  const { program: constrained } = await point("#283548", { maxChange: 0.08 });
+  try {
+    const frame = constrained.resolve({ canvas: "#ffffff" });
+    assert.equal(frame.state, "conflict");
+    assert.equal("values" in frame, false);
+  } finally { constrained.dispose(); }
+});
+
+test("an explicit reference retains its own selection policy during nominal repair", async () => {
+  const c = colors({ cleanliness: "nominal-srgb8-v2", reference: { canvas: "#fff7ef" } });
+  const canvas = c.surface("canvas");
+  const ink = c.role("ink", [200, 160, 50], { maxChange: 0.08 }).on(canvas);
+  const program = await c.compile({ ink });
+  try {
+    const frame = program.resolve({ canvas: "#ffffff" });
+    assert.equal(frame.state, "ready");
+    assert.equal(frame.selection[0].mode, "ordered-reference-v1");
+    assert.equal(frame.optimality, "exact");
+    assert.deepEqual(frame.values.ink.rgb, [211, 167, 61]);
+    assert.equal(frame.cleanliness.status, "conforms");
+  } finally { program.dispose(); }
+});
+
 test("conformance does not force a color to differ from its backdrop", async () => {
   for (const source of ["#ffffff", "#0067f4"]) {
     for (const opacity of [1, 0.5, 0]) {

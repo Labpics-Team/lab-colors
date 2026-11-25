@@ -53,8 +53,7 @@
 фиксируется в примере и сверяется с тем же каноническим сериализатором в тесте.
 Граф: source `[128,128,129]`, opacity `0.5`, один surface input и source-over
 occurrence; фон `[128,128,127]`, объявленное ограничение final `[128,128,128]`.
-Выбран выпуск `exact-nominal-srgb8-point-clean-set-v2` с SHA-256
-`05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290`.
+Поле `profile.conventionReleaseSha256` в примере содержит SHA-256 используемого [выпуска конвенции](../../proof/clean-set-srgb8/v2/release-v2.json).
 Старый выпуск v1 возвращает `unsupported_convention_release`; он не перенаправляется на новый набор.
 Этот пример проверяет подготовку входа, не заменяет независимый oracle цветовой
 математики. Одна команда `cargo run --quiet --locked -p labcolors-evaluate-cli --

@@ -30,7 +30,7 @@ def cross(a,b):return (a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[
 def progress(stage,**kwargs):print(json.dumps({'stage':stage,'seconds':round(time.monotonic()-START,3),**kwargs}),flush=True)
 p=read('profile-candidate.json');f=read('frontier-candidate.json');full=read('intervals-full.json');ref=read('intervals-refined.json');bridge=read('bridge.json');mut=read('mutation-corpus.json')
 require(sha('intervals-refined.raw')=='cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e','external table identity')
-identity_gate(sha('bridge.json'),'0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357')
+identity_gate(sha('bridge.json'),'45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996')
 source_names={'cmf':'cie-cmf.csv','spd':'cie-d65.csv','join':'join.json','bridge':'bridge.json','witnesses':'witnesses.json'}
 for key,name in source_names.items():require(sha(name)==p['source_pins'][key]['sha256'],'source pin '+key)
 require(f['profile_sha256']==sha('profile-candidate.json'),'frontier profile pin')
@@ -208,8 +208,8 @@ for case in mut['cases']:
         record['gate_error']=rejects(lambda:strict_policy_gate(B,B>=T),'strict policy mismatch')
         record['reason']='B equals T: strict predicate rejects, mutated non-strict predicate accepts'
     elif k=='output_binding_identity':
-        identity_gate(sha('bridge.json'),'0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357')
-        record['gate_error']=rejects(lambda:identity_gate(patch['bridge_sha256'],'0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357'),'identity mismatch')
+        identity_gate(sha('bridge.json'),'45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996')
+        record['gate_error']=rejects(lambda:identity_gate(patch['bridge_sha256'],'45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996'),'identity mismatch')
         record['reason']='external expected bridge SHA mismatch'
     elif k=='empty_sentinel':
         altered=bytearray(derived);altered[patch['byte_offset']]=patch['value'];c=w['column'];pair=list(altered[2*c:2*c+2])

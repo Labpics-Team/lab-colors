@@ -4,9 +4,9 @@
   "rows": 256,
   "columns": 65536,
   "pins": {
-    "profile": "66d5d2934d8f7205d26e86dc08262db430227f50efb11cc021209f1c8c2dd5ab",
-    "frontier": "754f97d5e9202ef416b6232ad0739d0142d8261a209fb705864c6464e8c3fd3a",
-    "bridge": "0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357"
+    "profile": "6747baf5d47b204467479033081daacb99171ffa5f98bcf22c1ab11a5154d48d",
+    "frontier": "96fe8e94d4c5cb33b3847057f3f07398840fb0c90f61f3c1e3ffbe1563a82b4a",
+    "bridge": "45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996"
   },
   "faces": [
     {

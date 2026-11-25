@@ -3,10 +3,12 @@
 
 use super::*;
 use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1};
+use crate::program_wire::{ProgramSelectionComponentV1, ProgramSelectionModeV1};
 use crate::wcag22::{
     Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22EvaluationErrorV1, evaluate_wcag22_srgb8,
 };
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ComputedIdentityV1(pub(super) [u8; 32]);
@@ -184,7 +186,7 @@ pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] =
-        b"labcolors.assignment-execution.v4.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
+        b"labcolors.assignment-execution.v5.nominal-visible-boxes.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -261,6 +263,13 @@ impl ComputedTargetV1 {
 
     /// Оpaque IDs связывает canonical graph; здесь только собственные данные.
     pub(crate) fn color_identity_hash(&self) -> Result<[u8; 32], ProgramCompileError> {
+        self.color_identity_hash_for(identity::CanonicalPreferenceV1::Ordered(self.preference))
+    }
+
+    pub(crate) fn color_identity_hash_for(
+        &self,
+        preference: identity::CanonicalPreferenceV1,
+    ) -> Result<[u8; 32], ProgramCompileError> {
         let intent = self
             .intent
             .as_ref()
@@ -274,7 +283,7 @@ impl ComputedTargetV1 {
         bytes
             .try_reserve_exact(size)
             .map_err(|_| ProgramCompileError::ResourceExhausted)?;
-        bytes.extend_from_slice(&self.identity_bytes());
+        self.append_identity_bytes_for(&mut bytes, preference);
         bytes.extend_from_slice(&intent.identity.identity_bytes());
         bytes.push(if self.reference_appearance {
             2
@@ -339,6 +348,41 @@ impl ComputedTargetV1 {
         bytes[18..].copy_from_slice(&self.preference.to_le_bytes());
         bytes
     }
+
+    pub(crate) fn identity_bytes_for(
+        &self,
+        preference: identity::CanonicalPreferenceV1,
+    ) -> Result<Vec<u8>, ProgramCompileError> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(27)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        self.append_identity_bytes_for(&mut bytes, preference);
+        Ok(bytes)
+    }
+
+    fn append_identity_bytes_for(
+        &self,
+        bytes: &mut Vec<u8>,
+        preference: identity::CanonicalPreferenceV1,
+    ) {
+        let mut value = self.identity_bytes();
+        match preference {
+            identity::CanonicalPreferenceV1::Ordered(rank) => {
+                value[18..].copy_from_slice(&rank.to_le_bytes());
+                bytes.extend_from_slice(&value);
+            }
+            identity::CanonicalPreferenceV1::JointPoint => {
+                bytes.extend_from_slice(&value[..18]);
+                bytes.push(1);
+            }
+            identity::CanonicalPreferenceV1::LegacyReferenceOrdered(rank) => {
+                value[18..].copy_from_slice(&rank.to_le_bytes());
+                bytes.extend_from_slice(&value);
+                bytes.push(2);
+            }
+        }
+    }
 }
 
 struct CompiledComputedTargetV1 {
@@ -353,6 +397,22 @@ struct CompiledComputedTargetV1 {
     opaque: bool,
 }
 
+/// The declared preference is separate from source identity and maxChange.
+/// Each numeric interpreter resolves the same origin in its own model.
+enum CompiledPreferredIntentV1<'a> {
+    Point {
+        anchor: PreferredPointAnchorV1,
+        tone: Option<(&'a ToneCurveV1, usize)>,
+    },
+    ImplicitReference,
+}
+
+#[derive(Clone, Copy)]
+enum PreferredPointAnchorV1 {
+    AuthoredSource,
+    ReferenceVisible,
+}
+
 struct EffectiveColorIntentV1<'a> {
     identity: ColorIdentityDomainV1,
     appearance: Option<OccurrenceId>,
@@ -360,6 +420,26 @@ struct EffectiveColorIntentV1<'a> {
 }
 
 impl CompiledComputedTargetV1 {
+    fn preferred_intent(&self) -> CompiledPreferredIntentV1<'_> {
+        let tone = self
+            .declaration
+            .intent
+            .as_ref()
+            .and_then(|intent| intent.tone.as_ref().zip(self.tone_input));
+        if self.declaration.reference_appearance && tone.is_none() {
+            CompiledPreferredIntentV1::ImplicitReference
+        } else {
+            CompiledPreferredIntentV1::Point {
+                anchor: if self.declaration.reference_appearance {
+                    PreferredPointAnchorV1::ReferenceVisible
+                } else {
+                    PreferredPointAnchorV1::AuthoredSource
+                },
+                tone,
+            }
+        }
+    }
+
     fn effective_intent(&self) -> Option<EffectiveColorIntentV1<'_>> {
         let authored = self.declaration.intent.as_ref()?;
         Some(EffectiveColorIntentV1 {
@@ -402,6 +482,170 @@ impl CompiledComputedTargetV1 {
 }
 
 impl ComputedSelectionV1 {
+    pub(super) fn identity_preferences(
+        &self,
+        partition: &components::ComponentPartitionV1,
+    ) -> Result<Vec<identity::ComputedTargetIdentityPreferenceV1>, ProgramCompileError> {
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(self.targets.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for component in &partition.groups {
+            for (rank, &index) in component.targets.iter().enumerate() {
+                let target = &self.targets[index];
+                let preference = match component.mode {
+                    ProgramSelectionModeV1::OrderedV1 => {
+                        identity::CanonicalPreferenceV1::Ordered(target.declaration.preference)
+                    }
+                    ProgramSelectionModeV1::JointPointV1 => {
+                        identity::CanonicalPreferenceV1::JointPoint
+                    }
+                    ProgramSelectionModeV1::OrderedReferenceV1 => {
+                        identity::CanonicalPreferenceV1::LegacyReferenceOrdered(rank as u64)
+                    }
+                };
+                result.push(identity::ComputedTargetIdentityPreferenceV1 {
+                    target: target.id,
+                    preference,
+                });
+            }
+        }
+        result.sort_unstable_by_key(|value| value.target);
+        Ok(result)
+    }
+
+    /// Apply the canonical schedule to the existing partition. Dependencies are
+    /// physical facts and do not change when target ordinals are permuted.
+    pub(super) fn canonicalize_execution(
+        &mut self,
+        layout: &identity::CanonicalExecutionLayoutV1,
+        partition: &mut components::ComponentPartitionV1,
+    ) -> Result<(), ProgramCompileError> {
+        let allocation = |_| ProgramCompileError::ResourceExhausted;
+        let mut ranks = Vec::new();
+        ranks
+            .try_reserve_exact(layout.targets.len())
+            .map_err(allocation)?;
+        ranks.extend(
+            layout
+                .targets
+                .iter()
+                .enumerate()
+                .map(|(rank, &id)| (id, rank)),
+        );
+        ranks.sort_unstable_by_key(|entry| entry.0);
+        let mut target_ranks = Vec::new();
+        target_ranks
+            .try_reserve_exact(self.targets.len())
+            .map_err(allocation)?;
+        for target in &self.targets {
+            let position = ranks
+                .binary_search_by_key(&target.id, |entry| entry.0)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            target_ranks.push(ranks[position].1);
+        }
+        let mut old_to_new =
+            buffer(self.targets.len(), 0).map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for group in &mut partition.groups {
+            if group.mode == ProgramSelectionModeV1::JointPointV1 {
+                group
+                    .targets
+                    .sort_unstable_by_key(|&target| target_ranks[target]);
+            }
+            let &first = group
+                .targets
+                .first()
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            old_to_new[first] = group
+                .targets
+                .iter()
+                .map(|&target| target_ranks[target])
+                .min()
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+        }
+        partition
+            .groups
+            .sort_unstable_by_key(|group| old_to_new[group.targets[0]]);
+        for (next, index) in partition
+            .groups
+            .iter_mut()
+            .flat_map(|group| &mut group.targets)
+            .enumerate()
+        {
+            old_to_new[*index] = next;
+            *index = next;
+        }
+        for factor in &mut partition.factors {
+            for target in &mut factor.targets {
+                *target = old_to_new[*target];
+            }
+        }
+        // An objective travels with its target. Each swap places one target,
+        // its physical objective, and its binding at their final ordinal.
+        let first = partition
+            .factors
+            .len()
+            .checked_sub(self.targets.len())
+            .ok_or(ProgramCompileError::InternalInvariant)?;
+        let objectives = &mut partition.factors[first..];
+        for index in 0..self.targets.len() {
+            while old_to_new[index] != index {
+                let next = old_to_new[index];
+                self.targets.swap(index, next);
+                objectives.swap(index, next);
+                old_to_new.swap(index, next);
+            }
+            objectives[index].kind = ComputedFactorKindV1::Objective(index);
+        }
+        Ok(())
+    }
+
+    fn objective_factor(&self, target: usize) -> Option<usize> {
+        let index = self
+            .factors
+            .len()
+            .checked_sub(self.targets.len())?
+            .checked_add(target)?;
+        (self.factors.get(index)?.kind == ComputedFactorKindV1::Objective(target)).then_some(index)
+    }
+
+    pub(super) fn canonicalize_inputs(
+        &mut self,
+        layout: &identity::CanonicalExecutionLayoutV1,
+        graph: &CompiledAppearanceGraph,
+    ) -> Result<(), ProgramCompileError> {
+        let mut ranks = Vec::new();
+        ranks
+            .try_reserve_exact(layout.inputs.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        ranks.extend(
+            layout
+                .inputs
+                .iter()
+                .enumerate()
+                .map(|(rank, &id)| (id, rank)),
+        );
+        ranks.sort_unstable_by_key(|entry| entry.0);
+        let mut schema_ranks = Vec::new();
+        schema_ranks
+            .try_reserve_exact(ranks.len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        for id in graph.surface_input_ports() {
+            let index = ranks
+                .binary_search_by_key(&id, |entry| entry.0)
+                .map_err(|_| ProgramCompileError::InternalInvariant)?;
+            schema_ranks.push(ranks[index].1);
+        }
+        for component in &mut self.components {
+            if component.mode == ProgramSelectionModeV1::JointPointV1 {
+                component
+                    .inputs
+                    .sort_unstable_by_key(|&input| schema_ranks[input]);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_reference(
         &mut self,
         reference: Option<&reference::ReferenceCompositionV1>,
@@ -440,14 +684,55 @@ pub(super) struct ComputedSelectionV1 {
     budget: u64,
     total_budget: u64,
     execution_profile: [u8; 32],
+    selection_components: Arc<[ProgramSelectionComponentV1]>,
+    point_anchors: Option<Arc<contextual::reference_completion::CompiledPointAnchorsV1>>,
 }
 
-/// Indices preserve the authored preference order inside each connected task.
+/// Ascending indices into the compiled target schedule: authored preference
+/// for ordered selection, canonical execution order for Point composition.
 struct ComputedComponentV1 {
     targets: Box<[usize]>,
     constraints: Box<[usize]>,
     inputs: Box<[usize]>,
     physical: CompiledAppearanceConeV1,
+    mode: ProgramSelectionModeV1,
+    point_equivalence: Option<PointEquivalenceV1>,
+}
+
+/// A substitution proof, not graph symmetry: every grouped source has the
+/// same local feasible set and Point preference for every value of the rest.
+struct PointEquivalenceV1 {
+    representatives: Box<[usize]>,
+    variables: Box<[usize]>,
+    constraints: Box<[usize]>,
+}
+
+impl ComputedComponentV1 {
+    fn point_representative(&self, local: usize) -> usize {
+        self.point_equivalence
+            .as_ref()
+            .map_or(local, |equivalence| equivalence.representatives[local])
+    }
+
+    fn point_variable_count(&self) -> usize {
+        self.point_equivalence
+            .as_ref()
+            .map_or(self.targets.len(), |equivalence| {
+                equivalence.variables.len()
+            })
+    }
+
+    fn point_variable(&self, ordinal: usize) -> usize {
+        self.point_equivalence
+            .as_ref()
+            .map_or(ordinal, |equivalence| equivalence.variables[ordinal])
+    }
+
+    fn point_constraints(&self) -> &[usize] {
+        self.point_equivalence
+            .as_ref()
+            .map_or(&self.constraints, |equivalence| &equivalence.constraints)
+    }
 }
 
 /// The same compiled cone supports both initial and conditional independence.
@@ -610,8 +895,7 @@ pub(super) fn compile_selection(
                 .and_then(|v| v.tone.as_ref())
                 .map(|tone| {
                     graph
-                        .surface_input_ports()
-                        .position(|id| id.value() == tone.input())
+                        .surface_input_index(SurfaceInputPortId::new(tone.input()))
                         .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput))
                 })
                 .transpose()?,
@@ -659,6 +943,8 @@ pub(super) fn compile_selection(
         } else {
             execution_profile_identity(budget)
         },
+        selection_components: Arc::from([]),
+        point_anchors: None,
     })
 }
 
@@ -749,6 +1035,9 @@ enum RegionConstraintV1 {
         slot: CompiledOccurrenceSlotV1,
         expected: Srgb8,
     },
+    NominalSrgb8Visible {
+        slot: CompiledOccurrenceSlotV1,
+    },
     Separation {
         slot: CompiledOccurrenceSlotV1,
         bounds: crate::constraints::VisibleSeparationBoundsV1,
@@ -767,6 +1056,7 @@ impl RegionConstraintV1 {
         let slot = match self {
             Self::Wcag { slot, .. }
             | Self::Exact { slot, .. }
+            | Self::NominalSrgb8Visible { slot }
             | Self::Separation { slot, .. }
             | Self::TonalHierarchy { slot, .. } => slot,
         };
@@ -793,6 +1083,10 @@ impl RegionConstraintV1 {
                 .iter()
                 .enumerate()
                 .all(|(i, value)| visible.0[i] <= *value && *value <= visible.1[i])),
+            Self::NominalSrgb8Visible { .. } => {
+                Ok(crate::clean_set::ExactNominalSrgb8CleanSetV2
+                    .intersects_box(visible.0, visible.1))
+            }
             Self::Separation { bounds, .. } => {
                 let [minimum, maximum] =
                     crate::spaces::oklab::srgb8_boxes_distance_bounds(visible, backdrop);
@@ -895,6 +1189,9 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
             ProgramConstraintContentV1::ExactSrgb8 { expected, .. } => {
                 result.push(RegionConstraintV1::Exact { slot, expected })
             }
+            ProgramConstraintContentV1::NominalSrgb8Visible {
+                release: crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+            } => result.push(RegionConstraintV1::NominalSrgb8Visible { slot }),
             ProgramConstraintContentV1::VisibleSeparation { bounds, .. } => {
                 result.push(RegionConstraintV1::Separation { slot, bounds })
             }
@@ -1314,6 +1611,25 @@ pub(crate) enum ComputedOptimalityV1 {
     Unfinished,
 }
 
+pub(super) fn prepare_point_anchors<E: ProgramConstraintEvaluatorSetV1>(
+    epoch: &mut ProgramEpochV1<E>,
+) -> Result<(), ProgramCompileError> {
+    let needed = matches!(&epoch.target_selection, CompiledTargetSelectionV1::Computed(selection) if selection.components.iter().any(|component| component.mode == ProgramSelectionModeV1::JointPointV1));
+    if needed {
+        let anchors = contextual::reference_completion::CompiledPointAnchorsV1::new(epoch)
+            .map_err(|error| match error {
+                contextual::reference_completion::ReferenceCompletionErrorV1::ResourceExhausted => {
+                    ProgramCompileError::ResourceExhausted
+                }
+                _ => ProgramCompileError::InternalInvariant,
+            })?;
+        if let CompiledTargetSelectionV1::Computed(selection) = &mut epoch.target_selection {
+            selection.point_anchors = Some(Arc::new(anchors));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1> {
     pub(super) identity: ComputedIdentityV1,
     pub(super) observation: RevisionBoundObservationV1,
@@ -1323,19 +1639,31 @@ pub(crate) struct ComputedVerifiedV1<Evaluation: ProgramConstraintEvaluatorSetV1
     reference_selections:
         Option<std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>>,
     components: std::sync::Arc<[components::VerifiedComponentV1]>,
+    selection_components: Arc<[ProgramSelectionComponentV1]>,
     pub(super) arena: ProgramEvaluationArenaLeaseV1<Evaluation>,
 }
 
 impl<Evaluation: ProgramConstraintEvaluatorSetV1> ComputedVerifiedV1<Evaluation> {
+    pub(crate) fn selection_components(&self) -> &Arc<[ProgramSelectionComponentV1]> {
+        &self.selection_components
+    }
     pub(crate) fn reference_selections(
         &self,
     ) -> Option<&std::sync::Arc<[crate::program_wire::ProgramReferenceSelectionV1]>> {
         self.reference_selections.as_ref()
     }
-    pub(super) const fn optimality(&self) -> ComputedOptimalityV1 {
-        match self.search.completion {
-            CompletionV1::AuthoredExact | CompletionV1::Complete => ComputedOptimalityV1::Exact,
-            CompletionV1::BudgetExhausted => ComputedOptimalityV1::Unfinished,
+    pub(super) fn optimality(&self) -> ComputedOptimalityV1 {
+        // Each verified component retains its own search proof through observation reuse.
+        // Completing the byte domain suffices only for a discrete selection policy.
+        if self
+            .components
+            .iter()
+            .zip(self.selection_components.iter())
+            .all(|(verified, component)| verified.proves_optimum(component.mode()))
+        {
+            ComputedOptimalityV1::Exact
+        } else {
+            ComputedOptimalityV1::Unfinished
         }
     }
 }
@@ -1421,6 +1749,8 @@ where
             scenarios,
             arena.storage_mut(),
             reusable,
+            &mut plan.reference_completion,
+            &observation,
         )?;
         (selected, components.into())
     };
@@ -1493,6 +1823,7 @@ where
                     search: selected.evidence,
                     reference_selections: selected.reference_selections,
                     components,
+                    selection_components: selection.selection_components.clone(),
                     arena: arena.into_lease(),
                 }),
             ))
@@ -1526,7 +1857,10 @@ where
 
 mod components;
 mod contextual;
-pub(super) use components::compile_components;
+pub(super) use components::{compile_components, partition_components};
+pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
+#[cfg(test)]
+pub(super) use contextual::reference_completion::tests::incoming_test_hook as reference_completion_incoming_test_hook;
 mod witness;
 
 #[cfg(test)]

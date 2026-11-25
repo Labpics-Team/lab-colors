@@ -10,7 +10,7 @@
 //!
 //! The gate is a pure-`std`, test-only consumer at the very top of the
 //! dependency graph (Clean: it depends on `src`; nothing in `src` depends on
-//! it). Zero new deps — `labcolors-core` stays zero-dep (issue #29).
+//! it). The scanner adds no runtime dependencies.
 //!
 //! Layout of this file:
 //! * `scan`     — the pure-std scanner (source → detected POLICY magnitudes:

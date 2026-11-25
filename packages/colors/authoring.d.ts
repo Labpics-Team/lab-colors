@@ -1,4 +1,4 @@
-import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1 } from "./pkg/labcolors.js";
+import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1, ProgramSelectionComponentV1 } from "./pkg/labcolors.js";
 
 declare const colorHandle: unique symbol;
 
@@ -10,6 +10,12 @@ export type ColorReferenceSelection = Readonly<Omit<ProgramReferenceSelectionV1,
   role: string;
   use: ColorUse;
   outputs: readonly string[];
+}>;
+
+/** Core-selected rule for a whole connected component, fixed before search. */
+export type ColorSelectionComponent = Readonly<{
+  mode: ProgramSelectionComponentV1["mode"];
+  uses: readonly Readonly<Pick<ColorReferenceSelection, "role" | "use" | "outputs">>[];
 }>;
 
 export interface ColorSystemOptions {
@@ -204,6 +210,7 @@ export type ModeledColorFrame<Name extends string = string> = Readonly<{
   optimality: "exact" | "unfinished";
   cleanliness: ColorCleanlinessAssessment;
   reference: readonly ColorReferenceSelection[];
+  selection: readonly ColorSelectionComponent[];
   context: ResolvedColorContext;
   /** Целые входы для явного preview: affine поле сериализовано с `in srgb` от 0% до 100%. */
   contextCss: Readonly<Record<string, string>>;
@@ -218,14 +225,19 @@ export type ColorResolution<Name extends string = string> =
       readonly cleanliness: ColorCleanlinessAssessment;
       /** Исходный вид и результат адаптации; пусто без reference и для fixed uses. */
       readonly reference: readonly ColorReferenceSelection[];
+      readonly selection: readonly ColorSelectionComponent[];
       context: Readonly<Record<string, readonly [number, number, number]>>;
       values: Readonly<Record<Name, ResolvedColor>>;
     }>
   | ModeledColorFrame<Name>
   | UnresolvedColorFrame;
 
-export type ColorViewUpdate<Name extends string = string> =
-  | Readonly<{ state: "committed"; frame: Extract<ColorResolution<Name>, { state: "ready" }> }>
+type DisplayableColorState = "ready" | "modeled";
+type InstalledColorFrame<Name extends string, State extends DisplayableColorState> =
+  Extract<ColorResolution<Name>, { state: State }>;
+
+export type ColorViewUpdate<Name extends string = string, State extends DisplayableColorState = "ready"> =
+  | Readonly<{ state: "committed"; frame: InstalledColorFrame<Name, State> }>
   | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
 /** Допускается одно affine поле; прочие входы постоянны. Несколько полей пока не поддержаны. */
@@ -236,25 +248,25 @@ export interface ColorAttachOptions {
   readonly nonce?: string;
 }
 
-export type ColorViewReplacement<Name extends string = string> =
+export type ColorViewReplacement<Name extends string = string, State extends DisplayableColorState = "ready"> =
   | Readonly<{
       state: "committed";
-      frame: Extract<ColorResolution<Name>, { state: "ready" }>;
-      view: ColorView<Name>;
+      frame: InstalledColorFrame<Name, State>;
+      view: ColorView<Name, State>;
     }>
   | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
-export interface ColorView<Name extends string = string> {
-  readonly current: Extract<ColorResolution<Name>, { state: "ready" }> | null;
+export interface ColorView<Name extends string = string, State extends DisplayableColorState = "ready"> {
+  readonly current: InstalledColorFrame<Name, State> | null;
   /** При отклонённом replace имена proposed.values принадлежат новой программе. */
-  readonly lastUpdate: ColorViewUpdate<Name> | Extract<ColorViewReplacement<string>, { state: "rejected" }> | null;
-  /** Предлагает полный owned context; modeled отклоняется вместе с фоном и сохраняет прежние значения. */
-  set(surfaces: ColorContext): ColorViewUpdate<Name>;
+  readonly lastUpdate: ColorViewUpdate<Name, State> | Extract<ColorViewReplacement<string>, { state: "rejected" }> | null;
+  /** Предлагает полный контекст. Способ подключения определяет, может ли view отобразить modeled. */
+  set(surfaces: ColorContext): ColorViewUpdate<Name, State>;
   /** Новая authored revision; успешный полный frame заменяет прежние variables в том же sink. */
   replace<NextName extends string>(
     program: ColorProgram<NextName>,
     surfaces: ColorContext,
-  ): ColorViewReplacement<NextName>;
+  ): ColorViewReplacement<NextName, State>;
   dispose(): void;
 }
 
@@ -265,6 +277,8 @@ export interface ColorProgram<Name extends string = string> {
   resolve(surfaces: ColorContext): ColorResolution<Name>;
   /** Владеет CSS custom properties; modeled остаётся lastUpdate.proposed, автоматически не применяется. */
   attach(element: HTMLElement, surfaces?: ColorContext, options?: ColorAttachOptions): ColorView<Name>;
+  /** Показывает также пригодное в модели поле; точность его растеризации остаётся неизвестной. */
+  preview(element: HTMLElement, surfaces?: ColorContext, options?: ColorAttachOptions): ColorView<Name, DisplayableColorState>;
   dispose(): void;
 }
 
@@ -274,7 +288,9 @@ export interface ColorSystem {
   fixed(id: string, source: AuthoredColor): ColorFixedRole;
   /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
   preserveTonalHierarchy(members: readonly ColorUse[]): void;
-  /** Экспортирует reachable graph. Приоритет — порядок создания uses, а не порядок output keys. */
+  /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.
+   * Компоненты с неявным reference сохраняют последовательный режим совместимости; frame.selection раскрывает режим.
+   */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,
   ): Promise<ColorProgram<Extract<keyof Outputs, string>>>;

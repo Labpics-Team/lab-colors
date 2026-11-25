@@ -46,8 +46,6 @@ Labpics связал лицензированные источники с объ
 16 777 216 sRGB8-точек.
 
 - Выпуск: `exact-nominal-srgb8-point-clean-set-v2`.
-- Release SHA-256:
-  `05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290`.
 - Raw table SHA-256:
   `cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e`.
 - Runtime codec SHA-256:

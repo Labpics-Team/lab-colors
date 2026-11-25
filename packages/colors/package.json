@@ -1,6 +1,6 @@
 {
   "name": "@labpics/colors",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "packageManager": "npm@11.9.0",
   "description": "Библиотека адаптивных цветов для интерфейсов и дизайн-систем.",
   "type": "module",
@@ -65,6 +65,8 @@
     "pkg/labcolors.d.ts",
     "pkg/labcolors_bg.wasm",
     "pkg/labcolors_bg.wasm.d.ts",
+    "pkg/dependency-licenses.json",
+    "pkg/THIRD-PARTY-NOTICES.md",
     "pkg/snippets/labcolors-wasm-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/inline0.js"
   ],
   "scripts": {

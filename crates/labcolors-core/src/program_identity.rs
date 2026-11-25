@@ -9,6 +9,8 @@ use super::*;
 use crate::colored_graph::{EdgeV1, ordering};
 
 const DOMAIN_V9: &[u8] = b"labcolors.program-content-identity.v9\0";
+const AUTHORED_COMPOSITION_DOMAIN_V1: &[u8] =
+    b"labcolors.authored-composition-program.v1.component-joint-point.legacy-reference-ordered.full-recheck\0";
 // V9 резервирует фиксированную protocol boundary под type/family tag и полный
 // content digest. Каждый writer использует проверяемый push и отвергает
 // расширение схемы вместо усечения данных или аллокации на вершину.
@@ -19,6 +21,7 @@ mod release_tag {
     pub(super) const PROGRAM_SCHEMA_V9: u8 = 9;
     pub(super) const SELECTION_RELEASE_IDENTITY_V1: u8 = 1;
     pub(super) const DECLARED_TOTAL_ORDER_V1: u8 = 1;
+    pub(super) const AUTHORED_COMPOSITION_V1: u8 = 2;
     pub(super) const FRESH_FULL_RECHECK_V1: u8 = 1;
     pub(super) const ATOMIC_OBSERVATION_GROUP_V1: u8 = 1;
     pub(super) const ENCODED_PAINT_OUTPUT_ROUTING_V1: u8 = 1;
@@ -123,6 +126,37 @@ impl ProgramContentIdentityV9 {
     pub(crate) const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+/// Derived from the compiled physical component, never from target names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalPreferenceV1 {
+    Ordered(u64),
+    JointPoint,
+    LegacyReferenceOrdered(u64),
+}
+
+/// Temporary compiler input, sorted by target ID for binding lookup only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ComputedTargetIdentityPreferenceV1 {
+    pub(crate) target: TargetId,
+    pub(crate) preference: CanonicalPreferenceV1,
+}
+
+/// Typed execution projections from one completed canonical form. The storage
+/// and observation-schema indexes remain separate from these scheduling ranks.
+/// Symmetric vertices retain separate bindings; their representative order is
+/// not a semantic tie-breaker between signed per-use outcomes.
+#[derive(Debug)]
+pub(crate) struct CanonicalExecutionLayoutV1 {
+    pub(crate) targets: Box<[TargetId]>,
+    pub(crate) inputs: Box<[SurfaceInputPortId]>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompiledProgramIdentityV1 {
+    pub(crate) content: ProgramOwnerIdentityV1,
+    pub(crate) execution: Option<CanonicalExecutionLayoutV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -275,6 +309,57 @@ declare_edge_roles_v1! {
 
 type CanonicalGraphV1 = crate::colored_graph::ColoredGraph<VertexColorV1>;
 
+struct ProgramIdentityGraphV1 {
+    graph: CanonicalGraphV1,
+    computed_targets: Vec<(TargetId, usize)>,
+    inputs: Vec<(SurfaceInputPortId, usize)>,
+}
+
+impl ProgramIdentityGraphV1 {
+    fn into_execution_layout(
+        mut self,
+        order: &[usize],
+    ) -> Result<CanonicalExecutionLayoutV1, ProgramCompileError> {
+        let vertex_count = self.graph.vertex_count();
+        if order.len() != vertex_count {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+        drop(self.graph);
+        let mut rank_of = Vec::new();
+        rank_of
+            .try_reserve_exact(vertex_count)
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        rank_of.resize(vertex_count, usize::MAX);
+        for (rank, &vertex) in order.iter().enumerate() {
+            let slot = rank_of
+                .get_mut(vertex)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if *slot != usize::MAX {
+                return Err(ProgramCompileError::InternalInvariant);
+            }
+            *slot = rank;
+        }
+        fn project<Key: Copy>(
+            bindings: &mut [(Key, usize)],
+            rank_of: &[usize],
+        ) -> Result<Box<[Key]>, ProgramCompileError> {
+            if bindings.iter().any(|&(_, vertex)| vertex >= rank_of.len()) {
+                return Err(ProgramCompileError::InternalInvariant);
+            }
+            ordering::sort_by_key(bindings, |&(_, vertex)| rank_of[vertex]);
+            let mut keys = Vec::new();
+            keys.try_reserve_exact(bindings.len())
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            keys.extend(bindings.iter().map(|&(key, _)| key));
+            Ok(keys.into_boxed_slice())
+        }
+        Ok(CanonicalExecutionLayoutV1 {
+            targets: project(&mut self.computed_targets, &rank_of)?,
+            inputs: project(&mut self.inputs, &rank_of)?,
+        })
+    }
+}
+
 struct GraphBuilderV1 {
     colors: Vec<VertexColorV1>,
     edges: Vec<EdgeV1>,
@@ -369,16 +454,26 @@ where
 }
 
 fn program_root_color() -> Result<VertexColorV1, ProgramCompileError> {
+    program_root_color_for(false)
+}
+
+fn program_root_color_for(
+    authored_composition: bool,
+) -> Result<VertexColorV1, ProgramCompileError> {
     let mut color = VertexColorV1::new(vertex_tag::PROGRAM);
     // Эти теги связывают адрес с версиями исполняемых законов: схемой Program,
-    // выбором по полному порядку, финальной перепроверкой, атомарным наблюдением,
+    // политикой выбора, финальной перепроверкой, атомарным наблюдением,
     // маршрутизацией кодированного `Paint` в output slot и моделируемым
     // представлением точки. Версии
     // производных возможностей связываются только с теми ограничениями,
     // которые их исполняют.
     for release in [
         release_tag::PROGRAM_SCHEMA_V9,
-        release_tag::DECLARED_TOTAL_ORDER_V1,
+        if authored_composition {
+            release_tag::AUTHORED_COMPOSITION_V1
+        } else {
+            release_tag::DECLARED_TOTAL_ORDER_V1
+        },
         release_tag::FRESH_FULL_RECHECK_V1,
         release_tag::ATOMIC_OBSERVATION_GROUP_V1,
         release_tag::ENCODED_PAINT_OUTPUT_ROUTING_V1,
@@ -1065,9 +1160,43 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
-    let mut graph = GraphBuilderV1::new(program_root_color()?)?;
+    build_identity_graph(program, None).map(|built| built.graph)
+}
+
+fn build_identity_graph<Evaluation>(
+    program: &Program<Evaluation>,
+    preferences: Option<&[ComputedTargetIdentityPreferenceV1]>,
+) -> Result<ProgramIdentityGraphV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    if let Some(preferences) = preferences {
+        let computed = program
+            .targets
+            .iter()
+            .filter(|target| matches!(target.intent(), TargetIntentV1::Computed(_)))
+            .count();
+        if preferences.len() != computed
+            || preferences
+                .windows(2)
+                .any(|pair| pair[0].target >= pair[1].target)
+            || preferences
+                .iter()
+                .any(|entry| matches!(entry.preference, CanonicalPreferenceV1::Ordered(_)))
+        {
+            return Err(ProgramCompileError::InternalInvariant);
+        }
+    }
+    let root = if preferences.is_some() {
+        program_root_color_for(true)?
+    } else {
+        program_root_color()?
+    };
+    let mut graph = GraphBuilderV1::new(root)?;
     let mut sources = IdIndexV1::new();
     let mut targets = IdIndexV1::new();
+    let mut computed_targets = IdIndexV1::new();
     let mut families = IdIndexV1::new();
     let mut candidates = IdIndexV1::new();
     let mut opacities = IdIndexV1::new();
@@ -1087,25 +1216,45 @@ where
         sources.insert(source.id(), graph.add_member(source_color(*source)?)?)?;
     }
     for target in &program.targets {
+        let target_id = target.id();
         let target_color = match target.intent() {
             TargetIntentV1::FixedSource(_) => VertexColorV1::new(vertex_tag::TARGET_FIXED),
             TargetIntentV1::Finite(_) => VertexColorV1::new(vertex_tag::TARGET_FINITE),
             TargetIntentV1::Computed(target) => {
+                let preference = preferences
+                    .map(|entries| {
+                        entries
+                            .binary_search_by_key(&target_id, |entry| entry.target)
+                            .map(|index| entries[index].preference)
+                            .map_err(|_| ProgramCompileError::InternalInvariant)
+                    })
+                    .transpose()?;
                 let mut color = VertexColorV1::new(if target.color_intent().is_some() {
                     vertex_tag::TARGET_COLOR
                 } else {
                     vertex_tag::TARGET_COMPUTED
                 });
                 if target.color_intent().is_some() {
-                    color.push_bytes(&target.color_identity_hash()?)?;
+                    color.push_bytes(&match preference {
+                        Some(preference) => target.color_identity_hash_for(preference)?,
+                        None => target.color_identity_hash()?,
+                    })?;
                 } else {
-                    color.push_bytes(&target.identity_bytes())?;
+                    match preference {
+                        Some(preference) => {
+                            color.push_bytes(&target.identity_bytes_for(preference)?)?;
+                        }
+                        None => color.push_bytes(&target.identity_bytes())?,
+                    }
                 }
                 color
             }
         };
         let target_vertex = graph.add_member(target_color)?;
         targets.insert(target.id(), target_vertex)?;
+        if preferences.is_some() && matches!(target.intent(), TargetIntentV1::Computed(_)) {
+            computed_targets.insert(target.id(), target_vertex)?;
+        }
         if let TargetIntentV1::Finite(domain) = target.intent() {
             for candidate in domain.candidates() {
                 let vertex = graph.add_member(candidate_color(*candidate)?)?;
@@ -1427,7 +1576,11 @@ where
         }
     }
 
-    graph.finish()
+    Ok(ProgramIdentityGraphV1 {
+        graph: graph.finish()?,
+        computed_targets: computed_targets.values,
+        inputs: ports.values,
+    })
 }
 
 #[cfg(test)]
@@ -1544,10 +1697,51 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
     ProgramConstraintInvocationOf<Evaluation>: Copy,
 {
+    if program
+        .assignment
+        .as_ref()
+        .is_some_and(ComputedSelectionPolicyV1::authored_composition)
+    {
+        return Err(ProgramCompileError::InternalInvariant);
+    }
     if program.assignment.is_some() {
         return compile_computed_identity(program).map(ProgramOwnerIdentityV1::Computed);
     }
     compile_program_content_identity_v9(program).map(ProgramOwnerIdentityV1::Legacy)
+}
+
+pub(crate) fn compile_owner_identity_and_layout<Evaluation>(
+    program: &Program<Evaluation>,
+    preferences: &[ComputedTargetIdentityPreferenceV1],
+) -> Result<CompiledProgramIdentityV1, ProgramCompileError>
+where
+    Evaluation: ProgramConstraintEvaluatorSetV1,
+    ProgramConstraintInvocationOf<Evaluation>: Copy,
+{
+    let authored_composition = program
+        .assignment
+        .as_ref()
+        .is_some_and(ComputedSelectionPolicyV1::authored_composition);
+    if !authored_composition {
+        return Ok(CompiledProgramIdentityV1 {
+            content: compile_owner_identity(program)?,
+            execution: None,
+        });
+    }
+    let built = build_identity_graph(program, Some(preferences))?;
+    let form = crate::colored_graph::canonical_form(&built.graph, AUTHORED_COMPOSITION_DOMAIN_V1)
+        .map_err(canonical_graph_error)?;
+    let content = ProgramOwnerIdentityV1::Computed(computed_assignment::ComputedIdentityV1(
+        *crate::sha256::digest(&form.preimage).as_bytes(),
+    ));
+    // Retain only the leaf binding while projecting typed keys. The potentially
+    // much larger serialization is no longer needed after its content digest.
+    drop(form.preimage);
+    let execution = built.into_execution_layout(&form.order)?;
+    Ok(CompiledProgramIdentityV1 {
+        content,
+        execution: Some(execution),
+    })
 }
 
 fn compile_computed_identity<Evaluation>(
@@ -1576,6 +1770,272 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout_program(
+        target_ids: [u32; 2],
+        input_ids: [u32; 2],
+        reverse: bool,
+        authored: bool,
+    ) -> Program<Wcag22Srgb8V1> {
+        use crate::color_intent::{ColorIdentityDomainV1, IdentityOptionsV1};
+        use crate::lcs_occurrence::{
+            AdaptingLuminanceCdM2, AppearanceContextSchemaReleaseId, BackgroundLuminanceRatio,
+            IEC_SRGB_D65_XYZ_FRAME_V1, SurroundProfileId,
+        };
+        let context = AppearanceContextId::from_inputs(
+            AppearanceContextSchemaReleaseId::Ciecam16ViewingInputsV1,
+            IEC_SRGB_D65_XYZ_FRAME_V1,
+            AdaptingLuminanceCdM2::try_new(64.0).expect("64 cd/m² is a valid adapting luminance"),
+            BackgroundLuminanceRatio::try_new(0.2).expect("0.2 is a valid background ratio"),
+            SurroundProfileId::AverageV1,
+        );
+        let mut targets = Vec::new();
+        let mut paints = Vec::new();
+        let mut surfaces = Vec::new();
+        let mut occurrences = Vec::new();
+        let mut outputs = Vec::new();
+        for index in 0..2 {
+            let source = Srgb8::new([64 + 128 * index as u8; 3]);
+            let occurrence = OccurrenceId::new(50 + index as u32);
+            let paint = PaintId::new(30 + index as u32);
+            let surface = SurfaceId::new(40 + index as u32);
+            let target = TargetId::new(target_ids[index]);
+            targets.push(Target::new(
+                target,
+                TargetIntentV1::Computed(computed_assignment::ComputedTargetV1::color(
+                    source,
+                    1.0,
+                    computed_assignment::ColorUseIntentV1 {
+                        identity: ColorIdentityDomainV1::new(
+                            source,
+                            false,
+                            IdentityOptionsV1::default(),
+                        )
+                        .expect("default identity admits the source color"),
+                        appearance: Some(occurrence),
+                        tone: None,
+                    },
+                )),
+            ));
+            paints.push(Paint::Solid { id: paint, target });
+            surfaces.push(Surface::Input {
+                id: surface,
+                input: SurfaceInputPortId::new(input_ids[index]),
+            });
+            occurrences.push(Occurrence::new(
+                occurrence,
+                paint,
+                surface,
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                context,
+            ));
+            outputs.push(OutputBinding::new(
+                OutputSlotId::new(60 + index as u32),
+                paint,
+            ));
+        }
+        let mut inputs = input_ids.map(SurfaceInputPortId::new).to_vec();
+        let mut order = target_ids.map(TargetId::new).to_vec();
+        if reverse {
+            targets.reverse();
+            paints.reverse();
+            surfaces.reverse();
+            occurrences.reverse();
+            outputs.reverse();
+            inputs.reverse();
+            order.reverse();
+        }
+        computed_assignment::assign_preference(&mut targets, Some(&order))
+            .expect("fixture lists every adjustable target once");
+        let mut program = Program::new(
+            vec![],
+            targets,
+            ObservationGroup::new(ObservationGroupId::new(1), inputs),
+            vec![],
+            paints,
+            surfaces,
+            occurrences,
+            ConstraintSet::new(vec![], vec![]),
+            outputs,
+            Wcag22Srgb8V1,
+        );
+        program.assignment = Some(if authored {
+            ComputedSelectionPolicyV1::AuthoredComposition {
+                legacy_reference_order: order,
+            }
+        } else {
+            ComputedSelectionPolicyV1::Ordered(order)
+        });
+        program
+    }
+
+    fn layout_preferences(
+        program: &Program<Wcag22Srgb8V1>,
+        legacy: bool,
+    ) -> Vec<ComputedTargetIdentityPreferenceV1> {
+        let mut result: Vec<_> = program
+            .assignment
+            .as_ref()
+            .expect("authored program declares a selection policy")
+            .legacy_order()
+            .iter()
+            .enumerate()
+            .map(|(rank, &target)| ComputedTargetIdentityPreferenceV1 {
+                target,
+                preference: if legacy {
+                    CanonicalPreferenceV1::LegacyReferenceOrdered(rank as u64)
+                } else {
+                    CanonicalPreferenceV1::JointPoint
+                },
+            })
+            .collect();
+        result.sort_unstable_by_key(|entry| entry.target);
+        result
+    }
+
+    #[test]
+    fn authored_layout_ignores_chronology_and_binds_typed_renamed_targets_and_ports() {
+        let baseline = layout_program([10, 20], [70, 80], false, true);
+        let reversed = layout_program([10, 20], [70, 80], true, true);
+        let renamed = layout_program([91, 7], [99, 3], true, true);
+        let compile = |program: &Program<Wcag22Srgb8V1>| {
+            compile_owner_identity_and_layout(program, &layout_preferences(program, false))
+                .expect("fixture has a complete preference binding")
+        };
+        let baseline = compile(&baseline);
+        let reversed = compile(&reversed);
+        let renamed = compile(&renamed);
+        assert_eq!(baseline.content, reversed.content);
+        assert_eq!(baseline.content, renamed.content);
+        let baseline = baseline
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        let reversed = reversed
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        let renamed = renamed
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        assert_eq!(baseline.targets, reversed.targets);
+        assert_eq!(baseline.inputs, reversed.inputs);
+        let target_roles = |values: &[TargetId], ids: [u32; 2]| {
+            values
+                .iter()
+                .map(|id| {
+                    ids.map(TargetId::new)
+                        .iter()
+                        .position(|other| other == id)
+                        .expect("compiled layout contains exactly the declared handles")
+                })
+                .collect::<Vec<_>>()
+        };
+        let input_roles = |values: &[SurfaceInputPortId], ids: [u32; 2]| {
+            values
+                .iter()
+                .map(|id| {
+                    ids.map(SurfaceInputPortId::new)
+                        .iter()
+                        .position(|other| other == id)
+                        .expect("compiled layout contains exactly the declared handles")
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            target_roles(&baseline.targets, [10, 20]),
+            target_roles(&renamed.targets, [91, 7])
+        );
+        assert_eq!(
+            input_roles(&baseline.inputs, [70, 80]),
+            input_roles(&renamed.inputs, [99, 3])
+        );
+    }
+
+    #[test]
+    fn ordered_and_legacy_reference_identities_keep_their_declared_preference() {
+        let ordered = layout_program([10, 20], [70, 80], false, false);
+        let reordered = layout_program([10, 20], [70, 80], true, false);
+        let compiled = compile_owner_identity_and_layout(&ordered, &[])
+            .expect("fixture has a complete preference binding");
+        assert!(compiled.execution.is_none());
+        assert_eq!(
+            compiled.content,
+            compile_owner_identity(&ordered).expect("fixture has a canonical program identity")
+        );
+        assert_ne!(
+            compiled.content,
+            compile_owner_identity(&reordered).expect("fixture has a canonical program identity")
+        );
+        let legacy = layout_program([10, 20], [70, 80], false, true);
+        let reordered_legacy = layout_program([10, 20], [70, 80], true, true);
+        let identity = |program: &Program<Wcag22Srgb8V1>| {
+            compile_owner_identity_and_layout(program, &layout_preferences(program, true))
+                .expect("fixture has a complete preference binding")
+                .content
+        };
+        assert_ne!(identity(&legacy), identity(&reordered_legacy));
+        assert_ne!(compiled.content, identity(&legacy));
+        assert_ne!(
+            identity(&legacy),
+            compile_owner_identity_and_layout(&legacy, &layout_preferences(&legacy, false))
+                .expect("fixture has a complete preference binding")
+                .content,
+        );
+    }
+
+    #[test]
+    fn authored_identity_requires_a_complete_unique_typed_preference_binding() {
+        let program = layout_program([10, 20], [70, 80], false, true);
+        let valid = layout_preferences(&program, false);
+        let mut duplicate = valid.clone();
+        duplicate[1].target = duplicate[0].target;
+        let mut absent = valid.clone();
+        absent[1].target = TargetId::new(21);
+        let mut unordered = valid.clone();
+        unordered.reverse();
+        let mut wrong_policy = valid.clone();
+        wrong_policy[0].preference = CanonicalPreferenceV1::Ordered(0);
+        for invalid in [
+            vec![],
+            valid[..1].to_vec(),
+            duplicate,
+            absent,
+            unordered,
+            wrong_policy,
+        ] {
+            assert_eq!(
+                compile_owner_identity_and_layout(&program, &invalid).err(),
+                Some(ProgramCompileError::InternalInvariant),
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_only_authored_composition_retains_its_policy_and_input_layout() {
+        let mut program = layout_program([10, 20], [70, 80], false, true);
+        for (index, target) in program.targets.iter_mut().enumerate() {
+            let source = SourceId::new(600 + index as u32);
+            let rgb = Srgb8::new([64 + 128 * index as u8; 3]);
+            program
+                .sources
+                .push(Source::new(source, ColorSignal::from_srgb8(rgb)));
+            target.intent = TargetIntentV1::FixedSource(source);
+        }
+        program.assignment = Some(ComputedSelectionPolicyV1::AuthoredComposition {
+            legacy_reference_order: vec![],
+        });
+        let authored = compile_owner_identity_and_layout(&program, &[])
+            .expect("fixture has a complete preference binding");
+        let layout = authored
+            .execution
+            .expect("authored composition supplies a physical execution layout");
+        assert!(layout.targets.is_empty());
+        assert_eq!(layout.inputs.len(), 2);
+        program.assignment = Some(ComputedSelectionPolicyV1::Ordered(vec![]));
+        assert_ne!(
+            authored.content,
+            compile_owner_identity(&program).expect("fixture has a canonical program identity")
+        );
+    }
 
     #[test]
     fn joint_selection_vertex_binds_tag_and_exact_release_identity_bytes() {

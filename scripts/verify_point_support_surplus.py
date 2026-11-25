@@ -31,6 +31,7 @@ SESSION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/session.rs"
 COMPOSITION_SOURCE = REPO_ROOT / "crates/labcolors-core/src/composition.rs"
 APPEARANCE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance.rs"
 APPEARANCE_CONE_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance/execution_cone.rs"
+APPEARANCE_KERNEL_SOURCE = REPO_ROOT / "crates/labcolors-core/src/appearance/numeric_kernel.rs"
 CONSTRAINTS_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/mod.rs"
 EXACT_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/exact.rs"
 WCAG22_CONSTRAINT_SOURCE = REPO_ROOT / "crates/labcolors-core/src/constraints/wcag22.rs"
@@ -103,6 +104,7 @@ SOURCE_CONE_PATHS = (
     COMPOSITION_SOURCE,
     APPEARANCE_SOURCE,
     APPEARANCE_CONE_SOURCE,
+    APPEARANCE_KERNEL_SOURCE,
     CONSTRAINTS_SOURCE,
     EXACT_CONSTRAINT_SOURCE,
     WCAG22_CONSTRAINT_SOURCE,
@@ -220,8 +222,9 @@ def source_mutations() -> tuple[tuple[Path, bytes, bytes], ...]:
         (SESSION_SOURCE, b"                SessionDecision::Violation(cause) => (\n                    SessionState::Failed {\n                        cause,\n                        previous: last_verified,\n                    },\n                    None,\n                ),\n", b"                SessionDecision::Violation(_) => (\n                    SessionState::Waiting,\n                    last_verified,\n                ),\n"),
         (SESSION_SOURCE, b"                return Err(SessionUpdateError::EvidenceBindingInvariant);\n", b"                unreachable!();\n"),
         (NUMERICS_SOURCE, b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Available", b"proof_ids: [NumericalProofIdV2::PointSupportReferenceSurplusIntegerV1],\n        bound_status: Unavailable"),
-        (COMPOSITION_SOURCE, b"f64::from(backdrop) + alpha * (f64::from(tint) - f64::from(backdrop))", b"f64::from(tint)"),
+        (COMPOSITION_SOURCE, b"    backdrop + alpha * (tint - backdrop)\n", b"    tint\n"),
         (APPEARANCE_SOURCE, b"        Self { source, opacity }\n", b"        Self { source, opacity: crate::composition::AdmittedOpacityV1::OPAQUE }\n"),
+        (APPEARANCE_KERNEL_SOURCE, b"        Srgb8::new(occurrence.visible())\n", b"        Srgb8::new([0, 0, 0])\n"),
         (CONSTRAINTS_SOURCE, b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = evaluator.classify(&invocation, &measurement);\n    let identity = evaluator.identity();", b"let measurement = evaluator.evaluate(&target, &invocation)?;\n    let classification = unreachable!();\n    let identity = evaluator.identity();"),
         (EXACT_CONSTRAINT_SOURCE, b"if actual == *invocation", b"if actual != *invocation"),
         (WCAG22_CONSTRAINT_SOURCE, b"HardDecision::Pass(Wcag22PassV1(()))", b"HardDecision::Violation(Wcag22ViolationV1(()))"),
@@ -851,7 +854,9 @@ def main() -> int:
             "source and independent numerical replay; regenerate explicitly "
             "with --emit only after numerical review"
         )
-    sys.stdout.write(canonical)
+    # The receipt is canonical UTF-8/LF bytes on every host. Text stdout on
+    # Windows would translate LF to CRLF, producing an unreplayable receipt.
+    sys.stdout.buffer.write(canonical.encode("utf-8"))
     print("point-support retained-surplus independent verification: PASS", file=sys.stderr)
     return 0
 

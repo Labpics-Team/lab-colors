@@ -69,6 +69,11 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
 
         regressions = (
             (
+                self.verifier["APPEARANCE_KERNEL_SOURCE"],
+                b"        Srgb8::new(occurrence.visible())\n",
+                b"        Srgb8::new([0, 0, 0])\n",
+            ),
+            (
                 self.point_path,
                 b"matches!(self.decision, PointSupportStabilityDecisionV1::NotRetained)",
                 b"false",
@@ -202,6 +207,8 @@ class PointSupportSurplusCliTests(unittest.TestCase):
         self,
         expected_success: bool,
         changes: dict[Path, bytes | None] | None = None,
+        *,
+        emit: bool = False,
     ) -> None:
         # Настоящий CLI читает изолированный filesystem snapshot: подмена
         # digest-helper не обнаружила бы прежний обход проверки в main().
@@ -217,23 +224,26 @@ class PointSupportSurplusCliTests(unittest.TestCase):
             proof_path = root / PROOF.relative_to(REPO_ROOT)
             proof_before = proof_path.read_bytes()
             result = subprocess.run(
-                [sys.executable, str(root / VERIFIER.relative_to(REPO_ROOT))],
+                [sys.executable, str(root / VERIFIER.relative_to(REPO_ROOT)),
+                 *(["--emit"] if emit else [])],
                 cwd=root,
                 capture_output=True,
-                text=True,
                 timeout=30,
                 check=False,
             )
             self.assertEqual(proof_path.read_bytes(), proof_before)
             if expected_success:
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.encode("utf-8"), proof_before)
+                self.assertEqual(result.stdout, proof_before)
             else:
                 self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertNotIn("verification: PASS", result.stderr)
+                self.assertNotIn(b"verification: PASS", result.stderr)
 
     def test_cli_replays_exact_source_without_writing_the_receipt(self) -> None:
         self.assert_cli(True)
+
+    def test_cli_emits_canonical_bytes_without_host_newline_translation(self) -> None:
+        self.assert_cli(True, emit=True)
 
     def test_cli_rejects_a_changed_retention_law_with_the_old_receipt(self) -> None:
         path = Path("crates/labcolors-core/src/point_support.rs")

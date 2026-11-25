@@ -13,7 +13,7 @@ function allocateScope(document) {
   return document[scopeAllocator]();
 }
 
-function readNonce(options) {
+function readNonce(options, operation) {
   if (options === undefined) return undefined;
   let keys, nonce;
   try {
@@ -23,31 +23,31 @@ function readNonce(options) {
     keys = Object.keys(options);
     nonce = Object.hasOwn(options, "nonce") ? options.nonce : undefined;
   } catch {
-    authoringError("attach.options", "expected readable options", "color_invalid_context");
+    authoringError(`${operation}.options`, "expected readable options", "color_invalid_context");
   }
   for (const key of keys) {
-    if (key !== "nonce") authoringError(`attach.options.${key}`, "unknown option", "color_invalid_context");
+    if (key !== "nonce") authoringError(`${operation}.options.${key}`, "unknown option", "color_invalid_context");
   }
   if (nonce !== undefined && (typeof nonce !== "string" || nonce.length === 0)) {
-    authoringError("attach.options.nonce", "expected a non-empty CSP nonce", "color_invalid_context");
+    authoringError(`${operation}.options.nonce`, "expected a non-empty CSP nonce", "color_invalid_context");
   }
   return nonce;
 }
 
 /** One owned stylesheet record is the complete frame, including controlled surface inputs. */
-export function createCssScope(element, options) {
-  const nonce = readNonce(options);
+export function createCssScope(element, options, operation = "attach") {
+  const nonce = readNonce(options, operation);
   const document = element?.ownerDocument, realm = document?.defaultView;
   if (!realm || !(element instanceof realm.HTMLElement) || !element.isConnected) {
-    authoringError("attach.element", "expected a connected HTMLElement", "color_invalid_context");
+    authoringError(`${operation}.element`, "expected a connected HTMLElement", "color_invalid_context");
   }
   if (roots.has(element) || element.hasAttribute(attribute)) {
-    authoringError("attach.element", "element already has a color owner", "color_host_changed");
+    authoringError(`${operation}.element`, "element already has a color owner", "color_host_changed");
   }
   const root = element.getRootNode();
   const parent = root === document ? document.head : root;
   if (parent === null || typeof parent.appendChild !== "function") {
-    authoringError("attach.element", "element has no stylesheet host", "color_invalid_context");
+    authoringError(`${operation}.element`, "element has no stylesheet host", "color_invalid_context");
   }
   const token = allocateScope(document);
   const style = document.createElement("style");
@@ -69,10 +69,14 @@ export function createCssScope(element, options) {
     throw error;
   }
   return {
+    preview: operation === "preview",
     prepare(context, frame) {
       if (disposed || !element.isConnected || style.parentNode !== parent || element.getRootNode() !== root
         || element.getAttribute(attribute) !== token || style.textContent !== text) {
         authoringError("view", "owned CSS scope was changed externally", "color_host_changed");
+      }
+      if (frame.state === "modeled" && !realm.CSS?.supports?.("background-image", frame.contextCss[frame.field.input])) {
+        authoringError(`context.${frame.field.input}`, "the browser does not support this gradient syntax", "color_unsupported_context");
       }
       const values = [...context.colors.map(({ name, css }) => [name, css]),
         ...Object.entries(frame.values).map(([name, value]) => [name, value.css])];

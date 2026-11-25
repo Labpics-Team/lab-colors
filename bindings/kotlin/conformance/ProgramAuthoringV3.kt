@@ -32,6 +32,56 @@ private fun referenceProgram(hierarchy: Boolean) = ProgramWireBuilderV3().apply 
     if (hierarchy) { wcag22VisibleUnary(true, 16u, 15u, Wcag22Criterion.SC143_TEXT_DEFAULT); output(17u, 13u) }
 }.finish()
 
+private fun verifyAuthoredComposition() {
+    fun wire(reverse: Boolean, tone: Boolean) = ProgramWireBuilderV3().apply {
+        val ids = if (reverse) listOf(20u, 10u) else listOf(10u, 20u)
+        for (id in ids) {
+            val channel = if (id == 10u) 68 else 102
+            colorTarget(id, rgb(channel, channel, channel), ProgramWireColorOptionsV3(
+                domain = ProgramWireColorDomainV3.NEUTRAL,
+                referenceAppearance = if (id == 10u) 5u else 15u,
+                tone = if (tone) ProgramWireToneV3(2u, listOf(0.0 to 0.7, 1.0 to 0.7)) else null,
+            ))
+        }
+        compose(ids, ProgramWireComposeOptionsV3(listOf(ProgramWireReferenceInputV3(2u, rgb(255, 255, 255)))))
+        surfaceInputPort(2u); inputSurface(4u, 2u)
+        solidPaint(3u, 10u); pointOccurrence(5u, 3u, 4u)
+        solidPaint(13u, 20u); pointOccurrence(15u, 13u, 4u)
+        preserveTonalHierarchy(30u, listOf(5u, 15u))
+        wcag22VisibleUnary(true, 6u, 5u, Wcag22Criterion.SC143_TEXT_DEFAULT)
+        wcag22VisibleUnary(true, 16u, 15u, Wcag22Criterion.SC143_TEXT_DEFAULT)
+        output(7u, 3u); output(17u, 13u)
+    }.finish()
+    var expected: List<Double>? = null
+    for (reverse in listOf(false, true)) {
+        compileProgramWire(wire(reverse, true), 1u).use { runtime ->
+            val first = runtime.updateObserved(1uL, listOf(1u), rgb(0, 0, 0), 1u)
+            try {
+                check(first.state() == "ready" && first.optimality() == "unfinished")
+                val components = requireNotNull(first.selectionComponents())
+                check(components == requireNotNull(first.assessmentReport()).selectionComponents)
+                check(components.single().mode == ProgramSelectionMode.JOINT_POINT_V1)
+                check(components.single().targets.toSet() == setOf(10u, 20u))
+                val references = requireNotNull(first.referenceSelections())
+                check(references.size == 2 && references.all {
+                    it.preference == ProgramReferencePreference.EXPLICIT_TONE && it.capacity == null
+                })
+                val table = first.copyOutputTable()
+                expected?.let { check(it == table) }
+                expected = table
+                runtime.updateUnknown(2uL, 7u).use { check(it.selectionComponents() == null) }
+                check(first.selectionComponents() == components && first.copyOutputTable() == table)
+            } finally { first.close() }
+        }
+    }
+    compileProgramWire(wire(false, false), 1u).use { runtime ->
+        runtime.updateObserved(1uL, listOf(1u), rgb(0, 0, 0), 1u).use { snapshot ->
+            check(snapshot.state() == "ready")
+            check(requireNotNull(snapshot.selectionComponents()).single().mode == ProgramSelectionMode.ORDERED_REFERENCE_V1)
+        }
+    }
+}
+
 private fun verifyPublishedV03AuthoringAbi() {
     // Эти JVM-сигнатуры взяты из опубликованного SDK v0.3: пересборка Kotlin-клиента скрыла бы их потерю.
     val optionsType = ProgramWireColorOptionsV3::class.java
@@ -131,6 +181,7 @@ private fun verifyDeclaredField(wire: ByteArray) {
 /** The same external consumer checks run against installed Android and JVM packages. */
 fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     verifyPublishedV03AuthoringAbi()
+    verifyAuthoredComposition()
     val referenceOptions = ProgramWireColorOptionsV3(referenceAppearance = 5u)
     check(referenceOptions.copy() == referenceOptions)
     check(referenceOptions.copy(maxChange = 1.0).referenceAppearance == 5u)
@@ -159,6 +210,19 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         pointOccurrence(26u, 27u, 28u); visibleSeparationHard(29u, 26u, -0.0, 2.0)
         assignment(emptyList())
     }.finish()
+    val composeTargets = listOf(0x01020304u, 0xffffffffu, 0u)
+    val composeReference = listOf(ProgramWireReferenceInputV3(0x10203040u, rgb(1, 128, 255)),
+        ProgramWireReferenceInputV3(0xffffffffu, rgb(254, 129, 0)))
+    for ((name, members, inputs) in listOf(
+        Triple("compose", composeTargets, null), Triple("composeReference", composeTargets, composeReference),
+        Triple("composeEmpty", emptyList(), null), Triple("composeReferenceEmpty", emptyList(), emptyList()),
+    )) {
+        val composition = ProgramWireBuilderV3().compose(members, ProgramWireComposeOptionsV3(inputs)).finish()
+        bytesEqual(requireNotNull(fixtures[name]).wireBytes(), composition)
+        check(composition[26].toInt() == if (inputs == null) 5 else 6)
+        composition[26] = (composition[26] - 2).toByte()
+        bytesEqual(ProgramWireBuilderV3().assignment(members, ProgramWireAssignmentOptionsV3(inputs)).finish(), composition)
+    }
     for ((name, actual) in mapOf("computedBox" to box, "computedGray" to gray,
         "contextual" to contextual, "fixedOnly" to fixed, "encodingOnly" to encodingOnly,
         "referenceSingleton" to referenceProgram(false), "referenceHierarchy" to referenceProgram(true),
@@ -189,6 +253,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     rejects { builder.computedTarget(2u, ProgramWireDomainV3.Gray(0u, 255u), rgb(1, 2, 3), Double.MAX_VALUE) }
     rejects { builder.visibleSeparationHard(3u, 61u, 0.5, 0.4) }
     rejects { builder.assignment(List(4097) { 1u }) }
+    rejects { builder.compose(List(4097) { 1u }) }
     rejects { builder.preserveTonalHierarchy(7u, emptyList()) }
     rejects { builder.preserveTonalHierarchy(7u, listOf(3u)) }
     rejects { builder.preserveTonalHierarchy(7u, listOf(3u, 3u)) }
@@ -196,6 +261,9 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(listOf(ProgramWireReferenceInputV3(0u, rgb(1, 2))))) }
     rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(List(2) { ProgramWireReferenceInputV3(0u, rgb(1, 2, 3)) })) }
     rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(List(4097) { ProgramWireReferenceInputV3(it.toUInt(), rgb(1, 2, 3)) })) }
+    rejects { builder.compose(emptyList(), ProgramWireComposeOptionsV3(listOf(ProgramWireReferenceInputV3(0u, rgb(1, 2))))) }
+    rejects { builder.compose(emptyList(), ProgramWireComposeOptionsV3(List(2) { ProgramWireReferenceInputV3(0u, rgb(1, 2, 3)) })) }
+    rejects { builder.compose(emptyList(), ProgramWireComposeOptionsV3(List(4097) { ProgramWireReferenceInputV3(it.toUInt(), rgb(1, 2, 3)) })) }
     val reentrant = object : AbstractList<UInt>() {
         override val size = 1
         override fun get(index: Int): UInt {
@@ -204,6 +272,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         }
     }
     rejects { builder.assignment(reentrant) }
+    rejects { builder.compose(reentrant) }
     val reentrantHierarchy = object : AbstractList<UInt>() {
         override val size: Int get() { builder.source(10u, rgb(1, 2, 3)); return 2 }
         override fun get(index: Int): UInt = index.toUInt()
@@ -217,16 +286,32 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         }
     }
     rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(reentrantReference)) }
+    rejects { builder.compose(emptyList(), ProgramWireComposeOptionsV3(reentrantReference)) }
     val reentrantReferenceSize = object : AbstractList<ProgramWireReferenceInputV3>() {
         override val size: Int get() { builder.finish(); return 0 }
         override fun get(index: Int) = error("unreachable")
     }
     rejects { builder.assignment(emptyList(), ProgramWireAssignmentOptionsV3(reentrantReferenceSize)) }
+    rejects { builder.compose(emptyList(), ProgramWireComposeOptionsV3(reentrantReferenceSize)) }
     builder.assignment(listOf(1u))
     val assigned = builder.finish()
     try { builder.assignment(emptyList()); error("duplicate assignment was accepted") }
     catch (_: ProgramWireException.InvalidDeclaration) { }
+    try { builder.compose(emptyList()); error("composition replaced an admitted assignment") }
+    catch (_: ProgramWireException.InvalidDeclaration) { }
     bytesEqual(assigned, builder.finish())
+
+    val composedRgb = rgb(255, 128, 0)
+    val composedTargets = mutableListOf(1u, 0u)
+    val composedInputs = mutableListOf(ProgramWireReferenceInputV3(0u, composedRgb))
+    val composed = ProgramWireBuilderV3().compose(composedTargets, ProgramWireComposeOptionsV3(composedInputs))
+    val composedOwned = composed.finish()
+    composedRgb.fill(0); composedTargets.clear(); composedInputs.clear()
+    try { composed.assignment(emptyList()); error("assignment replaced an admitted composition") }
+    catch (_: ProgramWireException.InvalidDeclaration) { }
+    try { composed.compose(emptyList()); error("duplicate composition was accepted") }
+    catch (_: ProgramWireException.InvalidDeclaration) { }
+    bytesEqual(composedOwned, composed.finish())
 
     val anchor = rgb(1, 2, 3)
     val curve = mutableListOf(0.0 to 0.2, 1.0 to 0.9)

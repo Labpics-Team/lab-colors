@@ -636,10 +636,6 @@ mod tests {
                 "repository tool leaked into Core: {repository_module}"
             );
         }
-        assert!(
-            core.dependencies.is_empty(),
-            "Core must not depend on repository parsers"
-        );
     }
 
     #[test]

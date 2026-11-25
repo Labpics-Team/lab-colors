@@ -20,6 +20,7 @@ const snapshot = (state = "ready", report = assessment()) => ({
   state, revision: 5n, optimality: "exact", fieldAssessment: () => report,
   cleanlinessAssessment: () => Object.freeze({ status: "not-assessed", reason: "no-declared-profile" }),
   referenceSelections: () => [], copyOutputTable: () => new Float64Array([1, 255, 255, 255, 1]),
+  selectionComponents: () => [{ mode: "ordered-v1", targets: [1] }],
   diagnostics: () => ({ searchVisited: 3n, searchBudget: 3n, witness: { violations: [
     { kind: "hard-constraint", constraintId: 7, caseIndex: 1 },
   ] } }),

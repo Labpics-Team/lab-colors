@@ -1,7 +1,7 @@
 {
   "upstream_repository": "https://github.com/Labpics-Team/agents-config",
   "upstream_commit": "c6b32fb2378346098960bb776b9ca31e4f328c39",
-  "geometry_verifier_sha256": "c87edbe70ed24b1a9e47ec156c1fe4aec3738657b7f4296ef9e7f508b896a8c8",
+  "geometry_verifier_sha256": "33ad941babb35237aa036307c8bccde4a142df36b6ddd6d54edffc6a1642aee1",
   "private_context_excluded": [
     "CLEANLINESS-DESIGN.md",
     "CLEANLINESS-EVIDENCE.md",
@@ -494,6 +494,135 @@
         "path": "geometry/input/mutation-corpus.json",
         "old_sha256": "ab9c0f7032f4aec1d4c79f756c54a784749aff82c3591e879ad24fe64b5f3a43",
         "new_sha256": "3ab87504b153232b332ad3a1cc1b7e0c7e5a66cdc99345b958d3164b6c6e5d64",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "profile-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "frontier-candidate.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ],
+          [
+            "input_sha256",
+            "intervals-refined.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      }
+    ],
+    "raw_sha256": "cf42419977850c435ede3e5be05a0a74b14ad98255418aac7d396f5bb501550e",
+    "codec_sha256": "ad4a72b6e3b18950f38544d19998052abf9ab6e12387613eed4ad0d83dfa4a8f"
+  },
+  "source_constant_refresh": {
+    "reason": "The product extracts five existing f64 literals into shared constants in the same srgb.rs source. The archived Rust source follows that committed source; the 256 decode and nine matrix inputs, inlined arithmetic expressions and all scientific certificate payloads are unchanged.",
+    "prior_research_commit": "58ca2b958ea5ab2713f23bf58ae459520b7a2576",
+    "prior_release_sha256": "05a3ea67834beca6fc1ef4b853092cd992dba04c4060d877358e8ea2dde88290",
+    "prior_proof_manifest_sha256": "bdf646418f75fcc99821b6c39c680deb4c64ac28303223ee043232483a2d4971",
+    "prior_product_source_commit": "95be02f7f0a99ef0cad282bdffa6ff9283fa2eeb",
+    "new_product_source_commit": "c7c50ff50d22c9566974dba3fc28dd0fb28f8d3a",
+    "source_path": "crates/labcolors-core/src/spaces/srgb.rs",
+    "old_source": {
+      "sha256": "1d4d7c0b10f1f1936fe47958b507fec7c4d083e352dda79b3c039295088eed32",
+      "git_blob_sha1": "ae00cc531c31650a80c3cbe7c556dfcb1f09075f"
+    },
+    "new_source": {
+      "sha256": "d940f9cf443970ff34e6ed4280d5b00c2aef10b85a0818e609bf21302fcb17d4",
+      "git_blob_sha1": "90c1c01a6d4800f29853a60d518e579e0fd6726f"
+    },
+    "source_origin_policy": "The previous capsule remains exactly retrievable at its preserved research commit. This snapshot is the actual new committed product source, not historical bytes.",
+    "certificate_provenance": "Only source-binding metadata changes in the numerical certificate JSON. Historical computation timestamps, generators and arithmetic payloads are preserved and do not describe a new numerical computation.",
+    "verifier_change": "Exactly three expected bridge SHA anchors change. Arithmetic, predicates, coverage, mutation cases and all independent audit programs are unchanged.",
+    "historical_stage_scope": "Existing source_refresh, text_io_revision and source_visibility_refresh blocks remain unchanged historical records. Their current fields refer to those earlier stages, not this constant-extraction refresh.",
+    "metadata_change_audit": [
+      {
+        "path": "geometry/input/bridge.json",
+        "old_sha256": "0c05d282cf1db45e9e049546fc8e32131f1895062426d8dee49a9e57e6ed8357",
+        "new_sha256": "45e5eb9eb63828473438d64571707af96722ba47878f57b171cf2d61b2fe7996",
+        "changed_json_paths": [
+          [
+            "product_commit"
+          ],
+          [
+            "created_utc"
+          ],
+          [
+            "bindings",
+            1,
+            "sha256"
+          ],
+          [
+            "bindings",
+            1,
+            "git_blob_sha1"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/profile-candidate.json",
+        "old_sha256": "66d5d2934d8f7205d26e86dc08262db430227f50efb11cc021209f1c8c2dd5ab",
+        "new_sha256": "6747baf5d47b204467479033081daacb99171ffa5f98bcf22c1ab11a5154d48d",
+        "changed_json_paths": [
+          [
+            "source_pins",
+            "bridge",
+            "sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/frontier-candidate.json",
+        "old_sha256": "754f97d5e9202ef416b6232ad0739d0142d8261a209fb705864c6464e8c3fd3a",
+        "new_sha256": "96fe8e94d4c5cb33b3847057f3f07398840fb0c90f61f3c1e3ffbe1563a82b4a",
+        "changed_json_paths": [
+          [
+            "profile_sha256"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-full.json",
+        "old_sha256": "c92d3f3ddca0a18e53c25a6de455f4f783f04983da2e41b507d858e95321f306",
+        "new_sha256": "069cc482c5ca442a7c42e0f3573b06338efb5c84c67f0a67fcaa45c537d02824",
+        "changed_json_paths": [
+          [
+            "pins",
+            "profile"
+          ],
+          [
+            "pins",
+            "frontier"
+          ],
+          [
+            "pins",
+            "bridge"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/intervals-refined.json",
+        "old_sha256": "dc4ccfabcd8974add65e73bf1c9b4acc64b8e19185f3407bb46f3a7f2bd3e1f3",
+        "new_sha256": "b6313d7c7c316b962aa90ae0761f524a0e2e2b6e6b48568c7de324b8c201035a",
+        "changed_json_paths": [
+          [
+            "input_sha256",
+            "intervals-full.json"
+          ]
+        ],
+        "all_other_fields_identical": true
+      },
+      {
+        "path": "geometry/input/mutation-corpus.json",
+        "old_sha256": "3ab87504b153232b332ad3a1cc1b7e0c7e5a66cdc99345b958d3164b6c6e5d64",
+        "new_sha256": "7f20f45dec04fa0ee8cfd38ac3aeda589d553ac96f97b09863341312a2694074",
         "changed_json_paths": [
           [
             "input_sha256",

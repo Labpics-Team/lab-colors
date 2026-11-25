@@ -326,6 +326,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import re
           import subprocess
           import sys
 
@@ -344,16 +345,29 @@ jobs:
           core = packages["labcolors-core"]
           if core["features"].get("default") != []:
               raise SystemExit("labcolors-core default capability set drifted")
-          # Ни optional, ни target-specific normal-edge не делает парсер
-          # репозитория частью цветовой математики. Dev-only oracle допустим.
+          # Software floating point is private color math. Parsers, IO and
+          # client capabilities remain outside Core, including optional and
+          # target-specific normal edges. The version lives in Cargo.toml.
           runtime_dependencies = [
               dependency
               for dependency in core["dependencies"]
               if dependency["kind"] is None
           ]
-          if runtime_dependencies:
-              names = sorted(dependency["name"] for dependency in runtime_dependencies)
-              raise SystemExit(f"labcolors-core must have zero runtime dependencies: {names}")
+          if len(runtime_dependencies) != 1:
+              raise SystemExit("Core must have one private numerical dependency")
+          arithmetic = runtime_dependencies[0]
+          if (
+              arithmetic["name"] != "rustc_apfloat"
+              or re.fullmatch(r"=[0-9]+\.[0-9]+\.[0-9]+", arithmetic["req"]) is None
+              or arithmetic["optional"]
+              or arithmetic["target"] is not None
+              or arithmetic["uses_default_features"]
+              or arithmetic["features"]
+              or arithmetic.get("rename") is not None
+              or arithmetic.get("path") is not None
+              or arithmetic["source"] != "registry+https://github.com/rust-lang/crates.io-index"
+          ):
+              raise SystemExit("Core numerical dependency must be pinned, portable and private")
           # Оффлайн protocol/compiler линия вырезана целиком: анти-воскрешение —
           # самих крейтов больше не существует в воркспейсе.
           for erased in ("labcolors-protocol", "labcolors-compiler"):
