@@ -125,7 +125,7 @@ impl ProgramFieldWitnessV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFieldAssessmentV1 {
     varying_input: usize,
-    stops: Vec<ProgramGradientStopV1>,
+    stops: Box<[ProgramGradientStopV1]>,
     region_count: usize,
     witnesses: Vec<ProgramFieldWitnessV1>,
 }
@@ -137,7 +137,7 @@ impl ProgramFieldAssessmentV1 {
     }
 
     /// Authored endpoints. Reversal retains different coordinate provenance.
-    pub fn endpoints(&self) -> (Srgb8, Srgb8) {
+    pub const fn endpoints(&self) -> (Srgb8, Srgb8) {
         (
             self.stops[0].color(),
             self.stops[self.stops.len() - 1].color(),
@@ -212,7 +212,7 @@ pub(super) fn copy_field_assessment(
     stops.extend_from_slice(field.stops());
     Ok(Some(ProgramFieldAssessmentV1 {
         varying_input: field.varying_input_index(),
-        stops,
+        stops: stops.into_boxed_slice(),
         region_count: field.cell_count(),
         witnesses,
     }))
