@@ -53,6 +53,7 @@ const intrinsicTypedArrayTagGetter = Object.getOwnPropertyDescriptor(
   Symbol.toStringTag,
 ).get;
 const byteStorage = { Type: Uint8Array, tag: "Uint8Array", bytesPerElement: 1 };
+const positionStorage = { Type: Float64Array, tag: "Float64Array", bytesPerElement: 8 };
 const scenarioStorage = { Type: Uint32Array, tag: "Uint32Array", bytesPerElement: 4 };
 
 const CERTIFICATE_ERROR_CODES = new Set([
@@ -220,6 +221,20 @@ function copyDeclaredFieldInputs(surfaces, input, from, to, operation) {
   ];
 }
 
+function copyGradientInputs(surfaces, input, positions, colors, operation) {
+  const code = "program_update", invalid = () => programIngressError(operation, code);
+  const pixels = inspectTypedArrayStorage(surfaces, byteStorage, invalid);
+  const stops = inspectTypedArrayStorage(positions, positionStorage, invalid);
+  const rgb = inspectTypedArrayStorage(colors, byteStorage, invalid);
+  if (pixels.length % 3 || !Number.isInteger(input) || input < 0 || input >= pixels.length / 3
+      || stops.length < 2 || stops.length * 3 !== rgb.length) throw invalid();
+  return [
+    copyProgramInput(surfaces, byteStorage, operation, code, undefined, pixels),
+    copyProgramInput(positions, positionStorage, operation, code, undefined, stops),
+    copyProgramInput(colors, byteStorage, operation, code, undefined, rgb),
+  ];
+}
+
 export function compileProgramWire(bytes, streamId) {
   return compileProgramWireWasm(copyProgramInput(
     bytes, byteStorage, "compileProgramWire", "program_wire",
@@ -246,7 +261,7 @@ function withRuntimeOperation(runtime, operation, callback) {
   }
 }
 
-for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredField", "updateDeclaredFieldWith", "updateUnknown", "free"]) {
+for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredField", "updateDeclaredFieldWith", "updateGradient", "updateGradientWith", "updateUnknown", "free"]) {
   const original = ProgramRuntime.prototype[method];
   ProgramRuntime.prototype[method] = function guardedRuntimeOperation(...args) {
     const operation = method === "free" ? "runtimeFree" : method;
@@ -263,7 +278,11 @@ for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredFie
         }
         [args[1], args[3], args[4]] = copyDeclaredFieldInputs(args[1], args[2], args[3], args[4], operation);
       }
-      const acceptIndex = method === "updateObservedWith" ? 4 : method === "updateDeclaredFieldWith" ? 5 : null;
+      if (method === "updateGradient" || method === "updateGradientWith") {
+        if (method === "updateGradientWith" && typeof args[5] !== "function") throw programIngressError(operation, "program_update");
+        [args[1], args[3], args[4]] = copyGradientInputs(args[1], args[2], args[3], args[4], operation);
+      }
+      const acceptIndex = method === "updateObservedWith" ? 4 : (method === "updateDeclaredFieldWith" || method === "updateGradientWith") ? 5 : null;
       if (acceptIndex !== null) {
         const accept = args[acceptIndex];
         args[acceptIndex] = snapshot => {
@@ -474,10 +493,10 @@ export function isProgramError(error) {
     const operation = error.operation;
     const code = error.code;
     if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
-    if (operation === "updateObserved" || operation === "updateDeclaredField" || operation === "updateUnknown") {
+    if (operation === "updateObserved" || operation === "updateDeclaredField" || operation === "updateGradient" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }
-    if (operation === "updateObservedWith" || operation === "updateDeclaredFieldWith") {
+    if (operation === "updateObservedWith" || operation === "updateDeclaredFieldWith" || operation === "updateGradientWith") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code) || code === "program_host_protocol";
     }
     if (operation === "runtimeFree" || operation === "snapshotFree") return code === "program_busy";

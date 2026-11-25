@@ -110,6 +110,19 @@ private fun verifyPublishedV03AuthoringAbi() {
     bytesEqual(builder.finish(), ProgramWireBuilderV3().assignment(emptyList(), ProgramWireAssignmentOptionsV3()).finish())
 }
 
+private fun verifyGradient(wire: ByteArray) {
+    val stops = listOf(ProgramGradientStop(0.0, ProgramRgb8(0u, 0u, 0u)),
+        ProgramGradientStop(0.125, ProgramRgb8(1u, 1u, 1u)), ProgramGradientStop(1.0, ProgramRgb8(3u, 3u, 3u)))
+    compileProgramWire(wire, 1u).use { runtime ->
+        runtime.updateGradient(1uL, rgb(0, 0, 0), 0u, stops).use { snapshot ->
+            val field = requireNotNull(snapshot.gradientAssessment())
+            check(field.stops == stops && field.regionCount == 11uL && field.rendering == "unknown")
+            val witness = field.witnesses.last()
+            check(witness.segmentIndex == 1u && witness.local == ProgramFieldWitness(3u, 4u, stops.last().color))
+        }
+    }
+}
+
 private fun verifyDeclaredField(wire: ByteArray) {
     val start = ProgramRgb8(0u, 0u, 0u)
     val end = ProgramRgb8(2u, 2u, 2u)
@@ -487,6 +500,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         output(17u, 4u); assignment(emptyList())
     }.finish()
     verifyDeclaredField(nominal)
+    verifyGradient(nominal)
     compileProgramWire(nominal, 1u).use { runtime ->
         runtime.updateObserved(1uL, listOf(9u), rgb(255, 255, 255), 1u).use { first ->
             val summary = requireNotNull(first.cleanlinessAssessment())

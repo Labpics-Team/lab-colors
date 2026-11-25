@@ -167,8 +167,8 @@ impl SchemaOrderedFieldSourceV1 for DeclaredFieldSource {
     fn varying_input_index(&self) -> usize {
         self.varying
     }
-    fn segment(&self) -> OpaqueSrgb8AffineSegment {
-        self.segment
+    fn stops(&self) -> crate::field_context::FieldStops<'_> {
+        crate::field_context::FieldStops::Affine(self.segment)
     }
 }
 
@@ -213,7 +213,13 @@ fn declared_field_keeps_exact_interior_tie_coordinate_and_complete_regions() {
     let field = observation
         .declared_field()
         .expect("declared admission retains its field descriptor");
-    assert_eq!(field.segment(), source.segment);
+    assert_eq!(
+        (
+            field.stops()[0].color().bytes(),
+            field.stops()[1].color().bytes()
+        ),
+        source.segment.endpoints()
+    );
     assert_eq!(observation.physical_case_count(), 511);
     assert_eq!(field.cell_count(), 513);
     let mut regions = 0;
@@ -240,11 +246,14 @@ fn declared_field_keeps_exact_interior_tie_coordinate_and_complete_regions() {
             .expect("each admitted physical case has coordinate cells")
         {
             regions += 1;
-            assert_eq!(cell.nominal(), values[0].srgb8().bytes());
-            assert_eq!(source.segment.at(cell.representative()), cell.nominal());
-            if let SegmentRegion::Point(at) = cell.region() {
+            assert_eq!(cell.local.nominal(), values[0].srgb8().bytes());
+            assert_eq!(
+                source.segment.at(cell.local.representative()),
+                cell.local.nominal()
+            );
+            if let SegmentRegion::Point(at) = cell.local.region() {
                 if at.numerator() == 1 && at.denominator() == 2 {
-                    tie = Some(cell.nominal());
+                    tie = Some(cell.local.nominal());
                 }
             }
         }
@@ -293,11 +302,11 @@ fn reversed_declared_field_conflicts_even_when_physical_support_is_equal() {
     assert_ne!(
         old.declared_field()
             .expect("declared admission retains its field descriptor")
-            .segment(),
+            .stops(),
         current
             .declared_field()
             .expect("declared admission retains its field descriptor")
-            .segment()
+            .stops()
     );
 }
 
@@ -320,7 +329,7 @@ fn constant_declared_field_is_not_collapsed_into_a_finite_observation() {
         .cells(0)
         .expect("a constant field has cells for its single physical case")
         .iter()
-        .map(|cell| cell.region())
+        .map(|cell| cell.local.region())
         .collect();
     assert_eq!(
         regions,
@@ -395,7 +404,8 @@ fn retained_field_descriptor_coordinates_and_constants_survive_pool_reuse() {
     let descriptor = old
         .declared_field()
         .expect("declared admission retains its field descriptor")
-        .segment();
+        .stops()
+        .to_vec();
     let cells = old
         .declared_field()
         .expect("declared admission retains its field descriptor")
@@ -411,7 +421,7 @@ fn retained_field_descriptor_coordinates_and_constants_survive_pool_reuse() {
         assert_eq!(
             old.declared_field()
                 .expect("declared admission retains its field descriptor")
-                .segment(),
+                .stops(),
             descriptor
         );
         assert_eq!(

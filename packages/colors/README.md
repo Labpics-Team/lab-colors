@@ -103,7 +103,14 @@ if (update.state === "rejected") {
 попытки.
 
 Для предпросмотра текста и материалов над градиентом подключите отдельный элемент
-через `program.preview(element, { canvas: { kind: "affine-srgb8", from: "#f4eadb", to: "#d7c5a8" } })`.
+через `program.preview`.
+
+```js
+const preview = program.preview(element, { canvas: { kind: "linear-srgb8", stops: [
+  { at: 0, color: "#f4eadb" }, { at: 0.35, color: "#d7c5a8" }, { at: 1, color: "#fff3db" },
+] } });
+```
+
 Он обновляет фон и связанные цвета вместе. Успешный кадр поля имеет
 `state: "modeled"`: Core проверил всю объявленную модель градиента,
 а точность растеризации браузера остаётся неизвестной.

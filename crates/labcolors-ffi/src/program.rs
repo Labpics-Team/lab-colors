@@ -135,6 +135,23 @@ fn observation<'a>(
     })
 }
 
+fn gradient_input(
+    stops: &[crate::ProgramGradientStop],
+    operation: &str,
+) -> Result<(Vec<f64>, Vec<u8>), LabColorsError> {
+    let mut positions = crate::program_reports::storage(stops.len(), operation)?;
+    let bytes = stops
+        .len()
+        .checked_mul(3)
+        .ok_or_else(|| LabColorsError::new("program_resource_exhausted", operation))?;
+    let mut colors = crate::program_reports::storage(bytes, operation)?;
+    for stop in stops {
+        positions.push(stop.at);
+        colors.extend([stop.color.red, stop.color.green, stop.color.blue]);
+    }
+    Ok((positions, colors))
+}
+
 #[derive(uniffi::Object)]
 pub struct ProgramRuntime {
     inner: Mutex<core::ProgramSessionV1>,
@@ -223,6 +240,59 @@ impl ProgramRuntime {
             .map(|inner| Arc::new(ProgramSnapshot { inner }))
             .map_err(|error| runtime_error(error, operation))
     }
+    /// Solves a single nominal composition for all segments in authored order.
+    pub fn update_gradient(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        varying_input: u32,
+        stops: Vec<crate::ProgramGradientStop>,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+        let operation = "updateGradient";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let (positions, colors) = gradient_input(&stops, operation)?;
+        let field = core::ProgramDeclaredFieldV1::from_gradient_rgb8(
+            &surfaces,
+            varying_input as usize,
+            &positions,
+            &colors,
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        inner
+            .update_declared_field(revision, field)
+            .map(|inner| Arc::new(ProgramSnapshot { inner }))
+            .map_err(|e| runtime_error(e, operation))
+    }
+
+    /// The host accepts or rejects the whole proposed gradient and its paints.
+    pub fn update_gradient_with(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        varying_input: u32,
+        stops: Vec<crate::ProgramGradientStop>,
+        accept: Box<dyn ProgramUpdateHost>,
+    ) -> Result<bool, LabColorsError> {
+        let operation = "updateGradientWith";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let (positions, colors) = gradient_input(&stops, operation)?;
+        let field = core::ProgramDeclaredFieldV1::from_gradient_rgb8(
+            &surfaces,
+            varying_input as usize,
+            &positions,
+            &colors,
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        let prepared = inner
+            .prepare_declared_field(revision, field)
+            .map_err(|e| runtime_error(e, operation))?;
+        prepared.commit_with(|inner| {
+            let snapshot = Arc::new(ProgramSnapshot { inner });
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accept.accept(snapshot)))
+                .map_err(|_| LabColorsError::new("program_host_protocol", operation))?
+        })
+    }
+
     pub fn update_observed(
         &self,
         revision: u64,
@@ -334,6 +404,16 @@ impl ProgramSnapshot {
             .map(crate::program_reports::field_assessment)
             .transpose()
     }
+    /// Full stop positions and exact segment-local witnesses for either field form.
+    pub fn gradient_assessment(
+        &self,
+    ) -> Result<Option<crate::ProgramGradientAssessment>, LabColorsError> {
+        self.inner
+            .field_assessment()
+            .map(crate::program_reports::gradient_assessment)
+            .transpose()
+    }
+
     pub fn snapshot_version(&self) -> u32 {
         self.inner.snapshot_version()
     }

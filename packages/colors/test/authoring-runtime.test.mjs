@@ -41,6 +41,29 @@ test("a whole affine source resolves as an immutable modeled frame through the r
   } finally { program.dispose(); }
 });
 
+test("one composition covers every positioned segment and retains a tie-only witness", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const program = await c.compile({ ink: c.fixed("ink", "#ffffff").on(canvas, { contrast: "wcag22-text" }) });
+  const stops = [{at: 0, color: [2, 0, 0]}, {at: 0.125, color: [2, 1, 0]}, {at: 1, color: [1, 2, 0]}];
+  try {
+    const frame = program.resolve({ canvas: { kind: "linear-srgb8", stops } });
+    assert.equal(frame.state, "modeled");
+    assert.equal(frame.field.regionCount, 9);
+    assert.equal(frame.coverage.rendering, "unknown");
+    assert.deepEqual(frame.values.ink.rgb, [255, 255, 255]);
+    assert.deepEqual(frame.field.witnesses.find(w => w.nominal.join() === "2,2,0"),
+      {segmentIndex: 1, coordinate: [1, 2], nominal: [2, 2, 0]});
+    stops[1].color[0] = 255;
+    const rejected = program.resolve({canvas: {kind: "linear-srgb8", stops: [
+      {at: 0, color: "#000000"}, {at: 0.1, color: "#ffffff"}, {at: 1, color: "#000000"}]}});
+    assert.equal(rejected.state, "conflict");
+    assert.equal(rejected.coverage.model, "violated");
+    assert.ok(rejected.diagnostics.some(d => d.fieldWitness !== undefined));
+    assert.equal(program.resolve({canvas: "#000000"}).state, "ready");
+    assert.deepEqual(frame.context.canvas.stops[1], {at: 0.125, color: [2, 1, 0]});
+  } finally { program.dispose(); }
+});
+
 test("an interior field failure is scoped to the nominal model with a Core coordinate witness", async () => {
   const c = colors(), canvas = c.surface("canvas");
   const program = await c.compile({ ink: c.fixed("ink", "#808080").on(canvas, { separation: [0.1, 2] }) });

@@ -1,6 +1,7 @@
 //! Declared field ingress and the scope of its revision-bound result.
 
 use super::*;
+use crate::field_context::{FieldStops, ProgramGradientStopV1};
 use crate::gradient_domain::OpaqueSrgb8AffineSegment;
 use crate::observation::SchemaOrderedFieldSourceV1;
 
@@ -13,7 +14,7 @@ use crate::observation::SchemaOrderedFieldSourceV1;
 pub struct ProgramDeclaredFieldV1<'a> {
     rgb8: &'a [u8],
     varying_input: usize,
-    segment: OpaqueSrgb8AffineSegment,
+    stops: FieldStops<'a>,
 }
 
 /// Malformed schema-ordered field declaration.
@@ -36,7 +37,32 @@ impl<'a> ProgramDeclaredFieldV1<'a> {
         Ok(Self {
             rgb8,
             varying_input,
-            segment: OpaqueSrgb8AffineSegment::new(from.bytes(), to.bytes()),
+            stops: FieldStops::Affine(OpaqueSrgb8AffineSegment::new(from.bytes(), to.bytes())),
+        })
+    }
+    /// A continuous piecewise-affine line in encoded sRGB. Positions are finite,
+    /// strictly increasing, start at zero and end at one. There is one RGB8
+    /// triple per position and one constant RGB8 triple per compiled input.
+    pub fn from_gradient_rgb8(
+        rgb8: &'a [u8],
+        varying_input: usize,
+        positions: &'a [f64],
+        colors: &'a [u8],
+    ) -> Result<Self, ProgramDeclaredFieldShapeErrorV1> {
+        if rgb8.len() % 3 != 0
+            || varying_input >= rgb8.len() / 3
+            || positions.len() < 2
+            || positions.len().checked_mul(3) != Some(colors.len())
+            || positions.first() != Some(&0.0)
+            || positions.last() != Some(&1.0)
+            || !positions.windows(2).all(|pair| pair[0] < pair[1])
+        {
+            return Err(ProgramDeclaredFieldShapeErrorV1);
+        }
+        Ok(Self {
+            rgb8,
+            varying_input,
+            stops: FieldStops::Positioned { positions, colors },
         })
     }
 }
@@ -59,8 +85,8 @@ impl SchemaOrderedFieldSourceV1 for ProgramDeclaredFieldV1<'_> {
         self.varying_input
     }
 
-    fn segment(&self) -> OpaqueSrgb8AffineSegment {
-        self.segment
+    fn stops(&self) -> FieldStops<'_> {
+        self.stops
     }
 }
 
@@ -68,13 +94,19 @@ impl SchemaOrderedFieldSourceV1 for ProgramDeclaredFieldV1<'_> {
 /// It is a diagnostic witness, not the definition or extent of the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramFieldWitnessV1 {
+    segment_index: usize,
     numerator: u16,
     denominator: u16,
     nominal: Srgb8,
 }
 
 impl ProgramFieldWitnessV1 {
-    /// Normalized parameter t = numerator / denominator, exactly.
+    /// Index of the first stop of this witness segment.
+    pub const fn segment_index(self) -> usize {
+        self.segment_index
+    }
+
+    /// Exact local parameter t = numerator / denominator within this segment.
     pub const fn coordinate(self) -> (u16, u16) {
         (self.numerator, self.denominator)
     }
@@ -93,8 +125,7 @@ impl ProgramFieldWitnessV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFieldAssessmentV1 {
     varying_input: usize,
-    from: Srgb8,
-    to: Srgb8,
+    stops: Vec<ProgramGradientStopV1>,
     region_count: usize,
     witnesses: Vec<ProgramFieldWitnessV1>,
 }
@@ -106,13 +137,25 @@ impl ProgramFieldAssessmentV1 {
     }
 
     /// Authored endpoints. Reversal retains different coordinate provenance.
-    pub const fn endpoints(&self) -> (Srgb8, Srgb8) {
-        (self.from, self.to)
+    pub fn endpoints(&self) -> (Srgb8, Srgb8) {
+        (
+            self.stops[0].color(),
+            self.stops[self.stops.len() - 1].color(),
+        )
+    }
+
+    /// All positive-width segments, in authored order.
+    pub fn stops(&self) -> &[ProgramGradientStopV1] {
+        &self.stops
     }
 
     /// Authoritative source model; materials keep the compiled Program law.
     pub const fn source_model(&self) -> &'static str {
-        "opaque-affine-encoded-srgb8-half-up-v1"
+        if self.stops.len() == 2 {
+            "opaque-affine-encoded-srgb8-half-up-v1"
+        } else {
+            "opaque-piecewise-affine-encoded-srgb8-half-up-v1"
+        }
     }
 
     /// All real positions between the declared stops are included in the model.
@@ -152,21 +195,24 @@ pub(super) fn copy_field_assessment(
         .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
     for case in 0..count {
         let cell = field
-            .cells(case)
-            .and_then(|cells| cells.first())
+            .witness(case)
             .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
-        let coordinate = cell.representative();
+        let coordinate = cell.local.representative();
         witnesses.push(ProgramFieldWitnessV1 {
+            segment_index: cell.segment_index,
             numerator: coordinate.numerator(),
             denominator: coordinate.denominator(),
-            nominal: Srgb8::new(cell.nominal()),
+            nominal: Srgb8::new(cell.local.nominal()),
         });
     }
-    let (from, to) = field.segment().endpoints();
+    let mut stops = Vec::new();
+    stops
+        .try_reserve_exact(field.stops().len())
+        .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+    stops.extend_from_slice(field.stops());
     Ok(Some(ProgramFieldAssessmentV1 {
         varying_input: field.varying_input_index(),
-        from: Srgb8::new(from),
-        to: Srgb8::new(to),
+        stops,
         region_count: field.cell_count(),
         witnesses,
     }))
@@ -195,16 +241,24 @@ impl ProgramSessionV1 {
         if self.owner.snapshot_version() != 2 {
             return Err(ProgramRuntimeErrorV1::Update);
         }
-        // Exact region count safely bounds the deduplicated physical support.
-        // Admission retains constants once and does not construct a dense matrix.
-        let count = field.segment.partition_cell_count();
-        self.reserve_computed_snapshot(count)?;
         let transition = self
             .owner
             .prepare_schema_ordered_field_update(&mut self.session, revision, &field)
             .map_err(map_runtime_update_error)?;
+        let evidence = transition.snapshot_evidence();
+        let count = evidence
+            .observation()
+            .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?
+            .physical_cases()
+            .len();
+        Self::reserve_computed_snapshot(
+            &self.owner,
+            &mut self.outputs_scratch,
+            &mut self.assessment_scratch,
+            count,
+        )?;
         let snapshot = snapshot_from_computed_evidence_into(
-            transition.snapshot_evidence(),
+            evidence,
             &mut self.outputs_scratch,
             &mut self.assessment_scratch,
         )?;

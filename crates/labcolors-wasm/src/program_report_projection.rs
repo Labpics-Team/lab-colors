@@ -12,11 +12,31 @@ pub(super) fn project_field(
     let Some(field) = field else {
         return Ok(JsValue::NULL);
     };
+    let stops = if field.stops().len() > 2 {
+        let stops = super::report_array()?;
+        for stop in field.stops() {
+            let [r, g, b] = stop.color().bytes();
+            super::report_array_push(
+                &stops,
+                &super::report_gradient_stop(stop.position(), r, g, b)?,
+            )?;
+        }
+        Some(stops)
+    } else {
+        None
+    };
     let witnesses = super::report_array()?;
     for witness in field.witnesses() {
         let (numerator, denominator) = witness.coordinate();
         let [r, g, b] = witness.nominal().bytes();
-        let value = super::report_field_witness(numerator, denominator, r, g, b)?;
+        let value = super::report_field_witness(
+            stops.as_ref().map(|_| witness.segment_index() as u32),
+            numerator,
+            denominator,
+            r,
+            g,
+            b,
+        )?;
         super::report_array_push(&witnesses, &value)?;
     }
     let (from, to) = field.endpoints();
@@ -31,6 +51,7 @@ pub(super) fn project_field(
         field.rendering(),
         field.region_count(),
         &witnesses,
+        stops,
     )
 }
 

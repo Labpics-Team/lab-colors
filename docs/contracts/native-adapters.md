@@ -93,6 +93,20 @@ Computed V3 с `assignment` принимает один непрозрачный
 descriptor `from → to`. V1/V2 возвращают `program_update`; нескольких полей,
 прозрачных stops и другого пространства интерполяции этот API не представляет.
 
+`update_gradient(revision, surfaces, varying_input, stops)` принимает список
+`ProgramGradientStop(at, color)` с непрозрачными RGB8 и строго возрастающими
+позициями от 0 до 1 включительно. `update_gradient_with(..., accept)`
+использует тот же протокол атомарного обновления. В Swift и Kotlin эти методы
+называются `updateGradient` и `updateGradientWith`.
+
+`gradientAssessment()` сохраняет все позиции, цвета и порядок остановок.
+Каждый `ProgramGradientWitness` указывает `segmentIndex` и `local` с точной
+дробью и номинальным RGB8. Между остановками цвет интерполируется в encoded
+sRGB. Для отображения передайте остановки рисующему API с этим пространством
+интерполяции. Покрытие фактических пикселей остаётся `unknown`. Двухконцевой
+`fieldAssessment()` возвращает `program_gradient_assessment_required` для
+поля с тремя и более остановками.
+
 `field_assessment()` возвращает owned `Option<ProgramFieldAssessment>`:
 `input_index`, endpoints, `source_model: "opaque-affine-encoded-srgb8-half-up-v1"`,
 `domain: "whole-field"`, `rendering: "unknown"`, `region_count` и `witnesses`.

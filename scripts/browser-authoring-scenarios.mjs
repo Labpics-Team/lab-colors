@@ -3,7 +3,7 @@ const CHECKS = {
   ownership: ["independent-modules", "independent-roots", "independent-dispose",
     "cascade-rollback", "cascade-recovery", "important-rollback", "important-recovery"],
   csp: ["csp-refusal"],
-  nonce: ["nonce-acceptance", "field-preview", "preview-solid-update"],
+  nonce: ["nonce-acceptance", "field-preview", "positioned-preview", "preview-solid-update"],
 };
 
 /** The same installed tarball is served under two complete module URL trees. */
@@ -128,6 +128,15 @@ async function browserAuthoringConsumer(origin, mode, nonce, cleanup) {
       check("field-preview", preview.lastUpdate.state === "committed" && preview.current.state === "modeled"
         && preview.current.coverage.rendering === "unknown" && computed.backgroundImage.startsWith("linear-gradient(")
         && read(second).canvas === preview.current.contextCss.canvas && computed.color === "rgb(255, 0, 0)", read(second));
+      const oldFrame = preview.current;
+      const positioned = preview.set({canvas: {kind: "linear-srgb8", stops: [
+        {at: 0, color: "#ffffff"}, {at: 0.5, color: "#c6b8af"},
+        {at: 0.5000000000000001, color: "#80736c"}, {at: 1, color: "#ffffff"},
+      ]}});
+      check("positioned-preview", positioned.state === "committed" && positioned.frame.state === "modeled"
+        && positioned.frame.context.canvas.stops[2].at === 0.5000000000000001
+        && positioned.frame.coverage.rendering === "unknown" && computed.backgroundImage.includes("128, 115, 108")
+        && oldFrame.context.canvas.kind === "affine-srgb8", computed.backgroundImage);
       const solid = preview.set({ canvas: "#ffffff" });
       check("preview-solid-update", solid.frame.state === "ready" && computed.backgroundImage === "none"
         && computed.backgroundColor === "rgb(255, 255, 255)", read(second));

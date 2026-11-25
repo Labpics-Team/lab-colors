@@ -23,19 +23,81 @@ pub struct ProgramFieldAssessment {
     pub witnesses: Vec<ProgramFieldWitness>,
 }
 
+/// One authored stop. Its position is normalized to the gradient line.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ProgramGradientStop {
+    pub at: f64,
+    pub color: ProgramRgb8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramGradientWitness {
+    pub segment_index: u32,
+    pub local: ProgramFieldWitness,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ProgramGradientAssessment {
+    pub input_index: u32,
+    pub stops: Vec<ProgramGradientStop>,
+    pub source_model: String,
+    pub domain: String,
+    pub rendering: String,
+    pub region_count: u64,
+    pub witnesses: Vec<ProgramGradientWitness>,
+}
+
+fn local_witness(witness: core::ProgramFieldWitnessV1) -> ProgramFieldWitness {
+    let (numerator, denominator) = witness.coordinate();
+    ProgramFieldWitness {
+        numerator,
+        denominator,
+        nominal: witness.nominal().into(),
+    }
+}
+
+pub(crate) fn gradient_assessment(
+    field: &core::ProgramFieldAssessmentV1,
+) -> Result<ProgramGradientAssessment, LabColorsError> {
+    let operation = "gradientAssessment";
+    let internal = |_| LabColorsError::new("program_internal", operation);
+    let mut stops = storage(field.stops().len(), operation)?;
+    stops.extend(field.stops().iter().map(|stop| ProgramGradientStop {
+        at: stop.position(),
+        color: stop.color().into(),
+    }));
+    let mut witnesses = storage(field.witnesses().len(), operation)?;
+    for &witness in field.witnesses() {
+        witnesses.push(ProgramGradientWitness {
+            segment_index: u32::try_from(witness.segment_index()).map_err(internal)?,
+            local: local_witness(witness),
+        });
+    }
+    Ok(ProgramGradientAssessment {
+        input_index: u32::try_from(field.input_index()).map_err(internal)?,
+        stops,
+        witnesses,
+        source_model: copy_text(field.source_model(), operation)?,
+        domain: copy_text(field.domain(), operation)?,
+        rendering: copy_text(field.rendering(), operation)?,
+        region_count: field.region_count() as u64,
+    })
+}
+
 pub(crate) fn field_assessment(
     field: &core::ProgramFieldAssessmentV1,
 ) -> Result<ProgramFieldAssessment, LabColorsError> {
     let operation = "fieldAssessment";
-    let mut witnesses = storage(field.witnesses().len(), operation)?;
-    for witness in field.witnesses() {
-        let (numerator, denominator) = witness.coordinate();
-        witnesses.push(ProgramFieldWitness {
-            numerator,
-            denominator,
-            nominal: witness.nominal().into(),
-        });
+    // The published two-stop report has no place for a segment index. A
+    // multistop caller can read the complete gradientAssessment on this snapshot.
+    if field.stops().len() != 2 {
+        return Err(LabColorsError::new(
+            "program_gradient_assessment_required",
+            operation,
+        ));
     }
+    let mut witnesses = storage(field.witnesses().len(), operation)?;
+    witnesses.extend(field.witnesses().iter().copied().map(local_witness));
     let (from, to) = field.endpoints();
     let internal = |_| LabColorsError::new("program_internal", operation);
     Ok(ProgramFieldAssessment {
@@ -497,7 +559,7 @@ pub struct ProgramDiagnostics {
     pub witness: Option<ProgramAttemptWitness>,
 }
 
-fn storage<T>(length: usize, operation: &str) -> Result<Vec<T>, LabColorsError> {
+pub(crate) fn storage<T>(length: usize, operation: &str) -> Result<Vec<T>, LabColorsError> {
     let mut output = Vec::new();
     output
         .try_reserve_exact(length)

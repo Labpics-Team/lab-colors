@@ -277,6 +277,21 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             .output(17, paint: 4).assignment([]).finish()
     }
 
+    func testGradientReportsTheAuthoredStopsAndExactSegmentLocalCoordinates() throws {
+        let stops = [ProgramGradientStop(at: 0, color: ProgramRgb8(red: 0, green: 0, blue: 0)),
+                     ProgramGradientStop(at: 0.125, color: ProgramRgb8(red: 1, green: 1, blue: 1)),
+                     ProgramGradientStop(at: 1, color: ProgramRgb8(red: 3, green: 3, blue: 3))]
+        let runtime = try compileProgramWire(bytes: nominalProgram(), streamId: 1)
+        let snapshot = try runtime.updateGradient(revision: 1, surfaces: Data([0, 0, 0]), varyingInput: 0, stops: stops)
+        let field = try XCTUnwrap(snapshot.gradientAssessment())
+        XCTAssertEqual(field.stops, stops)
+        XCTAssertEqual(field.regionCount, 11)
+        XCTAssertEqual(field.rendering, "unknown")
+        let witness = try XCTUnwrap(field.witnesses.last)
+        XCTAssertEqual(witness.segmentIndex, 1)
+        XCTAssertEqual(witness.local, ProgramFieldWitness(numerator: 3, denominator: 4, nominal: stops[2].color))
+    }
+
     func testDeclaredFieldReportsSurviveRejectionDirectionChangesAndRuntimeRelease() throws {
         let start = ProgramRgb8(red: 0, green: 0, blue: 0)
         let end = ProgramRgb8(red: 2, green: 2, blue: 2)

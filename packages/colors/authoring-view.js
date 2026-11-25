@@ -1,6 +1,6 @@
 import { authoringError } from "./authoring.js";
 import { colorProgramSource } from "./authoring-program.js";
-import { copyColorFrame, parseColorContext, unknownColorFrame } from "./authoring-frame.js";
+import { copyColorFrame, parseColorContext, unknownColorFrame, updateColorField } from "./authoring-frame.js";
 import { createCssScope } from "./authoring-css.js";
 
 const scenario = new Uint32Array([1]);
@@ -36,8 +36,7 @@ function update(state, values, replacement) {
     if (context.field === undefined) {
       state.runtime.updateObservedWith(revision, scenario, context.rgb, state.graph.inputs.length, accept);
     } else {
-      state.runtime.updateDeclaredFieldWith(revision, context.rgb, context.field.inputIndex,
-        new Uint8Array(context.field.descriptor.from), new Uint8Array(context.field.descriptor.to), accept);
+      updateColorField(state.runtime, revision, context, accept);
     }
     if (outcome.state === "committed") {
       state.current = state.pendingFrame;
