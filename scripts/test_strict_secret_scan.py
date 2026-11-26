@@ -217,7 +217,11 @@ class StrictSecretScanTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(source.count("- name: Scan secrets omitted by Trivy defaults"), 1)
-        self.assertIn("candidate: ${{ github.sha }}", source)
+        self.assertIn("ref: ${{ github.sha }}", source)
+        self.assertIn("--root .code-subject.public01 --format github --required", source)
+        self.assertIn("base: ${{ steps.transition.outputs.before }}", source)
+        self.assertIn("candidate: ${{ steps.transition.outputs.after }}", source)
+        self.assertNotIn("github.event.pull_request.base.sha", source)
         self.assertIn('"$GITHUB_WORKSPACE/.code-subject.public01" "$CANDIDATE_SHA"', source)
         self.assertIn('install -m 0600 scripts/ci/strict_secret_scan.py "$helper"', source)
         self.assertIn('printf "%s  %s\\n" "$helper_sha256" "$helper" | sha256sum -c -', source)
