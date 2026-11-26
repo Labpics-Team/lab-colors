@@ -214,3 +214,32 @@ test("unknown clears current field scope and old immutable model data survives r
   assert.deepEqual(retained.to, [2, 0, 0]);
   assert.deepEqual(retained.witnesses[1], { coordinate: [1, 4], nominal: [1, 0, 0] });
 });
+
+test("gradient stop positions are revision-bound even when supports and paints agree", () => {
+  const runtime = compileProgramWire(wire, 1), owned = new Set();
+  const colors = new Uint8Array([2, 0, 0, 2, 1, 0, 1, 2, 0]);
+  const pos = at => new Float64Array([0, at, 1]);
+  try {
+    const field = runtime.updateGradient(1n, surfaces(), 0, pos(0.25), colors); owned.add(field);
+    const scope = field.fieldAssessment();
+    assert.deepEqual(scope.stops[1], {at: 0.25, color: [2, 1, 0]});
+    assert.throws(() => runtime.updateGradient(1n, surfaces(), 0, pos(0.75), colors), programError("updateGradient"));
+    let calls = 0;
+    for (const positions of [pos(0), pos(1), pos(Infinity), pos(NaN), new Float32Array([0, 0.5, 1])]) {
+      assert.throws(() => runtime.updateGradientWith(2n, surfaces(), 0, positions, colors, () => { calls++; return true; }),
+        programError("updateGradientWith"));
+    }
+    assert.equal(calls, 0);
+    assert.equal(runtime.updateGradientWith(2n, surfaces(), 0, pos(0.75), colors, snapshot => {
+      owned.add(snapshot);
+      assert.equal(snapshot.fieldAssessment().stops[1].at, 0.75);
+      return false;
+    }), undefined);
+    const retry = runtime.updateGradient(2n, surfaces(), 0, pos(0.5), colors); owned.add(retry);
+    assert.deepEqual([...retry.copyOutputTable()], [...field.copyOutputTable()]);
+    assert.equal(scope.stops[1].at, 0.25);
+    const legacy = runtime.updateDeclaredField(3n, surfaces(), 0, from(), to()); owned.add(legacy);
+    const equivalent = runtime.updateGradient(3n, surfaces(), 0, new Float64Array([0, 1]), new Uint8Array([...from(), ...to()])); owned.add(equivalent);
+    assert.deepEqual(legacy.fieldAssessment(), equivalent.fieldAssessment());
+  } finally { for (const snapshot of owned) snapshot.free(); runtime.free(); }
+});

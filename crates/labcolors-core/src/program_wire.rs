@@ -577,6 +577,7 @@ pub use crate::cleanliness::assessment::{
 };
 use assessment_report::ProgramAssessmentReportScratchV1;
 mod field;
+pub use crate::field_context::ProgramGradientStopV1;
 pub use assessment_report::{
     ProgramAssessmentCellV1, ProgramAssessmentReportV1, ProgramAssessmentVerdictV1,
     ProgramConstraintAssessmentV1, ProgramReferenceCapacityV1, ProgramReferenceCaseV1,
@@ -1993,7 +1994,12 @@ impl ProgramSessionV1 {
     ) -> Result<PreparedProgramUpdateV1<'_>, ProgramRuntimeErrorV1> {
         let computed = self.owner.snapshot_version() == 2;
         if computed {
-            self.reserve_computed_snapshot(source.scenario_count())?;
+            Self::reserve_computed_snapshot(
+                &self.owner,
+                &mut self.outputs_scratch,
+                &mut self.assessment_scratch,
+                source.scenario_count(),
+            )?;
         }
         reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
@@ -2018,22 +2024,26 @@ impl ProgramSessionV1 {
         })
     }
 
-    fn reserve_computed_snapshot(&mut self, count: usize) -> Result<(), ProgramRuntimeErrorV1> {
-        let cells = self
-            .owner
+    fn reserve_computed_snapshot(
+        owner: &crate::program::OwnerV1,
+        outputs: &mut Vec<ProgramPaintOutputV1>,
+        assessment: &mut ProgramAssessmentReportScratchV1,
+        count: usize,
+    ) -> Result<(), ProgramRuntimeErrorV1> {
+        let cells = owner
             .evidence_cell_bounds(count)
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?
             .verified_cells();
-        self.assessment_scratch
+        assessment
             .reserve(
                 cells,
                 count,
-                self.owner
+                owner
                     .relation_member_bound(count)
                     .ok_or(ProgramRuntimeErrorV1::ResourceExhausted)?,
             )
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
-        reserve_snapshot_outputs(&mut self.outputs_scratch, self.owner.output_slots().count())
+        reserve_snapshot_outputs(outputs, owner.output_slots().count())
             .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)
     }
 

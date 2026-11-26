@@ -1,7 +1,7 @@
 import init, { compileProgramWire } from "./index.js";
 import { authoringError } from "./authoring.js";
 import { lowerColorSystem } from "./authoring-graph.js";
-import { copyColorFrame, parseColorContext } from "./authoring-frame.js";
+import { copyColorFrame, parseColorContext, updateColorField } from "./authoring-frame.js";
 import { attachColorView } from "./authoring-view.js";
 
 const programs = new WeakMap();
@@ -49,8 +49,7 @@ export async function compileColorSystem(entries, options) {
           ? headless.updateUnknown(revision, 1)
           : context.field === undefined
             ? headless.updateObserved(revision, scenario, context.rgb, graph.inputs.length)
-            : headless.updateDeclaredField(revision, context.rgb, context.field.inputIndex,
-              new Uint8Array(context.field.descriptor.from), new Uint8Array(context.field.descriptor.to));
+            : updateColorField(headless, revision, context);
         return copyColorFrame(snapshot, graph, context);
       } finally {
         snapshot?.free();

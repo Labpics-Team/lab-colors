@@ -3,11 +3,32 @@ import { authoringError, authoredRgb } from "./authoring.js";
 function contextValue(value, path) {
   try {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return authoredRgb(value, path);
-    for (const key of Object.keys(value)) {
-      if (!["kind", "from", "to"].includes(key)) authoringError(`${path}.${key}`, "unknown field option", "color_invalid_context");
-    }
     const own = (key) => Object.hasOwn(value, key) ? value[key] : undefined;
-    if (own("kind") !== "affine-srgb8") authoringError(`${path}.kind`, "expected affine-srgb8", "color_invalid_context");
+    const kind = own("kind"), gradient = kind === "linear-srgb8";
+    if (!gradient && kind !== "affine-srgb8") authoringError(path + ".kind", "expected linear-srgb8 or affine-srgb8", "color_invalid_context");
+    const allowed = gradient ? ["kind", "stops"] : ["kind", "from", "to"];
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key)) authoringError(path + "." + key, "unknown field option", "color_invalid_context");
+    }
+    if (gradient) {
+      const source = own("stops");
+      if (!Array.isArray(source) || source.length < 2) authoringError(path + ".stops", "expected at least two stops", "color_invalid_context");
+      const stops = [];
+      for (let i = 0, count = source.length; i < count; i++) {
+        const stop = Object.hasOwn(source, i) ? source[i] : null;
+        const where = path + ".stops[" + i + "]";
+        if (stop === null || typeof stop !== "object" || !Object.hasOwn(stop, "at") || !Object.hasOwn(stop, "color")
+            || Object.keys(stop).some(key => key !== "at" && key !== "color")) {
+          authoringError(where, "expected {at, color}", "color_invalid_context");
+        }
+        const at = stop.at;
+        if (!Number.isFinite(at) || (i === 0 ? at !== 0 : at <= stops[i - 1].at) || (i === count - 1 && at !== 1)) {
+          authoringError(where + ".at", "positions must increase from 0 to 1", "color_invalid_context");
+        }
+        stops.push(Object.freeze({ at: at === 0 ? 0 : at, color: authoredRgb(stop.color, where + ".color") }));
+      }
+      return Object.freeze({ kind, stops: Object.freeze(stops) });
+    }
     return Object.freeze({ kind: "affine-srgb8",
       from: authoredRgb(own("from"), `${path}.from`), to: authoredRgb(own("to"), `${path}.to`) });
   } catch (error) {
@@ -39,14 +60,31 @@ export function parseColorContext(graph, values) {
     }
     const copied = contextValue(value, `context.${name}`);
     if (!Array.isArray(copied)) {
-      if (field !== undefined) authoringError(`context.${name}`, "only one affine input is supported", "color_unsupported_context");
+      if (field !== undefined) authoringError(`context.${name}`, "only one varying input is supported", "color_unsupported_context");
       field = Object.freeze({ inputIndex: index, name, descriptor: copied });
     }
     // The varying slot is ignored by Core admission; endpoints travel separately.
-    rgb.set(Array.isArray(copied) ? copied : copied.from, index * 3);
+    rgb.set(Array.isArray(copied) ? copied : copied.from ?? copied.stops[0].color, index * 3);
     colors.push(Object.freeze({ name, value: copied, css: cssContextValue(copied) }));
   }
   return { rgb, colors: Object.freeze(colors), unknown: Object.freeze(unknown), field };
+}
+
+/** Transport only. Core derives physical cases and selects one assignment. */
+export function updateColorField(runtime, revision, context, accept) {
+  const { inputIndex, descriptor } = context.field;
+  const args = [revision, context.rgb, inputIndex];
+  if (descriptor.kind === "affine-srgb8") {
+    args.push(new Uint8Array(descriptor.from), new Uint8Array(descriptor.to));
+    return accept === undefined ? runtime.updateDeclaredField(...args) : runtime.updateDeclaredFieldWith(...args, accept);
+  }
+  const positions = new Float64Array(descriptor.stops.length), colors = new Uint8Array(positions.length * 3);
+  for (const [i, { at, color }] of descriptor.stops.entries()) {
+    positions[i] = at;
+    colors.set(color, i * 3);
+  }
+  return accept === undefined ? runtime.updateGradient(...args, positions, colors)
+    : runtime.updateGradientWith(...args, positions, colors, accept);
 }
 
 export function cssColor(rgb, opacity) {
@@ -55,6 +93,15 @@ export function cssColor(rgb, opacity) {
 
 /** Serialization of the authored source, never an expansion into support samples. */
 export function cssContextValue(value) {
+  if (value.kind === "linear-srgb8") {
+    const stops = value.stops.map(({at, color}) => {
+      // Keep the authored double's round-trip spelling. Multiplying adjacent
+      // binary64 positions by 100 in JS can round them to the same percentage.
+      const position = at === 0 ? "0%" : at === 1 ? "100%" : "calc(" + at + " * 100%)";
+      return cssColor(color, 1) + " " + position;
+    });
+    return "linear-gradient(90deg in srgb, " + stops.join(", ") + ")";
+  }
   if (!Array.isArray(value)) {
     return `linear-gradient(90deg in srgb, ${cssColor(value.from, 1)} 0%, ${cssColor(value.to, 1)} 100%)`;
   }
@@ -79,16 +126,22 @@ function copyFieldAssessment(snapshot, context) {
   if (context.field === undefined) return undefined;
   const report = snapshot.fieldAssessment?.();
   const { inputIndex, descriptor } = context.field;
+  const stops = descriptor.stops;
+  const piecewise = stops !== undefined && stops.length > 2;
+  const same = (rgb, expected) => expected?.length === 3 && rgb.every((byte, i) => byte === expected[i]);
   if (report === null || report === undefined || report.inputIndex !== inputIndex
-    || report.sourceModel !== "opaque-affine-encoded-srgb8-half-up-v1"
+    || report.sourceModel !== (piecewise ? "opaque-piecewise-affine-encoded-srgb8-half-up-v1" : "opaque-affine-encoded-srgb8-half-up-v1")
     || report.domain !== "whole-field" || report.rendering !== "unknown"
-    || !descriptor.from.every((byte, i) => byte === report.from[i])
-    || !descriptor.to.every((byte, i) => byte === report.to[i])) {
+    || !same(stops?.[0].color ?? descriptor.from, report.from)
+    || !same(stops?.at(-1).color ?? descriptor.to, report.to)
+    || (piecewise && (report.stops?.length !== stops.length
+      || !stops.every((stop, i) => stop.at === report.stops[i].at && same(stop.color, report.stops[i].color))))) {
     authoringError("resolution.field", "Core omitted the current declared source assessment", "color_core_contract");
   }
   return Object.freeze({ input: context.field.name, sourceModel: report.sourceModel,
     domain: report.domain, rendering: report.rendering, regionCount: report.regionCount,
     witnesses: Object.freeze(report.witnesses.map((witness) => Object.freeze({
+      ...(piecewise ? { segmentIndex: witness.segmentIndex } : {}),
       coordinate: Object.freeze([...witness.coordinate]), nominal: Object.freeze([...witness.nominal]),
     }))) });
 }

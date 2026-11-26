@@ -8,7 +8,7 @@ export type {
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
   ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
   ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection, ColorSelectionComponent,
-  ColorAffineSrgb8Field, ResolvedColorAffineSrgb8Field, ResolvedColorContext,
+  ColorAffineSrgb8Field, ResolvedColorAffineSrgb8Field, ColorLinearSrgb8Field, ResolvedColorLinearSrgb8Field, ResolvedColorContext,
   ColorFieldWitness, ColorFieldAssessment, ColorFieldModelScope, ModeledColorFrame,
 } from "./authoring.js";
 
@@ -91,11 +91,11 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_missing_point_absence_proof"
   | "program_materialization_ambiguous_observation_cases"
   | "program_attachment_busy";
-export type ProgramUpdateOperation = "updateObserved" | "updateUnknown" | "updateObservedWith" | "updateDeclaredField" | "updateDeclaredFieldWith";
+export type ProgramUpdateOperation = "updateObserved" | "updateUnknown" | "updateObservedWith" | "updateDeclaredField" | "updateDeclaredFieldWith" | "updateGradient" | "updateGradientWith";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
-  | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" | "updateDeclaredFieldWith" }>
+  | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" | "updateDeclaredFieldWith" | "updateGradientWith" }>
   | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
   | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "referenceSelections" | "selectionComponents" | "fieldAssessment" | "diagnostics" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>

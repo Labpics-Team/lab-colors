@@ -119,6 +119,7 @@ impl OpaqueSrgb8AffineSegment {
 
     /// Точный размер для fallible reserve без вычисления RGB и медиант.
     /// `m` внутренних порогов разделяют `m + 1` интервалов и `m + 2` точек.
+    #[cfg(test)]
     pub(crate) fn partition_cell_count(self) -> usize {
         2 * self.crossings().count() + 3
     }

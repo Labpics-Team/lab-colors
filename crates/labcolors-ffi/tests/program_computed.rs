@@ -704,3 +704,63 @@ fn native_commit_and_real_uniffi_success_return_do_not_allocate_after_host_accep
     );
     Ok(())
 }
+
+#[test]
+fn native_gradient_stops_replay_and_local_witness_survive_solids() -> TestResult {
+    let runtime = field_runtime()?;
+    let stops = vec![
+        ProgramGradientStop {
+            at: 0.0,
+            color: rgb(0),
+        },
+        ProgramGradientStop {
+            at: 0.125,
+            color: rgb(1),
+        },
+        ProgramGradientStop {
+            at: 1.0,
+            color: rgb(3),
+        },
+    ];
+    let positions = stops.iter().map(|stop| stop.at).collect();
+    let colors = vec![0, 0, 0, 1, 1, 1, 3, 3, 3];
+    let snapshot = runtime.update_gradient(1, vec![9; 3], 0, positions, colors.clone())?;
+    let report = snapshot.gradient_assessment()?.ok_or("gradient scope")?;
+    assert_eq!(report.stops, stops);
+    assert_eq!(report.region_count, 11);
+    assert_eq!(report.rendering, "unknown");
+    let last = report.witnesses.last().ok_or("last witness")?;
+    assert_eq!(
+        (
+            last.segment_index,
+            last.local.numerator,
+            last.local.denominator
+        ),
+        (1, 3, 4)
+    );
+    assert_eq!(last.local.nominal, rgb(3));
+    assert!(
+        matches!(snapshot.field_assessment(), Err(LabColorsError::Refused { code, .. }) if code == "program_gradient_assessment_required")
+    );
+    let moved = vec![0.0, 0.75, 1.0];
+    assert!(
+        runtime
+            .update_gradient(1, vec![9; 3], 0, moved.clone(), colors.clone())
+            .is_err()
+    );
+    assert!(!runtime.update_gradient_with(
+        2,
+        vec![0; 3],
+        0,
+        moved,
+        colors,
+        Box::new(Capture {
+            snapshots: Arc::new(Mutex::new(Vec::new())),
+            decision: Decision::Refuse,
+        })
+    )?);
+    let solid = runtime.update_observed(2, vec![1], vec![0; 3], 1)?;
+    assert!(solid.gradient_assessment()?.is_none());
+    assert_eq!(snapshot.gradient_assessment()?, Some(report));
+    Ok(())
+}

@@ -91,6 +91,27 @@ test("a preview installs the complete modeled frame, retains it on conflict, and
   } finally { replacement?.dispose(); view.dispose(); ink.dispose(); next.dispose(); }
 });
 
+test("preview preserves adjacent positions in its CSS and retains the entire accepted stop list", async () => {
+  const h = host(), program = await fixedProgram("ink", "#ffffff", {contrast: "wcag22-text"});
+  const at = 0.5, next = at + Number.EPSILON / 2;
+  const field = {kind: "linear-srgb8", stops: [
+    {at: 0, color: "#010203"}, {at, color: "#020304"}, {at: next, color: "#111111"}, {at: 1, color: "#010203"},
+  ]};
+  const view = program.preview(h.root, {canvas: field});
+  try {
+    const current = view.current;
+    assert.equal(current.state, "modeled");
+    assert.ok(h.sheet.includes("calc(0.5 * 100%)"));
+    assert.ok(h.sheet.includes("calc(0.5000000000000001 * 100%)"));
+    assert.equal(current.coverage.rendering, "unknown");
+    assert.equal(view.set({canvas: "#000000"}).frame.state, "ready");
+    assert.deepEqual(current.context.canvas.stops, [
+      { at: 0, color: [1, 2, 3] }, { at, color: [2, 3, 4] },
+      { at: next, color: [17, 17, 17] }, { at: 1, color: [1, 2, 3] },
+    ]);
+  } finally { view.dispose(); program.dispose(); }
+});
+
 test("unsupported gradient syntax leaves the preview and its last accepted update untouched", async () => {
   const h = host(), program = await fixedProgram("ink", "#000000", {});
   const field = { kind: "affine-srgb8", from: "#dddddd", to: "#ffffff" };

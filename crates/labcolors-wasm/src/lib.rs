@@ -166,11 +166,13 @@ export interface ProgramFieldAssessmentV1 {
   readonly inputIndex: number;
   readonly from: readonly [number, number, number];
   readonly to: readonly [number, number, number];
-  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1";
+  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" | "opaque-piecewise-affine-encoded-srgb8-half-up-v1";
+  readonly stops?: ReadonlyArray<{readonly at: number; readonly color: readonly [number, number, number]}>;
   readonly domain: "whole-field";
   readonly rendering: "unknown";
   readonly regionCount: number;
   readonly witnesses: ReadonlyArray<{
+    readonly segmentIndex?: number;
     readonly coordinate: readonly [number, number];
     readonly nominal: readonly [number, number, number];
   }>;
@@ -435,15 +437,19 @@ export function reportTonalHierarchy(constraintId, caseIndex, strongerOccurrence
 export function reportReferenceCapacity(ratioLower, ratioUpper, complete) {
   return reportFreeze({ratioLower, ratioUpper, complete});
 }
-export function reportFieldWitness(numerator, denominator, red, green, blue) {
-  return reportFreeze({coordinate: reportFreeze([numerator, denominator]),
+export function reportGradientStop(at, red, green, blue) {
+  return reportFreeze({at, color: reportFreeze([red, green, blue])});
+}
+export function reportFieldWitness(segmentIndex, numerator, denominator, red, green, blue) {
+  return reportFreeze({...(segmentIndex === undefined ? {} : {segmentIndex}), coordinate: reportFreeze([numerator, denominator]),
     nominal: reportFreeze([red, green, blue])});
 }
-export function reportField(inputIndex, colors, sourceModel, domain, rendering, regionCount, witnesses) {
+export function reportField(inputIndex, colors, sourceModel, domain, rendering, regionCount, witnesses, stops) {
   return reportFreeze({inputIndex,
     from: reportFreeze([colors[0], colors[1], colors[2]]),
     to: reportFreeze([colors[3], colors[4], colors[5]]),
-    sourceModel, domain, rendering, regionCount, witnesses: reportFreeze(witnesses)});
+    sourceModel, domain, rendering, regionCount, witnesses: reportFreeze(witnesses),
+    ...(stops === undefined ? {} : {stops: reportFreeze(stops)})});
 }
 export function reportReferenceCase(caseIndex, colors, referenceContrast, actualContrast,
     polarity, strengthLoss, virtualDistanceSquared) {
@@ -518,8 +524,11 @@ extern "C" {
     fn report_array_freeze(array: &js_sys::Array) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportArrayPush)]
     fn report_array_push(array: &js_sys::Array, value: &JsValue) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = reportGradientStop)]
+    fn report_gradient_stop(at: f64, red: u8, green: u8, blue: u8) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportFieldWitness)]
     fn report_field_witness(
+        segment_index: Option<u32>,
         numerator: u16,
         denominator: u16,
         red: u8,
@@ -535,6 +544,7 @@ extern "C" {
         rendering: &str,
         region_count: usize,
         witnesses: &js_sys::Array,
+        stops: Option<js_sys::Array>,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportScenario)]
     fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
@@ -773,6 +783,8 @@ enum ProgramOperation {
     UpdateObserved,
     UpdateDeclaredField,
     UpdateDeclaredFieldWith,
+    UpdateGradient,
+    UpdateGradientWith,
     UpdateObservedWith,
     UpdateUnknown,
     CopyOutputTable,
@@ -796,6 +808,8 @@ impl ProgramOperation {
             Self::UpdateObserved => "updateObserved",
             Self::UpdateDeclaredField => "updateDeclaredField",
             Self::UpdateDeclaredFieldWith => "updateDeclaredFieldWith",
+            Self::UpdateGradient => "updateGradient",
+            Self::UpdateGradientWith => "updateGradientWith",
             Self::UpdateObservedWith => "updateObservedWith",
             Self::UpdateUnknown => "updateUnknown",
             Self::CopyOutputTable => "copyOutputTable",
@@ -1256,6 +1270,59 @@ impl ProgramRuntime {
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, operation))
     }
+    /// One continuous opaque gradient with strictly increasing authored positions.
+    #[wasm_bindgen(js_name = updateGradient)]
+    pub fn update_gradient(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] varying_input: JsValue,
+        positions: &[f64],
+        colors: &[u8],
+    ) -> Result<ProgramSnapshot, JsValue> {
+        let operation = ProgramOperation::UpdateGradient;
+        let (revision, field) = checked_gradient(
+            revision,
+            surfaces,
+            varying_input,
+            positions,
+            colors,
+            operation,
+        )?;
+        self.inner
+            .update_declared_field(revision, field)
+            .map(|inner| ProgramSnapshot { inner })
+            .map_err(|e| to_program_js_error(e, operation))
+    }
+
+    /// Prepare one composition for the entire gradient, then ask the host to accept it.
+    #[wasm_bindgen(js_name = updateGradientWith, unchecked_return_type = "ProgramSnapshot | undefined")]
+    pub fn update_gradient_with(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "number")] varying_input: JsValue,
+        positions: &[f64],
+        colors: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "(snapshot: ProgramSnapshot) => boolean")]
+        accept: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        let operation = ProgramOperation::UpdateGradientWith;
+        let (revision, field) = checked_gradient(
+            revision,
+            surfaces,
+            varying_input,
+            positions,
+            colors,
+            operation,
+        )?;
+        let prepared = self
+            .inner
+            .prepare_declared_field(revision, field)
+            .map_err(|e| to_program_js_error(e, operation))?;
+        accept_program_update(prepared, accept, operation)
+    }
+
     /// Атомарный observed update. `surfaces` — row-major
     /// `scenario_ids.len() × surface_count × 3` bytes.
     #[wasm_bindgen(js_name = updateObserved)]
@@ -1334,6 +1401,30 @@ impl ProgramRuntime {
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateUnknown))
     }
+}
+
+fn checked_gradient<'a>(
+    revision: JsValue,
+    surfaces: &'a [u8],
+    varying_input: JsValue,
+    positions: &'a [f64],
+    colors: &'a [u8],
+    operation: ProgramOperation,
+) -> Result<
+    (
+        u64,
+        labcolors_core::program_wire::ProgramDeclaredFieldV1<'a>,
+    ),
+    JsValue,
+> {
+    use labcolors_core::program_wire::{ProgramDeclaredFieldV1, ProgramRuntimeErrorV1};
+    let invalid = || to_program_js_error(ProgramRuntimeErrorV1::Update, operation);
+    let revision = u64::try_from(revision).map_err(|_| invalid())?;
+    let input = checked_u32(varying_input).ok_or_else(invalid)?;
+    let field =
+        ProgramDeclaredFieldV1::from_gradient_rgb8(surfaces, input as usize, positions, colors)
+            .map_err(|_| invalid())?;
+    Ok((revision, field))
 }
 
 fn checked_declared_field<'a>(

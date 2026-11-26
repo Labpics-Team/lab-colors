@@ -42,18 +42,31 @@ export interface ResolvedColorAffineSrgb8Field {
   readonly to: readonly [number, number, number];
 }
 
+/** Opaque stops with strictly increasing positions, starting at 0 and ending at 1. */
+export interface ColorLinearSrgb8Field {
+  readonly kind: "linear-srgb8";
+  readonly stops: readonly Readonly<{at: number; color: AuthoredColor}>[];
+}
+
+export interface ResolvedColorLinearSrgb8Field {
+  readonly kind: "linear-srgb8";
+  readonly stops: readonly Readonly<{at: number; color: readonly [number, number, number]}>[];
+}
+
 export type ResolvedColorContext = Readonly<Record<string,
-  readonly [number, number, number] | ResolvedColorAffineSrgb8Field>>;
+  readonly [number, number, number] | ResolvedColorAffineSrgb8Field | ResolvedColorLinearSrgb8Field>>;
 
 export interface ColorFieldWitness {
-  /** Точный рациональный адрес внутри нормированной области: [числитель, знаменатель]. */
+  /** Индекс первого stop сегмента для кусочно-аффинного поля. */
+  readonly segmentIndex?: number;
+  /** Точный рациональный адрес внутри сегмента: [числитель, знаменатель]. */
   readonly coordinate: readonly [number, number];
   readonly nominal: readonly [number, number, number];
 }
 
 export interface ColorFieldAssessment {
   readonly input: string;
-  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1";
+  readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" | "opaque-piecewise-affine-encoded-srgb8-half-up-v1";
   readonly domain: "whole-field";
   readonly rendering: "unknown";
   /** Число точных точек и открытых интервалов, выведенных Core. */
@@ -241,7 +254,7 @@ export type ColorViewUpdate<Name extends string = string, State extends Displaya
   | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
 /** Допускается одно affine поле; прочие входы постоянны. Несколько полей пока не поддержаны. */
-export type ColorContext = Readonly<Record<string, AuthoredColor | ColorAffineSrgb8Field | null | undefined>>;
+export type ColorContext = Readonly<Record<string, AuthoredColor | ColorAffineSrgb8Field | ColorLinearSrgb8Field | null | undefined>>;
 
 export interface ColorAttachOptions {
   /** Доверенный nonce приложения для принадлежащего view stylesheet при CSP. */
