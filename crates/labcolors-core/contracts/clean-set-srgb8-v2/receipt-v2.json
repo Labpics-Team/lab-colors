@@ -174,11 +174,11 @@
       "sha256": "1f2fb77633c621cfba99ecc5b3e344f5785a13a1cf23181fefff0ffe85737fdf"
     },
     {
-      "bytes": 47342,
+      "bytes": 50812,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/components.rs",
       "role": "program_computed_components_source",
-      "sha256": "c27d1f6e166f4a11fa26566bdf8d883b52d61cb0607a41fad21b05ac3a57c604"
+      "sha256": "50926057aedb6d80d8e729eff729b99ed8a04c3f1a5956998eeeab368b98ab47"
     },
     {
       "bytes": 8513,
