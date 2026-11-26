@@ -966,6 +966,7 @@ const COMPONENT_REUSE_HISTORY_CAPACITY: usize = 16;
 pub(in crate::program_session) struct ComponentReuseHistoryV1 {
     committed: VecDeque<ComponentReuseEntryV1>,
     pending: VecDeque<ComponentReuseEntryV1>,
+    retired: Vec<ComponentReuseEntryV1>,
 }
 
 struct ComponentReuseEntryV1 {
@@ -986,25 +987,46 @@ impl ComponentReuseHistoryV1 {
         pending
             .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
             .map_err(|_| ())?;
-        Ok(Self { committed, pending })
+        let mut retired = Vec::new();
+        retired
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        Ok(Self {
+            committed,
+            pending,
+            retired,
+        })
     }
 
     pub(in crate::program_session) fn begin_update(&mut self) {
         self.pending.clear();
+        self.retired.clear();
     }
 
     pub(in crate::program_session) fn commit_update(&mut self) {
-        for entry in self.pending.drain(..) {
+        // One update can retire at most one committed entry per pending entry.
+        // The next pre-install begin_update owns their deallocation.
+        debug_assert!(self.retired.is_empty());
+        while let Some(entry) = self.pending.pop_front() {
             if let Some(index) = self.committed.iter().position(|committed| {
                 committed.component == entry.component && committed.support == entry.support
             }) {
-                self.committed.remove(index);
+                if let Some(retired) = self.committed.remove(index) {
+                    self.retire(retired);
+                }
             }
             if self.committed.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
-                self.committed.pop_front();
+                if let Some(retired) = self.committed.pop_front() {
+                    self.retire(retired);
+                }
             }
             self.committed.push_back(entry);
         }
+    }
+
+    fn retire(&mut self, entry: ComponentReuseEntryV1) {
+        debug_assert!(self.retired.len() < self.retired.capacity());
+        self.retired.push(entry);
     }
 
     pub(in crate::program_session) fn abort_update(&mut self) {
@@ -1289,4 +1311,71 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         },
         components,
     ))
+}
+
+#[cfg(test)]
+mod reuse_history_tests {
+    use super::*;
+
+    fn entry(component: usize, value: u8) -> ComponentReuseEntryV1 {
+        entry_with_support(component, value, value)
+    }
+
+    fn entry_with_support(component: usize, support_value: u8, value: u8) -> ComponentReuseEntryV1 {
+        let support = Srgb8::new([support_value; 3]);
+        let color = Srgb8::new([value; 3]);
+        ComponentReuseEntryV1 {
+            component,
+            support: Arc::from(vec![ColorSignal::from_srgb8(support)]),
+            values: vec![color],
+            search: SearchEvidenceV1 {
+                completion: CompletionV1::Complete,
+                visited: 0,
+                regions: 0,
+                points: 0,
+                endpoint_evaluations: 0,
+                examined: 0,
+                open_regions: 0,
+            },
+            reports: None,
+        }
+    }
+
+    #[test]
+    fn commit_retires_displaced_entries_until_the_next_pre_install() {
+        let mut history = ComponentReuseHistoryV1::new().expect("history allocation");
+        history.begin_update();
+        for component in 0..COMPONENT_REUSE_HISTORY_CAPACITY {
+            history.pending.push_back(entry(component, component as u8));
+        }
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert!(history.retired.is_empty());
+        assert!(history.retired.capacity() >= COMPONENT_REUSE_HISTORY_CAPACITY);
+
+        // A full queue evicts its oldest entry without dropping it during commit.
+        history.begin_update();
+        history
+            .pending
+            .push_back(entry(COMPONENT_REUSE_HISTORY_CAPACITY, 99));
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert_eq!(history.retired.len(), 1);
+        assert_eq!(history.retired[0].component, 0);
+        assert!(history.committed.iter().all(|entry| entry.component != 0));
+
+        // Deduplication replaces the exact support and retires exactly that entry.
+        history.begin_update();
+        assert!(history.retired.is_empty());
+        history.pending.push_back(entry_with_support(5, 5, 7));
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert_eq!(history.retired.len(), 1);
+        assert_eq!(history.retired[0].component, 5);
+        assert_eq!(history.retired[0].values[0].bytes(), [5; 3]);
+        assert_eq!(history.committed.back().unwrap().values[0].bytes(), [7; 3]);
+
+        history.begin_update();
+        assert!(history.retired.is_empty());
+    }
 }
