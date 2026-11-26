@@ -68,6 +68,8 @@ export interface ProgramDiagnosticsV1 {
   readonly searchVisited: bigint;
   readonly searchBudget: bigint;
   readonly witness: ProgramAttemptWitnessV1 | null;
+  /** Первый установленный повтор видимого цвета объявленного поля, если он есть. */
+  readonly fieldCollision?: ProgramFieldCollisionV1;
 }
 export type ProgramConstraintAssessmentV1 =
   | Readonly<{
@@ -168,6 +170,16 @@ export interface ProgramSelectionComponentV1 {
 }
 
 /** Scope of a declared model; unknown rendering is not a pixel guarantee. */
+export interface ProgramFieldCollisionV1 {
+  readonly occurrenceId: number;
+  readonly caseIndex: number;
+  readonly duplicateCaseIndex: number;
+  readonly visible: readonly [number, number, number];
+}
+/** Отображение видимых байтовых цветов на точной конечной опоре поля. */
+export type ProgramFieldCleanlinessV1 =
+  | Readonly<{status: "not-assessed"; reason: "no-hard-nominal-constraint"}>
+  | Readonly<{status: "conforms" | "violates" | "unavailable"}>;
 export interface ProgramFieldAssessmentV1 {
   readonly inputIndex: number;
   readonly from: readonly [number, number, number];
@@ -176,6 +188,9 @@ export interface ProgramFieldAssessmentV1 {
   readonly stops?: ReadonlyArray<{readonly at: number; readonly color: readonly [number, number, number]}>;
   readonly domain: "whole-field";
   readonly rendering: "unknown";
+  /** Инъективность на опоре для hard nominal occurrences; не эстетическая оценка. */
+  readonly cleanliness: ProgramFieldCleanlinessV1;
+  readonly collision?: ProgramFieldCollisionV1;
   readonly regionCount: number;
   readonly witnesses: ReadonlyArray<{
     readonly segmentIndex?: number;
@@ -398,8 +413,9 @@ export function diagnosticWitness(caseScenarioIds, targets, violations) {
   return reportFreeze({kind: "authored-tuple", caseScenarioIds: reportFreeze(caseScenarioIds),
     targets: reportFreeze(targets), violations: reportFreeze(violations)});
 }
-export function diagnosticsProjection(searchVisited, searchBudget, witness) {
-  return reportFreeze({searchVisited, searchBudget, witness});
+export function diagnosticsProjection(searchVisited, searchBudget, witness, fieldCollision) {
+  return reportFreeze({searchVisited, searchBudget, witness,
+    ...(fieldCollision == null ? {} : {fieldCollision})});
 }
 export function reportSeparation(pair, verdict, vr, vg, vb, br, bg, bb, distance, distanceLower, distanceUpper, minimum, maximum) {
   const left = reportFreeze([vr, vg, vb]), right = reportFreeze([br, bg, bb]);
@@ -449,11 +465,20 @@ export function reportFieldWitness(segmentIndex, numerator, denominator, red, gr
   return reportFreeze({...(segmentIndex === undefined ? {} : {segmentIndex}), coordinate: reportFreeze([numerator, denominator]),
     nominal: reportFreeze([red, green, blue])});
 }
-export function reportField(inputIndex, colors, sourceModel, domain, rendering, regionCount, witnesses, stops) {
+export function reportFieldCleanliness(status) {
+  if (status === "not-assessed") return reportFreeze({status, reason: "no-hard-nominal-constraint"});
+  return reportFreeze({status});
+}
+export function reportFieldCollision(occurrenceId, caseIndex, duplicateCaseIndex, red, green, blue) {
+  return reportFreeze({occurrenceId, caseIndex, duplicateCaseIndex,
+    visible: reportFreeze([red, green, blue])});
+}
+export function reportField(inputIndex, colors, sourceModel, domain, rendering, cleanliness, regionCount, witnesses, collision, stops) {
   return reportFreeze({inputIndex,
     from: reportFreeze([colors[0], colors[1], colors[2]]),
     to: reportFreeze([colors[3], colors[4], colors[5]]),
-    sourceModel, domain, rendering, regionCount, witnesses: reportFreeze(witnesses),
+    sourceModel, domain, rendering, cleanliness, regionCount, witnesses: reportFreeze(witnesses),
+    ...(collision == null ? {} : {collision}),
     ...(stops === undefined ? {} : {stops: reportFreeze(stops)})});
 }
 export function reportReferenceCase(caseIndex, colors, referenceContrast, actualContrast,
@@ -547,9 +572,22 @@ extern "C" {
         source_model: &str,
         domain: &str,
         rendering: &str,
+        cleanliness: &JsValue,
         region_count: usize,
         witnesses: &js_sys::Array,
+        collision: Option<JsValue>,
         stops: Option<js_sys::Array>,
+    ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFieldCleanliness)]
+    fn report_field_cleanliness(status: &str) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = reportFieldCollision)]
+    fn report_field_collision(
+        occurrence_id: u32,
+        case_index: usize,
+        duplicate_case_index: usize,
+        red: u8,
+        green: u8,
+        blue: u8,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportScenario)]
     fn report_scenario(case_index: usize, scenario_id: u32) -> Result<JsValue, JsValue>;
@@ -608,6 +646,7 @@ extern "C" {
         visited: u64,
         budget: u64,
         witness: &JsValue,
+        field_collision: Option<JsValue>,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = reportSeparation)]
     fn report_separation(

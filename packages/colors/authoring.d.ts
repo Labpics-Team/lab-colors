@@ -1,4 +1,5 @@
-import type { ProgramCleanlinessAssessmentV1, ProgramReferenceSelectionV1, ProgramSelectionComponentV1 } from "./pkg/labcolors.js";
+import type { ProgramCleanlinessAssessmentV1, ProgramFieldCleanlinessV1, ProgramFieldCollisionV1,
+  ProgramReferenceSelectionV1, ProgramSelectionComponentV1 } from "./pkg/labcolors.js";
 
 declare const colorHandle: unique symbol;
 
@@ -71,6 +72,10 @@ export interface ColorFieldAssessment {
   readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" | "opaque-piecewise-affine-encoded-srgb8-half-up-v1";
   readonly domain: "whole-field";
   readonly rendering: "unknown";
+  /** Инъективность видимых байтовых цветов на точной конечной опоре hard nominal occurrences. */
+  readonly cleanliness: ProgramFieldCleanlinessV1;
+  /** Первый повтор видимого цвета, если Core его установил. */
+  readonly collision?: ProgramFieldCollisionV1;
   /** Число точных точек и открытых интервалов, выведенных Core. */
   readonly regionCount: number;
   /** Представители в порядке Core caseIndex; не описание покрытия вместо descriptor. */
@@ -215,6 +220,16 @@ export type ColorDiagnostic =
       maximumDistance?: number;
     }>
   | Readonly<{ kind: "search-limit"; visited: bigint; budget: bigint }>
+  | Readonly<{
+      kind: "field";
+      evidence: "visible-collision";
+      input: string;
+      /** Случай, в котором видимый байтовый цвет повторился. */
+      caseIndex: number;
+      /** Предшествующий случай с тем же видимым цветом. */
+      duplicateCaseIndex: number;
+      visible: readonly [number, number, number];
+    }>
   | Readonly<{ kind: "unknown-input"; input: string }>
   | Readonly<{ kind: "stale-context"; revision: bigint }>;
 

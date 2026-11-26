@@ -122,6 +122,38 @@ export function unknownColorFrame(revision, inputs, context) {
     diagnostics: Object.freeze(inputs.map((input) => Object.freeze({ kind: "unknown-input", input }))) });
 }
 
+const fieldCleanlinessStatuses = new Set(["not-assessed", "conforms", "violates", "unavailable"]);
+
+/** Core decides field cleanliness. This only rejects unusable or contradictory metadata. */
+function copyFieldCleanliness(value) {
+  if (value === null || typeof value !== "object" || !fieldCleanlinessStatuses.has(value.status)) {
+    authoringError("resolution.field", "Core omitted the current field cleanliness", "color_core_contract");
+  }
+  if (value.status === "not-assessed") {
+    if (value.reason !== "no-hard-nominal-constraint") {
+      authoringError("resolution.field", "Core omitted the field cleanliness reason", "color_core_contract");
+    }
+    return Object.freeze({ status: "not-assessed", reason: "no-hard-nominal-constraint" });
+  }
+  return Object.freeze({ status: value.status });
+}
+
+function usableFieldCollision(value) {
+  return value !== null && typeof value === "object" && Number.isInteger(value.occurrenceId)
+    && Number.isInteger(value.caseIndex) && Number.isInteger(value.duplicateCaseIndex)
+    && value.caseIndex !== value.duplicateCaseIndex && Array.isArray(value.visible)
+    && value.visible.length === 3
+    && value.visible.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255);
+}
+
+function copyFieldCollision(value) {
+  if (!usableFieldCollision(value)) {
+    authoringError("resolution.field", "Core returned an unusable field collision", "color_core_contract");
+  }
+  return Object.freeze({ occurrenceId: value.occurrenceId, caseIndex: value.caseIndex,
+    duplicateCaseIndex: value.duplicateCaseIndex, visible: Object.freeze([...value.visible]) });
+}
+
 function copyFieldAssessment(snapshot, context) {
   if (context.field === undefined) return undefined;
   const report = snapshot.fieldAssessment?.();
@@ -138,8 +170,14 @@ function copyFieldAssessment(snapshot, context) {
       || !stops.every((stop, i) => stop.at === report.stops[i].at && same(stop.color, report.stops[i].color))))) {
     authoringError("resolution.field", "Core omitted the current declared source assessment", "color_core_contract");
   }
+  const cleanliness = copyFieldCleanliness(report.cleanliness);
+  const collision = report.collision === undefined ? undefined : copyFieldCollision(report.collision);
+  if (collision !== undefined && cleanliness.status !== "violates") {
+    authoringError("resolution.field", "Core reported a collision outside a violated field", "color_core_contract");
+  }
   return Object.freeze({ input: context.field.name, sourceModel: report.sourceModel,
     domain: report.domain, rendering: report.rendering, regionCount: report.regionCount,
+    cleanliness, ...(collision === undefined ? {} : { collision }),
     witnesses: Object.freeze(report.witnesses.map((witness) => Object.freeze({
       ...(piecewise ? { segmentIndex: witness.segmentIndex } : {}),
       coordinate: Object.freeze([...witness.coordinate]), nominal: Object.freeze([...witness.nominal]),
@@ -250,6 +288,24 @@ function copyDiagnostics(snapshot, graph, field) {
   const items = [];
   if (snapshot.state === "incomplete" && report !== null) {
     items.push(Object.freeze({ kind: "search-limit", visited: report.searchVisited, budget: report.searchBudget }));
+  }
+  const collision = report?.fieldCollision;
+  if (collision !== undefined) {
+    if (field === undefined || !usableFieldCollision(collision)) {
+      authoringError("resolution.diagnostics", "Core returned an unusable field collision", "color_core_contract");
+    }
+    const assessed = field.collision;
+    if (assessed === undefined || assessed.occurrenceId !== collision.occurrenceId
+      || assessed.caseIndex !== collision.caseIndex
+      || assessed.duplicateCaseIndex !== collision.duplicateCaseIndex
+      || !assessed.visible.every((byte, index) => byte === collision.visible[index])) {
+      authoringError("resolution.diagnostics", "Core disagreed about its own field collision", "color_core_contract");
+    }
+    items.push(Object.freeze({ kind: "field", evidence: "visible-collision", input: field.input,
+      caseIndex: collision.caseIndex, duplicateCaseIndex: collision.duplicateCaseIndex,
+      visible: Object.freeze([...collision.visible]) }));
+  } else if (field?.collision !== undefined) {
+    authoringError("resolution.diagnostics", "Core omitted its own field collision", "color_core_contract");
   }
   for (const violation of report?.witness?.violations ?? []) {
     let fieldWitness;

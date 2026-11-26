@@ -4,7 +4,7 @@
 use super::*;
 use crate::program_diagnostics::{
     ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramDiagnosticSubjectV1,
-    ProgramDiagnosticV1, ProgramDiagnosticsV1,
+    ProgramDiagnosticV1, ProgramDiagnosticsV1, ProgramFieldCollisionV1,
 };
 
 fn push_violation(
@@ -84,6 +84,27 @@ impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
     }
 }
 
+/// Один физический проход питает и свидетеля намерений, и ворота объявленного
+/// поля. Ворота добавляются только при наличии hard nominal слотов.
+struct WitnessObserverV1<'a, 'b> {
+    intent: IntentWitnessV1<'a>,
+    gate: Option<contextual::FieldGateV1<'b>>,
+}
+
+impl ProgramPhysicalCaseObserverV1 for WitnessObserverV1<'_, '_> {
+    fn observe(
+        &mut self,
+        case_index: usize,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
+        self.intent.observe(case_index, evaluation)?;
+        if let Some(gate) = self.gate.as_mut() {
+            gate.observe(case_index, evaluation)?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -99,6 +120,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             search_visited: search.visited,
             search_budget: selection.total_budget,
             witness: None,
+            field_collision: None,
         });
     }
     let mut values = buffer(selection.targets.len(), Srgb8::new([0; 3]))
@@ -109,28 +131,45 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     apply::<E>(selection, runtime, &values)?;
     arena.clear();
     let mut violations = Vec::new();
-    let mut collector = IntentWitnessV1 {
-        selection,
-        values: &values,
-        violations: &mut violations,
-    };
-    scan_program_candidate(
-        runtime,
-        epoch,
-        scenarios,
-        0,
-        ProgramEvaluationPhaseV1::Hard,
-        ProgramCandidateCollectionV1 {
-            evidence: ProgramConstraintEvidenceCaptureV1::Report {
-                cells: &mut arena.cells,
-                relation_members: &mut arena.relation_members,
+    let field_collision = {
+        let gate = if selection.field_slots.is_empty() {
+            None
+        } else {
+            Some(
+                contextual::FieldGateV1::new(&selection.field_slots, scenarios.len().get())
+                    .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?,
+            )
+        };
+        let mut observer = WitnessObserverV1 {
+            intent: IntentWitnessV1 {
+                selection,
+                values: &values,
+                violations: &mut violations,
             },
-            outputs: None,
-            point_causal: None,
-            physical_case: Some(&mut collector),
-        },
-        None,
-    )?;
+            gate,
+        };
+        scan_program_candidate(
+            runtime,
+            epoch,
+            scenarios,
+            0,
+            ProgramEvaluationPhaseV1::Hard,
+            ProgramCandidateCollectionV1 {
+                evidence: ProgramConstraintEvidenceCaptureV1::Report {
+                    cells: &mut arena.cells,
+                    relation_members: &mut arena.relation_members,
+                },
+                outputs: None,
+                point_causal: None,
+                physical_case: Some(&mut observer),
+            },
+            None,
+        )?;
+        observer
+            .gate
+            .as_ref()
+            .and_then(contextual::FieldGateV1::collision)
+    };
     let intent_count = violations.len();
     for cell in &arena.cells {
         if cell.result().is_violation() {
@@ -229,7 +268,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     }
     // Этот tuple уже отвергнут до остановки. Повторный законный успех означал
     // бы недетерминизм или ошибку поиска, а не новый fallback после бюджета.
-    if violations.is_empty() {
+    if violations.is_empty() && field_collision.is_none() {
         return Err(ProgramSessionEvaluationError::InternalInvariant);
     }
     Ok(ProgramDiagnosticsV1 {
@@ -239,6 +278,14 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
             case_scenario_ids,
             targets,
             violations,
+        }),
+        field_collision: field_collision.map(|collision| {
+            ProgramFieldCollisionV1::new(
+                collision.occurrence(),
+                collision.case_index(),
+                collision.duplicate_case_index(),
+                collision.visible(),
+            )
         }),
     })
 }

@@ -681,6 +681,11 @@ pub(super) struct ComputedSelectionV1 {
     components: Box<[ComputedComponentV1]>,
     factors: Box<[ComputedFactorV1]>,
     fixed_constraints: Box<[usize]>,
+    /// Hard nominal-visible slots of fixed constraints. They belong to no
+    /// component, so no adjustable tuple can repair their field collision.
+    fixed_field_slots: Box<[CompiledOccurrenceSlotV1]>,
+    /// Every hard nominal-visible slot of the selection, deduplicated.
+    field_slots: Box<[CompiledOccurrenceSlotV1]>,
     budget: u64,
     total_budget: u64,
     execution_profile: [u8; 32],
@@ -693,6 +698,7 @@ pub(super) struct ComputedSelectionV1 {
 struct ComputedComponentV1 {
     targets: Box<[usize]>,
     constraints: Box<[usize]>,
+    field_slots: Box<[CompiledOccurrenceSlotV1]>,
     inputs: Box<[usize]>,
     physical: CompiledAppearanceConeV1,
     mode: ProgramSelectionModeV1,
@@ -934,6 +940,8 @@ pub(super) fn compile_selection(
         components: Box::new([]),
         factors: Box::new([]),
         fixed_constraints: Box::new([]),
+        fixed_field_slots: Box::new([]),
+        field_slots: Box::new([]),
         budget,
         total_budget: budget,
         execution_profile: if reference {
@@ -1366,18 +1374,7 @@ where
     {
         evidence.examined += 1;
         apply_targets::<Evaluation>(targets, runtime, &values)?;
-        if !scan_program_candidate_scoped(
-            runtime,
-            epoch,
-            scenario_set,
-            0,
-            ProgramEvaluationPhaseV1::Hard,
-            ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints {
-                indices: &component.constraints,
-                physical: Some(&component.physical),
-            },
-        )? {
+        if !contextual::scan_component(runtime, epoch, scenario_set, component)? {
             evidence.completion = CompletionV1::AuthoredExact;
             return Ok(SearchResultV1 {
                 reference_selections: None,
@@ -1543,20 +1540,10 @@ where
         }
         evidence.examined += 1;
         apply_targets::<Evaluation>(targets, runtime, &values)?;
-        if !scan_program_candidate_scoped(
-            runtime,
-            epoch,
-            scenario_set,
-            0,
-            ProgramEvaluationPhaseV1::Hard,
-            ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints {
-                indices: &component.constraints,
-                physical: Some(&component.physical),
-            },
-        )? && (!has_best
-            || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
-                == Ordering::Less)
+        if !contextual::scan_component(runtime, epoch, scenario_set, component)?
+            && (!has_best
+                || compare_scores(&scores, &best_scores).then_with(|| values.cmp(&best_values))
+                    == Ordering::Less)
         {
             best_values.copy_from_slice(&values);
             best_scores.copy_from_slice(&scores);

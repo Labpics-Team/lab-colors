@@ -2,7 +2,8 @@
 
 use labcolors_core::program_wire::{
     ProgramAssessmentReportV1, ProgramAssessmentVerdictV1, ProgramCleanlinessAssessmentV1,
-    ProgramCleanlinessStatusV1, ProgramConstraintAssessmentV1, ProgramReferencePreferenceV1,
+    ProgramCleanlinessStatusV1, ProgramConstraintAssessmentV1, ProgramFieldCleanlinessStatusV1,
+    ProgramReferencePreferenceV1,
 };
 use wasm_bindgen::prelude::*;
 
@@ -43,15 +44,40 @@ pub(super) fn project_field(
     let mut colors = [0; 6];
     colors[..3].copy_from_slice(&from.bytes());
     colors[3..].copy_from_slice(&to.bytes());
+    let cleanliness = super::report_field_cleanliness(match field.cleanliness() {
+        ProgramFieldCleanlinessStatusV1::NotAssessed => "not-assessed",
+        ProgramFieldCleanlinessStatusV1::Conforms => "conforms",
+        ProgramFieldCleanlinessStatusV1::Violates => "violates",
+        ProgramFieldCleanlinessStatusV1::Unavailable => "unavailable",
+    })?;
+    let collision = field.collision().map(project_field_collision).transpose()?;
     super::report_field(
         field.input_index(),
         &colors,
         field.source_model(),
         field.domain(),
         field.rendering(),
+        &cleanliness,
         field.region_count(),
         &witnesses,
+        collision,
         stops,
+    )
+}
+
+/// Повтор видимого цвета объявленного поля: свидетельство неинъективности на
+/// точной конечной опоре, а не минимальный конфликт.
+pub(super) fn project_field_collision(
+    collision: labcolors_core::program_wire::ProgramFieldCollisionV1,
+) -> Result<JsValue, JsValue> {
+    let [red, green, blue] = collision.visible().bytes();
+    super::report_field_collision(
+        collision.occurrence_id(),
+        collision.case_index(),
+        collision.duplicate_case_index(),
+        red,
+        green,
+        blue,
     )
 }
 

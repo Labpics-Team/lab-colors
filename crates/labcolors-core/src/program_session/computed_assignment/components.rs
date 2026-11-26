@@ -541,6 +541,45 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
     })
 }
 
+/// Hard nominal-visible constraints define the whole-field injectivity gate.
+/// Report-only declarations remain report-only and never enter selection.
+pub(super) fn nominal_field_slots<E: ProgramConstraintEvaluatorSetV1>(
+    constraints: &[CompiledPointConstraint<ProgramConstraintInvocationOf<E>>],
+    indices: &[usize],
+    evaluator: &E,
+) -> Result<Box<[CompiledOccurrenceSlotV1]>, ()>
+where
+    ProgramConstraintInvocationOf<E>: Copy,
+{
+    let mut slots = Vec::new();
+    slots.try_reserve_exact(indices.len()).map_err(|_| ())?;
+    for &index in indices {
+        let Some(constraint) = constraints.get(index) else {
+            continue;
+        };
+        if !constraint.mode.rejects_candidate() {
+            continue;
+        }
+        let CompiledProgramConstraintBodyV1::VisibleUnary {
+            slot, invocation, ..
+        } = &constraint.body
+        else {
+            continue;
+        };
+        if matches!(
+            evaluator.constraint_content(*invocation),
+            ProgramConstraintContentV1::NominalSrgb8Visible {
+                release: crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
+            }
+        ) {
+            slots.push(*slot);
+        }
+    }
+    slots.sort_unstable();
+    slots.dedup();
+    Ok(slots.into_boxed_slice())
+}
+
 pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluatorSetV1>(
     selection: &mut ComputedSelectionV1,
     partition: ComponentPartitionV1,
@@ -636,6 +675,8 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 required_inputs[input] = false;
             }
         }
+        let field_slots = nominal_field_slots(constraints, &constraint_indices, &program.evaluator)
+            .map_err(|()| ProgramCompileError::ResourceExhausted)?;
         components.push(ComputedComponentV1 {
             point_equivalence: None,
             mode,
@@ -649,6 +690,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             .map_err(map_binding_compile_error)?,
             targets: targets.into_boxed_slice(),
             constraints: constraint_indices.into_boxed_slice(),
+            field_slots,
             inputs: inputs.into_boxed_slice(),
         });
     }
@@ -700,6 +742,30 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     selection.components = components.into_boxed_slice();
     selection.factors = factors.into_boxed_slice();
     selection.fixed_constraints = fixed.into_boxed_slice();
+    selection.fixed_field_slots = nominal_field_slots(
+        constraints,
+        &selection.fixed_constraints,
+        &program.evaluator,
+    )
+    .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    let mut field_slots = Vec::new();
+    field_slots
+        .try_reserve_exact(
+            selection.fixed_field_slots.len()
+                + selection
+                    .components
+                    .iter()
+                    .map(|component| component.field_slots.len())
+                    .sum::<usize>(),
+        )
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    field_slots.extend_from_slice(&selection.fixed_field_slots);
+    for component in &selection.components {
+        field_slots.extend_from_slice(&component.field_slots);
+    }
+    field_slots.sort_unstable();
+    field_slots.dedup();
+    selection.field_slots = field_slots.into_boxed_slice();
     let mut descriptions = Vec::new();
     descriptions
         .try_reserve_exact(selection.components.len())
@@ -848,6 +914,7 @@ pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
         for &input in &inputs {
             seen_inputs[input] = false;
         }
+        let field_slots = nominal_field_slots(&epoch.constraints, &constraints, &epoch.evaluator)?;
         components.push(ComputedComponentV1 {
             point_equivalence: None,
             mode: component.mode,
@@ -861,6 +928,7 @@ pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
             .map_err(|_| ())?,
             targets: targets.into_boxed_slice(),
             constraints: constraints.into_boxed_slice(),
+            field_slots,
             inputs: inputs.into_boxed_slice(),
         });
     }
@@ -911,6 +979,7 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
             }
         }
     }
+    let field_slots = nominal_field_slots(&epoch.constraints, &constraints, &epoch.evaluator)?;
     Ok(Some(ComputedComponentV1 {
         point_equivalence: None,
         mode: component.mode,
@@ -924,6 +993,7 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
         .map_err(|_| ())?,
         targets: buffer(1, first)?.into_boxed_slice(),
         constraints: constraints.into_boxed_slice(),
+        field_slots,
         inputs: inputs.into_boxed_slice(),
     }))
 }
@@ -1143,17 +1213,13 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     if !selection.fixed_constraints.is_empty() || selection.components.is_empty() {
         // No adjustable source can repair these conditions. Check once before
         // search instead of spending each component's budget on the same refusal.
-        let failed = scan_program_candidate_scoped(
+        let failed = contextual::scan_fixed(
             runtime,
             epoch,
             scenarios,
-            0,
-            ProgramEvaluationPhaseV1::Hard,
-            ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints {
-                indices: &selection.fixed_constraints,
-                physical: None,
-            },
+            &selection.fixed_constraints,
+            None,
+            &selection.fixed_field_slots,
         )?;
         evidence.visited = 1;
         evidence.points = 1;

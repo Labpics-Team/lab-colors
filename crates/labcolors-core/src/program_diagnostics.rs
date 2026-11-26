@@ -121,6 +121,57 @@ pub struct ProgramDiagnosticsV1 {
     pub(crate) search_visited: u64,
     pub(crate) search_budget: u64,
     pub(crate) witness: Option<ProgramAttemptWitnessV1>,
+    pub(crate) field_collision: Option<ProgramFieldCollisionV1>,
+}
+
+/// Повтор видимого байтового цвета в двух разных физических случаях одного
+/// hard nominal occurrence объявленного поля. Это свидетельство неинъективности
+/// видимого отображения на точной конечной опоре, а не минимальный конфликт.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramFieldCollisionV1 {
+    occurrence_id: u32,
+    case_index: usize,
+    duplicate_case_index: usize,
+    visible: Srgb8,
+}
+
+impl ProgramFieldCollisionV1 {
+    pub(crate) const fn new(
+        occurrence_id: u32,
+        case_index: usize,
+        duplicate_case_index: usize,
+        visible: Srgb8,
+    ) -> Self {
+        Self {
+            occurrence_id,
+            case_index,
+            duplicate_case_index,
+            visible,
+        }
+    }
+
+    /// Авторский occurrence, чей видимый цвет повторился.
+    #[must_use]
+    pub const fn occurrence_id(self) -> u32 {
+        self.occurrence_id
+    }
+
+    /// Случай, в котором цвет повторился впервые.
+    #[must_use]
+    pub const fn case_index(self) -> usize {
+        self.case_index
+    }
+
+    /// Предшествующий случай с тем же видимым цветом.
+    #[must_use]
+    pub const fn duplicate_case_index(self) -> usize {
+        self.duplicate_case_index
+    }
+
+    #[must_use]
+    pub const fn visible(self) -> Srgb8 {
+        self.visible
+    }
 }
 
 impl ProgramDiagnosticsV1 {
@@ -135,6 +186,12 @@ impl ProgramDiagnosticsV1 {
     #[must_use]
     pub const fn witness(&self) -> Option<&ProgramAttemptWitnessV1> {
         self.witness.as_ref()
+    }
+
+    /// Первый установленный повтор видимого цвета объявленного поля.
+    #[must_use]
+    pub const fn field_collision(&self) -> Option<ProgramFieldCollisionV1> {
+        self.field_collision
     }
 
     /// Snapshot получает независимые буферы до commit подготовленного перехода.
@@ -161,6 +218,7 @@ impl ProgramDiagnosticsV1 {
             search_visited: self.search_visited,
             search_budget: self.search_budget,
             witness,
+            field_collision: self.field_collision,
         })
     }
 }

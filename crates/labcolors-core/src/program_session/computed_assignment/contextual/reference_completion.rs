@@ -1207,17 +1207,13 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         if !selection.fixed_constraints.is_empty() || selection.components.is_empty() {
             // The compiler proved these conditions independent of every
             // adjustable paint. Match the existing once-only constant check.
-            let failed = scan_program_candidate_scoped(
+            let failed = super::scan_fixed(
                 runtime,
                 epoch,
                 scenarios,
-                0,
-                ProgramEvaluationPhaseV1::Hard,
-                ProgramCandidateCollectionV1::none(),
-                ProgramCandidateScanV1::Constraints {
-                    indices: &selection.fixed_constraints,
-                    physical: None,
-                },
+                &selection.fixed_constraints,
+                None,
+                &selection.fixed_field_slots,
             )?;
             search.visited = 1;
             search.points = 1;

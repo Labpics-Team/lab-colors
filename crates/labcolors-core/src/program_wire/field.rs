@@ -4,6 +4,10 @@ use super::*;
 use crate::field_context::{FieldStops, ProgramGradientStopV1};
 use crate::gradient_domain::OpaqueSrgb8AffineSegment;
 use crate::observation::SchemaOrderedFieldSourceV1;
+use crate::program_session::{
+    CoreProgramPassEvidenceV1, CoreProgramViolationEvidenceV1, ProgramConstraintPassEvidenceV1,
+    ProgramConstraintResultV1, ProgramConstraintViolationEvidenceV1,
+};
 
 /// One opaque encoded-sRGB input, affine between stops over the entire real interval [0, 1].
 ///
@@ -122,12 +126,30 @@ impl ProgramFieldWitnessV1 {
 /// Ready means the entire declared model satisfies the Program. It is not a
 /// claim about gradient rasterization. Consumers must retain this scope on
 /// both positive and negative results; renderer coverage remains unknown.
+/// Whole-field cleanliness covers only the exact finite support and the
+/// declared hard nominal occurrences: it reports whether the visible byte
+/// mapping repeats a color across two distinct cases of one such occurrence.
+/// It is not an aesthetic judgement or a rendering guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramFieldCleanlinessStatusV1 {
+    /// No hard nominal occurrence depends on the declared field.
+    NotAssessed,
+    /// Every hard nominal case passed and no visible color repeated.
+    Conforms,
+    /// A hard nominal case was rejected or a visible color repeated.
+    Violates,
+    /// No verified output exists for this revision.
+    Unavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFieldAssessmentV1 {
     varying_input: usize,
     stops: Box<[ProgramGradientStopV1]>,
     region_count: usize,
     witnesses: Vec<ProgramFieldWitnessV1>,
+    cleanliness: ProgramFieldCleanlinessStatusV1,
+    collision: Option<crate::program_diagnostics::ProgramFieldCollisionV1>,
 }
 
 impl ProgramFieldAssessmentV1 {
@@ -177,6 +199,16 @@ impl ProgramFieldAssessmentV1 {
     pub fn witnesses(&self) -> &[ProgramFieldWitnessV1] {
         &self.witnesses
     }
+
+    /// Cleanliness of the whole declared field on its exact finite support.
+    pub const fn cleanliness(&self) -> ProgramFieldCleanlinessStatusV1 {
+        self.cleanliness
+    }
+
+    /// First visible-color repetition that rejected the field, if any.
+    pub const fn collision(&self) -> Option<crate::program_diagnostics::ProgramFieldCollisionV1> {
+        self.collision
+    }
 }
 
 pub(super) fn copy_field_assessment(
@@ -210,11 +242,61 @@ pub(super) fn copy_field_assessment(
         .try_reserve_exact(field.stops().len())
         .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
     stops.extend_from_slice(field.stops());
+    let collision = evidence
+        .diagnostics()
+        .and_then(crate::program_diagnostics::ProgramDiagnosticsV1::field_collision);
+    let (cleanliness, collision) = match evidence.current_verified() {
+        // A verified outcome covers every hard cell on the full physical
+        // support. The field is clean only when a hard nominal occurrence
+        // actually depends on it and none of those cells was rejected.
+        Some(verified) => {
+            let mut nominal_cells = 0usize;
+            let mut rejected = false;
+            for cell in verified.cells() {
+                if !cell.is_hard() {
+                    continue;
+                }
+                if matches!(
+                    cell.result(),
+                    ProgramConstraintResultV1::Pass(ProgramConstraintPassEvidenceV1::VisibleUnary(
+                        CoreProgramPassEvidenceV1::NominalSrgb8Visible(_),
+                    ))
+                ) {
+                    nominal_cells += 1;
+                } else if matches!(
+                    cell.result(),
+                    ProgramConstraintResultV1::Violation(
+                        ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                            CoreProgramViolationEvidenceV1::NominalSrgb8Visible(_),
+                        ),
+                    )
+                ) {
+                    nominal_cells += 1;
+                    rejected = true;
+                }
+            }
+            if nominal_cells == 0 {
+                (ProgramFieldCleanlinessStatusV1::NotAssessed, None)
+            } else if rejected {
+                (ProgramFieldCleanlinessStatusV1::Violates, collision)
+            } else {
+                (ProgramFieldCleanlinessStatusV1::Conforms, None)
+            }
+        }
+        // Without verified output the field result is either a proven
+        // collision or genuinely unknown.
+        None => match collision {
+            Some(_) => (ProgramFieldCleanlinessStatusV1::Violates, collision),
+            None => (ProgramFieldCleanlinessStatusV1::Unavailable, None),
+        },
+    };
     Ok(Some(ProgramFieldAssessmentV1 {
         varying_input: field.varying_input_index(),
         stops: stops.into_boxed_slice(),
         region_count: field.cell_count(),
         witnesses,
+        cleanliness,
+        collision,
     }))
 }
 
@@ -297,6 +379,139 @@ mod tests {
     fn field(from: [u8; 3], to: [u8; 3]) -> ProgramDeclaredFieldV1<'static> {
         ProgramDeclaredFieldV1::from_rgb8(&[0; 3], 0, Srgb8::new(from), Srgb8::new(to))
             .expect("one RGB input and varying index zero define a valid field")
+    }
+
+    fn nominal_field_session(opacity: f64, hard: bool) -> ProgramSessionV1 {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .computed_gray_target(2, 0, 255, Srgb8::new([0; 3]), 2.0)
+            .surface_input_port(6)
+            .opacity_input(5, opacity)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 1)
+            .nominal_srgb8_visible(hard, 10, 8)
+            .output(17, 4);
+        compile_program_wire(
+            &builder
+                .finish_assignment(&[2])
+                .expect("the nominal field fixture is a valid assignment"),
+        )
+        .expect("the nominal field fixture compiles")
+        .instantiate(1)
+        .expect("the nominal field fixture instantiates")
+    }
+
+    #[test]
+    fn hard_nominal_field_rejects_a_constant_visible_mapping() {
+        // Opacity 1.0 hides the declared backdrop, so every physical case shows
+        // the same paint gray. A constant visible mapping cannot cover the
+        // declared field and the hard nominal occurrence must reject it.
+        let mut opaque = nominal_field_session(1.0, true);
+        let rejected = opaque
+            .update_declared_field(1, field([254; 3], [255; 3]))
+            .expect("a constant visible mapping produces a diagnostic snapshot");
+        assert_eq!(rejected.state(), ProgramSnapshotStateV1::Unsatisfied);
+        assert!(rejected.outputs().is_empty());
+        let assessment = rejected
+            .field_assessment()
+            .expect("a rejected field keeps its assessed domain");
+        assert_eq!(
+            assessment.cleanliness(),
+            ProgramFieldCleanlinessStatusV1::Violates
+        );
+        let collision = assessment
+            .collision()
+            .expect("the rejection records the repeated visible color");
+        assert_ne!(collision.case_index(), collision.duplicate_case_index());
+        let diagnostics = rejected
+            .diagnostics()
+            .expect("an unsatisfied snapshot keeps its diagnostics");
+        assert_eq!(diagnostics.field_collision(), Some(collision));
+        assert!(
+            diagnostics
+                .witness()
+                .is_some_and(|witness| witness.violations().is_empty()),
+            "a field-only rejection is proven by the repeated color alone"
+        );
+
+        // Opacity 0.0 lets the varying backdrop through, so every case keeps
+        // its own visible byte color and the mapping stays injective.
+        let mut transparent = nominal_field_session(0.0, true);
+        let ready = transparent
+            .update_declared_field(1, field([254; 3], [255; 3]))
+            .expect("a distinct visible mapping is admitted");
+        assert_eq!(ready.state(), ProgramSnapshotStateV1::Ready);
+        assert!(!ready.outputs().is_empty());
+        let assessment = ready
+            .field_assessment()
+            .expect("an accepted field keeps its assessed domain");
+        assert_eq!(
+            assessment.cleanliness(),
+            ProgramFieldCleanlinessStatusV1::Conforms
+        );
+        assert!(assessment.collision().is_none());
+    }
+
+    #[test]
+    fn report_only_nominal_field_is_not_a_selection_gate() {
+        let mut opaque = nominal_field_session(1.0, false);
+        let ready = opaque
+            .update_declared_field(1, field([254; 3], [255; 3]))
+            .expect("a report-only declaration remains report-only");
+        assert_eq!(ready.state(), ProgramSnapshotStateV1::Ready);
+        assert!(!ready.outputs().is_empty());
+        let assessment = ready
+            .field_assessment()
+            .expect("an accepted field keeps its assessed domain");
+        assert_eq!(
+            assessment.cleanliness(),
+            ProgramFieldCleanlinessStatusV1::NotAssessed
+        );
+    }
+
+    /// No adjustable target exists, so the nominal occurrence is a fixed
+    /// constraint and only the declared field can make its visible color
+    /// repeat.
+    fn fixed_nominal_field_session(hard: bool) -> ProgramSessionV1 {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .source(1, Srgb8::new([0, 0, 0]))
+            .fixed_target(2, 1)
+            .surface_input_port(6)
+            .opacity_input(5, 1.0)
+            .solid_paint(3, 2)
+            .opacity_paint(4, 3, 5)
+            .input_surface(7, 6)
+            .source_over_occurrence(8, 4, 7, 64.0, 0.2, 1)
+            .nominal_srgb8_visible(hard, 10, 8)
+            .output(17, 4);
+        compile_program_wire(
+            &builder
+                .finish_assignment(&[])
+                .expect("the fixed nominal field fixture is a valid assignment"),
+        )
+        .expect("the fixed nominal field fixture compiles")
+        .instantiate(1)
+        .expect("the fixed nominal field fixture instantiates")
+    }
+
+    #[test]
+    fn fixed_hard_nominal_field_rejects_a_constant_visible_mapping() {
+        let mut runtime = fixed_nominal_field_session(true);
+        let rejected = runtime
+            .update_declared_field(1, field([254; 3], [255; 3]))
+            .expect("a fixed constant visible mapping produces a diagnostic snapshot");
+        assert_eq!(rejected.state(), ProgramSnapshotStateV1::Unsatisfied);
+        assert!(rejected.outputs().is_empty());
+        let collision = rejected
+            .field_assessment()
+            .expect("a rejected field keeps its assessed domain")
+            .collision()
+            .expect("the fixed occurrence records the repeated visible color");
+        assert_eq!(collision.visible(), Srgb8::new([0, 0, 0]));
+        assert_ne!(collision.case_index(), collision.duplicate_case_index());
     }
 
     #[test]

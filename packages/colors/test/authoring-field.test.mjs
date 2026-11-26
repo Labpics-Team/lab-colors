@@ -12,6 +12,7 @@ const graph = {
 const descriptor = () => ({ kind: "affine-srgb8", from: [0, 0, 0], to: [1, 0, 0] });
 const assessment = () => ({ inputIndex: 0, from: [0, 0, 0], to: [1, 0, 0],
   sourceModel: "opaque-affine-encoded-srgb8-half-up-v1", domain: "whole-field", rendering: "unknown",
+  cleanliness: { status: "not-assessed", reason: "no-hard-nominal-constraint" },
   regionCount: 5, witnesses: [
     { coordinate: [0, 1], nominal: [0, 0, 0] },
     { coordinate: [1, 2], nominal: [1, 0, 0] },
@@ -122,4 +123,75 @@ test("ordinary solid results retain the public ready shape", () => {
   assert.equal(frame.state, "ready");
   assert.deepEqual(frame.context, { canvas: [0, 0, 0], paper: [255, 255, 255] });
   for (const key of ["scope", "coverage", "field", "contextCss"]) assert.equal(key in frame, false);
+});
+
+const collision = () => ({ occurrenceId: 2, caseIndex: 1, duplicateCaseIndex: 0, visible: [0, 0, 0] });
+const fieldReport = (cleanliness, collisionValue) => ({ ...assessment(), cleanliness,
+  ...(collisionValue === undefined ? {} : { collision: collisionValue }) });
+const fieldDiagnostics = (fieldCollision) => ({ searchVisited: 1n, searchBudget: 1n,
+  witness: { violations: [] }, ...(fieldCollision === undefined ? {} : { fieldCollision }) });
+
+test("field cleanliness travels with the modeled frame as Core reported it", () => {
+  const context = parseColorContext(graph, { canvas: descriptor(), paper: "#ffffff" });
+  const frame = copyColorFrame(snapshot("ready", fieldReport({ status: "conforms" })), graph, context);
+  assert.equal(frame.state, "modeled");
+  assert.deepEqual(frame.field.cleanliness, { status: "conforms" });
+  assert.equal(Object.isFrozen(frame.field.cleanliness), true);
+  assert.equal("collision" in frame.field, false);
+});
+
+test("a repeated visible color is a field diagnostic on the conflict frame", () => {
+  const context = parseColorContext(graph, { canvas: descriptor(), paper: "#ffffff" });
+  const repeated = collision();
+  const report = fieldReport({ status: "violates" }, repeated);
+  const frame = copyColorFrame({ ...snapshot("unsatisfied", report),
+    diagnostics: () => fieldDiagnostics(repeated) }, graph, context);
+  assert.equal(frame.state, "conflict");
+  assert.equal(frame.coverage.model, "violated");
+  assert.equal(frame.coverage.rendering, "unknown");
+  assert.equal("values" in frame, false);
+  assert.deepEqual(frame.field.cleanliness, { status: "violates" });
+  assert.deepEqual(frame.field.collision, repeated);
+  assert.deepEqual(frame.diagnostics, [{ kind: "field", evidence: "visible-collision",
+    input: "canvas", caseIndex: 1, duplicateCaseIndex: 0, visible: [0, 0, 0] }]);
+  assert.equal(Object.isFrozen(frame.field.collision), true);
+  assert.equal(Object.isFrozen(frame.field.collision.visible), true);
+  assert.equal(Object.isFrozen(frame.diagnostics[0].visible), true);
+});
+
+test("field cleanliness metadata cannot be invented or contradicted", () => {
+  const context = parseColorContext(graph, { canvas: descriptor(), paper: "#ffffff" });
+  for (const report of [
+    { ...assessment(), cleanliness: undefined },
+    { ...assessment(), cleanliness: null },
+    { ...assessment(), cleanliness: { status: "clean" } },
+    { ...assessment(), cleanliness: { status: "not-assessed" } },
+    { ...assessment(), cleanliness: { status: "not-assessed", reason: "no-declared-profile" } },
+    { ...assessment(), cleanliness: { status: "conforms" }, collision: collision() },
+    { ...assessment(), cleanliness: { status: "violates" },
+      collision: { ...collision(), duplicateCaseIndex: 1 } },
+    { ...assessment(), cleanliness: { status: "violates" },
+      collision: { ...collision(), visible: [0, 0, 300] } },
+    { ...assessment(), cleanliness: { status: "violates" },
+      collision: { ...collision(), occurrenceId: 2.5 } },
+  ]) {
+    assert.throws(() => copyColorFrame(snapshot("ready", report), graph, context),
+      { code: "color_core_contract", path: "resolution.field" });
+  }
+});
+
+test("field diagnostics and field assessment must describe the same collision", () => {
+  const context = parseColorContext(graph, { canvas: descriptor(), paper: "#ffffff" });
+  const repeated = collision();
+  const report = fieldReport({ status: "violates" }, repeated);
+  for (const diagnostics of [
+    fieldDiagnostics(),
+    fieldDiagnostics({ ...repeated, duplicateCaseIndex: 2 }),
+    fieldDiagnostics({ ...repeated, visible: [1, 1, 1] }),
+    fieldDiagnostics({ ...repeated, occurrenceId: 3 }),
+  ]) {
+    const conflict = { ...snapshot("unsatisfied", report), diagnostics: () => diagnostics };
+    assert.throws(() => copyColorFrame(conflict, graph, context),
+      { code: "color_core_contract", path: "resolution.diagnostics" });
+  }
 });

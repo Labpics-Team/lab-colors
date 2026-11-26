@@ -108,6 +108,240 @@ struct VisibleLabV1 {
     lab: [f64; 3],
 }
 
+/// One hard nominal-visible slot across every physical case of a declared
+/// field. A repeated visible byte color proves the visible mapping is not
+/// injective over the exact finite support.
+struct VisibleSetV1 {
+    keys: Vec<u32>,
+    /// Case that first produced the key in the same open-addressed position.
+    first_cases: Vec<u32>,
+    has_violation: bool,
+    violations: usize,
+    violation_case: Option<usize>,
+}
+
+impl VisibleSetV1 {
+    fn with_capacity(capacity: usize) -> Result<Self, ()> {
+        let mut keys = Vec::new();
+        keys.try_reserve_exact(capacity).map_err(|_| ())?;
+        keys.resize(capacity, u32::MAX);
+        let mut first_cases = Vec::new();
+        first_cases.try_reserve_exact(capacity).map_err(|_| ())?;
+        first_cases.resize(capacity, 0);
+        Ok(Self {
+            keys,
+            first_cases,
+            has_violation: false,
+            violations: 0,
+            violation_case: None,
+        })
+    }
+
+    fn clear(&mut self) {
+        self.keys.fill(u32::MAX);
+        self.first_cases.fill(0);
+        self.has_violation = false;
+        self.violations = 0;
+        self.violation_case = None;
+    }
+
+    /// Inserts one observed visible color. A repeated color reports the case
+    /// that first produced it; a fresh color reports nothing.
+    fn insert(&mut self, rgb: Srgb8, case: usize) -> Option<usize> {
+        let bytes = rgb.bytes();
+        let key = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
+        let mask = self.keys.len() - 1;
+        let mut index = (key.wrapping_mul(0x9e37_79b1) as usize) & mask;
+        loop {
+            match self.keys[index] {
+                u32::MAX => {
+                    self.keys[index] = key;
+                    self.first_cases[index] = u32::try_from(case).unwrap_or(u32::MAX);
+                    return None;
+                }
+                existing if existing == key => {
+                    self.has_violation = true;
+                    self.violations = self.violations.saturating_add(1);
+                    self.violation_case = Some(case);
+                    return Some(self.first_cases[index] as usize);
+                }
+                _ => index = (index + 1) & mask,
+            }
+        }
+    }
+}
+
+/// Первое найденное совпадение видимого байтового цвета в двух разных
+/// физических случаях одного hard nominal occurrence.
+#[derive(Clone, Copy)]
+pub(super) struct FieldCollisionV1 {
+    occurrence: u32,
+    case_index: usize,
+    duplicate_case_index: usize,
+    visible: Srgb8,
+}
+
+impl FieldCollisionV1 {
+    pub(super) const fn occurrence(self) -> u32 {
+        self.occurrence
+    }
+
+    pub(super) const fn case_index(self) -> usize {
+        self.case_index
+    }
+
+    pub(super) const fn duplicate_case_index(self) -> usize {
+        self.duplicate_case_index
+    }
+
+    pub(super) const fn visible(self) -> Srgb8 {
+        self.visible
+    }
+}
+
+/// Проверка объявленного поля на точной конечной опоре: повтор видимого
+/// байтового цвета в разных случаях одного hard nominal occurrence доказывает,
+/// что видимое отображение не инъективно, поэтому tuple не может выполнить
+/// всю объявленную область. Проверка только опровергает; отсутствие повтора на
+/// probe не является доказательством и требует полного прохода.
+pub(super) struct FieldGateV1<'a> {
+    slots: &'a [CompiledOccurrenceSlotV1],
+    sets: Vec<VisibleSetV1>,
+    collision: Option<FieldCollisionV1>,
+}
+
+impl<'a> FieldGateV1<'a> {
+    pub(super) fn new(slots: &'a [CompiledOccurrenceSlotV1], cases: usize) -> Result<Self, ()> {
+        let capacity = cases
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or(())?
+            .max(2);
+        let mut sets = Vec::new();
+        sets.try_reserve_exact(slots.len()).map_err(|_| ())?;
+        for _ in slots {
+            sets.push(VisibleSetV1::with_capacity(capacity)?);
+        }
+        Ok(Self {
+            slots,
+            sets,
+            collision: None,
+        })
+    }
+
+    pub(super) const fn collision(&self) -> Option<FieldCollisionV1> {
+        self.collision
+    }
+}
+
+impl ProgramPhysicalCaseObserverV1 for FieldGateV1<'_> {
+    fn observe(
+        &mut self,
+        case_index: usize,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Result<(), ProgramPhysicalCaseObserverErrorV1> {
+        for (set, &slot) in self.sets.iter_mut().zip(self.slots) {
+            let visible = evaluation
+                .occurrence_at(slot)
+                .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                .visible();
+            let rgb = Srgb8::new(visible);
+            if let Some(duplicate_case_index) = set.insert(rgb, case_index) {
+                if self.collision.is_none() {
+                    self.collision = Some(FieldCollisionV1 {
+                        occurrence: slot.occurrence().value(),
+                        case_index,
+                        duplicate_case_index,
+                        visible: rgb,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Scans one component's hard constraints together with its declared-field
+/// gate. The gate is attached only when the component owns hard nominal slots,
+/// so ordinary selections keep their exact evaluation and evidence reuse.
+pub(super) fn scan_component<E: ProgramConstraintEvaluatorSetV1>(
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
+    component: &ComputedComponentV1,
+) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>>
+where
+    ProgramConstraintInvocationOf<E>: Copy,
+{
+    scan_with_field_gate(
+        runtime,
+        epoch,
+        scenario_set,
+        &component.constraints,
+        Some(&component.physical),
+        &component.field_slots,
+    )
+}
+
+/// Scans the fixed hard constraints together with their declared-field gate.
+/// A repeated visible color in a fixed nominal slot cannot be repaired by any
+/// tuple, so it fails the scan exactly like a hard violation.
+pub(super) fn scan_fixed<E: ProgramConstraintEvaluatorSetV1>(
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
+    indices: &[usize],
+    physical: Option<&CompiledAppearanceConeV1>,
+    field_slots: &[CompiledOccurrenceSlotV1],
+) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>>
+where
+    ProgramConstraintInvocationOf<E>: Copy,
+{
+    scan_with_field_gate(runtime, epoch, scenario_set, indices, physical, field_slots)
+}
+
+fn scan_with_field_gate<E: ProgramConstraintEvaluatorSetV1>(
+    runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+    epoch: &ProgramEpochV1<E>,
+    scenario_set: NonEmptyScenarioSetV1<'_>,
+    indices: &[usize],
+    physical: Option<&CompiledAppearanceConeV1>,
+    field_slots: &[CompiledOccurrenceSlotV1],
+) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>>
+where
+    ProgramConstraintInvocationOf<E>: Copy,
+{
+    let scan = ProgramCandidateScanV1::Constraints { indices, physical };
+    if field_slots.is_empty() {
+        return scan_program_candidate_scoped(
+            runtime,
+            epoch,
+            scenario_set,
+            0,
+            ProgramEvaluationPhaseV1::Hard,
+            ProgramCandidateCollectionV1::none(),
+            scan,
+        );
+    }
+    let mut gate = FieldGateV1::new(field_slots, scenario_set.len().get())
+        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+    let failed = scan_program_candidate_scoped(
+        runtime,
+        epoch,
+        scenario_set,
+        0,
+        ProgramEvaluationPhaseV1::Hard,
+        ProgramCandidateCollectionV1 {
+            evidence: ProgramConstraintEvidenceCaptureV1::None,
+            outputs: None,
+            point_causal: None,
+            physical_case: Some(&mut gate),
+        },
+        scan,
+    )?;
+    Ok(failed || gate.collision().is_some())
+}
+
 struct ContextV1<'a> {
     targets: ComputedTargetsV1<'a>,
     constraint_indices: Option<&'a [usize]>,
@@ -121,6 +355,8 @@ struct ContextV1<'a> {
     score_extrema: RefCell<Vec<usize>>,
     identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     visible_labs: RefCell<Vec<Option<VisibleLabV1>>>,
+    field_slots: &'a [CompiledOccurrenceSlotV1],
+    field_sets: RefCell<Vec<VisibleSetV1>>,
     opaque: Vec<bool>,
     point_equivalence: Option<&'a PointEquivalenceV1>,
 }
@@ -341,6 +577,23 @@ impl<'a> ContextV1<'a> {
             CaseRefinementV1::new(&local_cases, scenarios.len().get()).map_err(allocation)?,
         );
         let physical_cases = component.map_or(scenarios.len().get(), |_| local_cases.order.len());
+        let field_slots = component.map_or(&[][..], |component| component.field_slots.as_ref());
+        let field_capacity = scenarios
+            .len()
+            .get()
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
+        let mut field_sets = Vec::new();
+        field_sets
+            .try_reserve_exact(field_slots.len())
+            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        for _ in field_slots {
+            field_sets.push(
+                VisibleSetV1::with_capacity(field_capacity)
+                    .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?,
+            );
+        }
         Ok(Self {
             targets,
             constraint_indices: component.map(|component| component.constraints.as_ref()),
@@ -354,6 +607,8 @@ impl<'a> ContextV1<'a> {
             score_extrema: RefCell::new(buffer(count, usize::MAX).map_err(allocation)?),
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
+            field_slots,
+            field_sets: RefCell::new(field_sets),
             opaque,
             point_equivalence: None,
         })
@@ -429,6 +684,7 @@ struct IntentScoreCollectorV1<'a, 'context> {
     extrema: RefMut<'a, Vec<usize>>,
     identity_memberships: RefMut<'a, Vec<Option<(Srgb8, bool)>>>,
     visible_labs: RefMut<'a, Vec<Option<VisibleLabV1>>>,
+    field_sets: RefMut<'a, Vec<VisibleSetV1>>,
 }
 
 #[derive(Clone, Copy)]
@@ -455,6 +711,10 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
         scores.fill(0.0);
         let mut extrema = context.score_extrema.borrow_mut();
         extrema.fill(usize::MAX);
+        let mut field_sets = context.field_sets.borrow_mut();
+        for set in field_sets.iter_mut() {
+            set.clear();
+        }
         Self {
             context,
             values,
@@ -466,6 +726,7 @@ impl<'a, 'context> IntentScoreCollectorV1<'a, 'context> {
             extrema,
             identity_memberships: context.identity_memberships.borrow_mut(),
             visible_labs: context.visible_labs.borrow_mut(),
+            field_sets,
         }
     }
 
@@ -596,6 +857,21 @@ impl ProgramPhysicalCaseObserverV1 for IntentScoreCollectorV1<'_, '_> {
                 self.extrema[index] = case;
             }
             self.scores[index] = self.scores[index].max(score);
+        }
+        let field_sets = &mut *self.field_sets;
+        for (set, &slot) in field_sets.iter_mut().zip(context.field_slots) {
+            let visible = evaluation
+                .occurrence_at(slot)
+                .ok_or(ProgramPhysicalCaseObserverErrorV1::InternalInvariant)?
+                .visible();
+            if set.insert(Srgb8::new(visible), case).is_some() {
+                self.has_violation = true;
+                self.violations = self.violations.saturating_add(1);
+                self.violation_case = context
+                    .case_refinement
+                    .borrow()
+                    .first_case(self.violation_case.into_iter().chain(std::iter::once(case)));
+            }
         }
         Ok(())
     }

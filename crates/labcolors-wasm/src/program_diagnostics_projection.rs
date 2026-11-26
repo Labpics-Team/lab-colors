@@ -37,7 +37,16 @@ pub(super) fn project(value: Option<&ProgramDiagnosticsV1>) -> Result<JsValue, J
     } else {
         JsValue::NULL
     };
-    diagnostics_projection(value.search_visited(), value.search_budget(), &witness)
+    let field_collision = value
+        .field_collision()
+        .map(super::program_report_projection::project_field_collision)
+        .transpose()?;
+    diagnostics_projection(
+        value.search_visited(),
+        value.search_budget(),
+        &witness,
+        field_collision,
+    )
 }
 
 fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {

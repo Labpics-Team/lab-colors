@@ -126,17 +126,19 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
     // The local selector checks those same factors; when its objective still
     // depends on the suffix, we keep the already verified incumbent's source.
     if preferred_probe && !residual.fixed_constraints.is_empty() {
-        let failed = scan_program_candidate_scoped(
+        let residual_field_slots = components::nominal_field_slots(
+            &epoch.constraints,
+            &residual.fixed_constraints,
+            &epoch.evaluator,
+        )
+        .map_err(allocation)?;
+        let failed = super::scan_fixed(
             runtime,
             epoch,
             scenarios,
-            0,
-            ProgramEvaluationPhaseV1::Hard,
-            ProgramCandidateCollectionV1::none(),
-            ProgramCandidateScanV1::Constraints {
-                indices: &residual.fixed_constraints,
-                physical: Some(&component.physical),
-            },
+            &residual.fixed_constraints,
+            Some(&component.physical),
+            &residual_field_slots,
         )?;
         candidate.evidence.visited += 1;
         candidate.evidence.points += 1;

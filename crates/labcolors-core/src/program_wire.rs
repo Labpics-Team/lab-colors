@@ -16,7 +16,7 @@ use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 pub use crate::program_diagnostics::{
     ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramDiagnosticSubjectV1,
-    ProgramDiagnosticV1, ProgramDiagnosticsV1,
+    ProgramDiagnosticV1, ProgramDiagnosticsV1, ProgramFieldCollisionV1,
 };
 
 /// Имя wire-секции в публичной диагностике.
@@ -590,7 +590,7 @@ pub use assessment_report::{
 };
 pub use field::{
     ProgramDeclaredFieldShapeErrorV1, ProgramDeclaredFieldV1, ProgramFieldAssessmentV1,
-    ProgramFieldWitnessV1,
+    ProgramFieldCleanlinessStatusV1, ProgramFieldWitnessV1,
 };
 
 pub struct CompiledProgramV1 {
