@@ -1,0 +1,116 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "pics.lab",
+    "module": "colors-desktop",
+    "version": "0.7.0-7b44fa100850a0a97dff0172acebb09567479702",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.13"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "net.java.dev.jna",
+          "module": "jna",
+          "version": {
+            "requires": "5.19.1"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.jar",
+          "url": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.jar",
+          "size": 4585506,
+          "sha512": "d555c606fb02bd14b0a71da4a42f85b466f457cdcaeb1fefa14ee60bc4936d8a4878fac3dee015c368f956f78aa13351ce0d3a8a3fe19e0ada160ede03a581fe",
+          "sha256": "1c2c830394fb5941b3b06ad271644a117b4d8d244a45c1a425d6bd11f17f35e3",
+          "sha1": "6468541a093974763f79bd6da7d7d5e739879ffb",
+          "md5": "b0fda5f42971f81f845dceae9ed702a4"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "net.java.dev.jna",
+          "module": "jna",
+          "version": {
+            "requires": "5.19.1"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.jar",
+          "url": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.jar",
+          "size": 4585506,
+          "sha512": "d555c606fb02bd14b0a71da4a42f85b466f457cdcaeb1fefa14ee60bc4936d8a4878fac3dee015c368f956f78aa13351ce0d3a8a3fe19e0ada160ede03a581fe",
+          "sha256": "1c2c830394fb5941b3b06ad271644a117b4d8d244a45c1a425d6bd11f17f35e3",
+          "sha1": "6468541a093974763f79bd6da7d7d5e739879ffb",
+          "md5": "b0fda5f42971f81f845dceae9ed702a4"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702-sources.jar",
+          "url": "colors-desktop-0.7.0-7b44fa100850a0a97dff0172acebb09567479702-sources.jar",
+          "size": 4010759,
+          "sha512": "5d8dbbd89b3ae4e51fc0f55705071f17b032a5fbab07ed51b67011cb6a7422f3d32d490038fd6279d77d035ceb5c2222bdbb46d436b14ce463a1c7cd570fab09",
+          "sha256": "404a672e2631d04926714faf3456f3afc34d3706e3d232199f445473f7061f78",
+          "sha1": "cdb01bccd019dc3d8606327c86b696e0d2ecae5b",
+          "md5": "9fa4e388e48a9365af963b1e1c47ae7a"
+        }
+      ]
+    }
+  ]
+}

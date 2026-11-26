@@ -1,0 +1,136 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "pics.lab",
+    "module": "colors-android",
+    "version": "0.7.0-7b44fa100850a0a97dff0172acebb09567479702",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.13"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "net.java.dev.jna",
+          "module": "jna",
+          "version": {
+            "requires": "5.19.1"
+          },
+          "excludes": [
+            {
+              "group": "*",
+              "module": "*"
+            }
+          ],
+          "thirdPartyCompatibility": {
+            "artifactSelector": {
+              "name": "jna",
+              "type": "aar",
+              "extension": "aar"
+            }
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.aar",
+          "url": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.aar",
+          "size": 4023880,
+          "sha512": "dde2572236b7b956aa0cfc87f5567d5bcd2aa257e404a2d3aaa5d61eb66d14b9eb3c24f3eb4ba9797b8a49a031738686ae635d73a41b11a6aca6ff7bebb372c5",
+          "sha256": "f5eb72cc73c334fb8b6e4cf9f8872ac746ff4dbf6139f966f12008cc4e866e8f",
+          "sha1": "921c7dd9969872d8eaa05a22119c9d4c50a43d05",
+          "md5": "0353a320b761ab3d8d2de85778ed9007"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "net.java.dev.jna",
+          "module": "jna",
+          "version": {
+            "requires": "5.19.1"
+          },
+          "excludes": [
+            {
+              "group": "*",
+              "module": "*"
+            }
+          ],
+          "thirdPartyCompatibility": {
+            "artifactSelector": {
+              "name": "jna",
+              "type": "aar",
+              "extension": "aar"
+            }
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.aar",
+          "url": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702.aar",
+          "size": 4023880,
+          "sha512": "dde2572236b7b956aa0cfc87f5567d5bcd2aa257e404a2d3aaa5d61eb66d14b9eb3c24f3eb4ba9797b8a49a031738686ae635d73a41b11a6aca6ff7bebb372c5",
+          "sha256": "f5eb72cc73c334fb8b6e4cf9f8872ac746ff4dbf6139f966f12008cc4e866e8f",
+          "sha1": "921c7dd9969872d8eaa05a22119c9d4c50a43d05",
+          "md5": "0353a320b761ab3d8d2de85778ed9007"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702-sources.jar",
+          "url": "colors-android-0.7.0-7b44fa100850a0a97dff0172acebb09567479702-sources.jar",
+          "size": 42144,
+          "sha512": "b7409fc37a98f916a2d4184bc0d8b479319fb11482d74ec3d410900567ad9818233e82424efd089b2e15bcfef843b2ffff1606ae9a7b154a7dd23d29f4509c93",
+          "sha256": "5d1a8318ab487607c12d10bbbfc5a8f6028d398c8322c246aa74939d4512ce27",
+          "sha1": "bcc7b6a185c5b4e88980f915d5949870df4b0b63",
+          "md5": "15bf3e895018e563b5d72fe8a12e59ba"
+        }
+      ]
+    }
+  ]
+}
