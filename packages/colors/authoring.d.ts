@@ -12,10 +12,12 @@ export type ColorReferenceSelection = Readonly<Omit<ProgramReferenceSelectionV1,
   outputs: readonly string[];
 }>;
 
+type AuthoredUse = Pick<ColorReferenceSelection, "role" | "use" | "outputs">;
+
 /** Core-selected rule for a whole connected component, fixed before search. */
 export type ColorSelectionComponent = Readonly<{
   mode: ProgramSelectionComponentV1["mode"];
-  uses: readonly Readonly<Pick<ColorReferenceSelection, "role" | "use" | "outputs">>[];
+  uses: readonly AuthoredUse[];
 }>;
 
 export interface ColorSystemOptions {
@@ -175,8 +177,8 @@ export type ColorDiagnostic =
       kind: "relation";
       requirement: "tonal-hierarchy";
       evidence: "candidate-witness";
-      stronger: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
-      weaker: Readonly<{ role: string; use: ColorUse; outputs: readonly string[] }>;
+      stronger: AuthoredUse;
+      weaker: AuthoredUse;
       caseIndex: number;
       readonly fieldWitness?: Readonly<ColorFieldWitness & { input: string }>;
       /** CRstrong / CRweak на общем фоне; сравнение выполняется по этим значениям. */
@@ -187,6 +189,16 @@ export type ColorDiagnostic =
       actualGap: number;
       strongerPolarity: "darker" | "equal" | "lighter";
       weakerPolarity: "darker" | "equal" | "lighter";
+    }>
+  | Readonly<{
+      kind: "relation";
+      requirement: "visible-pair-separation";
+      evidence: "candidate-witness";
+      left: AuthoredUse;
+      right: AuthoredUse;
+      range: readonly [number, number];
+      caseIndex: number;
+      readonly fieldWitness?: Readonly<ColorFieldWitness & { input: string }>;
     }>
   | Readonly<{
       kind: "requirement";
@@ -283,7 +295,26 @@ export interface ColorView<Name extends string = string, State extends Displayab
   dispose(): void;
 }
 
+/** Result for one complete, opaque sRGB8 reference bitmap in the same renderer context. */
+export type ColorRasterResult<Name extends string = string> =
+  | Readonly<{ state: "ready"; scope: "renderer-bitmap"; image: ImageData;
+      frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }> } & (
+        | { relation: "preserved" | "restored"; basis: "exact-bitmap-identity" }
+        | { relation: "unavailable"; reason: "incomparable-bitmap" | "no-reference-paints"
+            | "different-bitmap" | "search-limit" | "proposal-limit" | "no-ready-proposal" }
+      )>
+  | Readonly<{ state: "unavailable"; proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
+
+export interface ColorRasterReference<Name extends string = string> {
+  resolve(surfaces: ColorContext): ColorRasterResult<Name>;
+  dispose(): void;
+}
+
 export interface ColorProgram<Name extends string = string> {
+  /** Capture the authored reference using the application's complete opaque bitmap renderer.
+   * Reuse only in the same viewing context. Each returned frame has passed its own V3 graph.
+   */
+  captureRaster(draw: (frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }>) => ImageData): ColorRasterReference<Name>;
   readonly inputs: readonly string[];
   readonly outputs: readonly Name[];
   /** Явные данные контекста; поле возвращает modeled, недоступный результат не выдаёт старые outputs за свежие. */
@@ -299,6 +330,8 @@ export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorAdaptiveRole;
   fixed(id: string, source: AuthoredColor): ColorFixedRole;
+  /** Обе границы расстояния Oklab между конечными цветами включены. Каждое применение имеет свою подложку. */
+  separate(left: ColorUse, right: ColorUse, range: readonly [number, number]): void;
   /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
   preserveTonalHierarchy(members: readonly ColorUse[]): void;
   /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.

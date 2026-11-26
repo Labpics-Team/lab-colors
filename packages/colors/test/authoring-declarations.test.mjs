@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ColorAuthoringError, colors } from "../authoring.js";
 
+test("pair separation takes two distinct local applications and an explicit finite range", () => {
+  const c = colors(), role = c.fixed("слой", "#ffffff");
+  const left = role.on(c.surface("one")), right = role.on(c.surface("two"));
+  const foreign = colors(), other = foreign.role("слой", "#ffffff").on(foreign.surface("other"));
+  assert.doesNotThrow(() => c.separate(left, right, [0, 0]));
+  assert.doesNotThrow(() => c.separate(left, right, [2, 2]));
+  assert.throws(() => c.separate(left, left, [0, 2]), { code: "color_invalid_definition", path: "separate" });
+  for (const member of [role, left.against, { ...left }, other]) {
+    assert.throws(() => c.separate(member, right, [0, 2]), { code: "color_foreign_reference", path: "separate.left" });
+    assert.throws(() => c.separate(left, member, [0, 2]), { code: "color_foreign_reference", path: "separate.right" });
+  }
+  for (const bounds of [undefined, null, [], [0.1], [0.1, 0.2, 0.3], [NaN, 1], [0, Infinity],
+    [-0.1, 1], [0.5, 0.1], [0, 2.1], ["0", 0.5]]) {
+    assert.throws(() => c.separate(left, right, bounds), { code: "color_invalid_definition" });
+  }
+});
+
 test("tonal preservation declares local uses on one authored reference surface", () => {
   const c = colors({ reference: { canvas: "#ffffff", other: "#202020" } });
   const canvas = c.surface("canvas"), other = c.surface("other");

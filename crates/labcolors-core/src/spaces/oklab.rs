@@ -68,15 +68,47 @@ pub(crate) fn srgb_linear_to_lms_root(rgb: [f64; 3]) -> [f64; 3] {
     [lms[0].cbrt(), lms[1].cbrt(), lms[2].cbrt()]
 }
 
+fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
+    use core::cell::Cell;
+
+    // Point colors and interval corners share the exact same three roots.
+    // A bounded, per-thread working set retains only this pure projection.
+    type Slot = Cell<Option<(crate::Srgb8, [f64; 3])>>;
+    // This power of two caps the per-thread cache at 8 KiB with 32-byte slots.
+    const LMS_ROOT_CACHE_SLOTS: usize = 1 << 8;
+    thread_local! {
+        static ROOTS: [Slot; LMS_ROOT_CACHE_SLOTS] = const { [const { Cell::new(None) }; LMS_ROOT_CACHE_SLOTS] };
+    }
+    let [r, g, b] = rgb.bytes();
+    let key = u32::from_be_bytes([0, r, g, b]);
+    // The high bits of a product with xxHash's PRIME32_1 spread RGB keys over
+    // the slots. Only the full RGB equality below can reuse a projection.
+    let index =
+        (key.wrapping_mul(0x9e37_79b1) >> (u32::BITS - LMS_ROOT_CACHE_SLOTS.ilog2())) as usize;
+    ROOTS.with(|slots| {
+        let slot = &slots[index];
+        if let Some((color, roots)) = slot.get() {
+            if color == rgb {
+                return roots;
+            }
+        }
+        let roots = srgb_linear_to_lms_root(crate::spaces::srgb::srgb_linear_from_srgb8(rgb));
+        slot.set(Some((rgb, roots)));
+        roots
+    })
+}
+
+pub(crate) fn srgb8_to_oklab(rgb: crate::Srgb8) -> [f64; 3] {
+    mat_vec_mul(LMS_TO_OKLAB, srgb8_lms_root(rgb))
+}
+
 /// Границы машинного Oklab для RGB8-box. Предпосылка профиля — конечность и
 /// монотонность фактического decode → LMS → cbrt на всех соседних RGB8-рёбрах.
 /// Знаки коэффициентов и порядок операций совпадают с point-проекцией.
 pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3], [f64; 3]) {
     use crate::Srgb8;
-    use crate::spaces::srgb::srgb_linear_from_srgb8;
-
-    let lo = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(lower)));
-    let hi = srgb_linear_to_lms_root(srgb_linear_from_srgb8(Srgb8::new(upper)));
+    let lo = srgb8_lms_root(Srgb8::new(lower));
+    let hi = srgb8_lms_root(Srgb8::new(upper));
     let mut minimum = [0.0; 3];
     let mut maximum = [0.0; 3];
     for (index, row) in LMS_TO_OKLAB.iter().enumerate() {
@@ -201,6 +233,21 @@ pub(crate) fn oklab_hue(rgb: [f64; 3]) -> f64 {
 mod tests {
     use super::*;
     use crate::spaces::srgb::srgb_from_hex;
+
+    #[test]
+    fn repeatedly_projected_and_evicted_bytes_match_the_direct_float_path_to_the_bit() {
+        for index in (0..4096_u32).chain((0..4096_u32).rev()) {
+            let bytes = index.wrapping_mul(0x7f4a_7c15).to_be_bytes();
+            let rgb = crate::Srgb8::new([bytes[1], bytes[2], bytes[3]]);
+            let expected = srgb_linear_to_oklab(crate::spaces::srgb::srgb_linear_from_srgb8(rgb));
+            for _ in 0..2 {
+                assert_eq!(
+                    srgb8_to_oklab(rgb).map(f64::to_bits),
+                    expected.map(f64::to_bits)
+                );
+            }
+        }
+    }
 
     #[test]
     fn gamut_bound_contains_cell_boundaries_and_rgb_axis_crossings() {

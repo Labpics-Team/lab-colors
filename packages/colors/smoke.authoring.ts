@@ -10,6 +10,11 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   const fixed: ColorFixedRole = c.fixed("paper", "#f4eadb");
   const fixedPolicy: ColorFixedUsePolicy = { opacity: 0.8, contrast: "wcag22-ui", separation: [0.02, 2] };
   const fixedUse = fixed.on(canvas, fixedPolicy);
+  c.separate(fixedUse, pane, [0.08, 0.65]);
+  // @ts-expect-error the author supplies both bounds of the distance.
+  c.separate(fixedUse, pane);
+  // @ts-expect-error relations compare applied colors.
+  c.separate(accent, fixedUse, [0, 1]);
   fixedUse.role.on(canvas, { opacity: 0 });
   // @ts-expect-error a fixed source cannot use a tone adaptation curve.
   fixed.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
@@ -43,7 +48,14 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
     // @ts-expect-error only declared aliases exist on a ready headless result.
     frame.values.missing;
   } else {
-    frame.diagnostics;
+    for (const item of frame.diagnostics) {
+      if (item.kind === "relation" && item.requirement === "visible-pair-separation") {
+        const left: ColorUse = item.left.use;
+        const right: readonly string[] = item.right.outputs;
+        const range: readonly [number, number] = item.range;
+        void left; void right; void range;
+      }
+    }
     // @ts-expect-error unavailable results have no current values.
     frame.values;
   }

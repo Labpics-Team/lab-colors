@@ -37,3 +37,18 @@ test("invalid separation bounds or IDs never mutate the admitted byte snapshot",
     new ProgramWireBuilderV3().visibleSeparationHard(1, 2, 0, 0).finish(),
   );
 });
+
+test("invalid pair members and bounds leave the declaration unchanged", () => {
+  const builder = new ProgramWireBuilderV3().source(3, [1, 2, 3]);
+  const before = builder.finish();
+  for (const args of [
+    [-1, 2, 3, 0, 1], [1, 2.5, 3, 0, 1], [1, 2, 2 ** 32, 0, 1], [1, 2, 2, 0, 1],
+    [1, 2, 3, NaN, 1], [1, 2, 3, 0, Infinity], [1, 2, 3, -0.01, 1],
+    [1, 2, 3, 0.5, 0.4], [1, 2, 3, 0, 2.01], [1, 2, 3, "0", 1],
+  ]) {
+    assert.throws(() => builder.visiblePairSeparationHard(...args),
+      (error) => error instanceof ProgramWireError && error.code === PROGRAM_WIRE_INVALID_DECLARATION);
+    assert.deepEqual(builder.finish(), before);
+  }
+  assert.equal(typeof new ProgramWireBuilderV1().visiblePairSeparationHard, "undefined");
+});

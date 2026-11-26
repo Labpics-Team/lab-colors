@@ -1,11 +1,11 @@
 import init, { compileProgramWire } from "./index.js";
 import { authoringError } from "./authoring.js";
 import { lowerColorSystem } from "./authoring-graph.js";
-import { copyColorFrame, parseColorContext, updateColorField } from "./authoring-frame.js";
+import { parseColorContext, resolveColorContext } from "./authoring-frame.js";
 import { attachColorView } from "./authoring-view.js";
+import { captureRasterReference } from "./authoring-raster.js";
 
 const programs = new WeakMap();
-const scenario = new Uint32Array([1]);
 
 export function colorProgramSource(program) {
   const source = programs.get(program);
@@ -40,20 +40,25 @@ export async function compileColorSystem(entries, options) {
       ensureLive();
       if (busy) authoringError("program.resolve", "program is already updating", "color_busy");
       busy = true;
-      let snapshot;
       try {
         const context = parseColorContext(graph, values);
         headless ??= source.createRuntime();
-        revision += 1n;
-        snapshot = context.unknown.length > 0
-          ? headless.updateUnknown(revision, 1)
-          : context.field === undefined
-            ? headless.updateObserved(revision, scenario, context.rgb, graph.inputs.length)
-            : updateColorField(headless, revision, context);
-        return copyColorFrame(snapshot, graph, context);
+        return resolveColorContext(headless, graph, context, ++revision);
       } finally {
-        snapshot?.free();
         busy = false;
+      }
+    },
+    captureRaster(draw) {
+      ensureLive();
+      const ordinary = source.createRuntime();
+      try {
+        return captureRasterReference(draw, options.reference, graph, ordinary, (proposal) => {
+          const constrained = lowerColorSystem(entries, options, proposal);
+          return { graph: constrained, runtime: compileProgramWire(constrained.wire, 1) };
+        });
+      } catch (error) {
+        ordinary.free();
+        throw error;
       }
     },
     attach(element, values, options) {

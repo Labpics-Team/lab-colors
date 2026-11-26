@@ -124,6 +124,17 @@ pub(crate) trait SessionPlanV1: private::PlanSealed {
         permit: SessionObservationBindingPermitV1,
     ) -> SessionEvaluationResultV1<Self>;
 
+    /// Starts one prospective update. Plan-local reuse evidence accumulated by
+    /// this call remains pending until the transition commits.
+    fn begin_update(&mut self) {}
+
+    /// Publishes plan-local evidence only after the prospective transition has
+    /// become the Session lifecycle state.
+    fn commit_update(&mut self) {}
+
+    /// Discards plan-local evidence from a failed or dropped transition.
+    fn abort_update(&mut self) {}
+
     /// Возвращает хранилище retired evidence в точный план этой Session.
     /// План без reusable evidence storage сохраняет обычный owning drop.
     fn retire_verified(&mut self, evidence: Self::Verified) {
@@ -347,6 +358,7 @@ impl<Plan: SessionPlanV1> Drop for PendingSessionTransitionGuard<'_, Plan> {
     fn drop(&mut self) {
         if let Some(pending) = self.pending.take() {
             retire_pending_transition(self.plan, pending);
+            self.plan.abort_update();
         }
         drop(self.owner.take());
     }
@@ -416,6 +428,7 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
         // slot до commit, поэтому повторно проверить или заполнить его нельзя.
         let (pending, owner) = guard.take_parts();
         let (view, retirement) = publish_session_transition(raw_head, state, pending, owner);
+        guard.plan.commit_update();
         retirement.retire_into(guard.plan);
         drop(guard);
         view
@@ -438,6 +451,7 @@ impl<'session, Plan: SessionPlanV1> PreparedSessionTransition<'session, Plan> {
         // Та же эксклюзивная vacant-slot гарантия, что и у обычного commit.
         let (pending, owner) = guard.take_parts();
         let (view, retirement) = publish_session_transition(raw_head, state, pending, owner);
+        guard.plan.commit_update();
         *deferred_retirement = Some(retirement);
         drop(guard);
         view
@@ -723,6 +737,7 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
     owner: Plan::OwnerLease,
     prepared: PreparedObservationUpdateV1<'session, SessionObservationHeadV1>,
 ) -> SessionPrepareResult<'session, Plan> {
+    plan.begin_update();
     let (raw_head, pending) = match prepared {
         PreparedObservationUpdateV1::Idempotent(prepared) => {
             (prepared.into_owner(), PendingSessionTransition::Idempotent)
@@ -738,11 +753,19 @@ fn prepare_session_transition<'session, Plan: SessionPlanV1>(
             let (raw_head, observation) = prepared.into_parts();
             let raw_observation = observation.clone();
             let permit = SessionObservationBindingPermitV1::mint(&observation);
-            let decision = plan
-                .evaluate(&owner, observation, state.last_verified(), permit)
-                .map_err(SessionUpdateError::Plan)?;
+            let decision = match plan.evaluate(&owner, observation, state.last_verified(), permit) {
+                Ok(decision) => decision,
+                Err(error) => {
+                    plan.abort_update();
+                    return Err(SessionUpdateError::Plan(error));
+                }
+            };
+            if !matches!(&decision, SessionDecision::Verified(_)) {
+                plan.abort_update();
+            }
             if !decision.observation().is_same_binding_as(&raw_observation) {
                 retire_session_decision(plan, decision);
+                plan.abort_update();
                 return Err(SessionUpdateError::EvidenceBindingInvariant);
             }
             (

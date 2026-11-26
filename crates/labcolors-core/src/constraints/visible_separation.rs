@@ -34,6 +34,10 @@ impl VisibleSeparationBoundsV1 {
         })
     }
 
+    fn contains(self, [lower, upper]: [f64; 2]) -> bool {
+        lower >= self.minimum() && upper <= self.maximum()
+    }
+
     pub(crate) const fn minimum(self) -> f64 {
         f64::from_bits(self.minimum_bits)
     }
@@ -56,7 +60,35 @@ pub struct ProgramVisibleSeparationMeasurementV1 {
 }
 
 impl ProgramVisibleSeparationMeasurementV1 {
-    /// Финальный encoded результат composition.
+    pub(crate) fn satisfied(self) -> bool {
+        self.bounds.contains(self.distance_bounds())
+    }
+
+    /// Два конечных цвета с независимыми допусками растеризации.
+    pub(crate) fn between(
+        left: Srgb8,
+        right: Srgb8,
+        radii: [u8; 2],
+        bounds: VisibleSeparationBoundsV1,
+    ) -> Self {
+        let mut measurement = measure(left, right, bounds);
+        if radii != [0, 0] {
+            let range = crate::spaces::oklab::srgb8_boxes_distance_bounds(
+                crate::emission::rgb_bounds(left.bytes(), radii[0]),
+                crate::emission::rgb_bounds(right.bytes(), radii[1]),
+            );
+            measurement.distance_bounds_bits = range.map(f64::to_bits);
+        }
+        measurement
+    }
+
+    /// Конечные encoded цвета в порядке объявления сравнения.
+    #[must_use]
+    pub const fn colors(self) -> [Srgb8; 2] {
+        [self.visible, self.backdrop]
+    }
+
+    /// Финальный encoded результат при сравнении с подложкой.
     #[must_use]
     pub const fn visible(self) -> Srgb8 {
         self.visible
@@ -118,9 +150,9 @@ fn measure(
     backdrop: Srgb8,
     bounds: VisibleSeparationBoundsV1,
 ) -> ProgramVisibleSeparationMeasurementV1 {
-    use crate::spaces::{oklab::srgb_linear_to_oklab, srgb::srgb_linear_from_srgb8};
-    let left = srgb_linear_to_oklab(srgb_linear_from_srgb8(visible));
-    let right = srgb_linear_to_oklab(srgb_linear_from_srgb8(backdrop));
+    use crate::spaces::oklab::srgb8_to_oklab;
+    let left = srgb8_to_oklab(visible);
+    let right = srgb8_to_oklab(backdrop);
     let delta: [f64; 3] = std::array::from_fn(|index| left[index] - right[index]);
     let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
     ProgramVisibleSeparationMeasurementV1 {
@@ -156,20 +188,19 @@ impl Evaluator<ProgramPointTargetV1> for VisibleSeparationV1 {
         invocation: &Self::Invocation,
     ) -> Result<Self::Measurement, Self::Error> {
         let encoded = target.encoded();
-        let mut measurement = measure(
+        let emission = target.emission();
+        let mut measurement = ProgramVisibleSeparationMeasurementV1::between(
             Srgb8::new(encoded.visible()),
             Srgb8::new(encoded.backdrop()),
+            if emission.same_as_backdrop {
+                [0; 2]
+            } else {
+                [emission.visible_radius, emission.backdrop_radius]
+            },
             *invocation,
         );
-        if target.emission().same_as_backdrop {
+        if emission.same_as_backdrop {
             measurement.distance_bounds_bits = [0.0_f64.to_bits(); 2];
-        } else if !target.emission().exact() {
-            let emission = target.emission();
-            let range = crate::spaces::oklab::srgb8_boxes_distance_bounds(
-                crate::emission::rgb_bounds(encoded.visible(), emission.visible_radius),
-                crate::emission::rgb_bounds(encoded.backdrop(), emission.backdrop_radius),
-            );
-            measurement.distance_bounds_bits = range.map(f64::to_bits);
         }
         Ok(measurement)
     }
@@ -201,8 +232,7 @@ impl HardClassifier<VisibleSeparationBoundsV1, ProgramVisibleSeparationMeasureme
         measurement: &ProgramVisibleSeparationMeasurementV1,
     ) -> HardDecision<Self::Pass, Self::Violation> {
         // Both authored bounds must hold over the material's emission range.
-        let [lower, upper] = measurement.distance_bounds();
-        if lower >= invocation.minimum() && upper <= invocation.maximum() {
+        if invocation.contains(measurement.distance_bounds()) {
             HardDecision::Pass(VisibleSeparationPassV1)
         } else {
             HardDecision::Violation(VisibleSeparationViolationV1)

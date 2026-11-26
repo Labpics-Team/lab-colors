@@ -276,11 +276,18 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
     internal fun pointOccurrenceV3(id: UInt, paint: UInt, surface: UInt) = v3Entry(8) {
         it.u32(id); it.u32(paint); it.u32(surface); it.f64(0.0); it.f64(0.0); it.u8(0)
     }
-    internal fun visibleSeparationV3(id: UInt, occurrence: UInt, minimum: Double, maximum: Double) = v3Entry(11) {
+    private fun writeSeparationBounds(out: WireBytes, minimum: Double, maximum: Double) {
         val lower = bounded(minimum, 2.0, "visible separation minimum")
         val upper = bounded(maximum, 2.0, "visible separation maximum")
         if (lower > upper) throw ProgramWireException.InvalidDeclaration("visible separation bounds must be increasing")
-        it.u32(id); it.u8(11); it.u32(occurrence); it.f64(lower); it.f64(upper)
+        out.f64(lower); out.f64(upper)
+    }
+    internal fun visibleSeparationV3(id: UInt, occurrence: UInt, minimum: Double, maximum: Double) = v3Entry(11) {
+        it.u32(id); it.u8(11); it.u32(occurrence); writeSeparationBounds(it, minimum, maximum)
+    }
+    internal fun visiblePairSeparationV3(id: UInt, left: UInt, right: UInt, minimum: Double, maximum: Double) = v3Entry(11) {
+        if (left == right) throw ProgramWireException.InvalidDeclaration("pair occurrences must be distinct")
+        it.u32(id); it.u8(14); it.u32(left); it.u32(right); writeSeparationBounds(it, minimum, maximum)
     }
     internal fun computedTargetV3(id: UInt, domain: ProgramWireDomainV3, anchor: ByteArray, maxDelta: Double) = v3Entry(1) {
         it.u32(id); it.u8(3)
@@ -378,6 +385,10 @@ class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
     }
     fun visibleSeparationHard(id: UInt, occurrence: UInt, minimum: Double, maximum: Double): ProgramWireBuilderV3 {
         visibleSeparationV3(id, occurrence, minimum, maximum)
+        return this
+    }
+    fun visiblePairSeparationHard(id: UInt, left: UInt, right: UInt, minimum: Double, maximum: Double): ProgramWireBuilderV3 {
+        visiblePairSeparationV3(id, left, right, minimum, maximum)
         return this
     }
     fun computedTarget(id: UInt, domain: ProgramWireDomainV3, anchor: ByteArray, maxDelta: Double): ProgramWireBuilderV3 {

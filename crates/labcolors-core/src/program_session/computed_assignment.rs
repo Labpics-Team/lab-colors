@@ -949,7 +949,7 @@ pub(super) fn compile_selection(
 }
 
 fn lab(rgb: Srgb8) -> [f64; 3] {
-    crate::spaces::oklab::srgb_linear_to_oklab(crate::spaces::srgb::srgb_linear_from_srgb8(rgb))
+    crate::spaces::oklab::srgb8_to_oklab(rgb)
 }
 
 fn squared_distance(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -1040,6 +1040,7 @@ enum RegionConstraintV1 {
     },
     Separation {
         slot: CompiledOccurrenceSlotV1,
+        other: Option<CompiledOccurrenceSlotV1>,
         bounds: crate::constraints::VisibleSeparationBoundsV1,
     },
 }
@@ -1067,7 +1068,12 @@ impl RegionConstraintV1 {
         };
         Some(RegionPointV1 {
             visible: point.visible(),
-            backdrop: point.certificate().backdrop_rgb(),
+            backdrop: match self {
+                Self::Separation {
+                    other: Some(peer), ..
+                } => evaluation.occurrence_at(peer)?.visible(),
+                _ => point.certificate().backdrop_rgb(),
+            },
             weaker,
         })
     }
@@ -1150,7 +1156,11 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                 CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
                     occurrences, ..
                 } => occurrences.len().checked_sub(1).ok_or(())?,
-                CompiledProgramConstraintBodyV1::VisibleUnary { .. } => 1,
+                CompiledProgramConstraintBodyV1::VisibleUnary { .. }
+                | CompiledProgramConstraintBodyV1::VisibleRelation {
+                    invocation: CompiledCoreRelationInvocationV1::PairSeparation(_),
+                    ..
+                } => 1,
                 _ => 0,
             }
         };
@@ -1162,6 +1172,21 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
         let constraint = &epoch.constraints[index];
         if !ProgramEvaluationPhaseV1::Hard.includes(constraint.mode) {
             continue;
+        }
+        if let CompiledProgramConstraintBodyV1::VisibleRelation {
+            reference,
+            candidates,
+            invocation: CompiledCoreRelationInvocationV1::PairSeparation(bounds),
+        } = &constraint.body
+        {
+            let [peer] = candidates.as_ref() else {
+                return Err(());
+            };
+            result.push(RegionConstraintV1::Separation {
+                slot: reference.slot,
+                other: Some(peer.slot),
+                bounds: *bounds,
+            });
         }
         if let CompiledProgramConstraintBodyV1::ComputedVisibleRelation {
             occurrences,
@@ -1193,7 +1218,11 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                 release: crate::clean_set::EXACT_NOMINAL_SRGB8_CLEAN_SET_RELEASE_SHA256_V2,
             } => result.push(RegionConstraintV1::NominalSrgb8Visible { slot }),
             ProgramConstraintContentV1::VisibleSeparation { bounds, .. } => {
-                result.push(RegionConstraintV1::Separation { slot, bounds })
+                result.push(RegionConstraintV1::Separation {
+                    slot,
+                    other: None,
+                    bounds,
+                })
             }
             _ => {}
         }
@@ -1749,6 +1778,7 @@ where
             scenarios,
             arena.storage_mut(),
             reusable,
+            &mut plan.reuse_history,
             &mut plan.reference_completion,
             &observation,
         )?;
@@ -1857,7 +1887,7 @@ where
 
 mod components;
 mod contextual;
-pub(super) use components::{compile_components, partition_components};
+pub(super) use components::{ComponentReuseHistoryV1, compile_components, partition_components};
 pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
 #[cfg(test)]
 pub(super) use contextual::reference_completion::tests::incoming_test_hook as reference_completion_incoming_test_hook;

@@ -478,3 +478,108 @@ fn repeated_context_restores_discarded_bindings_and_cannot_skip_final_recheck() 
     );
     Ok(())
 }
+
+#[test]
+fn returning_to_a_previous_field_reuses_its_component_and_keeps_the_result() -> Result<(), String> {
+    let evaluator = crate::constraints::CountingProgramWcag22Srgb8V1::default();
+    let owner = compile_assignment(
+        program(
+            target(10, 150, 0, 255, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            evaluator.clone(),
+        ),
+        300,
+    )
+    .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("first field: {error:?}"))?
+        .commit();
+    let first = session
+        .state()
+        .current_verified()
+        .ok_or("first field must be verified")?
+        .computed_for_test();
+    let first_values = first.values.clone();
+    let first_search = first.search;
+    let calls_after_first = evaluator.calls().len();
+
+    session
+        .prepare_update(update(2, 0))
+        .map_err(|error| format!("second field: {error:?}"))?
+        .commit();
+    let second_values = session
+        .state()
+        .current_verified()
+        .ok_or("second field must be verified")?
+        .computed_for_test()
+        .values
+        .clone();
+    assert_ne!(second_values, first_values);
+    let calls_after_second = evaluator.calls().len();
+    assert!(
+        calls_after_second > calls_after_first + 1,
+        "a changed field must perform a component search"
+    );
+
+    session
+        .prepare_update(update(3, 255))
+        .map_err(|error| format!("returned field: {error:?}"))?
+        .commit();
+    let returned = session
+        .state()
+        .current_verified()
+        .ok_or("returned field must be verified")?
+        .computed_for_test();
+    assert_eq!(returned.values, first_values);
+    assert_eq!(returned.search, first_search);
+    assert_eq!(
+        evaluator.calls().len(),
+        calls_after_second + 1,
+        "returning to the exact physical support only performs final certification"
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_final_recheck_does_not_publish_pending_history() -> Result<(), String> {
+    let evaluator = crate::constraints::CountingProgramWcag22Srgb8V1::default();
+    let owner = compile_assignment(
+        program(
+            target(10, 150, 0, 255, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            evaluator.clone(),
+        ),
+        300,
+    )
+    .map_err(|error| format!("compile: {error:?}"))?;
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .map_err(|error| format!("instantiate: {error:?}"))?;
+    session
+        .prepare_update(update(1, 255))
+        .map_err(|error| format!("initial field: {error:?}"))?
+        .commit();
+
+    CORRUPT_FINAL_SOURCE.with(|value| value.set(Some(Srgb8::new([255; 3]))));
+    assert!(matches!(
+        session.prepare_update(update(2, 150)),
+        Err(SessionUpdateError::Plan(
+            ProgramSessionEvaluationError::FinalRecheckViolation { .. }
+        ))
+    ));
+    let calls_after_failure = evaluator.calls().len();
+
+    session
+        .prepare_update(update(2, 150))
+        .map_err(|error| format!("retry: {error:?}"))?
+        .commit();
+    assert!(
+        evaluator.calls().len() > calls_after_failure + 1,
+        "a failed final recheck must not publish its pending component"
+    );
+    Ok(())
+}

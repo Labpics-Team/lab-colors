@@ -84,6 +84,8 @@ use crate::session::{
 use crate::wcag22::Wcag22CriterionV1;
 
 pub(crate) mod computed_assignment;
+mod search_probe;
+use search_probe::{SearchCell, SearchProbe};
 mod reference;
 
 #[path = "program_identity.rs"]
@@ -718,6 +720,21 @@ impl<Invocation> ConstraintInvocation<Invocation, HardModeV1> {
         }
     }
 
+    pub(crate) const fn pair_separation(
+        id: ConstraintId,
+        relation: DirectedRelationV1<OccurrenceId>,
+        bounds: VisibleSeparationBoundsV1,
+    ) -> Self {
+        Self {
+            id,
+            body: ProgramConstraintBodyV1::VisibleRelation {
+                relation,
+                invocation: CoreRelationInvocationV1::PairSeparation(bounds),
+            },
+            mode: PhantomData,
+        }
+    }
+
     pub(crate) const fn exact_visible_distinction_hard(
         id: ConstraintId,
         relation: DirectedRelationV1<OccurrenceId>,
@@ -880,6 +897,12 @@ pub(crate) trait ProgramConstraintEvaluatorSetV1: Sized {
         invocation: Self::Invocation,
     ) -> ProgramConstraintAssessmentResultV1<Self>;
 
+    /// An admitted numeric invocation depends only on its encoded point target.
+    /// Other evaluator implementations must execute on every visit.
+    fn reusable_point_verdict(_invocation: Self::Invocation) -> bool {
+        false
+    }
+
     fn pass_binding(evidence: &Self::PassEvidence) -> ProgramVisiblePointBindingV1;
 
     fn violation_binding(evidence: &Self::ViolationEvidence) -> ProgramVisiblePointBindingV1;
@@ -1032,6 +1055,11 @@ macro_rules! define_core_program_evaluators_v1 {
                 match evidence {
                     $(CoreProgramViolationEvidenceV1::$variant(evidence) => *evidence.binding()),+
                 }
+            }
+
+            fn reusable_point_verdict(invocation: Self::Invocation) -> bool {
+                matches!(invocation, CoreProgramConstraintInvocationV1::Wcag22Srgb8(_)
+                    | CoreProgramConstraintInvocationV1::VisibleSeparation(_))
             }
 
             fn copy_pass_evidence(evidence: &Self::PassEvidence) -> Option<Self::PassEvidence> {
@@ -2657,6 +2685,15 @@ where
                 });
             }
         };
+        let reuse_history = match computed_assignment::ComponentReuseHistoryV1::new() {
+            Ok(history) => history,
+            Err(()) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause: ProgramSessionInstantiateError::ResourceExhausted,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
@@ -2665,6 +2702,7 @@ where
                 workspace,
                 presentation_cache,
                 evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                reuse_history,
                 reference_completion: computed_assignment::ReferenceCompletionScratchV1::empty(
                     &self.owner_generation,
                 ),
@@ -4230,6 +4268,7 @@ where
     Evaluation: ProgramConstraintEvaluatorSetV1,
 {
     None,
+    Search(&'buffers mut SearchProbe),
     Report {
         cells: &'buffers mut Vec<ProgramConstraintCellV1<Evaluation>>,
         relation_members: &'buffers mut Vec<ProgramRelationMemberEvidenceV1>,
@@ -4256,7 +4295,8 @@ impl<'capture> ProgramRelationEvidenceAccumulatorV1<'capture> {
     {
         let expected = NonZeroUsize::new(candidate_count).ok_or(())?;
         let relation_members = match capture {
-            ProgramConstraintEvidenceCaptureV1::None => None,
+            ProgramConstraintEvidenceCaptureV1::None
+            | ProgramConstraintEvidenceCaptureV1::Search(_) => None,
             ProgramConstraintEvidenceCaptureV1::Report {
                 relation_members, ..
             } => {
@@ -4452,6 +4492,9 @@ where
     workspace: AppearanceWorkspace,
     presentation_cache: ProgramPresentationCacheV1,
     evaluation_arenas: ProgramEvaluationArenaPoolV1<Evaluation>,
+    // Bounded exact-support history for committed field changes. It owns no
+    // observation or epoch lease and only seeds the full final recheck.
+    reuse_history: computed_assignment::ComponentReuseHistoryV1,
     // Initialized only by the private incoming continuous operation.
     // This scratch retains no epoch lease and does not affect ordinary search.
     reference_completion: computed_assignment::ReferenceCompletionScratchV1<Evaluation>,
@@ -4541,6 +4584,18 @@ where
         }
     }
 
+    fn begin_update(&mut self) {
+        self.reuse_history.begin_update();
+    }
+
+    fn commit_update(&mut self) {
+        self.reuse_history.commit_update();
+    }
+
+    fn abort_update(&mut self) {
+        self.reuse_history.abort_update();
+    }
+
     fn retire_verified(&mut self, evidence: Self::Verified) {
         self.evaluation_arenas.restore(evidence.into_arena());
     }
@@ -4574,6 +4629,7 @@ where
         workspace,
         presentation_cache,
         evaluation_arenas,
+        reuse_history: _,
         reference_completion: _,
         family_artifacts,
     } = plan;
@@ -5017,11 +5073,14 @@ fn canonicalize_program_report_cells<Evaluation>(
     });
 }
 
-fn resolve_visible_relation_endpoint(
-    evaluation: &AppearanceEvaluationView<'_, '_>,
+fn resolve_visible_relation_endpoint<'view>(
+    evaluation: &'view AppearanceEvaluationView<'_, '_>,
     contexts: &[CompiledOccurrenceContextV1],
     endpoint: CompiledVisibleRelationEndpointV1,
-) -> Option<(Srgb8, ProgramVisibleRelationBindingV1)> {
+) -> Option<(
+    &'view crate::appearance::ResolvedOccurrence,
+    ProgramVisibleRelationBindingV1,
+)> {
     let source = evaluation.occurrence_at(endpoint.slot)?;
     let context = contexts.get(endpoint.occurrence_context_index)?;
     if !coordinate_pair_matches(
@@ -5034,7 +5093,7 @@ fn resolve_visible_relation_endpoint(
     }
     let point = ProgramPointOccurrenceV1::from_resolved(source, context.context);
     Some((
-        Srgb8::new(source.visible()),
+        source,
         ProgramVisibleRelationBindingV1 {
             occurrence: endpoint.occurrence,
             physical: point.binding(),
@@ -5207,6 +5266,12 @@ where
     let mut workspace = Some(&mut *runtime.workspace);
     let mut prepared_paints = None;
     let scan_count = case_indices.map_or(case_count, <[usize]>::len);
+    let constraint_count = constraint_indices.map_or(epoch.constraints.len(), <[usize]>::len);
+    if let ProgramConstraintEvidenceCaptureV1::Search(probe) = &mut evidence {
+        probe
+            .begin(scan_count, constraint_count)
+            .map_err(|()| ProgramSessionEvaluationError::ResourceExhausted)?;
+    }
     for ordinal in 0..scan_count {
         let case_index = case_indices.map_or(ordinal, |cases| cases[ordinal]);
         let values = scenario_set
@@ -5355,7 +5420,6 @@ where
             }
         }
 
-        let constraint_count = constraint_indices.map_or(epoch.constraints.len(), <[usize]>::len);
         for ordinal in 0..constraint_count {
             let index = constraint_indices.map_or(ordinal, |indices| indices[ordinal]);
             let constraint = &epoch.constraints[index];
@@ -5385,9 +5449,9 @@ where
                         return Err(ProgramSessionEvaluationError::InternalInvariant);
                     }
                     let point = ProgramPointOccurrenceV1::from_resolved(source, binding.context);
-                    let decision = Evaluation::assess(&epoch.evaluator, point, *invocation)
-                        .map_err(|error| match error {
-                            ProgramPointAssessmentErrorV1::Evaluator(source) => {
+                    let assess = || {
+                        Evaluation::assess(&epoch.evaluator, point, *invocation).map_err(
+                            |ProgramPointAssessmentErrorV1::Evaluator(source)| {
                                 ProgramSessionEvaluationError::Evaluator {
                                     case_index,
                                     constraint: constraint.id,
@@ -5395,50 +5459,62 @@ where
                                     context: binding.context,
                                     source,
                                 }
-                            }
-                        })?;
-                    let (result, is_violation) = match decision {
-                        HardDecision::Pass(evidence) => {
-                            debug_assert_eq!(
-                                Evaluation::pass_binding(&evidence).physical(),
-                                source.visible_point_binding(),
-                            );
-                            debug_assert_eq!(
-                                Evaluation::pass_binding(&evidence).context(),
-                                binding.context,
-                            );
-                            (
-                                ProgramConstraintResultV1::Pass(
-                                    ProgramConstraintPassEvidenceV1::VisibleUnary(evidence),
-                                ),
-                                false,
-                            )
-                        }
-                        HardDecision::Violation(evidence) => {
-                            debug_assert_eq!(
-                                Evaluation::violation_binding(&evidence).physical(),
-                                source.visible_point_binding(),
-                            );
-                            debug_assert_eq!(
-                                Evaluation::violation_binding(&evidence).context(),
-                                binding.context,
-                            );
-                            (
-                                ProgramConstraintResultV1::Violation(
-                                    ProgramConstraintViolationEvidenceV1::VisibleUnary(evidence),
-                                ),
-                                true,
-                            )
-                        }
+                            },
+                        )
                     };
-                    (
-                        ProgramConstraintSubjectV1::VisibleUnary {
-                            occurrence: *occurrence,
-                            context: binding.context,
-                        },
-                        Some(result),
-                        is_violation,
-                    )
+                    let subject = ProgramConstraintSubjectV1::VisibleUnary {
+                        occurrence: *occurrence,
+                        context: binding.context,
+                    };
+                    if let ProgramConstraintEvidenceCaptureV1::Search(probe) = &mut evidence {
+                        let verdict = || {
+                            assess().map(|decision| matches!(decision, HardDecision::Violation(_)))
+                        };
+                        let violation = if Evaluation::reusable_point_verdict(*invocation) {
+                            probe.point_verdict(index, point.target(), verdict)?
+                        } else {
+                            verdict()?
+                        };
+                        (subject, None, violation)
+                    } else {
+                        let (result, is_violation) = match assess()? {
+                            HardDecision::Pass(evidence) => {
+                                debug_assert_eq!(
+                                    Evaluation::pass_binding(&evidence).physical(),
+                                    source.visible_point_binding(),
+                                );
+                                debug_assert_eq!(
+                                    Evaluation::pass_binding(&evidence).context(),
+                                    binding.context,
+                                );
+                                (
+                                    ProgramConstraintResultV1::Pass(
+                                        ProgramConstraintPassEvidenceV1::VisibleUnary(evidence),
+                                    ),
+                                    false,
+                                )
+                            }
+                            HardDecision::Violation(evidence) => {
+                                debug_assert_eq!(
+                                    Evaluation::violation_binding(&evidence).physical(),
+                                    source.visible_point_binding(),
+                                );
+                                debug_assert_eq!(
+                                    Evaluation::violation_binding(&evidence).context(),
+                                    binding.context,
+                                );
+                                (
+                                    ProgramConstraintResultV1::Violation(
+                                        ProgramConstraintViolationEvidenceV1::VisibleUnary(
+                                            evidence,
+                                        ),
+                                    ),
+                                    true,
+                                )
+                            }
+                        };
+                        (subject, Some(result), is_violation)
+                    }
                 }
                 CompiledProgramConstraintBodyV1::IntrinsicUnary {
                     target_id,
@@ -5519,6 +5595,7 @@ where
                             .assess(
                                 reference_value.source(),
                                 candidate_value.source(),
+                                [0; 2],
                                 runtime.family_artifacts,
                             )
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -5558,14 +5635,14 @@ where
                         candidates.len(),
                     )
                     .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?;
-                    let (reference_visible, reference_binding) = resolve_visible_relation_endpoint(
+                    let (reference_pixel, reference_binding) = resolve_visible_relation_endpoint(
                         &evaluation,
                         &epoch.occurrence_contexts,
                         *reference,
                     )
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     for candidate in candidates.iter().copied() {
-                        let (candidate_visible, candidate_binding) =
+                        let (candidate_pixel, candidate_binding) =
                             resolve_visible_relation_endpoint(
                                 &evaluation,
                                 &epoch.occurrence_contexts,
@@ -5574,8 +5651,9 @@ where
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                         let (measurement, decision) = invocation
                             .assess(
-                                reference_visible,
-                                candidate_visible,
+                                Srgb8::new(reference_pixel.visible()),
+                                Srgb8::new(candidate_pixel.visible()),
+                                reference_pixel.distance_radii(candidate_pixel),
                                 runtime.family_artifacts,
                             )
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -5628,13 +5706,12 @@ where
                             pair[1],
                         )
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-                        let backdrop = evaluation
-                            .occurrence_at(pair[0].slot)
-                            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
-                            .certificate()
-                            .backdrop_rgb();
-                        let measurement =
-                            hierarchy.measure_pair(index, stronger, weaker, Srgb8::new(backdrop));
+                        let measurement = hierarchy.measure_pair(
+                            index,
+                            Srgb8::new(stronger.visible()),
+                            Srgb8::new(weaker.visible()),
+                            Srgb8::new(stronger.certificate().backdrop_rgb()),
+                        );
                         let decision = if measurement.satisfied() {
                             ProgramRelationMemberDecisionV1::Pass(
                                 CoreRelationPassV1::TonalHierarchy,
@@ -5735,6 +5812,12 @@ where
             };
             if constraint.mode.rejects_candidate() && is_violation {
                 has_hard_violation = true;
+            }
+            if let ProgramConstraintEvidenceCaptureV1::Search(probe) = &mut evidence {
+                probe.cells.push(SearchCell {
+                    case: case_index,
+                    violation: is_violation,
+                });
             }
             if let ProgramConstraintEvidenceCaptureV1::Report { cells, .. } = &mut evidence {
                 let result = result.ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
@@ -6066,6 +6149,9 @@ where
 {
     Ok(match invocation {
         CoreRelationInvocationV1::ExactSrgb8 => CompiledCoreRelationInvocationV1::ExactSrgb8,
+        CoreRelationInvocationV1::PairSeparation(bounds) => {
+            CompiledCoreRelationInvocationV1::PairSeparation(bounds)
+        }
         CoreRelationInvocationV1::ExactSrgb8Distinction => {
             CompiledCoreRelationInvocationV1::ExactSrgb8Distinction
         }
@@ -7239,26 +7325,33 @@ where
                         },
                     )?);
                 }
-                dependency_scratch.scan(dependency_index, [reference_id])?;
-                if let Some(target) = dependency_scratch
-                    .queue
-                    .iter()
-                    .filter_map(|node| match *node {
-                        IndexedDependencyNodeV1::Target(index) => {
-                            let target = &program.targets[index];
-                            target.intent.is_solver_dependent().then_some(target.id)
-                        }
-                        _ => None,
-                    })
-                    .min()
-                {
-                    return Err(
-                        ProgramCompileError::SolverDependentVisibleRelationReference {
-                            constraint: constraint.id,
-                            reference: reference_id,
-                            target,
-                        },
-                    );
+                // Directed legacy relations bind an immutable reference. Geometric
+                // separation compares two outputs of the same proposed assignment.
+                if !matches!(
+                    invocation,
+                    CompiledCoreRelationInvocationV1::PairSeparation(_)
+                ) {
+                    dependency_scratch.scan(dependency_index, [reference_id])?;
+                    if let Some(target) = dependency_scratch
+                        .queue
+                        .iter()
+                        .filter_map(|node| match *node {
+                            IndexedDependencyNodeV1::Target(index) => {
+                                let target = &program.targets[index];
+                                target.intent.is_solver_dependent().then_some(target.id)
+                            }
+                            _ => None,
+                        })
+                        .min()
+                    {
+                        return Err(
+                            ProgramCompileError::SolverDependentVisibleRelationReference {
+                                constraint: constraint.id,
+                                reference: reference_id,
+                                target,
+                            },
+                        );
+                    }
                 }
                 CompiledProgramConstraintBodyV1::VisibleRelation {
                     reference,

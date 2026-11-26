@@ -2,6 +2,8 @@
 //! Общий неизменяемый фон не создаёт связь между вычисляемыми цветами.
 
 use super::*;
+use crate::program_wire::ProgramReferenceSelectionV1;
+use std::collections::VecDeque;
 
 mod point_equivalence;
 
@@ -956,6 +958,121 @@ pub(super) struct VerifiedComponentV1 {
     reports: std::ops::Range<usize>,
 }
 
+// Historical selection evidence is only a seed for the mandatory final
+// physical recheck. The exact local input vector, not a revision or a digest,
+// decides whether a component's solved tuple still describes this problem.
+const COMPONENT_REUSE_HISTORY_CAPACITY: usize = 16;
+
+pub(in crate::program_session) struct ComponentReuseHistoryV1 {
+    committed: VecDeque<ComponentReuseEntryV1>,
+    pending: VecDeque<ComponentReuseEntryV1>,
+    retired: Vec<ComponentReuseEntryV1>,
+}
+
+struct ComponentReuseEntryV1 {
+    component: usize,
+    support: Arc<[ColorSignal]>,
+    values: Vec<Srgb8>,
+    search: SearchEvidenceV1,
+    reports: Option<Arc<[ProgramReferenceSelectionV1]>>,
+}
+
+impl ComponentReuseHistoryV1 {
+    pub(in crate::program_session) fn new() -> Result<Self, ()> {
+        let mut committed = VecDeque::new();
+        committed
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        let mut pending = VecDeque::new();
+        pending
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        let mut retired = Vec::new();
+        retired
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        Ok(Self {
+            committed,
+            pending,
+            retired,
+        })
+    }
+
+    pub(in crate::program_session) fn begin_update(&mut self) {
+        self.pending.clear();
+        self.retired.clear();
+    }
+
+    pub(in crate::program_session) fn commit_update(&mut self) {
+        // One update can retire at most one committed entry per pending entry.
+        // The next pre-install begin_update owns their deallocation.
+        debug_assert!(self.retired.is_empty());
+        while let Some(entry) = self.pending.pop_front() {
+            if let Some(index) = self.committed.iter().position(|committed| {
+                committed.component == entry.component && committed.support == entry.support
+            }) {
+                if let Some(retired) = self.committed.remove(index) {
+                    self.retire(retired);
+                }
+            }
+            if self.committed.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
+                if let Some(retired) = self.committed.pop_front() {
+                    self.retire(retired);
+                }
+            }
+            self.committed.push_back(entry);
+        }
+    }
+
+    fn retire(&mut self, entry: ComponentReuseEntryV1) {
+        debug_assert!(self.retired.len() < self.retired.capacity());
+        self.retired.push(entry);
+    }
+
+    pub(in crate::program_session) fn abort_update(&mut self) {
+        self.pending.clear();
+    }
+
+    fn lookup(
+        &mut self,
+        component: usize,
+        support: &[ColorSignal],
+    ) -> Option<&ComponentReuseEntryV1> {
+        let index = self
+            .committed
+            .iter()
+            .position(|entry| entry.component == component && entry.support.as_ref() == support)?;
+        let entry = self.committed.remove(index)?;
+        self.committed.push_back(entry);
+        self.committed.back()
+    }
+
+    fn record(
+        &mut self,
+        component: usize,
+        support: Arc<[ColorSignal]>,
+        values: &[Srgb8],
+        search: SearchEvidenceV1,
+        reports: Option<Arc<[ProgramReferenceSelectionV1]>>,
+    ) {
+        let mut stored = Vec::new();
+        if stored.try_reserve_exact(values.len()).is_err() {
+            return;
+        }
+        stored.extend_from_slice(values);
+        if self.pending.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
+            self.pending.pop_front();
+        }
+        self.pending.push_back(ComponentReuseEntryV1 {
+            component,
+            support,
+            values: stored,
+            search,
+            reports,
+        });
+    }
+}
+
 impl VerifiedComponentV1 {
     pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
         match self.search.completion {
@@ -996,6 +1113,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     previous: Option<&ComputedVerifiedV1<E>>,
+    reuse_history: &mut ComponentReuseHistoryV1,
     point_scratch: &mut ReferenceCompletionScratchV1<E>,
     observation: &RevisionBoundObservationV1,
 ) -> Result<
@@ -1060,6 +1178,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             || support.into(),
             |previous| previous.components[index].support.clone(),
         );
+        let mut recorded = true;
         let selected = if let Some(previous) = reusable {
             let cached = &previous.components[index];
             let mut local = Vec::new();
@@ -1084,6 +1203,25 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                     selection, component, runtime, epoch, scenarios, &local, reports,
                 )?)
             };
+            SearchResultV1 {
+                values: Some(local),
+                evidence: cached.search,
+                reference_selections,
+            }
+        } else if let Some(cached) = reuse_history.lookup(index, support.as_ref()) {
+            let mut local = Vec::new();
+            local
+                .try_reserve_exact(cached.values.len())
+                .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            local.extend_from_slice(&cached.values);
+            let reference_selections = if let Some(reports) = cached.reports.as_deref() {
+                Some(contextual::refresh_reports(
+                    selection, component, runtime, epoch, scenarios, &local, reports,
+                )?)
+            } else {
+                None
+            };
+            recorded = false;
             SearchResultV1 {
                 values: Some(local),
                 evidence: cached.search,
@@ -1139,6 +1277,15 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         if local.len() != component.targets.len() {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
+        if recorded {
+            reuse_history.record(
+                index,
+                support.clone(),
+                &local,
+                selected.evidence,
+                selected.reference_selections.clone(),
+            );
+        }
         for (&index, value) in component.targets.iter().zip(local) {
             values[index] = value;
         }
@@ -1164,4 +1311,71 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         },
         components,
     ))
+}
+
+#[cfg(test)]
+mod reuse_history_tests {
+    use super::*;
+
+    fn entry(component: usize, value: u8) -> ComponentReuseEntryV1 {
+        entry_with_support(component, value, value)
+    }
+
+    fn entry_with_support(component: usize, support_value: u8, value: u8) -> ComponentReuseEntryV1 {
+        let support = Srgb8::new([support_value; 3]);
+        let color = Srgb8::new([value; 3]);
+        ComponentReuseEntryV1 {
+            component,
+            support: Arc::from(vec![ColorSignal::from_srgb8(support)]),
+            values: vec![color],
+            search: SearchEvidenceV1 {
+                completion: CompletionV1::Complete,
+                visited: 0,
+                regions: 0,
+                points: 0,
+                endpoint_evaluations: 0,
+                examined: 0,
+                open_regions: 0,
+            },
+            reports: None,
+        }
+    }
+
+    #[test]
+    fn commit_retires_displaced_entries_until_the_next_pre_install() {
+        let mut history = ComponentReuseHistoryV1::new().expect("history allocation");
+        history.begin_update();
+        for component in 0..COMPONENT_REUSE_HISTORY_CAPACITY {
+            history.pending.push_back(entry(component, component as u8));
+        }
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert!(history.retired.is_empty());
+        assert!(history.retired.capacity() >= COMPONENT_REUSE_HISTORY_CAPACITY);
+
+        // A full queue evicts its oldest entry without dropping it during commit.
+        history.begin_update();
+        history
+            .pending
+            .push_back(entry(COMPONENT_REUSE_HISTORY_CAPACITY, 99));
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert_eq!(history.retired.len(), 1);
+        assert_eq!(history.retired[0].component, 0);
+        assert!(history.committed.iter().all(|entry| entry.component != 0));
+
+        // Deduplication replaces the exact support and retires exactly that entry.
+        history.begin_update();
+        assert!(history.retired.is_empty());
+        history.pending.push_back(entry_with_support(5, 5, 7));
+        history.commit_update();
+        assert_eq!(history.committed.len(), COMPONENT_REUSE_HISTORY_CAPACITY);
+        assert_eq!(history.retired.len(), 1);
+        assert_eq!(history.retired[0].component, 5);
+        assert_eq!(history.retired[0].values[0].bytes(), [5; 3]);
+        assert_eq!(history.committed.back().unwrap().values[0].bytes(), [7; 3]);
+
+        history.begin_update();
+        assert!(history.retired.is_empty());
+    }
 }

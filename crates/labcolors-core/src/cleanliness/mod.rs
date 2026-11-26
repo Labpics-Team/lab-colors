@@ -6,6 +6,7 @@
 //! остаются у существующего evaluator; числового балла здесь нет.
 
 pub(crate) mod assessment;
+pub(crate) mod raster_reference;
 
 #[allow(
     dead_code,

@@ -15,20 +15,12 @@ const criteria = Object.freeze({
 });
 
 /** Only topology, identity maps and encoding: numerical work belongs to Program. */
-export function lowerColorSystem(entries, options) {
+export function lowerColorSystem(entries, options, rasterProposal) {
   const builder = new ProgramWireBuilderV3();
   let nextId = 1;
   const id = () => nextId++;
   const inputs = [], reachable = new Set();
-  const hierarchyByUse = new Map();
-  for (const hierarchy of options.hierarchies ?? []) {
-    for (const member of hierarchy) {
-      const groups = hierarchyByUse.get(member) ?? [];
-      groups.push(hierarchy);
-      hierarchyByUse.set(member, groups);
-    }
-  }
-  const reachableHierarchies = new Set();
+  const reachableRelations = new Set();
   const pending = entries.map((entry) => entry.node);
   // Iterative traversal also admits deeply nested client graphs without a JS call-stack limit.
   while (pending.length > 0) {
@@ -38,10 +30,11 @@ export function lowerColorSystem(entries, options) {
     if (node.kind === "use") {
       pending.push(node.against);
       if (node.policy.tone !== undefined) pending.push(node.policy.tone.from);
-      for (const hierarchy of hierarchyByUse.get(node) ?? []) {
-        if (reachableHierarchies.has(hierarchy)) continue;
-        reachableHierarchies.add(hierarchy);
-        for (const member of hierarchy) pending.push(member);
+      for (const relation of options.relationsByUse?.get(node) ?? []) {
+        if (relation.ordinal >= options.beforeOrdinal) break;
+        if (reachableRelations.has(relation)) continue;
+        reachableRelations.add(relation);
+        for (const member of relation.nodes) pending.push(member);
       }
     }
   }
@@ -98,6 +91,19 @@ export function lowerColorSystem(entries, options) {
     nodes.set(node, compiled);
     targets.set(target, node);
     occurrences.set(occurrence, node);
+    const requested = rasterProposal?.paints.get(node.handle);
+    if (requested !== undefined) {
+      // An opaque occurrence of the same base paint pins the actual source,
+      // including when the declared use subsequently applies material opacity.
+      let checked = occurrence;
+      if (rasterProposal.kind === "try-inverse" && paint !== basePaint) {
+        checked = id();
+        builder.pointOccurrence(checked, basePaint, asSurface(node.against));
+      }
+      const constraint = id();
+      builder.exactVisibleUnary(true, constraint, checked, [requested >>> 16, (requested >>> 8) & 255, requested & 255]);
+      constraints.set(constraint, { node, requirement: "visible-reference" });
+    }
     if (policy.contrast !== undefined) {
       const constraint = id();
       builder.wcag22VisibleUnary(true, constraint, occurrence, criteria[policy.contrast]);
@@ -117,11 +123,12 @@ export function lowerColorSystem(entries, options) {
       constraints.set(constraint, { node, requirement: "cleanliness" });
     }
   }
-  for (const hierarchy of options.hierarchies ?? []) {
-    if (!reachableHierarchies.has(hierarchy)) continue;
+  for (const relation of [...reachableRelations].sort(declaredOrder)) {
     const constraint = id();
-    builder.preserveTonalHierarchy(constraint, hierarchy.map((node) => nodes.get(node).occurrence));
-    constraints.set(constraint, { nodes: hierarchy, requirement: "tonal-hierarchy" });
+    const members = relation.nodes.map((node) => nodes.get(node).occurrence);
+    if (relation.requirement === "tonal-hierarchy") builder.preserveTonalHierarchy(constraint, members);
+    else builder.visiblePairSeparationHard(constraint, members[0], members[1], ...relation.bounds);
+    constraints.set(constraint, relation);
   }
   const reference = options.reference === undefined ? undefined : inputs.map((input) => {
     const rgb = options.reference.get(input.name);

@@ -83,17 +83,30 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   visibleSeparationHard(id, occurrence, minimum, maximum) {
     const checkedId = u32Value(id, "constraint id");
     const checkedOccurrence = u32Value(occurrence, "constraint occurrence");
-    const lower = f64Value(minimum, "visible separation minimum");
-    const upper = f64Value(maximum, "visible separation maximum");
-    if (lower < 0 || upper > 2 || lower > upper) {
-      invalid("visible separation bounds must satisfy 0 <= minimum <= maximum <= 2");
-    }
+    const [lower, upper] = separationBounds(minimum, maximum);
     const sink = this.constraintEntry(true);
     sink.u32(checkedId);
     sink.u8(11);
     sink.u32(checkedOccurrence);
-    sink.f64Bits(lower === 0 ? 0 : lower);
-    sink.f64Bits(upper === 0 ? 0 : upper);
+    sink.f64Bits(lower);
+    sink.f64Bits(upper);
+    return this;
+  }
+
+  /** Inclusive Oklab distance between two final visible occurrences, each on its own backdrop. */
+  visiblePairSeparationHard(id, left, right, minimum, maximum) {
+    const checkedId = u32Value(id, "constraint id");
+    const first = u32Value(left, "left occurrence");
+    const second = u32Value(right, "right occurrence");
+    if (first === second) invalid("visible separation occurrences must be distinct");
+    const [lower, upper] = separationBounds(minimum, maximum);
+    const sink = this.constraintEntry(true);
+    sink.u32(checkedId);
+    sink.u8(14);
+    sink.u32(first);
+    sink.u32(second);
+    sink.f64Bits(lower);
+    sink.f64Bits(upper);
     return this;
   }
 
@@ -210,6 +223,13 @@ function bounded(value, maximum, what) {
   const checked = f64Value(value, what);
   if (checked < 0 || checked > maximum) invalid(`${what} must be in [0, ${maximum}]`);
   return checked === 0 ? 0 : checked;
+}
+
+function separationBounds(minimum, maximum) {
+  const lower = bounded(minimum, 2, "visible separation minimum");
+  const upper = bounded(maximum, 2, "visible separation maximum");
+  if (lower > upper) invalid("visible separation minimum must not exceed maximum");
+  return [lower, upper];
 }
 
 function checkedPair(range, what) {
