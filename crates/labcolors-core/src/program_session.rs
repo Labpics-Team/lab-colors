@@ -4584,6 +4584,18 @@ where
         }
     }
 
+    fn begin_update(&mut self) {
+        self.reuse_history.begin_update();
+    }
+
+    fn commit_update(&mut self) {
+        self.reuse_history.commit_update();
+    }
+
+    fn abort_update(&mut self) {
+        self.reuse_history.abort_update();
+    }
+
     fn retire_verified(&mut self, evidence: Self::Verified) {
         self.evaluation_arenas.restore(evidence.into_arena());
     }

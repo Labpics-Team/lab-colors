@@ -964,7 +964,8 @@ pub(super) struct VerifiedComponentV1 {
 const COMPONENT_REUSE_HISTORY_CAPACITY: usize = 16;
 
 pub(in crate::program_session) struct ComponentReuseHistoryV1 {
-    entries: VecDeque<ComponentReuseEntryV1>,
+    committed: VecDeque<ComponentReuseEntryV1>,
+    pending: VecDeque<ComponentReuseEntryV1>,
 }
 
 struct ComponentReuseEntryV1 {
@@ -977,20 +978,51 @@ struct ComponentReuseEntryV1 {
 
 impl ComponentReuseHistoryV1 {
     pub(in crate::program_session) fn new() -> Result<Self, ()> {
-        let mut entries = VecDeque::new();
-        entries
+        let mut committed = VecDeque::new();
+        committed
             .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
             .map_err(|_| ())?;
-        Ok(Self { entries })
+        let mut pending = VecDeque::new();
+        pending
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        Ok(Self { committed, pending })
     }
 
-    fn lookup(&mut self, component: usize, support: &[ColorSignal]) -> Option<&ComponentReuseEntryV1> {
-        let index = self.entries.iter().position(|entry| {
-            entry.component == component && entry.support.as_ref() == support
-        })?;
-        let entry = self.entries.remove(index)?;
-        self.entries.push_back(entry);
-        self.entries.back()
+    pub(in crate::program_session) fn begin_update(&mut self) {
+        self.pending.clear();
+    }
+
+    pub(in crate::program_session) fn commit_update(&mut self) {
+        for entry in self.pending.drain(..) {
+            if let Some(index) = self.committed.iter().position(|committed| {
+                committed.component == entry.component && committed.support == entry.support
+            }) {
+                self.committed.remove(index);
+            }
+            if self.committed.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
+                self.committed.pop_front();
+            }
+            self.committed.push_back(entry);
+        }
+    }
+
+    pub(in crate::program_session) fn abort_update(&mut self) {
+        self.pending.clear();
+    }
+
+    fn lookup(
+        &mut self,
+        component: usize,
+        support: &[ColorSignal],
+    ) -> Option<&ComponentReuseEntryV1> {
+        let index = self
+            .committed
+            .iter()
+            .position(|entry| entry.component == component && entry.support.as_ref() == support)?;
+        let entry = self.committed.remove(index)?;
+        self.committed.push_back(entry);
+        self.committed.back()
     }
 
     fn record(
@@ -1006,10 +1038,10 @@ impl ComponentReuseHistoryV1 {
             return;
         }
         stored.extend_from_slice(values);
-        if self.entries.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
-            self.entries.pop_front();
+        if self.pending.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
+            self.pending.pop_front();
         }
-        self.entries.push_back(ComponentReuseEntryV1 {
+        self.pending.push_back(ComponentReuseEntryV1 {
             component,
             support,
             values: stored,
