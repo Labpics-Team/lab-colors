@@ -2,6 +2,8 @@
 //! Общий неизменяемый фон не создаёт связь между вычисляемыми цветами.
 
 use super::*;
+use crate::program_wire::ProgramReferenceSelectionV1;
+use std::collections::VecDeque;
 
 mod point_equivalence;
 
@@ -956,6 +958,67 @@ pub(super) struct VerifiedComponentV1 {
     reports: std::ops::Range<usize>,
 }
 
+// Historical selection evidence is only a seed for the mandatory final
+// physical recheck. The exact local input vector, not a revision or a digest,
+// decides whether a component's solved tuple still describes this problem.
+const COMPONENT_REUSE_HISTORY_CAPACITY: usize = 16;
+
+pub(in crate::program_session) struct ComponentReuseHistoryV1 {
+    entries: VecDeque<ComponentReuseEntryV1>,
+}
+
+struct ComponentReuseEntryV1 {
+    component: usize,
+    support: Arc<[ColorSignal]>,
+    values: Vec<Srgb8>,
+    search: SearchEvidenceV1,
+    reports: Option<Arc<[ProgramReferenceSelectionV1]>>,
+}
+
+impl ComponentReuseHistoryV1 {
+    pub(in crate::program_session) fn new() -> Result<Self, ()> {
+        let mut entries = VecDeque::new();
+        entries
+            .try_reserve_exact(COMPONENT_REUSE_HISTORY_CAPACITY)
+            .map_err(|_| ())?;
+        Ok(Self { entries })
+    }
+
+    fn lookup(&mut self, component: usize, support: &[ColorSignal]) -> Option<&ComponentReuseEntryV1> {
+        let index = self.entries.iter().position(|entry| {
+            entry.component == component && entry.support.as_ref() == support
+        })?;
+        let entry = self.entries.remove(index)?;
+        self.entries.push_back(entry);
+        self.entries.back()
+    }
+
+    fn record(
+        &mut self,
+        component: usize,
+        support: Arc<[ColorSignal]>,
+        values: &[Srgb8],
+        search: SearchEvidenceV1,
+        reports: Option<Arc<[ProgramReferenceSelectionV1]>>,
+    ) {
+        let mut stored = Vec::new();
+        if stored.try_reserve_exact(values.len()).is_err() {
+            return;
+        }
+        stored.extend_from_slice(values);
+        if self.entries.len() == COMPONENT_REUSE_HISTORY_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(ComponentReuseEntryV1 {
+            component,
+            support,
+            values: stored,
+            search,
+            reports,
+        });
+    }
+}
+
 impl VerifiedComponentV1 {
     pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
         match self.search.completion {
@@ -996,6 +1059,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     previous: Option<&ComputedVerifiedV1<E>>,
+    reuse_history: &mut ComponentReuseHistoryV1,
     point_scratch: &mut ReferenceCompletionScratchV1<E>,
     observation: &RevisionBoundObservationV1,
 ) -> Result<
@@ -1060,6 +1124,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             || support.into(),
             |previous| previous.components[index].support.clone(),
         );
+        let mut recorded = true;
         let selected = if let Some(previous) = reusable {
             let cached = &previous.components[index];
             let mut local = Vec::new();
@@ -1084,6 +1149,25 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                     selection, component, runtime, epoch, scenarios, &local, reports,
                 )?)
             };
+            SearchResultV1 {
+                values: Some(local),
+                evidence: cached.search,
+                reference_selections,
+            }
+        } else if let Some(cached) = reuse_history.lookup(index, support.as_ref()) {
+            let mut local = Vec::new();
+            local
+                .try_reserve_exact(cached.values.len())
+                .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            local.extend_from_slice(&cached.values);
+            let reference_selections = if let Some(reports) = cached.reports.as_deref() {
+                Some(contextual::refresh_reports(
+                    selection, component, runtime, epoch, scenarios, &local, reports,
+                )?)
+            } else {
+                None
+            };
+            recorded = false;
             SearchResultV1 {
                 values: Some(local),
                 evidence: cached.search,
@@ -1138,6 +1222,15 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         };
         if local.len() != component.targets.len() {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
+        }
+        if recorded {
+            reuse_history.record(
+                index,
+                support.clone(),
+                &local,
+                selected.evidence,
+                selected.reference_selections.clone(),
+            );
         }
         for (&index, value) in component.targets.iter().zip(local) {
             values[index] = value;

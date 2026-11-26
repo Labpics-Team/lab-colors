@@ -1778,6 +1778,7 @@ where
             scenarios,
             arena.storage_mut(),
             reusable,
+            &mut plan.reuse_history,
             &mut plan.reference_completion,
             &observation,
         )?;
@@ -1886,7 +1887,7 @@ where
 
 mod components;
 mod contextual;
-pub(super) use components::{compile_components, partition_components};
+pub(super) use components::{ComponentReuseHistoryV1, compile_components, partition_components};
 pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
 #[cfg(test)]
 pub(super) use contextual::reference_completion::tests::incoming_test_hook as reference_completion_incoming_test_hook;

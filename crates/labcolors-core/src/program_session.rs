@@ -2685,6 +2685,15 @@ where
                 });
             }
         };
+        let reuse_history = match computed_assignment::ComponentReuseHistoryV1::new() {
+            Ok(history) => history,
+            Err(()) => {
+                return Err(ProgramSessionInstantiateFailureV2 {
+                    cause: ProgramSessionInstantiateError::ResourceExhausted,
+                    family_artifacts: family_artifacts.into_unbound(),
+                });
+            }
+        };
         Ok(Session::new(
             stream,
             ProgramSessionPlan {
@@ -2693,6 +2702,7 @@ where
                 workspace,
                 presentation_cache,
                 evaluation_arenas: ProgramEvaluationArenaPoolV1::new(),
+                reuse_history,
                 reference_completion: computed_assignment::ReferenceCompletionScratchV1::empty(
                     &self.owner_generation,
                 ),
@@ -4482,6 +4492,9 @@ where
     workspace: AppearanceWorkspace,
     presentation_cache: ProgramPresentationCacheV1,
     evaluation_arenas: ProgramEvaluationArenaPoolV1<Evaluation>,
+    // Bounded exact-support history for committed field changes. It owns no
+    // observation or epoch lease and only seeds the full final recheck.
+    reuse_history: computed_assignment::ComponentReuseHistoryV1,
     // Initialized only by the private incoming continuous operation.
     // This scratch retains no epoch lease and does not affect ordinary search.
     reference_completion: computed_assignment::ReferenceCompletionScratchV1<Evaluation>,
@@ -4604,6 +4617,7 @@ where
         workspace,
         presentation_cache,
         evaluation_arenas,
+        reuse_history: _,
         reference_completion: _,
         family_artifacts,
     } = plan;
