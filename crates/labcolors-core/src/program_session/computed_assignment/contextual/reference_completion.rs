@@ -861,61 +861,86 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
         let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
-        let source = self.scratch.bindings.paint_inputs_canonical();
-        let mut paints = epoch.graph.prepare_certified_surface_cases(
-            None,
-            &self.scratch.bindings,
-            |index| {
-                PointPaintValueV1::from_admitted(
-                    CertifiedRgbV1::from_encoded(self.scratch.binding_targets[index].map_or_else(
-                        || source[index].1.source().bytes().map(f64::from),
-                        |target| values[target].channels(),
-                    )),
-                    source[index].1.opacity(),
-                )
-            },
-            &mut self.scratch.certified_workspace,
-        )?;
-        let count = self.observation.physical_case_count();
         let mut preferences = reserve::<_, E>(self.scratch.uses.len())?;
         for usage in &self.scratch.uses {
             preferences.push(reserve::<_, E>(usage.cases.len())?);
         }
-        for case in 0..count {
-            let inputs = self
-                .observation
-                .physical_values(case)
-                .ok_or(Error::<E>::MissingFiniteObservation)?;
-            let view = paints.evaluate_surface_inputs_canonical(|index| {
-                CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
+        let source = self.scratch.bindings.paint_inputs_canonical();
+        for component in &selection.components {
+            let component_uses = component.targets.iter().flat_map(|target| {
+                self.scratch
+                    .uses
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(index, usage)| (usage.target == *target).then_some(index))
             });
-            for (usage, rows) in self.scratch.uses.iter().zip(&mut preferences) {
-                if !usage.cases.contains(&case) {
+            if component_uses.clone().next().is_none() {
+                continue;
+            }
+            let mut paints = epoch.graph.prepare_certified_surface_cases(
+                Some(&component.physical),
+                &self.scratch.bindings,
+                |index| {
+                    PointPaintValueV1::from_admitted(
+                        CertifiedRgbV1::from_encoded(
+                            self.scratch.binding_targets[index].map_or_else(
+                                || source[index].1.source().bytes().map(f64::from),
+                                |target| values[target].channels(),
+                            ),
+                        ),
+                        source[index].1.opacity(),
+                    )
+                },
+                &mut self.scratch.certified_workspace,
+            )?;
+            for usage_index in component_uses.clone() {
+                let cases = self.scratch.uses[usage_index].cases.clone();
+                if component_uses
+                    .clone()
+                    .take_while(|&previous| previous != usage_index)
+                    .any(|previous| self.scratch.uses[previous].cases == cases)
+                {
                     continue;
                 }
-                let (visible_lab, backdrop_lab) = if let Some(slot) = usage.slot {
-                    let point = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
-                    (point.visible?.oklab()?, Some(point.backdrop?.oklab()?))
-                } else {
-                    (
-                        CertifiedRgbV1::from_encoded(values[usage.target].channels())?.oklab()?,
-                        None,
-                    )
-                };
-                let preferred = usage.preferred.get(case - usage.cases.start).copied();
-                let distance = preferred
-                    .map(|point| source_distance_squared(visible_lab, point))
-                    .transpose()?;
-                rows.push(PreferenceMeasurementV1 {
-                    target_id: selection.targets[usage.target].id,
-                    occurrence: usage.occurrence,
-                    case,
-                    visible_lab,
-                    backdrop_lab,
-                    preferred,
-                    distance,
-                    reference: usage.reference,
-                });
+                for case in cases.clone() {
+                    let inputs = self
+                        .observation
+                        .physical_values(case)
+                        .ok_or(Error::<E>::MissingFiniteObservation)?;
+                    let view = paints.evaluate_surface_inputs_canonical(|index| {
+                        CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
+                    });
+                    for usage_index in component_uses.clone() {
+                        let usage = &self.scratch.uses[usage_index];
+                        if usage.cases != cases {
+                            continue;
+                        }
+                        let (visible_lab, backdrop_lab) = if let Some(slot) = usage.slot {
+                            let point = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
+                            (point.visible?.oklab()?, Some(point.backdrop?.oklab()?))
+                        } else {
+                            (
+                                CertifiedRgbV1::from_encoded(values[usage.target].channels())?
+                                    .oklab()?,
+                                None,
+                            )
+                        };
+                        let preferred = usage.preferred.get(case - usage.cases.start).copied();
+                        let distance = preferred
+                            .map(|point| source_distance_squared(visible_lab, point))
+                            .transpose()?;
+                        preferences[usage_index].push(PreferenceMeasurementV1 {
+                            target_id: selection.targets[usage.target].id,
+                            occurrence: usage.occurrence,
+                            case,
+                            visible_lab,
+                            backdrop_lab,
+                            preferred,
+                            distance,
+                            reference: usage.reference,
+                        });
+                    }
+                }
             }
         }
         let mut source = reserve::<_, E>(values.len())?;
