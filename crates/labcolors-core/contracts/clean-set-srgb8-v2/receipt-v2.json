@@ -349,11 +349,18 @@
       "sha256": "78d37406e9bdc37f126b72987c9c92b452c13b3233c0aeb0a75ed25dadb83a68"
     },
     {
-      "bytes": 21299,
+      "bytes": 17188,
       "license": "MIT",
       "path": "crates/labcolors-core/src/spaces/oklab.rs",
       "role": "srgb8_oklab_source",
-      "sha256": "d38a8fbb66789b340acdc0502cd4acca7d457205d65e32a646955c98915cb416"
+      "sha256": "d5b8c91cc4ac77ff279744d1dbc99f8677b625c08ceba965a5f99f9d55da6c75"
+    },
+    {
+      "bytes": 4147,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/spaces/oklab/rounded_root.rs",
+      "role": "srgb8_rounded_root_source",
+      "sha256": "230e308a3eaf4cd2f9cbabc93a1d87c97d6cf43907446a6c4256075ad9877505"
     },
     {
       "bytes": 6994,
@@ -377,11 +384,11 @@
       "sha256": "c4a70c6379afb86a20c6e8c7b4795b573af2eb2982b74f41b4fa7b7665921225"
     },
     {
-      "bytes": 44896,
+      "bytes": 44987,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "8fbb6e29159c0469cdb6743b4df668f1423532d518521fe35fe862c033ae9645"
+      "sha256": "3eb8612b059191bfecea0ea394613d4eea99c937c72059d8cff4593ecb7b6f8f"
     },
     {
       "bytes": 44658,

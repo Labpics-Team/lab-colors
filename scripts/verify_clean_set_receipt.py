@@ -133,6 +133,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "srgb_decode_source": "crates/labcolors-core/src/spaces/srgb/gamma_data.rs",
     "srgb_matrix_source": "crates/labcolors-core/src/spaces/srgb.rs",
     "srgb8_oklab_source": "crates/labcolors-core/src/spaces/oklab.rs",
+    "srgb8_rounded_root_source": "crates/labcolors-core/src/spaces/oklab/rounded_root.rs",
     "srgb8_source": "crates/labcolors-core/src/srgb8.rs",
     "verifier_source": "scripts/verify_clean_set_receipt.py",
     "verifier_tests": "scripts/test_verify_clean_set_receipt.py",
