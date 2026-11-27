@@ -94,6 +94,14 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     *crate::sha256::digest(&bytes).as_bytes()
 }
 
+pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v1.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.source-distance.canonical-search\0";
+    let mut bytes = [0; DOMAIN.len() + 32];
+    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    bytes[DOMAIN.len()..].copy_from_slice(&base);
+    *crate::sha256::digest(&bytes).as_bytes()
+}
+
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] = b"labcolors.assignment-reference.v10.paired-source-tones.independent-depth-and-sibling-directions.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
     let mut bytes = [0; DOMAIN.len() + 8];

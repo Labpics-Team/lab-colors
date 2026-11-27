@@ -196,3 +196,46 @@ test("moving a translucent fill reopens the choice of its neutral ink", async ()
     assert.ok(distance(closest) <= distance(27));
   } finally { program.dispose(); }
 });
+
+test("a branded text hierarchy commits on colored paper independently of declaration order", async () => {
+  const surfaces = { paper: "#f7f3ed", aside: "#ffffff" };
+  async function compile(reverse) {
+    const c = colors({ reference: surfaces }), paper = c.surface("paper");
+    const roles = [c.role("heading", "#314dac"), c.role("caption", "#5362aa")];
+    const uses = [];
+    for (const index of reverse ? [1, 0] : [0, 1]) {
+      uses[index] = roles[index].on(paper, { contrast: "wcag22-text" });
+    }
+    c.preserveTonalHierarchy(uses);
+    const glaze = c.role("glaze", "#b64c2c").on(c.surface("aside"), { opacity: 0.72 });
+    const mark = c.role("mark", "#352310").on(glaze, { contrast: "wcag22-text" });
+    return c.compile({ heading: uses[0], caption: uses[1], glaze, mark });
+  }
+  const first = await compile(false), second = await compile(true);
+  try {
+    for (const paper of ["#f7f3ed", "#152537", "#8f8599", "#f7f3ed"]) {
+      const direct = first.resolve({ paper, aside: "#f7f3ed" });
+      const reverse = second.resolve({ paper, aside: "#f7f3ed" });
+      assert.equal(direct.state, "ready");
+      assert.equal(reverse.state, "ready");
+      assert.deepEqual(direct.values, reverse.values);
+      assert.deepEqual(direct.selection.map((part) => part.mode).sort(),
+        ["joint-reference-peers-v1", "ordered-reference-v1"]);
+      for (const name of ["heading", "caption"]) {
+        const value = direct.values[name].rgb;
+        assert.ok(textPasses(value, direct.context.paper));
+        assert.ok(value[2] > value[0], "the source remains blue");
+        const reference = direct.reference.find((use) => use.outputs.includes(name));
+        assert.equal(reference.capacity, null, "a physical limit does not prove feasible contrast capacity");
+      }
+      const movedAside = first.resolve({ paper, aside: "#152537" });
+      assert.equal(movedAside.state, "ready");
+      assert.deepEqual(movedAside.values.heading, direct.values.heading);
+      assert.deepEqual(movedAside.values.caption, direct.values.caption);
+      if (paper === surfaces.paper) {
+        assert.deepEqual(direct.values.heading.rgb, [49, 77, 172]);
+        assert.deepEqual(direct.values.caption.rgb, [83, 98, 170]);
+      }
+    }
+  } finally { first.dispose(); second.dispose(); }
+});

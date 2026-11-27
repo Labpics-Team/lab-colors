@@ -136,8 +136,10 @@ export function lowerColorSystem(entries, options, rasterProposal) {
     return [input.port, rgb];
   });
   // Even an all-fixed declaration gets one complete tuple check under V3.
-  builder.compose(declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
-    .map((node) => nodes.get(node).target), { reference });
+  const adaptive = declaredNodes.filter((node) => node.kind === "use" && node.role.adaptive)
+    .map((node) => nodes.get(node).target);
+  if (reference === undefined) builder.compose(adaptive);
+  else builder.composeReference(adaptive, reference);
 
   const outputNodes = new Map();
   for (const node of [...new Set(entries.map((entry) => entry.node))].sort(declaredOrder)) {

@@ -376,6 +376,10 @@ impl ComputedTargetV1 {
                 bytes.extend_from_slice(&value[..18]);
                 bytes.push(1);
             }
+            identity::CanonicalPreferenceV1::JointReferencePeers => {
+                bytes.extend_from_slice(&value[..18]);
+                bytes.push(3);
+            }
             identity::CanonicalPreferenceV1::LegacyReferenceOrdered(rank) => {
                 value[18..].copy_from_slice(&rank.to_le_bytes());
                 bytes.extend_from_slice(&value);
@@ -500,6 +504,9 @@ impl ComputedSelectionV1 {
                     ProgramSelectionModeV1::JointPointV1 => {
                         identity::CanonicalPreferenceV1::JointPoint
                     }
+                    ProgramSelectionModeV1::JointReferencePeersV1 => {
+                        identity::CanonicalPreferenceV1::JointReferencePeers
+                    }
                     ProgramSelectionModeV1::OrderedReferenceV1 => {
                         identity::CanonicalPreferenceV1::LegacyReferenceOrdered(rank as u64)
                     }
@@ -547,7 +554,7 @@ impl ComputedSelectionV1 {
         let mut old_to_new =
             buffer(self.targets.len(), 0).map_err(|_| ProgramCompileError::ResourceExhausted)?;
         for group in &mut partition.groups {
-            if group.mode == ProgramSelectionModeV1::JointPointV1 {
+            if group.mode.symmetric() {
                 group
                     .targets
                     .sort_unstable_by_key(|&target| target_ranks[target]);
@@ -637,7 +644,7 @@ impl ComputedSelectionV1 {
             schema_ranks.push(ranks[index].1);
         }
         for component in &mut self.components {
-            if component.mode == ProgramSelectionModeV1::JointPointV1 {
+            if component.mode.symmetric() {
                 component
                     .inputs
                     .sort_unstable_by_key(|&input| schema_ranks[input]);

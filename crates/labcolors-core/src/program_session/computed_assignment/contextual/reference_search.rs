@@ -4,6 +4,8 @@
 //! never the incidental state of the DFS cursor.
 
 use super::*;
+
+mod peers;
 use crate::color_intent::reference_transport::{
     ReferenceTransportV1, contrast_ratio, luminance, polarity,
 };
@@ -12,6 +14,7 @@ use crate::program_wire::{
     ProgramReferenceCapacityV1, ProgramReferenceCaseV1, ProgramReferencePreferenceV1,
     ProgramReferenceSelectionV1,
 };
+use peers::PeerProfiles;
 use std::collections::{BinaryHeap, HashMap};
 use std::hash::{Hash, Hasher};
 
@@ -115,6 +118,7 @@ impl PartialEq for CapacityPriorityV1 {
 impl Eq for CapacityPriorityV1 {}
 
 struct ReferenceRuntimeV1<'a> {
+    peers: Option<PeerProfiles>,
     context: ContextV1<'a>,
     models: Vec<Option<ReferenceTransportV1>>,
     evidence: SearchEvidenceV1,
@@ -303,6 +307,10 @@ impl<'a> ReferenceRuntimeV1<'a> {
             );
         }
         Ok(Self {
+            peers: (component.mode == ProgramSelectionModeV1::JointReferencePeersV1)
+                .then(|| PeerProfiles::new(count))
+                .transpose()
+                .map_err(allocation)?,
             context,
             models,
             evidence: SearchEvidenceV1 {
@@ -625,6 +633,26 @@ impl<'a> ReferenceRuntimeV1<'a> {
     }
 
     fn retain_tuple(&mut self, values: &[Srgb8], points: &[AppearancePointV1]) -> Result<(), ()> {
+        if let Some(peers) = &mut self.peers {
+            let improved = peers.consider(&self.context, &self.models, points, values)?;
+            if improved {
+                if let Some(best) = self.best {
+                    self.pending[best].values.copy_from_slice(values);
+                } else {
+                    pushed(
+                        &mut self.pending,
+                        PendingPointV1 {
+                            values: cloned(values)?,
+                            capacities: cloned(&self.scratch_capacities)?,
+                            keys: Vec::new(),
+                            revision: 0,
+                        },
+                    )?;
+                    self.best = Some(0);
+                }
+            }
+            return Ok(());
+        }
         self.scratch_capacities.fill(None);
         self.scratch_keys.fill(TargetKeyV1::default());
         let count = self.context.targets.len();
@@ -1030,6 +1058,11 @@ impl<'a> ReferenceRuntimeV1<'a> {
     }
 
     fn region_cannot_improve(&self, bounds: &BoundsV1) -> bool {
+        // Ordered capacity bounds do not compare symmetric peer profiles.
+        // Physical hard bounds still discard impossible regions before this step.
+        if self.peers.is_some() {
+            return false;
+        }
         let Some(best) = self.best else {
             return false;
         };
@@ -1266,6 +1299,9 @@ impl<'a> ReferenceRuntimeV1<'a> {
         let Some(best) = self.best else {
             return false;
         };
+        if let Some(peers) = &self.peers {
+            return peers.authored_exact();
+        }
         let point = &self.pending[best];
         point
             .values

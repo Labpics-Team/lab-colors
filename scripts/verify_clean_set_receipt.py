@@ -112,6 +112,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "program_computed_contextual_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
     "program_computed_conditional_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/conditional.rs",
     "program_computed_reference_search_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search.rs",
+    "program_reference_peers_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search/peers.rs",
     "program_point_search_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
     "program_prepared_composition_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion.rs",
     "program_authored_optimum_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion/authored_optimum.rs",

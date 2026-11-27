@@ -135,6 +135,7 @@ pub(crate) enum CanonicalPreferenceV1 {
     Ordered(u64),
     JointPoint,
     LegacyReferenceOrdered(u64),
+    JointReferencePeers,
 }
 
 /// Temporary compiler input, sorted by target ID for binding lookup only.

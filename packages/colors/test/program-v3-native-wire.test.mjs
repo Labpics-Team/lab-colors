@@ -53,6 +53,11 @@ test("reference declarations match independent native wire vectors", () => {
 test("composition uses distinct tags with the unchanged assignment field grammar", () => {
   const targets = [0x01020304, 0xffffffff, 0];
   const reference = [[0x10203040, [1, 128, 255]], [0xffffffff, [254, 129, 0]]];
+  const peers = new ProgramWireBuilderV3().composeReference(targets, reference).finish();
+  assert.equal(peers[26], 7);
+  peers[26] = 6;
+  assert.equal(Buffer.from(peers).toString("hex"), fixture.composeReference);
+  assert.throws(() => new ProgramWireBuilderV3().composeReference(targets), /requires a reference/);
   for (const [members, options, name, tag] of [
     [targets, {}, "compose", 5],
     [targets, { reference }, "composeReference", 6],

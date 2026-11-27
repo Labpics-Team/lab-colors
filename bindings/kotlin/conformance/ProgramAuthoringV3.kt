@@ -275,6 +275,10 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     val composeTargets = listOf(0x01020304u, 0xffffffffu, 0u)
     val composeReference = listOf(ProgramWireReferenceInputV3(0x10203040u, rgb(1, 128, 255)),
         ProgramWireReferenceInputV3(0xffffffffu, rgb(254, 129, 0)))
+    val peers = ProgramWireBuilderV3().composeReference(composeTargets, composeReference).finish()
+    check(peers[26].toInt() == 7)
+    peers[26] = 6
+    bytesEqual(requireNotNull(fixtures["composeReference"]).wireBytes(), peers)
     for ((name, members, inputs) in listOf(
         Triple("compose", composeTargets, null), Triple("composeReference", composeTargets, composeReference),
         Triple("composeEmpty", emptyList(), null), Triple("composeReferenceEmpty", emptyList(), emptyList()),

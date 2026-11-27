@@ -345,6 +345,7 @@ pub enum ProgramSelectionMode {
     OrderedV1,
     JointPointV1,
     OrderedReferenceV1,
+    JointReferencePeersV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -694,6 +695,9 @@ pub(crate) fn selection_components(
         let mode = match component.mode() {
             core::ProgramSelectionModeV1::OrderedV1 => ProgramSelectionMode::OrderedV1,
             core::ProgramSelectionModeV1::JointPointV1 => ProgramSelectionMode::JointPointV1,
+            core::ProgramSelectionModeV1::JointReferencePeersV1 => {
+                ProgramSelectionMode::JointReferencePeersV1
+            }
             core::ProgramSelectionModeV1::OrderedReferenceV1 => {
                 ProgramSelectionMode::OrderedReferenceV1
             }

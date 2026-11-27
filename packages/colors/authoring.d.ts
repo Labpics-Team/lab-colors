@@ -149,7 +149,7 @@ export interface ColorAdaptiveRole {
   readonly [colorHandle]: "adaptive-role";
   readonly id: string;
   readonly anchor: readonly [number, number, number];
-  /** Новый local use в порядке предпочтений декларации; повторный handle сохраняет один paint. */
+  /** Новое локальное применение. Повторный handle сохраняет один общий paint. */
   on(surface: ColorSurface, policy?: ColorUsePolicy): ColorUse<ColorAdaptiveRole>;
 }
 

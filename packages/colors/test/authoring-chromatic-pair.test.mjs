@@ -31,7 +31,7 @@ function oklabDistance(left, right) {
 }
 
 for (const [mode, options] of [
-  ["joint-point-v1", {}], ["ordered-reference-v1", { reference: context }],
+  ["joint-point-v1", {}], ["joint-reference-peers-v1", { reference: context }],
 ]) {
   test(`${mode} separates two uses of one blue source when both must move`, async () => {
     const c = colors(options), primary = c.role("primary", "#4364ca", { maxChange: 0.1 });

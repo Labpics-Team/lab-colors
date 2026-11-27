@@ -447,6 +447,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         join(&mut parents, &members);
         constraint_members.push((ordinal, members.first().copied()));
     }
+    let mut independent_backdrops = false_slots(count)?;
     // A visible identity/recourse can couple sources even without a separate
     // contrast constraint. Its own variable remains in the same task.
     for (ordinal, target) in selection.targets.iter().enumerate() {
@@ -459,7 +460,13 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         if let Some(appearance) = appearance {
             visible.visible(index, appearance, &mut |target| marked.mark(target))?;
             if target.declaration.reference_appearance {
-                visible.backdrop(index, appearance, &mut |target| marked.mark(target))?;
+                independent_backdrops[ordinal] = true;
+                visible.backdrop(index, appearance, &mut |source| {
+                    marked.mark(source);
+                    if selected[source].is_some() {
+                        independent_backdrops[ordinal] = false;
+                    }
+                })?;
             }
         }
         if let Some(input) = target.tone_input {
@@ -516,6 +523,21 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             )
         {
             group.mode = ProgramSelectionModeV1::OrderedReferenceV1;
+        }
+    }
+    if matches!(
+        program.assignment,
+        Some(ComputedSelectionPolicyV1::ReferenceComposition(_))
+    ) {
+        for group in &mut groups {
+            if group.mode == ProgramSelectionModeV1::OrderedReferenceV1
+                && group.targets.len() > 1
+                // Compilation binds each reference occurrence to its own paint.
+                // Only its backdrop can introduce another adjustable source.
+                && group.targets.iter().all(|&target| independent_backdrops[target])
+            {
+                group.mode = ProgramSelectionModeV1::JointReferencePeersV1;
+            }
         }
     }
     let mut fixed = Vec::new();
@@ -728,6 +750,14 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     {
         selection.execution_profile =
             contextual::point_search::execution_profile_identity(selection.budget);
+    }
+    if selection
+        .components
+        .iter()
+        .any(|c| c.mode == ProgramSelectionModeV1::JointReferencePeersV1)
+    {
+        selection.execution_profile =
+            contextual::reference_peer_profile_identity(selection.execution_profile);
     }
     Ok(())
 }
@@ -1077,7 +1107,7 @@ impl VerifiedComponentV1 {
     pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
         match self.search.completion {
             CompletionV1::AuthoredExact => true,
-            CompletionV1::Complete => mode != ProgramSelectionModeV1::JointPointV1,
+            CompletionV1::Complete => !mode.symmetric(),
             CompletionV1::BudgetExhausted => false,
         }
     }

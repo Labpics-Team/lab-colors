@@ -51,5 +51,7 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
   /** Каждый computed target ровно один раз. Core выбирает целые физические компоненты;
    * порядок деклараций сохраняется только для совместимости implicit-reference компонентов. */
   compose(targets: readonly number[], options?: ProgramWireComposeOptionsV3): this;
+  /** Core balances related reference uses with independent physical backdrops. */
+  composeReference(targets: readonly number[], reference: NonNullable<ProgramWireComposeOptionsV3["reference"]>): this;
   finish(): Uint8Array;
 }

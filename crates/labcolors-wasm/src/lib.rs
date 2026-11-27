@@ -163,7 +163,7 @@ export interface ProgramReferenceSelectionV1 {
 }
 
 export interface ProgramSelectionComponentV1 {
-  readonly mode: "ordered-v1" | "joint-point-v1" | "ordered-reference-v1";
+  readonly mode: "ordered-v1" | "joint-point-v1" | "ordered-reference-v1" | "joint-reference-peers-v1";
   readonly targets: ReadonlyArray<number>;
 }
 
