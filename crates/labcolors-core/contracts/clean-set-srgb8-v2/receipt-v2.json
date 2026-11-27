@@ -80,7 +80,7 @@
       "license": "MIT",
       "path": "crates/labcolors-core/src/color_intent.rs",
       "role": "color_intent_source",
-      "sha256": "fcf1d109361e482f5e25483d5ea3c86a9552deba5ae50f04fa63a256d8403b15"
+      "sha256": "9dc73aabae74b9f0b7d7f5f79d9dc76728933ce7674aadaededcb0333289bfef"
     },
     {
       "bytes": 140834,
@@ -174,11 +174,11 @@
       "sha256": "e2dd7a9a2ac6f22ee4844a7c82861755237e91fd7169b412d10f04aa6546ea78"
     },
     {
-      "bytes": 75551,
+      "bytes": 75623,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment.rs",
       "role": "program_computed_assignment_source",
-      "sha256": "d651de598ba3bdffe8dceb5daa931cde3270abf17ae8c84f724a7ceb1cb96218"
+      "sha256": "e45639beae3fa272cdc41843fde2ce8655a172eb8ead9e21a8460f20c294c67f"
     },
     {
       "bytes": 55244,
@@ -195,11 +195,11 @@
       "sha256": "367223751b3baddc44e0fba99b45e94eadc5aef20f9badb34f1b574f94c69f9a"
     },
     {
-      "bytes": 67528,
+      "bytes": 67504,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
       "role": "program_computed_contextual_source",
-      "sha256": "0bf6dfd8ecacb854cbefeaa5376b2e5153516d1c79bb517980f802545742cdda"
+      "sha256": "c32f7976a316e543e580262d59c1dc678815c45799c227d64daef1305ef061f5"
     },
     {
       "bytes": 9261,
@@ -258,11 +258,11 @@
       "sha256": "7634011aef3a1a3e116734c17429b65d63cbbedbb76097fbf8bce45b7f6136c5"
     },
     {
-      "bytes": 42512,
+      "bytes": 42488,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
       "role": "program_point_search_source",
-      "sha256": "835092695a28cd926184ac35249049aba910eaa2bd1067724073ba24c0293c0a"
+      "sha256": "5a0494d17735ab8106d66c72737d66f92382926597f93534535b30c2ca61c864"
     },
     {
       "bytes": 65941,
@@ -349,11 +349,11 @@
       "sha256": "78d37406e9bdc37f126b72987c9c92b452c13b3233c0aeb0a75ed25dadb83a68"
     },
     {
-      "bytes": 20395,
+      "bytes": 20671,
       "license": "MIT",
       "path": "crates/labcolors-core/src/spaces/oklab.rs",
       "role": "srgb8_oklab_source",
-      "sha256": "da9736e813cdd243ceee97d3f81b7a8c19097977f733abf38ee105f4d7375bee"
+      "sha256": "cb42447b354d3a3f4749bb46bd164f6d0a544891332859a1c05d96e4ce4e4ecd"
     },
     {
       "bytes": 6994,

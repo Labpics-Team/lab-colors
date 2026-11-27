@@ -193,6 +193,7 @@ fn execution_identity_with_budget(domain: &[u8], budget: u64) -> [u8; 32] {
     hash.update(domain);
     hash.update(&budget.to_le_bytes());
     hash.update(contrast_bounds::IDENTITY);
+    hash.update(crate::spaces::oklab::SRGB8_OKLAB_PROJECTION_IDENTITY);
     *hash.finalize().as_bytes()
 }
 

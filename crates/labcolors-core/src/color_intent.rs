@@ -34,7 +34,7 @@ pub(crate) enum ColorIntentErrorV1 {
 /// превысить верхнюю границу, только если её соблюдение до кодирования даёт
 /// ровно те же bytes. Явный chroma override задаёт строгие encoded границы.
 /// Точная серая ось остаётся серой; почти нейтральный цвет сохраняет оттенок.
-const IDENTITY_POLICY_VERSION: u8 = 3;
+const IDENTITY_POLICY_VERSION: u8 = 2;
 const DEFAULT_HUE_DEVIATION_DEGREES: f64 = 18.0;
 const DEFAULT_MINIMUM_CHROMA_FRACTION: f64 = 0.1;
 

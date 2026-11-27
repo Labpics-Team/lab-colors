@@ -95,6 +95,11 @@ const _: () = {
 const SIGNIFICAND_BIT: u64 = 1 << 52;
 const FRACTION_MASK: u64 = SIGNIFICAND_BIT - 1;
 
+/// Identity of the operational encoded-color projection shared by all
+/// assignment execution profiles. Authored content keeps its own identity.
+pub(crate) const SRGB8_OKLAB_PROJECTION_IDENTITY: &[u8] =
+    b"labcolors.srgb8-oklab-projection.v1.exact-rounded-lms-roots\0";
+
 /// Compare the exact cube of the midpoint between `lower` and its successor
 /// to the positive normal binary64 `input`. The midpoint has an odd 54-bit
 /// significand M; M^3 fits in 162 bits. We need only the high 128 bits:
