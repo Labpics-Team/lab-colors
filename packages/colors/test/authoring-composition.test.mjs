@@ -72,7 +72,7 @@ test("an independent implicit-reference component neither changes Point choice n
       assert.equal(frame.optimality, "unfinished", "the Point hierarchy has only a byte-domain result");
       assert.deepEqual(frame.values.a, baseline.values.a);
       assert.deepEqual(frame.values.b, baseline.values.b);
-      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
+      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "joint-reference-peers-v1"]);
       const point = frame.selection.find((component) => component.mode === "joint-point-v1");
       assert.deepEqual(new Set(point.uses.flatMap((use) => use.outputs)), new Set(["a", "b"]));
     }
@@ -99,7 +99,7 @@ test("ordinary Point search constructs a readable first result from an infeasibl
   } finally { program.dispose(); }
 });
 
-test("an independent completed reference search preserves the proven optimum of a constant Point use", async () => {
+test("an independent reference search preserves a constant Point use across changes", async () => {
   const c = colors({ reference: { canvas: "#ffffff", paper: "#ffffff" } });
   const canvas = c.surface("canvas"), paper = c.surface("paper");
   const overlay = c.role("overlay", "#888888").on(canvas, {
@@ -112,8 +112,8 @@ test("an independent completed reference search preserves the proven optimum of 
     for (const paper of ["#ffffff", "#000000", "#000000", "#ffffff"]) {
       const frame = program.resolve({ canvas: "#ffffff", paper });
       assert.equal(frame.state, "ready");
-      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "ordered-reference-v1"]);
-      assert.equal(frame.optimality, "exact");
+      assert.deepEqual(frame.selection.map((component) => component.mode).sort(), ["joint-point-v1", "joint-reference-peers-v1"]);
+      assert.equal(frame.optimality, paper === "#ffffff" ? "exact" : "unfinished");
       assert.deepEqual(frame.values.overlay.rgb, [136, 136, 136]);
       if (paper === "#000000") assert.notDeepEqual(frame.values.ink.rgb, [34, 34, 34]);
     }

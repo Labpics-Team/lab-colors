@@ -84,8 +84,8 @@ test("an explicit reference retains its own selection policy during nominal repa
   try {
     const frame = program.resolve({ canvas: "#ffffff" });
     assert.equal(frame.state, "ready");
-    assert.equal(frame.selection[0].mode, "ordered-reference-v1");
-    assert.equal(frame.optimality, "exact");
+    assert.equal(frame.selection[0].mode, "joint-reference-peers-v1");
+    assert.equal(frame.optimality, "unfinished");
     assert.deepEqual(frame.values.ink.rgb, [211, 167, 61]);
     assert.equal(frame.cleanliness.status, "conforms");
   } finally { program.dispose(); }

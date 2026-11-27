@@ -1,4 +1,4 @@
-//! Connected reference uses compare each criterion across the whole tuple.
+//! Authored uses compare each criterion across the whole tuple.
 //! A backdrop can depend on another paint in that same tuple.
 
 use super::*;
@@ -68,16 +68,10 @@ impl UseCase {
         context: &ContextV1<'_>,
         model: ReferenceTransportV1,
         target: usize,
-        case: usize,
         [lower, upper]: [RegionPointV1; 2],
     ) -> [f64; 3] {
         let (lab_lo, lab_hi) =
             crate::spaces::oklab::srgb8_box_oklab_bounds(lower.visible, upper.visible);
-        if context.targets[target].tone_input.is_some() {
-            let mut preferred = model.reference_lab();
-            preferred[0] = context.preferred[case * context.targets.len() + target][0];
-            return [point_box_distance(preferred, lab_lo, lab_hi), 0.0, 0.0];
-        }
         let backdrops = [Srgb8::new(lower.backdrop), Srgb8::new(upper.backdrop)];
         let fixed = backdrops[0] == backdrops[1];
         if fixed && self.backdrop != backdrops[0] {
@@ -123,7 +117,95 @@ impl UseCase {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Preference {
+    Point,
+    Tone,
+    Transport(ReferenceTransportV1),
+}
+
+impl Preference {
+    fn compile(target: &CompiledComputedTargetV1) -> Result<Self, ()> {
+        Ok(match target.preferred_intent() {
+            CompiledPreferredIntentV1::Point { tone: None, .. } => Self::Point,
+            CompiledPreferredIntentV1::Point { tone: Some(_), .. } => Self::Tone,
+            CompiledPreferredIntentV1::ImplicitReference => {
+                Self::Transport(ReferenceTransportV1::new(
+                    target.effective_anchor(),
+                    target.reference_backdrop.ok_or(())?,
+                ))
+            }
+        })
+    }
+
+    fn point_loss(
+        self,
+        prepared: &mut UseCase,
+        domain: AssignmentDomainV1,
+        point: AppearancePointV1,
+        preferred: [f64; 3],
+    ) -> [f64; 3] {
+        match self {
+            Self::Point => [0.0, 0.0, squared_distance(point.lab, preferred)],
+            Self::Tone => [squared_distance(point.lab, preferred), 0.0, 0.0],
+            Self::Transport(model) => {
+                if prepared.backdrop != point.backdrop || prepared.alpha != point.alpha {
+                    *prepared = UseCase::new(point.backdrop, point.alpha);
+                }
+                let sign = if model.reference_contrast() == 1.0 {
+                    0
+                } else {
+                    sign(polarity(point.visible, point.backdrop))
+                };
+                let direction = prepared.direction_at(domain, model, (sign + 1) as usize);
+                [
+                    0.0,
+                    direction.physical_shortfall,
+                    squared_distance(point.lab, direction.preferred),
+                ]
+            }
+        }
+    }
+
+    fn lower_loss(
+        self,
+        prepared: &mut UseCase,
+        context: &ContextV1<'_>,
+        target: usize,
+        case: usize,
+        points: [RegionPointV1; 2],
+    ) -> [f64; 3] {
+        match self {
+            Self::Transport(model) => prepared.lower_bounds(context, model, target, points),
+            Self::Point | Self::Tone => {
+                let preferred = context.preferred[case * context.targets.len() + target];
+                let [lower, upper] = points;
+                let (lo, hi) =
+                    crate::spaces::oklab::srgb8_box_oklab_bounds(lower.visible, upper.visible);
+                let distance = point_box_distance(preferred, lo, hi);
+                match self {
+                    Self::Point => [0.0, 0.0, distance],
+                    Self::Tone => [distance, 0.0, 0.0],
+                    Self::Transport(_) => unreachable!("point preference"),
+                }
+            }
+        }
+    }
+
+    fn authored_exact(self, target: &CompiledComputedTargetV1, point: AppearancePointV1) -> bool {
+        match self {
+            Self::Tone => false,
+            Self::Point => point.visible == target.effective_anchor(),
+            Self::Transport(_) => {
+                Some(point.backdrop) == target.reference_backdrop
+                    && point.visible == target.effective_anchor()
+            }
+        }
+    }
+}
+
 pub(super) struct PeerProfiles {
+    preferences: Vec<Preference>,
     cases: Vec<UseCase>,
     current: Vec<f64>,
     best: Vec<f64>,
@@ -132,9 +214,16 @@ pub(super) struct PeerProfiles {
 }
 
 impl PeerProfiles {
-    pub(super) fn new(count: usize) -> Result<Self, ()> {
+    pub(super) fn new(context: &ContextV1<'_>) -> Result<Self, ()> {
+        let count = context.targets.len();
         let length = count.checked_mul(4).ok_or(())?;
+        let mut preferences = Vec::new();
+        preferences.try_reserve_exact(count).map_err(|_| ())?;
+        for target in context.targets.iter() {
+            preferences.push(Preference::compile(target)?);
+        }
         Ok(Self {
+            preferences,
             cases: Vec::new(),
             current: buffer(length, 0.0)?,
             best: buffer(length, 0.0)?,
@@ -150,7 +239,6 @@ impl PeerProfiles {
     pub(super) fn prepare(
         &mut self,
         context: &ContextV1<'_>,
-        models: &[Option<ReferenceTransportV1>],
         points: &[AppearancePointV1],
     ) -> Result<(), ()> {
         let count = context.targets.len();
@@ -160,8 +248,7 @@ impl PeerProfiles {
                 .try_reserve_exact(count.checked_mul(local_cases.len()).ok_or(())?)
                 .map_err(|_| ())?;
             for &case in local_cases {
-                for (target, &model) in models.iter().enumerate() {
-                    model.ok_or(())?;
+                for target in 0..count {
                     self.cases.push(UseCase::new(
                         points[case * count + target].backdrop,
                         points[case * count + target].alpha,
@@ -175,13 +262,12 @@ impl PeerProfiles {
     pub(super) fn consider(
         &mut self,
         context: &ContextV1<'_>,
-        models: &[Option<ReferenceTransportV1>],
         points: &[AppearancePointV1],
         values: &[Srgb8],
     ) -> Result<bool, ()> {
         let count = values.len();
         let local_cases = &context.local_cases.order;
-        self.prepare(context, models, points)?;
+        self.prepare(context, points)?;
         self.current.fill(0.0);
         let (explicit, remainder) = self.current.split_at_mut(count);
         let (shortfalls, distances) = remainder.split_at_mut(count);
@@ -191,31 +277,19 @@ impl PeerProfiles {
             for (target, prepared) in row.iter_mut().enumerate() {
                 let point = points[case * count + target];
                 let compiled = &context.targets[target];
-                let model = models[target].ok_or(())?;
-                if compiled.tone_input.is_some() {
-                    let mut preferred = model.reference_lab();
-                    preferred[0] = context.preferred[case * count + target][0];
-                    explicit[target] = explicit[target].max(squared_distance(point.lab, preferred));
-                } else {
-                    if prepared.backdrop != point.backdrop || prepared.alpha != point.alpha {
-                        *prepared = UseCase::new(point.backdrop, point.alpha);
-                    }
-                    let sign = if model.reference_contrast() == 1.0 {
-                        0
-                    } else {
-                        sign(polarity(point.visible, point.backdrop))
-                    };
-                    let direction =
-                        prepared.direction_at(context.domains[target], model, (sign + 1) as usize);
-                    shortfalls[target] = shortfalls[target].max(direction.physical_shortfall);
-                    visible[target] =
-                        visible[target].max(squared_distance(point.lab, direction.preferred));
-                }
+                let preference = self.preferences[target];
+                let [tone, shortfall, distance] = preference.point_loss(
+                    prepared,
+                    context.domains[target],
+                    point,
+                    context.preferred[case * count + target],
+                );
+                explicit[target] = explicit[target].max(tone);
+                shortfalls[target] = shortfalls[target].max(shortfall);
+                visible[target] = visible[target].max(distance);
                 // An identical authored use has zero transport and source loss
                 // by construction. A rounded tone comparison cannot prove this.
-                authored_reference &= compiled.tone_input.is_none()
-                    && Some(point.backdrop) == compiled.reference_backdrop
-                    && point.visible == compiled.effective_anchor();
+                authored_reference &= preference.authored_exact(compiled, point);
             }
         }
         for (target, &value) in values.iter().enumerate() {
@@ -236,7 +310,6 @@ impl PeerProfiles {
     pub(super) fn lower_profile(
         &mut self,
         context: &ContextV1<'_>,
-        models: &[Option<ReferenceTransportV1>],
         bounds: &BoundsV1,
         domain_at: impl Fn(usize) -> AssignmentDomainV1,
     ) -> &[f64] {
@@ -252,10 +325,10 @@ impl PeerProfiles {
         let (visible, source) = distances.split_at_mut(count);
         for &case in &refinement.cases {
             let row = refinement.ranks[case] * count;
-            for (target, model) in models.iter().enumerate() {
-                let [tone, shortfall, distance] = self.cases[row + target].lower_bounds(
+            for (target, &preference) in self.preferences.iter().enumerate() {
+                let [tone, shortfall, distance] = preference.lower_loss(
+                    &mut self.cases[row + target],
                     context,
-                    model.expect("reference peer model"),
                     target,
                     case,
                     points[case * count + target],

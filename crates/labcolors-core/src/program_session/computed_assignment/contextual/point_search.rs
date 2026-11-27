@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v9.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.local-support.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v10.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
     let mut bytes = [0; DOMAIN.len() + 8];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
@@ -89,43 +89,50 @@ fn sorted_order(buffers: &mut BuffersV1) -> Option<Ordering> {
 
 fn compare_primary<E: ProgramConstraintEvaluatorSetV1>(
     prepared: &PreparedPointSelectionV1<'_, '_, E>,
+    context: &ContextV1<'_>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
 ) -> Option<Ordering> {
-    buffers.left.clear();
-    buffers.right.clear();
-    // A shared immutable expression can be cancelled from both multisets.
-    // Matching non-singleton bounds, in contrast, never authorize cancellation.
-    for variable in 0..component.point_variable_count() {
-        let local = component.point_variable(variable);
-        if prepared.same_point_expression(component, local, &buffers.values, &buffers.best, region)
-        {
-            continue;
+    // The same tiers as reference composition, with no transport losses.
+    // Each use contributes its worst loss across all of its observed contexts.
+    for explicit_tone in [true, false] {
+        buffers.left.clear();
+        buffers.right.clear();
+        // A shared immutable expression can be cancelled from both multisets.
+        // Matching non-singleton bounds never authorize cancellation.
+        for variable in 0..component.point_variable_count() {
+            let local = component.point_variable(variable);
+            if context.targets[local].tone_input.is_some() != explicit_tone
+                || prepared.same_point_expression(
+                    component,
+                    local,
+                    &buffers.values,
+                    &buffers.best,
+                    region,
+                )
+            {
+                continue;
+            }
+            buffers.left.push(buffers.primary[variable]);
+            buffers.right.push(buffers.best_primary[variable]);
         }
-        for (a, b) in buffers
-            .primary
-            .chunks_exact(component.point_variable_count())
-            .zip(
-                buffers
-                    .best_primary
-                    .chunks_exact(component.point_variable_count()),
-            )
-        {
-            buffers.left.push(a[variable]);
-            buffers.right.push(b[variable]);
+        match sorted_order(buffers)? {
+            Ordering::Equal => {}
+            order => return Some(order),
         }
     }
-    sorted_order(buffers)
+    Some(Ordering::Equal)
 }
 
 fn compare<E: ProgramConstraintEvaluatorSetV1>(
     prepared: &PreparedPointSelectionV1<'_, '_, E>,
+    context: &ContextV1<'_>,
     component: &ComputedComponentV1,
     buffers: &mut BuffersV1,
     region: Option<RegionNodeV1>,
 ) -> Option<Ordering> {
-    match compare_primary(prepared, component, buffers, region)? {
+    match compare_primary(prepared, context, component, buffers, region)? {
         Ordering::Equal => {}
         order => return Some(order),
     }
@@ -214,7 +221,13 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
         if !self.has_best || !self.best_measured || !current_measured {
             return Ok((current_measured, precision, None));
         }
-        let mut order = compare(self.prepared, self.component, self.buffers, region);
+        let mut order = compare(
+            self.prepared,
+            self.context,
+            self.component,
+            self.buffers,
+            region,
+        );
         if order.is_none()
             && (precision == PointMeasurementPrecisionV1::Screened
                 || self.best_precision == PointMeasurementPrecisionV1::Screened)
@@ -228,7 +241,13 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                 current_measured = self.measure_current(region, precision)?;
             }
             if self.best_measured && current_measured {
-                order = compare(self.prepared, self.component, self.buffers, region);
+                order = compare(
+                    self.prepared,
+                    self.context,
+                    self.component,
+                    self.buffers,
+                    region,
+                );
             }
         }
         Ok((current_measured, precision, order))
@@ -479,11 +498,16 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
                 &mut self.buffers.source,
                 PointMeasurementV1::RegionWitness,
             ))?;
-            // Each row has an independent witness for its interval lower bound.
+            // Each use has independent witnesses for its interval lower bound.
             // Such a profile can disprove pruning but cannot retain a tuple.
             if witnessed
-                && compare_primary(self.prepared, self.component, self.buffers, Some(node))
-                    == Some(Ordering::Less)
+                && compare_primary(
+                    self.prepared,
+                    self.context,
+                    self.component,
+                    self.buffers,
+                    Some(node),
+                ) == Some(Ordering::Less)
             {
                 return Ok(false);
             }
@@ -556,13 +580,10 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
     copy(&mut buffers.working, &buffers.authored)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     buffers.scores.resize(count, 0.0);
-    let rows = variables
-        .checked_mul(context.local_cases.order.len())
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
     for values in [&mut buffers.left, &mut buffers.right, &mut buffers.sort] {
         values.clear();
         values
-            .try_reserve(rows.max(count))
+            .try_reserve(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     }
     let mut state = SearchV1 {

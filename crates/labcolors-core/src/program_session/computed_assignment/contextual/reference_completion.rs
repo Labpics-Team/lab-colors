@@ -746,12 +746,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
         primary.clear();
         source_profile.clear();
         primary
-            .try_reserve(
-                cases
-                    .len()
-                    .checked_mul(component.targets.len())
-                    .ok_or(Error::<E>::ResourceExhausted)?,
-            )
+            .try_reserve(component.point_variable_count())
             .map_err(|_| Error::<E>::ResourceExhausted)?;
         if let PointMeasurementV1::Profile(precision) = measurement {
             source_profile
@@ -803,10 +798,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
             let view = paints.evaluate_surface_inputs_canonical(|index| {
                 CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
             });
-            for (local, &target) in component.targets.iter().enumerate() {
-                if component.point_representative(local) != local {
-                    continue;
-                }
+            for variable in 0..component.point_variable_count() {
+                let local = component.point_variable(variable);
+                let target = component.targets[local];
                 let usage = &mut self.scratch.uses[target];
                 let visible_rgb = if let Some(slot) = usage.slot {
                     view.occurrence_at(slot)
@@ -833,7 +827,11 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                         source_distance_squared(visible, preferred)?
                     }
                 };
-                primary.push(loss);
+                if local_case == 0 {
+                    primary.push(loss);
+                } else {
+                    primary[variable] = primary[variable].max(loss)?;
+                }
             }
         }
         Ok(())

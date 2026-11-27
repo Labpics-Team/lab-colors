@@ -248,6 +248,229 @@ fn reference_peers_prune_and_restore_the_authored_hierarchy() {
 }
 
 #[test]
+fn reference_peers_preserve_choice_when_a_redundant_material_joins() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let distance = |a, b| squared_distance(lab(gray(a)), lab(gray(b)));
+    let minimum = 0.20_f64;
+    let expected = (0..=255_u8)
+        .flat_map(|a| (0..=255_u8).map(move |b| [a, b]))
+        .filter(|&[a, b]| distance(a, b).sqrt() >= minimum)
+        .min_by(|&[a, b], &[c, d]| {
+            let profile = |a, b| {
+                let losses = [distance(a, 124), distance(b, 132)];
+                [losses[0].max(losses[1]), losses[0].min(losses[1])]
+            };
+            let a = profile(a, b);
+            let b = profile(c, d);
+            a[0].total_cmp(&b[0]).then_with(|| a[1].total_cmp(&b[1]))
+        })
+        .expect("finite neutral pair");
+    assert_eq!(expected, [99, 159]);
+    let separation = |id, a, b, minimum| {
+        ConstraintInvocation::pair_separation(
+            ConstraintId::new(id),
+            DirectedRelationV1::try_new(OccurrenceId::new(a), vec![OccurrenceId::new(b)])
+                .expect("distinct uses"),
+            VisibleSeparationBoundsV1::new(minimum, 2.0).expect("valid separation"),
+        )
+    };
+    for reverse in [false, true] {
+        for material in [None, Some(false), Some(true)] {
+            for connected in [false, true] {
+                let mut p = hierarchy();
+                p.targets = vec![color(10, 5, 124, 0), color(20, 15, 132, 1)];
+                p.constraints.hard = vec![separation(30, 5, 15, minimum)];
+                if let Some(appearance) = material {
+                    let mut extra = if appearance {
+                        color(40, 45, 0, 2)
+                    } else {
+                        super::tests::target(40, 0, 0, 5, 2)
+                    };
+                    let TargetIntentV1::Computed(value) = &mut extra.intent else {
+                        unreachable!()
+                    };
+                    value.reference_appearance = false;
+                    value.domain = AssignmentDomainV1::Gray { lower: 0, upper: 5 };
+                    p.targets.push(extra);
+                    p.paints.push(Paint::Solid {
+                        id: PaintId::new(43),
+                        target: TargetId::new(40),
+                    });
+                    // A distinct physical input also exercises observed-order
+                    // projection and report refresh with a partial report set.
+                    p.observation_group
+                        .surface_input_ports
+                        .push(SurfaceInputPortId::new(12));
+                    p.reference_inputs
+                        .as_mut()
+                        .expect("reference")
+                        .push((SurfaceInputPortId::new(12), gray(250)));
+                    p.surfaces.push(Surface::Input {
+                        id: SurfaceId::new(44),
+                        input: SurfaceInputPortId::new(12),
+                    });
+                    p.occurrences.push(Occurrence::new(
+                        OccurrenceId::new(45),
+                        PaintId::new(43),
+                        SurfaceId::new(44),
+                        CompositionProfile::EncodedSrgb8SourceOverV1,
+                        p.occurrences[0].context,
+                    ));
+                    p.outputs
+                        .push(OutputBinding::new(OutputSlotId::new(47), PaintId::new(43)));
+                    if connected {
+                        p.constraints.hard.push(separation(50, 5, 45, 0.05));
+                    }
+                } else if connected {
+                    continue;
+                }
+                let owner = compile_reference_composition(p, reverse);
+                let mut session = owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .expect("session");
+                for revision in 1..=2 {
+                    let mut observed = gray_cases(revision, &[255, 255]);
+                    if material.is_some() {
+                        use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};
+                        let ObservationPayloadInput::Scenarios(cases) = &mut observed.payload
+                        else {
+                            unreachable!()
+                        };
+                        for (case, input) in cases.scenarios.iter_mut().zip([250, 210]) {
+                            case.bindings.push(SurfaceInputBinding::new(
+                                SurfaceInputPortId::new(12),
+                                ColorSignal::from_srgb8(gray(input)),
+                            ));
+                        }
+                        if revision == 2 {
+                            cases.scenarios.reverse();
+                        }
+                    }
+                    session
+                        .prepare_update(observed)
+                        .expect("observation")
+                        .commit();
+                    let frame = session
+                        .state()
+                        .current_verified()
+                        .expect("feasible composition")
+                        .computed_for_test();
+                    let sources = &frame.arena.storage.outputs;
+                    assert_eq!(
+                        [sources[0].paint.source(), sources[1].paint.source()],
+                        expected.map(gray),
+                        "reverse={reverse}, material={material:?}, connected={connected}"
+                    );
+                    if material.is_some() {
+                        assert_eq!(sources[2].paint.source(), gray(0));
+                    }
+                    let reports = frame.reference_selections().expect("reference reports");
+                    assert_eq!(reports.len(), 2);
+                    for report in reports.iter() {
+                        let expected = if report.target_id() == 10 {
+                            expected[0]
+                        } else {
+                            assert_eq!(report.target_id(), 20);
+                            expected[1]
+                        };
+                        assert!(
+                            report
+                                .cases()
+                                .iter()
+                                .all(|case| case.actual_visible() == gray(expected))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_point_tone_priority_survives_a_redundant_reference_constraint() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let separation = |id, a, b, minimum| {
+        ConstraintInvocation::pair_separation(
+            ConstraintId::new(id),
+            DirectedRelationV1::try_new(OccurrenceId::new(a), vec![OccurrenceId::new(b)])
+                .expect("distinct uses"),
+            VisibleSeparationBoundsV1::new(minimum, 2.0).expect("valid separation"),
+        )
+    };
+    let expected = (0..=255_u8)
+        .filter(|&b| squared_distance(lab(gray(124)), lab(gray(b))).sqrt() >= 0.20)
+        .min_by(|&a, &b| {
+            squared_distance(lab(gray(a)), lab(gray(132)))
+                .total_cmp(&squared_distance(lab(gray(b)), lab(gray(132))))
+        })
+        .expect("feasible second use at the requested first tone");
+    for reverse in [false, true] {
+        for connected in [false, true] {
+            let mut p = hierarchy();
+            p.targets = vec![color(10, 5, 124, 0), color(20, 15, 132, 1)];
+            for target in &mut p.targets {
+                let TargetIntentV1::Computed(value) = &mut target.intent else {
+                    unreachable!()
+                };
+                value.reference_appearance = false;
+            }
+            let TargetIntentV1::Computed(first) = &mut p.targets[0].intent else {
+                unreachable!()
+            };
+            let tone = lab(gray(124))[0];
+            first.intent.as_mut().expect("color use").tone =
+                Some(ToneCurveV1::new(2, vec![[0.0, tone], [1.0, tone]]).expect("constant tone"));
+            p.constraints.hard = vec![separation(30, 5, 15, 0.20)];
+            let mut extra = color(40, 45, 0, 2);
+            let TargetIntentV1::Computed(value) = &mut extra.intent else {
+                unreachable!()
+            };
+            value.domain = AssignmentDomainV1::Gray { lower: 0, upper: 5 };
+            p.targets.push(extra);
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(43),
+                target: TargetId::new(40),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(45),
+                PaintId::new(43),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.outputs
+                .push(OutputBinding::new(OutputSlotId::new(47), PaintId::new(43)));
+            if connected {
+                p.constraints.hard.push(separation(50, 5, 45, 0.05));
+            }
+            let owner = compile_reference_composition(p, reverse);
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            session
+                .prepare_update(update(1, 255))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("feasible composition")
+                .computed_for_test();
+            let outputs = &frame.arena.storage.outputs;
+            assert_eq!(
+                [
+                    outputs[0].paint.source(),
+                    outputs[1].paint.source(),
+                    outputs[2].paint.source()
+                ],
+                [gray(124), gray(expected), gray(0)],
+                "reverse={reverse}, connected={connected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn reference_peers_tone_selects_the_nearest_feasible_surface_across_polarities() {
     // Enumerate the physical neutral feasibility envelope independently of the
     // search. A surface in the middle cannot host both levels of text at the
@@ -599,15 +822,13 @@ fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
             else {
                 panic!("computed reference composition")
             };
-            // A fully transparent parent can remove the physical dependency.
-            // Independent singleton components retain their discrete policy.
-            let joint = selection.components.len() == 1;
-            assert!(selection.components.iter().all(|component| component.mode
-                == if joint {
-                    ProgramSelectionModeV1::JointReferencePeersV1
-                } else {
-                    ProgramSelectionModeV1::OrderedReferenceV1
-                }));
+            // Removing a physical dependency changes the decomposition, not
+            // the objective of any remaining reference use.
+            assert!(
+                selection.components.iter().all(
+                    |component| component.mode == ProgramSelectionModeV1::JointReferencePeersV1
+                )
+            );
             let mut session = owner
                 .instantiate(ObservationStreamId::new(8))
                 .expect("session");
@@ -634,11 +855,7 @@ fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
             // policy's continuous minimum remains unproven.
             assert_eq!(
                 frame.optimality(),
-                if joint {
-                    ComputedOptimalityV1::Unfinished
-                } else {
-                    ComputedOptimalityV1::Exact
-                },
+                ComputedOptimalityV1::Unfinished,
                 "{:?}",
                 frame.search
             );

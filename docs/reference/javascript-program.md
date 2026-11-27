@@ -841,12 +841,13 @@ V1 сохраняет прежние байты и отказывается от
 вычисляемый sRGB8-domain, `colorTarget`, стандартный `pointOccurrence` и
 `visibleSeparationHard`. `assignment(targetIds)` объявляет лексикографический
 порядок предпочтений; пустой список допустим для полностью фиксированного графа.
-`compose(targetIds, { reference })` объявляет совместный выбор: Core использует
-`joint-point-v1` для целиком Point-компонент и `ordered-reference-v1` для
-компонент с implicit-reference. В последнем случае список сохраняет прежний
-порядок для совместимости; он не задаёт приоритет Point-компонент.
-`composeReference(targetIds, reference)` передаёт выбор с независимыми
-подложками через tag 7 в LCPW V3. Обычный `colors({ reference })` использует
+`compose(targetIds, { reference })` объявляет совместный выбор Point-компонент
+(`joint-point-v1`). Для implicit-reference этот прежний низкоуровневый вход
+сохраняет `ordered-reference-v1` для совместимости.
+`composeReference(targetIds, reference)` передаёт симметричный выбор с независимыми
+подложками через tag 6 в LCPW V3. Любая компонента с implicit-reference использует
+`joint-reference-peers-v1` независимо от числа применений и наличия других типов опор.
+Обычный `colors({ reference })` использует
 его автоматически, а `colors()` без авторского окружения использует `compose`.
 Имена и порядок экспортируемых outputs не меняют предпочтения.
 Матрицы кандидатов в JavaScript не нужны.

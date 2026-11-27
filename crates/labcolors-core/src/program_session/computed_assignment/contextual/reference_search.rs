@@ -309,7 +309,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         }
         Ok(Self {
             peers: (component.mode == ProgramSelectionModeV1::JointReferencePeersV1)
-                .then(|| PeerProfiles::new(count))
+                .then(|| PeerProfiles::new(&context))
                 .transpose()
                 .map_err(allocation)?,
             context,
@@ -635,7 +635,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
 
     fn retain_tuple(&mut self, values: &[Srgb8], points: &[AppearancePointV1]) -> Result<(), ()> {
         if let Some(peers) = &mut self.peers {
-            let improved = peers.consider(&self.context, &self.models, points, values)?;
+            let improved = peers.consider(&self.context, points, values)?;
             if improved {
                 if let Some(best) = self.best {
                     self.pending[best].values.copy_from_slice(values);
@@ -1103,7 +1103,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
             return Ok(false);
         }
         let peers = self.peers.as_mut().expect("joint reference component");
-        peers.lower_profile(&self.context, &self.models, bounds, domain_at);
+        peers.lower_profile(&self.context, bounds, domain_at);
         Ok(!peers.cannot_improve())
     }
 
@@ -1504,8 +1504,9 @@ impl<'a> ReferenceRuntimeV1<'a> {
     fn reference_reports(
         &self,
         selected: usize,
+        target_order: impl IntoIterator<Item = usize>,
     ) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
-        reports(&self.context, &self.appearance, |target| {
+        reports(&self.context, &self.appearance, target_order, |target| {
             Ok(self.pending[selected].capacities[target].map(|index| {
                 let capacity = &self.capacities[index];
                 ProgramReferenceCapacityV1 {
@@ -1521,6 +1522,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
 fn reports(
     context: &ContextV1<'_>,
     appearance: &[AppearancePointV1],
+    target_order: impl IntoIterator<Item = usize>,
     mut capacity: impl FnMut(usize) -> Result<Option<ProgramReferenceCapacityV1>, ()>,
 ) -> Result<std::sync::Arc<[ProgramReferenceSelectionV1]>, ()> {
     let count = context.targets.len();
@@ -1534,7 +1536,8 @@ fn reports(
                 .count(),
         )
         .map_err(|_| ())?;
-    for (target, compiled) in context.targets.iter().enumerate() {
+    for target in target_order {
+        let compiled = &context.targets[target];
         let Some(backdrop) = compiled.reference_backdrop else {
             continue;
         };
@@ -1614,7 +1617,7 @@ pub(super) fn reports_for_values<E: ProgramConstraintEvaluatorSetV1>(
         &mut scores,
         &mut appearance,
     )?;
-    reports(context, &appearance, capacity).map_err(allocation)
+    reports(context, &appearance, 0..context.targets.len(), capacity).map_err(allocation)
 }
 
 fn observe_selected<E: ProgramConstraintEvaluatorSetV1>(
@@ -1699,7 +1702,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     search.assess_tuple(runtime, epoch, scenarios, &working, arena)?;
     if let Some(peers) = &mut search.peers {
         peers
-            .prepare(&search.context, &search.models, &search.appearance)
+            .prepare(&search.context, &search.appearance)
             .map_err(allocation)?;
     }
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
@@ -2086,28 +2089,28 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             &mut search.legacy_scores,
             &mut search.appearance,
         )?;
-        let mut reports = search.reference_reports(best).map_err(allocation)?;
-        if let Some(order) = order.as_ref() {
-            // Snapshot storage and history are always in the compiled component
-            // order. Only the finite search used the observed execution order.
-            let mut destinations = cloned(&order.targets).map_err(allocation)?;
-            for dst in &mut destinations {
-                *dst = component
+        // Snapshot storage and history use the compiled component order.
+        // Project both the full tuple and the subset of reference reports from
+        // the same mapping, before filtering out non-reference targets.
+        let local_order = if let Some(order) = order.as_ref() {
+            let mut local_order = buffer(count, 0).map_err(allocation)?;
+            for (local, ordinal) in order.targets.iter().enumerate() {
+                let dst = component
                     .targets
-                    .binary_search(dst)
+                    .binary_search(ordinal)
                     .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+                local_order[dst] = local;
+                values[dst] = search.pending[best].values[local];
             }
-            let rows = std::sync::Arc::get_mut(&mut reports)
-                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-            for index in 0..count {
-                while destinations[index] != index {
-                    let dst = destinations[index];
-                    destinations.swap(index, dst);
-                    values.swap(index, dst);
-                    rows.swap(index, dst);
-                }
-            }
-        }
+            Some(local_order)
+        } else {
+            None
+        };
+        let target_order =
+            (0..count).map(|target| local_order.as_ref().map_or(target, |order| order[target]));
+        let reports = search
+            .reference_reports(best, target_order)
+            .map_err(allocation)?;
         (Some(values), Some(reports))
     } else {
         (None, None)

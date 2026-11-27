@@ -539,13 +539,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         Some(ComputedSelectionPolicyV1::ReferenceComposition(_))
     ) {
         for group in &mut groups {
-            if group.mode == ProgramSelectionModeV1::OrderedReferenceV1
-                && group.targets.len() > 1
-                && group
-                    .targets
-                    .iter()
-                    .all(|&target| selection.targets[target].declaration.reference_appearance)
-            {
+            if group.mode == ProgramSelectionModeV1::OrderedReferenceV1 {
                 group.mode = ProgramSelectionModeV1::JointReferencePeersV1;
             }
         }
