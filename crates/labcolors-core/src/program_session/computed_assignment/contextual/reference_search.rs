@@ -291,12 +291,13 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
 {
     fn new(
         selection: &'a ComputedSelectionV1,
-        component: &'a ComputedComponentV1,
-        scenarios: NonEmptyScenarioSetV1<'_>,
+        observation: LocalObservationV1<'a, '_>,
         order: Option<&'a identity::ObservedComponentOrder>,
         prepared: Option<&'p mut PreparedPointSelectionV1<'program, 'scratch, E>>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let context = ContextV1::in_order::<E>(selection, Some(component), scenarios, order)?;
+        let component = observation.component;
+        let scenarios = observation.scenarios;
+        let context = ContextV1::for_observation::<E>(selection, observation, order)?;
         let count = context.targets.len();
         let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         let cells = count
@@ -1684,17 +1685,17 @@ pub(in crate::program_session::computed_assignment) fn refresh_reports<
     E: ProgramConstraintEvaluatorSetV1,
 >(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     values: &[Srgb8],
     previous: &[ProgramReferenceSelectionV1],
 ) -> Result<
     std::sync::Arc<[ProgramReferenceSelectionV1]>,
     ProgramSessionEvaluationError<ProgramEvaluatorError<E>>,
 > {
-    let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+    let scenarios = observation.scenarios;
+    let context = ContextV1::for_observation::<E>(selection, observation, None)?;
     // Capacity and search completeness describe the same local support. Case
     // indexes and appearances describe this observation and must be rebuilt.
     let mut previous = previous.iter();
@@ -1723,17 +1724,19 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     E: ProgramConstraintEvaluatorSetV1,
 >(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     prepared: Option<&mut PreparedPointSelectionV1<'_, '_, E>>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    let component = observation.component;
+    let scenarios = observation.scenarios;
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let mut order = if let Some(graph) = &component.peer_graph {
-        let cases = local_case_order::<E>(component, scenarios, |_, _| {})?;
-        graph.order(&cases, scenarios).map_err(allocation)?
+        graph
+            .order(&observation.cases.order, scenarios)
+            .map_err(allocation)?
     } else {
         None
     };
@@ -1745,8 +1748,7 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             .constraints
             .retain(|index| component.point_constraints().contains(index));
     }
-    let mut search =
-        ReferenceRuntimeV1::new(selection, component, scenarios, order.as_ref(), prepared)?;
+    let mut search = ReferenceRuntimeV1::new(selection, observation, order.as_ref(), prepared)?;
     let count = search.context.targets.len();
     let mut authored = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     for (value, target) in authored.iter_mut().zip(search.context.targets.iter()) {

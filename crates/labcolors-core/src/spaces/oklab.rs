@@ -72,14 +72,6 @@ pub(crate) fn srgb_linear_to_lms_root(rgb: [f64; 3]) -> [f64; 3] {
 // is at least 2^-17. Thus each LMS sum is zero or a positive normal f64.
 // Positive matrix entries and monotone binary64 operations preserve order.
 const _: () = {
-    use crate::spaces::srgb::decode_8bit;
-    assert!(decode_8bit(0) == 0.0 && decode_8bit(1) >= 1.0 / 4096.0);
-    let mut i = 1;
-    while i <= 255 {
-        assert!(decode_8bit(i as u8) > decode_8bit((i - 1) as u8));
-        assert!(decode_8bit(i as u8) <= 1.0);
-        i += 1;
-    }
     let mut row = 0;
     while row < 3 {
         let mut column = 0;
@@ -100,6 +92,18 @@ pub(crate) const SRGB8_OKLAB_PROJECTION_IDENTITY: &[u8] =
     b"labcolors.srgb8-oklab-projection.v1.exact-rounded-lms-roots\0";
 
 fn srgb8_lms_root_uncached(rgb: crate::Srgb8) -> [f64; 3] {
+    // The independently replayable nominal proof binds the exact sRGB
+    // implementation. Admit its actual decoder once before any cache entry
+    // can be produced; the matrix coefficients are checked at compile time.
+    static DECODE: std::sync::Once = std::sync::Once::new();
+    DECODE.call_once(|| {
+        use crate::spaces::srgb::decode_8bit;
+        assert!(decode_8bit(0) == 0.0 && decode_8bit(1) >= 1.0 / 4096.0);
+        for i in 1..=255_u8 {
+            let decoded = decode_8bit(i);
+            assert!(decoded > decode_8bit(i - 1) && decoded <= 1.0);
+        }
+    });
     let lms = mat_vec_mul(
         SRGB_TO_LMS,
         crate::spaces::srgb::srgb_linear_from_srgb8(rgb),
@@ -159,8 +163,8 @@ pub(crate) fn srgb8_neutral_lightness() -> &'static [f64; 256] {
     })
 }
 
-/// Границы машинного Oklab для RGB8-box. Таблица decode и положительные
-/// коэффициенты LMS проверяются при компиляции; корень корректно округлён,
+/// Границы машинного Oklab для RGB8-box. Таблица decode допускается один раз,
+/// положительные коэффициенты LMS проверяются при компиляции, корень корректно округлён,
 /// поэтому все три координаты LMS монотонны на всей RGB8-решётке.
 /// Знаки коэффициентов и порядок операций совпадают с point-проекцией.
 pub(crate) fn srgb8_box_oklab_bounds(lower: [u8; 3], upper: [u8; 3]) -> ([f64; 3], [f64; 3]) {

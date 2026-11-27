@@ -1175,28 +1175,6 @@ impl VerifiedComponentV1 {
     }
 }
 
-fn local_support<E: ProgramConstraintEvaluatorSetV1>(
-    component: &ComputedComponentV1,
-    scenarios: NonEmptyScenarioSetV1<'_>,
-) -> Result<Vec<ColorSignal>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let cases = contextual::local_case_order::<E>(component, scenarios, |_, _| {})?;
-    let count = cases
-        .len()
-        .checked_mul(component.inputs.len())
-        .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
-    let mut support = Vec::new();
-    support
-        .try_reserve_exact(count)
-        .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    for case in cases {
-        let values = scenarios
-            .physical_values(case)
-            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        support.extend(component.inputs.iter().map(|&input| values[input]));
-    }
-    Ok(support)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
@@ -1264,7 +1242,8 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     for (index, component) in selection.components.iter().enumerate() {
-        let support = local_support::<E>(component, scenarios)?;
+        let local_observation = contextual::LocalObservationV1::prepare::<E>(component, scenarios)?;
+        let support = local_observation.support::<E>()?;
         let reusable =
             previous.filter(|previous| previous.components[index].support.as_ref() == support);
         let support = reusable.map_or_else(
@@ -1293,7 +1272,12 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                     .and_then(|reports| reports.get(cached.reports.clone()))
                     .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                 Some(contextual::refresh_reports(
-                    selection, component, runtime, epoch, scenarios, &local, reports,
+                    selection,
+                    local_observation,
+                    runtime,
+                    epoch,
+                    &local,
+                    reports,
                 )?)
             };
             SearchResultV1 {
@@ -1309,7 +1293,12 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             local.extend_from_slice(&cached.values);
             let reference_selections = if let Some(reports) = cached.reports.as_deref() {
                 Some(contextual::refresh_reports(
-                    selection, component, runtime, epoch, scenarios, &local, reports,
+                    selection,
+                    local_observation,
+                    runtime,
+                    epoch,
+                    &local,
+                    reports,
                 )?)
             } else {
                 None
@@ -1338,20 +1327,18 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             match component.mode {
                 ProgramSelectionModeV1::JointPointV1 => contextual::point_search::select_component(
                     selection,
-                    component,
+                    local_observation,
                     runtime,
                     epoch,
-                    scenarios,
                     arena,
                     &mut prepared,
                 )?,
                 ProgramSelectionModeV1::JointReferencePeersV1 => {
                     contextual::reference_search::select_component(
                         selection,
-                        component,
+                        local_observation,
                         runtime,
                         epoch,
-                        scenarios,
                         arena,
                         Some(&mut prepared),
                     )?
@@ -1363,7 +1350,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
             .iter()
             .any(|&index| selection.targets[index].declaration.intent.is_some())
         {
-            contextual::select_component(selection, component, runtime, epoch, scenarios, arena)?
+            contextual::select_component(selection, local_observation, runtime, epoch, arena)?
         } else {
             select_component(selection, component, runtime, epoch, scenarios)?
         };

@@ -31,7 +31,8 @@ fn select_task<E: ProgramConstraintEvaluatorSetV1>(
         .iter()
         .any(|&index| selection.targets[index].declaration.intent.is_some())
     {
-        select_component_inner(selection, task, runtime, epoch, scenarios, arena, false)
+        let observation = LocalObservationV1::prepare::<E>(task, scenarios)?;
+        select_component_inner(selection, observation, runtime, epoch, arena, false)
     } else {
         super::super::select_component(selection, task, runtime, epoch, scenarios)
     }

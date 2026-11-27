@@ -262,6 +262,74 @@ fn canonical_working_cases_grow_without_reallocation_or_duplicate_weight() {
     assert_eq!(allocations.realloc, 0);
 }
 
+#[test]
+fn reordering_local_inputs_preserves_joint_row_witnesses() {
+    let mut p = program(
+        color(10, 5, 120, 0, 255, false),
+        Wcag22CriterionV1::Sc1411UiComponentOrState,
+        Wcag22Srgb8V1,
+    );
+    let ports = [2, 8, 9].map(SurfaceInputPortId::new);
+    p.observation_group.surface_input_ports = ports.to_vec();
+    for (index, input) in ports.into_iter().skip(1).enumerate() {
+        p.surfaces.push(Surface::Input {
+            id: SurfaceId::new(20 + index as u32),
+            input,
+        });
+    }
+    let owner = compile_assignment(p, 4096).expect("three input ports");
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("session");
+    let mut observation = update(1, 0);
+    let ObservationPayloadInput::Scenarios(cases) = &mut observation.payload else {
+        unreachable!()
+    };
+    cases.scenarios = [[0, 255, 0], [255, 0, 0], [0, 255, 1]]
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| ScenarioInput {
+            id: ScenarioId::new(100 + index as u32),
+            bindings: ports
+                .into_iter()
+                .zip(row)
+                .map(|(port, value)| {
+                    SurfaceInputBinding::new(port, ColorSignal::from_srgb8(gray(value)))
+                })
+                .collect(),
+        })
+        .collect();
+    session.prepare_update(observation).expect("cases").commit();
+    let observed = &session
+        .state()
+        .current_verified()
+        .expect("verified cases")
+        .computed_for_test()
+        .observation;
+    let scenarios = NonEmptyScenarioSetV1::from_admitted(observed).expect("admitted cases");
+    assert_eq!(scenarios.len().get(), 3);
+    let mut local = local_cases::<Wcag22Srgb8V1>(&[0, 1], scenarios).expect("joint support");
+    let row = |case| {
+        let values = scenarios.physical_values(case).expect("physical row");
+        [values[0].srgb8().bytes()[0], values[1].srgb8().bytes()[0]]
+    };
+    assert_eq!(
+        local.order.iter().copied().map(row).collect::<Vec<_>>(),
+        [[0, 255], [255, 0]]
+    );
+    let witnesses = local.representatives.clone();
+    let original_order = local.order.clone();
+    for (case, &representative) in witnesses.iter().enumerate() {
+        assert_eq!(row(case), row(representative));
+        assert!(original_order.contains(&representative));
+    }
+    local
+        .reorder::<Wcag22Srgb8V1>(&[1, 0], scenarios)
+        .expect("same inputs in reversed order");
+    assert_eq!(local.representatives, witnesses);
+    assert_eq!(local.order, [original_order[1], original_order[0]]);
+}
+
 fn check_membership_pass(
     context: &ContextV1<'_>,
     epoch: &ProgramEpochV1<Wcag22Srgb8V1>,

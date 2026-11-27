@@ -610,20 +610,18 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
 #[allow(clippy::too_many_arguments)]
 pub(in crate::program_session) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut buffers = prepared.take_point_buffers();
     let result = search(
         selection,
-        component,
+        observation,
         runtime,
         epoch,
-        scenarios,
         arena,
         prepared,
         &mut buffers,
@@ -635,15 +633,16 @@ pub(in crate::program_session) fn select_component<E: ProgramConstraintEvaluator
 #[allow(clippy::too_many_arguments)]
 fn search<E: ProgramConstraintEvaluatorSetV1>(
     selection: &ComputedSelectionV1,
-    component: &ComputedComponentV1,
+    observation: LocalObservationV1<'_, '_>,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
-    scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
     prepared: &mut PreparedPointSelectionV1<'_, '_, E>,
     buffers: &mut BuffersV1,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-    let context = ContextV1::point::<E>(selection, component, scenarios)?;
+    let component = observation.component;
+    let scenarios = observation.scenarios;
+    let context = ContextV1::for_observation::<E>(selection, observation, None)?;
     prepared
         .refresh_point_component(component, &context.local_cases.order)
         .map_err(|error| match error {
