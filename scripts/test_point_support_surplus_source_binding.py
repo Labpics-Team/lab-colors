@@ -95,8 +95,8 @@ class PointSupportSurplusSourceBindingTests(unittest.TestCase):
             ),
             (
                 self.field_path,
-                b"        let support = self.support.get(case_index)?;\n",
-                b"        let support = self.support.first()?;\n",
+                b"            .get(row.checked_sub(field.case_offset)?)?\n",
+                b"            .first()?\n",
             ),
             (
                 self.gradient_path,

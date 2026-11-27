@@ -105,6 +105,7 @@ fn visible_separation_uses_final_composition_and_adapts_to_actual_backdrop() -> 
             .contains(&ProgramDiagnosticV1::HardConstraint {
                 constraint_id: 6,
                 case_index: 0,
+                field_case: None,
                 subject: ProgramDiagnosticSubjectV1::Occurrence { occurrence_id: 5 },
             })
     );

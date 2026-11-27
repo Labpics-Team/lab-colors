@@ -22,7 +22,7 @@ const snapshot = (state = "ready", report = assessment()) => ({
   referenceSelections: () => [], copyOutputTable: () => new Float64Array([1, 255, 255, 255, 1]),
   selectionComponents: () => [{ mode: "ordered-v1", targets: [1] }],
   diagnostics: () => ({ searchVisited: 3n, searchBudget: 3n, witness: { violations: [
-    { kind: "hard-constraint", constraintId: 7, caseIndex: 1 },
+    { kind: "hard-constraint", constraintId: 7, caseIndex: 1, fieldCase: { inputIndex: 0, caseIndex: 1 } },
   ] } }),
 });
 
@@ -52,8 +52,8 @@ test("affine descriptors reject unsupported and malformed declarations with type
     assert.throws(() => parseColorContext(graph, { canvas: value, paper: "#ffffff" }),
       { code: "color_invalid_context" });
   }
-  assert.throws(() => parseColorContext(graph, { canvas: descriptor(), paper: descriptor() }),
-    { code: "color_unsupported_context", path: "context.paper" });
+  const pair = parseColorContext(graph, { canvas: descriptor(), paper: descriptor() });
+  assert.deepEqual(pair.fields.map(({name}) => name), ["canvas", "paper"]);
 });
 
 test("nominal readiness becomes modeled with copied descriptor and explicit sRGB preview CSS", () => {
@@ -92,6 +92,52 @@ test("field conflict and budget limit keep nominal scope and exact Core witness 
     assert.deepEqual(frame.context.canvas, descriptor());
     assert.deepEqual(frame.diagnostics.find((entry) => entry.kind === "requirement").fieldWitness,
       { input: "canvas", coordinate: [1, 2], nominal: [1, 0, 0] });
+  }
+});
+
+test("independent diagnostics project Core dependency origin and preserve fixed requirements", () => {
+  const context = parseColorContext(graph, { canvas: descriptor(), paper: { ...descriptor(), to: [2, 0, 0] } });
+  const makeReport = (inputIndex, caseOffset, witnesses) => ({
+    inputIndex, caseOffset, from: [0, 0, 0], to: witnesses.at(-1).nominal,
+    sourceModel: "opaque-affine-encoded-srgb8-half-up-v1", domain: "whole-field",
+    rendering: "unknown", regionCount: witnesses.length, witnesses,
+  });
+  const reports = [
+    makeReport(0, 0, [
+      { coordinate: [0, 1], nominal: [0, 0, 0] },
+      { coordinate: [1, 2], nominal: [1, 0, 0] },
+    ]),
+    makeReport(1, 2, [
+      { coordinate: [0, 2], nominal: [0, 0, 0] },
+      { coordinate: [1, 2], nominal: [1, 0, 0] },
+      { coordinate: [2, 2], nominal: [2, 0, 0] },
+    ]),
+  ];
+  const multiSnapshot = {
+    ...snapshot("unsatisfied"),
+    fieldAssessments: () => reports,
+    diagnostics: () => ({ witness: { violations: [
+      { kind: "hard-constraint", constraintId: 7, caseIndex: 3, fieldCase: { inputIndex: 1, caseIndex: 1 } },
+      { kind: "hard-constraint", constraintId: 7, caseIndex: 0, fieldCase: null },
+    ] } }),
+  };
+  const frame = copyColorFrame(multiSnapshot, graph, context);
+  assert.equal("field" in frame, false);
+  assert.deepEqual(frame.fields, [
+    { input: "canvas", sourceModel: reports[0].sourceModel, caseOffset: 0, domain: "whole-field", rendering: "unknown",
+      regionCount: 2, witnesses: reports[0].witnesses },
+    { input: "paper", sourceModel: reports[1].sourceModel, caseOffset: 2, domain: "whole-field", rendering: "unknown",
+      regionCount: 3, witnesses: reports[1].witnesses },
+  ]);
+  const [diagnostic, fixed] = frame.diagnostics;
+  assert.equal("fieldWitnesses" in diagnostic, false);
+  assert.deepEqual(diagnostic.fieldWitness, { input: "paper", coordinate: [1, 2], nominal: [1, 0, 0] });
+  assert.equal("fieldWitness" in fixed, false);
+  for (const fieldCase of [undefined, { inputIndex: 2, caseIndex: 0 }, { inputIndex: 1, caseIndex: 3 }]) {
+    const invalid = { ...multiSnapshot, diagnostics: () => ({ witness: { violations: [
+      { kind: "hard-constraint", constraintId: 7, caseIndex: 0, fieldCase },
+    ] } }) };
+    assert.throws(() => copyColorFrame(invalid, graph, context), { code: "color_core_contract" });
   }
 });
 

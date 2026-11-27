@@ -1,13 +1,13 @@
 //! Структурная проекция immutable witness. Все решения уже приняты Core.
 
 use super::{
-    diagnostic_color, diagnostic_constraint, diagnostic_domain, diagnostic_subject,
-    diagnostic_target, diagnostic_tonal_hierarchy, diagnostic_witness, diagnostics_projection,
-    report_array, report_array_push,
+    diagnostic_color, diagnostic_constraint, diagnostic_domain, diagnostic_field_case,
+    diagnostic_subject, diagnostic_target, diagnostic_tonal_hierarchy, diagnostic_witness,
+    diagnostics_projection, report_array, report_array_push,
 };
 use labcolors_core::program_wire::TonalPolarityV1;
 use labcolors_core::program_wire::{
-    ProgramDiagnosticSubjectV1, ProgramDiagnosticV1, ProgramDiagnosticsV1,
+    ProgramDiagnosticSubjectV1, ProgramDiagnosticV1, ProgramDiagnosticsV1, ProgramFieldCaseV1,
 };
 use wasm_bindgen::prelude::*;
 
@@ -45,6 +45,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
         ProgramDiagnosticV1::HardConstraint {
             constraint_id,
             case_index,
+            field_case,
             subject,
         } => {
             let (kind, a, b, c) = match subject {
@@ -70,6 +71,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
             diagnostic_constraint(
                 constraint_id,
                 case_index,
+                &project_field_case(field_case)?,
                 &diagnostic_subject(kind, a, b, c)?,
             )
         }
@@ -80,6 +82,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
         ProgramDiagnosticV1::ColorIdentity {
             target_id,
             case_index,
+            field_case,
             occurrence_id,
             actual,
         } => {
@@ -88,6 +91,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
                 "color-identity",
                 target_id,
                 case_index,
+                &project_field_case(field_case)?,
                 occurrence_id,
                 r,
                 g,
@@ -99,6 +103,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
         ProgramDiagnosticV1::MaxChange {
             target_id,
             case_index,
+            field_case,
             occurrence_id,
             actual,
             distance_squared,
@@ -109,6 +114,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
                 "max-change",
                 target_id,
                 case_index,
+                &project_field_case(field_case)?,
                 occurrence_id,
                 r,
                 g,
@@ -120,6 +126,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
         ProgramDiagnosticV1::TonalHierarchy {
             constraint_id,
             case_index,
+            field_case,
             stronger_occurrence_id,
             weaker_occurrence_id,
             required_ratio,
@@ -131,6 +138,7 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
         } => diagnostic_tonal_hierarchy(
             constraint_id,
             case_index,
+            &project_field_case(field_case)?,
             stronger_occurrence_id,
             weaker_occurrence_id,
             required_ratio,
@@ -141,6 +149,12 @@ fn project_violation(value: ProgramDiagnosticV1) -> Result<JsValue, JsValue> {
             polarity_key(weaker_polarity),
         ),
     }
+}
+
+fn project_field_case(value: Option<ProgramFieldCaseV1>) -> Result<JsValue, JsValue> {
+    value.map_or(Ok(JsValue::NULL), |case| {
+        diagnostic_field_case(case.input_index(), case.case_index())
+    })
 }
 
 pub(super) const fn polarity_key(value: TonalPolarityV1) -> &'static str {

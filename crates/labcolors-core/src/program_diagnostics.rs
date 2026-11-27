@@ -3,6 +3,43 @@
 
 use crate::Srgb8;
 
+/// A case in the exact support of the input on which this evidence depends.
+/// The case index is local to that input, independent of other field lengths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramFieldCaseV1 {
+    pub(crate) input_index: usize,
+    pub(crate) case_index: usize,
+}
+
+impl ProgramFieldCaseV1 {
+    pub const fn input_index(self) -> usize {
+        self.input_index
+    }
+
+    pub const fn case_index(self) -> usize {
+        self.case_index
+    }
+}
+
+/// Origin is assigned during evaluation from the compiled input dependencies.
+/// Repeated evaluations on another marginal carry no independent evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProgramCaseOriginV1 {
+    Observed,
+    Fixed,
+    Field(ProgramFieldCaseV1),
+    OtherMarginal,
+}
+
+impl ProgramCaseOriginV1 {
+    pub(crate) const fn field_case(self) -> Option<ProgramFieldCaseV1> {
+        match self {
+            Self::Field(case) => Some(case),
+            _ => None,
+        }
+    }
+}
+
 /// Физический объект нарушенного hard constraint. Идентификаторы принадлежат
 /// исходной декларации; relation reference не подменяет всех её участников.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +71,7 @@ pub enum ProgramDiagnosticV1 {
     TonalHierarchy {
         constraint_id: u32,
         case_index: usize,
+        field_case: Option<ProgramFieldCaseV1>,
         stronger_occurrence_id: u32,
         weaker_occurrence_id: u32,
         required_gap: f64,
@@ -46,6 +84,7 @@ pub enum ProgramDiagnosticV1 {
     HardConstraint {
         constraint_id: u32,
         case_index: usize,
+        field_case: Option<ProgramFieldCaseV1>,
         subject: ProgramDiagnosticSubjectV1,
     },
     TargetDomain {
@@ -55,12 +94,14 @@ pub enum ProgramDiagnosticV1 {
     ColorIdentity {
         target_id: u32,
         case_index: usize,
+        field_case: Option<ProgramFieldCaseV1>,
         occurrence_id: Option<u32>,
         actual: Srgb8,
     },
     MaxChange {
         target_id: u32,
         case_index: usize,
+        field_case: Option<ProgramFieldCaseV1>,
         occurrence_id: Option<u32>,
         actual: Srgb8,
         distance_squared: f64,

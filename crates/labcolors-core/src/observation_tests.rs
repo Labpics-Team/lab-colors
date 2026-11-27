@@ -164,10 +164,14 @@ impl SchemaOrderedFieldSourceV1 for DeclaredFieldSource {
         );
         self.values[index]
     }
-    fn varying_input_index(&self) -> usize {
+    fn field_count(&self) -> usize {
+        1
+    }
+
+    fn field_input(&self, _ordinal: usize) -> usize {
         self.varying
     }
-    fn stops(&self) -> crate::field_context::FieldStops<'_> {
+    fn field_stops(&self, _ordinal: usize) -> crate::field_context::FieldStops<'_> {
         crate::field_context::FieldStops::Affine(self.segment)
     }
 }
