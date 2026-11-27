@@ -88,13 +88,13 @@ impl UseCase {
         target: usize,
         case: usize,
         [lower, upper]: [RegionPointV1; 2],
-    ) -> [f64; 2] {
+    ) -> [f64; 3] {
         let (lab_lo, lab_hi) =
             crate::spaces::oklab::srgb8_box_oklab_bounds(lower.visible, upper.visible);
         if context.targets[target].tone_input.is_some() {
             let mut preferred = model.reference_lab();
             preferred[0] = context.preferred[case * context.targets.len() + target][0];
-            return [0.0, point_box_distance(preferred, lab_lo, lab_hi)];
+            return [point_box_distance(preferred, lab_lo, lab_hi), 0.0, 0.0];
         }
         let backdrops = [Srgb8::new(lower.backdrop), Srgb8::new(upper.backdrop)];
         let fixed = backdrops[0] == backdrops[1];
@@ -138,7 +138,7 @@ impl UseCase {
             shortfall = shortfall.min(branch_shortfall);
             distance = distance.min((dl * dl + da * da) + db * db);
         }
-        [shortfall, distance]
+        [0.0, shortfall, distance]
     }
 }
 
@@ -152,7 +152,7 @@ pub(super) struct PeerProfiles {
 
 impl PeerProfiles {
     pub(super) fn new(count: usize) -> Result<Self, ()> {
-        let length = count.checked_mul(3).ok_or(())?;
+        let length = count.checked_mul(4).ok_or(())?;
         Ok(Self {
             cases: Vec::new(),
             current: buffer(length, 0.0)?,
@@ -193,7 +193,8 @@ impl PeerProfiles {
             }
         }
         self.current.fill(0.0);
-        let (shortfalls, distances) = self.current.split_at_mut(count);
+        let (explicit, remainder) = self.current.split_at_mut(count);
+        let (shortfalls, distances) = remainder.split_at_mut(count);
         let (visible, source) = distances.split_at_mut(count);
         let mut authored_reference = true;
         for (row, &case) in self.cases.chunks_exact_mut(count).zip(local_cases) {
@@ -210,10 +211,14 @@ impl PeerProfiles {
                     );
                 }
                 let direction = prepared.direction(point);
-                shortfalls[target] = shortfalls[target].max(direction.physical_shortfall);
-                visible[target] =
-                    visible[target].max(squared_distance(point.lab, direction.preferred));
                 let compiled = &context.targets[target];
+                let distance = squared_distance(point.lab, direction.preferred);
+                if compiled.tone_input.is_some() {
+                    explicit[target] = explicit[target].max(distance);
+                } else {
+                    shortfalls[target] = shortfalls[target].max(direction.physical_shortfall);
+                    visible[target] = visible[target].max(distance);
+                }
                 // An identical authored use has zero transport and source loss
                 // by construction. A rounded tone comparison cannot prove this.
                 authored_reference &= compiled.tone_input.is_none()
@@ -254,18 +259,20 @@ impl PeerProfiles {
             .expect("reference bounds capture");
         let refinement = context.case_refinement.borrow();
         self.current.fill(0.0);
-        let (shortfalls, distances) = self.current.split_at_mut(count);
+        let (explicit, remainder) = self.current.split_at_mut(count);
+        let (shortfalls, distances) = remainder.split_at_mut(count);
         let (visible, source) = distances.split_at_mut(count);
         for &case in &refinement.cases {
             let row = refinement.ranks[case] * count;
             for (target, model) in models.iter().enumerate() {
-                let [shortfall, distance] = self.cases[row + target].lower_bounds(
+                let [tone, shortfall, distance] = self.cases[row + target].lower_bounds(
                     context,
                     model.expect("reference peer model"),
                     target,
                     case,
                     points[case * count + target],
                 );
+                explicit[target] = explicit[target].max(tone);
                 shortfalls[target] = shortfalls[target].max(shortfall);
                 visible[target] = visible[target].max(distance);
             }
