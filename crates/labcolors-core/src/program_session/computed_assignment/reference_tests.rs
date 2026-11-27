@@ -388,11 +388,16 @@ fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
                 .find(|order| *order != Ordering::Equal)
                 .unwrap_or(Ordering::Equal)
         };
+        let identities = anchors.map(|anchor| {
+            ColorIdentityDomainV1::new(anchor, false, IdentityOptionsV1::default())
+                .expect("source identity")
+        });
         let expected = (0..domains[0].cardinality().expect("finite domain"))
             .flat_map(|left| {
                 (0..domains[1].cardinality().expect("finite domain"))
                     .map(move |right| [domains[0].value(left), domains[1].value(right)])
             })
+            .filter(|tuple| (0..2).all(|target| identities[target].contains(tuple[target])))
             .map(profile)
             .min_by(compare)
             .expect("nonempty tuples");
@@ -405,12 +410,7 @@ fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
                     anchors[target],
                     2.0,
                     ColorUseIntentV1 {
-                        identity: ColorIdentityDomainV1::new(
-                            anchors[target],
-                            false,
-                            IdentityOptionsV1::default(),
-                        )
-                        .expect("source identity"),
+                        identity: identities[target],
                         appearance: Some(OccurrenceId::new(5 + target as u32 * 10)),
                         tone: None,
                     },

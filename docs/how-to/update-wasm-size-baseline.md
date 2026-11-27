@@ -24,11 +24,13 @@ gh run download "$RUN_ID" --repo Labpics-Team/lab-colors \
 ```
 
 Внутри находятся `labcolors_bg.wasm`, `wasm-build.json` и `measurement.json`. Сверьте SHA-256 и
-длину файла с `artifact`, а `sourceSha`, номер запуска и попытку — с job и его
+длину WASM с `artifact`, SHA-256 файла `wasm-build.json` с
+`build.receiptSha256`, а `sourceSha`, номер запуска и попытку — с job и его
 checkout. У pull request checkout может быть merge-коммитом, а не head ветки.
 Receipt также содержит хеши workflow, Cargo.lock, manifests, скриптов сборки и
 старого budget. `wasm-build.json` создаётся общим build-скриптом после успешной
-компиляции и оптимизации. Measurement требует совпадения записей обеих сборок,
+компиляции и оптимизации. Обе сборки используют независимые каталоги Cargo.
+Measurement требует `compiledWithoutCargoReuse: true`, совпадения байтов записей обеих сборок,
 хешей входов и конечных байтов, проверяет фактический профиль из сообщений Cargo
 и версии инструментов. Базовый профиль WASM задан в `recipe.cargoProfile`.
 Скрипт перекрывает одноимённые profile settings, incremental и rustflags

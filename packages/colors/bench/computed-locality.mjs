@@ -12,8 +12,11 @@ const packageRoot = process.argv[2] === undefined
 const components = Number(process.argv[3] ?? 8);
 const protocol = measurementProtocol({ samples: process.argv[4], warmups: process.argv[5], frames: process.argv[6] });
 const pattern = process.argv[7] ?? "independent";
+const selectionMode = process.argv[8] ?? "joint-reference-peers-v1";
 assert.ok(Number.isInteger(components) && components >= 1 && components <= 256, "components: 1..256");
 assert.ok(["independent", "shared-input"].includes(pattern), "pattern: independent | shared-input");
+assert.ok(["joint-reference-peers-v1", "ordered-reference-v1"].includes(selectionMode),
+  "selection mode: joint-reference-peers-v1 | ordered-reference-v1");
 const inputCount = pattern === "independent" ? components : 1;
 const inputs = Array.from({ length: inputCount }, (_, index) => `canvas${index}`);
 const phases = ["localChange", "unchanged", "restore", "unchanged"];
@@ -69,13 +72,13 @@ function check(frame, context, revision, digest) {
   // Only the authored reference proves the continuous symmetric minimum.
   // Every adapted frame still has to match the finite witness below.
   const authored = inputs.every((name) => context[name][0] === 255);
-  assert.equal(frame.optimality, authored ? "exact" : "unfinished");
+  assert.equal(frame.optimality, authored || selectionMode === "ordered-reference-v1" ? "exact" : "unfinished");
   assert.equal(frame.revision, BigInt(revision));
   assert.deepEqual(frame.context, context);
   assert.equal(Object.keys(frame.values).length, components * 2);
   assert.equal(frame.reference.length, components * 2);
   assert.equal(frame.selection.length, components);
-  assert.ok(frame.selection.every((part) => part.mode === "joint-reference-peers-v1"));
+  assert.ok(frame.selection.every((part) => part.mode === selectionMode));
   assert.deepEqual(frame.cleanliness, { status: "not-assessed", reason: "no-declared-profile" });
   const physical = [];
   for (let index = 0; index < components; index += 1) {
@@ -94,7 +97,8 @@ function check(frame, context, revision, digest) {
   }
   for (const selection of frame.reference) {
     assert.equal(selection.preference, "reference-strength");
-    assert.equal(selection.capacity, null);
+    assert.deepEqual(selection.capacity, selectionMode === "ordered-reference-v1"
+      ? { ratioLower: 1, ratioUpper: 1, complete: true } : null);
     assert.equal(selection.outputs.length, 1);
     assert.equal(selection.cases.length, 1);
     const name = selection.outputs[0];
@@ -107,7 +111,9 @@ function check(frame, context, revision, digest) {
     assert.deepEqual(evidence.actualBackdrop, observed);
     assert.deepEqual(evidence.actualVisible, frame.values[name].rgb);
   }
-  digest.update(JSON.stringify([frame.state, frame.optimality, physical]));
+  // Compare identical displayed work even when the proof policy changes.
+  // Its reported optimality and capacity are asserted separately above.
+  digest.update(JSON.stringify([frame.state, physical]));
 }
 
 function changeContext(context, index) {
@@ -185,7 +191,7 @@ async function retainedMemory() {
 const retainedMemoryBytes = await retainedMemory();
 console.log(JSON.stringify({
   node: process.version, v8: process.versions.v8, producer, producerIdentityError, pattern, components, inputCount,
-  outputs: components * 2, ...protocol, importMs, initializationMs,
+  outputs: components * 2, selectionMode, checksumSchema: "physical-frame-v1", ...protocol, importMs, initializationMs,
   wasmBytes: wasm.length, wasmSha256: createHash("sha256").update(wasm).digest("hex"),
   ...splitMeasurements(results, protocol), retainedMemoryBytes,
   memoryAtEndBytes: process.memoryUsage(), maxRssKiB: process.resourceUsage().maxRSS,

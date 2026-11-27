@@ -3,14 +3,21 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
-import { createWasmMeasurement } from "../../../scripts/record-wasm-measurement.mjs";
+import { createWasmMeasurement as measureBuildBytes } from "../../../scripts/record-wasm-measurement.mjs";
 import {
-  createWasmBuildEnvironment, createWasmBuildReceipt, expectedWasmCargoProfile, wasmCargoProfileArgs,
+  createWasmBuildEnvironment, createWasmBuildReceipt, expectedWasmCargoProfile,
+  isolateWasmBuildEnvironment, wasmCargoProfileArgs,
 } from "../../../scripts/build-wasm.mjs";
 
 const budget = JSON.parse(readFileSync(new URL("../bench/wasm.json", import.meta.url)));
 const workflow = readFileSync(new URL("../../../.github/workflows/package-worker.yml", import.meta.url), "utf8");
 const sourceSha = "1".repeat(40);
+const receiptBytes = (receipt) => receipt === undefined ? undefined
+  : Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
+
+function createWasmMeasurement({ firstBuild, build, ...input }) {
+  return measureBuildBytes({ ...input, firstBuildBytes: receiptBytes(firstBuild), buildBytes: receiptBytes(build) });
+}
 
 function fixture() {
   const runtime = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
@@ -36,7 +43,7 @@ function cargoMessages(profile = expectedWasmCargoProfile(budget)) {
   return [
     "wasm-pack progress",
     JSON.stringify({ reason: "compiler-artifact", target: { name: "labcolors_wasm", crate_types: ["cdylib"] },
-      filenames: ["/target/wasm32-unknown-unknown/release/labcolors_wasm.wasm"], profile, fresh: true }),
+      filenames: ["/target/wasm32-unknown-unknown/release/labcolors_wasm.wasm"], profile, fresh: false }),
     JSON.stringify({ reason: "build-finished", success: true }),
   ].join("\n");
 }
@@ -52,7 +59,26 @@ test("measurement preserves reproduced bytes and source/run identity without adm
   assert.equal(receipt.qualification, "measurement-only");
   assert.deepEqual(receipt.reproducibility, { builds: 2, byteIdentical: true, scope: "runtime-wasm" });
   assert.deepEqual(receipt.build.profile, input.build.profile);
-  assert.equal(receipt.build.receiptSha256, createHash("sha256").update(JSON.stringify(input.build)).digest("hex"));
+  assert.equal(receipt.build.compiledWithoutCargoReuse, true);
+  assert.equal(receipt.build.receiptSha256, createHash("sha256").update(receiptBytes(input.build)).digest("hex"));
+});
+
+test("the measurement hashes and compares the exact receipt bytes, including whitespace", () => {
+  const { build, firstBuild, ...input } = fixture();
+  const buildBytes = Buffer.from(JSON.stringify(build));
+  const firstBuildBytes = receiptBytes(firstBuild);
+  assert.throws(() => measureBuildBytes({ ...input, buildBytes, firstBuildBytes }), /build receipts differ/u);
+  const measurement = measureBuildBytes({ ...input, buildBytes, firstBuildBytes: buildBytes });
+  assert.equal(measurement.build.receiptSha256, createHash("sha256").update(buildBytes).digest("hex"));
+});
+
+test("a reused Cargo artifact cannot certify a canonical rebuild", () => {
+  const input = fixture();
+  const messages = cargoMessages().replace('"fresh":false', '"fresh":true');
+  input.build = createWasmBuildReceipt({ ...input, messages });
+  input.firstBuild = structuredClone(input.build);
+  assert.equal(input.build.compiledWithoutCargoReuse, false);
+  assert.throws(() => createWasmMeasurement(input), /without Cargo artifact reuse/u);
 });
 
 test("an over-budget canonical build remains downloadable as a failed-budget measurement", () => {
@@ -149,6 +175,19 @@ test("controlled Windows environment spellings cannot compete with the build rec
   assert.equal(actual.CARGO_INCREMENTAL, "0");
   assert.equal(actual.RUSTUP_TOOLCHAIN, budget.toolchain.rust);
   assert.ok(Object.keys(actual).every((name) => name === name.toUpperCase()));
+});
+
+test("isolated builds own both Cargo directories without changing the ambient cache", () => {
+  const environment = { cargo_target_dir: "relative-cache", CARGO_BUILD_TARGET_DIR: "/other",
+    Cargo_Build_Build_Dir: "/intermediate", PATH: "/tools" };
+  const before = structuredClone(environment);
+  const first = isolateWasmBuildEnvironment(environment, "/isolated/one");
+  const second = isolateWasmBuildEnvironment(environment, "/isolated/two");
+  assert.deepEqual(first, { PATH: "/tools", CARGO_TARGET_DIR: resolve("/isolated/one/target"),
+    CARGO_BUILD_BUILD_DIR: resolve("/isolated/one/build") });
+  assert.notEqual(first.CARGO_TARGET_DIR, second.CARGO_TARGET_DIR);
+  assert.notEqual(first.CARGO_BUILD_BUILD_DIR, second.CARGO_BUILD_BUILD_DIR);
+  assert.deepEqual(environment, before);
 });
 
 test("measurement checks the recorded build while ambient settings are normalized by the builder", () => {

@@ -93,6 +93,17 @@ export function createWasmBuildEnvironment(budget, sourceRoot, environment = pro
   return buildEnvironment;
 }
 
+// A canonical build owns both Cargo output directories. Never clean an
+// ambient cache: its configuration can resolve differently inside the crate.
+export function isolateWasmBuildEnvironment(environment, directory) {
+  const outputVariables = /^(?:CARGO_TARGET_DIR|CARGO_BUILD_TARGET_DIR|CARGO_BUILD_BUILD_DIR)$/iu;
+  return {
+    ...Object.fromEntries(Object.entries(environment).filter(([name]) => !outputVariables.test(name))),
+    CARGO_TARGET_DIR: resolve(directory, "target"),
+    CARGO_BUILD_BUILD_DIR: resolve(directory, "build"),
+  };
+}
+
 export async function readWasmBuildInputs(sourceRoot = ROOT) {
   const sources = ["Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "crates/labcolors-wasm/Cargo.toml"];
   const recipe = ["packages/colors/bench/wasm.json", "scripts/build-wasm.mjs", "scripts/check-wasm-size-budget.mjs",
@@ -118,9 +129,13 @@ export function createWasmBuildReceipt({ messages, runtime, budget, sourceSha, i
   const targetDirectory = `/${budget.toolchain.target}/${budget.toolchain.cargoProfile}/`;
   const expectedProfile = expectedWasmCargoProfile(budget);
   let finished = false;
+  let compiledWithoutCargoReuse = true;
   for (const line of messages.split(/\r?\n/u)) {
     if (!line.trimStart().startsWith("{")) continue;
     const message = JSON.parse(line);
+    if (message.reason === "compiler-artifact" && message.fresh !== false) {
+      compiledWithoutCargoReuse = false;
+    }
     if (message.reason === "compiler-artifact" && message.filenames?.some((path) =>
       path.replaceAll("\\", "/").includes(targetDirectory))) {
       assert.deepEqual(normalizedCargoProfile(message.profile), expectedProfile,
@@ -142,7 +157,7 @@ export function createWasmBuildReceipt({ messages, runtime, budget, sourceSha, i
   assert.deepEqual(profile, expectedProfile, "actual Cargo profile differs from the WASM recipe");
   assert.match(sourceSha, /^[0-9a-f]{40}$/u, "invalid WASM build source SHA");
   assert.ok(WebAssembly.validate(runtime), "WASM build receipt requires a valid runtime");
-  return { schemaVersion: 1, kind: "wasm-build", sourceSha,
+  return { schemaVersion: 2, kind: "wasm-build", sourceSha, compiledWithoutCargoReuse,
     artifact: { bytes: runtime.length, sha256: sha256(runtime) },
     profile, recipe: structuredClone(budget.recipe), tools, inputs };
 }
@@ -150,7 +165,7 @@ export function createWasmBuildReceipt({ messages, runtime, budget, sourceSha, i
 export async function buildWasm(sourceRoot = ROOT) {
   sourceRoot = resolve(sourceRoot);
   const budget = parseBudgetDocument(await readFile(DEFAULT_BUDGET), DEFAULT_BUDGET);
-  const buildEnvironment = createWasmBuildEnvironment(budget, sourceRoot);
+  let buildEnvironment = createWasmBuildEnvironment(budget, sourceRoot);
   const { binaryenRelease, wasmOptFlags, wasmPack } = budget.toolchain;
   const optimizerFlags = wasmOptFlags.trim().split(/\s+/u);
   assert.ok(optimizerFlags.length > 0 && optimizerFlags.every((flag) => flag.startsWith("-")));
@@ -178,6 +193,10 @@ export async function buildWasm(sourceRoot = ROOT) {
   const wasm = resolve(sourceRoot, budget.artifact);
   const optimized = `${wasm}.${randomUUID()}.optimized.wasm`;
   try {
+    const requireFresh = process.env.LABCOLORS_WASM_FRESH === "1";
+    if (requireFresh) {
+      buildEnvironment = isolateWasmBuildEnvironment(buildEnvironment, join(temporary, "cargo"));
+    }
     // Extract the byte-verified archive on every build, including CI.
     run("tar", ["-xzf", archive, "-C", temporary], sourceRoot, buildEnvironment);
     const optimizer = join(temporary, `binaryen-${binaryenRelease}`, "wasm-opt.js");
@@ -202,6 +221,9 @@ export async function buildWasm(sourceRoot = ROOT) {
     await writeWasmLicenses(messages, sourceRoot, metadata);
     assert.deepEqual(await readWasmBuildInputs(sourceRoot), inputs, "WASM build inputs changed during compilation");
     const receipt = createWasmBuildReceipt({ messages, runtime: bytes, budget, sourceSha, inputs, tools });
+    if (requireFresh) {
+      assert.equal(receipt.compiledWithoutCargoReuse, true, "isolated WASM build reused a Cargo artifact");
+    }
     await writeFile(join(generatedPackage, WASM_BUILD_RECEIPT), `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
     console.log(`Binaryen ${binaryenRelease}: ${before} -> ${bytes.length} bytes (${relative(sourceRoot, wasm)})`);
   } finally {

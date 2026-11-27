@@ -17,7 +17,7 @@ const BUDGET = "packages/colors/bench/wasm.json";
 const RUNTIME = "packages/colors/pkg/labcolors_bg.wasm";
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-export function createWasmMeasurement({ first, runtime, firstBuild, build, sourceSha, env, budget, workflow, tools, inputs }) {
+export function createWasmMeasurement({ first, runtime, firstBuildBytes, buildBytes, sourceSha, env, budget, workflow, tools, inputs }) {
   assert.match(sourceSha, /^[0-9a-f]{40}$/u, "invalid checked-out source SHA");
   assert.equal(sourceSha, env.GITHUB_SHA, "measurement source differs from the workflow event");
   assert.equal(tools.platform, "linux-x64", "measurement requires the canonical CI platform");
@@ -38,9 +38,13 @@ export function createWasmMeasurement({ first, runtime, firstBuild, build, sourc
   for (const key of ["rust", "rustcCommit", "wasmPack", "wasmBindgen", "node", "binaryenRelease", "binaryenNodeArchiveSha256"]) {
     assert.equal(tools[key], budget.toolchain[key], `measured ${key} differs from the declared toolchain`);
   }
-  assert.equal(build?.schemaVersion, 1, "missing supported WASM build receipt");
+  assert.ok(Buffer.isBuffer(buildBytes), "missing supported WASM build receipt");
+  const build = JSON.parse(buildBytes);
+  assert.equal(build?.schemaVersion, 2, "missing supported WASM build receipt");
   assert.equal(build.kind, "wasm-build", "invalid WASM build receipt kind");
-  assert.deepEqual(firstBuild, build, "build receipts differ between the two canonical builds");
+  assert.ok(Buffer.isBuffer(firstBuildBytes) && firstBuildBytes.equals(buildBytes),
+    "build receipts differ between the two canonical builds");
+  assert.equal(build.compiledWithoutCargoReuse, true, "canonical builds must compile without Cargo artifact reuse");
   assert.equal(build.sourceSha, sourceSha, "WASM build receipt belongs to different source");
   assert.deepEqual(build.artifact, { bytes: runtime.length, sha256: sha256(runtime) }, "WASM build receipt differs from runtime bytes");
   assert.deepEqual(build.recipe, budget.recipe, "WASM build receipt differs from the declared recipe");
@@ -51,7 +55,7 @@ export function createWasmMeasurement({ first, runtime, firstBuild, build, sourc
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     kind: "canonical-wasm-measurement",
     sourceSha,
     run: {
@@ -71,7 +75,7 @@ export function createWasmMeasurement({ first, runtime, firstBuild, build, sourc
     reproducibility: { builds: 2, byteIdentical: true, scope: "runtime-wasm" },
     toolchain: { ...budget.toolchain },
     recipe: { ...budget.recipe },
-    build: { receiptSha256: sha256(JSON.stringify(build)), profile: { ...build.profile } },
+    build: { receiptSha256: sha256(buildBytes), compiledWithoutCargoReuse: true, profile: { ...build.profile } },
     inputs,
     budget: { source: budget.measurement.source, maxRawBytes: budget.policy.maxRawBytes, passed: runtime.length <= budget.policy.maxRawBytes },
     // This receipt admits a measurement; the later size, package and consumer gates still decide release readiness.
@@ -88,7 +92,8 @@ export async function recordWasmMeasurement(firstDirectory, outputDirectory) {
   const sourceSha = command("git", ["rev-parse", "HEAD"]);
   buildEnvironment.RUSTC = command("rustup", ["which", "rustc"]);
   const rustc = command(buildEnvironment.RUSTC, ["-vV"]);
-  const build = JSON.parse(readFileSync(join(ROOT, "packages/colors/pkg", WASM_BUILD_RECEIPT)));
+  const buildBytes = readFileSync(join(ROOT, "packages/colors/pkg", WASM_BUILD_RECEIPT));
+  const build = JSON.parse(buildBytes);
   const tools = {
     platform: `${process.platform}-${process.arch}`,
     rust: /^release: (.+)$/mu.exec(rustc)?.[1],
@@ -103,7 +108,7 @@ export async function recordWasmMeasurement(firstDirectory, outputDirectory) {
   const runtime = readFileSync(join(ROOT, RUNTIME));
   const receipt = createWasmMeasurement({
     first: readFileSync(join(firstDirectory, "labcolors_bg.wasm")), runtime,
-    firstBuild: JSON.parse(readFileSync(join(firstDirectory, WASM_BUILD_RECEIPT))), build, sourceSha, env, budget,
+    firstBuildBytes: readFileSync(join(firstDirectory, WASM_BUILD_RECEIPT)), buildBytes, sourceSha, env, budget,
     workflow: readFileSync(join(ROOT, WORKFLOW), "utf8"), tools, inputs,
   });
   receipt.inputs[WORKFLOW] = sha256(readFileSync(join(ROOT, WORKFLOW)));
@@ -111,7 +116,7 @@ export async function recordWasmMeasurement(firstDirectory, outputDirectory) {
   mkdirSync(outputDirectory);
   writeFileSync(join(outputDirectory, "labcolors_bg.wasm"), runtime, { flag: "wx" });
   writeFileSync(join(outputDirectory, "measurement.json"), `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
-  writeFileSync(join(outputDirectory, WASM_BUILD_RECEIPT), `${JSON.stringify(build, null, 2)}\n`, { flag: "wx" });
+  writeFileSync(join(outputDirectory, WASM_BUILD_RECEIPT), buildBytes, { flag: "wx" });
   appendFileSync(env.GITHUB_OUTPUT, "measurement-ready=true\n");
   console.log(`canonical WASM measurement: ${runtime.length}B sha256=${receipt.artifact.sha256} source=${sourceSha}`);
   return receipt;

@@ -70,6 +70,7 @@ jobs:
       - name: repeat runtime WASM build in one toolchain-pinned CI job
         id: runtime-build
         env:
+          LABCOLORS_WASM_FRESH: "1"
           PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
           PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
@@ -87,7 +88,6 @@ jobs:
           mkdir -p "$first"
           cp -a packages/colors/pkg "$first/pkg"
 
-          cargo clean
           build_runtime
 
           if ! diff --no-dereference --recursive "$first/pkg" packages/colors/pkg; then

@@ -22,7 +22,7 @@ def validate(ci, package, release):
     if "environment:" in package or "secrets." in package:
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
-    for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
+    for command in ["build_runtime", 'LABCOLORS_WASM_FRESH: "1"', "diff --no-dereference --recursive",
                     'node "$GITHUB_WORKSPACE/scripts/build-wasm.mjs" "$PWD"',
                     "node scripts/record-wasm-measurement.mjs", "node scripts/check-wasm-size-budget.mjs",
                     "npm run typecheck", "npm test", "npm run release:verify",
@@ -57,6 +57,8 @@ def validate(ci, package, release):
     if any(value not in measurement for value in required) or "continue-on-error:" in measurement:
         raise AssertionError("canonical measurement lost its reproduced source or bounded lifetime")
     build = next(block for block in blocks if "node scripts/record-wasm-measurement.mjs" in block)
+    if "cargo clean" in build or len(re.findall(r"(?m)^          build_runtime$", build)) != 2:
+        raise AssertionError("canonical builds must use two independently isolated builder invocations")
     if any(control in build for control in ["CARGO_PROFILE_", "CARGO_ENCODED_RUSTFLAGS", "wasm-pack build", "wasm-opt.js"]):
         raise AssertionError("WASM build settings must belong to the shared build script")
     if ("        id: runtime-build\n" not in build
@@ -94,6 +96,7 @@ class CiStorageTests(unittest.TestCase):
             (1,'retention-days: 1','retention-days: 90'),
             (1,'node scripts/check-wasm-size-budget.mjs','node --version'),
             (1,'node "$GITHUB_WORKSPACE/scripts/build-wasm.mjs" "$PWD"', 'wasm-pack build'),
+            (1,'LABCOLORS_WASM_FRESH: "1"', 'LABCOLORS_WASM_FRESH: "0"'),
             (1,'          PROGRAM_BENCHMARK:', '          CARGO_PROFILE_RELEASE_OPT_LEVEL: s\n          PROGRAM_BENCHMARK:'),
             (1,"steps.runtime-build.outputs.measurement-ready == 'true'", "true"),
             (1,"retention-days: 3", "retention-days: 90"),
