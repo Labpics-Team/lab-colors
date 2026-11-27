@@ -507,13 +507,13 @@ fn reference_peers_preserve_choice_when_a_redundant_material_joins() {
                     }
                     let reports = frame.reference_selections().expect("reference reports");
                     assert_eq!(reports.len(), 2);
-                    for report in reports.iter() {
-                        let expected = if report.target_id() == 10 {
-                            expected[0]
-                        } else {
-                            assert_eq!(report.target_id(), 20);
-                            expected[1]
-                        };
+                    let mut reports = [&reports[0], &reports[1]];
+                    reports.sort_unstable_by_key(|report| report.target_id());
+                    for (report, (id, expected)) in reports
+                        .into_iter()
+                        .zip([(10, expected[0]), (20, expected[1])])
+                    {
+                        assert_eq!(report.target_id(), id);
                         assert!(
                             report
                                 .cases()
