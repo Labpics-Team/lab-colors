@@ -16,7 +16,7 @@ use crate::observation::{ScenarioId, SchemaOrderedScenarioSourceV1};
 use crate::program::wire::{ProgramWireErrorV1, decode_program_wire, decode_program_wire_v1};
 pub use crate::program_diagnostics::{
     ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramDiagnosticSubjectV1,
-    ProgramDiagnosticV1, ProgramDiagnosticsV1,
+    ProgramDiagnosticV1, ProgramDiagnosticsV1, ProgramFieldCaseV1,
 };
 
 /// Имя wire-секции в публичной диагностике.
@@ -792,7 +792,7 @@ impl ProgramOptimalityV1 {
 /// Owned snapshot Session после атомарного update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramSnapshotV1 {
-    field_assessment: Option<ProgramFieldAssessmentV1>,
+    field_assessment: Vec<ProgramFieldAssessmentV1>,
     diagnostics: Option<ProgramDiagnosticsV1>,
     snapshot_version: u32,
     revision: u64,
@@ -824,7 +824,15 @@ impl ProgramSnapshotV1 {
     /// Declared model scope and exact report coordinates; absent for observations.
     #[must_use]
     pub fn field_assessment(&self) -> Option<&ProgramFieldAssessmentV1> {
-        self.field_assessment.as_ref()
+        match &self.field_assessment[..] {
+            [field] => Some(field),
+            _ => None,
+        }
+    }
+
+    /// Per-input coverage with coordinates local to each independent source.
+    pub fn field_assessments(&self) -> &[ProgramFieldAssessmentV1] {
+        &self.field_assessment
     }
     /// Конкретные нарушения авторского attempt для текущего Unsatisfied/Incomplete.
     /// Это исторические данные; они не являются минимальным конфликтом или outputs.
@@ -1862,6 +1870,8 @@ pub enum ProgramRuntimeErrorV1 {
     FamilyArtifactsRequired,
     Instantiate,
     Update,
+    /// The compiled graph needs joint geometry for two varying roots.
+    FieldCorrelationRequired,
     /// Недостаточно ресурсов для компиляции, создания Session или update.
     ResourceExhausted,
     /// Нарушен внутренний инвариант, а не контракт пользовательского ввода.
@@ -2140,7 +2150,7 @@ fn snapshot_from_evidence_into(
         if outputs.len() == 1 {
             if let Some(output) = outputs.next() {
                 return Ok(ProgramSnapshotV1 {
-                    field_assessment: None,
+                    field_assessment: Vec::new(),
                     diagnostics: None,
                     state,
                     snapshot_version: 1,
@@ -2157,7 +2167,7 @@ fn snapshot_from_evidence_into(
         outputs_scratch.extend(outputs);
     }
     Ok(ProgramSnapshotV1 {
-        field_assessment: None,
+        field_assessment: Vec::new(),
         diagnostics: None,
         state,
         snapshot_version: 1,

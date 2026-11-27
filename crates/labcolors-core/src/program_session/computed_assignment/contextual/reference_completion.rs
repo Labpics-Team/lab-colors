@@ -1,5 +1,12 @@
 //! Private incoming path: checked full-point preference comparison, then one
 //! strict RGB8 realization. Implicit reference facts do not imply a comparator.
+//!
+//! A declared field's complete support covers its nominal quantized root model.
+//! Independence admission proves that every objective and hard/report factor
+//! depends on at most one varying input. Universal componentwise comparison
+//! and feasibility therefore reduce to that input's complete marginal support.
+//! Source-distance profiles are measured once per source. Global case ordinals
+//! identify observation rows, never synchronized positions across fields.
 
 use super::*;
 use crate::appearance::{CertifiedAppearanceWorkspace, ContinuousSrgbV1, PointPaintValueV1};
@@ -7,6 +14,7 @@ use crate::certified_numeric::{
     CERTIFIED_NUMERIC_MODEL_V1, CertifiedNumericModelV1, CertifiedRgbV1, CertifiedScalarEvidenceV1,
     CertifiedScalarV1, NumericUncertaintyV1, sort_descending_profile, source_distance_squared,
 };
+use core::ops::Range;
 
 mod authored_optimum;
 
@@ -117,6 +125,7 @@ struct UseV1 {
     occurrence: Option<OccurrenceId>,
     target: usize,
     factor: usize,
+    cases: Range<usize>,
     tone_bits: Vec<Option<u64>>,
     point_anchor: Option<[CertifiedScalarV1; 3]>,
     preferred: Vec<[CertifiedScalarV1; 3]>,
@@ -137,7 +146,9 @@ struct PreferenceMeasurementV1 {
 }
 
 struct MeasurementsV1 {
-    preferences: Vec<PreferenceMeasurementV1>,
+    // Each use owns its complete support. Independent fields can have different
+    // cardinalities, so a rectangular case/target matrix has no physical meaning.
+    preferences: Vec<Vec<PreferenceMeasurementV1>>,
     source: Vec<CertifiedScalarV1>,
 }
 
@@ -173,6 +184,8 @@ pub(crate) struct CompletionScalarEvidenceV1 {
 
 pub(crate) struct CompletionUseToneEvidenceV1 {
     pub(crate) occurrence: Option<OccurrenceId>,
+    /// Global observation ordinals corresponding to `per_case_bits` in order.
+    pub(crate) cases: Range<usize>,
     pub(crate) per_case_bits: Box<[Option<u64>]>,
 }
 
@@ -387,9 +400,6 @@ pub(in crate::program_session) fn prepare<
     observation: &RevisionBoundObservationV1,
     scratch: &'scratch mut ReferenceCompletionScratchV1<E>,
 ) -> Result<PreparedReferenceCompletionV1<'program, 'scratch, E>, Error<E>> {
-    if observation.declared_field().is_some() {
-        return Err(Error::<E>::UnsupportedDeclaredField);
-    }
     let prepared = prepare_selection(epoch, observation, scratch)?;
     prepared.scratch.refresh_tones(epoch, observation)?;
     Ok(PreparedObservationV1 {
@@ -513,6 +523,7 @@ impl ReferenceCompletionStorageV1 {
                     .and_then(|intent| intent.appearance),
                 target: index,
                 factor,
+                cases: 0..0,
                 tone_bits: Vec::new(),
                 point_anchor,
                 preferred: Vec::new(),
@@ -542,18 +553,49 @@ impl ReferenceCompletionStorageV1 {
         let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
+        if let Some(field) = observation.declared_field() {
+            let mut inputs = reserve::<_, E>(field.fields().len())?;
+            for input in field.fields() {
+                inputs.push(
+                    u32::try_from(input.varying_input_index())
+                        .map_err(|_| Error::<E>::UnsupportedDeclaredField)?,
+                );
+            }
+            // Marginal supports cover the product exactly only when every
+            // component/factor reads at most one varying input. Check the same
+            // compiler proof used at public field admission, including fixed
+            // and report-only factors, before interpreting a full proposal.
+            if !selection.accepts_independent_fields(&inputs) {
+                return Err(Error::<E>::UnsupportedDeclaredField);
+            }
+        }
         for usage in &mut self.uses {
+            usage.cases = observation.declared_field().map_or_else(
+                || 0..observation.physical_case_count(),
+                |field| {
+                    field
+                        .fields()
+                        .find(|field| {
+                            selection.factors[usage.factor]
+                                .inputs
+                                .contains(&field.varying_input_index())
+                        })
+                        .map_or(0..1, |field| {
+                            field.case_offset()..field.case_offset() + field.support_count()
+                        })
+                },
+            );
             usage.preferred.clear();
             usage.tone_bits.clear();
             usage
                 .preferred
-                .try_reserve(observation.physical_case_count())
+                .try_reserve(usage.cases.len())
                 .map_err(|_| Error::<E>::ResourceExhausted)?;
             usage
                 .tone_bits
-                .try_reserve(observation.physical_case_count())
+                .try_reserve(usage.cases.len())
                 .map_err(|_| Error::<E>::ResourceExhausted)?;
-            for case in 0..observation.physical_case_count() {
+            for case in usage.cases.clone() {
                 let inputs = observation
                     .physical_values(case)
                     .ok_or(Error::<E>::MissingFiniteObservation)?;
@@ -835,11 +877,10 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             &mut self.scratch.certified_workspace,
         )?;
         let count = self.observation.physical_case_count();
-        let mut preferences = reserve::<_, E>(
-            count
-                .checked_mul(self.scratch.uses.len())
-                .ok_or(Error::<E>::ResourceExhausted)?,
-        )?;
+        let mut preferences = reserve::<_, E>(self.scratch.uses.len())?;
+        for usage in &self.scratch.uses {
+            preferences.push(reserve::<_, E>(usage.cases.len())?);
+        }
         for case in 0..count {
             let inputs = self
                 .observation
@@ -848,7 +889,10 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
             let view = paints.evaluate_surface_inputs_canonical(|index| {
                 CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
             });
-            for usage in &self.scratch.uses {
+            for (usage, rows) in self.scratch.uses.iter().zip(&mut preferences) {
+                if !usage.cases.contains(&case) {
+                    continue;
+                }
                 let (visible_lab, backdrop_lab) = if let Some(slot) = usage.slot {
                     let point = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
                     (point.visible?.oklab()?, Some(point.backdrop?.oklab()?))
@@ -858,11 +902,11 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                         None,
                     )
                 };
-                let preferred = usage.preferred.get(case).copied();
+                let preferred = usage.preferred.get(case - usage.cases.start).copied();
                 let distance = preferred
                     .map(|point| source_distance_squared(visible_lab, point))
                     .transpose()?;
-                preferences.push(PreferenceMeasurementV1 {
+                rows.push(PreferenceMeasurementV1 {
                     target_id: selection.targets[usage.target].id,
                     occurrence: usage.occurrence,
                     case,
@@ -898,8 +942,13 @@ fn scalar_evidence(value: CertifiedScalarV1) -> CompletionScalarEvidenceV1 {
 fn evidence<E: ProgramConstraintEvaluatorSetV1>(
     values: &MeasurementsV1,
 ) -> Result<CompletionPointEvidenceV1, Error<E>> {
-    let mut preferences = reserve::<_, E>(values.preferences.len())?;
-    for row in &values.preferences {
+    let count = values
+        .preferences
+        .iter()
+        .try_fold(0_usize, |count, rows| count.checked_add(rows.len()))
+        .ok_or(Error::<E>::ResourceExhausted)?;
+    let mut preferences = reserve::<_, E>(count)?;
+    for row in values.preferences.iter().flatten() {
         preferences.push(CompletionPreferenceEvidenceV1 {
             target: row.target_id,
             occurrence: row.occurrence,
@@ -966,16 +1015,15 @@ fn component_admission(
             drift = drift.max(0.0);
             continue;
         }
-        // Measurement rows are case-major, in compiled target order. Visit
-        // only this component's targets, without scanning unrelated rows.
-        for (a, b) in anchor
-            .preferences
-            .chunks_exact(uses.len())
-            .zip(proposal.preferences.chunks_exact(uses.len()))
+        // Both measurements use the same prepared use/support binding. No
+        // ordinal from another field can stand in for one of this use's cases.
+        for (a, b) in anchor.preferences[target]
+            .iter()
+            .zip(&proposal.preferences[target])
         {
             #[cfg(test)]
             tests::preference_row_visit();
-            let (Some(a), Some(b)) = (a[target].distance, b[target].distance) else {
+            let (Some(a), Some(b)) = (a.distance, b.distance) else {
                 return Ok((
                     preserved(CompletionRejectionV1::ImplicitReferenceUnresolved),
                     None,
@@ -1157,6 +1205,7 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         for usage in &self.scratch.uses {
             use_tones.push(CompletionUseToneEvidenceV1 {
                 occurrence: usage.occurrence,
+                cases: usage.cases.clone(),
                 per_case_bits: copy_slice::<_, E>(&usage.tone_bits)?.into_boxed_slice(),
             });
         }
@@ -1274,6 +1323,10 @@ impl<'program, E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1
         }
         // A scoped pass never authorizes publication. Reapply and verify the
         // merged tuple with all cases, hard relations and material constraints.
+        // For declared fields these are complete nominal RGB8 marginal supports.
+        // The admission proof above makes this universal check equivalent to
+        // checking their Cartesian product. It makes no rasterizer claim and
+        // does not extend the point metric to unquantized field interpolation.
         let context = ContextV1::new::<E>(selection, None, scenarios)?;
         let mut scores = buffer(values.len(), 0.0).map_err(|_| Error::<E>::ResourceExhausted)?;
         if assess(

@@ -7,6 +7,8 @@ use crate::program_session::computed_assignment::tests::{
 use crate::session::SessionState;
 use crate::session_tests::CommitSessionUpdateForTest as _;
 
+mod declared_fields;
+
 // Standalone fixtures retain the original explicit-proposal surface. All
 // production preparation uses incoming arguments; this adapter is test-only.
 struct StandalonePreparedV1<'program, 'session, E: ProgramConstraintEvaluatorSetV1> {
@@ -701,7 +703,7 @@ fn declared_tone_is_derived_from_each_actual_context() -> Result<(), String> {
 }
 
 #[test]
-fn declared_field_is_not_lifted_from_its_deduplicated_byte_support() -> Result<(), String> {
+fn declared_field_completion_retains_its_nominal_model_and_descriptor() -> Result<(), String> {
     let owner = compile_assignment(single(), 1).map_err(fixture_error)?;
     let field = crate::program_wire::ProgramDeclaredFieldV1::from_rgb8(
         &[0; 3],
@@ -717,10 +719,27 @@ fn declared_field_is_not_lifted_from_its_deduplicated_byte_support() -> Result<(
         .prepare_schema_ordered_field(crate::observation::Revision::new(1), &field)
         .map_err(fixture_error)?
         .commit();
-    assert!(matches!(
-        owner.prepare_reference_completion(&session),
-        Err(ReferenceCompletionErrorV1::UnsupportedDeclaredField)
-    ));
+    let mut prepared = owner
+        .prepare_reference_completion(&session)
+        .map_err(fixture_error)?;
+    let anchor = [point([49., 85., 190.])];
+    let result = prepared
+        .realize(&anchor, &anchor, 1)
+        .map_err(fixture_error)?;
+    assert!(result.emitted().is_some());
+    assert_eq!(result.model(), CERTIFIED_NUMERIC_MODEL_V1);
+    assert_eq!(
+        result.continuous_optimality(),
+        ComputedOptimalityV1::Unfinished
+    );
+    let retained = result
+        .observation()
+        .declared_field()
+        .ok_or("lost field descriptor")?;
+    assert_eq!(retained.support_count(), 2);
+    assert_eq!(retained.stops().len(), 2);
+    assert_eq!(result.use_tones()[0].cases, 0..2);
+    assert_eq!(result.point_evidence().0.preferences.len(), 2);
     Ok(())
 }
 

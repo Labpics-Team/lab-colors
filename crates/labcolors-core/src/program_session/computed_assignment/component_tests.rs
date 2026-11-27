@@ -7,6 +7,571 @@ use crate::observation::{
 };
 use crate::session::SessionState;
 
+mod independent_fields {
+    use super::*;
+    use crate::observation::Revision;
+    use crate::program::wire::ProgramWireBuilderV1;
+    use crate::program_diagnostics::ProgramDiagnosticV1;
+    use crate::program_wire::{
+        ProgramAssessmentVerdictV1, ProgramConstraintAssessmentV1, ProgramDeclaredFieldV1,
+        ProgramRuntimeErrorV1, ProgramScenarioV1, ProgramSnapshotStateV1, compile_program_wire,
+    };
+
+    fn two_inputs() -> Program<Wcag22Srgb8V1> {
+        let mut declaration = program(
+            target(10, 64, 64, 65, 0),
+            Wcag22CriterionV1::Sc143TextDefault,
+            Wcag22Srgb8V1,
+        );
+        duplicate_use(&mut declaration, target(20, 80, 80, 81, 1));
+        declaration
+            .observation_group
+            .surface_input_ports
+            .push(SurfaceInputPortId::new(12));
+        declaration.surfaces.push(Surface::Input {
+            id: SurfaceId::new(14),
+            input: SurfaceInputPortId::new(12),
+        });
+        declaration.occurrences[1].against = SurfaceId::new(14);
+        declaration
+    }
+
+    fn compile_fields(
+        mut declaration: Program<Wcag22Srgb8V1>,
+        authored: bool,
+        reverse: bool,
+    ) -> CompiledProgram<Wcag22Srgb8V1> {
+        let mut order: Vec<_> = declaration
+            .targets
+            .iter()
+            .filter(|target| matches!(target.intent, TargetIntentV1::Computed(_)))
+            .map(|target| target.id)
+            .collect();
+        if reverse {
+            order.reverse();
+        }
+        declaration.assignment = Some(if authored {
+            ComputedSelectionPolicyV1::AuthoredComposition {
+                legacy_reference_order: order,
+            }
+        } else {
+            ComputedSelectionPolicyV1::Ordered(order)
+        });
+        declaration.computed_budget = Some(256);
+        declaration.compile().expect("valid two-input declaration")
+    }
+
+    fn add_report(declaration: &mut Program<Wcag22Srgb8V1>, occurrence: u32) {
+        declaration
+            .constraints
+            .report_only
+            .push(ConstraintInvocation::visible_unary_report_only(
+                ConstraintId::new(26),
+                OccurrenceId::new(occurrence),
+                Wcag22CriterionV1::Sc143TextDefault,
+            ));
+    }
+
+    #[test]
+    fn local_report_only_accepts_both_independent_fields_in_every_target_order() {
+        for authored in [false, true] {
+            for reverse in [false, true] {
+                for occurrence in [5, 15] {
+                    let mut declaration = two_inputs();
+                    add_report(&mut declaration, occurrence);
+                    let owner = compile_fields(declaration, authored, reverse);
+                    assert!(
+                        owner.accepts_independent_fields(&[0, 1]),
+                        "local report must stay local: authored={authored}, reverse={reverse}, occurrence={occurrence}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn report_only_expands_selected_color_dependencies_before_admitting_fields() {
+        for authored in [false, true] {
+            for reverse in [false, true] {
+                let mut declaration = two_inputs();
+                // This opaque occurrence directly reads input 12 for contrast.
+                // Its selected source still depends on input 2 through hard 6.
+                declaration.occurrences.push(Occurrence::new(
+                    OccurrenceId::new(25),
+                    PaintId::new(3),
+                    SurfaceId::new(14),
+                    CompositionProfile::EncodedSrgb8SourceOverV1,
+                    declaration.occurrences[0].context,
+                ));
+                add_report(&mut declaration, 25);
+                let owner = compile_fields(declaration, authored, reverse);
+                assert!(owner.accepts_independent_fields(&[0]));
+                assert!(owner.accepts_independent_fields(&[1]));
+                assert!(
+                    !owner.accepts_independent_fields(&[0, 1]),
+                    "report reads two independently selected inputs: authored={authored}, reverse={reverse}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn report_only_between_opaque_selected_colors_expands_both_components() {
+        for authored in [false, true] {
+            for reverse in [false, true] {
+                let mut declaration = two_inputs();
+                declaration.surfaces.push(Surface::FromOccurrence {
+                    id: SurfaceId::new(24),
+                    occurrence: OccurrenceId::new(15),
+                });
+                declaration.occurrences.push(Occurrence::new(
+                    OccurrenceId::new(25),
+                    PaintId::new(3),
+                    SurfaceId::new(24),
+                    CompositionProfile::EncodedSrgb8SourceOverV1,
+                    declaration.occurrences[0].context,
+                ));
+                add_report(&mut declaration, 25);
+                let owner = compile_fields(declaration, authored, reverse);
+                let CompiledTargetSelectionV1::Computed(selection) =
+                    &owner.owner_generation.target_selection
+                else {
+                    panic!("computed selection");
+                };
+                assert_eq!(
+                    selection.components.len(),
+                    2,
+                    "reports preserve separate searches"
+                );
+                assert!(
+                    !owner.accepts_independent_fields(&[0, 1]),
+                    "both opaque colors inherit their selecting component's inputs"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_only_local_hard_and_report_constraints_accept_independent_fields() {
+        let mut declaration = two_inputs();
+        for (index, entry) in declaration.targets.iter_mut().enumerate() {
+            let source = SourceId::new(30 + index as u32);
+            declaration.sources.push(Source::new(
+                source,
+                ColorSignal::from_srgb8(Srgb8::new([64 + index as u8; 3])),
+            ));
+            entry.intent = TargetIntentV1::FixedSource(source);
+        }
+        add_report(&mut declaration, 5);
+        let owner = compile_fields(declaration, true, false);
+        assert!(owner.accepts_independent_fields(&[0, 1]));
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("fixed-only session");
+        session
+            .prepare_schema_ordered_field(Revision::new(1), &field())
+            .expect("independent fields for fixed colors")
+            .commit();
+        let current = session
+            .state()
+            .current_verified()
+            .expect("fixed colors satisfy both physical fields")
+            .computed_for_test();
+        assert_eq!(current.arena.storage.outputs.len(), 2);
+        assert_eq!(
+            current.arena.storage.outputs[0].paint.source(),
+            Srgb8::new([64; 3])
+        );
+        assert_eq!(
+            current.arena.storage.outputs[1].paint.source(),
+            Srgb8::new([65; 3])
+        );
+        assert!(
+            current
+                .arena
+                .storage
+                .cells
+                .iter()
+                .any(|cell| cell.constraint() == ConstraintId::new(26))
+        );
+        assert!(
+            current
+                .arena
+                .storage
+                .cells
+                .iter()
+                .all(|cell| !cell.result().is_violation())
+        );
+    }
+
+    #[test]
+    fn fixed_only_failure_has_one_witness_without_a_physical_field() {
+        let mut declaration = two_inputs();
+        declaration.sources.push(Source::new(
+            SourceId::new(30),
+            ColorSignal::from_srgb8(Srgb8::new([64; 3])),
+        ));
+        declaration.targets[0].intent = TargetIntentV1::FixedSource(SourceId::new(30));
+        declaration
+            .constraints
+            .hard
+            .push(ConstraintInvocation::exact_intrinsic_unary_hard(
+                ConstraintId::new(26),
+                TargetId::new(10),
+                Srgb8::new([255; 3]),
+            ));
+        let owner = compile_fields(declaration, true, false);
+        assert!(owner.accepts_independent_fields(&[0, 1]));
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        session
+            .prepare_schema_ordered_field(Revision::new(1), &field())
+            .expect("admitted independent fields")
+            .commit();
+        let SessionState::Failed {
+            cause: ProgramViolationOutcomeV1::Computed(cause),
+            ..
+        } = session.state()
+        else {
+            panic!("the fixed source cannot satisfy the intrinsic requirement");
+        };
+        let violations = cause
+            .diagnostics()
+            .witness()
+            .expect("fixed-only conflict witness")
+            .violations();
+        assert!(
+            matches!(
+                violations,
+                [ProgramDiagnosticV1::HardConstraint {
+                    constraint_id: 26,
+                    field_case: None,
+                    ..
+                }]
+            ),
+            "fixed evidence must not be repeated across the field supports: {violations:?}"
+        );
+    }
+
+    fn hierarchy(cross_input: bool) -> Program<Wcag22Srgb8V1> {
+        let mut declaration = two_inputs();
+        declaration.reference_inputs = Some(vec![
+            (SurfaceInputPortId::new(2), Srgb8::new([255; 3])),
+            (SurfaceInputPortId::new(12), Srgb8::new([255; 3])),
+        ]);
+        if !cross_input {
+            declaration.occurrences[1].against = SurfaceId::new(4);
+        }
+        // The hierarchy endpoints share a physical backdrop, as required by
+        // its contract. The second source also has its original hard use.
+        declaration.occurrences.push(Occurrence::new(
+            OccurrenceId::new(25),
+            PaintId::new(13),
+            SurfaceId::new(4),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            declaration.occurrences[0].context,
+        ));
+        declaration
+            .constraints
+            .hard
+            .push(ConstraintInvocation::preserve_tonal_hierarchy(
+                ConstraintId::new(30),
+                vec![OccurrenceId::new(5), OccurrenceId::new(25)],
+            ));
+        declaration
+    }
+
+    #[test]
+    fn tonal_hierarchy_includes_its_backdrop_and_selected_endpoint_dependencies() {
+        for authored in [false, true] {
+            for reverse in [false, true] {
+                for cross_input in [false, true] {
+                    let owner = compile_fields(hierarchy(cross_input), authored, reverse);
+                    assert_eq!(
+                        owner.accepts_independent_fields(&[0, 1]),
+                        !cross_input,
+                        "hierarchy scope: authored={authored}, reverse={reverse}, cross_input={cross_input}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tonal_hierarchy_violation_is_attributed_to_its_own_field() {
+        let owner = compile_fields(hierarchy(false), false, false);
+        assert!(owner.accepts_independent_fields(&[0, 1]));
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        let dark = ProgramDeclaredFieldV1::from_independent_gradients_rgb8(
+            &[0, 0, 0, 250, 250, 250],
+            &[0, 1],
+            &[0, 2, 4],
+            &[0.0, 1.0, 0.0, 1.0],
+            &[0, 0, 0, 1, 1, 1, 250, 250, 250, 252, 252, 252],
+        )
+        .expect("unequal independent supports");
+        session
+            .prepare_schema_ordered_field(Revision::new(1), &dark)
+            .expect("admitted independent fields")
+            .commit();
+        let SessionState::Failed {
+            cause: ProgramViolationOutcomeV1::Computed(cause),
+            ..
+        } = session.state()
+        else {
+            panic!("the fixed gray domains cannot preserve light-backdrop hierarchy on black");
+        };
+        let violations = cause
+            .diagnostics()
+            .witness()
+            .expect("attempt witness")
+            .violations();
+        let cases: Vec<_> = violations
+            .iter()
+            .filter_map(|violation| match violation {
+                ProgramDiagnosticV1::TonalHierarchy {
+                    constraint_id: 30,
+                    field_case,
+                    ..
+                } => Some(field_case.expect("hierarchy has a varying physical backdrop")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cases.len(),
+            2,
+            "one hierarchy violation per local gray byte"
+        );
+        assert!(cases.iter().all(|case| case.input_index() == 0));
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case.case_index())
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn visible_identity_max_change_and_hard_failures_keep_their_local_field_scope() {
+        let mut declaration = two_inputs();
+        let mut first = blue(10, 5, 0);
+        let TargetIntentV1::Computed(color) = &mut first.intent else {
+            unreachable!();
+        };
+        color.domain = AssignmentDomainV1::Gray { lower: 0, upper: 0 };
+        color.max_delta_bits = 0.01_f64.to_bits();
+        declaration.targets[0] = first;
+        declaration
+            .opacities
+            .push(OpacityInput::new(OpacityInputId::new(11), 0.0));
+        declaration.paints.push(Paint::Opacity {
+            id: PaintId::new(31),
+            source: PaintId::new(3),
+            opacity: OpacityInputId::new(11),
+        });
+        declaration.occurrences[0].subject = PaintId::new(31);
+        declaration.outputs[0] = OutputBinding::new(OutputSlotId::new(7), PaintId::new(31));
+        let owner = compile_fields(declaration, false, false);
+        assert!(owner.accepts_independent_fields(&[0, 1]));
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        session
+            .prepare_schema_ordered_field(Revision::new(1), &field())
+            .expect("admitted independent fields")
+            .commit();
+        let SessionState::Failed {
+            cause: ProgramViolationOutcomeV1::Computed(cause),
+            ..
+        } = session.state()
+        else {
+            panic!("fully transparent blue cannot satisfy visible identity or contrast");
+        };
+        let violations = cause
+            .diagnostics()
+            .witness()
+            .expect("attempt witness")
+            .violations();
+        assert_eq!(
+            violations
+                .iter()
+                .filter(|violation| matches!(
+                    violation,
+                    ProgramDiagnosticV1::TargetDomain { target_id: 10, .. }
+                ))
+                .count(),
+            1,
+            "source-domain evidence is independent of physical cases"
+        );
+        for kind in ["identity", "max-change", "hard"] {
+            let cases: Vec<_> = violations
+                .iter()
+                .filter_map(|violation| {
+                    let origin = match (kind, violation) {
+                        (
+                            "identity",
+                            ProgramDiagnosticV1::ColorIdentity {
+                                target_id: 10,
+                                field_case,
+                                ..
+                            },
+                        )
+                        | (
+                            "max-change",
+                            ProgramDiagnosticV1::MaxChange {
+                                target_id: 10,
+                                field_case,
+                                ..
+                            },
+                        )
+                        | (
+                            "hard",
+                            ProgramDiagnosticV1::HardConstraint {
+                                constraint_id: 6,
+                                field_case,
+                                ..
+                            },
+                        ) => field_case,
+                        _ => return None,
+                    };
+                    Some(origin.expect("visible evidence belongs to a physical field"))
+                })
+                .collect();
+            assert_eq!(
+                cases.len(),
+                2,
+                "{kind} must be evaluated once per local byte"
+            );
+            assert!(cases.iter().all(|case| case.input_index() == 0), "{kind}");
+            assert_eq!(
+                cases
+                    .iter()
+                    .map(|case| case.case_index())
+                    .collect::<Vec<_>>(),
+                vec![0, 1],
+                "{kind}"
+            );
+        }
+    }
+
+    fn wire(cross_report: bool) -> Vec<u8> {
+        let mut builder = ProgramWireBuilderV1::new();
+        builder
+            .computed_gray_target(10, 0, 2, Srgb8::new([1; 3]), 1.0)
+            .computed_gray_target(20, 3, 5, Srgb8::new([4; 3]), 1.0)
+            .surface_input_port(2)
+            .surface_input_port(12)
+            .solid_paint(3, 10)
+            .solid_paint(13, 20)
+            .input_surface(4, 2)
+            .input_surface(14, 12)
+            .source_over_occurrence(5, 3, 4, 64.0, 0.2, 1)
+            .source_over_occurrence(15, 13, 14, 64.0, 0.2, 1)
+            .wcag22_visible_unary(true, 6, 5, 1)
+            .wcag22_visible_unary(true, 16, 15, 1)
+            .output(7, 3)
+            .output(17, 13);
+        if cross_report {
+            builder
+                .source_over_occurrence(25, 3, 14, 64.0, 0.2, 1)
+                .wcag22_visible_unary(false, 26, 25, 1);
+        } else {
+            builder
+                .exact_visible_unary(false, 26, 5, Srgb8::new([255; 3]))
+                .exact_visible_unary(false, 36, 15, Srgb8::new([255; 3]));
+        }
+        builder.finish_assignment(&[10, 20]).expect("wire fixture")
+    }
+
+    fn field() -> ProgramDeclaredFieldV1<'static> {
+        ProgramDeclaredFieldV1::from_independent_gradients_rgb8(
+            &[240, 240, 240, 250, 250, 250],
+            &[0, 1],
+            &[0, 2, 4],
+            &[0.0, 1.0, 0.0, 1.0],
+            &[240, 240, 240, 241, 241, 241, 250, 250, 250, 251, 251, 251],
+        )
+        .expect("two independently varying gray gradients")
+    }
+
+    fn cartesian_cases() -> Vec<ProgramScenarioV1> {
+        let mut scenarios = Vec::new();
+        // These adjacent-byte gray gradients have exactly two encoded values
+        // each. All four combinations form an exhaustive finite oracle.
+        for first in [240, 241] {
+            for second in [250, 251] {
+                scenarios.push(ProgramScenarioV1::new(
+                    scenarios.len() as u32 + 1,
+                    vec![Srgb8::new([first; 3]), Srgb8::new([second; 3])],
+                ));
+            }
+        }
+        scenarios
+    }
+
+    #[test]
+    fn local_report_violations_keep_independent_field_execution_ready() {
+        let owner = compile_program_wire(&wire(false)).expect("wire compiles");
+        let mut session = owner.instantiate(8).expect("field session");
+        let actual = session
+            .update_declared_field(1, field())
+            .expect("independent fields");
+        assert_eq!(actual.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(actual.snapshot_version(), 2);
+        assert_eq!(actual.outputs().len(), 2);
+        assert_eq!(actual.outputs()[0].source(), Srgb8::new([1; 3]));
+        assert_eq!(actual.outputs()[1].source(), Srgb8::new([4; 3]));
+        assert_eq!(actual.field_assessments().len(), 2);
+        let cells = actual
+            .assessment_report()
+            .expect("final assessment")
+            .cells();
+        for id in [26, 36] {
+            let reports: Vec<_> = cells
+                .iter()
+                .filter(|cell| cell.constraint_id() == id)
+                .collect();
+            assert!(!reports.is_empty(), "report {id} must be evaluated");
+            assert!(reports.iter().all(|cell| {
+                !cell.hard()
+                    && cell.assessment()
+                        == ProgramConstraintAssessmentV1::ExactSrgb8 {
+                            verdict: ProgramAssessmentVerdictV1::Violation,
+                        }
+            }));
+        }
+        let mut oracle = compile_program_wire(&wire(false))
+            .expect("oracle program")
+            .instantiate(9)
+            .expect("finite oracle session");
+        let expected = oracle
+            .update_observed(1, &cartesian_cases())
+            .expect("all input combinations");
+        assert_eq!(expected.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(actual.outputs(), expected.outputs());
+        assert_eq!(actual.optimality(), expected.optimality());
+    }
+
+    #[test]
+    fn cross_input_report_is_refused_before_committing_the_field_revision() {
+        let owner = compile_program_wire(&wire(true)).expect("wire compiles");
+        let mut session = owner.instantiate(8).expect("session");
+        assert!(matches!(
+            session.update_declared_field(1, field()),
+            Err(ProgramRuntimeErrorV1::FieldCorrelationRequired)
+        ));
+        let observed = session
+            .update_observed(1, &cartesian_cases())
+            .expect("the refused field must leave revision 1 available");
+        assert_eq!(observed.state(), ProgramSnapshotStateV1::Ready);
+        assert_eq!(observed.revision(), 1);
+    }
+}
+
 fn blue(id: u32, occurrence: u32, preference: u64) -> Target {
     let anchor = Srgb8::new([0, 103, 244]);
     let mut declaration = ComputedTargetV1::color(

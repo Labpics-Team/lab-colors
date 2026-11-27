@@ -46,16 +46,21 @@ export type ProgramDiagnosticSubjectV1 =
   | Readonly<{kind: "visible-relation"; referenceOccurrenceId: number}>
   | Readonly<{kind: "computed-visible-relation"}>
   | Readonly<{kind: "presentation"; rootId: number; occurrenceId: number; terminalId: number}>;
+/** Local support index of the input on which the checked value depends. */
+export type ProgramFieldCaseV1 = Readonly<{inputIndex: number; caseIndex: number}>;
 export type ProgramDiagnosticV1 =
   | Readonly<{kind: "tonal-hierarchy"; constraintId: number; caseIndex: number;
+      fieldCase: ProgramFieldCaseV1 | null;
       strongerOccurrenceId: number; weakerOccurrenceId: number; requiredRatio: number; actualRatio: number;
       requiredGap: number; actualGap: number;
       strongerPolarity: "darker" | "equal" | "lighter"; weakerPolarity: "darker" | "equal" | "lighter"}>
-  | Readonly<{kind: "hard-constraint"; constraintId: number; caseIndex: number; subject: ProgramDiagnosticSubjectV1}>
+  | Readonly<{kind: "hard-constraint"; constraintId: number; caseIndex: number; fieldCase: ProgramFieldCaseV1 | null; subject: ProgramDiagnosticSubjectV1}>
   | Readonly<{kind: "target-domain"; targetId: number; source: readonly [number, number, number]}>
   | Readonly<{kind: "color-identity"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      fieldCase: ProgramFieldCaseV1 | null;
       actual: readonly [number, number, number]}>
   | Readonly<{kind: "max-change"; targetId: number; caseIndex: number; occurrenceId: number | null;
+      fieldCase: ProgramFieldCaseV1 | null;
       actual: readonly [number, number, number]; distanceSquared: number; maximumDistance: number}>;
 export interface ProgramAttemptWitnessV1 {
   readonly kind: "authored-tuple";
@@ -374,19 +379,22 @@ export function diagnosticSubject(kind, first, second, third) {
   if (kind === "computed-visible-relation") return reportFreeze({kind});
   return reportFreeze({kind, rootId: first, occurrenceId: second, terminalId: third});
 }
-export function diagnosticConstraint(constraintId, caseIndex, subject) {
-  return reportFreeze({kind: "hard-constraint", constraintId, caseIndex, subject});
+export function diagnosticFieldCase(inputIndex, caseIndex) {
+  return reportFreeze({inputIndex, caseIndex});
 }
-export function diagnosticTonalHierarchy(constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+export function diagnosticConstraint(constraintId, caseIndex, fieldCase, subject) {
+  return reportFreeze({kind: "hard-constraint", constraintId, caseIndex, fieldCase, subject});
+}
+export function diagnosticTonalHierarchy(constraintId, caseIndex, fieldCase, strongerOccurrenceId, weakerOccurrenceId,
     requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity) {
-  return reportFreeze({kind: "tonal-hierarchy", constraintId, caseIndex, strongerOccurrenceId, weakerOccurrenceId,
+  return reportFreeze({kind: "tonal-hierarchy", constraintId, caseIndex, fieldCase, strongerOccurrenceId, weakerOccurrenceId,
     requiredRatio, actualRatio, requiredGap, actualGap, strongerPolarity, weakerPolarity});
 }
 export function diagnosticDomain(targetId, red, green, blue) {
   return reportFreeze({kind: "target-domain", targetId, source: reportFreeze([red, green, blue])});
 }
-export function diagnosticColor(kind, targetId, caseIndex, occurrenceId, red, green, blue, distanceSquared, maximumDistance) {
-  const base = {kind, targetId, caseIndex, occurrenceId: occurrenceId ?? null, actual: reportFreeze([red, green, blue])};
+export function diagnosticColor(kind, targetId, caseIndex, fieldCase, occurrenceId, red, green, blue, distanceSquared, maximumDistance) {
+  const base = {kind, targetId, caseIndex, fieldCase, occurrenceId: occurrenceId ?? null, actual: reportFreeze([red, green, blue])};
   if (kind === "max-change") { base.distanceSquared = distanceSquared; base.maximumDistance = maximumDistance; }
   return reportFreeze(base);
 }
@@ -449,8 +457,9 @@ export function reportFieldWitness(segmentIndex, numerator, denominator, red, gr
   return reportFreeze({...(segmentIndex === undefined ? {} : {segmentIndex}), coordinate: reportFreeze([numerator, denominator]),
     nominal: reportFreeze([red, green, blue])});
 }
-export function reportField(inputIndex, colors, sourceModel, domain, rendering, regionCount, witnesses, stops) {
+export function reportField(inputIndex, caseOffset, colors, sourceModel, domain, rendering, regionCount, witnesses, stops) {
   return reportFreeze({inputIndex,
+    caseOffset,
     from: reportFreeze([colors[0], colors[1], colors[2]]),
     to: reportFreeze([colors[3], colors[4], colors[5]]),
     sourceModel, domain, rendering, regionCount, witnesses: reportFreeze(witnesses),
@@ -543,6 +552,7 @@ extern "C" {
     #[wasm_bindgen(catch, js_name = reportField)]
     fn report_field(
         input_index: usize,
+        case_offset: usize,
         colors: &[u8],
         source_model: &str,
         domain: &str,
@@ -562,16 +572,20 @@ extern "C" {
         second: u32,
         third: u32,
     ) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = diagnosticFieldCase)]
+    fn diagnostic_field_case(input: usize, case: usize) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = diagnosticConstraint)]
     fn diagnostic_constraint(
         constraint: u32,
         case: usize,
+        field_case: &JsValue,
         subject: &JsValue,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch, js_name = diagnosticTonalHierarchy)]
     fn diagnostic_tonal_hierarchy(
         constraint: u32,
         case: usize,
+        field_case: &JsValue,
         stronger_occurrence: u32,
         weaker_occurrence: u32,
         required_ratio: f64,
@@ -588,6 +602,7 @@ extern "C" {
         kind: &str,
         target: u32,
         case: usize,
+        field_case: &JsValue,
         occurrence: Option<u32>,
         red: u8,
         green: u8,
@@ -791,6 +806,8 @@ enum ProgramOperation {
     UpdateDeclaredFieldWith,
     UpdateGradient,
     UpdateGradientWith,
+    UpdateIndependentGradients,
+    UpdateIndependentGradientsWith,
     UpdateObservedWith,
     UpdateUnknown,
     CopyOutputTable,
@@ -816,6 +833,8 @@ impl ProgramOperation {
             Self::UpdateDeclaredFieldWith => "updateDeclaredFieldWith",
             Self::UpdateGradient => "updateGradient",
             Self::UpdateGradientWith => "updateGradientWith",
+            Self::UpdateIndependentGradients => "updateIndependentGradients",
+            Self::UpdateIndependentGradientsWith => "updateIndependentGradientsWith",
             Self::UpdateObservedWith => "updateObservedWith",
             Self::UpdateUnknown => "updateUnknown",
             Self::CopyOutputTable => "copyOutputTable",
@@ -845,6 +864,14 @@ fn to_program_js_error(
         E::Compile => 1,
         E::FamilyArtifactsRequired => 2,
         E::Instantiate => 3,
+        E::FieldCorrelationRequired => {
+            return program_error(
+                "The declared gradients require a joint spatial observation",
+                "program_field_correlation_required",
+                operation.key(),
+            )
+            .into();
+        }
         E::Update => 4,
         E::ResourceExhausted => 5,
         E::InternalInvariant => 6,
@@ -1060,6 +1087,27 @@ pub struct ProgramSnapshot {
 
 #[wasm_bindgen]
 impl ProgramSnapshot {
+    /// Individual nominal domains. No shared spatial coordinate is implied.
+    #[wasm_bindgen(js_name = fieldAssessments, unchecked_return_type = "ReadonlyArray<ProgramFieldAssessmentV1>")]
+    pub fn field_assessments(&self) -> Result<JsValue, JsValue> {
+        let project = || -> Result<JsValue, JsValue> {
+            let values = report_array()?;
+            for field in self.inner.field_assessments() {
+                report_array_push(
+                    &values,
+                    &program_report_projection::project_field(Some(field))?,
+                )?;
+            }
+            report_array_freeze(&values)
+        };
+        project().map_err(|_| {
+            to_program_js_error(
+                labcolors_core::program_wire::ProgramRuntimeErrorV1::ResourceExhausted,
+                ProgramOperation::FieldAssessment,
+            )
+        })
+    }
+
     /// Scope is preserved on positive and negative declared-field results.
     #[wasm_bindgen(js_name = fieldAssessment, unchecked_return_type = "ProgramFieldAssessmentV1 | null")]
     pub fn field_assessment(&self) -> Result<JsValue, JsValue> {
@@ -1329,6 +1377,52 @@ impl ProgramRuntime {
         accept_program_update(prepared, accept, operation)
     }
 
+    /// Multiple independent gradients, each with its own normalized coordinate.
+    #[wasm_bindgen(js_name = updateIndependentGradients)]
+    pub fn update_independent_gradients(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        inputs: &[u32],
+        offsets: &[u32],
+        positions: &[f64],
+        colors: &[u8],
+    ) -> Result<ProgramSnapshot, JsValue> {
+        let op = ProgramOperation::UpdateIndependentGradients;
+        let (revision, field) = checked_independent_gradients(
+            revision, surfaces, inputs, offsets, positions, colors, op,
+        )?;
+        self.inner
+            .update_declared_field(revision, field)
+            .map(|inner| ProgramSnapshot { inner })
+            .map_err(|err| to_program_js_error(err, op))
+    }
+
+    /// All modeled surfaces and paints are offered in one prepare/commit.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = updateIndependentGradientsWith, unchecked_return_type = "ProgramSnapshot | undefined")]
+    pub fn update_independent_gradients_with(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] revision: JsValue,
+        surfaces: &[u8],
+        inputs: &[u32],
+        offsets: &[u32],
+        positions: &[f64],
+        colors: &[u8],
+        #[wasm_bindgen(unchecked_param_type = "(snapshot: ProgramSnapshot) => boolean")]
+        accept: &js_sys::Function,
+    ) -> Result<JsValue, JsValue> {
+        let op = ProgramOperation::UpdateIndependentGradientsWith;
+        let (revision, field) = checked_independent_gradients(
+            revision, surfaces, inputs, offsets, positions, colors, op,
+        )?;
+        let prepared = self
+            .inner
+            .prepare_declared_field(revision, field)
+            .map_err(|err| to_program_js_error(err, op))?;
+        accept_program_update(prepared, accept, op)
+    }
+
     /// Атомарный observed update. `surfaces` — row-major
     /// `scenario_ids.len() × surface_count × 3` bytes.
     #[wasm_bindgen(js_name = updateObserved)]
@@ -1407,6 +1501,31 @@ impl ProgramRuntime {
             .map(|inner| ProgramSnapshot { inner })
             .map_err(|error| to_program_js_error(error, ProgramOperation::UpdateUnknown))
     }
+}
+
+fn checked_independent_gradients<'a>(
+    revision: JsValue,
+    surfaces: &'a [u8],
+    inputs: &'a [u32],
+    offsets: &'a [u32],
+    positions: &'a [f64],
+    colors: &'a [u8],
+    op: ProgramOperation,
+) -> Result<
+    (
+        u64,
+        labcolors_core::program_wire::ProgramDeclaredFieldV1<'a>,
+    ),
+    JsValue,
+> {
+    use labcolors_core::program_wire::{ProgramDeclaredFieldV1, ProgramRuntimeErrorV1};
+    let invalid = || to_program_js_error(ProgramRuntimeErrorV1::Update, op);
+    let revision = u64::try_from(revision).map_err(|_| invalid())?;
+    let field = ProgramDeclaredFieldV1::from_independent_gradients_rgb8(
+        surfaces, inputs, offsets, positions, colors,
+    )
+    .map_err(|_| invalid())?;
+    Ok((revision, field))
 }
 
 fn checked_gradient<'a>(
