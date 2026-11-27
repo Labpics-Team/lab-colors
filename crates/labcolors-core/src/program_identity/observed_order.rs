@@ -5,11 +5,9 @@ use super::*;
 use crate::colored_graph::{ColoredGraph, canonical_form};
 use std::collections::HashMap;
 
-type Color = [u8; 11];
-
 #[derive(Debug)]
 pub(crate) struct PeerSearchGraph {
-    colors: Vec<Color>,
+    colors: Vec<VertexColorV1>,
     edges: Vec<EdgeV1>,
     targets: Vec<(usize, usize)>,
     inputs: Vec<(usize, usize)>,
@@ -119,8 +117,8 @@ impl ProgramIdentityGraphV1 {
                 .binary_search(&colors[vertex])
                 .map_err(|_| ProgramCompileError::InternalInvariant)?;
             let rank = u32::try_from(index).map_err(|_| ProgramCompileError::ResourceExhausted)?;
-            let mut color = [0; 11];
-            color[1..5].copy_from_slice(&rank.to_be_bytes());
+            let mut color = VertexColorV1::new(0);
+            color.push_bytes(&rank.to_be_bytes())?;
             local_colors.push(color);
         }
         Ok(Some(PeerSearchGraph {
@@ -162,14 +160,14 @@ impl PeerSearchGraph {
                 let value = rgb(case, input)?;
                 low = low.min(value);
                 high = high.max(value);
-                if !distinguished && let Some((earlier, _)) = interchangeable {
+                if let Some((earlier, _)) = interchangeable.filter(|_| !distinguished) {
                     distinguished = rgb(case, earlier)? != value;
                 }
             }
             // Two actual RGB tuples occurring in this column. Distinct extrema
             // already identify most varying ports without a graph per case.
-            colors[vertex][5..8].copy_from_slice(&low);
-            colors[vertex][8..11].copy_from_slice(&high);
+            colors[vertex].push_bytes(&low).map_err(|_| ())?;
+            colors[vertex].push_bytes(&high).map_err(|_| ())?;
         }
         if !distinguished {
             return Ok(None);
@@ -206,14 +204,11 @@ impl PeerSearchGraph {
             // each port loses which backgrounds can actually occur together.
             for &case in cases {
                 let row = colors.len();
-                let mut color = [0; 11];
-                color[0] = 1;
-                colors.push(color);
+                colors.push(VertexColorV1::new(1));
                 for &(input, vertex) in &self.inputs {
                     let cell = colors.len();
-                    let mut color = [0; 11];
-                    color[0] = 2;
-                    color[1..4].copy_from_slice(&rgb(case, input)?);
+                    let mut color = VertexColorV1::new(2);
+                    color.push_bytes(&rgb(case, input)?).map_err(|_| ())?;
                     colors.push(color);
                     edges.push(EdgeV1 {
                         from: cell,

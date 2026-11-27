@@ -230,11 +230,11 @@
       "sha256": "80fbdb0b83e364091052909e1fe8f181d3e810283b2ad8413dfeb8fc06905a02"
     },
     {
-      "bytes": 9920,
+      "bytes": 9859,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_identity/observed_order.rs",
       "role": "program_observed_order_source",
-      "sha256": "0acbd7de197b989f9a64d00ed4a9f448ca800e9b9738536e1d6ab08e1e37dc44"
+      "sha256": "fad2943da788cde8e6c2f2ea9daa7b3ac850d1fea9ed36634331d64f8879d35e"
     },
     {
       "bytes": 8932,
