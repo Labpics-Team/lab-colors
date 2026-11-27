@@ -1040,6 +1040,7 @@ pub(super) fn merge_evidence(
         (CompletionV1::AuthoredExact, CompletionV1::AuthoredExact) => CompletionV1::AuthoredExact,
         _ => CompletionV1::Complete,
     };
+    left.numerical_order_unresolved |= right.numerical_order_unresolved;
     Ok(())
 }
 
@@ -1168,7 +1169,7 @@ impl VerifiedComponentV1 {
     pub(super) fn proves_optimum(&self, mode: ProgramSelectionModeV1) -> bool {
         match self.search.completion {
             CompletionV1::AuthoredExact => true,
-            CompletionV1::Complete => !mode.symmetric(),
+            CompletionV1::Complete => !mode.symmetric() && !self.search.numerical_order_unresolved,
             CompletionV1::BudgetExhausted => false,
         }
     }
@@ -1218,6 +1219,7 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::AuthoredExact,
+        numerical_order_unresolved: false,
         visited: 0,
         regions: 0,
         points: 0,
@@ -1438,6 +1440,7 @@ mod reuse_history_tests {
             values: vec![color],
             search: SearchEvidenceV1 {
                 completion: CompletionV1::Complete,
+                numerical_order_unresolved: false,
                 visited: 0,
                 regions: 0,
                 points: 0,

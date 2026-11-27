@@ -86,6 +86,7 @@ pub(super) fn attempt<E: ProgramConstraintEvaluatorSetV1>(
     let prefix = 1;
     let mut extra = SearchEvidenceV1 {
         completion: CompletionV1::Complete,
+        numerical_order_unresolved: false,
         visited: 0,
         regions: 0,
         points: 0,

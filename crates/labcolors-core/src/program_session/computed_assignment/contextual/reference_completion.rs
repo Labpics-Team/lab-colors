@@ -1433,6 +1433,7 @@ struct FrozenRealizationRequestV1<'a> {
 fn empty_search(completion: CompletionV1) -> SearchEvidenceV1 {
     SearchEvidenceV1 {
         completion,
+        numerical_order_unresolved: false,
         visited: 0,
         regions: 0,
         points: 0,

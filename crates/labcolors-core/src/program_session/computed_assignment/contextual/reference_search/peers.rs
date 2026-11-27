@@ -1,7 +1,7 @@
 //! Authored uses compare each criterion across the whole tuple.
 //! A backdrop can depend on another paint in that same tuple.
 
-use super::super::point_search::{measured, profile_order};
+use super::super::point_search::{FeasibleIncumbentV1, measured, profile_order};
 use super::super::reference_completion::{
     PointMeasurementPrecisionV1, PointMeasurementV1, PreparedPointSelectionV1,
 };
@@ -266,9 +266,7 @@ pub(super) struct PeerProfiles<'a, 'p, 'program, 'scratch, E: ProgramConstraintE
     left: Vec<CertifiedScalarV1>,
     right: Vec<CertifiedScalarV1>,
     sort: Vec<CertifiedScalarV1>,
-    has_best: bool,
-    best_measured: bool,
-    best_precision: PointMeasurementPrecisionV1,
+    incumbent: FeasibleIncumbentV1,
     authored_exact: bool,
 }
 
@@ -330,15 +328,17 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             left: buffer(count, zero()).map_err(allocation)?,
             right: buffer(count, zero()).map_err(allocation)?,
             sort: buffer(count, zero()).map_err(allocation)?,
-            has_best: false,
-            best_measured: false,
-            best_precision: PointMeasurementPrecisionV1::Screened,
+            incumbent: FeasibleIncumbentV1::default(),
             authored_exact: false,
         })
     }
 
     pub(super) fn authored_exact(&self) -> bool {
         self.authored_exact
+    }
+
+    pub(super) fn unresolved(&self) -> bool {
+        self.incumbent.unresolved()
     }
 
     pub(super) fn prepare(
@@ -406,15 +406,15 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             (rgb, rgb)
         };
         let (measured, precision, order) = self.assess_profile(context, domain_at)?;
-        let improved = !self.has_best
-            || order == Some(Ordering::Less)
-            || order == Some(Ordering::Equal) && values < self.best_values.as_slice();
+        let improved = self.incumbent.consider(
+            measured,
+            precision,
+            order,
+            values.cmp(self.best_values.as_slice()),
+        );
         if improved {
             std::mem::swap(&mut self.best, &mut self.candidate);
             self.best_values.copy_from_slice(values);
-            self.has_best = true;
-            self.best_measured = measured;
-            self.best_precision = precision;
             self.authored_exact = false;
             if authored_transport_minimum
                 && values
@@ -494,33 +494,36 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                 self.continuous
                     .measure(context, &domain_at, &mut self.candidate, precision)?;
         }
-        if !self.has_best || !self.best_measured || !measured {
+        if self.incumbent.precision().is_none() || !measured {
             return Ok((measured, precision, None));
         }
         let mut order = self.compare_profile(context, &domain_at);
         if order.is_none() {
-            if self.best_precision == PointMeasurementPrecisionV1::Screened {
+            if self.incumbent.precision() == Some(PointMeasurementPrecisionV1::Screened) {
                 let values = &self.best_values;
-                self.best_precision = PointMeasurementPrecisionV1::Refined;
-                self.best_measured = self.continuous.measure(
+                if self.continuous.measure(
                     context,
                     |index| {
                         let rgb = values[index].bytes();
                         (rgb, rgb)
                     },
                     &mut self.best,
-                    self.best_precision,
-                )?;
+                    PointMeasurementPrecisionV1::Refined,
+                )? {
+                    self.incumbent.refined();
+                }
             }
-            if precision == PointMeasurementPrecisionV1::Screened {
+            if precision == PointMeasurementPrecisionV1::Screened
+                && self.continuous.measure(
+                    context,
+                    &domain_at,
+                    &mut self.candidate,
+                    PointMeasurementPrecisionV1::Refined,
+                )?
+            {
                 precision = PointMeasurementPrecisionV1::Refined;
-                measured =
-                    self.continuous
-                        .measure(context, &domain_at, &mut self.candidate, precision)?;
             }
-            if measured && self.best_measured {
-                order = self.compare_profile(context, &domain_at);
-            }
+            order = self.compare_profile(context, &domain_at);
         }
         Ok((measured, precision, order))
     }
@@ -591,7 +594,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         // order, and a maximum over the sampled cases bounds the full maximum.
         // Reuse the comparison scratch; accepted profiles remain in `best`.
         sort_tiers(&mut self.current, count);
-        if !self.has_best || !self.best_measured {
+        if self.incumbent.precision().is_none() {
             return Ok(false);
         }
         let (measured, _, order) =

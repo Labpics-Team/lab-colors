@@ -1069,6 +1069,9 @@ enum CompletionV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SearchEvidenceV1 {
     completion: CompletionV1,
+    // Domain traversal can be complete even when feasible objective
+    // profiles could not be ordered. This is separate from open regions.
+    numerical_order_unresolved: bool,
     visited: u64,
     regions: u64,
     points: u64,
@@ -1504,6 +1507,7 @@ where
     let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocate)?;
     let mut evidence = SearchEvidenceV1 {
         completion: CompletionV1::BudgetExhausted,
+        numerical_order_unresolved: false,
         visited: 0,
         regions: 0,
         points: 0,

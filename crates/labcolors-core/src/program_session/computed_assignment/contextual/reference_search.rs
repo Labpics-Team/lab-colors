@@ -328,6 +328,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             models,
             evidence: SearchEvidenceV1 {
                 completion: CompletionV1::BudgetExhausted,
+                numerical_order_unresolved: false,
                 visited: 0,
                 regions: 0,
                 points: 0,
@@ -1736,8 +1737,9 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     } else {
         None
     };
-    if let Some(order) = &mut order
-        && component.point_equivalence.is_some()
+    if let Some(order) = order
+        .as_mut()
+        .filter(|_| component.point_equivalence.is_some())
     {
         order
             .constraints
@@ -2145,6 +2147,9 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             }
         }
     }
+    search.evidence.numerical_order_unresolved = search.evidence.completion
+        != CompletionV1::AuthoredExact
+        && search.peers.as_ref().is_some_and(PeerProfiles::unresolved);
     let (values, reference_selections) = if let Some(best) = search.best {
         let mut values = cloned(&search.pending[best].values).map_err(allocation)?;
         // Pending tuples need their typed keys and source paints, not a copy

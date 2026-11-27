@@ -489,6 +489,49 @@ fn unresolved_profile_never_falls_through_to_source_tie()
     Ok(())
 }
 
+#[test]
+fn feasible_incumbent_recovers_after_unavailable_measurement() {
+    use Ordering::{Equal, Greater, Less};
+    use PointMeasurementPrecisionV1::{Refined, Screened};
+
+    let mut incumbent = FeasibleIncumbentV1::default();
+    assert!(!incumbent.has_value());
+    assert!(incumbent.consider(false, Refined, None, Equal));
+    assert!(incumbent.has_value());
+    assert!(incumbent.unresolved());
+    assert_eq!(incumbent.precision(), None);
+
+    // A later certified tuple must become usable even if the first
+    // feasible tuple could not be measured at either precision.
+    assert!(incumbent.consider(true, Screened, None, Greater));
+    assert_eq!(incumbent.precision(), Some(Screened));
+    assert!(incumbent.unresolved());
+    incumbent.refined();
+    assert_eq!(incumbent.precision(), Some(Refined));
+
+    assert!(!incumbent.consider(false, Refined, None, Less));
+    assert!(!incumbent.consider(true, Refined, None, Less));
+    assert!(incumbent.consider(true, Refined, Some(Less), Greater));
+    assert!(incumbent.unresolved());
+}
+
+#[test]
+fn repeated_tuple_can_recover_its_own_measurement_without_a_distinct_unknown_order() {
+    use Ordering::{Equal, Less};
+    use PointMeasurementPrecisionV1::Refined;
+
+    let mut incumbent = FeasibleIncumbentV1::default();
+    assert!(incumbent.consider(false, Refined, None, Equal));
+    assert!(incumbent.consider(true, Refined, None, Equal));
+    assert!(!incumbent.unresolved());
+    assert!(incumbent.consider(true, Refined, Some(Equal), Less));
+    assert!(!incumbent.unresolved());
+    assert!(!incumbent.consider(true, Refined, None, Equal));
+    assert!(!incumbent.unresolved());
+    assert!(!incumbent.consider(true, Refined, None, Less));
+    assert!(incumbent.unresolved());
+}
+
 fn repeated_children(opacity: f64, duplicate: bool) -> Program<Wcag22Srgb8V1> {
     let mut p = joint_gray();
     if opacity != 1.0 {
