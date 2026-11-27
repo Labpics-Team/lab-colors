@@ -175,6 +175,7 @@ export interface ProgramSelectionComponentV1 {
 /** Scope of a declared model; unknown rendering is not a pixel guarantee. */
 export interface ProgramFieldAssessmentV1 {
   readonly inputIndex: number;
+  readonly caseOffset: number;
   readonly from: readonly [number, number, number];
   readonly to: readonly [number, number, number];
   readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" | "opaque-piecewise-affine-encoded-srgb8-half-up-v1";

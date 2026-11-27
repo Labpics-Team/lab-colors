@@ -402,12 +402,12 @@ fn unequal_supports_match_cartesian_metrics_and_exhaustive_rgb8_oracle() -> Resu
                     &anchor,
                 ),
                 (
-                    &actual
+                    actual
                         .point_evidence()
                         .1
                         .as_ref()
                         .expect("proposal evidence is present"),
-                    &expected
+                    expected
                         .point_evidence()
                         .1
                         .as_ref()
