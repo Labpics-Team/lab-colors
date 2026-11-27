@@ -183,7 +183,7 @@ mod gamma_data;
 /// is therefore the *exact* decode for every reachable input — a table lookup
 /// that replaces the per-channel `powf` with zero loss (gated by
 /// `decode_table_matches_live_math` and `decode_reproduces_legacy_powf_path`).
-pub(crate) fn decode_8bit(byte: u8) -> f64 {
+pub(crate) const fn decode_8bit(byte: u8) -> f64 {
     gamma_data::DECODE_8BIT[byte as usize]
 }
 

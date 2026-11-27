@@ -26,7 +26,7 @@ pub(super) fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v12.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum.reference-visible-minimum.measured-incumbent-recovery\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v13.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum.reference-visible-minimum.measured-incumbent-recovery.rounded-srgb8-lms-roots\0";
     execution_identity_with_budget(DOMAIN, budget)
 }
 

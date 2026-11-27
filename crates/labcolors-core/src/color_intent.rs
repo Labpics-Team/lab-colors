@@ -5,7 +5,7 @@
 //! конечных sRGB8 значениях, в том числе после поиска и квантования.
 
 use crate::Srgb8;
-use crate::spaces::oklab::{oklab_to_srgb_linear, srgb8_to_oklab};
+use crate::spaces::oklab::{oklab_to_srgb_linear, srgb8_box_oklab_bounds, srgb8_to_oklab};
 use crate::spaces::srgb::srgb8_from_linear;
 
 pub(crate) mod reference_transport;
@@ -34,7 +34,7 @@ pub(crate) enum ColorIntentErrorV1 {
 /// превысить верхнюю границу, только если её соблюдение до кодирования даёт
 /// ровно те же bytes. Явный chroma override задаёт строгие encoded границы.
 /// Точная серая ось остаётся серой; почти нейтральный цвет сохраняет оттенок.
-const IDENTITY_POLICY_VERSION: u8 = 2;
+const IDENTITY_POLICY_VERSION: u8 = 3;
 const DEFAULT_HUE_DEVIATION_DEGREES: f64 = 18.0;
 const DEFAULT_MINIMUM_CHROMA_FRACTION: f64 = 0.1;
 
@@ -186,9 +186,10 @@ impl ColorIdentityDomainV1 {
             if low > high {
                 return false;
             }
-            // На точной серой оси Oklab L монотонна.
-            return oklab(Srgb8::new([low; 3]))[0] <= self.lightness[1]
-                && oklab(Srgb8::new([high; 3]))[0] >= self.lightness[0];
+            // Даже на серой оси строка L имеет отрицательный коэффициент.
+            // Используем то же доказанное охватывающее отображение, что и поиск.
+            let (minimum, maximum) = srgb8_box_oklab_bounds([low; 3], [high; 3]);
+            return minimum[0] <= self.lightness[1] && maximum[0] >= self.lightness[0];
         }
         true
     }
