@@ -5,6 +5,10 @@ use super::*;
 use crate::colored_graph::{ColoredGraph, canonical_form};
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "observed_order/tests.rs"]
+mod tests;
+
 #[derive(Debug)]
 pub(crate) struct PeerSearchGraph {
     colors: Vec<VertexColorV1>,
@@ -144,6 +148,38 @@ impl PeerSearchGraph {
                 .map(|v| v.srgb8().bytes())
                 .ok_or(())
         };
+        let Some(graph) = self.observed_graph(cases, rgb)? else {
+            return Ok(None);
+        };
+        let form =
+            canonical_form(&graph, b"labcolors.local-observed-peer-order.v1\0").map_err(|_| ())?;
+        drop(form.preimage);
+        let rank = form.order;
+        let mut inverse = Vec::new();
+        inverse.try_reserve_exact(rank.len()).map_err(|_| ())?;
+        inverse.resize(rank.len(), 0);
+        for (index, vertex) in rank.into_iter().enumerate() {
+            inverse[vertex] = index;
+        }
+        let project = |bindings: &[(usize, usize)]| -> Result<Vec<usize>, ()> {
+            let mut ordered =
+                try_collect_program(bindings.len(), bindings.iter().copied()).map_err(|_| ())?;
+            ordering::sort_by_key(&mut ordered, |&(_, vertex)| inverse[vertex]);
+            try_collect_program(ordered.len(), ordered.into_iter().map(|(slot, _)| slot))
+                .map_err(|_| ())
+        };
+        Ok(Some(ObservedComponentOrder {
+            targets: project(&self.targets)?,
+            inputs: project(&self.inputs)?,
+            constraints: project(&self.constraints)?,
+        }))
+    }
+
+    fn observed_graph(
+        &self,
+        cases: &[usize],
+        rgb: impl Fn(usize, usize) -> Result<[u8; 3], ()>,
+    ) -> Result<Option<ColoredGraph<VertexColorV1>>, ()> {
         let mut colors =
             try_collect_program(self.colors.len(), self.colors.iter().copied()).map_err(|_| ())?;
         let mut ties =
@@ -193,58 +229,46 @@ impl PeerSearchGraph {
         let mut edges =
             try_collect_program(self.edges.len(), self.edges.iter().copied()).map_err(|_| ())?;
         if needs_rows {
-            let cells = cases.len().checked_mul(self.inputs.len()).ok_or(())?;
+            let channels = self.inputs.len().checked_mul(3).ok_or(())?;
             colors
-                .try_reserve_exact(cells.checked_add(cases.len()).ok_or(())?)
+                .try_reserve_exact(channels.checked_add(cases.len()).ok_or(())?)
                 .map_err(|_| ())?;
             edges
-                .try_reserve_exact(cells.checked_mul(2).ok_or(())?)
+                .try_reserve_exact(
+                    channels
+                        .checked_mul(cases.len().checked_add(1).ok_or(())?)
+                        .ok_or(())?,
+                )
                 .map_err(|_| ())?;
-            // Case vertices preserve correlations. A multiset of colours for
-            // each port loses which backgrounds can actually occur together.
-            for &case in cases {
-                let row = colors.len();
-                colors.push(VertexColorV1::new(1));
-                for &(input, vertex) in &self.inputs {
-                    let cell = colors.len();
-                    let mut color = VertexColorV1::new(2);
-                    color.push_bytes(&rgb(case, input)?).map_err(|_| ())?;
-                    colors.push(color);
+            // Each row points to three fixed channel vertices per input. Edge
+            // roles hold the bytes, so the canonicalizer only partitions
+            // cases + 3 * inputs new vertices for a complete RGB matrix.
+            let channels_start = colors.len();
+            for &(_, vertex) in &self.inputs {
+                for tag in 2..=4 {
+                    let channel = colors.len();
+                    colors.push(VertexColorV1::new(tag));
                     edges.push(EdgeV1 {
-                        from: cell,
-                        to: row,
-                        role: 1,
-                    });
-                    edges.push(EdgeV1 {
-                        from: cell,
+                        from: channel,
                         to: vertex,
-                        role: 2,
+                        role: 0,
                     });
                 }
             }
+            for &case in cases {
+                let row = colors.len();
+                colors.push(VertexColorV1::new(1));
+                for (i, &(input, _)) in self.inputs.iter().enumerate() {
+                    for (channel, role) in rgb(case, input)?.into_iter().enumerate() {
+                        edges.push(EdgeV1 {
+                            from: row,
+                            to: channels_start + 3 * i + channel,
+                            role,
+                        });
+                    }
+                }
+            }
         }
-        let graph = ColoredGraph::new(colors, edges).map_err(|_| ())?;
-        let form =
-            canonical_form(&graph, b"labcolors.local-observed-peer-order.v1\0").map_err(|_| ())?;
-        drop(form.preimage);
-        let rank = form.order;
-        let mut inverse = Vec::new();
-        inverse.try_reserve_exact(rank.len()).map_err(|_| ())?;
-        inverse.resize(rank.len(), 0);
-        for (index, vertex) in rank.into_iter().enumerate() {
-            inverse[vertex] = index;
-        }
-        let project = |bindings: &[(usize, usize)]| -> Result<Vec<usize>, ()> {
-            let mut ordered =
-                try_collect_program(bindings.len(), bindings.iter().copied()).map_err(|_| ())?;
-            ordering::sort_by_key(&mut ordered, |&(_, vertex)| inverse[vertex]);
-            try_collect_program(ordered.len(), ordered.into_iter().map(|(slot, _)| slot))
-                .map_err(|_| ())
-        };
-        Ok(Some(ObservedComponentOrder {
-            targets: project(&self.targets)?,
-            inputs: project(&self.inputs)?,
-            constraints: project(&self.constraints)?,
-        }))
+        ColoredGraph::new(colors, edges).map(Some).map_err(|_| ())
     }
 }

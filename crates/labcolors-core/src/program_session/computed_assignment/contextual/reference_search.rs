@@ -1517,8 +1517,10 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let mut proposal = cloned(&working).map_err(allocation)?;
         if search.best.is_none() && count >= 2 {
             let targets = search.context.targets;
-            let proposals = component
-                .constraints
+            let proposals = search
+                .context
+                .constraint_indices
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
                 .iter()
                 .filter_map(|&index| paired_tones(targets, &epoch.constraints[index]))
                 .flatten();
