@@ -306,8 +306,10 @@ fn reference_peers_tone_selects_the_nearest_feasible_surface_across_polarities()
             let TargetIntentV1::Computed(value) = &mut target.intent else {
                 unreachable!()
             };
-            value.intent.as_mut().unwrap().tone =
-                Some(ToneCurveV1::new(2, vec![[0.0, dark], [1.0, light]]).unwrap());
+            value.intent.as_mut().expect("computed color intent").tone = Some(
+                ToneCurveV1::new(2, vec![[0.0, dark], [1.0, light]])
+                    .expect("finite authored tone curve"),
+            );
             p.targets.push(target);
             p.paints.push(Paint::Solid {
                 id: PaintId::new(paint),
