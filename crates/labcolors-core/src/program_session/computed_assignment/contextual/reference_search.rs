@@ -1156,11 +1156,13 @@ impl<'a> ReferenceRuntimeV1<'a> {
                 while let Some(frame) = stack.last_mut() {
                     if let Some(sibling) = frame.sibling.take() {
                         domains[frame.target] = sibling;
-                        active = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
-                        if active {
-                            break;
-                        }
-                        self.evidence.close_region().map_err(allocation)?;
+                        // The sibling was already assessed when its split was
+                        // created. Its open status is not a feasibility or
+                        // optimality claim. Apply new incumbent and case
+                        // information to its children (or fully assess a leaf).
+                        // Each product region is assessed once, within budget.
+                        active = true;
+                        break;
                     } else {
                         domains[frame.target] = frame.parent;
                         stack.pop();

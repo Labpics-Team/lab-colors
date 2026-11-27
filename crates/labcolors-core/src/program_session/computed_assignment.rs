@@ -1337,28 +1337,58 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
             _ => {}
         }
     }
-    // Both conditions concern the very same visible occurrence and backdrop.
-    // Derive the stronger region bound from the compiled hard conditions,
-    // irrespective of declaration order or the presence of unrelated roles.
-    for index in 0..result.len() {
-        let RegionConstraintV1::TonalHierarchy { weaker, .. } = result[index] else {
-            continue;
-        };
-        let strongest = result
-            .iter()
-            .filter_map(|constraint| match *constraint {
-                RegionConstraintV1::Wcag { slot, criterion } if slot == weaker => Some(criterion),
-                _ => None,
-            })
-            .max_by_key(|&criterion| crate::wcag22::twice_minimum_contrast(criterion));
-        if let RegionConstraintV1::TonalHierarchy {
-            weaker_contrast, ..
-        } = &mut result[index]
-        {
-            *weaker_contrast = strongest;
+    bind_weaker_contrast(&mut result);
+    Ok(result)
+}
+
+/// A hierarchy pair and a WCAG requirement can share a stronger bound only
+/// when they address the same sealed occurrence (including its backdrop).
+/// Index the WCAG prefix in place, strongest criterion first for each slot.
+/// Preparation is O(n + w log w + h log w) without a second allocation.
+fn bind_weaker_contrast(constraints: &mut [RegionConstraintV1]) {
+    if !constraints
+        .iter()
+        .any(|constraint| matches!(constraint, RegionConstraintV1::TonalHierarchy { .. }))
+    {
+        return;
+    }
+    let mut wcag_count = 0;
+    for index in 0..constraints.len() {
+        if matches!(constraints[index], RegionConstraintV1::Wcag { .. }) {
+            constraints.swap(index, wcag_count);
+            wcag_count += 1;
         }
     }
-    Ok(result)
+    if wcag_count == 0 {
+        return;
+    }
+    let (wcag, other) = constraints.split_at_mut(wcag_count);
+    wcag.sort_unstable_by_key(|constraint| match *constraint {
+        RegionConstraintV1::Wcag { slot, criterion } => Some((
+            slot,
+            std::cmp::Reverse(crate::wcag22::twice_minimum_contrast(criterion)),
+        )),
+        _ => None,
+    });
+    for constraint in other {
+        let RegionConstraintV1::TonalHierarchy {
+            weaker,
+            weaker_contrast,
+            ..
+        } = constraint
+        else {
+            continue;
+        };
+        let index = wcag.partition_point(|constraint| {
+            matches!(*constraint, RegionConstraintV1::Wcag { slot, .. } if slot < *weaker)
+        });
+        *weaker_contrast = match wcag.get(index) {
+            Some(RegionConstraintV1::Wcag { slot, criterion }) if slot == weaker => {
+                Some(*criterion)
+            }
+            _ => None,
+        };
+    }
 }
 
 struct RegionPruningV1<'scope> {

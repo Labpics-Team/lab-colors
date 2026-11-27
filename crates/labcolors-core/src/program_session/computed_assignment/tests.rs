@@ -598,7 +598,7 @@ fn nested_translucent_text_proves_impossible_at_the_root() {
                 .targets
                 .iter_mut()
                 .find(|target| target.id == TargetId::new(10))
-                .unwrap();
+                .expect("nested fixture has a parent target");
             *parent = target(10, 150, 0, 255, 0);
             declaration
                 .opacities
@@ -610,9 +610,15 @@ fn nested_translucent_text_proves_impossible_at_the_root() {
             });
             declaration.occurrences[1].subject = PaintId::new(51);
             declaration.outputs[1] = OutputBinding::new(OutputSlotId::new(17), PaintId::new(51));
-            let owner = compile_assignment(declaration, 2).unwrap();
-            let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-            session.prepare_update(update(1, 255)).unwrap().commit();
+            let owner = compile_assignment(declaration, 2)
+                .expect("nested fixture compiles with two region visits");
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("nested fixture instantiates");
+            session
+                .prepare_update(update(1, 255))
+                .expect("fixture observation is valid")
+                .commit();
             let SessionState::Failed {
                 cause: ProgramViolationOutcomeV1::Computed(cause),
                 ..

@@ -95,15 +95,45 @@ fn hierarchy_then_unary_regions_allocate_the_complete_result_once() {
             OccurrenceId::new(5),
             Wcag22CriterionV1::Sc143TextDefault,
         ));
+    for (id, criterion) in [
+        (32, Wcag22CriterionV1::Sc143TextLargeScale),
+        (33, Wcag22CriterionV1::Sc143TextDefault),
+    ] {
+        p.constraints
+            .hard
+            .push(ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(id),
+                OccurrenceId::new(15),
+                criterion,
+            ));
+    }
     let owner = compile_assignment(p, EXECUTION_NODE_LIMIT_V1)
         .expect("ordered hierarchy followed by a unary constraint should compile");
     let (result, allocations) = crate::test_support::measured_allocator_events(|| {
         region_constraints(&owner.owner_generation, None)
     });
     let regions = result.expect("finite region constraints should allocate");
-    assert_eq!(regions.len(), 8);
+    assert_eq!(regions.len(), 10);
     assert_eq!(allocations.alloc, 1);
     assert_eq!(allocations.realloc, 0);
+    let weaker_slot = owner
+        .owner_generation
+        .graph
+        .bind_occurrence(OccurrenceId::new(15))
+        .expect("compiled hierarchy occurrence");
+    for region in regions {
+        if let RegionConstraintV1::TonalHierarchy {
+            weaker,
+            weaker_contrast,
+            ..
+        } = region
+        {
+            assert_eq!(
+                weaker_contrast,
+                (weaker == weaker_slot).then_some(Wcag22CriterionV1::Sc143TextDefault)
+            );
+        }
+    }
 }
 
 #[test]
@@ -224,6 +254,9 @@ fn reference_peers_prune_and_restore_the_authored_hierarchy() {
                 .map(|output| output.paint.source())
                 .collect();
             assert_eq!(sources, expected.map(|gray| Srgb8::new([gray; 3])));
+            // This program has one physical observation. The search may
+            // assess two endpoints per product region, exactly once.
+            assert!(frame.search.endpoint_evaluations <= 2 * frame.search.regions);
             assert_eq!(
                 frame.optimality(),
                 if background == 255 {

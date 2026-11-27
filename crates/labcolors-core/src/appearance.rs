@@ -851,7 +851,7 @@ pub(crate) struct CompiledPaintInputSlotV1 {
 /// Cold-bound canonical Occurrence position for allocation-free repeated
 /// lookup. As with [`CompiledPaintSlotV1`], construction remains sealed inside
 /// the compiled appearance graph and every use revalidates the exact ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct CompiledOccurrenceSlotV1 {
     index: usize,
     id: OccurrenceId,

@@ -114,14 +114,15 @@ mod tests {
         SourceOverCertificateV1::compose(
             CompositionProfileV1::EncodedSrgb8SourceOverV1,
             tint,
-            AdmittedOpacityV1::new(alpha).unwrap(),
+            AdmittedOpacityV1::new(alpha).expect("fixture opacity is admitted"),
             backdrop,
         )
     }
 
     fn passes(c: SourceOverCertificateV1, criterion: Wcag22CriterionV1) -> bool {
         matches!(
-            evaluate_wcag22_srgb8(c.output_rgb(), c.backdrop_rgb(), criterion).unwrap(),
+            evaluate_wcag22_srgb8(c.output_rgb(), c.backdrop_rgb(), criterion)
+                .expect("fixture sRGB8 pair admits WCAG evaluation"),
             Wcag22AssessmentV1::Evaluated {
                 decision: Wcag22ApplicableDecisionV1::Pass,
                 ..
@@ -142,7 +143,7 @@ mod tests {
                         cert([255; 3], alpha, [255; 3]),
                         criterion,
                     )
-                    .unwrap(),
+                    .expect("endpoints have identical composition profiles"),
                     "alpha={alpha}, {criterion:?}"
                 );
             }
@@ -168,7 +169,7 @@ mod tests {
                             cert([se; 3], alpha, [be; 3]),
                             criterion,
                         )
-                        .unwrap()
+                        .expect("endpoints have identical composition profiles")
                     });
                     for tint in s..=se {
                         for backdrop in b..=be {
@@ -201,7 +202,7 @@ mod tests {
                     cert(sources[1], alpha, backdrops[1]),
                     criterion,
                 )
-                .unwrap();
+                .expect("endpoints have identical composition profiles");
                 for s in 0..27 {
                     for b in 0..27 {
                         let sample = |ends: [[u8; 3]; 2], ordinal| {
