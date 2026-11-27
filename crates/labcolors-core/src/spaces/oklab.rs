@@ -92,7 +92,9 @@ const _: () = {
     }
 };
 
-const SIGNIFICAND_BIT: u64 = 1 << 52;
+// GROUNDED — Rust binary64 `f64::MANTISSA_DIGITS` (docs/explanation/color-system.md).
+const SIGNIFICAND_BIT: u64 = 1 << (f64::MANTISSA_DIGITS - 1);
+// GROUNDED — stored `binary64 fraction` (docs/explanation/color-system.md).
 const FRACTION_MASK: u64 = SIGNIFICAND_BIT - 1;
 
 /// Identity of the operational encoded-color projection shared by all
@@ -201,6 +203,15 @@ pub(crate) fn srgb8_lms_root(rgb: crate::Srgb8) -> [f64; 3] {
 
 pub(crate) fn srgb8_to_oklab(rgb: crate::Srgb8) -> [f64; 3] {
     mat_vec_mul(LMS_TO_OKLAB, srgb8_lms_root(rgb))
+}
+
+/// Exact finite gray-axis projection, shared by point and region admission.
+/// No claim about monotonicity of the second (signed) Oklab matrix is needed.
+pub(crate) fn srgb8_neutral_lightness() -> &'static [f64; 256] {
+    static LIGHTNESS: std::sync::OnceLock<[f64; 256]> = std::sync::OnceLock::new();
+    LIGHTNESS.get_or_init(|| {
+        std::array::from_fn(|gray| srgb8_to_oklab(crate::Srgb8::new([gray as u8; 3]))[0])
+    })
 }
 
 /// Границы машинного Oklab для RGB8-box. Таблица decode и положительные

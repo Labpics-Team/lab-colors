@@ -5,7 +5,7 @@
 //! конечных sRGB8 значениях, в том числе после поиска и квантования.
 
 use crate::Srgb8;
-use crate::spaces::oklab::{oklab_to_srgb_linear, srgb8_box_oklab_bounds, srgb8_to_oklab};
+use crate::spaces::oklab::{oklab_to_srgb_linear, srgb8_neutral_lightness, srgb8_to_oklab};
 use crate::spaces::srgb::srgb8_from_linear;
 
 pub(crate) mod reference_transport;
@@ -48,6 +48,7 @@ pub(crate) struct ColorIdentityDomainV1 {
     hue_deviation: f64,
     chroma: [f64; 2],
     lightness: [f64; 2],
+    neutral_extent: Option<[u8; 2]>,
 }
 
 // Все float-поля проходят admission и канонизацию; NaN непредставим.
@@ -80,6 +81,22 @@ fn hue_distance(a: f64, b: f64) -> f64 {
     d.min(360.0 - d)
 }
 
+fn contains_lightness(range: [f64; 2], value: f64) -> bool {
+    range[0] <= value && value <= range[1]
+}
+
+/// Enclose the actual admitted gray codes, without assuming that lightness
+/// along the quantized gray axis is monotone. Any holes remain point-checked.
+fn neutral_extent(lightness: [f64; 2]) -> Option<[u8; 2]> {
+    let mut admitted = srgb8_neutral_lightness()
+        .iter()
+        .enumerate()
+        .filter(|&(_, &value)| contains_lightness(lightness, value));
+    let first = admitted.next()?.0;
+    let last = admitted.next_back().map_or(first, |(index, _)| index);
+    Some([first as u8, last as u8])
+}
+
 impl ColorIdentityDomainV1 {
     pub(crate) fn new(
         source: Srgb8,
@@ -95,8 +112,8 @@ impl ColorIdentityDomainV1 {
         if !(0.0..=180.0).contains(&hue_deviation) {
             return Err(ColorIntentErrorV1::InvalidHueDeviation);
         }
-        let lab = oklab(source);
         let neutral = force_neutral || source.is_achromatic();
+        let lab = if neutral { [0.0; 3] } else { oklab(source) };
         let chroma = checked_range(
             options.chroma.unwrap_or(if neutral {
                 [0.0, 0.0]
@@ -129,6 +146,11 @@ impl ColorIdentityDomainV1 {
             hue_deviation,
             chroma,
             lightness,
+            neutral_extent: if neutral {
+                neutral_extent(lightness)
+            } else {
+                None
+            },
         })
     }
 
@@ -145,16 +167,20 @@ impl ColorIdentityDomainV1 {
     }
 
     pub(crate) fn contains(&self, rgb: Srgb8) -> bool {
-        if self.neutral && !rgb.is_achromatic() {
+        // Номинальный hue серого от round-off матриц не становится характером.
+        if rgb.is_achromatic() {
+            return self.chroma[0] == 0.0
+                && contains_lightness(
+                    self.lightness,
+                    srgb8_neutral_lightness()[rgb.bytes()[0] as usize],
+                );
+        }
+        if self.neutral {
             return false;
         }
         let lab = oklab(rgb);
-        if lab[0] < self.lightness[0] || lab[0] > self.lightness[1] {
+        if !contains_lightness(self.lightness, lab[0]) {
             return false;
-        }
-        // Номинальный hue серого от round-off матриц не становится характером.
-        if rgb.is_achromatic() {
-            return self.chroma[0] == 0.0;
         }
         let c = chroma(lab);
         if c < self.chroma[0] || hue_distance(hue(lab), self.hue) > self.hue_deviation {
@@ -181,15 +207,12 @@ impl ColorIdentityDomainV1 {
             return self.contains(Srgb8::new(lower));
         }
         if self.neutral {
-            let low = lower[0].max(lower[1]).max(lower[2]);
-            let high = upper[0].min(upper[1]).min(upper[2]);
-            if low > high {
+            let Some([first, last]) = self.neutral_extent else {
                 return false;
-            }
-            // Даже на серой оси строка L имеет отрицательный коэффициент.
-            // Используем то же доказанное охватывающее отображение, что и поиск.
-            let (minimum, maximum) = srgb8_box_oklab_bounds([low; 3], [high; 3]);
-            return minimum[0] <= self.lightness[1] && maximum[0] >= self.lightness[0];
+            };
+            let low = lower[0].max(lower[1]).max(lower[2]).max(first);
+            let high = upper[0].min(upper[1]).min(upper[2]).min(last);
+            return low <= high;
         }
         true
     }
@@ -422,6 +445,42 @@ mod tests {
         assert!(!neutral.contains(Srgb8::new([128, 128, 129])));
         assert!(!neutral.may_intersect_rgb_box([0, 100, 200], [20, 120, 220]));
         assert!(neutral.may_intersect_rgb_box([100, 90, 80], [120, 130, 140]));
+        Ok(())
+    }
+
+    #[test]
+    fn neutral_region_admission_uses_exact_gray_codes() -> Result<(), String> {
+        for gray in 0..=255_u8 {
+            let point = Srgb8::new([gray; 3]);
+            let lightness = oklab(point)[0];
+            let domain = ColorIdentityDomainV1::new(
+                Srgb8::new([128; 3]),
+                false,
+                IdentityOptionsV1 {
+                    lightness: Some([lightness; 2]),
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| format!("neutral identity: {error:?}"))?;
+            assert!(domain.contains(point));
+            for other in 0..=255_u8 {
+                let expected = oklab(Srgb8::new([other; 3]))[0] == lightness;
+                assert_eq!(domain.contains(Srgb8::new([other; 3])), expected);
+                if expected {
+                    assert!(domain.may_intersect_rgb_box([other, 0, 0], [255, other, 255]));
+                }
+            }
+        }
+        let empty = ColorIdentityDomainV1::new(
+            Srgb8::new([128; 3]),
+            false,
+            IdentityOptionsV1 {
+                lightness: Some([0.0001, 0.0002]),
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("neutral identity: {error:?}"))?;
+        assert!(!empty.may_intersect_rgb_box([0; 3], [255; 3]));
         Ok(())
     }
 
