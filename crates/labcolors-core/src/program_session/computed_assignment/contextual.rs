@@ -4,6 +4,7 @@
 use super::*;
 use crate::color_intent::color_at_lightness;
 use crate::observation::PhysicalValuesV1;
+use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 
 // Performance policy: an initial repair and a final repair each receive at
@@ -92,7 +93,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v6.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.shared-certified-point-tone-and-source.sorted-operational-transport.immutable-expression-cancellation.observed-component-order.joint-domain-bounds.single-assessment-per-region\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v7.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.shared-certified-point-tone-and-source.sorted-operational-transport.immutable-expression-cancellation.observed-component-order.joint-domain-bounds.single-assessment-per-region.substitution-equivalent-leaf-variables\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);
@@ -124,7 +125,7 @@ struct ContextV1<'a> {
     identity_memberships: RefCell<Vec<Option<(Srgb8, bool)>>>,
     visible_labs: RefCell<Vec<Option<VisibleLabV1>>>,
     opaque: Vec<bool>,
-    point_equivalence: Option<&'a PointEquivalenceV1>,
+    target_representatives: Option<Cow<'a, [usize]>>,
 }
 
 #[derive(Default)]
@@ -362,12 +363,35 @@ impl<'a> ContextV1<'a> {
         let case_refinement = RefCell::new(
             CaseRefinementV1::new(&local_cases, scenarios.len().get()).map_err(allocation)?,
         );
+        let target_representatives = match (component, order) {
+            (Some(component), Some(order)) if component.point_equivalence.is_some() => {
+                let mut compiled_to_observed = buffer(count, usize::MAX).map_err(allocation)?;
+                for (observed, target) in order.targets.iter().enumerate() {
+                    let local = component
+                        .targets
+                        .binary_search(target)
+                        .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+                    compiled_to_observed[local] = observed;
+                }
+                let mut representatives = buffer(count, usize::MAX).map_err(allocation)?;
+                for local in 0..count {
+                    representatives[compiled_to_observed[local]] =
+                        compiled_to_observed[component.point_representative(local)];
+                }
+                Some(Cow::Owned(representatives))
+            }
+            (Some(component), _) => component
+                .point_equivalence
+                .as_ref()
+                .map(|equivalence| Cow::Borrowed(equivalence.representatives.as_ref())),
+            _ => None,
+        };
         let physical_cases = component.map_or(scenarios.len().get(), |_| local_cases.order.len());
         Ok(Self {
             targets,
             constraint_indices: order
                 .map(|order| order.constraints.as_slice())
-                .or_else(|| component.map(|component| component.constraints.as_ref())),
+                .or_else(|| component.map(ComputedComponentV1::point_constraints)),
             physical: component.map(|component| &component.physical),
             domains,
             preferred,
@@ -379,7 +403,7 @@ impl<'a> ContextV1<'a> {
             identity_memberships: RefCell::new(buffer(count, None).map_err(allocation)?),
             visible_labs: RefCell::new(buffer(count, None).map_err(allocation)?),
             opaque,
-            point_equivalence: None,
+            target_representatives,
         })
     }
 
@@ -388,15 +412,25 @@ impl<'a> ContextV1<'a> {
         component: &'a ComputedComponentV1,
         scenarios: NonEmptyScenarioSetV1<'_>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let mut context = Self::new::<E>(selection, Some(component), scenarios)?;
-        context.point_equivalence = component.point_equivalence.as_ref();
-        context.constraint_indices = Some(component.point_constraints());
-        Ok(context)
+        Self::new::<E>(selection, Some(component), scenarios)
+    }
+
+    fn target_representative(&self, local: usize) -> usize {
+        self.target_representatives
+            .as_ref()
+            .map_or(local, |representatives| representatives[local])
     }
 
     fn represents_target(&self, local: usize) -> bool {
-        self.point_equivalence
-            .is_none_or(|equivalence| equivalence.representatives[local] == local)
+        self.target_representative(local) == local
+    }
+
+    fn expand_sources(&self, values: &mut [Srgb8]) {
+        if let Some(representatives) = &self.target_representatives {
+            for (local, &representative) in representatives.iter().enumerate() {
+                values[local] = values[representative];
+            }
+        }
     }
 
     fn represents_case(&self, case: usize) -> bool {

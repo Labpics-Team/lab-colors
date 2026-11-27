@@ -203,14 +203,14 @@ fn tonal_proposals(anchor: Srgb8, domain: AssignmentDomainV1) -> impl Iterator<I
 }
 
 fn polish_plan(
-    targets: impl IntoIterator<Item = (Srgb8, AssignmentDomainV1)>,
+    targets: impl IntoIterator<Item = (usize, Srgb8, AssignmentDomainV1)>,
     maximum: usize,
 ) -> Result<Vec<(usize, Srgb8)>, ()> {
     let mut proposals = Vec::new();
     if maximum == 0 {
         return Ok(proposals);
     }
-    for (target, (anchor, domain)) in targets.into_iter().enumerate() {
+    for (target, anchor, domain) in targets {
         for source in tonal_proposals(anchor, domain) {
             if proposals.is_empty() {
                 proposals.try_reserve_exact(maximum).map_err(|_| ())?;
@@ -251,9 +251,10 @@ fn terminal_proposals_count_only_distinct_admitted_sources() {
 #[test]
 fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     let anchor = Srgb8::new([128; 3]);
-    let targets = std::iter::once((anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 })).chain(
-        std::iter::once_with(|| panic!("the reserve needs no later target")),
-    );
+    let targets = std::iter::once((0, anchor, AssignmentDomainV1::Gray { lower: 0, upper: 3 }))
+        .chain(std::iter::once_with(|| {
+            panic!("the reserve needs no later target")
+        }));
     assert_eq!(
         polish_plan(targets, 3).expect("bounded proposal storage"),
         (0..=2)
@@ -263,6 +264,7 @@ fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     let (empty, allocations) = crate::test_support::measured_allocator_events(|| {
         polish_plan(
             [(
+                0,
                 anchor,
                 AssignmentDomainV1::Cube {
                     lower: [0, 0, 1],
@@ -774,7 +776,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
-        values: &[Srgb8],
+        values: &mut [Srgb8],
         arena: &mut ProgramEvaluationArenaV1<E>,
     ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         self.assess_tuple_inner(runtime, epoch, scenarios, values, arena, false)
@@ -785,13 +787,14 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
         scenarios: NonEmptyScenarioSetV1<'_>,
-        values: &[Srgb8],
+        values: &mut [Srgb8],
         arena: &mut ProgramEvaluationArenaV1<E>,
         probe: bool,
     ) -> Result<Option<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         if self.evidence.visited >= self.budget {
             return Ok(None);
         }
+        self.context.expand_sources(values);
         self.evidence.visited += 1;
         self.evidence.points += 1;
         self.evidence.examined += 1;
@@ -1120,7 +1123,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         scenarios: NonEmptyScenarioSetV1<'_>,
         domains: &[AssignmentDomainV1],
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let domain_at = |index| domains[index];
+        let domain_at = |index| domains[self.context.target_representative(index)];
         let possible =
             bounds.may_pass_domains(&self.context, runtime, epoch, scenarios, domain_at)?;
         self.evidence.endpoint_evaluations = bounds.evaluations;
@@ -1154,6 +1157,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         let count = domains.len();
         let depth = domains
             .iter()
+            .enumerate()
+            .filter(|(index, _)| self.context.represents_target(*index))
+            .map(|(_, domain)| domain)
             .try_fold(0_usize, |sum, domain| sum.checked_add(domain.split_depth()))
             .ok_or_else(|| allocation(()))?;
         let mut stack = Vec::<Split>::new();
@@ -1161,7 +1167,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         let mut first_profile =
             buffer(count.checked_mul(4).ok_or_else(|| allocation(()))?, 0.0).map_err(allocation)?;
         let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
-        let maximum_polish_work = (count as u64)
+        let maximum_polish_work = ((0..count)
+            .filter(|&index| self.context.represents_target(index))
+            .count() as u64)
             .saturating_mul(256)
             .min(self.budget / COORDINATE_BUDGET_DIVISOR);
         let mut polish_proposals = None;
@@ -1208,7 +1216,11 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                                 .targets
                                 .iter()
                                 .zip(&self.context.domains)
-                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                                .enumerate()
+                                .filter(|(index, _)| self.context.represents_target(*index))
+                                .map(|(index, (target, &domain))| {
+                                    (index, target.declaration.anchor, domain)
+                                }),
                             usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
                         )
                         .map_err(allocation)?,
@@ -1228,7 +1240,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             let split = domains
                 .iter()
                 .enumerate()
-                .filter(|(_, domain)| domain.split_depth() != 0)
+                .filter(|(index, domain)| {
+                    self.context.represents_target(*index) && domain.split_depth() != 0
+                })
                 .max_by_key(|(index, domain)| {
                     (
                         self.context.targets[*index].tone_input.is_some(),
@@ -1240,7 +1254,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                 for (value, domain) in values.iter_mut().zip(&domains) {
                     *value = Srgb8::new(domain.bounds().0);
                 }
-                self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+                self.assess_tuple_inner(runtime, epoch, scenarios, &mut values, arena, true)?;
                 self.evidence.close_region().map_err(allocation)?;
                 active = false;
                 continue;
@@ -1442,7 +1456,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                             runtime,
                             epoch,
                             scenarios,
-                            &job.values,
+                            &mut job.values,
                             arena,
                             true,
                         )?;
@@ -1506,7 +1520,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             // move has made it the current source. This fixed work set is
             // exactly what the scheduler reserves; each visit is assessed.
             values[target] = source;
-            self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+            self.assess_tuple_inner(runtime, epoch, scenarios, &mut values, arena, true)?;
         }
         Ok(())
     }
@@ -1716,12 +1730,19 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     prepared: Option<&mut PreparedPointSelectionV1<'_, '_, E>>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
-    let order = if let Some(graph) = &component.peer_graph {
+    let mut order = if let Some(graph) = &component.peer_graph {
         let cases = local_case_order::<E>(component, scenarios, |_, _| {})?;
         graph.order(&cases, scenarios).map_err(allocation)?
     } else {
         None
     };
+    if let Some(order) = &mut order
+        && component.point_equivalence.is_some()
+    {
+        order
+            .constraints
+            .retain(|index| component.point_constraints().contains(index));
+    }
     let mut search =
         ReferenceRuntimeV1::new(selection, component, scenarios, order.as_ref(), prepared)?;
     let count = search.context.targets.len();
@@ -1730,7 +1751,7 @@ pub(in crate::program_session::computed_assignment) fn select_component<
         *value = target.declaration.anchor;
     }
     let mut working = cloned(&authored).map_err(allocation)?;
-    search.assess_tuple(runtime, epoch, scenarios, &working, arena)?;
+    search.assess_tuple(runtime, epoch, scenarios, &mut working, arena)?;
     if let Some(peers) = &mut search.peers {
         peers
             .prepare(&search.context, &search.appearance)
@@ -1758,7 +1779,7 @@ pub(in crate::program_session::computed_assignment) fn select_component<
                 proposal.copy_from_slice(&authored);
                 proposal[left] = first;
                 proposal[right] = second;
-                search.assess_tuple(runtime, epoch, scenarios, &proposal, arena)?;
+                search.assess_tuple(runtime, epoch, scenarios, &mut proposal, arena)?;
             }
         }
         let mut current_hard_failures =
@@ -1771,6 +1792,9 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             .try_reserve_exact(count)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         for (target, compiled) in search.context.targets.iter().enumerate() {
+            if !search.context.represents_target(target) {
+                continue;
+            }
             let depth = compiled
                 .appearance
                 .map(|slot| {
@@ -1789,7 +1813,8 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             siblings.reverse();
         }
         let sibling_orders = 1 + usize::from(opposite_siblings != repair_order);
-        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[count - 1].0);
+        let coordinates = repair_order.len();
+        let depth_orders = 1 + usize::from(repair_order[0].0 != repair_order[coordinates - 1].0);
         let trajectories = sibling_orders * depth_orders;
         let starts = search
             .context
@@ -1820,6 +1845,9 @@ pub(in crate::program_session::computed_assignment) fn select_component<
                 let case = search.context.local_cases.order[(seed - 1) / 2];
                 let direction = if seed % 2 == 1 { -1 } else { 1 };
                 for target in 0..count {
+                    if !search.context.represents_target(target) {
+                        continue;
+                    }
                     let point = initial_appearance[case * count + target];
                     seed_values[target] = if search.models[target].is_some() {
                         let preferred = search
@@ -1839,7 +1867,7 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             }
             working.copy_from_slice(&seed_values);
             let mut current_failures = search
-                .assess_tuple_inner(runtime, epoch, scenarios, &working, arena, true)?
+                .assess_tuple_inner(runtime, epoch, scenarios, &mut working, arena, true)?
                 .unwrap_or(usize::MAX);
             if current_failures == 0 {
                 continue;
@@ -1861,9 +1889,9 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             let downstream_first = trajectory < sibling_orders;
             'repair: for pass in 0.. {
                 let mut changed = false;
-                for position in 0..count {
+                for position in 0..coordinates {
                     let coordinate = if (pass % 2 == 0) == downstream_first {
-                        count - 1 - position
+                        coordinates - 1 - position
                     } else {
                         position
                     };
@@ -1893,7 +1921,12 @@ pub(in crate::program_session::computed_assignment) fn select_component<
                         }
                         let case_count = search.context.case_refinement.borrow().cases.len();
                         let Some(failures) = search.assess_tuple_inner(
-                            runtime, epoch, scenarios, &proposal, arena, true,
+                            runtime,
+                            epoch,
+                            scenarios,
+                            &mut proposal,
+                            arena,
+                            true,
                         )?
                         else {
                             break 'repair;
@@ -1917,7 +1950,12 @@ pub(in crate::program_session::computed_assignment) fn select_component<
                             }
                             current_failures = search
                                 .assess_tuple_inner(
-                                    runtime, epoch, scenarios, &working, arena, true,
+                                    runtime,
+                                    epoch,
+                                    scenarios,
+                                    &mut working,
+                                    arena,
+                                    true,
                                 )?
                                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                             // Current already failed on the old probe, a subset
@@ -2026,7 +2064,10 @@ pub(in crate::program_session::computed_assignment) fn select_component<
                                     .targets
                                     .iter()
                                     .zip(&search.context.domains)
-                                    .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                                    .enumerate()
+                                    .map(|(index, (target, &domain))| {
+                                        (index, target.declaration.anchor, domain)
+                                    }),
                                 usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
                             )
                             .map_err(allocation)?,

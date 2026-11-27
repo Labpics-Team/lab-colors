@@ -251,10 +251,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> SearchV1<'_, '_, '_, '_, E> {
     }
 
     fn synchronize(&mut self) {
-        for local in 0..self.component.targets.len() {
-            self.buffers.values[local] =
-                self.buffers.values[self.component.point_representative(local)];
-        }
+        self.context.expand_sources(&mut self.buffers.values);
     }
 
     fn assess(

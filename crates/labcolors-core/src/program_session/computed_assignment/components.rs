@@ -715,7 +715,10 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
         .and_then(|budget| budget.checked_add(constant_check))
         .ok_or(ProgramCompileError::ResourceExhausted)?;
     for component in &mut components {
-        if component.mode == ProgramSelectionModeV1::JointPointV1 {
+        if matches!(
+            component.mode,
+            ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1
+        ) {
             component.point_equivalence = point_equivalence::compile(
                 selection,
                 component,

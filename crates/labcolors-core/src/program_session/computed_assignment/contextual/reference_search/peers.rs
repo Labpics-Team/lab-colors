@@ -227,17 +227,19 @@ impl<E: ProgramConstraintEvaluatorSetV1> ContinuousProfiles<'_, '_, '_, '_, E> {
             PointMeasurementV1::Profile(precision),
         ))?;
         if measured {
-            for (local, &target) in self.compiled_to_observed.iter().enumerate() {
+            for variable in 0..self.component.point_variable_count() {
+                let local = self.component.point_variable(variable);
+                let target = self.compiled_to_observed[local];
                 match context.targets[target].preferred_intent() {
                     CompiledPreferredIntentV1::Point { tone: Some(_), .. } => {
-                        profile[target] = self.point[local];
+                        profile[target] = self.point[variable];
                     }
                     CompiledPreferredIntentV1::Point { tone: None, .. } => {
-                        profile[2 * count + target] = self.point[local];
+                        profile[2 * count + target] = self.point[variable];
                     }
                     CompiledPreferredIntentV1::ImplicitReference => {}
                 }
-                profile[3 * count + target] = self.source[local];
+                profile[3 * count + target] = self.source[variable];
             }
         }
         Ok(measured)
@@ -376,6 +378,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         let mut authored_transport_minimum = true;
         for (row, &case) in self.cases.chunks_exact_mut(count).zip(local_cases) {
             for (target, prepared) in row.iter_mut().enumerate() {
+                if !context.represents_target(target) {
+                    continue;
+                }
                 let Preference::Transport(model) = self.preferences[target] else {
                     continue;
                 };
@@ -433,7 +438,11 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         Ok(improved)
     }
 
-    fn compare_profile(&mut self, domain_at: impl Fn(usize) -> SourceBounds) -> Option<Ordering> {
+    fn compare_profile(
+        &mut self,
+        context: &ContextV1<'_>,
+        domain_at: impl Fn(usize) -> SourceBounds,
+    ) -> Option<Ordering> {
         let count = self.preferences.len();
         let equal = |index: usize| {
             let (lo, hi) = domain_at(index);
@@ -442,6 +451,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         for tier in 0..4 {
             let mut used = 0;
             for target in 0..count {
+                if !context.represents_target(target) {
+                    continue;
+                }
                 let same = if tier == 3 {
                     equal(target)
                 } else {
@@ -485,7 +497,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         if !self.has_best || !self.best_measured || !measured {
             return Ok((measured, precision, None));
         }
-        let mut order = self.compare_profile(&domain_at);
+        let mut order = self.compare_profile(context, &domain_at);
         if order.is_none() {
             if self.best_precision == PointMeasurementPrecisionV1::Screened {
                 let values = &self.best_values;
@@ -507,7 +519,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                         .measure(context, &domain_at, &mut self.candidate, precision)?;
             }
             if measured && self.best_measured {
-                order = self.compare_profile(&domain_at);
+                order = self.compare_profile(context, &domain_at);
             }
         }
         Ok((measured, precision, order))
@@ -533,6 +545,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         for &case in &refinement.cases {
             let row = refinement.ranks[case] * count;
             for (target, &preference) in self.preferences.iter().enumerate() {
+                if !context.represents_target(target) {
+                    continue;
+                }
                 let [tone, shortfall, distance] = preference.lower_loss(
                     &mut self.cases[row + target],
                     context,
@@ -561,6 +576,9 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             }
         }
         for (target, compiled) in context.targets.iter().enumerate() {
+            if !context.represents_target(target) {
+                continue;
+            }
             let domain = domain_at(target);
             let (lo, hi) = domain.bounds();
             source[target] = if lo == hi {

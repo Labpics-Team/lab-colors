@@ -219,6 +219,114 @@ fn compile_reference_composition(
     p.compile().expect("reference composition compiles")
 }
 
+fn mixed_repeated_children(duplicate: bool, distinct_requirement: bool) -> Program<Wcag22Srgb8V1> {
+    let mut p = singleton(Srgb8::new([32; 3]), 255, 0.75);
+    p.surfaces.push(Surface::FromOccurrence {
+        id: SurfaceId::new(14),
+        occurrence: OccurrenceId::new(5),
+    });
+    for index in 0..if duplicate { 2 } else { 1 } {
+        let offset = index * 10;
+        let mut target = color(20 + offset, 15 + offset, 220, u64::from(index) + 1);
+        let TargetIntentV1::Computed(value) = &mut target.intent else {
+            unreachable!()
+        };
+        value.reference_appearance = false;
+        p.targets.push(target);
+        p.paints.push(Paint::Solid {
+            id: PaintId::new(13 + offset),
+            target: TargetId::new(20 + offset),
+        });
+        p.occurrences.push(Occurrence::new(
+            OccurrenceId::new(15 + offset),
+            PaintId::new(13 + offset),
+            SurfaceId::new(14),
+            CompositionProfile::EncodedSrgb8SourceOverV1,
+            p.occurrences[0].context,
+        ));
+        p.outputs.push(OutputBinding::new(
+            OutputSlotId::new(17 + offset),
+            PaintId::new(13 + offset),
+        ));
+        p.constraints
+            .hard
+            .push(ConstraintInvocation::visible_unary_hard(
+                ConstraintId::new(16 + offset),
+                OccurrenceId::new(15 + offset),
+                if distinct_requirement && index == 1 {
+                    Wcag22CriterionV1::Sc143TextLargeScale
+                } else {
+                    Wcag22CriterionV1::Sc143TextDefault
+                },
+            ));
+    }
+    p
+}
+
+#[test]
+fn mixed_reference_composition_counts_equivalent_children_once() {
+    for reverse in [false, true] {
+        let owners = [
+            compile_reference_composition(mixed_repeated_children(false, false), reverse),
+            compile_reference_composition(mixed_repeated_children(true, false), reverse),
+            compile_reference_composition(mixed_repeated_children(true, true), reverse),
+        ];
+        for (index, owner) in owners.iter().enumerate() {
+            let CompiledTargetSelectionV1::Computed(selection) =
+                &owner.owner_generation.target_selection
+            else {
+                panic!("computed reference composition")
+            };
+            assert_eq!(selection.components.len(), 1);
+            assert_eq!(
+                selection.components[0].mode,
+                ProgramSelectionModeV1::JointReferencePeersV1
+            );
+            assert_eq!(
+                selection.components[0].point_variable_count(),
+                if index == 2 { 3 } else { 2 }
+            );
+        }
+        let mut sessions = owners[..2]
+            .iter()
+            .map(|owner| {
+                owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .expect("session")
+            })
+            .collect::<Vec<_>>();
+        for (revision, backdrop) in [(1, 255), (2, 0), (3, 208), (4, 255)] {
+            let mut outputs = Vec::new();
+            for session in &mut sessions {
+                session
+                    .prepare_update(update(revision, backdrop))
+                    .expect("observation")
+                    .commit();
+                let frame = session
+                    .state()
+                    .current_verified()
+                    .expect("feasible composition")
+                    .computed_for_test();
+                outputs.push(
+                    frame
+                        .arena
+                        .storage
+                        .outputs
+                        .iter()
+                        .map(|output| output.paint.source())
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert_eq!(
+                &outputs[1][..2],
+                &outputs[0],
+                "backdrop={backdrop}, reverse={reverse}"
+            );
+            assert_eq!(outputs[1][2], outputs[0][1]);
+        }
+    }
+}
+
 #[test]
 fn reference_peers_prune_and_restore_the_authored_hierarchy() {
     for reverse in [false, true] {
