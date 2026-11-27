@@ -1939,8 +1939,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         let constraints =
             region_constraints(epoch, search.context.constraint_indices).map_err(allocation)?;
         let mut bounds = BoundsV1 {
-            constraint_lower: buffer(constraints.len(), RegionPointV1::default())
-                .map_err(allocation)?,
+            constraint_lower: buffer(constraints.len(), None).map_err(allocation)?,
             constraints,
             lower: buffer(count, [0; 3]).map_err(allocation)?,
             scores: buffer(count, 0.0).map_err(allocation)?,

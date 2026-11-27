@@ -6,6 +6,7 @@ use crate::program_session::computed_assignment::tests::{
 };
 use crate::session::SessionState;
 use crate::session_tests::CommitSessionUpdateForTest as _;
+use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_srgb8};
 
 mod declared_fields;
 

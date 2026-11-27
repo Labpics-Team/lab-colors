@@ -2,11 +2,9 @@
 //! Области сокращаются до полного выбора; физика остаётся у Program.
 
 use super::*;
+use crate::appearance::SourceOverCertificateV1;
 use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1};
 use crate::program_wire::{ProgramSelectionComponentV1, ProgramSelectionModeV1};
-use crate::wcag22::{
-    Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, Wcag22EvaluationErrorV1, evaluate_wcag22_srgb8,
-};
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -187,10 +185,15 @@ pub(crate) const EXECUTION_NODE_LIMIT_V1: u64 = 65_536;
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] =
         b"labcolors.assignment-execution.v5.nominal-visible-boxes.independent-components.anytime.direct-oklab-f64.lex-rgb.region-dfs.leaf64.region-plus-point-budget.full-recheck\0";
-    let mut bytes = [0; DOMAIN.len() + 8];
-    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
-    *crate::sha256::digest(&bytes).as_bytes()
+    execution_identity_with_budget(DOMAIN, budget)
+}
+
+fn execution_identity_with_budget(domain: &[u8], budget: u64) -> [u8; 32] {
+    let mut hash = crate::sha256::Hasher::new();
+    hash.update(domain);
+    hash.update(&budget.to_le_bytes());
+    hash.update(contrast_bounds::IDENTITY);
+    *hash.finalize().as_bytes()
 }
 
 impl ComputedTargetV1 {
@@ -1149,11 +1152,20 @@ enum RegionConstraintV1 {
 struct RegionPointV1 {
     visible: [u8; 3],
     backdrop: [u8; 3],
+}
+
+#[derive(Clone, Copy)]
+struct RegionConstraintPointV1 {
+    subject: SourceOverCertificateV1,
+    comparison: [u8; 3],
     weaker: [u8; 3],
 }
 
 impl RegionConstraintV1 {
-    fn point(self, evaluation: &AppearanceEvaluationView<'_, '_>) -> Option<RegionPointV1> {
+    fn point(
+        self,
+        evaluation: &AppearanceEvaluationView<'_, '_>,
+    ) -> Option<RegionConstraintPointV1> {
         let slot = match self {
             Self::Wcag { slot, .. }
             | Self::Exact { slot, .. }
@@ -1166,9 +1178,9 @@ impl RegionConstraintV1 {
             Self::TonalHierarchy { weaker, .. } => evaluation.occurrence_at(weaker)?.visible(),
             _ => [0; 3],
         };
-        Some(RegionPointV1 {
-            visible: point.visible(),
-            backdrop: match self {
+        Some(RegionConstraintPointV1 {
+            subject: *point.certificate(),
+            comparison: match self {
                 Self::Separation {
                     other: Some(peer), ..
                 } => evaluation.occurrence_at(peer)?.visible(),
@@ -1177,12 +1189,16 @@ impl RegionConstraintV1 {
             weaker,
         })
     }
-    fn may_pass(self, lower: RegionPointV1, upper: RegionPointV1) -> Result<bool, ()> {
-        let visible = (lower.visible, upper.visible);
-        let backdrop = (lower.backdrop, upper.backdrop);
+    fn may_pass(
+        self,
+        lower: RegionConstraintPointV1,
+        upper: RegionConstraintPointV1,
+    ) -> Result<bool, ()> {
+        let visible = (lower.subject.output_rgb(), upper.subject.output_rgb());
+        let backdrop = (lower.comparison, upper.comparison);
         match self {
             Self::Wcag { criterion, .. } => {
-                rgb_boxes_may_pass(visible, backdrop, criterion).map_err(|_| ())
+                contrast_bounds::source_over_may_pass(lower.subject, upper.subject, criterion)
             }
             Self::Exact { expected, .. } => Ok(expected
                 .bytes()
@@ -1208,13 +1224,13 @@ impl RegionConstraintV1 {
                         crate::color_intent::reference_transport::luminance(Srgb8::new(rgb))
                     })
                 };
-                let stronger = luminance(lower.visible, upper.visible);
+                let stronger = luminance(visible.0, visible.1);
                 let weaker = luminance(lower.weaker, upper.weaker);
-                let background = luminance(lower.backdrop, upper.backdrop);
+                let background = luminance(backdrop.0, backdrop.1);
                 if let Some(criterion) = weaker_contrast {
                     let limits =
                         crate::color_intent::reference_transport::wcag_weak_luminance_limits(
-                            [Srgb8::new(lower.backdrop), Srgb8::new(upper.backdrop)],
+                            [Srgb8::new(backdrop.0), Srgb8::new(backdrop.1)],
                             criterion,
                         );
                     Ok(CompiledTonalHierarchyV1::pair_possible_with_weak_limits(
@@ -1228,28 +1244,6 @@ impl RegionConstraintV1 {
             }
         }
     }
-}
-
-/// Консервативное исключение двух RGB8-box. Монотонная Q55 luminance достигает
-/// крайних значений в RGB endpoints; проверяем обе возможные полярности через
-/// тот же точный point-kernel. `true` не удостоверяет допустимость всего box.
-fn rgb_boxes_may_pass(
-    foreground: ([u8; 3], [u8; 3]),
-    background: ([u8; 3], [u8; 3]),
-    criterion: Wcag22CriterionV1,
-) -> Result<bool, Wcag22EvaluationErrorV1> {
-    for (light, dark) in [(foreground.1, background.0), (background.1, foreground.0)] {
-        if matches!(
-            evaluate_wcag22_srgb8(light, dark, criterion)?,
-            Wcag22AssessmentV1::Evaluated {
-                decision: Wcag22ApplicableDecisionV1::Pass,
-                ..
-            }
-        ) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
@@ -1369,7 +1363,7 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
 
 struct RegionPruningV1<'scope> {
     constraints: Vec<RegionConstraintV1>,
-    lower: Vec<RegionPointV1>,
+    lower: Vec<Option<RegionConstraintPointV1>>,
     endpoint_evaluations: u64,
     physical: &'scope CompiledAppearanceConeV1,
 }
@@ -1431,11 +1425,15 @@ impl RegionPruningV1<'_> {
                         .point(&evaluation)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     if !high {
-                        self.lower[index] = point;
+                        self.lower[index] = Some(point);
                         continue;
                     }
                     let possible = constraint
-                        .may_pass(self.lower[index], point)
+                        .may_pass(
+                            self.lower[index]
+                                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
+                            point,
+                        )
                         .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
                     if !possible {
                         return Ok(false);
@@ -1527,7 +1525,7 @@ where
     let mut scores = buffer(count, 0.0).map_err(allocate)?;
     let mut best_scores = buffer(count, 0.0).map_err(allocate)?;
     let constraints = region_constraints(epoch, Some(&component.constraints)).map_err(allocate)?;
-    let lower = buffer(constraints.len(), RegionPointV1::default()).map_err(allocate)?;
+    let lower = buffer(constraints.len(), None).map_err(allocate)?;
     let mut pruning = RegionPruningV1 {
         physical: &component.physical,
         constraints,
@@ -2024,6 +2022,7 @@ where
 
 mod components;
 mod contextual;
+mod contrast_bounds;
 pub(super) use components::{ComponentReuseHistoryV1, compile_components, partition_components};
 pub(super) use contextual::reference_completion::ReferenceCompletionScratchV1;
 #[cfg(test)]

@@ -167,11 +167,11 @@
       "sha256": "f2913f016d4973b57164ed2510e1da01b215e8f8f06c52ad481f7384511488e9"
     },
     {
-      "bytes": 74857,
+      "bytes": 74403,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment.rs",
       "role": "program_computed_assignment_source",
-      "sha256": "ae1818f9148fc138556735296cceb91a2522f5615df70111bcc15a8d724ebdd2"
+      "sha256": "c1a19b7211e1030888d636ce424fed73f87a66419470a004c40074b14863a6e1"
     },
     {
       "bytes": 54246,
@@ -188,18 +188,25 @@
       "sha256": "21d5d1d8127221318621dfae6b2a87cc0b16a63d7739ee1392e0e1838d923429"
     },
     {
-      "bytes": 66050,
+      "bytes": 65860,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
       "role": "program_computed_contextual_source",
-      "sha256": "d62fa4beebb7f212093717ab72cddb831ad0017360701ebceccddd1da40cbb49"
+      "sha256": "7e90766781ede918b1204be54100837a968f1d107bc3ff763ded344a9abb3c39"
     },
     {
-      "bytes": 88210,
+      "bytes": 9031,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/program_session/computed_assignment/contrast_bounds.rs",
+      "role": "program_computed_contrast_bounds_source",
+      "sha256": "bfcf27f9529ca5f0db1e7d12360d0ee6425697ed68d52c32f7779307529671ac"
+    },
+    {
+      "bytes": 88173,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search.rs",
       "role": "program_computed_reference_search_source",
-      "sha256": "868396993ede6156133247934e7d1201f7009680ed2452fa4f8efe2ed92d2c52"
+      "sha256": "04cf7b77eb23c33e0fc456133c1b4ccca6778e541d20d4174c9b28a21d8f4be6"
     },
     {
       "bytes": 9446,
@@ -244,11 +251,11 @@
       "sha256": "bc5ae38bbdbe3b636f36f53bac27d65b4177f5a9db02f5a8e9c8b06bb1cb1806"
     },
     {
-      "bytes": 39103,
+      "bytes": 38928,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/point_search.rs",
       "role": "program_point_search_source",
-      "sha256": "a71fa8e4441bfc717c36b8a197ae79ce72e5f3ef1d2979f7a70868319d183ba3"
+      "sha256": "a1598e00ed984c217b4300d7148d2725df0a2f2e81096356dddd4b3676b100ab"
     },
     {
       "bytes": 64439,
@@ -356,11 +363,11 @@
       "sha256": "d940f9cf443970ff34e6ed4280d5b00c2aef10b85a0818e609bf21302fcb17d4"
     },
     {
-      "bytes": 44622,
+      "bytes": 44753,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "ae98062759acd308fc6c83d933ef6669efd6b7e95b5a13ab88b0bee66829e7b1"
+      "sha256": "d61d8fb911e6ff232f4090a4bea7bd0440d84b5189400cb136d89067fe95b019"
     },
     {
       "bytes": 44658,

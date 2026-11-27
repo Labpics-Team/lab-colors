@@ -88,10 +88,7 @@ fn paired_tones<'a, Invocation>(
 
 pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] = b"labcolors.assignment-execution.v17.nominal-visible-boxes.continuous-preferred-point.domain-preserving-neutral.independent-components.unique-zero-prefix.local-prefix-polish.conditional-factors.local-context-seeds.visible-oklab-max-cases.unchanged-authored-source.lex-rgb.independent-authored-context-seeds.reverse-forward-coordinate-tonal256.quarter-budget.full-domain-dfs.bounded-prefix-refinement.endpoints.canonical-case-refinement.full-recheck\0";
-    let mut bytes = [0; DOMAIN.len() + 8];
-    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
-    *crate::sha256::digest(&bytes).as_bytes()
+    execution_identity_with_budget(DOMAIN, budget)
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
@@ -104,10 +101,7 @@ pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
 
 pub(super) fn reference_execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] = b"labcolors.assignment-reference.v10.paired-source-tones.independent-depth-and-sibling-directions.nominal-visible-boxes.continuous-preferred-point.source-identity.immutable-visible-reference.upper-monotone-cubic.continuous-explicit-tone.conditional-prior-paints.actual-backdrop-vector.joint-capped-capacity.ordered-use-keys.shared-component-budget.final-visit-fallback.pending-points.source-tie.identity-projected-tonal256.branch-local-depth-priority-bidirectional-repair.hard-cell-preserving-plateaus.quarter-budget.canonical-case-refinement.full-capacity.terminal-exact-proposal-reserve-tonal256\0";
-    let mut bytes = [0; DOMAIN.len() + 8];
-    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
-    *crate::sha256::digest(&bytes).as_bytes()
+    execution_identity_with_budget(DOMAIN, budget)
 }
 
 #[derive(Clone, Copy)]
@@ -941,7 +935,7 @@ pub(super) fn recheck_intents<E: ProgramConstraintEvaluatorSetV1>(
 struct BoundsV1 {
     lower: Vec<[u8; 3]>,
     constraints: Vec<RegionConstraintV1>,
-    constraint_lower: Vec<RegionPointV1>,
+    constraint_lower: Vec<Option<RegionConstraintPointV1>>,
     scores: Vec<f64>,
     changes_min: Vec<bool>,
     tuple_min: Vec<Srgb8>,
@@ -1034,9 +1028,13 @@ impl BoundsV1 {
                         .point(&evaluation)
                         .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
                     if !high {
-                        self.constraint_lower[index] = point;
+                        self.constraint_lower[index] = Some(point);
                     } else if !constraint
-                        .may_pass(self.constraint_lower[index], point)
+                        .may_pass(
+                            self.constraint_lower[index]
+                                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?,
+                            point,
+                        )
                         .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?
                     {
                         return Ok(false);
@@ -1065,7 +1063,6 @@ impl BoundsV1 {
                         points[case * count + index][usize::from(high)] = RegionPointV1 {
                             visible: rgb,
                             backdrop,
-                            weaker: [0; 3],
                         };
                     }
                     if !high {
@@ -1440,8 +1437,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
     // Полный RGB8/gray domain остаётся доступен после приближений.
     let constraints = region_constraints(epoch, context.constraint_indices).map_err(allocation)?;
     let mut bounds = BoundsV1 {
-        constraint_lower: buffer(constraints.len(), RegionPointV1::default())
-            .map_err(allocation)?,
+        constraint_lower: buffer(constraints.len(), None).map_err(allocation)?,
         constraints,
         lower: buffer(count, [0; 3]).map_err(allocation)?,
         scores: buffer(count, 0.0).map_err(allocation)?,

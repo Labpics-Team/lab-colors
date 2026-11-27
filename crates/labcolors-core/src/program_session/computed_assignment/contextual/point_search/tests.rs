@@ -3,6 +3,7 @@ use crate::color_intent::IdentityOptionsV1;
 use crate::observation::{ObservationPayloadInput, ScenarioId, ScenarioInput, SurfaceInputBinding};
 use crate::program_session::computed_assignment::tests::{program, rgb, target, update};
 use crate::session_tests::CommitSessionUpdateForTest as _;
+use crate::wcag22::{Wcag22ApplicableDecisionV1, Wcag22AssessmentV1, evaluate_wcag22_srgb8};
 
 std::thread_local! { static REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }
 std::thread_local! { static SEED_REFRESHES: std::cell::RefCell<Vec<TargetId>> = const { std::cell::RefCell::new(Vec::new()) }; }

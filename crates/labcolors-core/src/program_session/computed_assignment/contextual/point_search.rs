@@ -27,10 +27,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
     const DOMAIN: &[u8] = b"labcolors.composition-point.v10.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
-    let mut bytes = [0; DOMAIN.len() + 8];
-    bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
-    bytes[DOMAIN.len()..].copy_from_slice(&budget.to_le_bytes());
-    *crate::sha256::digest(&bytes).as_bytes()
+    execution_identity_with_budget(DOMAIN, budget)
 }
 
 #[derive(Default)]
@@ -774,7 +771,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
         let constraints = region_constraints(epoch, context.constraint_indices)
             .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
         let mut bounds = BoundsV1 {
-            constraint_lower: buffer(constraints.len(), RegionPointV1::default())
+            constraint_lower: buffer(constraints.len(), None)
                 .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?,
             constraints,
             lower: buffer(count, [0; 3])

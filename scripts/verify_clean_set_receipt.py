@@ -109,6 +109,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "program_reference_source": "crates/labcolors-core/src/program_session/reference.rs",
     "program_computed_assignment_source": "crates/labcolors-core/src/program_session/computed_assignment.rs",
     "program_computed_components_source": "crates/labcolors-core/src/program_session/computed_assignment/components.rs",
+    "program_computed_contrast_bounds_source": "crates/labcolors-core/src/program_session/computed_assignment/contrast_bounds.rs",
     "program_point_equivalence_source": "crates/labcolors-core/src/program_session/computed_assignment/components/point_equivalence.rs",
     "program_computed_contextual_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual.rs",
     "program_computed_conditional_source": "crates/labcolors-core/src/program_session/computed_assignment/contextual/conditional.rs",
