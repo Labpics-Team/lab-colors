@@ -92,7 +92,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v5.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.sorted-explicit-tone-first.sorted-virtual-oklab.authored-source-distance.observed-component-order.joint-domain-bounds.single-assessment-per-region\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v6.typed-mixed-preferences.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.shared-certified-point-tone-and-source.sorted-operational-transport.immutable-expression-cancellation.observed-component-order.joint-domain-bounds.single-assessment-per-region\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);
@@ -1110,7 +1110,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         .any(|&index| selection.targets[index].declaration.reference_appearance)
     {
         return reference_search::select_component(
-            selection, component, runtime, epoch, scenarios, arena,
+            selection, component, runtime, epoch, scenarios, arena, None,
         );
     }
     select_component_inner(selection, component, runtime, epoch, scenarios, arena, true)
@@ -1669,7 +1669,7 @@ fn select_component_inner<E: ProgramConstraintEvaluatorSetV1>(
 mod conditional;
 pub(super) mod point_search;
 pub(crate) mod reference_completion;
-mod reference_search;
+pub(super) mod reference_search;
 mod refinement;
 
 #[cfg(test)]

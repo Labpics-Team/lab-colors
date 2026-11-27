@@ -1,7 +1,12 @@
 //! Authored uses compare each criterion across the whole tuple.
 //! A backdrop can depend on another paint in that same tuple.
 
+use super::super::point_search::{measured, profile_order};
+use super::super::reference_completion::{
+    PointMeasurementPrecisionV1, PointMeasurementV1, PreparedPointSelectionV1,
+};
 use super::*;
+use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
 use crate::composition::source_over_channel_srgb8;
 
 #[derive(Clone, Copy)]
@@ -61,6 +66,27 @@ impl UseCase {
                 preferred: model.lab_for(backdrop, from_sign(index as i8 - 1)),
             }
         })
+    }
+
+    fn transport_loss(
+        &mut self,
+        domain: AssignmentDomainV1,
+        model: ReferenceTransportV1,
+        point: AppearancePointV1,
+    ) -> [f64; 2] {
+        if self.backdrop != point.backdrop || self.alpha != point.alpha {
+            *self = Self::new(point.backdrop, point.alpha);
+        }
+        let sign = if model.reference_contrast() == 1.0 {
+            0
+        } else {
+            sign(polarity(point.visible, point.backdrop))
+        };
+        let direction = self.direction_at(domain, model, (sign + 1) as usize);
+        [
+            direction.physical_shortfall,
+            squared_distance(point.lab, direction.preferred),
+        ]
     }
 
     fn lower_bounds(
@@ -138,35 +164,6 @@ impl Preference {
         })
     }
 
-    fn point_loss(
-        self,
-        prepared: &mut UseCase,
-        domain: AssignmentDomainV1,
-        point: AppearancePointV1,
-        preferred: [f64; 3],
-    ) -> [f64; 3] {
-        match self {
-            Self::Point => [0.0, 0.0, squared_distance(point.lab, preferred)],
-            Self::Tone => [squared_distance(point.lab, preferred), 0.0, 0.0],
-            Self::Transport(model) => {
-                if prepared.backdrop != point.backdrop || prepared.alpha != point.alpha {
-                    *prepared = UseCase::new(point.backdrop, point.alpha);
-                }
-                let sign = if model.reference_contrast() == 1.0 {
-                    0
-                } else {
-                    sign(polarity(point.visible, point.backdrop))
-                };
-                let direction = prepared.direction_at(domain, model, (sign + 1) as usize);
-                [
-                    0.0,
-                    direction.physical_shortfall,
-                    squared_distance(point.lab, direction.preferred),
-                ]
-            }
-        }
-    }
-
     fn lower_loss(
         self,
         prepared: &mut UseCase,
@@ -191,43 +188,149 @@ impl Preference {
             }
         }
     }
+}
 
-    fn authored_exact(self, target: &CompiledComputedTargetV1, point: AppearancePointV1) -> bool {
-        match self {
-            Self::Tone => false,
-            Self::Point => point.visible == target.effective_anchor(),
-            Self::Transport(_) => {
-                Some(point.backdrop) == target.reference_backdrop
-                    && point.visible == target.effective_anchor()
+type EvaluationError<E> = ProgramSessionEvaluationError<ProgramEvaluatorError<E>>;
+type SourceBounds = ([u8; 3], [u8; 3]);
+
+fn zero() -> CertifiedScalarV1 {
+    CertifiedScalarV1::exact(0.0).expect("zero is finite")
+}
+
+struct ContinuousProfiles<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
+    component: &'a ComputedComponentV1,
+    prepared: &'p mut PreparedPointSelectionV1<'program, 'scratch, E>,
+    compiled_to_observed: Vec<usize>,
+    observed_to_compiled: Vec<usize>,
+    point: Vec<CertifiedScalarV1>,
+    source: Vec<CertifiedScalarV1>,
+}
+
+impl<E: ProgramConstraintEvaluatorSetV1> ContinuousProfiles<'_, '_, '_, '_, E> {
+    fn measure(
+        &mut self,
+        context: &ContextV1<'_>,
+        domain_at: impl Fn(usize) -> SourceBounds,
+        profile: &mut [CertifiedScalarV1],
+        precision: PointMeasurementPrecisionV1,
+    ) -> Result<bool, EvaluationError<E>> {
+        let count = context.targets.len();
+        let measured = measured::<E>(self.prepared.measure_point_domains(
+            self.component,
+            |local| {
+                let (lo, hi) = domain_at(self.compiled_to_observed[local]);
+                (lo.map(f64::from), hi.map(f64::from))
+            },
+            &context.local_cases.order,
+            &mut self.point,
+            &mut self.source,
+            PointMeasurementV1::Profile(precision),
+        ))?;
+        if measured {
+            for (local, &target) in self.compiled_to_observed.iter().enumerate() {
+                match context.targets[target].preferred_intent() {
+                    CompiledPreferredIntentV1::Point { tone: Some(_), .. } => {
+                        profile[target] = self.point[local];
+                    }
+                    CompiledPreferredIntentV1::Point { tone: None, .. } => {
+                        profile[2 * count + target] = self.point[local];
+                    }
+                    CompiledPreferredIntentV1::ImplicitReference => {}
+                }
+                profile[3 * count + target] = self.source[local];
             }
         }
+        Ok(measured)
+    }
+
+    fn same_expression(&self, observed: usize, equal: impl Fn(usize) -> bool) -> bool {
+        self.prepared.same_preference_expression(
+            self.component,
+            self.observed_to_compiled[observed],
+            |local| equal(self.compiled_to_observed[local]),
+        )
     }
 }
 
-pub(super) struct PeerProfiles {
+pub(super) struct PeerProfiles<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
+    continuous: ContinuousProfiles<'a, 'p, 'program, 'scratch, E>,
     preferences: Vec<Preference>,
     cases: Vec<UseCase>,
+    // Machine lower scores rank traversal children only.
     current: Vec<f64>,
-    best: Vec<f64>,
+    candidate: Vec<CertifiedScalarV1>,
+    best: Vec<CertifiedScalarV1>,
+    best_values: Vec<Srgb8>,
+    left: Vec<CertifiedScalarV1>,
+    right: Vec<CertifiedScalarV1>,
+    sort: Vec<CertifiedScalarV1>,
     has_best: bool,
+    best_measured: bool,
+    best_precision: PointMeasurementPrecisionV1,
     authored_exact: bool,
 }
 
-impl PeerProfiles {
-    pub(super) fn new(context: &ContextV1<'_>) -> Result<Self, ()> {
+impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
+    PeerProfiles<'a, 'p, 'program, 'scratch, E>
+{
+    pub(super) fn new(
+        context: &ContextV1<'_>,
+        component: &'a ComputedComponentV1,
+        prepared: &'p mut PreparedPointSelectionV1<'program, 'scratch, E>,
+    ) -> Result<Self, EvaluationError<E>> {
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         let count = context.targets.len();
-        let length = count.checked_mul(4).ok_or(())?;
+        let length = count.checked_mul(4).ok_or_else(|| allocation(()))?;
         let mut preferences = Vec::new();
-        preferences.try_reserve_exact(count).map_err(|_| ())?;
+        preferences
+            .try_reserve_exact(count)
+            .map_err(|_| allocation(()))?;
         for target in context.targets.iter() {
-            preferences.push(Preference::compile(target)?);
+            preferences.push(
+                Preference::compile(target)
+                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?,
+            );
         }
+        let mut compiled_to_observed = buffer(count, usize::MAX).map_err(allocation)?;
+        let mut observed_to_compiled = buffer(count, usize::MAX).map_err(allocation)?;
+        let observed = context
+            .targets
+            .indices
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        for (index, &target) in observed.iter().enumerate() {
+            let local = component
+                .targets
+                .binary_search(&target)
+                .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+            compiled_to_observed[local] = index;
+            observed_to_compiled[index] = local;
+        }
+        prepared.refresh_point_component(component, &context.local_cases.order)
+            .map_err(|error| match error {
+                super::super::reference_completion::ReferenceCompletionErrorV1::ResourceExhausted => ProgramSessionEvaluationError::ResourceExhausted,
+                _ => ProgramSessionEvaluationError::InternalInvariant,
+            })?;
         Ok(Self {
+            continuous: ContinuousProfiles {
+                component,
+                prepared,
+                compiled_to_observed,
+                observed_to_compiled,
+                point: Vec::new(),
+                source: Vec::new(),
+            },
             preferences,
             cases: Vec::new(),
-            current: buffer(length, 0.0)?,
-            best: buffer(length, 0.0)?,
+            current: buffer(length, 0.0).map_err(allocation)?,
+            candidate: buffer(length, zero()).map_err(allocation)?,
+            best: buffer(length, zero()).map_err(allocation)?,
+            best_values: buffer(count, Srgb8::new([0; 3])).map_err(allocation)?,
+            left: buffer(count, zero()).map_err(allocation)?,
+            right: buffer(count, zero()).map_err(allocation)?,
+            sort: buffer(count, zero()).map_err(allocation)?,
             has_best: false,
+            best_measured: false,
+            best_precision: PointMeasurementPrecisionV1::Screened,
             authored_exact: false,
         })
     }
@@ -264,47 +367,150 @@ impl PeerProfiles {
         context: &ContextV1<'_>,
         points: &[AppearancePointV1],
         values: &[Srgb8],
-    ) -> Result<bool, ()> {
+    ) -> Result<bool, EvaluationError<E>> {
         let count = values.len();
         let local_cases = &context.local_cases.order;
-        self.prepare(context, points)?;
-        self.current.fill(0.0);
-        let (explicit, remainder) = self.current.split_at_mut(count);
-        let (shortfalls, distances) = remainder.split_at_mut(count);
-        let (visible, source) = distances.split_at_mut(count);
-        let mut authored_reference = true;
+        self.prepare(context, points)
+            .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+        self.candidate.fill(zero());
+        let mut authored_transport_minimum = true;
         for (row, &case) in self.cases.chunks_exact_mut(count).zip(local_cases) {
             for (target, prepared) in row.iter_mut().enumerate() {
+                let Preference::Transport(model) = self.preferences[target] else {
+                    continue;
+                };
                 let point = points[case * count + target];
-                let compiled = &context.targets[target];
-                let preference = self.preferences[target];
-                let [tone, shortfall, distance] = preference.point_loss(
-                    prepared,
-                    context.domains[target],
-                    point,
-                    context.preferred[case * count + target],
-                );
-                explicit[target] = explicit[target].max(tone);
-                shortfalls[target] = shortfalls[target].max(shortfall);
-                visible[target] = visible[target].max(distance);
-                // An identical authored use has zero transport and source loss
-                // by construction. A rounded tone comparison cannot prove this.
-                authored_reference &= preference.authored_exact(compiled, point);
+                let [shortfall, distance] =
+                    prepared.transport_loss(context.domains[target], model, point);
+                for (index, loss) in [(count + target, shortfall), (2 * count + target, distance)] {
+                    // Reference transport is an explicitly operational RGB8
+                    // objective. Lift its binary64 value exactly, never a
+                    // rounded proxy for a continuous Point or Tone expression.
+                    self.candidate[index] = self.candidate[index]
+                        .max(
+                            CertifiedScalarV1::exact(loss)
+                                .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?,
+                        )
+                        .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+                    authored_transport_minimum &= loss == 0.0;
+                }
             }
         }
-        for (target, &value) in values.iter().enumerate() {
-            let compiled = &context.targets[target];
-            source[target] = squared_distance(lab(value), compiled.source_anchor_lab);
-            authored_reference &= value == compiled.declaration.anchor;
-        }
-        sort_tiers(&mut self.current, count);
-        let improved = !self.has_best || compare(&self.current, &self.best) == Ordering::Less;
+        let domain_at = |index: usize| {
+            let rgb = values[index].bytes();
+            (rgb, rgb)
+        };
+        let (measured, precision, order) = self.assess_profile(context, domain_at)?;
+        let improved = !self.has_best
+            || order == Some(Ordering::Less)
+            || order == Some(Ordering::Equal) && values < self.best_values.as_slice();
         if improved {
-            std::mem::swap(&mut self.best, &mut self.current);
+            std::mem::swap(&mut self.best, &mut self.candidate);
+            self.best_values.copy_from_slice(values);
             self.has_best = true;
-            self.authored_exact = authored_reference;
+            self.best_measured = measured;
+            self.best_precision = precision;
+            self.authored_exact = false;
+            if authored_transport_minimum
+                && values
+                    .iter()
+                    .zip(context.targets.iter())
+                    .all(|(&value, target)| value == target.declaration.anchor)
+            {
+                self.authored_exact = match self
+                    .continuous
+                    .prepared
+                    .authored_continuous_terms_minimal(self.continuous.component, local_cases)
+                {
+                    Ok(proven) => proven,
+                    Err(error) => {
+                        super::super::point_search::measured::<E>(Err(error))?;
+                        false
+                    }
+                };
+            }
         }
         Ok(improved)
+    }
+
+    fn compare_profile(&mut self, domain_at: impl Fn(usize) -> SourceBounds) -> Option<Ordering> {
+        let count = self.preferences.len();
+        let equal = |index: usize| {
+            let (lo, hi) = domain_at(index);
+            lo == hi && lo == self.best_values[index].bytes()
+        };
+        for tier in 0..4 {
+            let mut used = 0;
+            for target in 0..count {
+                let same = if tier == 3 {
+                    equal(target)
+                } else {
+                    self.continuous.same_expression(target, equal)
+                };
+                if same {
+                    continue;
+                }
+                let index = tier * count + target;
+                self.left[used] = self.candidate[index];
+                self.right[used] = self.best[index];
+                used += 1;
+            }
+            let left = &mut self.left[..used];
+            let right = &mut self.right[..used];
+            sort_descending_profile(left, &mut self.sort).ok()?;
+            sort_descending_profile(right, &mut self.sort).ok()?;
+            match profile_order(left, right)? {
+                Ordering::Equal => {}
+                order => return Some(order),
+            }
+        }
+        Some(Ordering::Equal)
+    }
+
+    fn assess_profile(
+        &mut self,
+        context: &ContextV1<'_>,
+        domain_at: impl Fn(usize) -> SourceBounds,
+    ) -> Result<(bool, PointMeasurementPrecisionV1, Option<Ordering>), EvaluationError<E>> {
+        let mut precision = PointMeasurementPrecisionV1::Screened;
+        let mut measured =
+            self.continuous
+                .measure(context, &domain_at, &mut self.candidate, precision)?;
+        if !measured {
+            precision = PointMeasurementPrecisionV1::Refined;
+            measured =
+                self.continuous
+                    .measure(context, &domain_at, &mut self.candidate, precision)?;
+        }
+        if !self.has_best || !self.best_measured || !measured {
+            return Ok((measured, precision, None));
+        }
+        let mut order = self.compare_profile(&domain_at);
+        if order.is_none() {
+            if self.best_precision == PointMeasurementPrecisionV1::Screened {
+                let values = &self.best_values;
+                self.best_precision = PointMeasurementPrecisionV1::Refined;
+                self.best_measured = self.continuous.measure(
+                    context,
+                    |index| {
+                        let rgb = values[index].bytes();
+                        (rgb, rgb)
+                    },
+                    &mut self.best,
+                    self.best_precision,
+                )?;
+            }
+            if precision == PointMeasurementPrecisionV1::Screened {
+                precision = PointMeasurementPrecisionV1::Refined;
+                measured =
+                    self.continuous
+                        .measure(context, &domain_at, &mut self.candidate, precision)?;
+            }
+            if measured && self.best_measured {
+                order = self.compare_profile(&domain_at);
+            }
+        }
+        Ok((measured, precision, order))
     }
 
     pub(super) fn lower_profile(
@@ -312,7 +518,7 @@ impl PeerProfiles {
         context: &ContextV1<'_>,
         bounds: &BoundsV1,
         domain_at: impl Fn(usize) -> AssignmentDomainV1,
-    ) -> &[f64] {
+    ) -> Result<bool, EvaluationError<E>> {
         let count = context.targets.len();
         let points = bounds
             .appearance
@@ -320,6 +526,7 @@ impl PeerProfiles {
             .expect("reference bounds capture");
         let refinement = context.case_refinement.borrow();
         self.current.fill(0.0);
+        self.candidate.fill(zero());
         let (explicit, remainder) = self.current.split_at_mut(count);
         let (shortfalls, distances) = remainder.split_at_mut(count);
         let (visible, source) = distances.split_at_mut(count);
@@ -336,6 +543,21 @@ impl PeerProfiles {
                 explicit[target] = explicit[target].max(tone);
                 shortfalls[target] = shortfalls[target].max(shortfall);
                 visible[target] = visible[target].max(distance);
+                if matches!(preference, Preference::Transport(_)) {
+                    for (index, loss) in
+                        [(count + target, shortfall), (2 * count + target, distance)]
+                    {
+                        // The machine-domain bound follows monotonic source-over,
+                        // luminance and the operational Oklab box evaluator. A
+                        // sampled-case maximum remains a lower bound. If a
+                        // bound is unavailable, zero is the nonnegative floor.
+                        if let Ok(loss) = CertifiedScalarV1::exact(loss) {
+                            self.candidate[index] = self.candidate[index]
+                                .max(loss)
+                                .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+                        }
+                    }
+                }
             }
         }
         for (target, compiled) in context.targets.iter().enumerate() {
@@ -351,15 +573,18 @@ impl PeerProfiles {
         // order, and a maximum over the sampled cases bounds the full maximum.
         // Reuse the comparison scratch; accepted profiles remain in `best`.
         sort_tiers(&mut self.current, count);
-        &self.current
+        if !self.has_best || !self.best_measured {
+            return Ok(false);
+        }
+        let (measured, _, order) =
+            self.assess_profile(context, |index| domain_at(index).bounds())?;
+        // Equality of a lower profile is insufficient to reject a region:
+        // it may contain a canonical representative of a proved tie.
+        Ok(measured && order == Some(Ordering::Greater))
     }
 
     pub(super) fn current_profile(&self) -> &[f64] {
         &self.current
-    }
-
-    pub(super) fn cannot_improve(&self) -> bool {
-        self.has_best && compare(&self.current, &self.best) != Ordering::Less
     }
 }
 

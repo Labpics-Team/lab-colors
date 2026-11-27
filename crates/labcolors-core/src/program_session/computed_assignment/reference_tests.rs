@@ -1296,6 +1296,79 @@ fn singleton(anchor: Srgb8, reference: u8, alpha: f64) -> Program<Wcag22Srgb8V1>
 }
 
 #[test]
+fn redundant_reference_relation_preserves_continuous_translucent_tone() {
+    let gray = |value| Srgb8::new([value; 3]);
+    let tone = 0.6012_f64;
+    let expected = (0..=255_u8)
+        .min_by(|&a, &b| {
+            let loss = |source: u8| {
+                let encoded = (f64::from(source) + 255.0) / 510.0;
+                (((encoded + 0.055) / 1.055).powf(2.4).cbrt() - tone).abs()
+            };
+            loss(a).total_cmp(&loss(b))
+        })
+        .expect("nonempty neutral domain");
+    assert_eq!(expected, 2);
+
+    for reverse in [false, true] {
+        for connected in [false, true] {
+            let mut p = singleton(gray(64), 255, 0.5);
+            let TargetIntentV1::Computed(first) = &mut p.targets[0].intent else {
+                unreachable!()
+            };
+            first.intent.as_mut().expect("color use").tone =
+                Some(ToneCurveV1::new(2, vec![[0.0, tone], [1.0, tone]]).expect("constant tone"));
+            p.targets.push(color(20, 15, 64, 1));
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(13),
+                target: TargetId::new(20),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(15),
+                PaintId::new(13),
+                SurfaceId::new(4),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.outputs
+                .push(OutputBinding::new(OutputSlotId::new(17), PaintId::new(13)));
+            if connected {
+                p.constraints
+                    .hard
+                    .push(ConstraintInvocation::pair_separation(
+                        ConstraintId::new(30),
+                        DirectedRelationV1::try_new(
+                            OccurrenceId::new(5),
+                            vec![OccurrenceId::new(15)],
+                        )
+                        .expect("distinct uses"),
+                        VisibleSeparationBoundsV1::new(0.0, 2.0).expect("redundant separation"),
+                    ));
+            }
+            let owner = compile_reference_composition(p, reverse);
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            session
+                .prepare_update(update(1, 255))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("feasible composition")
+                .computed_for_test();
+            let outputs = &frame.arena.storage.outputs;
+            assert_eq!(
+                [outputs[0].paint.source(), outputs[1].paint.source()],
+                [gray(expected), gray(64)],
+                "reverse={reverse}, connected={connected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn reference_adapts_a_translucent_backdrop_with_an_adaptive_foreground() {
     use crate::color_intent::reference_transport::contrast_ratio;
     use crate::observation::{ObservationPayloadInput, SurfaceInputBinding};

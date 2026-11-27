@@ -1315,7 +1315,10 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 evidence: cached.search,
                 reference_selections,
             }
-        } else if component.mode == ProgramSelectionModeV1::JointPointV1 {
+        } else if matches!(
+            component.mode,
+            ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1
+        ) {
             let mut prepared = contextual::reference_completion::prepare_selection(
                 epoch,
                 observation,
@@ -1327,15 +1330,29 @@ pub(super) fn select<E: ProgramConstraintEvaluatorSetV1>(
                 }
                 _ => ProgramSessionEvaluationError::InternalInvariant,
             })?;
-            contextual::point_search::select_component(
-                selection,
-                component,
-                runtime,
-                epoch,
-                scenarios,
-                arena,
-                &mut prepared,
-            )?
+            match component.mode {
+                ProgramSelectionModeV1::JointPointV1 => contextual::point_search::select_component(
+                    selection,
+                    component,
+                    runtime,
+                    epoch,
+                    scenarios,
+                    arena,
+                    &mut prepared,
+                )?,
+                ProgramSelectionModeV1::JointReferencePeersV1 => {
+                    contextual::reference_search::select_component(
+                        selection,
+                        component,
+                        runtime,
+                        epoch,
+                        scenarios,
+                        arena,
+                        Some(&mut prepared),
+                    )?
+                }
+                _ => unreachable!("joint composition mode"),
+            }
         } else if component
             .targets
             .iter()

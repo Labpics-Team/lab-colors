@@ -1808,7 +1808,7 @@ pub(crate) enum ComputedOptimalityV1 {
 pub(super) fn prepare_point_anchors<E: ProgramConstraintEvaluatorSetV1>(
     epoch: &mut ProgramEpochV1<E>,
 ) -> Result<(), ProgramCompileError> {
-    let needed = matches!(&epoch.target_selection, CompiledTargetSelectionV1::Computed(selection) if selection.components.iter().any(|component| component.mode == ProgramSelectionModeV1::JointPointV1));
+    let needed = matches!(&epoch.target_selection, CompiledTargetSelectionV1::Computed(selection) if selection.components.iter().any(|component| matches!(component.mode, ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1)));
     if needed {
         let anchors = contextual::reference_completion::CompiledPointAnchorsV1::new(epoch)
             .map_err(|error| match error {

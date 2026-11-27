@@ -1729,7 +1729,7 @@ fn authored_material_minimum(
         .refresh_point_component(&selection.components[0], &cases)
         .map_err(fixture_error)?;
     prepared
-        .authored_point_optimal(&selection.components[0], &cases)
+        .authored_continuous_terms_minimal(&selection.components[0], &cases)
         .map_err(fixture_error)
 }
 

@@ -3,6 +3,7 @@
 //! contain actual backdrop values and prior paints from the compared tuple,
 //! never the incidental state of the DFS cursor.
 
+use super::reference_completion::PreparedPointSelectionV1;
 use super::*;
 
 mod peers;
@@ -117,8 +118,8 @@ impl PartialEq for CapacityPriorityV1 {
 }
 impl Eq for CapacityPriorityV1 {}
 
-struct ReferenceRuntimeV1<'a> {
-    peers: Option<PeerProfiles>,
+struct ReferenceRuntimeV1<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
+    peers: Option<PeerProfiles<'a, 'p, 'program, 'scratch, E>>,
     context: ContextV1<'a>,
     models: Vec<Option<ReferenceTransportV1>>,
     evidence: SearchEvidenceV1,
@@ -283,12 +284,15 @@ fn terminal_plan_stops_at_its_reserve_and_empty_domains_do_not_allocate() {
     );
 }
 
-impl<'a> ReferenceRuntimeV1<'a> {
-    fn new<E: ProgramConstraintEvaluatorSetV1>(
+impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
+    ReferenceRuntimeV1<'a, 'p, 'program, 'scratch, E>
+{
+    fn new(
         selection: &'a ComputedSelectionV1,
         component: &'a ComputedComponentV1,
         scenarios: NonEmptyScenarioSetV1<'_>,
         order: Option<&'a identity::ObservedComponentOrder>,
+        prepared: Option<&'p mut PreparedPointSelectionV1<'program, 'scratch, E>>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         let context = ContextV1::in_order::<E>(selection, Some(component), scenarios, order)?;
         let count = context.targets.len();
@@ -307,11 +311,17 @@ impl<'a> ReferenceRuntimeV1<'a> {
                     .map(|backdrop| ReferenceTransportV1::new(target.effective_anchor(), backdrop)),
             );
         }
+        let peers = match (component.mode, prepared) {
+            (ProgramSelectionModeV1::JointReferencePeersV1, Some(prepared)) => {
+                Some(PeerProfiles::new(&context, component, prepared)?)
+            }
+            (ProgramSelectionModeV1::JointReferencePeersV1, None) | (_, Some(_)) => {
+                return Err(ProgramSessionEvaluationError::InternalInvariant);
+            }
+            _ => None,
+        };
         Ok(Self {
-            peers: (component.mode == ProgramSelectionModeV1::JointReferencePeersV1)
-                .then(|| PeerProfiles::new(&context))
-                .transpose()
-                .map_err(allocation)?,
+            peers,
             context,
             models,
             evidence: SearchEvidenceV1 {
@@ -633,7 +643,12 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(())
     }
 
-    fn retain_tuple(&mut self, values: &[Srgb8], points: &[AppearancePointV1]) -> Result<(), ()> {
+    fn retain_peer_tuple(
+        &mut self,
+        values: &[Srgb8],
+        points: &[AppearancePointV1],
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         if let Some(peers) = &mut self.peers {
             let improved = peers.consider(&self.context, points, values)?;
             if improved {
@@ -643,17 +658,22 @@ impl<'a> ReferenceRuntimeV1<'a> {
                     pushed(
                         &mut self.pending,
                         PendingPointV1 {
-                            values: cloned(values)?,
-                            capacities: cloned(&self.scratch_capacities)?,
+                            values: cloned(values).map_err(allocation)?,
+                            capacities: cloned(&self.scratch_capacities).map_err(allocation)?,
                             keys: Vec::new(),
                             revision: 0,
                         },
-                    )?;
+                    )
+                    .map_err(allocation)?;
                     self.best = Some(0);
                 }
             }
             return Ok(());
         }
+        Err(ProgramSessionEvaluationError::InternalInvariant)
+    }
+
+    fn retain_tuple(&mut self, values: &[Srgb8], points: &[AppearancePointV1]) -> Result<(), ()> {
         self.scratch_capacities.fill(None);
         self.scratch_keys.fill(TargetKeyV1::default());
         let count = self.context.targets.len();
@@ -749,7 +769,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(())
     }
 
-    fn assess_tuple<E: ProgramConstraintEvaluatorSetV1>(
+    fn assess_tuple(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
@@ -760,7 +780,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         self.assess_tuple_inner(runtime, epoch, scenarios, values, arena, false)
     }
 
-    fn assess_tuple_inner<E: ProgramConstraintEvaluatorSetV1>(
+    fn assess_tuple_inner(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
@@ -817,9 +837,14 @@ impl<'a> ReferenceRuntimeV1<'a> {
         }
         if failures == 0 {
             let points = std::mem::take(&mut self.appearance);
-            let result = self.retain_tuple(values, &points);
+            let result = if self.peers.is_some() {
+                self.retain_peer_tuple(values, &points)
+            } else {
+                self.retain_tuple(values, &points)
+                    .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)
+            };
             self.appearance = points;
-            result.map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
+            result?;
         }
         Ok(Some(failures))
     }
@@ -1087,7 +1112,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
             != Ordering::Less
     }
 
-    fn joint_region<E: ProgramConstraintEvaluatorSetV1>(
+    fn joint_region(
         &mut self,
         bounds: &mut BoundsV1,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -1103,8 +1128,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
             return Ok(false);
         }
         let peers = self.peers.as_mut().expect("joint reference component");
-        peers.lower_profile(&self.context, bounds, domain_at);
-        Ok(!peers.cannot_improve())
+        Ok(!peers.lower_profile(&self.context, bounds, domain_at)?)
     }
 
     // Subdivide the product of source domains, keeping all other domains
@@ -1112,7 +1136,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
     // together before any one paint is fixed. Both children are disjoint and
     // cover their parent. Branch ranking is the same conservative sorted
     // objective used to reject a region, independent of the incumbent.
-    fn joint_search<E: ProgramConstraintEvaluatorSetV1>(
+    fn joint_search(
         &mut self,
         bounds: &mut BoundsV1,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -1282,7 +1306,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(())
     }
 
-    fn step<E: ProgramConstraintEvaluatorSetV1>(
+    fn step(
         &mut self,
         capacity: Option<usize>,
         bounds: &mut BoundsV1,
@@ -1454,7 +1478,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
         Ok(progressed)
     }
 
-    fn polish<E: ProgramConstraintEvaluatorSetV1>(
+    fn polish(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
         epoch: &ProgramEpochV1<E>,
@@ -1679,13 +1703,17 @@ fn point_box_distance(point: [f64; 3], lower: [f64; 3], upper: [f64; 3]) -> f64 
     (d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]
 }
 
-pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
+#[allow(clippy::too_many_arguments)]
+pub(in crate::program_session::computed_assignment) fn select_component<
+    E: ProgramConstraintEvaluatorSetV1,
+>(
     selection: &ComputedSelectionV1,
     component: &ComputedComponentV1,
     runtime: &mut ProgramEvaluationRuntimeV1<'_>,
     epoch: &ProgramEpochV1<E>,
     scenarios: NonEmptyScenarioSetV1<'_>,
     arena: &mut ProgramEvaluationArenaV1<E>,
+    prepared: Option<&mut PreparedPointSelectionV1<'_, '_, E>>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
     let order = if let Some(graph) = &component.peer_graph {
@@ -1694,7 +1722,8 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     } else {
         None
     };
-    let mut search = ReferenceRuntimeV1::new::<E>(selection, component, scenarios, order.as_ref())?;
+    let mut search =
+        ReferenceRuntimeV1::new(selection, component, scenarios, order.as_ref(), prepared)?;
     let count = search.context.targets.len();
     let mut authored = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     for (value, target) in authored.iter_mut().zip(search.context.targets.iter()) {

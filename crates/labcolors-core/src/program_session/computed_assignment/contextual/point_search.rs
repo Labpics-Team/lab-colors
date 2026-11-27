@@ -8,7 +8,7 @@ use super::reference_completion::{
 use super::*;
 use crate::certified_numeric::{CertifiedScalarV1, sort_descending_profile};
 
-fn measured<E: ProgramConstraintEvaluatorSetV1>(
+pub(super) fn measured<E: ProgramConstraintEvaluatorSetV1>(
     value: Result<(), reference_completion::ReferenceCompletionErrorV1<ProgramEvaluatorError<E>>>,
 ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     match value {
@@ -26,7 +26,7 @@ fn measured<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 pub(in crate::program_session) fn execution_profile_identity(budget: u64) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.composition-point.v10.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum\0";
+    const DOMAIN: &[u8] = b"labcolors.composition-point.v11.paired-source-tones.coupled-material-neighborhood.material-source-discovery.authored-segment-polish.monotone-source-over.nominal-visible-boxes.certified-full-point.worst-case-per-use.explicit-tone-first.substitution-equivalent-leaf-profile.lex-minimax.source-frontier.component-budget.hard-region.byte-discovery.authored-continuous-minimum.reference-visible-minimum\0";
     execution_identity_with_budget(DOMAIN, budget)
 }
 
@@ -53,7 +53,7 @@ fn copy<T: Copy>(destination: &mut Vec<T>, source: &[T]) -> Result<(), ()> {
     Ok(())
 }
 
-fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ordering> {
+pub(super) fn profile_order(a: &[CertifiedScalarV1], b: &[CertifiedScalarV1]) -> Option<Ordering> {
     for (&a, &b) in a.iter().zip(b) {
         if a.strictly_below(b) {
             return Some(Ordering::Less);
@@ -608,7 +608,7 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
     let authored_optimal = authored.is_some_and(|(failures, _)| failures == 0)
         && match state
             .prepared
-            .authored_point_optimal(component, &context.local_cases.order)
+            .authored_continuous_terms_minimal(component, &context.local_cases.order)
         {
             Ok(proven) => proven,
             Err(error) => {

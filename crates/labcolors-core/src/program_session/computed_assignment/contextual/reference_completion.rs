@@ -657,6 +657,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
         for &target in &component.targets {
             let usage = &mut self.scratch.uses[target];
             usage.local_preferred.clear();
+            let Some(anchor) = usage.point_anchor else {
+                continue;
+            };
             usage
                 .local_preferred
                 .try_reserve(cases.len())
@@ -664,7 +667,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
             for &case in cases {
                 #[cfg(test)]
                 super::point_search::tests::refreshed_point_case(selection.targets[target].id);
-                let mut point = usage.point_anchor.ok_or(Error::<E>::InvalidUse)?;
+                let mut point = anchor;
                 if let CompiledPreferredIntentV1::Point {
                     tone: Some((curve, input)),
                     ..
@@ -699,6 +702,17 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
         b: &[Srgb8],
         region: Option<RegionNodeV1>,
     ) -> bool {
+        self.same_preference_expression(component, local, |index| {
+            region.is_none_or(|node| index < node.depth) && a[index] == b[index]
+        })
+    }
+
+    pub(super) fn same_preference_expression(
+        &self,
+        component: &ComputedComponentV1,
+        local: usize,
+        fixed_equal: impl Fn(usize) -> bool,
+    ) -> bool {
         let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
             return false;
         };
@@ -707,9 +721,10 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
             .targets
             .iter()
             .all(|target| {
-                component.targets.binary_search(target).is_ok_and(|index| {
-                    region.is_none_or(|node| index < node.depth) && a[index] == b[index]
-                })
+                component
+                    .targets
+                    .binary_search(target)
+                    .is_ok_and(&fixed_equal)
             })
     }
 
@@ -743,6 +758,29 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
             };
             (lo.map(f64::from), hi.map(f64::from))
         };
+        self.measure_point_domains(
+            component,
+            bounds,
+            cases,
+            primary,
+            source_profile,
+            measurement,
+        )
+    }
+
+    /// One physical interpreter for Point and explicit Tone terms, irrespective
+    /// of the other preferences or constraints in their connected component.
+    /// Domains are supplied in compiled-local order. Implicit reference terms
+    /// are measured separately; their physical source distance is still shared.
+    pub(super) fn measure_point_domains(
+        &mut self,
+        component: &ComputedComponentV1,
+        bounds: impl Fn(usize) -> ([f64; 3], [f64; 3]),
+        cases: &[usize],
+        primary: &mut Vec<CertifiedScalarV1>,
+        source_profile: &mut Vec<CertifiedScalarV1>,
+        measurement: PointMeasurementV1,
+    ) -> Result<(), Error<E>> {
         primary.clear();
         source_profile.clear();
         primary
@@ -802,6 +840,12 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                 let local = component.point_variable(variable);
                 let target = component.targets[local];
                 let usage = &mut self.scratch.uses[target];
+                if usage.point_anchor.is_none() {
+                    if local_case == 0 {
+                        primary.push(CertifiedScalarV1::exact(0.0)?);
+                    }
+                    continue;
+                }
                 let visible_rgb = if let Some(slot) = usage.slot {
                     view.occurrence_at(slot)
                         .ok_or(Error::<E>::InvalidUse)?

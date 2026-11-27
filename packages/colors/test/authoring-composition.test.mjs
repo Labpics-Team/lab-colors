@@ -11,6 +11,38 @@ const textPasses = (foreground, background) =>
 const grayL = (gray) => Math.cbrt(gray <= 10.31475
   ? gray / (255 * 12.92) : ((gray / 255 + 0.055) / 1.055) ** 2.4);
 
+test("a redundant relation cannot change the continuous tone of translucent material", async () => {
+  const tone = 0.6012;
+  const loss = (source) => Math.abs(grayL((source + 255) / 2) - tone);
+  const expected = Array.from({ length: 256 }, (_, source) => source)
+    .reduce((best, source) => loss(source) < loss(best) ? source : best);
+  assert.equal(expected, 2);
+  for (const reverse of [false, true]) {
+    for (const connected of [false, true]) {
+      const c = colors({ reference: { canvas: "#ffffff" } });
+      const canvas = c.surface("canvas");
+      const uses = {};
+      for (const key of reverse ? ["b", "a"] : ["a", "b"]) {
+        const role = c.role(key, "#404040", { domain: "neutral" });
+        uses[key] = key === "a"
+          ? role.on(canvas, { opacity: 0.5, tone: { from: canvas, curve: [[0, tone], [1, tone]] } })
+          : role.on(canvas);
+      }
+      if (connected) c.separate(uses.a, uses.b, [0, 2]);
+      const program = await c.compile({ a: uses.a, b: uses.b });
+      try {
+        const frame = program.resolve({ canvas: "#ffffff" });
+        assert.equal(frame.state, "ready");
+        assert.deepEqual(frame.values.a.rgb, [expected, expected, expected]);
+        assert.equal(frame.values.a.opacity, 0.5);
+        assert.deepEqual(frame.values.b.rgb, [64, 64, 64]);
+        const material = frame.reference.find((entry) => entry.outputs.includes("a"));
+        assert.deepEqual(material.cases[0].actualVisible, [129, 129, 129]);
+      } finally { program.dispose(); }
+    }
+  }
+});
+
 async function hierarchy({ reverse = false, extra = false, aliases = false } = {}) {
   const c = colors({ reference: { canvas: "#ffffff", ...(extra ? { aside: "#ffffff" } : {}) } });
   const canvas = c.surface("canvas");
