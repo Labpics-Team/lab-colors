@@ -288,8 +288,9 @@ impl<'a> ReferenceRuntimeV1<'a> {
         selection: &'a ComputedSelectionV1,
         component: &'a ComputedComponentV1,
         scenarios: NonEmptyScenarioSetV1<'_>,
+        order: Option<&'a identity::ObservedComponentOrder>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let context = ContextV1::new::<E>(selection, Some(component), scenarios)?;
+        let context = ContextV1::in_order::<E>(selection, Some(component), scenarios, order)?;
         let count = context.targets.len();
         let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         let cells = count
@@ -1493,7 +1494,13 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     arena: &mut ProgramEvaluationArenaV1<E>,
 ) -> Result<SearchResultV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
-    let mut search = ReferenceRuntimeV1::new::<E>(selection, component, scenarios)?;
+    let order = if let Some(graph) = &component.peer_graph {
+        let cases = local_case_order::<E>(component, scenarios, |_, _| {})?;
+        graph.order(&cases, scenarios).map_err(allocation)?
+    } else {
+        None
+    };
+    let mut search = ReferenceRuntimeV1::new::<E>(selection, component, scenarios, order.as_ref())?;
     let count = search.context.targets.len();
     let mut authored = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
     for (value, target) in authored.iter_mut().zip(search.context.targets.iter()) {
@@ -1864,7 +1871,7 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     let (values, reference_selections) = if let Some(best) = search.best {
-        let values = cloned(&search.pending[best].values).map_err(allocation)?;
+        let mut values = cloned(&search.pending[best].values).map_err(allocation)?;
         // Pending tuples need their typed keys and source paints, not a copy
         // of every physical case. Recompose only the selected report, without
         // running another search or another constraint evaluator. The caller
@@ -1878,10 +1885,29 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
             &mut search.legacy_scores,
             &mut search.appearance,
         )?;
-        (
-            Some(values),
-            Some(search.reference_reports(best).map_err(allocation)?),
-        )
+        let mut reports = search.reference_reports(best).map_err(allocation)?;
+        if let Some(order) = order.as_ref() {
+            // Snapshot storage and history are always in the compiled component
+            // order. Only the finite search used the observed execution order.
+            let mut destinations = cloned(&order.targets).map_err(allocation)?;
+            for dst in &mut destinations {
+                *dst = component
+                    .targets
+                    .binary_search(dst)
+                    .map_err(|_| ProgramSessionEvaluationError::InternalInvariant)?;
+            }
+            let rows = std::sync::Arc::get_mut(&mut reports)
+                .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+            for index in 0..count {
+                while destinations[index] != index {
+                    let dst = destinations[index];
+                    destinations.swap(index, dst);
+                    values.swap(index, dst);
+                    rows.swap(index, dst);
+                }
+            }
+        }
+        (Some(values), Some(reports))
     } else {
         (None, None)
     };

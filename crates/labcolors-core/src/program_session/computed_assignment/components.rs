@@ -659,6 +659,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             }
         }
         components.push(ComputedComponentV1 {
+            peer_graph: None,
             point_equivalence: None,
             mode,
             physical: physical_cone(
@@ -879,6 +880,7 @@ pub(super) fn conditioned<E: ProgramConstraintEvaluatorSetV1>(
             seen_inputs[input] = false;
         }
         components.push(ComputedComponentV1 {
+            peer_graph: None,
             point_equivalence: None,
             mode: component.mode,
             physical: physical_cone(
@@ -942,6 +944,7 @@ pub(super) fn leading<E: ProgramConstraintEvaluatorSetV1>(
         }
     }
     Ok(Some(ComputedComponentV1 {
+        peer_graph: None,
         point_equivalence: None,
         mode: component.mode,
         physical: physical_cone(

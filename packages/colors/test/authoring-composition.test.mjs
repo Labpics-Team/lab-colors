@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { colors, evaluateWcag22 } from "../index.js";
+import init, { colors, compileProgramWire, evaluateWcag22 } from "../index.js";
 
 await init({ module_or_path: readFileSync(new URL("../pkg/labcolors_bg.wasm", import.meta.url)) });
 
@@ -238,4 +238,54 @@ test("a branded text hierarchy commits on colored paper independently of declara
       }
     }
   } finally { first.dispose(); second.dispose(); }
+});
+
+test("observed backgrounds distinguish structurally interchangeable ports before finite reference search", async () => {
+  function declare(reverse, source, opacity, range) {
+    const c = colors({ reference: { a: "#ffffff", b: "#ffffff" } });
+    const surfaces = { a: c.surface("a"), b: c.surface("b") }, uses = {};
+    for (const id of reverse ? ["b", "a"] : ["a", "b"]) {
+      uses[id] = c.role(id, source, { domain: "neutral" }).on(surfaces[id], { opacity });
+    }
+    c.separate(uses.a, uses.b, range);
+    return { c, outputs: { A: uses.a, B: uses.b } };
+  }
+  for (const [source, opacity, range, env] of [
+    ["#686868", .78, [.16, 1], { a: "#f5f5f5", b: "#d9d9d9" }],
+    ["#949494", .28, [0, .20], { a: "#410eea", b: "#402f47" }],
+  ]) {
+    const build = (reverse) => declare(reverse, source, opacity, range);
+    const a = build(false), b = build(true);
+    const forward = await a.c.compile(a.outputs), reverse = await b.c.compile(b.outputs);
+    try {
+      for (const context of [env, { a: env.b, b: env.a }, env]) {
+        const left = forward.resolve(context), right = reverse.resolve(context);
+        assert.equal(left.state, right.state);
+        if (source === "#686868") assert.equal(left.state, "ready");
+        if (left.state === "ready") {
+          assert.deepEqual(left.values.A, right.values.A);
+          assert.deepEqual(left.values.B, right.values.B);
+        }
+      }
+    } finally { forward.dispose(); reverse.dispose(); }
+  }
+  function correlated(reverse, rows) {
+    const { c, outputs } = declare(reverse, "#686868", .78, [.10, 1]);
+    const artifact = c.encode(outputs), runtime = compileProgramWire(artifact.bytes, 1);
+    const bytes = Uint8Array.from(rows.flatMap(row =>
+      artifact.inputs.flatMap(({ name }) => Array(3).fill(row[name]))));
+    try {
+      const snapshot = runtime.updateObserved(1n, Uint32Array.from(rows, (_, i) => i + 1), bytes, artifact.inputs.length);
+      try {
+        const slots = new Map(Array.from({ length: snapshot.outputCount() }, (_, i) => [snapshot.outputSlot(i), i]));
+        return { state: snapshot.state, rgb: artifact.outputs.map(({slot}) => [...snapshot.outputRgb(slots.get(slot))]) };
+      } finally { snapshot.free(); }
+    } finally { runtime.free(); }
+  }
+  // Equal per-port extrema and colour multisets, with a different pairing of
+  // the middle rows. A per-port aggregate cannot orient all of these inputs.
+  const rows = [{ a: 186, b: 197 }, { a: 197, b: 221 }, { a: 221, b: 186 }];
+  const original = correlated(false, rows);
+  assert.equal(original.state, "ready");
+  assert.deepEqual(correlated(true, rows.toReversed()), original);
 });

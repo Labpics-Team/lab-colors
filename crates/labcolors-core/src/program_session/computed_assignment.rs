@@ -616,6 +616,35 @@ impl ComputedSelectionV1 {
         (self.factors.get(index)?.kind == ComputedFactorKindV1::Objective(target)).then_some(index)
     }
 
+    pub(super) fn compile_peer_schedules<T>(
+        &mut self,
+        topology: &identity::ProgramIdentityGraphV1,
+        graph: &CompiledAppearanceGraph,
+        constraints: &[CompiledPointConstraint<T>],
+    ) -> Result<(), ProgramCompileError> {
+        let mut ports = Vec::new();
+        ports
+            .try_reserve_exact(graph.surface_input_ports().len())
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        ports.extend(graph.surface_input_ports());
+        for component in &mut self.components {
+            if component.mode != ProgramSelectionModeV1::JointReferencePeersV1
+                || component.inputs.len() < 2
+            {
+                continue;
+            }
+            component.peer_graph = topology.peer_component(
+                component.targets.iter().map(|&i| (i, self.targets[i].id)),
+                component.inputs.iter().map(|&i| (i, ports[i])),
+                component
+                    .constraints
+                    .iter()
+                    .map(|&i| (i, constraints[i].id)),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn canonicalize_inputs(
         &mut self,
         layout: &identity::CanonicalExecutionLayoutV1,
@@ -704,6 +733,7 @@ struct ComputedComponentV1 {
     physical: CompiledAppearanceConeV1,
     mode: ProgramSelectionModeV1,
     point_equivalence: Option<PointEquivalenceV1>,
+    peer_graph: Option<identity::PeerSearchGraph>,
 }
 
 /// A substitution proof, not graph symmetry: every grouped source has the

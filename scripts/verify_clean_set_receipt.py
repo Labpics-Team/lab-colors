@@ -105,6 +105,7 @@ PRODUCT_ARTIFACT_PATHS = {
     "point_attachment_tests": "crates/labcolors-core/src/program/attachment/tests.rs",
     "program_facade_source": "crates/labcolors-core/src/program.rs",
     "program_identity_source": "crates/labcolors-core/src/program_identity.rs",
+    "program_observed_order_source": "crates/labcolors-core/src/program_identity/observed_order.rs",
     "program_reference_source": "crates/labcolors-core/src/program_session/reference.rs",
     "program_computed_assignment_source": "crates/labcolors-core/src/program_session/computed_assignment.rs",
     "program_computed_components_source": "crates/labcolors-core/src/program_session/computed_assignment/components.rs",

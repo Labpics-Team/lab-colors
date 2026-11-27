@@ -6091,6 +6091,9 @@ where
         if let Some(layout) = &compiled_identity.execution {
             selection.canonicalize_inputs(layout, &graph)?;
         }
+        if let Some(topology) = &compiled_identity.peer_order {
+            selection.compile_peer_schedules(topology, &graph, &constraints)?;
+        }
     }
     let families = program.families.into_boxed_slice();
     let mut epoch = ProgramEpochV1 {

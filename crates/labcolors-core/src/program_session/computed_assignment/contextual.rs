@@ -95,7 +95,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v1.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.source-distance.canonical-search\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v1.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.source-distance.observed-component-order\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);
@@ -205,6 +205,14 @@ impl CaseRefinementV1 {
 pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
     component: &ComputedComponentV1,
     scenarios: NonEmptyScenarioSetV1<'_>,
+    record_duplicate: impl FnMut(usize, usize),
+) -> Result<Vec<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+    case_order_for_inputs::<E>(&component.inputs, scenarios, record_duplicate)
+}
+
+fn case_order_for_inputs<E: ProgramConstraintEvaluatorSetV1>(
+    inputs: &[usize],
+    scenarios: NonEmptyScenarioSetV1<'_>,
     mut record_duplicate: impl FnMut(usize, usize),
 ) -> Result<Vec<usize>, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let count = scenarios.len().get();
@@ -216,17 +224,16 @@ pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
         let values = scenarios
             .physical_values(case)
             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
-        if component.inputs.iter().any(|&input| input >= values.len()) {
+        if inputs.iter().any(|&input| input >= values.len()) {
             return Err(ProgramSessionEvaluationError::InternalInvariant);
         }
         cases.push((case, values));
     }
     let compare = |left: PhysicalValuesV1<'_>, right: PhysicalValuesV1<'_>| {
-        component
-            .inputs
+        inputs
             .iter()
             .map(|&input| left[input])
-            .cmp(component.inputs.iter().map(|&input| right[input]))
+            .cmp(inputs.iter().map(|&input| right[input]))
     };
     cases.sort_unstable_by(|left, right| compare(left.1, right.1));
     cases.dedup_by(|later, retained| {
@@ -247,12 +254,12 @@ pub(super) fn local_case_order<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 fn local_cases<E: ProgramConstraintEvaluatorSetV1>(
-    component: &ComputedComponentV1,
+    inputs: &[usize],
     scenarios: NonEmptyScenarioSetV1<'_>,
 ) -> Result<LocalCasesV1, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
     let mut representatives = buffer(scenarios.len().get(), 0)
         .map_err(|_| ProgramSessionEvaluationError::ResourceExhausted)?;
-    let order = local_case_order::<E>(component, scenarios, |case, representative| {
+    let order = case_order_for_inputs::<E>(inputs, scenarios, |case, representative| {
         representatives[case] = representative;
     })?;
     for &case in &order {
@@ -272,14 +279,27 @@ impl<'a> ContextV1<'a> {
         component: Option<&'a ComputedComponentV1>,
         scenarios: NonEmptyScenarioSetV1<'_>,
     ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
-        let targets = ComputedTargetsV1::new(selection, component);
+        Self::in_order::<E>(selection, component, scenarios, None)
+    }
+
+    fn in_order<E: ProgramConstraintEvaluatorSetV1>(
+        selection: &'a ComputedSelectionV1,
+        component: Option<&'a ComputedComponentV1>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        order: Option<&'a identity::ObservedComponentOrder>,
+    ) -> Result<Self, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let mut targets = ComputedTargetsV1::new(selection, component);
+        if let Some(order) = order {
+            targets.indices = Some(&order.targets);
+        }
         let count = targets.len();
         let cells = count
             .checked_mul(scenarios.len().get())
             .ok_or(ProgramSessionEvaluationError::ResourceExhausted)?;
         let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
         let local_cases = if let Some(component) = component {
-            local_cases::<E>(component, scenarios)?
+            let inputs = order.map_or(component.inputs.as_ref(), |order| order.inputs.as_slice());
+            local_cases::<E>(inputs, scenarios)?
         } else {
             LocalCasesV1::default()
         };
@@ -351,7 +371,9 @@ impl<'a> ContextV1<'a> {
         let physical_cases = component.map_or(scenarios.len().get(), |_| local_cases.order.len());
         Ok(Self {
             targets,
-            constraint_indices: component.map(|component| component.constraints.as_ref()),
+            constraint_indices: order
+                .map(|order| order.constraints.as_slice())
+                .or_else(|| component.map(|component| component.constraints.as_ref())),
             physical: component.map(|component| &component.physical),
             domains,
             preferred,
