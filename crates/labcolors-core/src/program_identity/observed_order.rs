@@ -46,7 +46,7 @@ impl ProgramIdentityGraphV1 {
     ) -> Result<Option<PeerSearchGraph>, ProgramCompileError> {
         let mut inputs = bindings(inputs, &self.inputs)?;
         let colors = self.graph.colors();
-        inputs.sort_unstable_by_key(|&(_, vertex)| colors[vertex]);
+        ordering::sort_by(&mut inputs, |a, b| colors[a.1].cmp(&colors[b.1]));
         // Distinct authored port colours already anchor all relevant inputs.
         if inputs
             .windows(2)
@@ -106,7 +106,7 @@ impl ProgramIdentityGraphV1 {
         // class per vertex and never traverses another component's program.
         let mut classes =
             try_collect_program(members.len(), members.iter().map(|&vertex| colors[vertex]))?;
-        classes.sort_unstable();
+        ordering::sort(&mut classes);
         classes.dedup();
         let mut local_colors = Vec::new();
         local_colors
@@ -172,7 +172,7 @@ impl PeerSearchGraph {
         if !distinguished {
             return Ok(None);
         }
-        ties.sort_unstable_by_key(|&(_, v)| colors[v]);
+        ordering::sort_by(&mut ties, |a, b| colors[a.1].cmp(&colors[b.1]));
         let mut needs_rows = false;
         for pair in ties.windows(2) {
             let (a, va) = pair[0];
@@ -237,7 +237,7 @@ impl PeerSearchGraph {
         let project = |bindings: &[(usize, usize)]| -> Result<Vec<usize>, ()> {
             let mut ordered =
                 try_collect_program(bindings.len(), bindings.iter().copied()).map_err(|_| ())?;
-            ordered.sort_unstable_by_key(|&(_, vertex)| inverse[vertex]);
+            ordering::sort_by_key(&mut ordered, |&(_, vertex)| inverse[vertex]);
             try_collect_program(ordered.len(), ordered.into_iter().map(|(slot, _)| slot))
                 .map_err(|_| ())
         };

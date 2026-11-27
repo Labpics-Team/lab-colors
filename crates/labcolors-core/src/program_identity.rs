@@ -325,11 +325,19 @@ pub(crate) struct ProgramIdentityGraphV1 {
 }
 
 impl ProgramIdentityGraphV1 {
-    fn execution_layout(
-        &mut self,
+    fn into_execution_layout(
+        self,
         order: &[usize],
-    ) -> Result<CanonicalExecutionLayoutV1, ProgramCompileError> {
-        let vertex_count = self.graph.vertex_count();
+    ) -> Result<(CanonicalExecutionLayoutV1, Option<Self>), ProgramCompileError> {
+        let Self {
+            graph,
+            hard,
+            mut computed_targets,
+            mut inputs,
+        } = self;
+        let vertex_count = graph.vertex_count();
+        // Only multi-port reference peers may need the topology after projection.
+        let peer_graph = (!hard.is_empty()).then_some(graph);
         if order.len() != vertex_count {
             return Err(ProgramCompileError::InternalInvariant);
         }
@@ -361,10 +369,21 @@ impl ProgramIdentityGraphV1 {
             keys.extend(bindings.iter().map(|&(key, _)| key));
             Ok(keys.into_boxed_slice())
         }
-        Ok(CanonicalExecutionLayoutV1 {
-            targets: project(&mut self.computed_targets, &rank_of)?,
-            inputs: project(&mut self.inputs, &rank_of)?,
-        })
+        let layout = CanonicalExecutionLayoutV1 {
+            targets: project(&mut computed_targets, &rank_of)?,
+            inputs: project(&mut inputs, &rank_of)?,
+        };
+        let peer_order = peer_graph.map(|graph| {
+            ordering::sort_by_key(&mut inputs, |entry| entry.0);
+            ordering::sort_by_key(&mut computed_targets, |entry| entry.0);
+            Self {
+                graph,
+                hard,
+                computed_targets,
+                inputs,
+            }
+        });
+        Ok((layout, peer_order))
     }
 }
 
@@ -1559,7 +1578,7 @@ where
             hard.push((constraint.id(), vertex));
         }
     }
-    hard.sort_unstable_by_key(|entry| entry.0);
+    ordering::sort_by_key(&mut hard, |entry| entry.0);
     for constraint in &program.constraints.report_only {
         add_constraint_graph_binding(
             &mut graph,
@@ -1762,7 +1781,7 @@ where
             peer_order: None,
         });
     }
-    let mut built = build_identity_graph(program, Some(preferences))?;
+    let built = build_identity_graph(program, Some(preferences))?;
     let form = crate::colored_graph::canonical_form(&built.graph, AUTHORED_COMPOSITION_DOMAIN_V1)
         .map_err(canonical_graph_error)?;
     let content = ProgramOwnerIdentityV1::Computed(computed_assignment::ComputedIdentityV1(
@@ -1771,12 +1790,7 @@ where
     // Retain only the leaf binding while projecting typed keys. The potentially
     // much larger serialization is no longer needed after its content digest.
     drop(form.preimage);
-    let execution = built.execution_layout(&form.order)?;
-    let peer_order = (!built.hard.is_empty()).then(|| {
-        built.inputs.sort_unstable_by_key(|entry| entry.0);
-        built.computed_targets.sort_unstable_by_key(|entry| entry.0);
-        built
-    });
+    let (execution, peer_order) = built.into_execution_layout(&form.order)?;
     Ok(CompiledProgramIdentityV1 {
         content,
         execution: Some(execution),
