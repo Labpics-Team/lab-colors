@@ -261,7 +261,7 @@ function withRuntimeOperation(runtime, operation, callback) {
   }
 }
 
-for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredField", "updateDeclaredFieldWith", "updateGradient", "updateGradientWith", "updateUnknown", "free"]) {
+for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredField", "updateDeclaredFieldWith", "updateGradient", "updateGradientWith", "updateIndependentGradients", "updateIndependentGradientsWith", "updateUnknown", "free"]) {
   const original = ProgramRuntime.prototype[method];
   ProgramRuntime.prototype[method] = function guardedRuntimeOperation(...args) {
     const operation = method === "free" ? "runtimeFree" : method;
@@ -282,7 +282,13 @@ for (const method of ["updateObserved", "updateObservedWith", "updateDeclaredFie
         if (method === "updateGradientWith" && typeof args[5] !== "function") throw programIngressError(operation, "program_update");
         [args[1], args[3], args[4]] = copyGradientInputs(args[1], args[2], args[3], args[4], operation);
       }
-      const acceptIndex = method === "updateObservedWith" ? 4 : (method === "updateDeclaredFieldWith" || method === "updateGradientWith") ? 5 : null;
+      if (method === "updateIndependentGradients" || method === "updateIndependentGradientsWith") {
+        if (method === "updateIndependentGradientsWith" && typeof args[6] !== "function") throw programIngressError(operation, "program_update");
+        for (const [ordinal, storage] of [byteStorage, scenarioStorage, scenarioStorage, positionStorage, byteStorage].entries()) {
+          args[ordinal + 1] = copyProgramInput(args[ordinal + 1], storage, operation, "program_update");
+        }
+      }
+      const acceptIndex = method === "updateIndependentGradientsWith" ? 6 : method === "updateObservedWith" ? 4 : (method === "updateDeclaredFieldWith" || method === "updateGradientWith") ? 5 : null;
       if (acceptIndex !== null) {
         const accept = args[acceptIndex];
         args[acceptIndex] = snapshot => {
@@ -493,6 +499,10 @@ export function isProgramError(error) {
     const operation = error.operation;
     const code = error.code;
     if (operation === "compileProgramWire") return COMPILE_PROGRAM_ERROR_CODES.has(code);
+    if (operation === "updateIndependentGradients" || operation === "updateIndependentGradientsWith") {
+      return UPDATE_PROGRAM_ERROR_CODES.has(code) || code === "program_field_correlation_required"
+        || (operation === "updateIndependentGradientsWith" && code === "program_host_protocol");
+    }
     if (operation === "updateObserved" || operation === "updateDeclaredField" || operation === "updateGradient" || operation === "updateUnknown") {
       return UPDATE_PROGRAM_ERROR_CODES.has(code);
     }

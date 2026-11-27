@@ -91,11 +91,12 @@ export type ProgramMaterializationErrorCode =
   | "program_materialization_missing_point_absence_proof"
   | "program_materialization_ambiguous_observation_cases"
   | "program_attachment_busy";
-export type ProgramUpdateOperation = "updateObserved" | "updateUnknown" | "updateObservedWith" | "updateDeclaredField" | "updateDeclaredFieldWith" | "updateGradient" | "updateGradientWith";
+export type ProgramUpdateOperation = "updateObserved" | "updateUnknown" | "updateObservedWith" | "updateDeclaredField" | "updateDeclaredFieldWith" | "updateGradient" | "updateGradientWith" | "updateIndependentGradients" | "updateIndependentGradientsWith";
 export type ProgramError = Error & (
   | Readonly<{ code: ProgramCompileErrorCode; operation: "compileProgramWire" }>
   | Readonly<{ code: ProgramUpdateErrorCode; operation: ProgramUpdateOperation }>
-  | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" | "updateDeclaredFieldWith" | "updateGradientWith" }>
+  | Readonly<{ code: "program_field_correlation_required"; operation: "updateIndependentGradients" | "updateIndependentGradientsWith" }>
+  | Readonly<{ code: ProgramTransactionErrorCode; operation: "updateObservedWith" | "updateDeclaredFieldWith" | "updateGradientWith" | "updateIndependentGradientsWith" }>
   | Readonly<{ code: "program_busy"; operation: "runtimeFree" | "snapshotFree" }>
   | Readonly<{ code: "program_resource_exhausted"; operation: "copyOutputTable" | "assessmentReport" | "cleanlinessAssessment" | "referenceSelections" | "selectionComponents" | "fieldAssessment" | "diagnostics" }>
   | Readonly<{ code: ProgramAttachmentErrorCode; operation: "attachProgramWire" }>

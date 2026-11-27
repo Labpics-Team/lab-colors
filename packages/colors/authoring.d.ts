@@ -68,6 +68,8 @@ export interface ColorFieldWitness {
 
 export interface ColorFieldAssessment {
   readonly input: string;
+  /** First global marginal case occupied by this independent field. */
+  readonly caseOffset: number;
   readonly sourceModel: "opaque-affine-encoded-srgb8-half-up-v1" | "opaque-piecewise-affine-encoded-srgb8-half-up-v1";
   readonly domain: "whole-field";
   readonly rendering: "unknown";
@@ -77,15 +79,15 @@ export interface ColorFieldAssessment {
   readonly witnesses: readonly ColorFieldWitness[];
 }
 
-export interface ColorFieldModelScope<Model extends "complete" | "violated" | "incomplete"> {
+export type ColorFieldModelScope<Model extends "complete" | "violated" | "incomplete"> = Readonly<{
   readonly scope: "nominal-model";
-  readonly field: ColorFieldAssessment;
   readonly coverage: Readonly<{
-    readonly sourceModel: ColorFieldAssessment["sourceModel"];
+    readonly sourceModel: ColorFieldAssessment["sourceModel"] | "independent-opaque-srgb8-fields-v1";
     readonly model: Model;
     readonly rendering: "unknown";
   }>;
-}
+}> & (Readonly<{ readonly field: ColorFieldAssessment; readonly fields?: never }> |
+  Readonly<{ readonly fields: readonly ColorFieldAssessment[]; readonly field?: never }>);
 
 export type ColorAuthoringErrorCode =
   | "color_invalid_definition"
@@ -265,7 +267,7 @@ export type ColorViewUpdate<Name extends string = string, State extends Displaya
   | Readonly<{ state: "committed"; frame: InstalledColorFrame<Name, State> }>
   | Readonly<{ state: "rejected"; proposed: UnresolvedColorFrame | ModeledColorFrame<Name> }>;
 
-/** Допускается одно affine поле; прочие входы постоянны. Несколько полей пока не поддержаны. */
+/** Несколько полей допустимы, когда каждая выбираемая компонента и каждое обязательное условие зависят максимум от одного поля. */
 export type ColorContext = Readonly<Record<string, AuthoredColor | ColorAffineSrgb8Field | ColorLinearSrgb8Field | null | undefined>>;
 
 export interface ColorAttachOptions {

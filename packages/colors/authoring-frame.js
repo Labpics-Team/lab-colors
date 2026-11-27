@@ -48,7 +48,7 @@ export function parseColorContext(graph, values) {
     if (!names.has(key)) authoringError(`context.${key}`, "unknown input", "color_invalid_context");
   }
   const rgb = new Uint8Array(graph.inputs.length * 3), colors = [], unknown = [];
-  let field;
+  const fields = [];
   for (let index = 0; index < graph.inputs.length; index++) {
     const { name } = graph.inputs[index];
     let value;
@@ -60,18 +60,46 @@ export function parseColorContext(graph, values) {
     }
     const copied = contextValue(value, `context.${name}`);
     if (!Array.isArray(copied)) {
-      if (field !== undefined) authoringError(`context.${name}`, "only one varying input is supported", "color_unsupported_context");
-      field = Object.freeze({ inputIndex: index, name, descriptor: copied });
+      fields.push(Object.freeze({ inputIndex: index, name, descriptor: copied }));
     }
     // The varying slot is ignored by Core admission; endpoints travel separately.
     rgb.set(Array.isArray(copied) ? copied : copied.from ?? copied.stops[0].color, index * 3);
     colors.push(Object.freeze({ name, value: copied, css: cssContextValue(copied) }));
   }
-  return { rgb, colors: Object.freeze(colors), unknown: Object.freeze(unknown), field };
+  return { rgb, colors: Object.freeze(colors), unknown: Object.freeze(unknown), field: fields[0], fields: Object.freeze(fields) };
 }
 
 /** Transport only. Core derives physical cases and selects one assignment. */
 export function updateColorField(runtime, revision, context, accept) {
+  if (context.fields.length > 1) {
+    const inputs = new Uint32Array(context.fields.length), offsets = new Uint32Array(inputs.length + 1);
+    let count = 0;
+    for (const [i, {inputIndex, descriptor}] of context.fields.entries()) {
+      inputs[i] = inputIndex;
+      offsets[i] = count;
+      count += descriptor.stops?.length ?? 2;
+    }
+    offsets[inputs.length] = count;
+    const positions = new Float64Array(count), colors = new Uint8Array(count * 3);
+    for (const [i, {descriptor}] of context.fields.entries()) {
+      let offset = offsets[i];
+      if (descriptor.stops === undefined) {
+        positions[offset + 1] = 1;
+        colors.set(descriptor.from, offset * 3);
+        colors.set(descriptor.to, (offset + 1) * 3);
+      } else for (const stop of descriptor.stops) {
+        positions[offset] = stop.at;
+        colors.set(stop.color, offset++ * 3);
+      }
+    }
+    const args = [revision, context.rgb, inputs, offsets, positions, colors];
+    try {
+      return accept === undefined ? runtime.updateIndependentGradients(...args) : runtime.updateIndependentGradientsWith(...args, accept);
+    } catch (error) {
+      if (error?.code === "program_field_correlation_required") authoringError("context", "these gradient inputs require a joint spatial observation", "color_unsupported_context");
+      throw error;
+    }
+  }
   const { inputIndex, descriptor } = context.field;
   const args = [revision, context.rgb, inputIndex];
   if (descriptor.kind === "affine-srgb8") {
@@ -124,8 +152,14 @@ export function unknownColorFrame(revision, inputs, context) {
 
 function copyFieldAssessment(snapshot, context) {
   if (context.field === undefined) return undefined;
-  const report = snapshot.fieldAssessment?.();
-  const { inputIndex, descriptor } = context.field;
+  if (context.fields.length === 1) return copyInputField(snapshot.fieldAssessment?.(), context.field);
+  const reports = snapshot.fieldAssessments();
+  if (reports.length !== context.fields.length) authoringError("resolution.field", "Core omitted a declared field", "color_core_contract");
+  return Object.freeze({ fields: Object.freeze(context.fields.map((field, i) => copyInputField(reports[i], field))) });
+}
+
+function copyInputField(report, field) {
+  const { inputIndex, descriptor } = field;
   const stops = descriptor.stops;
   const piecewise = stops !== undefined && stops.length > 2;
   const same = (rgb, expected) => expected?.length === 3 && rgb.every((byte, i) => byte === expected[i]);
@@ -138,8 +172,8 @@ function copyFieldAssessment(snapshot, context) {
       || !stops.every((stop, i) => stop.at === report.stops[i].at && same(stop.color, report.stops[i].color))))) {
     authoringError("resolution.field", "Core omitted the current declared source assessment", "color_core_contract");
   }
-  return Object.freeze({ input: context.field.name, sourceModel: report.sourceModel,
-    domain: report.domain, rendering: report.rendering, regionCount: report.regionCount,
+  return Object.freeze({ input: field.name, sourceModel: report.sourceModel,
+    caseOffset: report.caseOffset, domain: report.domain, rendering: report.rendering, regionCount: report.regionCount,
     witnesses: Object.freeze(report.witnesses.map((witness) => Object.freeze({
       ...(piecewise ? { segmentIndex: witness.segmentIndex } : {}),
       coordinate: Object.freeze([...witness.coordinate]), nominal: Object.freeze([...witness.nominal]),
@@ -147,6 +181,8 @@ function copyFieldAssessment(snapshot, context) {
 }
 
 function fieldScope(field, model) {
+  if (field?.fields) return { scope: "nominal-model", fields: field.fields,
+    coverage: Object.freeze({ model, rendering: "unknown", sourceModel: "independent-opaque-srgb8-fields-v1" }) };
   return field === undefined ? {} : { scope: "nominal-model", field,
     coverage: Object.freeze({ model, rendering: field.rendering, sourceModel: field.sourceModel }) };
 }
@@ -252,11 +288,17 @@ function copyDiagnostics(snapshot, graph, field) {
     items.push(Object.freeze({ kind: "search-limit", visited: report.searchVisited, budget: report.searchBudget }));
   }
   for (const violation of report?.witness?.violations ?? []) {
-    let fieldWitness;
-    if (field !== undefined && violation.caseIndex !== undefined) {
-      const witness = field.witnesses[violation.caseIndex];
+    let coordinates = {};
+    if (violation.fieldCase !== null && violation.fieldCase !== undefined) {
+      const { inputIndex, caseIndex } = violation.fieldCase;
+      const name = Number.isSafeInteger(inputIndex) && inputIndex >= 0 ? graph.inputs[inputIndex]?.name : undefined;
+      if (name === undefined) authoringError("resolution.diagnostics", "Core witness refers to an unknown input", "color_core_contract");
+      const source = field?.fields?.find((entry) => entry.input === name) ?? (field?.input === name ? field : undefined);
+      const witness = Number.isSafeInteger(caseIndex) && caseIndex >= 0 ? source?.witnesses[caseIndex] : undefined;
       if (witness === undefined) authoringError("resolution.diagnostics", "Core witness refers to an unknown field coordinate", "color_core_contract");
-      fieldWitness = Object.freeze({ input: field.input, ...witness });
+      coordinates = { fieldWitness: Object.freeze({ input: source.input, ...witness }) };
+    } else if (field !== undefined && violation.caseIndex !== undefined && violation.fieldCase !== null) {
+      authoringError("resolution.diagnostics", "Core omitted diagnostic dependency provenance", "color_core_contract");
     }
     const constraint = violation.kind === "hard-constraint" || violation.kind === "tonal-hierarchy"
       ? graph.constraints.get(violation.constraintId) : undefined;
@@ -269,7 +311,7 @@ function copyDiagnostics(snapshot, graph, field) {
       }
       items.push(Object.freeze({ kind: "relation", requirement: "tonal-hierarchy", evidence: "candidate-witness",
         stronger: authoredUse(stronger, graph), weaker: authoredUse(weaker, graph), caseIndex: violation.caseIndex,
-        ...(fieldWitness === undefined ? {} : { fieldWitness }),
+        ...coordinates,
         requiredRatio: violation.requiredRatio, actualRatio: violation.actualRatio,
         requiredGap: violation.requiredGap, actualGap: violation.actualGap,
         strongerPolarity: violation.strongerPolarity, weakerPolarity: violation.weakerPolarity }));
@@ -279,7 +321,7 @@ function copyDiagnostics(snapshot, graph, field) {
       const [left, right] = constraint.nodes;
       items.push(Object.freeze({ kind: "relation", requirement: constraint.requirement, evidence: "candidate-witness",
         left: authoredUse(left, graph), right: authoredUse(right, graph), range: constraint.bounds,
-        caseIndex: violation.caseIndex, ...(fieldWitness === undefined ? {} : { fieldWitness }) }));
+        caseIndex: violation.caseIndex, ...coordinates }));
       continue;
     }
     const node = constraint?.node ?? graph.targets.get(violation.targetId);
@@ -294,7 +336,7 @@ function copyDiagnostics(snapshot, graph, field) {
       kind: "requirement", evidence: "candidate-witness", requirement,
       role: node.role.id, use: node.handle,
       outputs: graph.outputNames.get(node),
-      ...(fieldWitness === undefined ? {} : { fieldWitness }),
+      ...coordinates,
       ...(violation.caseIndex === undefined ? {} : { caseIndex: violation.caseIndex }),
       ...(actual === undefined ? {} : { actual: Object.freeze([...actual]) }),
       ...(violation.kind === "max-change" ? { distanceSquared: violation.distanceSquared, maximumDistance: violation.maximumDistance } : {}),

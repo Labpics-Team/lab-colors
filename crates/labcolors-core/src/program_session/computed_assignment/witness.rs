@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::program_diagnostics::{
-    ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramDiagnosticSubjectV1,
-    ProgramDiagnosticV1, ProgramDiagnosticsV1,
+    ProgramAttemptTargetV1, ProgramAttemptWitnessV1, ProgramCaseOriginV1,
+    ProgramDiagnosticSubjectV1, ProgramDiagnosticV1, ProgramDiagnosticsV1,
 };
 
 fn push_violation(
@@ -20,6 +20,7 @@ fn push_violation(
 
 struct IntentWitnessV1<'a> {
     selection: &'a ComputedSelectionV1,
+    field: Option<crate::field_context::DeclaredFieldViewV1<'a>>,
     values: &'a [Srgb8],
     violations: &'a mut Vec<ProgramDiagnosticV1>,
 }
@@ -45,16 +46,25 @@ impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
                 .effective_intent()
                 .and_then(|intent| intent.appearance)
                 .map(|id| id.value());
-            if target.effective_intent().is_some_and(|intent| {
-                !intent
-                    .identity
-                    .contains(target.identity_point(source, actual))
-            }) {
+            let visible_origin = self.origin(&target.appearance_inputs, case_index)?;
+            let identity_origin = if target.declaration.reference_appearance {
+                self.origin(&[], case_index)?
+            } else {
+                visible_origin
+            };
+            if identity_origin != ProgramCaseOriginV1::OtherMarginal
+                && target.effective_intent().is_some_and(|intent| {
+                    !intent
+                        .identity
+                        .contains(target.identity_point(source, actual))
+                })
+            {
                 push_violation(
                     self.violations,
                     ProgramDiagnosticV1::ColorIdentity {
                         target_id: target.id.value(),
                         case_index,
+                        field_case: identity_origin.field_case(),
                         occurrence_id: if target.declaration.reference_appearance {
                             None
                         } else {
@@ -66,12 +76,15 @@ impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
             }
             let distance_squared = squared_distance(lab(actual), target.anchor_lab);
             let maximum_distance = f64::from_bits(target.declaration.max_delta_bits);
-            if distance_squared > maximum_distance * maximum_distance {
+            if visible_origin != ProgramCaseOriginV1::OtherMarginal
+                && distance_squared > maximum_distance * maximum_distance
+            {
                 push_violation(
                     self.violations,
                     ProgramDiagnosticV1::MaxChange {
                         target_id: target.id.value(),
                         case_index,
+                        field_case: visible_origin.field_case(),
                         occurrence_id,
                         actual,
                         distance_squared,
@@ -81,6 +94,21 @@ impl ProgramPhysicalCaseObserverV1 for IntentWitnessV1<'_> {
             }
         }
         Ok(())
+    }
+}
+
+impl IntentWitnessV1<'_> {
+    fn origin(
+        &self,
+        inputs: &[usize],
+        case_index: usize,
+    ) -> Result<ProgramCaseOriginV1, ProgramPhysicalCaseObserverErrorV1> {
+        self.field
+            .map_or(Ok(ProgramCaseOriginV1::Observed), |field| {
+                field
+                    .case_origin(inputs, case_index)
+                    .map_err(|()| ProgramPhysicalCaseObserverErrorV1::InternalInvariant)
+            })
     }
 }
 
@@ -111,6 +139,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     let mut violations = Vec::new();
     let mut collector = IntentWitnessV1 {
         selection,
+        field: scenarios.observation().declared_field(),
         values: &values,
         violations: &mut violations,
     };
@@ -133,6 +162,9 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
     )?;
     let intent_count = violations.len();
     for cell in &arena.cells {
+        if cell.case_origin() == ProgramCaseOriginV1::OtherMarginal {
+            continue;
+        }
         if cell.result().is_violation() {
             if let ProgramConstraintResultV1::Violation(
                 ProgramConstraintViolationEvidenceV1::Relation(span),
@@ -155,6 +187,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
                                 ProgramDiagnosticV1::TonalHierarchy {
                                     constraint_id: cell.constraint().value(),
                                     case_index: cell.case_index(),
+                                    field_case: cell.case_origin().field_case(),
                                     stronger_occurrence_id: stronger.occurrence.value(),
                                     weaker_occurrence_id: weaker.occurrence.value(),
                                     required_gap: measurement.required_gap(),
@@ -182,6 +215,7 @@ pub(super) fn capture<E: ProgramConstraintEvaluatorSetV1>(
                 ProgramDiagnosticV1::HardConstraint {
                     constraint_id: cell.constraint().value(),
                     case_index: cell.case_index(),
+                    field_case: cell.case_origin().field_case(),
                     subject: subject(cell.subject()),
                 },
             )
@@ -356,6 +390,7 @@ mod tests {
                 .contains(&ProgramDiagnosticV1::HardConstraint {
                     constraint_id: 6,
                     case_index: 0,
+                    field_case: None,
                     subject: ProgramDiagnosticSubjectV1::Occurrence { occurrence_id: 5 },
                 })
         );
@@ -410,12 +445,13 @@ mod tests {
                 .contains(&ProgramDiagnosticV1::ColorIdentity {
                     target_id: 10,
                     case_index: 0,
+                    field_case: None,
                     occurrence_id: Some(5),
                     actual: Srgb8::new([255; 3]),
                 })
         );
         assert!(witness.violations().iter().any(|value| matches!(value,
-            ProgramDiagnosticV1::MaxChange { target_id: 10, case_index: 0, occurrence_id: Some(5), actual, distance_squared, maximum_distance }
+            ProgramDiagnosticV1::MaxChange { target_id: 10, case_index: 0, field_case: None, occurrence_id: Some(5), actual, distance_squared, maximum_distance }
                 if *actual == Srgb8::new([255; 3]) && *distance_squared > 0.0 && *maximum_distance == 0.0)));
         assert!(session.state().current_verified().is_none());
         Ok(())
@@ -474,6 +510,7 @@ mod tests {
                 .contains(&ProgramDiagnosticV1::ColorIdentity {
                     target_id: 10,
                     case_index: 0,
+                    field_case: None,
                     occurrence_id: None,
                     actual: source,
                 })

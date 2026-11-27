@@ -363,6 +363,7 @@ fn native_reports_preserve_composition_provenance_and_owned_conflict_witness() -
             .contains(&ProgramDiagnostic::HardConstraint {
                 constraint_id: 6,
                 case_index: 0,
+                field_case: None,
                 subject: ProgramDiagnosticSubject::Occurrence { occurrence_id: 5 },
             })
     );
@@ -762,5 +763,107 @@ fn native_gradient_stops_replay_and_local_witness_survive_solids() -> TestResult
     let solid = runtime.update_observed(2, vec![1], vec![0; 3], 1)?;
     assert!(solid.gradient_assessment()?.is_none());
     assert_eq!(snapshot.gradient_assessment()?, Some(report));
+    Ok(())
+}
+
+#[test]
+fn native_independent_field_surface_exposes_per_input_reports_and_validates_shape() -> TestResult {
+    let runtime = compile_program_wire(
+        include_bytes!("../../labcolors-core/tests/fixtures/independent-nominal-fields.lcpw")
+            .to_vec(),
+        8,
+    )?;
+    let observed = runtime.update_observed(1, vec![9], vec![255; 6], 2)?;
+    assert!(observed.field_assessments()?.is_empty());
+
+    let malformed = runtime.update_independent_gradients(
+        2,
+        vec![0; 5],
+        vec![0, 1],
+        vec![0, 2, 5],
+        vec![0.0, 1.0, 0.0, 0.5, 1.0],
+        vec![0; 15],
+    );
+    assert!(matches!(
+        malformed,
+        Err(LabColorsError::Refused { code, operation })
+            if code == "program_update" && operation == "updateIndependentGradients"
+    ));
+
+    let retained = Arc::new(Mutex::new(Vec::new()));
+    let accepted = runtime.update_independent_gradients_with(
+        2,
+        vec![0; 6],
+        vec![0, 1],
+        vec![0, 2, 5],
+        vec![0.0, 1.0, 0.0, 0.5, 1.0],
+        vec![0, 0, 0, 10, 10, 10, 20, 20, 20, 30, 30, 30, 40, 40, 40],
+        Box::new(Capture {
+            snapshots: Arc::clone(&retained),
+            decision: Decision::Accept,
+        }),
+    )?;
+    assert!(accepted);
+    let snapshots = retained.lock().expect("snapshot storage");
+    let assessments = snapshots[0].field_assessments()?;
+    assert_eq!(assessments.len(), 2);
+    assert_eq!(assessments[0].input_index, 0);
+    assert_eq!(assessments[0].stops.len(), 2);
+    assert_eq!(assessments[1].input_index, 1);
+    assert_eq!(assessments[1].stops.len(), 3);
+    let outputs = snapshots[0].copy_output_table()?;
+    assert_eq!(outputs.len(), 2 * 5);
+    let mut first_input_outputs = 0;
+    let mut second_input_outputs = 0;
+    for output in outputs.chunks_exact(5) {
+        match output[0] as u32 {
+            7 => {
+                assert_eq!(&output[1..4], &[96.0; 3]);
+                first_input_outputs += 1;
+            }
+            17 => {
+                assert_eq!(&output[1..4], &[160.0; 3]);
+                second_input_outputs += 1;
+            }
+            slot => panic!("unexpected output slot {slot}"),
+        }
+        assert_eq!(output[4], 1.0);
+    }
+    assert_eq!(first_input_outputs, 1);
+    assert_eq!(second_input_outputs, 1);
+    drop(snapshots);
+
+    for decision in [Decision::Refuse, Decision::Error] {
+        let runtime = compile_program_wire(
+            include_bytes!("../../labcolors-core/tests/fixtures/independent-nominal-fields.lcpw")
+                .to_vec(),
+            8,
+        )?;
+        runtime.update_observed(1, vec![9], vec![255; 6], 2)?;
+        let result = runtime.update_independent_gradients_with(
+            2,
+            vec![0; 6],
+            vec![0, 1],
+            vec![0, 2, 5],
+            vec![0.0, 1.0, 0.0, 0.5, 1.0],
+            vec![0, 0, 0, 10, 10, 10, 20, 20, 20, 30, 30, 30, 40, 40, 40],
+            Box::new(Capture {
+                snapshots: Arc::new(Mutex::new(Vec::new())),
+                decision,
+            }),
+        );
+        match decision {
+            Decision::Refuse => assert!(!result?),
+            Decision::Error => assert!(result.is_err()),
+            Decision::Accept => unreachable!(),
+        }
+        // Both callback outcomes leave revision 1 current, so revision 2 is reusable.
+        assert_eq!(
+            runtime
+                .update_observed(2, vec![9], vec![0; 6], 2)?
+                .revision(),
+            2
+        );
+    }
     Ok(())
 }

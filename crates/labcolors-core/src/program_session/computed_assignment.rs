@@ -397,6 +397,7 @@ struct CompiledComputedTargetV1 {
     effective_anchor: Srgb8,
     reference_backdrop: Option<Srgb8>,
     appearance: Option<CompiledOccurrenceSlotV1>,
+    appearance_inputs: Box<[usize]>,
     tone_input: Option<usize>,
     opaque: bool,
 }
@@ -486,6 +487,20 @@ impl CompiledComputedTargetV1 {
 }
 
 impl ComputedSelectionV1 {
+    /// Constraint factors retain compiled constraint order in both phases.
+    /// Objectives occupy the tail of the hard-factor array.
+    pub(super) fn constraint_inputs(&self, constraint: usize) -> Option<&[usize]> {
+        let count = self.factors.len().checked_sub(self.targets.len())?;
+        for factors in [&self.factors[..count], self.report_only_factors.as_ref()] {
+            if let Ok(index) =
+                factors.binary_search_by_key(&Some(constraint), |factor| factor.constraint())
+            {
+                return Some(&factors[index].inputs);
+            }
+        }
+        None
+    }
+
     pub(super) fn identity_preferences(
         &self,
         partition: &components::ComponentPartitionV1,
@@ -582,7 +597,11 @@ impl ComputedSelectionV1 {
             old_to_new[*index] = next;
             *index = next;
         }
-        for factor in &mut partition.factors {
+        for factor in partition
+            .factors
+            .iter_mut()
+            .chain(&mut partition.report_only_factors)
+        {
             for target in &mut factor.targets {
                 *target = old_to_new[*target];
             }
@@ -716,12 +735,48 @@ pub(super) struct ComputedSelectionV1 {
     targets: Box<[CompiledComputedTargetV1]>,
     components: Box<[ComputedComponentV1]>,
     factors: Box<[ComputedFactorV1]>,
+    report_only_factors: Box<[ComputedFactorV1]>,
     fixed_constraints: Box<[usize]>,
     budget: u64,
     total_budget: u64,
     execution_profile: [u8; 32],
     selection_components: Arc<[ProgramSelectionComponentV1]>,
     point_anchors: Option<Arc<contextual::reference_completion::CompiledPointAnchorsV1>>,
+}
+
+impl ComputedSelectionV1 {
+    /// Each independently selected component, and each hard factor including
+    /// fixed-only constraints, must read at most one varying physical input.
+    pub(super) fn accepts_independent_fields(&self, fields: &[u32]) -> bool {
+        let include = |first: &mut Option<usize>, inputs: &[usize]| {
+            for &input in inputs {
+                if fields.binary_search(&(input as u32)).is_ok() {
+                    match *first {
+                        None => *first = Some(input),
+                        Some(previous) if previous == input => {}
+                        Some(_) => return false,
+                    }
+                }
+            }
+            true
+        };
+        for component in &self.components {
+            if !include(&mut None, &component.inputs) {
+                return false;
+            }
+        }
+        for factor in &self.factors {
+            if !include(&mut None, &factor.inputs) {
+                return false;
+            }
+        }
+        for factor in &self.report_only_factors {
+            if !include(&mut None, &factor.inputs) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Ascending indices into the compiled target schedule: authored preference
@@ -915,6 +970,7 @@ pub(super) fn compile_selection(
             declaration: declaration.try_clone_v1()?,
             effective_anchor: declaration.anchor,
             reference_backdrop: None,
+            appearance_inputs: Box::new([]),
             anchor_lab: lab(declaration.anchor),
             appearance: declaration
                 .intent
@@ -970,6 +1026,7 @@ pub(super) fn compile_selection(
         targets: compiled.into_boxed_slice(),
         components: Box::new([]),
         factors: Box::new([]),
+        report_only_factors: Box::new([]),
         fixed_constraints: Box::new([]),
         budget,
         total_budget: budget,

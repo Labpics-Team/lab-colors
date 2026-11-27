@@ -84,6 +84,17 @@ pub(crate) fn gradient_assessment(
     })
 }
 
+pub(crate) fn field_assessments(
+    fields: &[core::ProgramFieldAssessmentV1],
+) -> Result<Vec<ProgramGradientAssessment>, LabColorsError> {
+    let operation = "fieldAssessments";
+    let mut assessments = storage(fields.len(), operation)?;
+    for field in fields {
+        assessments.push(gradient_assessment(field)?);
+    }
+    Ok(assessments)
+}
+
 pub(crate) fn field_assessment(
     field: &core::ProgramFieldAssessmentV1,
 ) -> Result<ProgramFieldAssessment, LabColorsError> {
@@ -457,11 +468,27 @@ impl From<core::ProgramDiagnosticSubjectV1> for ProgramDiagnosticSubject {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct ProgramFieldCase {
+    pub input_index: u64,
+    pub case_index: u64,
+}
+
+impl From<core::ProgramFieldCaseV1> for ProgramFieldCase {
+    fn from(value: core::ProgramFieldCaseV1) -> Self {
+        Self {
+            input_index: value.input_index() as u64,
+            case_index: value.case_index() as u64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum ProgramDiagnostic {
     HardConstraint {
         constraint_id: u32,
         case_index: u64,
+        field_case: Option<ProgramFieldCase>,
         subject: ProgramDiagnosticSubject,
     },
     TargetDomain {
@@ -471,12 +498,14 @@ pub enum ProgramDiagnostic {
     ColorIdentity {
         target_id: u32,
         case_index: u64,
+        field_case: Option<ProgramFieldCase>,
         occurrence_id: Option<u32>,
         actual: ProgramRgb8,
     },
     MaxChange {
         target_id: u32,
         case_index: u64,
+        field_case: Option<ProgramFieldCase>,
         occurrence_id: Option<u32>,
         actual: ProgramRgb8,
         distance_squared: f64,
@@ -485,6 +514,7 @@ pub enum ProgramDiagnostic {
     TonalHierarchy {
         constraint_id: u32,
         case_index: u64,
+        field_case: Option<ProgramFieldCase>,
         stronger_occurrence_id: u32,
         weaker_occurrence_id: u32,
         required_ratio: f64,
@@ -503,10 +533,12 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
             C::HardConstraint {
                 constraint_id,
                 case_index,
+                field_case,
                 subject,
             } => Self::HardConstraint {
                 constraint_id,
                 case_index: case_index as u64,
+                field_case: field_case.map(Into::into),
                 subject: subject.into(),
             },
             C::TargetDomain { target_id, source } => Self::TargetDomain {
@@ -516,17 +548,20 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
             C::ColorIdentity {
                 target_id,
                 case_index,
+                field_case,
                 occurrence_id,
                 actual,
             } => Self::ColorIdentity {
                 target_id,
                 case_index: case_index as u64,
+                field_case: field_case.map(Into::into),
                 occurrence_id,
                 actual: actual.into(),
             },
             C::MaxChange {
                 target_id,
                 case_index,
+                field_case,
                 occurrence_id,
                 actual,
                 distance_squared,
@@ -534,6 +569,7 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
             } => Self::MaxChange {
                 target_id,
                 case_index: case_index as u64,
+                field_case: field_case.map(Into::into),
                 occurrence_id,
                 actual: actual.into(),
                 distance_squared,
@@ -542,6 +578,7 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
             C::TonalHierarchy {
                 constraint_id,
                 case_index,
+                field_case,
                 stronger_occurrence_id,
                 weaker_occurrence_id,
                 required_ratio,
@@ -553,6 +590,7 @@ impl From<core::ProgramDiagnosticV1> for ProgramDiagnostic {
             } => Self::TonalHierarchy {
                 constraint_id,
                 case_index: case_index as u64,
+                field_case: field_case.map(Into::into),
                 stronger_occurrence_id,
                 weaker_occurrence_id,
                 required_ratio,

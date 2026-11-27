@@ -2140,6 +2140,10 @@ impl OwnerV1 {
             .ok_or(EvidenceBoundsErrorV1::CardinalityOverflow)
     }
 
+    pub(crate) fn accepts_independent_fields(&self, inputs: &[u32]) -> bool {
+        self.compiled.accepts_independent_fields(inputs)
+    }
+
     /// Число значений Surface в каждом schema-ordered сценарии.
     pub(crate) fn surface_input_port_count(&self) -> usize {
         self.compiled.surface_input_ports().len()

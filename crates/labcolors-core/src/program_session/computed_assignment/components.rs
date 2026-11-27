@@ -371,6 +371,7 @@ pub(super) struct ComponentGroupV1 {
 pub(in crate::program_session) struct ComponentPartitionV1 {
     pub(super) groups: Vec<ComponentGroupV1>,
     pub(super) factors: Vec<ComputedFactorV1>,
+    pub(super) report_only_factors: Vec<ComputedFactorV1>,
     fixed: Vec<usize>,
     visible: VisibleDependenciesV1,
 }
@@ -422,6 +423,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         .try_reserve_exact(constraints.len())
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     let mut factors = Vec::new();
+    let mut report_only_factors = Vec::new();
     factors
         .try_reserve_exact(
             constraints
@@ -430,15 +432,23 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
                 .ok_or(ProgramCompileError::ResourceExhausted)?,
         )
         .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    report_only_factors
+        .try_reserve_exact(constraints.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
     for (ordinal, constraint) in constraints.iter().enumerate() {
-        if !constraint.mode.rejects_candidate() {
-            continue;
-        }
         visible.clear_inputs();
         visible.constraint(program, index, scratch, constraint, &mut |target| {
             marked.mark(target)
         })?;
         marked.collect(&selected, &mut members);
+        if !constraint.mode.rejects_candidate() {
+            report_only_factors.push(copy_factor(
+                &members,
+                &visible.inputs,
+                ComputedFactorKindV1::Constraint(ordinal),
+            )?);
+            continue;
+        }
         factors.push(copy_factor(
             &members,
             &visible.inputs,
@@ -450,7 +460,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
     let mut independent_backdrops = false_slots(count)?;
     // A visible identity/recourse can couple sources even without a separate
     // contrast constraint. Its own variable remains in the same task.
-    for (ordinal, target) in selection.targets.iter().enumerate() {
+    for (ordinal, target) in selection.targets.iter_mut().enumerate() {
         let appearance = target
             .declaration
             .intent
@@ -459,6 +469,12 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         visible.clear_inputs();
         if let Some(appearance) = appearance {
             visible.visible(index, appearance, &mut |target| marked.mark(target))?;
+            let mut inputs = Vec::new();
+            inputs
+                .try_reserve_exact(visible.inputs.len())
+                .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+            inputs.extend_from_slice(&visible.inputs);
+            target.appearance_inputs = inputs.into_boxed_slice();
             if target.declaration.reference_appearance {
                 independent_backdrops[ordinal] = true;
                 visible.backdrop(index, appearance, &mut |source| {
@@ -558,6 +574,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
     Ok(ComponentPartitionV1 {
         groups,
         factors,
+        report_only_factors,
         fixed,
         visible,
     })
@@ -575,6 +592,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
     let ComponentPartitionV1 {
         groups,
         factors,
+        mut report_only_factors,
         fixed,
         mut visible,
     } = partition;
@@ -720,8 +738,57 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
             )?;
         }
     }
+    let mut component_of = buffer(selection.targets.len(), usize::MAX)
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for (component_index, component) in components.iter().enumerate() {
+        for &target in &component.targets {
+            component_of[target] = component_index;
+        }
+    }
+    let mut seen_components = false_slots(components.len())?;
+    let mut related = Vec::new();
+    related
+        .try_reserve_exact(components.len())
+        .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+    for factor in &mut report_only_factors {
+        related.clear();
+        for &target in &factor.targets {
+            let component = *component_of
+                .get(target)
+                .ok_or(ProgramCompileError::InternalInvariant)?;
+            if component != usize::MAX && !seen_components[component] {
+                seen_components[component] = true;
+                related.push(component);
+            }
+        }
+        let additional = related
+            .iter()
+            .try_fold(0_usize, |total, &component| {
+                total.checked_add(components[component].inputs.len())
+            })
+            .ok_or(ProgramCompileError::ResourceExhausted)?;
+        let mut inputs = Vec::new();
+        inputs
+            .try_reserve_exact(
+                factor
+                    .inputs
+                    .len()
+                    .checked_add(additional)
+                    .ok_or(ProgramCompileError::ResourceExhausted)?,
+            )
+            .map_err(|_| ProgramCompileError::ResourceExhausted)?;
+        inputs.extend_from_slice(&factor.inputs);
+        for &component in &related {
+            inputs.extend_from_slice(&components[component].inputs);
+            seen_components[component] = false;
+        }
+        inputs.sort_unstable();
+        inputs.dedup();
+        factor.inputs = inputs.into_boxed_slice();
+    }
     selection.components = components.into_boxed_slice();
     selection.factors = factors.into_boxed_slice();
+    selection.report_only_factors = report_only_factors.into_boxed_slice();
     selection.fixed_constraints = fixed.into_boxed_slice();
     let mut descriptions = Vec::new();
     descriptions

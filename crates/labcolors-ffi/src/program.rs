@@ -51,6 +51,7 @@ fn runtime_error(error: core::ProgramRuntimeErrorV1, operation: &str) -> LabColo
             E::FamilyArtifactsRequired => "program_family_artifacts_required",
             E::Instantiate => "program_instantiate",
             E::Update => "program_update",
+            E::FieldCorrelationRequired => "program_field_correlation_required",
             E::ResourceExhausted => "program_resource_exhausted",
             E::InternalInvariant => "program_internal_invariant",
             _ => "program_runtime",
@@ -276,6 +277,57 @@ impl ProgramRuntime {
         })
     }
 
+    /// Updates several independent input fields in one atomic Program revision.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_independent_gradients(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        inputs: Vec<u32>,
+        offsets: Vec<u32>,
+        positions: Vec<f64>,
+        colors: Vec<u8>,
+    ) -> Result<Arc<ProgramSnapshot>, LabColorsError> {
+        let operation = "updateIndependentGradients";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let field = core::ProgramDeclaredFieldV1::from_independent_gradients_rgb8(
+            &surfaces, &inputs, &offsets, &positions, &colors,
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        inner
+            .update_declared_field(revision, field)
+            .map(|inner| Arc::new(ProgramSnapshot { inner }))
+            .map_err(|error| runtime_error(error, operation))
+    }
+
+    /// Host acceptance and Program publication cover every independent field together.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_independent_gradients_with(
+        &self,
+        revision: u64,
+        surfaces: Vec<u8>,
+        inputs: Vec<u32>,
+        offsets: Vec<u32>,
+        positions: Vec<f64>,
+        colors: Vec<u8>,
+        accept: Box<dyn ProgramUpdateHost>,
+    ) -> Result<bool, LabColorsError> {
+        let operation = "updateIndependentGradientsWith";
+        let mut inner = enter(&self.inner, operation, "program_busy")?;
+        let field = core::ProgramDeclaredFieldV1::from_independent_gradients_rgb8(
+            &surfaces, &inputs, &offsets, &positions, &colors,
+        )
+        .map_err(|_| LabColorsError::new("program_update", operation))?;
+        let prepared = inner
+            .prepare_declared_field(revision, field)
+            .map_err(|error| runtime_error(error, operation))?;
+        prepared.commit_with(|inner| {
+            let snapshot = Arc::new(ProgramSnapshot { inner });
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| accept.accept(snapshot)))
+                .map_err(|_| LabColorsError::new("program_host_protocol", operation))?
+        })
+    }
+
     pub fn update_observed(
         &self,
         revision: u64,
@@ -378,6 +430,13 @@ fn copy_snapshot_outputs(snapshot: &core::ProgramSnapshotV1) -> Result<Vec<f64>,
 
 #[uniffi::export]
 impl ProgramSnapshot {
+    /// Per-input assessments retain their independent normalized coordinates.
+    pub fn field_assessments(
+        &self,
+    ) -> Result<Vec<crate::ProgramGradientAssessment>, LabColorsError> {
+        crate::program_reports::field_assessments(self.inner.field_assessments())
+    }
+
     /// Scope and exact diagnostic coordinates for positive or negative model results.
     pub fn field_assessment(
         &self,

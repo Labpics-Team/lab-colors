@@ -1089,12 +1089,14 @@ pub(crate) fn prepare_schema_ordered_field_observation<
     if actual != expected {
         return Err(ObservationError::DeclaredFieldValueCountMismatch { expected, actual });
     }
-    let input_index = source.varying_input_index();
-    if input_index >= expected {
-        return Err(ObservationError::DeclaredFieldInputOutOfBounds {
-            input_index,
-            input_count: expected,
-        });
+    for field in 0..source.field_count() {
+        let input_index = source.field_input(field);
+        if input_index >= expected {
+            return Err(ObservationError::DeclaredFieldInputOutOfBounds {
+                input_index,
+                input_count: expected,
+            });
+        }
     }
     let current_revision = owner.observation_head().revision();
     if let Some(current) = current_revision {
