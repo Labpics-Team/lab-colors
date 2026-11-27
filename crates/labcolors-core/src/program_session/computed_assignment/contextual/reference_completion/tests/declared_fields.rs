@@ -159,7 +159,10 @@ fn field_program(nested: bool, tone: bool) -> Result<Program<Wcag22Srgb8V1>, Str
             identity: ColorIdentityDomainV1::new(value.anchor, true, IdentityOptionsV1::default())
                 .map_err(fixture_error)?,
             appearance: Some(OccurrenceId::new(occurrence)),
-            tone: tone.then(|| ToneCurveV1::new(input, vec![[0.0, 0.5], [1.0, 0.25]]).unwrap()),
+            tone: tone.then(|| {
+                ToneCurveV1::new(input, vec![[0.0, 0.5], [1.0, 0.25]])
+                    .expect("fixture tone curve is valid")
+            }),
         });
     }
     if nested {
@@ -399,8 +402,16 @@ fn unequal_supports_match_cartesian_metrics_and_exhaustive_rgb8_oracle() -> Resu
                     &anchor,
                 ),
                 (
-                    &actual.point_evidence().1.unwrap(),
-                    &expected.point_evidence().1.unwrap(),
+                    &actual
+                        .point_evidence()
+                        .1
+                        .as_ref()
+                        .expect("proposal evidence is present"),
+                    &expected
+                        .point_evidence()
+                        .1
+                        .as_ref()
+                        .expect("oracle proposal evidence is present"),
                     &proposal,
                 ),
             ] {
@@ -415,15 +426,20 @@ fn unequal_supports_match_cartesian_metrics_and_exhaustive_rgb8_oracle() -> Resu
                     } else {
                         2
                     };
-                    let inputs = actual.observation().physical_values(row.case).unwrap();
+                    let inputs = actual
+                        .observation()
+                        .physical_values(row.case)
+                        .expect("reported marginal case has physical values");
                     let expected_row = b
                         .preferences
                         .iter()
                         .find(|other| {
                             other.target == row.target
                                 && (index == 2
-                                    || expected.observation().physical_values(other.case).unwrap()
-                                        [index]
+                                    || expected
+                                        .observation()
+                                        .physical_values(other.case)
+                                        .expect("oracle marginal case has physical values")[index]
                                         .srgb8()
                                         == inputs[index].srgb8())
                         })
@@ -452,7 +468,12 @@ fn unequal_supports_match_cartesian_metrics_and_exhaustive_rgb8_oracle() -> Resu
                             Some(preferred[0].to_bits())
                         );
                     }
-                    let scalar = row.distance.as_ref().unwrap().cell.map_err(fixture_error)?;
+                    let scalar = row
+                        .distance
+                        .as_ref()
+                        .expect("scalar objective has distance evidence")
+                        .cell
+                        .map_err(fixture_error)?;
                     assert!(
                         (f64::from_bits(scalar.cell_bits) - distance(lab(visible), preferred))
                             .abs()
@@ -495,7 +516,13 @@ fn mixed_direction_singleton_is_included_in_full_completion() -> Result<(), Stri
     assert_eq!(rows.len(), 3);
     assert_eq!(
         rows.iter()
-            .map(|row| result.observation().physical_values(row.case).unwrap()[0].srgb8())
+            .map(|row| {
+                result
+                    .observation()
+                    .physical_values(row.case)
+                    .expect("reported marginal case has physical values")[0]
+                    .srgb8()
+            })
             .collect::<Vec<_>>(),
         support(stops[0])
     );
@@ -522,7 +549,12 @@ fn changed_field_supports_refresh_reused_scratch_and_preserve_old_evidence() -> 
             .map_err(fixture_error)?;
         (prepared.scratch, old)
     };
-    let uses = scratch.storage.as_ref().unwrap().uses.as_ptr();
+    let uses = scratch
+        .storage
+        .as_ref()
+        .expect("prepared scratch retains its allocation")
+        .uses
+        .as_ptr();
     let old_measurement = old.point_evidence().0.preferences[2].visible_lab;
     let changed: [&[[u8; 3]]; 2] = [&[[244; 3], [241; 3]], &[[252; 3], [252; 3]]];
     commit_fields(&mut session, 2, changed)?;
@@ -534,7 +566,13 @@ fn changed_field_supports_refresh_reused_scratch_and_preserve_old_evidence() -> 
         .realize(&values, &values, 64)
         .map_err(fixture_error)?;
     assert_eq!(
-        prepared.scratch.storage.as_ref().unwrap().uses.as_ptr(),
+        prepared
+            .scratch
+            .storage
+            .as_ref()
+            .expect("reused scratch retains its allocation")
+            .uses
+            .as_ptr(),
         uses
     );
     assert_eq!(new.observation().revision().value(), 2);
@@ -558,7 +596,7 @@ fn changed_field_supports_refresh_reused_scratch_and_preserve_old_evidence() -> 
         .preferences
         .iter()
         .find(|row| row.target == TargetId::new(20))
-        .unwrap();
+        .expect("second target has a reported preference");
     assert_ne!(new_second.visible_lab, old_measurement);
     assert_eq!(
         new.emitted(),
