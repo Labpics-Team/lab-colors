@@ -13,8 +13,27 @@ use crate::observation::SchemaOrderedFieldSourceV1;
 #[derive(Debug, Clone, Copy)]
 pub struct ProgramDeclaredFieldV1<'a> {
     rgb8: &'a [u8],
-    varying_input: usize,
-    stops: FieldStops<'a>,
+    sources: FieldSources<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FieldSources<'a> {
+    One {
+        input: usize,
+        stops: FieldStops<'a>,
+    },
+    Independent {
+        inputs: &'a [u32],
+        offsets: &'a [u32],
+        positions: &'a [f64],
+        colors: &'a [u8],
+    },
+}
+
+fn valid_positions(positions: &[f64]) -> bool {
+    positions.first() == Some(&0.0)
+        && positions.last() == Some(&1.0)
+        && positions.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 /// Malformed schema-ordered field declaration.
@@ -36,8 +55,10 @@ impl<'a> ProgramDeclaredFieldV1<'a> {
         }
         Ok(Self {
             rgb8,
-            varying_input,
-            stops: FieldStops::Affine(OpaqueSrgb8AffineSegment::new(from.bytes(), to.bytes())),
+            sources: FieldSources::One {
+                input: varying_input,
+                stops: FieldStops::Affine(OpaqueSrgb8AffineSegment::new(from.bytes(), to.bytes())),
+            },
         })
     }
     /// A continuous piecewise-affine line in encoded sRGB. Positions are finite,
@@ -53,16 +74,52 @@ impl<'a> ProgramDeclaredFieldV1<'a> {
             || varying_input >= rgb8.len() / 3
             || positions.len() < 2
             || positions.len().checked_mul(3) != Some(colors.len())
-            || positions.first() != Some(&0.0)
-            || positions.last() != Some(&1.0)
-            || !positions.windows(2).all(|pair| pair[0] < pair[1])
+            || !valid_positions(positions)
         {
             return Err(ProgramDeclaredFieldShapeErrorV1);
         }
         Ok(Self {
             rgb8,
-            varying_input,
-            stops: FieldStops::Positioned { positions, colors },
+            sources: FieldSources::One {
+                input: varying_input,
+                stops: FieldStops::Positioned { positions, colors },
+            },
+        })
+    }
+    /// Several independent opaque fields, in ascending input order. Each
+    /// offset pair selects one complete list of positioned stops. The compiled
+    /// graph must establish independence before this domain can be evaluated.
+    pub fn from_independent_gradients_rgb8(
+        rgb8: &'a [u8],
+        inputs: &'a [u32],
+        offsets: &'a [u32],
+        positions: &'a [f64],
+        colors: &'a [u8],
+    ) -> Result<Self, ProgramDeclaredFieldShapeErrorV1> {
+        if rgb8.len() % 3 != 0
+            || inputs.len() < 2
+            || inputs.windows(2).any(|pair| pair[0] >= pair[1])
+            || inputs.last().is_some_and(|&i| i as usize >= rgb8.len() / 3)
+            || inputs.len().checked_add(1) != Some(offsets.len())
+            || offsets.first() != Some(&0)
+            || offsets.last().copied().map(|v| v as usize) != Some(positions.len())
+            || positions.len().checked_mul(3) != Some(colors.len())
+            || offsets.windows(2).any(|pair| {
+                positions
+                    .get(pair[0] as usize..pair[1] as usize)
+                    .is_none_or(|stops| !valid_positions(stops))
+            })
+        {
+            return Err(ProgramDeclaredFieldShapeErrorV1);
+        }
+        Ok(Self {
+            rgb8,
+            sources: FieldSources::Independent {
+                inputs,
+                offsets,
+                positions,
+                colors,
+            },
         })
     }
 }
@@ -81,12 +138,37 @@ impl SchemaOrderedFieldSourceV1 for ProgramDeclaredFieldV1<'_> {
         ])
     }
 
-    fn varying_input_index(&self) -> usize {
-        self.varying_input
+    fn field_count(&self) -> usize {
+        match self.sources {
+            FieldSources::One { .. } => 1,
+            FieldSources::Independent { inputs, .. } => inputs.len(),
+        }
     }
 
-    fn stops(&self) -> FieldStops<'_> {
-        self.stops
+    fn field_input(&self, ordinal: usize) -> usize {
+        match self.sources {
+            FieldSources::One { input, .. } => input,
+            FieldSources::Independent { inputs, .. } => inputs[ordinal] as usize,
+        }
+    }
+
+    fn field_stops(&self, ordinal: usize) -> FieldStops<'_> {
+        match self.sources {
+            FieldSources::One { stops, .. } => stops,
+            FieldSources::Independent {
+                offsets,
+                positions,
+                colors,
+                ..
+            } => {
+                let start = offsets[ordinal] as usize;
+                let end = offsets[ordinal + 1] as usize;
+                FieldStops::Positioned {
+                    positions: &positions[start..end],
+                    colors: &colors[3 * start..3 * end],
+                }
+            }
+        }
     }
 }
 
@@ -125,6 +207,7 @@ impl ProgramFieldWitnessV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFieldAssessmentV1 {
     varying_input: usize,
+    case_offset: usize,
     stops: Box<[ProgramGradientStopV1]>,
     region_count: usize,
     witnesses: Vec<ProgramFieldWitnessV1>,
@@ -134,6 +217,11 @@ impl ProgramFieldAssessmentV1 {
     /// Index in the compiled input schema.
     pub const fn input_index(&self) -> usize {
         self.varying_input
+    }
+
+    /// First global marginal case occupied by this independent field.
+    pub const fn case_offset(&self) -> usize {
+        self.case_offset
     }
 
     /// Authored endpoints. Reversal retains different coordinate provenance.
@@ -181,21 +269,34 @@ impl ProgramFieldAssessmentV1 {
 
 pub(super) fn copy_field_assessment(
     evidence: crate::program::SnapshotEvidenceV1<'_>,
-) -> Result<Option<ProgramFieldAssessmentV1>, ProgramRuntimeErrorV1> {
-    let Some(observation) = evidence.observation() else {
-        return Ok(None);
+) -> Result<Vec<ProgramFieldAssessmentV1>, ProgramRuntimeErrorV1> {
+    let Some(domain) = evidence
+        .observation()
+        .and_then(|observation| observation.declared_field())
+    else {
+        return Ok(Vec::new());
     };
-    let Some(field) = observation.declared_field() else {
-        return Ok(None);
-    };
-    let count = observation.physical_cases().len();
+    let mut fields = Vec::new();
+    fields
+        .try_reserve_exact(domain.fields().len())
+        .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
+    for field in domain.fields() {
+        fields.push(copy_input_field(field)?);
+    }
+    Ok(fields)
+}
+
+fn copy_input_field(
+    field: crate::observation::DeclaredFieldViewV1<'_>,
+) -> Result<ProgramFieldAssessmentV1, ProgramRuntimeErrorV1> {
+    let count = field.support_count();
     let mut witnesses = Vec::new();
     witnesses
         .try_reserve_exact(count)
         .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
     for case in 0..count {
         let cell = field
-            .witness(case)
+            .witness(field.case_offset() + case)
             .ok_or(ProgramRuntimeErrorV1::InternalInvariant)?;
         let coordinate = cell.local.representative();
         witnesses.push(ProgramFieldWitnessV1 {
@@ -210,12 +311,13 @@ pub(super) fn copy_field_assessment(
         .try_reserve_exact(field.stops().len())
         .map_err(|_| ProgramRuntimeErrorV1::ResourceExhausted)?;
     stops.extend_from_slice(field.stops());
-    Ok(Some(ProgramFieldAssessmentV1 {
+    Ok(ProgramFieldAssessmentV1 {
         varying_input: field.varying_input_index(),
+        case_offset: field.case_offset(),
         stops: stops.into_boxed_slice(),
         region_count: field.cell_count(),
         witnesses,
-    }))
+    })
 }
 
 impl ProgramSessionV1 {
@@ -238,6 +340,10 @@ impl ProgramSessionV1 {
         field: ProgramDeclaredFieldV1<'_>,
     ) -> Result<PreparedProgramUpdateV1<'_>, ProgramRuntimeErrorV1> {
         // Existing legacy point certificates do not describe continuous fields.
+        if matches!(field.sources, FieldSources::Independent { inputs, .. } if !self.owner.accepts_independent_fields(inputs))
+        {
+            return Err(ProgramRuntimeErrorV1::FieldCorrelationRequired);
+        }
         if self.owner.snapshot_version() != 2 {
             return Err(ProgramRuntimeErrorV1::Update);
         }

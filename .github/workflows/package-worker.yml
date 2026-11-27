@@ -91,6 +91,7 @@ jobs:
         id: runtime-build
         env:
           PROGRAM_BENCHMARK: ${{ inputs.program-benchmark }}
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: s
           PROGRAM_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           PROGRAM_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         # Remap убирает пути workspace/CARGO_HOME из WASM; повторимость проверяется внутри этого job.

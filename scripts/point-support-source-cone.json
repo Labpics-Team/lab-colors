@@ -71,13 +71,13 @@
       "path": "crates/labcolors-core/src/observation.rs"
     },
     {
-      "after": "        let support = self.support.first()?;\n",
-      "before": "        let support = self.support.get(case_index)?;\n",
+      "after": "            .first()?\n",
+      "before": "            .get(row.checked_sub(field.case_offset)?)?\n",
       "path": "crates/labcolors-core/src/field_context.rs"
     },
     {
-      "after": "            &self.fixed_values,\n            0,\n            &support.value,\n",
-      "before": "            &self.fixed_values,\n            self.varying_input_index,\n            &support.value,\n",
+      "after": "            0,\n            value,\n",
+      "before": "            field.input,\n            value,\n",
       "path": "crates/labcolors-core/src/field_context.rs"
     },
     {

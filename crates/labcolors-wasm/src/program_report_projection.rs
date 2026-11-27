@@ -45,6 +45,7 @@ pub(super) fn project_field(
     colors[3..].copy_from_slice(&to.bytes());
     super::report_field(
         field.input_index(),
+        field.case_offset(),
         &colors,
         field.source_model(),
         field.domain(),

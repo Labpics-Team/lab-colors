@@ -66,7 +66,7 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
     const rendering: "unknown" = modeled.coverage.rendering;
     const background: string = modeled.contextCss.canvas;
     const descriptor = modeled.context.canvas;
-    const witness: readonly [number, number] | undefined = modeled.field.witnesses[0]?.coordinate;
+    const witness: readonly [number, number] | undefined = modeled.field?.witnesses[0]?.coordinate;
     void complete; void rendering; void background; void descriptor; void witness;
     // @ts-expect-error a modeled frame is not an attach-ready frame.
     const ready: Extract<typeof frame, { state: "ready" }> = modeled;

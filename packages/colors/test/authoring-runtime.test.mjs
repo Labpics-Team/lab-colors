@@ -121,18 +121,70 @@ test("an interior field failure is scoped to the nominal model with a Core coord
   } finally { program.dispose(); }
 });
 
-test("affine contexts reject multiple fields and retain missing constant inputs as unknown", async () => {
+test("affine contexts model independent fields and retain missing constant inputs as unknown", async () => {
   const c = colors(), first = c.surface("first"), second = c.surface("second");
   const program = await c.compile({ a: c.fixed("a", "#000000").on(first), b: c.fixed("b", "#ffffff").on(second) });
   const field = { kind: "affine-srgb8", from: "#000000", to: "#010000" };
   try {
-    assert.throws(() => program.resolve({ first: field, second: field }), { code: "color_unsupported_context" });
     const missing = program.resolve({ first: field });
     assert.equal(missing.state, "unknown");
     assert.deepEqual(missing.context.first, { kind: "affine-srgb8", from: [0, 0, 0], to: [1, 0, 0] });
     assert.equal("coverage" in missing, false);
     assert.deepEqual(missing.diagnostics, [{ kind: "unknown-input", input: "second" }]);
+    const independent = program.resolve({ first: field, second: field });
+    assert.equal(independent.state, "modeled");
+    assert.equal(independent.fields.length, 2);
+    assert.deepEqual(independent.fields.map(({ input }) => input), ["first", "second"]);
     assert.equal(program.resolve({ first: "#ffffff", second: "#000000" }).state, "ready");
+  } finally { program.dispose(); }
+});
+
+test("independent field witnesses follow the failing input through unequal support lengths and source order", async () => {
+  for (const reverse of [false, true]) {
+    const c = colors();
+    const surfaces = Object.fromEntries((reverse ? ["second", "first"] : ["first", "second"])
+      .map(name => [name, c.surface(name)]));
+    const program = await c.compile({
+      a: c.fixed("a", "#ffffff").on(surfaces.first),
+      b: c.fixed("b", "#808080").on(surfaces.second, { separation: [0.1, 2] }),
+    });
+    try {
+      for (const end of ["#010000", "#101010", "#ffffff"]) {
+        const frame = program.resolve({
+          first: { kind: "affine-srgb8", from: "#000000", to: end },
+          second: { kind: "affine-srgb8", from: "#808080", to: "#828282" },
+        });
+        assert.equal(frame.state, "conflict");
+        assert.equal("field" in frame, false);
+        assert.equal(frame.fields.length, 2);
+        const violations = frame.diagnostics.filter(item => item.requirement === "separation");
+        assert.ok(violations.length > 0);
+        assert.ok(violations.every(item => item.fieldWitness?.input === "second"));
+        assert.deepEqual(violations[0].fieldWitness,
+          { input: "second", coordinate: [0, 1], nominal: [128, 128, 128] });
+      }
+      assert.equal(program.resolve({ first: "#ffffff", second: "#000000" }).state, "ready");
+    } finally { program.dispose(); }
+  }
+});
+
+test("a fixed-context failure has no gradient witness in a multi-field composition", async () => {
+  const c = colors(), first = c.surface("first"), second = c.surface("second"), solid = c.surface("solid");
+  const program = await c.compile({
+    a: c.fixed("a", "#000000").on(first),
+    b: c.fixed("b", "#ffffff").on(second),
+    ink: c.fixed("ink", "#808080").on(solid, { separation: [0.1, 2] }),
+  });
+  try {
+    const frame = program.resolve({
+      first: { kind: "affine-srgb8", from: "#000000", to: "#010000" },
+      second: { kind: "affine-srgb8", from: "#ffffff", to: "#eeeeee" },
+      solid: "#808080",
+    });
+    assert.equal(frame.state, "conflict");
+    const violations = frame.diagnostics.filter(item => item.requirement === "separation");
+    assert.equal(violations.length, 1);
+    assert.equal("fieldWitness" in violations[0], false);
   } finally { program.dispose(); }
 });
 

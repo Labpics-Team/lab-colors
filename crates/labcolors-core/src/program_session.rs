@@ -2422,6 +2422,15 @@ where
         self.owner_generation.target_selection.release_identity()
     }
 
+    pub(crate) fn accepts_independent_fields(&self, inputs: &[u32]) -> bool {
+        match &self.owner_generation.target_selection {
+            CompiledTargetSelectionV1::Computed(selection) => {
+                selection.accepts_independent_fields(inputs)
+            }
+            _ => false,
+        }
+    }
+
     pub fn surface_input_ports(&self) -> &[SurfaceInputPortId] {
         self.owner_generation.observation_group.schema.as_slice()
     }
@@ -3073,6 +3082,7 @@ where
 {
     candidate_state_index: usize,
     case_index: usize,
+    case_origin: crate::program_diagnostics::ProgramCaseOriginV1,
     constraint: ConstraintId,
     subject: ProgramConstraintSubjectV1,
     mode: CompiledConstraintModeV1,
@@ -3087,6 +3097,7 @@ where
         Some(Self {
             candidate_state_index: self.candidate_state_index,
             case_index: self.case_index,
+            case_origin: self.case_origin,
             constraint: self.constraint,
             subject: self.subject,
             mode: self.mode,
@@ -3099,6 +3110,10 @@ where
 
     pub const fn case_index(&self) -> usize {
         self.case_index
+    }
+
+    pub(crate) const fn case_origin(&self) -> crate::program_diagnostics::ProgramCaseOriginV1 {
+        self.case_origin
     }
 
     pub const fn constraint(&self) -> ConstraintId {
@@ -5821,9 +5836,24 @@ where
             }
             if let ProgramConstraintEvidenceCaptureV1::Report { cells, .. } = &mut evidence {
                 let result = result.ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                let case_origin = if let Some(field) = observation.declared_field() {
+                    let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection
+                    else {
+                        return Err(ProgramSessionEvaluationError::InternalInvariant);
+                    };
+                    let inputs = selection
+                        .constraint_inputs(index)
+                        .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+                    field
+                        .case_origin(inputs, case_index)
+                        .map_err(|()| ProgramSessionEvaluationError::InternalInvariant)?
+                } else {
+                    crate::program_diagnostics::ProgramCaseOriginV1::Observed
+                };
                 cells.push(ProgramConstraintCellV1 {
                     candidate_state_index,
                     case_index,
+                    case_origin,
                     constraint: constraint.id,
                     subject,
                     mode: constraint.mode,
