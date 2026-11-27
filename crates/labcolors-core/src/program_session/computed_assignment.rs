@@ -1125,6 +1125,7 @@ enum RegionConstraintV1 {
         slot: CompiledOccurrenceSlotV1,
         weaker: CompiledOccurrenceSlotV1,
         required: f64,
+        weaker_contrast: Option<Wcag22CriterionV1>,
     },
     Wcag {
         slot: CompiledOccurrenceSlotV1,
@@ -1197,18 +1198,33 @@ impl RegionConstraintV1 {
                     crate::spaces::oklab::srgb8_boxes_distance_bounds(visible, backdrop);
                 Ok(minimum <= bounds.maximum() && maximum >= bounds.minimum())
             }
-            Self::TonalHierarchy { required, .. } => {
+            Self::TonalHierarchy {
+                required,
+                weaker_contrast,
+                ..
+            } => {
                 let luminance = |lower, upper| {
                     [lower, upper].map(|rgb| {
                         crate::color_intent::reference_transport::luminance(Srgb8::new(rgb))
                     })
                 };
-                Ok(CompiledTonalHierarchyV1::pair_possible_ratio(
-                    required,
-                    luminance(lower.visible, upper.visible),
-                    luminance(lower.weaker, upper.weaker),
-                    luminance(lower.backdrop, upper.backdrop),
-                ))
+                let stronger = luminance(lower.visible, upper.visible);
+                let weaker = luminance(lower.weaker, upper.weaker);
+                let background = luminance(lower.backdrop, upper.backdrop);
+                if let Some(criterion) = weaker_contrast {
+                    let limits =
+                        crate::color_intent::reference_transport::wcag_weak_luminance_limits(
+                            [Srgb8::new(lower.backdrop), Srgb8::new(upper.backdrop)],
+                            criterion,
+                        );
+                    Ok(CompiledTonalHierarchyV1::pair_possible_with_weak_limits(
+                        required, stronger, weaker, background, limits,
+                    ))
+                } else {
+                    Ok(CompiledTonalHierarchyV1::pair_possible_ratio(
+                        required, stronger, weaker, background,
+                    ))
+                }
             }
         }
     }
@@ -1297,6 +1313,7 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                     slot: pair[0].slot,
                     weaker: pair[1].slot,
                     required,
+                    weaker_contrast: None,
                 });
             }
         }
@@ -1324,6 +1341,27 @@ fn region_constraints<Evaluation: ProgramConstraintEvaluatorSetV1>(
                 })
             }
             _ => {}
+        }
+    }
+    // Both conditions concern the very same visible occurrence and backdrop.
+    // Derive the stronger region bound from the compiled hard conditions,
+    // irrespective of declaration order or the presence of unrelated roles.
+    for index in 0..result.len() {
+        let RegionConstraintV1::TonalHierarchy { weaker, .. } = result[index] else {
+            continue;
+        };
+        let strongest = result
+            .iter()
+            .filter_map(|constraint| match *constraint {
+                RegionConstraintV1::Wcag { slot, criterion } if slot == weaker => Some(criterion),
+                _ => None,
+            })
+            .max_by_key(|&criterion| crate::wcag22::twice_minimum_contrast(criterion));
+        if let RegionConstraintV1::TonalHierarchy {
+            weaker_contrast, ..
+        } = &mut result[index]
+        {
+            *weaker_contrast = strongest;
         }
     }
     Ok(result)

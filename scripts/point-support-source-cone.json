@@ -247,7 +247,7 @@
     },
     {
       "after": "\"proof_payload_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"",
-      "before": "\"proof_payload_sha256\":\"726d4a6038d8d30a76c7051de881b199c9d762dedb7ac609b1ba84b7252b7977\"",
+      "before": "\"proof_payload_sha256\":\"b0ad8061716be86d9fd1e12b580c5d4cf7918312319091b4b7bbcf4ed52b4237\"",
       "path": "crates/labcolors-core/contracts/wcag22-srgb8-q55-proof-v1.json"
     }
   ],

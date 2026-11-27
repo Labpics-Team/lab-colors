@@ -1058,15 +1058,8 @@ impl<'a> ReferenceRuntimeV1<'a> {
         key
     }
 
-    fn region_cannot_improve(
-        &mut self,
-        bounds: &BoundsV1,
-        node: RegionNodeV1,
-        values: &[Srgb8],
-    ) -> bool {
-        if let Some(peers) = &mut self.peers {
-            return peers.cannot_improve(&self.context, &self.models, bounds, node, values);
-        }
+    fn region_cannot_improve(&mut self, bounds: &BoundsV1) -> bool {
+        debug_assert!(self.peers.is_none(), "joint peers use product regions");
         let Some(best) = self.best else {
             return false;
         };
@@ -1092,6 +1085,199 @@ impl<'a> ReferenceRuntimeV1<'a> {
             )
             .then_with(|| bounds.tuple_min.cmp(&best.values))
             != Ordering::Less
+    }
+
+    fn joint_region<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        bounds: &mut BoundsV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        domains: &[AssignmentDomainV1],
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let domain_at = |index| domains[index];
+        let possible =
+            bounds.may_pass_domains(&self.context, runtime, epoch, scenarios, domain_at)?;
+        self.evidence.endpoint_evaluations = bounds.evaluations;
+        if !possible {
+            return Ok(false);
+        }
+        let peers = self.peers.as_mut().expect("joint reference component");
+        peers.lower_profile(&self.context, &self.models, bounds, domain_at);
+        Ok(!peers.cannot_improve())
+    }
+
+    // Subdivide the product of source domains, keeping all other domains
+    // as intervals. A surface and its dependents can therefore be narrowed
+    // together before any one paint is fixed. Both children are disjoint and
+    // cover their parent. Branch ranking is the same conservative sorted
+    // objective used to reject a region, independent of the incumbent.
+    fn joint_search<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        bounds: &mut BoundsV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<(), ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+        struct Split {
+            target: usize,
+            parent: AssignmentDomainV1,
+            sibling: Option<AssignmentDomainV1>,
+        }
+        let mut domains = cloned(&self.context.domains).map_err(allocation)?;
+        let count = domains.len();
+        let depth = domains
+            .iter()
+            .try_fold(0_usize, |sum, domain| sum.checked_add(domain.split_depth()))
+            .ok_or_else(|| allocation(()))?;
+        let mut stack = Vec::<Split>::new();
+        stack.try_reserve_exact(depth).map_err(|_| allocation(()))?;
+        let mut first_profile =
+            buffer(count.checked_mul(4).ok_or_else(|| allocation(()))?, 0.0).map_err(allocation)?;
+        let mut values = buffer(count, Srgb8::new([0; 3])).map_err(allocation)?;
+        let maximum_polish_work = (count as u64)
+            .saturating_mul(256)
+            .min(self.budget / COORDINATE_BUDGET_DIVISOR);
+        let mut polish_proposals = None;
+
+        self.evidence.visited += 1;
+        self.evidence.regions += 1;
+        self.evidence.open_regions += 1;
+        let mut active = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+        if !active {
+            self.evidence.close_region().map_err(allocation)?;
+        }
+        loop {
+            if !active {
+                // Undo the preceding split, or activate its still-open sibling.
+                // Only the modified domain is stored on the stack.
+                while let Some(frame) = stack.last_mut() {
+                    if let Some(sibling) = frame.sibling.take() {
+                        domains[frame.target] = sibling;
+                        active = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+                        if active {
+                            break;
+                        }
+                        self.evidence.close_region().map_err(allocation)?;
+                    } else {
+                        domains[frame.target] = frame.parent;
+                        stack.pop();
+                    }
+                }
+                if !active {
+                    debug_assert_eq!(self.evidence.open_regions, 0);
+                    self.evidence.completion = CompletionV1::Complete;
+                    return Ok(());
+                }
+            }
+
+            let remaining = self.budget - self.evidence.visited;
+            if self.best.is_some() && remaining <= maximum_polish_work {
+                if polish_proposals.is_none() {
+                    polish_proposals = Some(
+                        polish_plan(
+                            self.context
+                                .targets
+                                .iter()
+                                .zip(&self.context.domains)
+                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                        )
+                        .map_err(allocation)?,
+                    );
+                }
+                if remaining <= polish_proposals.as_ref().expect("prepared reserve").len() as u64 {
+                    break;
+                }
+            }
+            if remaining == 0 {
+                break;
+            }
+            // Resolve the highest-priority explicit tone domains first, then
+            // balance subdivision depth within each objective tier. Leaving
+            // a tone unconstrained while refining lower-priority dependent
+            // uses spends work on compositions whose tone can be improved.
+            let split = domains
+                .iter()
+                .enumerate()
+                .filter(|(_, domain)| domain.split_depth() != 0)
+                .max_by_key(|(index, domain)| {
+                    (
+                        self.context.targets[*index].tone_input.is_some(),
+                        domain.split_depth(),
+                        std::cmp::Reverse(*index),
+                    )
+                });
+            let Some((target, &parent)) = split else {
+                for (value, domain) in values.iter_mut().zip(&domains) {
+                    *value = Srgb8::new(domain.bounds().0);
+                }
+                self.assess_tuple_inner(runtime, epoch, scenarios, &values, arena, true)?;
+                self.evidence.close_region().map_err(allocation)?;
+                active = false;
+                continue;
+            };
+            if remaining < 2 {
+                break;
+            }
+            self.evidence.visited += 2;
+            self.evidence.regions += 2;
+            self.evidence.open_regions += 2;
+            self.evidence.close_region().map_err(allocation)?;
+            let (left, right) = parent.split();
+            domains[target] = left;
+            let left_possible = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+            if left_possible {
+                first_profile.copy_from_slice(
+                    self.peers
+                        .as_ref()
+                        .expect("joint reference component")
+                        .current_profile(),
+                );
+            } else {
+                self.evidence.close_region().map_err(allocation)?;
+            }
+            domains[target] = right;
+            let right_possible = self.joint_region(bounds, runtime, epoch, scenarios, &domains)?;
+            if !right_possible {
+                self.evidence.close_region().map_err(allocation)?;
+            }
+            let (first, sibling) = match (left_possible, right_possible) {
+                (false, false) => {
+                    domains[target] = parent;
+                    active = false;
+                    continue;
+                }
+                (true, false) => (left, None),
+                (false, true) => (right, None),
+                (true, true) => {
+                    let right_profile = self
+                        .peers
+                        .as_ref()
+                        .expect("joint reference component")
+                        .current_profile();
+                    if peers::compare(&first_profile, right_profile) == Ordering::Greater {
+                        (right, Some(left))
+                    } else {
+                        (left, Some(right))
+                    }
+                }
+            };
+            domains[target] = first;
+            stack.push(Split {
+                target,
+                parent,
+                sibling,
+            });
+        }
+        // Unvisited regions remain open. Local improvement never changes
+        // the evidence for completeness or skips the full acceptance check.
+        if let Some(proposals) = polish_proposals.as_deref() {
+            self.polish(runtime, epoch, scenarios, arena, proposals)?;
+        }
+        Ok(())
     }
 
     fn step<E: ProgramConstraintEvaluatorSetV1>(
@@ -1140,7 +1326,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
                             upper <= self.capacities[capacity.expect("capacity job")].ratio_lower
                         })
                     } else {
-                        self.region_cannot_improve(bounds, node, &job.values)
+                        self.region_cannot_improve(bounds)
                     };
                 if rejected {
                     self.evidence.close_region().map_err(allocation)?;
@@ -1511,6 +1697,11 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
     }
     let mut working = cloned(&authored).map_err(allocation)?;
     search.assess_tuple(runtime, epoch, scenarios, &working, arena)?;
+    if let Some(peers) = &mut search.peers {
+        peers
+            .prepare(&search.context, &search.models, &search.appearance)
+            .map_err(allocation)?;
+    }
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
     if !search.authored_exact() && search.evidence.visited < search.budget {
         let seed_limit = (search.budget / COORDINATE_BUDGET_DIVISOR).max(search.evidence.visited);
@@ -1758,121 +1949,126 @@ pub(super) fn select_component<E: ProgramConstraintEvaluatorSetV1>(
                     .map_err(allocation)?,
             ),
         };
-        let initial = if let Some(best) = search.best {
-            cloned(&search.pending[best].values)
+        if search.peers.is_some() {
+            search.joint_search(&mut bounds, runtime, epoch, scenarios, arena)?;
         } else {
-            cloned(&authored)
-        }
-        .map_err(allocation)?;
-        let point_job = search.traversal(0, &initial).map_err(allocation)?;
-        pushed(&mut search.jobs, point_job).map_err(allocation)?;
-        // A capacity query and the outer search advance in the same scheduler
-        // and spend the same node budget. A short quantum prevents an unknown
-        // context from blocking discovery of a better feasible composition.
-        let mut capacity_steps = 0_u8;
-        let maximum_polish_work = if count > 1 {
-            (count as u64)
-                .saturating_mul(256)
-                .min(search.budget / COORDINATE_BUDGET_DIVISOR)
-        } else {
-            0
-        };
-        let mut polish_proposals = None;
-        while search.evidence.visited < search.budget {
-            if maximum_polish_work != 0
-                && search.best.is_some()
-                && search.budget - search.evidence.visited <= maximum_polish_work
-            {
-                if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
-                    break;
-                }
-                // Most complete searches never reach this reserve. When one
-                // does, cache only the executable prefix, at most a quarter
-                // of the shared budget. Counting and execution reuse the RGBs.
-                if polish_proposals.is_none() {
-                    polish_proposals = Some(
-                        polish_plan(
-                            search
-                                .context
-                                .targets
-                                .iter()
-                                .zip(&search.context.domains)
-                                .map(|(target, &domain)| (target.declaration.anchor, domain)),
-                            usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
-                        )
-                        .map_err(allocation)?,
-                    );
-                }
-                if search.budget - search.evidence.visited
-                    <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
-                {
-                    break;
-                }
-            }
-            let needed = search.needed_capacity().map_err(allocation)?;
-            let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
-            let mut progressed = if run_point {
-                capacity_steps = 0;
-                search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?
-            } else if let Some(capacity) = needed {
-                capacity_steps = capacity_steps.saturating_add(1);
-                search.step(
-                    Some(capacity),
-                    &mut bounds,
-                    runtime,
-                    epoch,
-                    scenarios,
-                    arena,
-                )?
+            let initial = if let Some(best) = search.best {
+                cloned(&search.pending[best].values)
             } else {
-                break;
+                cloned(&authored)
+            }
+            .map_err(allocation)?;
+            let point_job = search.traversal(0, &initial).map_err(allocation)?;
+            pushed(&mut search.jobs, point_job).map_err(allocation)?;
+            // A capacity query and the outer search advance in the same scheduler
+            // and spend the same node budget. A short quantum prevents an unknown
+            // context from blocking discovery of a better feasible composition.
+            let mut capacity_steps = 0_u8;
+            let maximum_polish_work = if count > 1 {
+                (count as u64)
+                    .saturating_mul(256)
+                    .min(search.budget / COORDINATE_BUDGET_DIVISOR)
+            } else {
+                0
             };
-            if !progressed {
-                // Splitting a region or extending a partial tuple needs two
-                // visits. The other traversal may still evaluate a leaf with
-                // the final visit, and that tuple may replace the current best.
-                if run_point {
-                    if let Some(capacity) = needed {
-                        capacity_steps = capacity_steps.saturating_add(1);
-                        progressed = search.step(
-                            Some(capacity),
-                            &mut bounds,
-                            runtime,
-                            epoch,
-                            scenarios,
-                            arena,
-                        )?;
+            let mut polish_proposals = None;
+            while search.evidence.visited < search.budget {
+                if maximum_polish_work != 0
+                    && search.best.is_some()
+                    && search.budget - search.evidence.visited <= maximum_polish_work
+                {
+                    if search.point_closed
+                        && search.needed_capacity().map_err(allocation)?.is_none()
+                    {
+                        break;
                     }
-                } else if !search.point_closed {
+                    // Most complete searches never reach this reserve. When one
+                    // does, cache only the executable prefix, at most a quarter
+                    // of the shared budget. Counting and execution reuse the RGBs.
+                    if polish_proposals.is_none() {
+                        polish_proposals = Some(
+                            polish_plan(
+                                search
+                                    .context
+                                    .targets
+                                    .iter()
+                                    .zip(&search.context.domains)
+                                    .map(|(target, &domain)| (target.declaration.anchor, domain)),
+                                usize::try_from(maximum_polish_work).map_err(|_| allocation(()))?,
+                            )
+                            .map_err(allocation)?,
+                        );
+                    }
+                    if search.budget - search.evidence.visited
+                        <= polish_proposals.as_ref().expect("prepared reserve").len() as u64
+                    {
+                        break;
+                    }
+                }
+                let needed = search.needed_capacity().map_err(allocation)?;
+                let run_point = !search.point_closed && (needed.is_none() || capacity_steps == 32);
+                let mut progressed = if run_point {
                     capacity_steps = 0;
-                    progressed =
-                        search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?;
+                    search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?
+                } else if let Some(capacity) = needed {
+                    capacity_steps = capacity_steps.saturating_add(1);
+                    search.step(
+                        Some(capacity),
+                        &mut bounds,
+                        runtime,
+                        epoch,
+                        scenarios,
+                        arena,
+                    )?
+                } else {
+                    break;
+                };
+                if !progressed {
+                    // Splitting a region or extending a partial tuple needs two
+                    // visits. The other traversal may still evaluate a leaf with
+                    // the final visit, and that tuple may replace the current best.
+                    if run_point {
+                        if let Some(capacity) = needed {
+                            capacity_steps = capacity_steps.saturating_add(1);
+                            progressed = search.step(
+                                Some(capacity),
+                                &mut bounds,
+                                runtime,
+                                epoch,
+                                scenarios,
+                                arena,
+                            )?;
+                        }
+                    } else if !search.point_closed {
+                        capacity_steps = 0;
+                        progressed =
+                            search.step(None, &mut bounds, runtime, epoch, scenarios, arena)?;
+                    }
+                }
+                if !progressed {
+                    break;
                 }
             }
-            if !progressed {
-                break;
-            }
-        }
-        if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
-            for index in 0..search.jobs.len() {
-                if let Some(job) = search.jobs[index].take() {
-                    search.cancel_traversal(job).map_err(allocation)?;
+            if search.point_closed && search.needed_capacity().map_err(allocation)?.is_none() {
+                for index in 0..search.jobs.len() {
+                    if let Some(job) = search.jobs[index].take() {
+                        search.cancel_traversal(job).map_err(allocation)?;
+                    }
                 }
+                if search.evidence.open_regions != 0 {
+                    return Err(ProgramSessionEvaluationError::InternalInvariant);
+                }
+                search.evidence.completion = CompletionV1::Complete;
+            } else if let Some(proposals) = polish_proposals.as_deref().filter(|proposals| {
+                !proposals.is_empty() && search.evidence.visited < search.budget
+            }) {
+                // Do this after the last domain-search step. Resuming DFS could
+                // accept another earlier paint with a still-unsearched suffix and
+                // undo the improvement. The exact admitted-proposal count reserves
+                // only executable work; the pass consumes the remaining visits.
+                // Open regions still keep completeness explicitly unfinished.
+                search.polish(runtime, epoch, scenarios, arena, proposals)?;
             }
-            if search.evidence.open_regions != 0 {
-                return Err(ProgramSessionEvaluationError::InternalInvariant);
-            }
-            search.evidence.completion = CompletionV1::Complete;
-        } else if let Some(proposals) = polish_proposals
-            .as_deref()
-            .filter(|proposals| !proposals.is_empty() && search.evidence.visited < search.budget)
-        {
-            // Do this after the last domain-search step. Resuming DFS could
-            // accept another earlier paint with a still-unsearched suffix and
-            // undo the improvement. The exact admitted-proposal count reserves
-            // only executable work; the pass consumes the remaining visits.
-            // Open regions still keep completeness explicitly unfinished.
-            search.polish(runtime, epoch, scenarios, arena, proposals)?;
         }
     }
     let (values, reference_selections) = if let Some(best) = search.best {

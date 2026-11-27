@@ -11,8 +11,7 @@ struct Direction {
 }
 
 struct UseCase {
-    directions: [Direction; 3],
-    reference_y_equal: bool,
+    directions: [Option<Direction>; 3],
     backdrop: Srgb8,
     alpha: f64,
 }
@@ -21,6 +20,10 @@ struct UseCase {
 // The ratio uses independent numerator/denominator extrema when the backdrop
 // varies. A fixed backdrop recovers the exact operational ceiling.
 fn physical_ceilings(domain: AssignmentDomainV1, alpha: f64, backdrops: [Srgb8; 2]) -> [f64; 3] {
+    // At zero opacity the subject and backdrop are the same physical paint.
+    if alpha == 0.0 {
+        return [1.0; 3];
+    }
     let (low, high) = domain.bounds();
     let visible_y = |source: [u8; 3], backdrop: Srgb8| {
         luminance(Srgb8::new(std::array::from_fn(|i| {
@@ -35,50 +38,29 @@ fn physical_ceilings(domain: AssignmentDomainV1, alpha: f64, backdrops: [Srgb8; 
 }
 
 impl UseCase {
-    fn new(
-        context: &ContextV1<'_>,
-        model: ReferenceTransportV1,
-        target: usize,
-        case: usize,
-        backdrop: Srgb8,
-        alpha: f64,
-    ) -> Self {
-        let ceiling = physical_ceilings(context.domains[target], alpha, [backdrop; 2]);
-        let explicit = context.targets[target].tone_input.is_some();
-        let directions = std::array::from_fn(|i| {
-            if explicit {
-                let mut preferred = model.reference_lab();
-                preferred[0] = context.preferred[case * context.targets.len() + target][0];
-                Direction {
-                    physical_shortfall: 0.0,
-                    preferred,
-                }
-            } else {
-                // Monotonic source-over and sRGB luminance put a ceiling on
-                // contrast for this paint domain, opacity and actual backdrop.
-                // Other hard conditions may further restrict attainable colours.
-                let fraction = (ceiling[i] / model.reference_contrast()).min(1.0);
-                Direction {
-                    physical_shortfall: 1.0 - fraction,
-                    preferred: model.lab_for(backdrop, from_sign(i as i8 - 1)),
-                }
-            }
-        });
+    fn new(backdrop: Srgb8, alpha: f64) -> Self {
         Self {
-            directions,
-            reference_y_equal: model.reference_contrast() == 1.0,
+            directions: [None; 3],
             backdrop,
             alpha,
         }
     }
 
-    fn direction(&self, point: AppearancePointV1) -> &Direction {
-        let sign = if self.reference_y_equal {
-            0
-        } else {
-            sign(polarity(point.visible, point.backdrop))
-        };
-        &self.directions[(sign + 1) as usize]
+    fn direction_at(
+        &mut self,
+        domain: AssignmentDomainV1,
+        model: ReferenceTransportV1,
+        index: usize,
+    ) -> Direction {
+        let backdrop = self.backdrop;
+        let alpha = self.alpha;
+        *self.directions[index].get_or_insert_with(|| {
+            let ceiling = physical_ceilings(domain, alpha, [backdrop; 2])[index];
+            Direction {
+                physical_shortfall: 1.0 - (ceiling / model.reference_contrast()).min(1.0),
+                preferred: model.lab_for(backdrop, from_sign(index as i8 - 1)),
+            }
+        })
     }
 
     fn lower_bounds(
@@ -99,17 +81,18 @@ impl UseCase {
         let backdrops = [Srgb8::new(lower.backdrop), Srgb8::new(upper.backdrop)];
         let fixed = backdrops[0] == backdrops[1];
         if fixed && self.backdrop != backdrops[0] {
-            *self = Self::new(context, model, target, case, backdrops[0], self.alpha);
+            *self = Self::new(backdrops[0], self.alpha);
         }
         let background = backdrops.map(luminance);
         let visible = [Srgb8::new(lower.visible), Srgb8::new(upper.visible)].map(luminance);
-        let ceilings = physical_ceilings(context.domains[target], self.alpha, backdrops);
+        let domain = context.domains[target];
+        let ceilings = (!fixed).then(|| physical_ceilings(domain, self.alpha, backdrops));
         let reference = model.reference_lab();
         let mut shortfall = 1.0_f64;
         let mut distance = f64::INFINITY;
-        for (index, ceiling) in ceilings.into_iter().enumerate() {
+        for index in 0..3 {
             let direction = index as i8 - 1;
-            let possible = if self.reference_y_equal {
+            let possible = if model.reference_contrast() == 1.0 || self.alpha == 0.0 {
                 direction == 0
             } else {
                 match direction {
@@ -121,16 +104,14 @@ impl UseCase {
             if !possible {
                 continue;
             }
-            let branch = &self.directions[index];
-            let branch_shortfall = if fixed {
-                branch.physical_shortfall
+            let (branch_shortfall, target_l) = if let Some(ceilings) = ceilings {
+                (
+                    1.0 - (ceilings[index] / model.reference_contrast()).min(1.0),
+                    model.virtual_lightness_bounds(background, from_sign(direction)),
+                )
             } else {
-                1.0 - (ceiling / model.reference_contrast()).min(1.0)
-            };
-            let target_l = if fixed {
-                [branch.preferred[0]; 2]
-            } else {
-                model.virtual_lightness_bounds(background, from_sign(direction))
+                let branch = self.direction_at(domain, model, index);
+                (branch.physical_shortfall, [branch.preferred[0]; 2])
             };
             let dl = interval_distance([lab_lo[0], lab_hi[0]], target_l);
             let da = interval_distance([lab_lo[1], lab_hi[1]], [reference[1]; 2]);
@@ -166,6 +147,31 @@ impl PeerProfiles {
         self.authored_exact
     }
 
+    pub(super) fn prepare(
+        &mut self,
+        context: &ContextV1<'_>,
+        models: &[Option<ReferenceTransportV1>],
+        points: &[AppearancePointV1],
+    ) -> Result<(), ()> {
+        let count = context.targets.len();
+        let local_cases = &context.local_cases.order;
+        if self.cases.is_empty() {
+            self.cases
+                .try_reserve_exact(count.checked_mul(local_cases.len()).ok_or(())?)
+                .map_err(|_| ())?;
+            for &case in local_cases {
+                for (target, &model) in models.iter().enumerate() {
+                    model.ok_or(())?;
+                    self.cases.push(UseCase::new(
+                        points[case * count + target].backdrop,
+                        points[case * count + target].alpha,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn consider(
         &mut self,
         context: &ContextV1<'_>,
@@ -175,23 +181,7 @@ impl PeerProfiles {
     ) -> Result<bool, ()> {
         let count = values.len();
         let local_cases = &context.local_cases.order;
-        if self.cases.is_empty() {
-            self.cases
-                .try_reserve_exact(count.checked_mul(local_cases.len()).ok_or(())?)
-                .map_err(|_| ())?;
-            for &case in local_cases {
-                for (target, &model) in models.iter().enumerate() {
-                    self.cases.push(UseCase::new(
-                        context,
-                        model.ok_or(())?,
-                        target,
-                        case,
-                        points[case * count + target].backdrop,
-                        points[case * count + target].alpha,
-                    ));
-                }
-            }
-        }
+        self.prepare(context, models, points)?;
         self.current.fill(0.0);
         let (explicit, remainder) = self.current.split_at_mut(count);
         let (shortfalls, distances) = remainder.split_at_mut(count);
@@ -200,24 +190,26 @@ impl PeerProfiles {
         for (row, &case) in self.cases.chunks_exact_mut(count).zip(local_cases) {
             for (target, prepared) in row.iter_mut().enumerate() {
                 let point = points[case * count + target];
-                if prepared.backdrop != point.backdrop || prepared.alpha != point.alpha {
-                    *prepared = UseCase::new(
-                        context,
-                        models[target].ok_or(())?,
-                        target,
-                        case,
-                        point.backdrop,
-                        point.alpha,
-                    );
-                }
-                let direction = prepared.direction(point);
                 let compiled = &context.targets[target];
-                let distance = squared_distance(point.lab, direction.preferred);
+                let model = models[target].ok_or(())?;
                 if compiled.tone_input.is_some() {
-                    explicit[target] = explicit[target].max(distance);
+                    let mut preferred = model.reference_lab();
+                    preferred[0] = context.preferred[case * count + target][0];
+                    explicit[target] = explicit[target].max(squared_distance(point.lab, preferred));
                 } else {
+                    if prepared.backdrop != point.backdrop || prepared.alpha != point.alpha {
+                        *prepared = UseCase::new(point.backdrop, point.alpha);
+                    }
+                    let sign = if model.reference_contrast() == 1.0 {
+                        0
+                    } else {
+                        sign(polarity(point.visible, point.backdrop))
+                    };
+                    let direction =
+                        prepared.direction_at(context.domains[target], model, (sign + 1) as usize);
                     shortfalls[target] = shortfalls[target].max(direction.physical_shortfall);
-                    visible[target] = visible[target].max(distance);
+                    visible[target] =
+                        visible[target].max(squared_distance(point.lab, direction.preferred));
                 }
                 // An identical authored use has zero transport and source loss
                 // by construction. A rounded tone comparison cannot prove this.
@@ -241,17 +233,13 @@ impl PeerProfiles {
         Ok(improved)
     }
 
-    pub(super) fn cannot_improve(
+    pub(super) fn lower_profile(
         &mut self,
         context: &ContextV1<'_>,
         models: &[Option<ReferenceTransportV1>],
         bounds: &BoundsV1,
-        node: RegionNodeV1,
-        values: &[Srgb8],
-    ) -> bool {
-        if !self.has_best {
-            return false;
-        }
+        domain_at: impl Fn(usize) -> AssignmentDomainV1,
+    ) -> &[f64] {
         let count = context.targets.len();
         let points = bounds
             .appearance
@@ -278,14 +266,11 @@ impl PeerProfiles {
             }
         }
         for (target, compiled) in context.targets.iter().enumerate() {
-            source[target] = if target < node.depth {
-                squared_distance(lab(values[target]), compiled.source_anchor_lab)
+            let domain = domain_at(target);
+            let (lo, hi) = domain.bounds();
+            source[target] = if lo == hi {
+                squared_distance(lab(Srgb8::new(lo)), compiled.source_anchor_lab)
             } else {
-                let domain = if target == node.depth {
-                    node.domain
-                } else {
-                    context.domains[target]
-                };
                 domain.lower_score(compiled.source_anchor_lab)
             };
         }
@@ -293,7 +278,15 @@ impl PeerProfiles {
         // order, and a maximum over the sampled cases bounds the full maximum.
         // Reuse the comparison scratch; accepted profiles remain in `best`.
         sort_tiers(&mut self.current, count);
-        compare(&self.current, &self.best) != Ordering::Less
+        &self.current
+    }
+
+    pub(super) fn current_profile(&self) -> &[f64] {
+        &self.current
+    }
+
+    pub(super) fn cannot_improve(&self) -> bool {
+        self.has_best && compare(&self.current, &self.best) != Ordering::Less
     }
 }
 
@@ -303,7 +296,7 @@ fn sort_tiers(profile: &mut [f64], count: usize) {
     }
 }
 
-fn compare(left: &[f64], right: &[f64]) -> Ordering {
+pub(super) fn compare(left: &[f64], right: &[f64]) -> Ordering {
     left.iter()
         .zip(right)
         .map(|(a, b)| a.total_cmp(b))

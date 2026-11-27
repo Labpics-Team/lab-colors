@@ -248,6 +248,159 @@ fn reference_peers_prune_and_restore_the_authored_hierarchy() {
 }
 
 #[test]
+fn reference_peers_tone_selects_the_nearest_feasible_surface_across_polarities() {
+    // Enumerate the physical neutral feasibility envelope independently of the
+    // search. A surface in the middle cannot host both levels of text at the
+    // required ratio and minimum contrast, even though each may fit alone.
+    let luma = |gray: u8| {
+        let s = f64::from(gray) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let cr = |a: u8, b: u8| (luma(a.max(b)) + 0.05) / (luma(a.min(b)) + 0.05);
+    let ratio = cr(23, 255) / cr(96, 255);
+    let feasible = |background: u8| {
+        [false, true].into_iter().any(|lighter| {
+            let mut candidates = (0..=255_u8)
+                .filter(|&gray| {
+                    (if lighter {
+                        gray > background
+                    } else {
+                        gray < background
+                    }) && cr(gray, background) >= 4.5
+                })
+                .map(|gray| cr(gray, background));
+            let Some(first) = candidates.next() else {
+                return false;
+            };
+            let (low, high) = candidates.fold((first, first), |(low, high), contrast| {
+                (low.min(contrast), high.max(contrast))
+            });
+            high / low >= ratio
+        })
+    };
+    let nearest = |tone: f64| {
+        (0..=255_u8)
+            .filter(|&gray| feasible(gray))
+            .min_by(|&a, &b| {
+                (luma(a).cbrt() - tone)
+                    .abs()
+                    .total_cmp(&(luma(b).cbrt() - tone).abs())
+            })
+            .expect("nonempty feasibility envelope")
+    };
+    for reverse in [false, true] {
+        let mut p = hierarchy();
+        p.targets = vec![color(10, 5, 23, 0), color(20, 15, 96, 1)];
+        for (index, (id, paint, occurrence, surface, anchor, dark, light, parent)) in [
+            (40, 43, 45, 44, 242, 0.23, 0.96, 4),
+            (50, 53, 55, 54, 255, 0.31, 1.0, 44),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut target = color(id, occurrence, anchor, 2 + index as u64);
+            let TargetIntentV1::Computed(value) = &mut target.intent else {
+                unreachable!()
+            };
+            value.intent.as_mut().unwrap().tone =
+                Some(ToneCurveV1::new(2, vec![[0.0, dark], [1.0, light]]).unwrap());
+            p.targets.push(target);
+            p.paints.push(Paint::Solid {
+                id: PaintId::new(paint),
+                target: TargetId::new(id),
+            });
+            p.occurrences.push(Occurrence::new(
+                OccurrenceId::new(occurrence),
+                PaintId::new(paint),
+                SurfaceId::new(parent),
+                CompositionProfile::EncodedSrgb8SourceOverV1,
+                p.occurrences[0].context,
+            ));
+            p.surfaces.push(Surface::FromOccurrence {
+                id: SurfaceId::new(surface),
+                occurrence: OccurrenceId::new(occurrence),
+            });
+            p.outputs.push(OutputBinding::new(
+                OutputSlotId::new(id + 7),
+                PaintId::new(paint),
+            ));
+            let members = [60 + 20 * index as u32, 70 + 20 * index as u32];
+            for (member, gray) in members.into_iter().zip([23, 96]) {
+                let occurrence = OccurrenceId::new(member + 5);
+                let paint = PaintId::new(member + 3);
+                p.targets
+                    .push(color(member, member + 5, gray, u64::from(member)));
+                p.paints.push(Paint::Solid {
+                    id: paint,
+                    target: TargetId::new(member),
+                });
+                p.occurrences.push(Occurrence::new(
+                    occurrence,
+                    paint,
+                    SurfaceId::new(surface),
+                    CompositionProfile::EncodedSrgb8SourceOverV1,
+                    p.occurrences[0].context,
+                ));
+                p.outputs
+                    .push(OutputBinding::new(OutputSlotId::new(member + 7), paint));
+                p.constraints
+                    .hard
+                    .push(ConstraintInvocation::visible_unary_hard(
+                        ConstraintId::new(member + 6),
+                        occurrence,
+                        Wcag22CriterionV1::Sc143TextDefault,
+                    ));
+            }
+            p.constraints
+                .hard
+                .push(ConstraintInvocation::preserve_tonal_hierarchy(
+                    ConstraintId::new(100 + index as u32),
+                    members.map(|id| OccurrenceId::new(id + 5)).to_vec(),
+                ));
+        }
+        for target in &mut p.targets {
+            let TargetIntentV1::Computed(value) = &mut target.intent else {
+                unreachable!()
+            };
+            value.domain = AssignmentDomainV1::Gray {
+                lower: 0,
+                upper: 255,
+            };
+        }
+        let owner = compile_reference_composition(p, reverse);
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        for (revision, canvas) in [(1, 0), (2, 22), (3, 217), (4, 255), (5, 22)] {
+            session
+                .prepare_update(update(revision, canvas))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("readable composition")
+                .computed_for_test();
+            let values = &frame.arena.storage.outputs;
+            let surfaces = [
+                values[2].paint.source().bytes()[0],
+                values[3].paint.source().bytes()[0],
+            ];
+            let tone = luma(canvas).cbrt();
+            let expected = [
+                nearest(0.23 + tone * (0.96 - 0.23)),
+                nearest(0.31 + tone * (1.0 - 0.31)),
+            ];
+            assert_eq!(surfaces, expected, "canvas={canvas}, {:?}", frame.search);
+        }
+    }
+}
+
+#[test]
 fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
     use crate::color_intent::reference_transport::{
         ReferenceTransportV1, contrast_ratio, polarity,

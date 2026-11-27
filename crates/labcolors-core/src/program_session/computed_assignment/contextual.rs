@@ -95,7 +95,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v2.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.authored-source-distance.observed-component-order.monotone-sorted-region-bounds\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v3.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.sorted-explicit-tone-first.sorted-virtual-oklab.authored-source-distance.observed-component-order.joint-domain-bounds\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);
@@ -949,6 +949,27 @@ struct BoundsV1 {
     appearance: Option<Vec<[RegionPointV1; 2]>>,
 }
 
+// The physical bound evaluator accepts the complete product of current source
+// domains. Ordered search represents its fixed prefix as singleton domains.
+fn prefix_domain(
+    context: &ContextV1<'_>,
+    node: RegionNodeV1,
+    values: &[Srgb8],
+    index: usize,
+) -> AssignmentDomainV1 {
+    if index < node.depth {
+        let point = values[index].bytes();
+        AssignmentDomainV1::Cube {
+            lower: point,
+            upper: point,
+        }
+    } else if index == node.depth {
+        node.domain
+    } else {
+        context.domains[index]
+    }
+}
+
 impl BoundsV1 {
     fn may_pass<E: ProgramConstraintEvaluatorSetV1>(
         &mut self,
@@ -959,25 +980,25 @@ impl BoundsV1 {
         node: RegionNodeV1,
         values: &[Srgb8],
     ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        self.may_pass_domains(context, runtime, epoch, scenarios, |index| {
+            prefix_domain(context, node, values, index)
+        })
+    }
+
+    fn may_pass_domains<E: ProgramConstraintEvaluatorSetV1>(
+        &mut self,
+        context: &ContextV1,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        domain_at: impl Fn(usize) -> AssignmentDomainV1,
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
         let count = context.targets.len();
         self.scores.fill(0.0);
-        for (index, domain) in context.domains.iter().enumerate() {
-            let lo = if index < node.depth {
-                values[index].bytes()
-            } else if index == node.depth {
-                node.domain.bounds().0
-            } else {
-                domain.bounds().0
-            };
-            self.tuple_min[index] = Srgb8::new(lo);
-            let anchor = context.targets[index].declaration.anchor;
-            self.changes_min[index] = if index < node.depth {
-                values[index] != anchor
-            } else if index == node.depth {
-                !node.domain.contains(anchor)
-            } else {
-                !domain.contains(anchor)
-            };
+        for (index, target) in context.targets.iter().enumerate() {
+            let domain = domain_at(index);
+            self.tuple_min[index] = Srgb8::new(domain.bounds().0);
+            self.changes_min[index] = !domain.contains(target.declaration.anchor);
         }
         let refinement = context.case_refinement.borrow();
         for &case in &refinement.cases {
@@ -986,17 +1007,8 @@ impl BoundsV1 {
                 .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
             for high in [false, true] {
                 for (index, target) in context.targets.iter().enumerate() {
-                    let rgb = if index < node.depth {
-                        values[index]
-                    } else {
-                        let (lo, hi) = if index == node.depth {
-                            node.domain
-                        } else {
-                            context.domains[index]
-                        }
-                        .bounds();
-                        Srgb8::new(if high { hi } else { lo })
-                    };
+                    let (lo, hi) = domain_at(index).bounds();
+                    let rgb = Srgb8::new(if high { hi } else { lo });
                     runtime
                         .bindings
                         .overwrite_paint_input_at(
@@ -1036,15 +1048,8 @@ impl BoundsV1 {
                             .occurrence_at(slot)
                             .ok_or(ProgramSessionEvaluationError::InternalInvariant)?
                             .visible()
-                    } else if index < node.depth {
-                        values[index].bytes()
                     } else {
-                        let (lo, hi) = if index == node.depth {
-                            node.domain
-                        } else {
-                            context.domains[index]
-                        }
-                        .bounds();
+                        let (lo, hi) = domain_at(index).bounds();
                         if high { hi } else { lo }
                     };
                     if let Some(points) = &mut self.appearance {
@@ -1069,14 +1074,7 @@ impl BoundsV1 {
                     }
                     let lower = self.lower[index];
                     let identity_box = if target.declaration.reference_appearance {
-                        if index < node.depth {
-                            let point = values[index].bytes();
-                            (point, point)
-                        } else if index == node.depth {
-                            node.domain.bounds()
-                        } else {
-                            context.domains[index].bounds()
-                        }
+                        domain_at(index).bounds()
                     } else {
                         (lower, rgb)
                     };

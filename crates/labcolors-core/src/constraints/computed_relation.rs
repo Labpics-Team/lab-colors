@@ -176,6 +176,22 @@ impl CompiledTonalHierarchyV1 {
         weaker_y: [f64; 2],
         backdrop_y: [f64; 2],
     ) -> bool {
+        Self::pair_possible_with_weak_limits(
+            required_ratio,
+            stronger_y,
+            weaker_y,
+            backdrop_y,
+            [0.0, 1.0],
+        )
+    }
+
+    pub(crate) fn pair_possible_with_weak_limits(
+        required_ratio: f64,
+        stronger_y: [f64; 2],
+        weaker_y: [f64; 2],
+        backdrop_y: [f64; 2],
+        weak_limits: [f64; 2],
+    ) -> bool {
         if !required_ratio.is_finite()
             || required_ratio <= 1.0
             || [stronger_y, weaker_y, backdrop_y].iter().any(|range| {
@@ -189,10 +205,14 @@ impl CompiledTonalHierarchyV1 {
             // Неопределённая оценка никогда не доказывает отсутствие.
             return true;
         }
+        let lighter_min = weaker_y[0].max(backdrop_y[0]).max(weak_limits[0]);
+        let darker_max = weaker_y[1].min(backdrop_y[1]).min(weak_limits[1]);
         let lighter_possible = stronger_y[1].min(weaker_y[1]) > backdrop_y[0]
-            && multiplier_upper(stronger_y[1], weaker_y[0].max(backdrop_y[0])) >= required_ratio;
+            && lighter_min <= weaker_y[1]
+            && multiplier_upper(stronger_y[1], lighter_min) >= required_ratio;
         let darker_possible = stronger_y[0].max(weaker_y[0]) < backdrop_y[1]
-            && multiplier_upper(weaker_y[1].min(backdrop_y[1]), stronger_y[0]) >= required_ratio;
+            && darker_max >= weaker_y[0]
+            && multiplier_upper(darker_max, stronger_y[0]) >= required_ratio;
         lighter_possible || darker_possible
     }
 }
