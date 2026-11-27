@@ -393,6 +393,9 @@ struct CompiledComputedTargetV1 {
     id: TargetId,
     binding: CompiledPaintInputSlotV1,
     declaration: ComputedTargetV1,
+    // Source recourse stays anchored before compositing. Reference compilation
+    // updates only the effective appearance used by visible-space conditions.
+    source_anchor_lab: [f64; 3],
     anchor_lab: [f64; 3],
     effective_anchor: Srgb8,
     reference_backdrop: Option<Srgb8>,
@@ -962,6 +965,7 @@ pub(super) fn compile_selection(
         {
             return Err(invalid(ComputedAdmissionErrorV1::InvalidColorIntent));
         }
+        let source_anchor_lab = lab(declaration.anchor);
         compiled.push(CompiledComputedTargetV1 {
             id: target.id,
             binding: graph
@@ -971,7 +975,8 @@ pub(super) fn compile_selection(
             effective_anchor: declaration.anchor,
             reference_backdrop: None,
             appearance_inputs: Box::new([]),
-            anchor_lab: lab(declaration.anchor),
+            source_anchor_lab,
+            anchor_lab: source_anchor_lab,
             appearance: declaration
                 .intent
                 .as_ref()

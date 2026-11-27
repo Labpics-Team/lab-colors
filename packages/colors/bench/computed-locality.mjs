@@ -66,11 +66,16 @@ async function compile() {
 
 function check(frame, context, revision, digest) {
   assert.equal(frame.state, "ready");
-  assert.equal(frame.optimality, "exact");
+  // Only the authored reference proves the continuous symmetric minimum.
+  // Every adapted frame still has to match the finite witness below.
+  const authored = inputs.every((name) => context[name][0] === 255);
+  assert.equal(frame.optimality, authored ? "exact" : "unfinished");
   assert.equal(frame.revision, BigInt(revision));
   assert.deepEqual(frame.context, context);
   assert.equal(Object.keys(frame.values).length, components * 2);
   assert.equal(frame.reference.length, components * 2);
+  assert.equal(frame.selection.length, components);
+  assert.ok(frame.selection.every((part) => part.mode === "joint-reference-peers-v1"));
   assert.deepEqual(frame.cleanliness, { status: "not-assessed", reason: "no-declared-profile" });
   const physical = [];
   for (let index = 0; index < components; index += 1) {
@@ -89,7 +94,7 @@ function check(frame, context, revision, digest) {
   }
   for (const selection of frame.reference) {
     assert.equal(selection.preference, "reference-strength");
-    assert.deepEqual(selection.capacity, { ratioLower: 1, ratioUpper: 1, complete: true });
+    assert.equal(selection.capacity, null);
     assert.equal(selection.outputs.length, 1);
     assert.equal(selection.cases.length, 1);
     const name = selection.outputs[0];

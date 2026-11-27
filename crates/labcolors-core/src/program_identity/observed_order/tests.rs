@@ -154,6 +154,54 @@ fn observed_order_allocates_channels_per_port_and_rows_per_case() {
 }
 
 #[test]
+#[ignore = "explicit 64-port, 512-case canonicalization measurement"]
+fn observed_order_canonicalizes_large_joint_observations() {
+    let count = 64;
+    let mut cases: Vec<_> = (0..512).collect();
+    let mut inputs: Vec<_> = (0..count).collect();
+    for affine in [false, true] {
+        // Every column has the same RGB multiset. The cyclic case retains
+        // rotational symmetry; the affine case changes joint correlations.
+        let rgb = |case: usize, input: usize| {
+            let value = if affine {
+                (case * (2 * input + 1) + 37 * input) % 512
+            } else {
+                (case + 8 * input) % 512
+            };
+            Ok([value as u8, (value / 2) as u8, value.wrapping_mul(73) as u8])
+        };
+        let mut expected = None;
+        for reverse in [false, true] {
+            let started = std::time::Instant::now();
+            let peer = peers(&inputs, reverse);
+            let graph = peer
+                .observed_graph(&cases, rgb)
+                .expect("complete RGB observations")
+                .expect("equal column summaries need joint rows");
+            assert_eq!(graph.vertex_count(), 5 * count + cases.len());
+            assert_eq!(graph.edge_count(), count + 3 * count * (cases.len() + 1));
+            let prepared = started.elapsed();
+            let form = identity(&graph);
+            eprintln!(
+                "observed-order affine={affine} reverse={reverse} ports={count} cases={} vertices={} edges={} prepare={prepared:?} total={:?} preimage_bytes={}",
+                cases.len(),
+                graph.vertex_count(),
+                graph.edge_count(),
+                started.elapsed(),
+                form.len(),
+            );
+            if let Some(expected) = &expected {
+                assert_eq!(&form, expected, "full canonical form after permutation");
+            } else {
+                expected = Some(form);
+            }
+            cases.reverse();
+            inputs.reverse();
+        }
+    }
+}
+
+#[test]
 fn observed_order_keeps_identical_ports_and_rejects_missing_observations() {
     let peer = peers(&[0, 1], false);
     assert!(

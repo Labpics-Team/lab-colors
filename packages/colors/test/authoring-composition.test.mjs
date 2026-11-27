@@ -220,7 +220,11 @@ test("a branded text hierarchy commits on colored paper independently of declara
       assert.equal(reverse.state, "ready");
       assert.deepEqual(direct.values, reverse.values);
       assert.deepEqual(direct.selection.map((part) => part.mode).sort(),
-        ["joint-reference-peers-v1", "ordered-reference-v1"]);
+        ["joint-reference-peers-v1", "joint-reference-peers-v1"]);
+      const glaze = direct.values.glaze;
+      const visibleGlaze = glaze.rgb.map((v, i) => Math.round(direct.context.aside[i] + glaze.opacity * (v - direct.context.aside[i])));
+      assert.equal(glaze.opacity, 0.72);
+      assert.ok(textPasses(direct.values.mark.rgb, visibleGlaze));
       for (const name of ["heading", "caption"]) {
         const value = direct.values[name].rgb;
         assert.ok(textPasses(value, direct.context.paper));

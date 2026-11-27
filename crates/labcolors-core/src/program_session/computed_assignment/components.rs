@@ -457,7 +457,6 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         join(&mut parents, &members);
         constraint_members.push((ordinal, members.first().copied()));
     }
-    let mut independent_backdrops = false_slots(count)?;
     // A visible identity/recourse can couple sources even without a separate
     // contrast constraint. Its own variable remains in the same task.
     for (ordinal, target) in selection.targets.iter_mut().enumerate() {
@@ -476,13 +475,7 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             inputs.extend_from_slice(&visible.inputs);
             target.appearance_inputs = inputs.into_boxed_slice();
             if target.declaration.reference_appearance {
-                independent_backdrops[ordinal] = true;
-                visible.backdrop(index, appearance, &mut |source| {
-                    marked.mark(source);
-                    if selected[source].is_some() {
-                        independent_backdrops[ordinal] = false;
-                    }
-                })?;
+                visible.backdrop(index, appearance, &mut |source| marked.mark(source))?;
             }
         }
         if let Some(input) = target.tone_input {
@@ -548,9 +541,10 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
         for group in &mut groups {
             if group.mode == ProgramSelectionModeV1::OrderedReferenceV1
                 && group.targets.len() > 1
-                // Compilation binds each reference occurrence to its own paint.
-                // Only its backdrop can introduce another adjustable source.
-                && group.targets.iter().all(|&target| independent_backdrops[target])
+                && group
+                    .targets
+                    .iter()
+                    .all(|&target| selection.targets[target].declaration.reference_appearance)
             {
                 group.mode = ProgramSelectionModeV1::JointReferencePeersV1;
             }

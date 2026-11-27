@@ -95,7 +95,7 @@ pub(super) fn execution_profile_identity(budget: u64) -> [u8; 32] {
 }
 
 pub(super) fn reference_peer_profile_identity(base: [u8; 32]) -> [u8; 32] {
-    const DOMAIN: &[u8] = b"labcolors.reference-peers.v1.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.source-distance.observed-component-order\0";
+    const DOMAIN: &[u8] = b"labcolors.reference-peers.v2.tuple-dependent-backdrops.domain-opacity-physical-polarity-ceiling.sorted-virtual-oklab.authored-source-distance.observed-component-order.monotone-sorted-region-bounds\0";
     let mut bytes = [0; DOMAIN.len() + 32];
     bytes[..DOMAIN.len()].copy_from_slice(DOMAIN);
     bytes[DOMAIN.len()..].copy_from_slice(&base);

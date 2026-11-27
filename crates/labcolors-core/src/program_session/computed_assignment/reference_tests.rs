@@ -171,6 +171,331 @@ fn gray_reference_hierarchy_adapts_and_recovers_authored_composition() {
     }
 }
 
+fn compile_reference_composition(
+    mut p: Program<Wcag22Srgb8V1>,
+    reverse: bool,
+) -> CompiledProgram<Wcag22Srgb8V1> {
+    if reverse {
+        p.targets.reverse();
+        p.paints.reverse();
+        p.surfaces.reverse();
+        p.occurrences.reverse();
+        p.constraints.hard.reverse();
+    }
+    p.assignment = Some(ComputedSelectionPolicyV1::ReferenceComposition(
+        p.targets.iter().map(|target| target.id).collect(),
+    ));
+    p.computed_budget = Some(EXECUTION_NODE_LIMIT_V1);
+    p.compile().expect("reference composition compiles")
+}
+
+#[test]
+fn reference_peers_prune_and_restore_the_authored_hierarchy() {
+    for reverse in [false, true] {
+        let owner = compile_reference_composition(hierarchy(), reverse);
+        let CompiledTargetSelectionV1::Computed(selection) =
+            &owner.owner_generation.target_selection
+        else {
+            panic!("computed reference composition")
+        };
+        assert_eq!(selection.components.len(), 1);
+        assert_eq!(
+            selection.components[0].mode,
+            ProgramSelectionModeV1::JointReferencePeersV1
+        );
+        let mut session = owner
+            .instantiate(ObservationStreamId::new(8))
+            .expect("session");
+        for (revision, background, expected) in [(1, 0, [177, 134]), (2, 255, [68, 102])] {
+            session
+                .prepare_update(update(revision, background))
+                .expect("observation")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("readable hierarchy")
+                .computed_for_test();
+            let sources: Vec<_> = frame
+                .arena
+                .storage
+                .outputs
+                .iter()
+                .map(|output| output.paint.source())
+                .collect();
+            assert_eq!(sources, expected.map(|gray| Srgb8::new([gray; 3])));
+            assert_eq!(
+                frame.optimality(),
+                if background == 255 {
+                    ComputedOptimalityV1::Exact
+                } else {
+                    ComputedOptimalityV1::Unfinished
+                },
+                "{:?}",
+                frame.search
+            );
+            assert_eq!(
+                frame.search.completion,
+                if background == 255 {
+                    CompletionV1::AuthoredExact
+                } else {
+                    CompletionV1::Complete
+                }
+            );
+            assert!(frame.search.visited < 4096, "{:?}", frame.search);
+        }
+    }
+}
+
+#[test]
+fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
+    use crate::color_intent::reference_transport::{
+        ReferenceTransportV1, contrast_ratio, polarity,
+    };
+    use crate::constraints::TonalPolarityV1;
+
+    let gray = |value| Srgb8::new([value; 3]);
+    let composite = |source: Srgb8, alpha, backdrop: Srgb8| {
+        Srgb8::new(
+            crate::composition::source_over_srgb8(source.bytes(), alpha, backdrop.bytes())
+                .expect("material"),
+        )
+    };
+    // Both gray domains cross the tree's finite-enumeration threshold. The
+    // chromatic boxes exercise independent channel bounds and encoded rounding.
+    let gray_domains = [
+        AssignmentDomainV1::Gray {
+            lower: 36,
+            upper: 111,
+        },
+        AssignmentDomainV1::Gray {
+            lower: 100,
+            upper: 175,
+        },
+    ];
+    let cube_domains = [
+        AssignmentDomainV1::Cube {
+            lower: [64, 74, 84],
+            upper: [68, 78, 88],
+        },
+        AssignmentDomainV1::Cube {
+            lower: [124, 134, 144],
+            upper: [128, 138, 148],
+        },
+    ];
+    for (domains, anchors, alphas, backdrops) in [
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 0.5],
+            &[0, 20][..],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.25, 0.75],
+            &[128, 160, 200],
+        ),
+        (gray_domains, [gray(68), gray(128)], [0.5, 1.0], &[220, 255]),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.0, 1.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 0.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.0, 0.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [1.0, 1.0],
+            &[0, 128, 255],
+        ),
+        (
+            gray_domains,
+            [gray(68), gray(128)],
+            [0.001, 0.999],
+            &[0, 63, 128, 200, 255],
+        ),
+        (
+            cube_domains,
+            [Srgb8::new([66, 76, 86]), Srgb8::new([126, 136, 146])],
+            [0.55, 0.35],
+            &[0, 127, 240],
+        ),
+    ] {
+        let reference_parent = composite(anchors[1], alphas[1], gray(255));
+        let models = [
+            ReferenceTransportV1::new(
+                composite(anchors[0], alphas[0], reference_parent),
+                reference_parent,
+            ),
+            ReferenceTransportV1::new(reference_parent, gray(255)),
+        ];
+        // Independent complete finite oracle. It uses point composition and
+        // transport only, without region bounds, pruning, seeds or search order.
+        let profile = |tuple: [Srgb8; 2]| {
+            let mut tiers = [[0.0_f64; 2]; 3];
+            for &backdrop in backdrops {
+                let parent = composite(tuple[1], alphas[1], gray(backdrop));
+                let backgrounds = [parent, gray(backdrop)];
+                for target in 0..2 {
+                    let visible = composite(tuple[target], alphas[target], backgrounds[target]);
+                    let direction = polarity(visible, backgrounds[target]);
+                    let (lo, hi) = domains[target].bounds();
+                    let ceiling = match direction {
+                        TonalPolarityV1::Darker => contrast_ratio(
+                            composite(Srgb8::new(lo), alphas[target], backgrounds[target]),
+                            backgrounds[target],
+                        ),
+                        TonalPolarityV1::Lighter => contrast_ratio(
+                            composite(Srgb8::new(hi), alphas[target], backgrounds[target]),
+                            backgrounds[target],
+                        ),
+                        TonalPolarityV1::Equal => 1.0,
+                    };
+                    tiers[0][target] = tiers[0][target]
+                        .max(1.0 - (ceiling / models[target].reference_contrast()).min(1.0));
+                    tiers[1][target] = tiers[1][target].max(squared_distance(
+                        lab(visible),
+                        models[target].lab_for(backgrounds[target], direction),
+                    ));
+                }
+            }
+            for target in 0..2 {
+                tiers[2][target] = squared_distance(lab(tuple[target]), lab(anchors[target]));
+            }
+            for tier in &mut tiers {
+                tier.sort_unstable_by(|a, b| b.total_cmp(a));
+            }
+            tiers
+        };
+        let compare = |left: &[[f64; 2]; 3], right: &[[f64; 2]; 3]| {
+            left.iter()
+                .flatten()
+                .zip(right.iter().flatten())
+                .map(|(a, b)| a.total_cmp(b))
+                .find(|order| *order != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
+        };
+        let expected = (0..domains[0].cardinality().expect("finite domain"))
+            .flat_map(|left| {
+                (0..domains[1].cardinality().expect("finite domain"))
+                    .map(move |right| [domains[0].value(left), domains[1].value(right)])
+            })
+            .map(profile)
+            .min_by(compare)
+            .expect("nonempty tuples");
+        let mut previous = None;
+        for reverse in [false, true] {
+            let mut p = hierarchy();
+            p.constraints = ConstraintSet::new(vec![], vec![]);
+            for target in 0..2 {
+                let mut value = ComputedTargetV1::color(
+                    anchors[target],
+                    2.0,
+                    ColorUseIntentV1 {
+                        identity: ColorIdentityDomainV1::new(
+                            anchors[target],
+                            false,
+                            IdentityOptionsV1::default(),
+                        )
+                        .expect("source identity"),
+                        appearance: Some(OccurrenceId::new(5 + target as u32 * 10)),
+                        tone: None,
+                    },
+                );
+                value.domain = domains[target];
+                value.reference_appearance = true;
+                p.targets[target].intent = TargetIntentV1::Computed(value);
+                p.opacities.push(OpacityInput::new(
+                    OpacityInputId::new(50 + target as u32),
+                    alphas[target],
+                ));
+                p.paints.push(Paint::Opacity {
+                    id: PaintId::new(60 + target as u32),
+                    source: PaintId::new(3 + target as u32 * 10),
+                    opacity: OpacityInputId::new(50 + target as u32),
+                });
+                p.occurrences[target].subject = PaintId::new(60 + target as u32);
+                p.outputs[target] = OutputBinding::new(
+                    OutputSlotId::new(7 + target as u32 * 10),
+                    PaintId::new(60 + target as u32),
+                );
+            }
+            p.surfaces.push(Surface::FromOccurrence {
+                id: SurfaceId::new(44),
+                occurrence: OccurrenceId::new(15),
+            });
+            p.occurrences[0].against = SurfaceId::new(44);
+            let owner = compile_reference_composition(p, reverse);
+            let CompiledTargetSelectionV1::Computed(selection) =
+                &owner.owner_generation.target_selection
+            else {
+                panic!("computed reference composition")
+            };
+            // A fully transparent parent can remove the physical dependency.
+            // Independent singleton components retain their discrete policy.
+            let joint = selection.components.len() == 1;
+            assert!(selection.components.iter().all(|component| component.mode
+                == if joint {
+                    ProgramSelectionModeV1::JointReferencePeersV1
+                } else {
+                    ProgramSelectionModeV1::OrderedReferenceV1
+                }));
+            let mut session = owner
+                .instantiate(ObservationStreamId::new(8))
+                .expect("session");
+            let mut observed = backdrops.to_vec();
+            if reverse {
+                observed.reverse();
+            }
+            session
+                .prepare_update(gray_cases(1, &observed))
+                .expect("cases")
+                .commit();
+            let frame = session
+                .state()
+                .current_verified()
+                .expect("finite reference result")
+                .computed_for_test();
+            let tuple = std::array::from_fn(|i| frame.arena.storage.outputs[i].paint.source());
+            assert_eq!(
+                profile(tuple),
+                expected,
+                "domains={domains:?}, alpha={alphas:?}, cases={backdrops:?}, tuple={tuple:?}"
+            );
+            // Exhausting RGB8 proves the finite oracle, while the symmetric
+            // policy's continuous minimum remains unproven.
+            assert_eq!(
+                frame.optimality(),
+                if joint {
+                    ComputedOptimalityV1::Unfinished
+                } else {
+                    ComputedOptimalityV1::Exact
+                },
+                "{:?}",
+                frame.search
+            );
+            assert_ne!(frame.search.completion, CompletionV1::BudgetExhausted);
+            if let Some(previous) = previous {
+                assert_eq!(tuple, previous, "declaration and case permutations");
+            }
+            previous = Some(tuple);
+        }
+    }
+}
+
 #[test]
 fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
     let mut p = hierarchy();
@@ -193,6 +518,10 @@ fn reference_alpha_is_composited_once_and_bounds_max_change_in_visible_space() {
         panic!()
     };
     assert_eq!(selection.targets[0].declaration.anchor, Srgb8::new([68; 3]));
+    assert_eq!(
+        selection.targets[0].source_anchor_lab,
+        lab(Srgb8::new([68; 3]))
+    );
     assert_eq!(
         selection.targets[0].effective_anchor(),
         Srgb8::new([162; 3])

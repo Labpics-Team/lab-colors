@@ -1058,11 +1058,14 @@ impl<'a> ReferenceRuntimeV1<'a> {
         key
     }
 
-    fn region_cannot_improve(&self, bounds: &BoundsV1) -> bool {
-        // Ordered capacity bounds do not compare symmetric peer profiles.
-        // Physical hard bounds still discard impossible regions before this step.
-        if self.peers.is_some() {
-            return false;
+    fn region_cannot_improve(
+        &mut self,
+        bounds: &BoundsV1,
+        node: RegionNodeV1,
+        values: &[Srgb8],
+    ) -> bool {
+        if let Some(peers) = &mut self.peers {
+            return peers.cannot_improve(&self.context, &self.models, bounds, node, values);
         }
         let Some(best) = self.best else {
             return false;
@@ -1137,7 +1140,7 @@ impl<'a> ReferenceRuntimeV1<'a> {
                             upper <= self.capacities[capacity.expect("capacity job")].ratio_lower
                         })
                     } else {
-                        self.region_cannot_improve(bounds)
+                        self.region_cannot_improve(bounds, node, &job.values)
                     };
                 if rejected {
                     self.evidence.close_region().map_err(allocation)?;
