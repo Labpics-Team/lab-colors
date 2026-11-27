@@ -15,6 +15,7 @@ use crate::certified_numeric::{
     CertifiedScalarV1, NumericUncertaintyV1, sort_descending_profile, source_distance_squared,
 };
 use core::ops::Range;
+use std::collections::BTreeMap;
 
 mod authored_optimum;
 
@@ -867,14 +868,18 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
         }
         let source = self.scratch.bindings.paint_inputs_canonical();
         for component in &selection.components {
-            let component_uses = component.targets.iter().flat_map(|target| {
-                self.scratch
-                    .uses
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(index, usage)| (usage.target == *target).then_some(index))
-            });
-            if component_uses.clone().next().is_none() {
+            let mut uses_by_cases = BTreeMap::<(usize, usize), Vec<usize>>::new();
+            for target in &component.targets {
+                for (index, usage) in self.scratch.uses.iter().enumerate() {
+                    if usage.target == *target {
+                        uses_by_cases
+                            .entry((usage.cases.start, usage.cases.end))
+                            .or_default()
+                            .push(index);
+                    }
+                }
+            }
+            if uses_by_cases.is_empty() {
                 continue;
             }
             let mut paints = epoch.graph.prepare_certified_surface_cases(
@@ -893,30 +898,29 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                 },
                 &mut self.scratch.certified_workspace,
             )?;
-            for usage_index in component_uses.clone() {
-                let cases = self.scratch.uses[usage_index].cases.clone();
-                if component_uses
-                    .clone()
-                    .take_while(|&previous| previous != usage_index)
-                    .any(|previous| self.scratch.uses[previous].cases == cases)
-                {
-                    continue;
-                }
-                for case in cases.clone() {
+            for ((case_start, case_end), usage_indices) in uses_by_cases {
+                for case in case_start..case_end {
                     let inputs = self
                         .observation
                         .physical_values(case)
                         .ok_or(Error::<E>::MissingFiniteObservation)?;
-                    let view = paints.evaluate_surface_inputs_canonical(|index| {
-                        CertifiedRgbV1::from_encoded(inputs[index].srgb8().bytes().map(f64::from))
-                    });
-                    for usage_index in component_uses.clone() {
+                    let view = usage_indices
+                        .iter()
+                        .any(|&index| self.scratch.uses[index].slot.is_some())
+                        .then(|| {
+                            paints.evaluate_surface_inputs_canonical(|index| {
+                                CertifiedRgbV1::from_encoded(
+                                    inputs[index].srgb8().bytes().map(f64::from),
+                                )
+                            })
+                        });
+                    for &usage_index in &usage_indices {
                         let usage = &self.scratch.uses[usage_index];
-                        if usage.cases != cases {
-                            continue;
-                        }
                         let (visible_lab, backdrop_lab) = if let Some(slot) = usage.slot {
-                            let point = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
+                            let point = view
+                                .as_ref()
+                                .and_then(|view| view.occurrence_at(slot))
+                                .ok_or(Error::<E>::InvalidUse)?;
                             (point.visible?.oklab()?, Some(point.backdrop?.oklab()?))
                         } else {
                             (
@@ -925,7 +929,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                                 None,
                             )
                         };
-                        let preferred = usage.preferred.get(case - usage.cases.start).copied();
+                        let preferred = usage.preferred.get(case - case_start).copied();
                         let distance = preferred
                             .map(|point| source_distance_squared(visible_lab, point))
                             .transpose()?;
