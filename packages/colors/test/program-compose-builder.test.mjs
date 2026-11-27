@@ -85,6 +85,7 @@ test("compose rejects malformed list lengths before reading entries", () => {
 
 test("ordinary lowering always composes the complete declaration order", (t) => {
   const compose = t.mock.method(ProgramWireBuilderV3.prototype, "compose");
+  const composeReference = t.mock.method(ProgramWireBuilderV3.prototype, "composeReference");
   t.mock.method(ProgramWireBuilderV3.prototype, "assignment", () => assert.fail("ordinary lowering must compose"));
   const input = { kind: "input", id: "canvas", ordinal: 0 };
   const makeUse = (ordinal, adaptive, against) => ({
@@ -99,12 +100,13 @@ test("ordinary lowering always composes the complete declaration order", (t) => 
       const graph = lowerColorSystem(entries, {
         reference: authored ? new Map([["canvas", [255, 255, 255]]]) : undefined,
       });
-      const call = compose.mock.calls.at(-1);
+      const call = (authored ? composeReference : compose).mock.calls.at(-1);
       const expectedTargets = [...graph.targets].filter(([, node]) => node.role.adaptive).map(([target]) => target);
       assert.deepEqual(call.arguments[0], expectedTargets);
       assert.equal(expectedTargets.length, adaptive ? 3 : 0);
-      assert.deepEqual(call.arguments[1], { reference: authored ? [[graph.inputs[0].port, [255, 255, 255]]] : undefined });
+      assert.deepEqual(call.arguments[1], authored ? [[graph.inputs[0].port, [255, 255, 255]]] : undefined);
     }
   }
-  assert.equal(compose.mock.callCount(), 4);
+  assert.equal(compose.mock.callCount(), 2);
+  assert.equal(composeReference.mock.callCount(), 2);
 });
