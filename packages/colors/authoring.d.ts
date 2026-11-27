@@ -352,7 +352,8 @@ export interface ColorSystem {
     outputs: Outputs,
   ): EncodedColorSystem<Extract<keyof Outputs, string>>;
   /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.
-   * Связанные reference-применения на независимых подложках подбираются совместно. Режим каждой группы доступен в frame.selection.
+   * Связанные reference-применения, включая вложенные адаптивные подложки, подбираются совместно.
+   * Режим каждой группы доступен в frame.selection.
    */
   compile<const Outputs extends Readonly<Record<string, ColorUse>>>(
     outputs: Outputs,

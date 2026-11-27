@@ -23,7 +23,7 @@ def validate(ci, package, release):
         raise AssertionError("package checks acquired credentials")
     owner=job(package,"wasm")
     for command in ["build_runtime", "cargo clean", "diff --no-dereference --recursive",
-                    'node "$GITHUB_WORKSPACE/scripts/wasm-build-licenses.mjs"',
+                    'node "$GITHUB_WORKSPACE/scripts/build-wasm.mjs" "$PWD"',
                     "node scripts/record-wasm-measurement.mjs", "node scripts/check-wasm-size-budget.mjs",
                     "npm run typecheck", "npm test", "npm run release:verify",
                     "wasm-pack test --headless --chrome", "node scripts/test-program-runtime-browser.mjs",
@@ -57,10 +57,8 @@ def validate(ci, package, release):
     if any(value not in measurement for value in required) or "continue-on-error:" in measurement:
         raise AssertionError("canonical measurement lost its reproduced source or bounded lifetime")
     build = next(block for block in blocks if "node scripts/record-wasm-measurement.mjs" in block)
-    if ('--message-format=json-render-diagnostics > "$messages"' not in build
-            or build.index('node "$GITHUB_WORKSPACE/scripts/wasm-build-licenses.mjs"')
-            < build.index('mv -- "$optimized" "$wasm"')):
-        raise AssertionError("dependency licenses must describe the final WASM and actual Cargo build")
+    if any(control in build for control in ["CARGO_PROFILE_", "CARGO_ENCODED_RUSTFLAGS", "wasm-pack build", "wasm-opt.js"]):
+        raise AssertionError("WASM build settings must belong to the shared build script")
     if ("        id: runtime-build\n" not in build
             or build.index("node scripts/record-wasm-measurement.mjs") < build.index("diff --no-dereference --recursive")
             or owner.index(measurement) < owner.index(build)
@@ -95,6 +93,8 @@ class CiStorageTests(unittest.TestCase):
             (1,"retention-days: 1", "retention-days: 1\n        continue-on-error: true"),
             (1,'retention-days: 1','retention-days: 90'),
             (1,'node scripts/check-wasm-size-budget.mjs','node --version'),
+            (1,'node "$GITHUB_WORKSPACE/scripts/build-wasm.mjs" "$PWD"', 'wasm-pack build'),
+            (1,'          PROGRAM_BENCHMARK:', '          CARGO_PROFILE_RELEASE_OPT_LEVEL: s\n          PROGRAM_BENCHMARK:'),
             (1,"steps.runtime-build.outputs.measurement-ready == 'true'", "true"),
             (1,"retention-days: 3", "retention-days: 90"),
             (2,'    needs: prepare','    needs: ignored'),
