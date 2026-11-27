@@ -82,7 +82,7 @@ impl CompiledDependencyPlanV1 {
     /// Returns `None` for out-of-bounds index, `Some(slice)` for valid.
     pub fn dependencies_of(&self, node: NodeIndexV1) -> Option<&[NodeIndexV1]> {
         let i = node.raw() as usize;
-        if i + 1 >= self.forward_offsets.len() {
+        if i >= self.nodes.len() {
             return None;
         }
         let start = self.forward_offsets[i];
@@ -94,7 +94,7 @@ impl CompiledDependencyPlanV1 {
     /// Returns `None` for out-of-bounds index, `Some(slice)` for valid.
     pub fn dependents_of(&self, node: NodeIndexV1) -> Option<&[NodeIndexV1]> {
         let i = node.raw() as usize;
-        if i + 1 >= self.reverse_offsets.len() {
+        if i >= self.nodes.len() {
             return None;
         }
         let start = self.reverse_offsets[i];
@@ -126,67 +126,71 @@ impl CompiledDependencyPlanV1 {
             }
         }
 
-        // Map external IDs to canonical indices.
+        let n = sorted_ids.len();
         let id_to_index = |id: u32| -> Option<usize> { sorted_ids.binary_search(&id).ok() };
 
-        // Validate edges and check for duplicates.
-        let mut edge_pairs: Vec<(usize, usize)> = Vec::with_capacity(edges.len());
+        // Count both adjacencies while validating endpoints. The declared
+        // bounds prove that mapped node indices and degrees fit in u32.
+        let mut fwd_offsets = vec![0usize; n + 1];
+        let mut reverse_offsets = vec![0usize; n + 1];
+        let mut mapped = Vec::with_capacity(edges.len());
         for &(from, to) in edges {
             let fi = id_to_index(from).ok_or(CompileErrorV1::UnknownNode(from))?;
             let ti = id_to_index(to).ok_or(CompileErrorV1::UnknownNode(to))?;
-            edge_pairs.push((fi, ti));
+            fwd_offsets[fi + 1] += 1;
+            reverse_offsets[ti + 1] += 1;
+            mapped.push((NodeIndexV1::new(fi as u32), NodeIndexV1::new(ti as u32)));
         }
-        edge_pairs.sort_unstable();
-        for w in edge_pairs.windows(2) {
-            if w[0] == w[1] {
+        let mut in_degree: Vec<u32> = reverse_offsets[1..]
+            .iter()
+            .map(|&count| count as u32)
+            .collect();
+        for offsets in [&mut fwd_offsets, &mut reverse_offsets] {
+            for i in 1..=n {
+                offsets[i] = offsets[i]
+                    .checked_add(offsets[i - 1])
+                    .ok_or(CompileErrorV1::OffsetOverflow)?;
+            }
+        }
+
+        // Bucket directly into CSR; only each node's own neighbors need
+        // sorting. Checking in canonical node order preserves the duplicate
+        // error order as well as forward adjacency order.
+        let mut forward_edges = vec![NodeIndexV1::new(0); mapped.len()];
+        let mut cursor = fwd_offsets[..n].to_vec();
+        for (from, to) in mapped {
+            let fi = from.raw() as usize;
+            forward_edges[cursor[fi]] = to;
+            cursor[fi] += 1;
+        }
+        for (fi, range) in fwd_offsets.windows(2).enumerate() {
+            let neighbors = &mut forward_edges[range[0]..range[1]];
+            neighbors.sort_unstable();
+            if let Some(duplicate) = neighbors.windows(2).find(|pair| pair[0] == pair[1]) {
                 return Err(CompileErrorV1::DuplicateEdge {
-                    from: sorted_ids[w[0].0],
-                    to: sorted_ids[w[0].1],
+                    from: sorted_ids[fi],
+                    to: sorted_ids[duplicate[0].raw() as usize],
                 });
             }
         }
 
-        let n = sorted_ids.len();
-
-        // Build forward CSR: for each node, list of dependencies (successors in edge direction).
-        let mut fwd_offsets: Vec<usize> = vec![0; n + 1];
-        for &(fi, _ti) in &edge_pairs {
-            fwd_offsets[fi + 1] += 1;
-        }
-        for i in 1..=n {
-            fwd_offsets[i] = fwd_offsets[i]
-                .checked_add(fwd_offsets[i - 1])
-                .ok_or(CompileErrorV1::OffsetOverflow)?;
-        }
-        let mut forward_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
-        let mut cursor = fwd_offsets.clone();
-        for &(fi, ti) in &edge_pairs {
-            let pos = cursor[fi];
-            forward_edges[pos] = NodeIndexV1::new(ti as u32);
-            cursor[fi] += 1;
-        }
-
-        // Topological sort (Kahn's algorithm) — also detects cycles.
-        let mut in_degree: Vec<u32> = vec![0; n];
-        for &(_fi, ti) in &edge_pairs {
-            in_degree[ti] += 1;
-        }
-        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
-        for (i, &deg) in in_degree.iter().enumerate().take(n) {
-            if deg == 0 {
-                queue.push_back(i);
-            }
-        }
-        let mut topo_order: Vec<usize> = Vec::with_capacity(n);
-        while let Some(node) = queue.pop_front() {
-            topo_order.push(node);
-            let start = fwd_offsets[node];
-            let end = fwd_offsets[node + 1];
-            for edge in &forward_edges[start..end] {
+        // Kahn's FIFO queue is also the completed topological order: every
+        // node is appended exactly once. No separate queue or rank array.
+        let mut topo_order = Vec::with_capacity(n);
+        topo_order.extend(
+            in_degree
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &degree)| (degree == 0).then_some(i)),
+        );
+        let mut next = 0;
+        while let Some(&node) = topo_order.get(next) {
+            next += 1;
+            for edge in &forward_edges[fwd_offsets[node]..fwd_offsets[node + 1]] {
                 let succ = edge.raw() as usize;
                 in_degree[succ] -= 1;
                 if in_degree[succ] == 0 {
-                    queue.push_back(succ);
+                    topo_order.push(succ);
                 }
             }
         }
@@ -194,43 +198,25 @@ impl CompiledDependencyPlanV1 {
             return Err(CompileErrorV1::CycleDetected);
         }
 
-        // Build packed reverse adjacency: reverse_offsets[i..i+1] gives
-        // the slice of reverse_edges containing predecessors of node i.
-        // Predecessors stored in topological order for deterministic traversal.
-        let mut rev_counts: Vec<usize> = vec![0; n];
-        for &(_fi, ti) in &edge_pairs {
-            rev_counts[ti] += 1;
-        }
-        let mut reverse_offsets: Vec<usize> = vec![0; n + 1];
-        for i in 0..n {
-            reverse_offsets[i + 1] = reverse_offsets[i]
-                .checked_add(rev_counts[i])
-                .ok_or(CompileErrorV1::OffsetOverflow)?;
-        }
-        let mut reverse_edges: Vec<NodeIndexV1> = vec![NodeIndexV1::new(0); edge_pairs.len()];
-
-        // Sort edge_pairs by (topo_rank[target], topo_rank[source]) for deterministic
-        // predecessor ordering without intermediate allocation.
-        let mut topo_rank: Vec<usize> = vec![0; n];
-        for (rank, &node) in topo_order.iter().enumerate() {
-            topo_rank[node] = rank;
-        }
-        edge_pairs.sort_unstable_by_key(|&(fi, ti)| (topo_rank[ti], topo_rank[fi]));
-
-        // Populate reverse_edges in one pass from sorted edge_pairs.
-        let mut rev_cursor = reverse_offsets.clone();
-        for &(fi, ti) in &edge_pairs {
-            let pos = rev_cursor[ti];
-            reverse_edges[pos] = NodeIndexV1::new(fi as u32);
-            rev_cursor[ti] += 1;
+        // Visit sources in topological order and append to each target's
+        // disjoint reverse-CSR slice. Every slice is therefore already in
+        // topological order, with no global sort of edges.
+        let mut reverse_edges = vec![NodeIndexV1::new(0); forward_edges.len()];
+        cursor.copy_from_slice(&reverse_offsets[..n]);
+        for fi in topo_order {
+            let from = NodeIndexV1::new(fi as u32);
+            for edge in &forward_edges[fwd_offsets[fi]..fwd_offsets[fi + 1]] {
+                let ti = edge.raw() as usize;
+                reverse_edges[cursor[ti]] = from;
+                cursor[ti] += 1;
+            }
         }
 
-        // Terminal outputs: nodes with no dependents (nothing depends on them).
-        // In our edge convention (A,B) means A depends on B, so forward_edges[A] = [B].
-        // Terminal outputs are nodes that nobody depends on → reverse degree == 0.
-        let terminal_outputs: Vec<NodeIndexV1> = (0..n)
-            .filter(|&i| rev_counts[i] == 0)
-            .map(|i| NodeIndexV1::new(i as u32))
+        // Terminal outputs have no dependents (empty reverse adjacency).
+        let terminal_outputs: Vec<NodeIndexV1> = reverse_offsets
+            .windows(2)
+            .enumerate()
+            .filter_map(|(i, range)| (range[0] == range[1]).then_some(NodeIndexV1::new(i as u32)))
             .collect();
 
         // dependency_count = number of direct dependencies (forward degree).
@@ -293,48 +279,56 @@ impl CompiledDependencyPlanV1 {
                 got: visited.len(),
             });
         }
-        // Reset visited bitset.
-        for v in visited.iter_mut().take(n) {
-            *v = false;
-        }
+        let visited = &mut visited[..n];
+        visited.fill(false);
         stack.clear();
 
         for &idx in changed {
-            let i = idx.raw() as usize;
-            if i < n && !visited[i] {
-                visited[i] = true;
-                stack.push(idx);
+            if let Some(seen) = visited.get_mut(idx.raw() as usize) {
+                if !*seen {
+                    *seen = true;
+                    stack.push(idx);
+                }
             }
         }
 
-        let mut result_indices: Vec<usize> = Vec::new();
+        let mut result = Vec::new();
         while let Some(node) = stack.pop() {
             let ni = node.raw() as usize;
-            result_indices.push(ni);
-            let start = self.reverse_offsets[ni];
-            let end = self.reverse_offsets[ni + 1];
-            for j in start..end {
-                let dep = self.reverse_edges[j];
+            result.push(node);
+            for &dep in &self.reverse_edges[self.reverse_offsets[ni]..self.reverse_offsets[ni + 1]]
+            {
                 let di = dep.raw() as usize;
-                if di >= n {
-                    return Err(CompileErrorV1::CorruptReverseEdge {
+                let seen = visited
+                    .get_mut(di)
+                    .ok_or(CompileErrorV1::CorruptReverseEdge {
                         index: di,
                         node_count: n,
-                    });
-                }
-                if !visited[di] {
-                    visited[di] = true;
+                    })?;
+                if !*seen {
+                    *seen = true;
                     stack.push(dep);
                 }
             }
         }
 
-        // Sort by index for deterministic output.
-        result_indices.sort_unstable();
-        Ok(result_indices
-            .into_iter()
-            .map(|i| NodeIndexV1::new(i as u32))
-            .collect())
+        // The visitation flags already encode canonical order. For a dense
+        // cone, scanning them is less work than comparison sorting. For a
+        // sparse cone retain selective sorting; do not scan the entire plan
+        // again. Compare the work bounds rather than hardcoding a graph size.
+        let count = result.len();
+        if count > 1 && count.saturating_mul(count.ilog2() as usize) >= n {
+            result.clear();
+            result.extend(
+                visited
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &seen)| seen.then_some(NodeIndexV1::new(i as u32))),
+            );
+        } else {
+            result.sort_unstable();
+        }
+        Ok(result)
     }
 
     /// Compute the diff between a full resolve and the current state.
