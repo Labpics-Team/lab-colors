@@ -244,11 +244,11 @@
       "sha256": "3ed0b372bd42d118ca65abca28178163c973dbce561ed2f26f74a3ec47aebdf0"
     },
     {
-      "bytes": 62884,
+      "bytes": 64247,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_completion.rs",
       "role": "program_prepared_composition_source",
-      "sha256": "c7e73e48346787fddbbd4bb90d9dc22bd29c1598472b6be2ca9b2f415bc94583"
+      "sha256": "be91e574a99e61972eb074a5d04a2c25f267d64ffe881c972000d8e142d6b9b5"
     },
     {
       "bytes": 12920,

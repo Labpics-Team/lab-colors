@@ -1,4 +1,4 @@
-[workspace]
+﻿[workspace]
 members = ["crates/*"]
 resolver = "2"
 
@@ -27,7 +27,7 @@ askama = { git = "https://github.com/askama-rs/askama", rev = "3863808cf594054f7
 # Выбор opt-level проверяется полным compile/update/readout циклом, включая
 # холодный запуск и память, а не одной численной операцией.
 [profile.release]
-opt-level = 2
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
