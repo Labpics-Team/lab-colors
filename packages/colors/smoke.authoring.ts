@@ -30,6 +30,9 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   placeRole(accent); placeRole(fixed);
   pane.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   const program: ColorProgram<"fill" | "label" | "pane"> = await c.compile({ fill, label, pane });
+  const encoded = c.encode({ fill, label, pane });
+  const outputName: "fill" | "label" | "pane" = encoded.outputs[0].name;
+  void outputName;
   const frame = program.resolve({ canvas: "#e6ddd0" });
   if (frame.state === "ready" || frame.state === "modeled") {
     const rgb: readonly [number, number, number] = frame.values.fill.rgb;

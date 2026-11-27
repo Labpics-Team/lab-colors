@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import init, { compileProgramWire } from "../index.js";
+import init, { colors, compileProgramWire } from "../index.js";
 import { ProgramWireBuilderV1 } from "../program-wire/abi-v1.js";
 import { ProgramWireBuilderV2 } from "../program-wire/abi-v2.js";
 
@@ -12,6 +12,44 @@ const bytes = (key) => new Uint8Array(Buffer.from(fixture[key], "hex"));
 const graph = (builder) => builder.surfaceInputPort(31).solidPaint(41, 21).inputSurface(51, 31)
   .sourceOverOccurrence(61, 41, 51, 64, .2, 1).presentationRoot(71, 61).presentationTarget(71, 61)
   .wcag22VisibleUnary(true, 81, 61, 1).output(91, 41);
+
+test("a host can render the authored declaration using only its bytes and dispatch names", async () => {
+  const c = colors({ reference: { sheet: "#fff8ea", panel: "#ffffff" } });
+  const sheet = c.surface("sheet");
+  const ink = c.role("ink", "#444444", { domain: "neutral" });
+  const strong = ink.on(sheet, { contrast: "wcag22-text" });
+  const panelInk = ink.on(c.surface("panel"), { contrast: "wcag22-text" });
+  const exports = { panelInk, caption: strong, sheetInk: strong };
+  const artifact = c.encode(exports);
+  const detached = c.encode(exports);
+  detached.bytes.fill(0);
+  assert.deepEqual(artifact.inputs.map(({ name }) => name), ["sheet", "panel"]);
+  assert.equal(new Set(artifact.inputs.map(({ port }) => port)).size, 2);
+  assert.equal(artifact.outputs[1].slot, artifact.outputs[2].slot);
+  const runtime = compileProgramWire(artifact.bytes, 1);
+  const program = await c.compile(exports);
+  try {
+    const contexts = [
+      { panel: [24, 24, 24], sheet: [255, 248, 234] },
+      { panel: [255, 255, 255], sheet: [16, 16, 16] },
+    ];
+    for (const [index, context] of contexts.entries()) {
+      const frame = program.resolve(context);
+      assert.equal(frame.state, "ready");
+      const input = new Uint8Array(artifact.inputs.flatMap(({ name }) => context[name]));
+      const snapshot = runtime.updateObserved(BigInt(index + 1), Uint32Array.of(1), input, artifact.inputs.length);
+      try {
+        assert.equal(snapshot.state, "ready");
+        const slots = new Map(Array.from({ length: snapshot.outputCount() }, (_, i) => [snapshot.outputSlot(i), i]));
+        for (const { name, slot } of artifact.outputs) {
+          assert.ok(slots.has(slot));
+          assert.deepEqual([...snapshot.outputRgb(slots.get(slot))], frame.values[name].rgb);
+          assert.equal(snapshot.outputOpacity(slots.get(slot)), frame.values[name].opacity);
+        }
+      } finally { snapshot.free(); }
+    }
+  } finally { program.dispose(); runtime.free(); }
+});
 
 test("native and Web execute the same versioned runtime history", () => {
   const runtime = compileProgramWire(bytes("adaptive"), 1), held = [];

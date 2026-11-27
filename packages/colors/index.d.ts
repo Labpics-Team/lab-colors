@@ -6,7 +6,7 @@ export type {
   ColorInputSurface, ColorSurface, ColorTonePolicy, ColorUsePolicy, ColorRole,
   ColorAdaptiveRole, ColorFixedUsePolicy, ColorFixedRole, ColorFixedUse,
   ColorUse, ResolvedColor, ColorDiagnostic, UnresolvedColorFrame, ColorResolution,
-  ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem,
+  ColorContext, ColorAttachOptions, ColorViewUpdate, ColorViewReplacement, ColorView, ColorProgram, ColorSystem, EncodedColorSystem,
   ColorSystemOptions, ColorCleanlinessAssessment, ColorReferenceSelection, ColorSelectionComponent, ColorRasterResult, ColorRasterReference,
   ColorAffineSrgb8Field, ResolvedColorAffineSrgb8Field, ColorLinearSrgb8Field, ResolvedColorLinearSrgb8Field, ResolvedColorContext,
   ColorFieldWitness, ColorFieldAssessment, ColorFieldModelScope, ModeledColorFrame,

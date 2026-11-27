@@ -1,4 +1,5 @@
 import { MAX_SECTION_ENTRIES_V1 } from "./program-wire/encoding.js";
+import { lowerColorSystem } from "./authoring-graph.js";
 
 const surfaces = new WeakMap();
 const roles = new WeakMap();
@@ -181,6 +182,24 @@ export function colors(options = {}) {
   const relationsByUse = new WeakMap();
   let nextOrdinal = 0;
 
+  function declaration(outputs, operation) {
+    const path = `${operation}.outputs`;
+    const entries = keys(outputs, path).map((key) => {
+      const checkedKey = name(key, `${operation}.output`);
+      const node = localUse(read(outputs, key, `${path}.${key}`), owner, `${path}.${key}`);
+      return Object.freeze({ name: checkedKey, node });
+    });
+    if (entries.length === 0 || entries.length > MAX_SECTION_ENTRIES_V1) {
+      authoringError(path, "expected a bounded non-empty output map");
+    }
+    for (const key of reference?.keys() ?? []) {
+      if (!surfaceNames.has(key)) authoringError(`colors.options.reference.${key}`, "unknown surface");
+    }
+    // An asynchronous compilation must use exactly the relations declared at the call.
+    const options = Object.freeze({ ...systemOptions, relationsByUse, beforeOrdinal: nextOrdinal, operation });
+    return { entries: Object.freeze(entries), options };
+  }
+
   function declareRelation(requirement, nodes, bounds) {
     const relation = Object.freeze({ requirement, nodes: Object.freeze(nodes), bounds, ordinal: nextOrdinal++ });
     for (const node of nodes) {
@@ -240,20 +259,19 @@ export function colors(options = {}) {
       // Core derives the visible gaps and validates their direction from the reference composition.
       declareRelation("tonal-hierarchy", nodes);
     },
-    async compile(outputs) {
-      const entries = keys(outputs, "compile.outputs").map((key) => {
-        const checkedKey = name(key, "compile.output");
-        const node = localUse(read(outputs, key, `compile.outputs.${key}`), owner, `compile.outputs.${key}`);
-        return Object.freeze({ name: checkedKey, node });
+    encode(outputs) {
+      const { entries, options } = declaration(outputs, "encode");
+      const graph = lowerColorSystem(entries, options);
+      return Object.freeze({
+        bytes: graph.wire,
+        inputs: Object.freeze(graph.inputs.map(({ name, port }) => Object.freeze({ name, port }))),
+        outputs: Object.freeze(graph.outputs.map(({ name, slot }) => Object.freeze({ name, slot }))),
       });
-      if (entries.length === 0 || entries.length > MAX_SECTION_ENTRIES_V1) authoringError("compile.outputs", "expected a bounded non-empty output map");
-      for (const key of reference?.keys() ?? []) {
-        if (!surfaceNames.has(key)) authoringError(`colors.options.reference.${key}`, "unknown surface");
-      }
-      // The relation lists are append-only. Capture this declaration before the asynchronous import.
-      const compiledOptions = Object.freeze({ ...systemOptions, relationsByUse, beforeOrdinal: nextOrdinal });
+    },
+    async compile(outputs) {
+      const { entries, options } = declaration(outputs, "compile");
       const { compileColorSystem } = await import("./authoring-program.js");
-      return compileColorSystem(Object.freeze(entries), compiledOptions);
+      return compileColorSystem(entries, options);
     },
   });
 }

@@ -326,6 +326,14 @@ export interface ColorProgram<Name extends string = string> {
   dispose(): void;
 }
 
+/** A Program V3 declaration and the names needed to use its ports and output slots. */
+export interface EncodedColorSystem<Name extends string = string> {
+  /** Owned by this invocation. Mutating these bytes cannot change other programs. */
+  readonly bytes: Uint8Array;
+  readonly inputs: readonly Readonly<{ name: string; port: number }>[];
+  readonly outputs: readonly Readonly<{ name: Name; slot: number }>[];
+}
+
 export interface ColorSystem {
   surface(id: string): ColorInputSurface;
   role(id: string, anchor: AuthoredColor, options?: ColorRoleOptions): ColorAdaptiveRole;
@@ -334,6 +342,10 @@ export interface ColorSystem {
   separate(left: ColorUse, right: ColorUse, range: readonly [number, number]): void;
   /** Сохраняет исходные отношения силы контраста сильнее → слабее на общей поверхности. Требует reference. */
   preserveTonalHierarchy(members: readonly ColorUse[]): void;
+  /** Encode once at build time for distribution to compatible Core runtimes. */
+  encode<const Outputs extends Readonly<Record<string, ColorUse>>>(
+    outputs: Outputs,
+  ): EncodedColorSystem<Extract<keyof Outputs, string>>;
   /** Экспортирует reachable graph. Core совместно выбирает Point-применения без приоритета имён и порядка создания.
    * Компоненты с неявным reference сохраняют последовательный режим совместимости; frame.selection раскрывает режим.
    */

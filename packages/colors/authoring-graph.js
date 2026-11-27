@@ -149,7 +149,7 @@ export function lowerColorSystem(entries, options, rasterProposal) {
     outputNodes.set(node, { slot, node });
   }
   const outputs = entries.map(({ name, node }) => {
-    if (inputs.some((input) => input.name === name)) authoringError(`compile.outputs.${name}`, "output aliases must not shadow input names");
+    if (inputs.some((input) => input.name === name)) authoringError(`${options.operation}.outputs.${name}`, "output aliases must not shadow input names");
     return Object.freeze({ name, ...outputNodes.get(node) });
   });
   // Compile aliases once; frame projection stays linear in the number of uses.
