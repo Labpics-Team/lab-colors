@@ -36,16 +36,17 @@ fn module_header(source: &str) -> String {
 }
 
 #[test]
-fn readme_documents_dependency_inspection() {
-    let readme = read(workspace_root().join("README.md"));
+fn dependency_inspection_is_reachable_from_readme() {
+    const GUIDE: &str = "docs/how-to/develop.md";
+    let root = workspace_root();
+    let readme = read(root.join("README.md"));
     assert!(
-        readme.contains("## Зависимости"),
-        "README.md lost the `## Зависимости` section required by #29"
+        readme.contains(&format!("({GUIDE})")),
+        "README.md must link to the development guide at {GUIDE}"
     );
     assert!(
-        readme.contains("cargo tree -p labcolors-core --edges=no-dev"),
-        "README.md lost the verifiable `cargo tree --edges=no-dev` command \
-         for inspecting actual runtime dependencies"
+        read(root.join(GUIDE)).contains("cargo tree -p labcolors-core --edges=no-dev"),
+        "{GUIDE} must document how to inspect the actual runtime dependencies"
     );
 }
 
