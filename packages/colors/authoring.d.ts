@@ -298,15 +298,18 @@ export interface ColorView<Name extends string = string, State extends Displayab
 /** Result for one complete, opaque sRGB8 reference bitmap in the same renderer context. */
 export type ColorRasterResult<Name extends string = string> =
   | Readonly<{ state: "ready"; scope: "renderer-bitmap"; image: ImageData;
+      fieldRelation: "not-dirtier" | "incomparable" | "unavailable";
       frame: Extract<ColorResolution<Name>, { state: "ready" | "modeled" }> } & (
         | { relation: "preserved" | "restored"; basis: "exact-bitmap-identity" }
         | { relation: "unavailable"; reason: "incomparable-bitmap" | "no-reference-paints"
             | "different-bitmap" | "search-limit" | "proposal-limit" | "no-ready-proposal" }
       )>
-  | Readonly<{ state: "unavailable"; proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
+  | Readonly<{ state: "unavailable"; fieldRelation: "unavailable";
+      proposed: Exclude<ColorResolution<Name>, { state: "ready" | "modeled" }> }>;
 
 export interface ColorRasterReference<Name extends string = string> {
-  resolve(surfaces: ColorContext): ColorRasterResult<Name>;
+  /** Declare the same viewing conditions as capture to assess the field returned in this update. */
+  resolve(surfaces: ColorContext, options?: { readonly sameViewingContext?: boolean }): ColorRasterResult<Name>;
   dispose(): void;
 }
 

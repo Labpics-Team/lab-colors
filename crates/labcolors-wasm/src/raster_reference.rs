@@ -53,6 +53,14 @@ impl RasterChoice {
         self.selection.action().as_str().into()
     }
 
+    #[wasm_bindgen(js_name = fieldRelation)]
+    pub fn field_relation(&self, same_viewing_context: bool) -> String {
+        self.selection
+            .field_relation(same_viewing_context)
+            .as_str()
+            .into()
+    }
+
     pub fn inspect(&mut self, width: JsValue, height: JsValue, rgba: &[u8]) {
         let same = extent(width, height).and_then(|(w, h)| self.reference.same_field(w, h, rgba));
         self.selection.observe(same.into());

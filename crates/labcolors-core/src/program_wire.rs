@@ -578,8 +578,8 @@ pub use crate::cleanliness::assessment::{
 use assessment_report::ProgramAssessmentReportScratchV1;
 mod field;
 pub use crate::cleanliness::raster_reference::{
-    OpaqueRasterReference, RasterAction, RasterReferenceError, RasterSelection, RasterTrial,
-    raster_paint_proposal,
+    OpaqueRasterReference, RasterAction, RasterFieldRelation, RasterReferenceError,
+    RasterSelection, RasterTrial, raster_paint_proposal,
 };
 pub use crate::field_context::ProgramGradientStopV1;
 pub use assessment_report::{

@@ -13,13 +13,17 @@ final class RasterReferenceTests: XCTestCase {
             return reference.start(width: 2, height: 1, rgba: ordinary, hasPaints: true)
         }
 
-        XCTAssertEqual(try start(with: pixels).action(), "preserved")
+        let preserved = try start(with: pixels)
+        XCTAssertEqual(preserved.action(), "preserved")
+        XCTAssertEqual(preserved.fieldRelation(sameViewingContext: false), "unavailable")
+        XCTAssertEqual(preserved.fieldRelation(sameViewingContext: true), "not-dirtier")
         let restored = try start(with: changed)
         XCTAssertEqual(restored.action(), "try-inverse")
         restored.inspect(width: 2, height: 1, rgba: changed)
         XCTAssertEqual(restored.action(), "try-visible")
         restored.inspect(width: 2, height: 1, rgba: pixels)
         XCTAssertEqual(restored.action(), "restored")
+        XCTAssertEqual(restored.fieldRelation(sameViewingContext: true), "not-dirtier")
 
         let different = try start(with: changed)
         different.refused(searchLimit: false)
@@ -30,6 +34,7 @@ final class RasterReferenceTests: XCTestCase {
         limited.refused(searchLimit: true)
         limited.inspect(width: 2, height: 1, rgba: changed)
         XCTAssertEqual(limited.action(), "search-limit")
+        XCTAssertEqual(limited.fieldRelation(sameViewingContext: true), "incomparable")
 
         let oversized = try start(with: changed)
         oversized.proposalLimit()

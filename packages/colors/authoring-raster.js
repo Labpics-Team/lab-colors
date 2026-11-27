@@ -31,8 +31,8 @@ function retain({ width, height, data }) {
   return new ImageData(new Uint8ClampedArray(data), width, height, { colorSpace: "srgb" });
 }
 
-function project(relation, image, frame, reason) {
-  return Object.freeze({ state: "ready", scope: "renderer-bitmap", relation, image, frame,
+function project(relation, fieldRelation, image, frame, reason) {
+  return Object.freeze({ state: "ready", scope: "renderer-bitmap", relation, fieldRelation, image, frame,
     ...(reason === undefined ? { basis: "exact-bitmap-identity" } : { reason }) });
 }
 
@@ -95,25 +95,34 @@ export function captureRasterReference(draw, authoredReference, graph, runtime, 
     return next;
   }
   return Object.freeze({
-    resolve(values) {
+    resolve(values, options = {}) {
       if (disposed) authoringError("raster.resolve", "reference is disposed", "color_disposed");
       if (busy) authoringError("raster.resolve", "raster resolution is in progress", "color_busy");
       busy = true;
       let choice;
       try {
+        if (options === null || typeof options !== "object") {
+          authoringError("raster.resolve.options", "expected an options object", "color_invalid_context");
+        }
+        const { sameViewingContext = false } = options;
+        if (typeof sameViewingContext !== "boolean") {
+          authoringError("raster.resolve.sameViewingContext", "expected a boolean", "color_invalid_context");
+        }
         const current = parseColorContext(graph, values);
         const ordinary = resolveColorContext(runtime, graph, current, ++revision);
         if (ordinary.state !== "ready" && ordinary.state !== "modeled") {
-          return Object.freeze({ state: "unavailable", proposed: ordinary });
+          return Object.freeze({ state: "unavailable", proposed: ordinary, fieldRelation: "unavailable" });
         }
         const normal = readBitmap(draw, ordinary);
         choice = field.start(normal.width, normal.height, normal.data, expectations.size !== 0);
         let plans, retainedNormal, candidate, image;
         for (let action = choice.action(); ; action = choice.action()) {
-          if (action === "preserved") return project(action, retain(normal), ordinary);
-          if (action === "restored") return project(action, retain(image), candidate);
           if (action !== "try-inverse" && action !== "try-visible") {
-            return project("unavailable", retainedNormal ?? retain(normal), ordinary, action);
+            const fieldRelation = choice.fieldRelation(sameViewingContext);
+            if (action === "restored") return project(action, fieldRelation, retain(image), candidate);
+            const selectedImage = retainedNormal ?? retain(normal);
+            if (action === "preserved") return project(action, fieldRelation, selectedImage, ordinary);
+            return project("unavailable", fieldRelation, selectedImage, ordinary, action);
           }
           plans ??= paintProposals(expectations, ordinary);
           const paints = plans[action];
