@@ -608,6 +608,118 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
     pub(super) fn current_profile(&self) -> &[f64] {
         &self.current
     }
+
+    // Dropping the joint hard conditions bounds every sorted preference tier.
+    // Unique local minima attain the bound together if their whole tuple passes.
+    pub(super) fn independent_minimum(
+        &self,
+        context: &ContextV1<'_>,
+        initial: &[Srgb8],
+        mut remaining: u64,
+    ) -> Result<Option<Vec<Srgb8>>, ()> {
+        if self.preferences.len() < 2
+            || self.preferences.iter().any(|&(index, preference)| {
+                !matches!(preference, Preference::Transport { .. })
+                    || !context.targets[index].independent_backdrop
+                    || context.domains[index]
+                        .cardinality()
+                        .is_none_or(|size| size > remaining)
+            })
+        {
+            return Ok(None);
+        }
+        let mut values = cloned(initial)?;
+        let mut minima = HashMap::new();
+        let rows = context.local_cases.order.len();
+        for &(index, preference) in &self.preferences {
+            let Preference::Transport { model, case_start } = preference else {
+                unreachable!("all preferences were checked above")
+            };
+            let target = &context.targets[index];
+            let domain = context.domains[index];
+            let mut support = Vec::new();
+            support.try_reserve_exact(rows).map_err(|_| ())?;
+            support.extend(
+                self.cases[case_start..case_start + rows]
+                    .iter()
+                    .map(|case| (case.backdrop, case.alpha.to_bits())),
+            );
+            support.sort_unstable();
+            support.dedup();
+            let key = (
+                target.effective_anchor(),
+                target.reference_backdrop,
+                domain.identity_bytes(),
+                support,
+            );
+            values[index] = if let Some(&minimum) = minima.get(&key) {
+                minimum
+            } else {
+                let size = domain.cardinality().ok_or(())?;
+                let Some(rest) = remaining.checked_sub(size) else {
+                    return Ok(None);
+                };
+                remaining = rest;
+                let Some(minimum) = strict_transport_minimum(domain, model, &key.3, size)? else {
+                    return Ok(None);
+                };
+                minima.try_reserve(1).map_err(|_| ())?;
+                minima.insert(key, minimum);
+                minimum
+            };
+        }
+        context.expand_sources(&mut values);
+        Ok(Some(values))
+    }
+}
+
+fn strict_transport_minimum(
+    domain: AssignmentDomainV1,
+    model: ReferenceTransportV1,
+    support: &[(Srgb8, u64)],
+    size: u64,
+) -> Result<Option<Srgb8>, ()> {
+    use crate::composition::{AdmittedOpacityV1, CompositionProfileV1};
+    let mut cases = Vec::new();
+    cases.try_reserve_exact(support.len()).map_err(|_| ())?;
+    for &(backdrop, alpha) in support {
+        let opacity = AdmittedOpacityV1::new(f64::from_bits(alpha)).map_err(|_| ())?;
+        cases.push((UseCase::new(backdrop, opacity.value()), opacity));
+    }
+    let mut best = [f64::INFINITY; 2];
+    let mut unique = None;
+    for ordinal in 0..size {
+        let source = domain.value(ordinal);
+        let mut worst = [0.0_f64; 2];
+        for (case, opacity) in &mut cases {
+            let visible = Srgb8::new(CompositionProfileV1::EncodedSrgb8SourceOverV1.composite(
+                source.bytes(),
+                *opacity,
+                case.backdrop.bytes(),
+            ));
+            let point = AppearancePointV1 {
+                visible,
+                backdrop: case.backdrop,
+                alpha: case.alpha,
+                lab: lab(visible),
+            };
+            let loss = case.transport_loss(domain, model, point);
+            worst[0] = worst[0].max(loss[0]);
+            worst[1] = worst[1].max(loss[1]);
+        }
+        match worst[0]
+            .total_cmp(&best[0])
+            .then_with(|| worst[1].total_cmp(&best[1]))
+        {
+            Ordering::Less => {
+                best = worst;
+                unique = Some(source);
+            }
+            Ordering::Equal => unique = None,
+            Ordering::Greater => {}
+        }
+    }
+    Ok(unique)
 }
 
 fn sort_tiers(profile: &mut [f64], count: usize) {

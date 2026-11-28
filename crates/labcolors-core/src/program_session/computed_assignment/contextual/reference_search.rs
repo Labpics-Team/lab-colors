@@ -773,6 +773,65 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         Ok(())
     }
 
+    fn admit_independent_minimum(
+        &mut self,
+        runtime: &mut ProgramEvaluationRuntimeV1<'_>,
+        epoch: &ProgramEpochV1<E>,
+        scenarios: NonEmptyScenarioSetV1<'_>,
+        initial: &[Srgb8],
+        arena: &mut ProgramEvaluationArenaV1<E>,
+    ) -> Result<bool, ProgramSessionEvaluationError<ProgramEvaluatorError<E>>> {
+        let Some(peers) = &self.peers else {
+            return Ok(false);
+        };
+        if self.authored_exact() || self.evidence.visited >= self.budget {
+            return Ok(false);
+        }
+        let remaining = (self.budget - self.evidence.visited) / COORDINATE_BUDGET_DIVISOR;
+        let allocation = |_| ProgramSessionEvaluationError::ResourceExhausted;
+        let Some(mut values) = peers
+            .independent_minimum(&self.context, initial, remaining)
+            .map_err(allocation)?
+        else {
+            return Ok(false);
+        };
+        // Rejection must leave the incumbent, seeds, refinement and full-tuple
+        // budget of the ordinary coupled search exactly as they were.
+        let indices = self
+            .context
+            .constraint_indices
+            .ok_or(ProgramSessionEvaluationError::InternalInvariant)?;
+        apply_targets::<E>(self.context.targets, runtime, &values)?;
+        let mut scores = buffer(values.len(), 0.0).map_err(allocation)?;
+        let mut collector = IntentScoreCollectorV1::new(&self.context, &values, &mut scores);
+        let failed = scan_program_candidate_scoped(
+            runtime,
+            epoch,
+            scenarios,
+            0,
+            ProgramEvaluationPhaseV1::Hard,
+            ProgramCandidateCollectionV1 {
+                evidence: ProgramConstraintEvidenceCaptureV1::None,
+                outputs: None,
+                point_causal: None,
+                physical_case: Some(&mut collector),
+            },
+            ProgramCandidateScanV1::Constraints {
+                indices,
+                physical: self.context.physical,
+            },
+        )? || collector.violations() != 0;
+        drop(collector);
+        if failed {
+            apply_targets::<E>(self.context.targets, runtime, initial)?;
+            return Ok(false);
+        }
+        self.assess_tuple(runtime, epoch, scenarios, &mut values, arena)?;
+        Ok(self
+            .best
+            .is_some_and(|index| self.pending[index].values == values))
+    }
+
     fn assess_tuple(
         &mut self,
         runtime: &mut ProgramEvaluationRuntimeV1<'_>,
@@ -1759,8 +1818,10 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     if let Some(peers) = &mut search.peers {
         peers.prepare(&search.context, &search.appearance);
     }
+    let finite_minimum =
+        search.admit_independent_minimum(runtime, epoch, scenarios, &working, arena)?;
     let mut current_scores = cloned(&search.legacy_scores).map_err(allocation)?;
-    if !search.authored_exact() && search.evidence.visited < search.budget {
+    if !finite_minimum && !search.authored_exact() && search.evidence.visited < search.budget {
         let seed_limit = (search.budget / COORDINATE_BUDGET_DIVISOR).max(search.evidence.visited);
         let initial_appearance = cloned(&search.appearance).map_err(allocation)?;
         let mut seed_values = cloned(&authored).map_err(allocation)?;
@@ -2006,6 +2067,8 @@ pub(in crate::program_session::computed_assignment) fn select_component<
     }
     if search.authored_exact() {
         search.evidence.completion = CompletionV1::AuthoredExact;
+    } else if finite_minimum {
+        search.evidence.completion = CompletionV1::Complete;
     } else if search.evidence.visited < search.budget {
         let constraints =
             region_constraints(epoch, search.context.constraint_indices).map_err(allocation)?;
@@ -2147,8 +2210,8 @@ pub(in crate::program_session::computed_assignment) fn select_component<
             }
         }
     }
-    search.evidence.numerical_order_unresolved = search.evidence.completion
-        != CompletionV1::AuthoredExact
+    search.evidence.numerical_order_unresolved = !finite_minimum
+        && search.evidence.completion != CompletionV1::AuthoredExact
         && search.peers.as_ref().is_some_and(PeerProfiles::unresolved);
     let (values, reference_selections) = if let Some(best) = search.best {
         let mut values = cloned(&search.pending[best].values).map_err(allocation)?;
