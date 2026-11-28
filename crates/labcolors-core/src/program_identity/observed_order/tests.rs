@@ -161,18 +161,19 @@ fn distinct_marginals_anchor_ports_without_joint_row_vertices() {
             let peer = peers(&input_order, reverse_vertices);
             let graph = observed(&peer, &[2, 0, 1], &matrix);
             assert_eq!(identity(&graph), expected);
-            let form = canonical_form(&graph, b"observed-peer-test\0").unwrap();
+            let form = canonical_form(&graph, b"observed-peer-test\0")
+                .expect("a finite test graph has a canonical form");
             let a = peer
                 .inputs
                 .iter()
                 .find(|&(input, _)| *input == 0)
-                .unwrap()
+                .expect("the peer contains the first input")
                 .1;
             let b = peer
                 .inputs
                 .iter()
                 .find(|&(input, _)| *input == 1)
-                .unwrap()
+                .expect("the peer contains the second input")
                 .1;
             assert!(
                 form.order.iter().position(|&v| v == a) < form.order.iter().position(|&v| v == b)
@@ -213,7 +214,10 @@ fn observed_order_canonicalizes_distinct_large_marginals() {
     for reverse in [false, true] {
         let started = std::time::Instant::now();
         let peer = peers(&inputs, reverse);
-        let graph = peer.observed_graph(&cases, rgb).unwrap().unwrap();
+        let graph = peer
+            .observed_graph(&cases, rgb)
+            .expect("all RGB observations are present")
+            .expect("the observations distinguish the ports");
         let prepared = started.elapsed();
         assert_eq!(graph.vertex_count(), 2 * count);
         assert_eq!(graph.edge_count(), count);
