@@ -16,6 +16,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
         let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
             return Err(Error::<E>::RequiresComputedTargets);
         };
+        if !self.has_point_terms(component) {
+            return Ok(true);
+        }
         let storage = &mut *self.scratch;
         let count = component.targets.len();
         let rows = count
