@@ -127,8 +127,9 @@ export interface ColorInputSurface {
 export type ColorSurface = ColorInputSurface | ColorUse;
 
 export interface ColorTonePolicy {
-  readonly from: ColorInputSurface;
-  /** [Oklab L входа, предпочтительный Oklab L]; абсциссы возрастают от 0 до 1. */
+  /** Внешний вход кривой. По умолчанию кривая читает видимую подложку этого применения. */
+  readonly from?: ColorInputSurface;
+  /** Пары [светлота входа, предпочтительная светлота] в Oklab L с возрастающими абсциссами от 0 до 1. */
   readonly curve: readonly (readonly [number, number])[];
 }
 

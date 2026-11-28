@@ -147,6 +147,7 @@ impl UseCase {
 enum Preference {
     Point,
     Tone,
+    BackdropTone,
     Transport {
         model: ReferenceTransportV1,
         case_start: usize,
@@ -164,6 +165,9 @@ impl Preference {
         points: [RegionPointV1; 2],
     ) -> [f64; 3] {
         match self {
+            // The region's continuous physical backdrop determines this term.
+            // lower_profile installs its measured bound after assess_profile.
+            Self::BackdropTone => [0.0; 3],
             Self::Transport { model, case_start } => {
                 cases[case_start + row].lower_bounds(context, model, target, points)
             }
@@ -176,7 +180,7 @@ impl Preference {
                 match self {
                     Self::Point => [0.0, 0.0, distance],
                     Self::Tone => [distance, 0.0, 0.0],
-                    Self::Transport { .. } => unreachable!("point preference"),
+                    _ => unreachable!("point preference"),
                 }
             }
         }
@@ -250,6 +254,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> ContinuousProfiles<'_, '_, '_, '_, E> {
 pub(super) struct PeerProfiles<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1> {
     continuous: ContinuousProfiles<'a, 'p, 'program, 'scratch, E>,
     preferences: Vec<(usize, Preference)>,
+    backdrop_tones: Vec<usize>,
     cases: Vec<UseCase>,
     // Machine lower scores rank traversal children only.
     current: Vec<f64>,
@@ -279,12 +284,20 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             .try_reserve_exact(count)
             .map_err(|_| allocation(()))?;
         let mut case_slots = 0_usize;
+        let mut backdrop_tones = Vec::new();
         for (index, target) in context.targets.iter().enumerate() {
             if !context.represents_target(index) {
                 continue;
             }
             let preference = match target.preferred_intent() {
                 CompiledPreferredIntentV1::Point { tone: None, .. } => Preference::Point,
+                CompiledPreferredIntentV1::Point {
+                    tone: Some((_, ToneSourceV1::Backdrop)),
+                    ..
+                } => {
+                    pushed(&mut backdrop_tones, index).map_err(allocation)?;
+                    Preference::BackdropTone
+                }
                 CompiledPreferredIntentV1::Point { tone: Some(_), .. } => Preference::Tone,
                 CompiledPreferredIntentV1::ImplicitReference => {
                     let case_start = case_slots;
@@ -335,6 +348,7 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                 source: Vec::new(),
             },
             preferences,
+            backdrop_tones,
             cases,
             current: buffer(length, 0.0).map_err(allocation)?,
             candidate: buffer(length, zero()).map_err(allocation)?,
@@ -534,14 +548,10 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
     pub(super) fn lower_profile(
         &mut self,
         context: &ContextV1<'_>,
-        bounds: &BoundsV1,
+        points: &[[RegionPointV1; 2]],
         domain_at: impl Fn(usize) -> AssignmentDomainV1,
     ) -> Result<bool, EvaluationError<E>> {
         let count = context.targets.len();
-        let points = bounds
-            .appearance
-            .as_ref()
-            .expect("reference bounds capture");
         let refinement = context.case_refinement.borrow();
         self.current.fill(0.0);
         self.candidate.fill(zero());
@@ -591,18 +601,23 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
                 domain.lower_score(compiled.source_anchor_lab)
             };
         }
-        // Each coordinate is a lower bound. Sorting preserves componentwise
-        // order, and a maximum over the sampled cases bounds the full maximum.
-        // Reuse the comparison scratch; accepted profiles remain in `best`.
-        sort_tiers(&mut self.current, count);
-        if self.incumbent.precision().is_none() {
-            return Ok(false);
+        let mut reject = false;
+        if self.incumbent.precision().is_some() || !self.backdrop_tones.is_empty() {
+            let (measured, _, order) =
+                self.assess_profile(context, |index| domain_at(index).bounds())?;
+            if measured {
+                // The certified Point profile already includes the curve over
+                // this region's composed backdrop and every enclosed knot.
+                for &target in &self.backdrop_tones {
+                    self.current[target] = self.candidate[target].lower_f64().unwrap_or(0.0);
+                }
+                reject = order == Some(Ordering::Greater);
+            }
         }
-        let (measured, _, order) =
-            self.assess_profile(context, |index| domain_at(index).bounds())?;
+        sort_tiers(&mut self.current, count);
         // Equality of a lower profile is insufficient to reject a region:
         // it may contain a canonical representative of a proved tie.
-        Ok(measured && order == Some(Ordering::Greater))
+        Ok(reject)
     }
 
     pub(super) fn current_profile(&self) -> &[f64] {
@@ -622,4 +637,73 @@ pub(super) fn compare(left: &[f64], right: &[f64]) -> Ordering {
         .map(|(a, b)| a.total_cmp(b))
         .find(|order| *order != Ordering::Equal)
         .unwrap_or(Ordering::Equal)
+}
+
+#[test]
+fn traversal_ranks_the_visible_backdrop_ahead_of_the_authored_source() {
+    use super::super::reference_completion::{ReferenceCompletionScratchV1, prepare_selection};
+    use crate::program_session::computed_assignment::{
+        reference_tests::white_backdrop_tone_peer, tests::update,
+    };
+    let owner = white_backdrop_tone_peer();
+    let epoch = &owner.owner_generation;
+    let CompiledTargetSelectionV1::Computed(selection) = &epoch.target_selection else {
+        unreachable!()
+    };
+    let component = &selection.components[0];
+    assert_eq!(
+        component.mode,
+        ProgramSelectionModeV1::JointReferencePeersV1
+    );
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference composition instantiates");
+    session
+        .prepare_update(update(1, 0))
+        .expect("first observed update prepares")
+        .commit();
+    let crate::observation::ObservationHeadViewV1::Observed(observation) = session.raw_head()
+    else {
+        unreachable!()
+    };
+    let scenarios =
+        NonEmptyScenarioSetV1::from_admitted(observation).expect("observed scenario is present");
+    let context = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+        .expect("reference component admits the scenario");
+    let mut scratch = ReferenceCompletionScratchV1::empty(epoch);
+    let mut prepared =
+        prepare_selection(epoch, observation, &mut scratch).expect("reference selection prepares");
+    let mut peers = PeerProfiles::new(&context, component, &mut prepared)
+        .expect("peer preference profiles exist");
+    peers.prepare(&context, &[AppearancePointV1::default(); 2]);
+
+    let mut priority = |lower, upper| {
+        let mut points = [[RegionPointV1::default(); 2]; 2];
+        let mut domains = [AssignmentDomainV1::Gray {
+            lower: 68,
+            upper: 68,
+        }; 2];
+        for (i, target) in context.targets.iter().enumerate() {
+            if target.id.value() == 20 {
+                domains[i] = AssignmentDomainV1::Gray { lower, upper };
+            }
+            let (lo, hi) = domains[i].bounds();
+            points[i] = [lo, hi].map(|visible| RegionPointV1 {
+                visible,
+                backdrop: [0; 3],
+            });
+        }
+        assert!(
+            !peers
+                .lower_profile(&context, &points, |i| domains[i])
+                .expect("region is admissible")
+        );
+        peers.current_profile()[0]
+    };
+    let dark = priority(0, 127);
+    let light = priority(128, 255);
+    assert!(
+        dark < light,
+        "identity tone over black must visit the dark region first: {dark} vs {light}"
+    );
 }

@@ -1381,10 +1381,12 @@ where
         let target_vertex = targets.get(target.id())?;
         if let TargetIntentV1::Computed(value) = target.intent() {
             if let Some(intent) = value.color_intent() {
-                if let Some(tone) = &intent.tone {
+                if let Some(crate::color_intent::ToneSourceV1::Input(port)) =
+                    intent.tone.as_ref().map(|tone| tone.source())
+                {
                     graph.add_edge(
                         target_vertex,
-                        ports.get(SurfaceInputPortId::new(tone.input()))?,
+                        ports.get(SurfaceInputPortId::new(port))?,
                         EdgeRoleV1::TargetToneInput,
                     )?;
                 }

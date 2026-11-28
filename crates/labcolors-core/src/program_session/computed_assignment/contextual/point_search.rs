@@ -756,8 +756,19 @@ fn search<E: ProgramConstraintEvaluatorSetV1>(
                         scenarios,
                         case,
                     )?;
-                    state.buffers.values[local] =
-                        inverse_hint(context.preferred_rgb[case * count + local], backdrop, alpha);
+                    state.buffers.values[local] = inverse_hint(
+                        target.backdrop_curve().map_or_else(
+                            || context.preferred_rgb[case * count + local],
+                            |curve| {
+                                curve.preferred_color(
+                                    target.effective_anchor(),
+                                    Srgb8::new(backdrop),
+                                )
+                            },
+                        ),
+                        backdrop,
+                        alpha,
+                    );
                 }
             }
             let Some((mut failures, _)) = state.assess(runtime, epoch, scenarios, arena)? else {

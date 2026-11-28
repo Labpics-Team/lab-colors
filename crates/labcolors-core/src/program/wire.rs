@@ -385,8 +385,15 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 };
                 let tone = match reader.read_u8()? {
                     0 => None,
-                    1 => {
-                        let input = reader.read_u32()?;
+                    source_tag @ (1 | 2) => {
+                        let input = if source_tag == 1 {
+                            Some(reader.read_u32()?)
+                        } else {
+                            None
+                        };
+                        if input.is_none() && appearance.is_none() {
+                            return Err(reader.declaration_error(entry_offset));
+                        }
                         let count = reader.read_count()?;
                         let mut stops = Vec::new();
                         stops.try_reserve_exact(count as usize).map_err(|_| {
@@ -398,8 +405,14 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                             stops.push([reader.read_f64_bits()?, reader.read_f64_bits()?]);
                         }
                         Some(
-                            ToneCurveV1::new(input, stops)
-                                .map_err(|_| reader.declaration_error(entry_offset))?,
+                            match input {
+                                Some(port) => ToneCurveV1::new(port, stops),
+                                None => ToneCurveV1::with_source(
+                                    crate::color_intent::ToneSourceV1::Backdrop,
+                                    stops,
+                                ),
+                            }
+                            .map_err(|_| reader.declaration_error(entry_offset))?,
                         )
                     }
                     _ => return Err(reader.declaration_error(entry_offset)),

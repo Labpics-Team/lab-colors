@@ -29,7 +29,7 @@ export function lowerColorSystem(entries, options, rasterProposal) {
     reachable.add(node);
     if (node.kind === "use") {
       pending.push(node.against);
-      if (node.policy.tone !== undefined) pending.push(node.policy.tone.from);
+      if (node.policy.tone?.from !== undefined) pending.push(node.policy.tone.from);
       for (const relation of options.relationsByUse?.get(node) ?? []) {
         if (relation.ordinal >= options.beforeOrdinal) break;
         if (reachableRelations.has(relation)) continue;
@@ -67,7 +67,10 @@ export function lowerColorSystem(entries, options, rasterProposal) {
         ...role.options,
         ...(options.reference === undefined ? { appearance: occurrence } : { referenceAppearance: occurrence }),
         ...(policy.tone === undefined ? {} : {
-          tone: { from: nodes.get(policy.tone.from).port, curve: policy.tone.curve },
+          tone: {
+            from: policy.tone.from === undefined ? undefined : nodes.get(policy.tone.from).port,
+            curve: policy.tone.curve,
+          },
         }),
       });
     } else {

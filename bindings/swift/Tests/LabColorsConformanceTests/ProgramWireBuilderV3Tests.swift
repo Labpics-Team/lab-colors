@@ -7,6 +7,7 @@ private struct AuthoringV3Fixture: Decodable {
     let computedBox: String
     let computedGray: String
     let contextual: String
+    let backdropTone: String
     let encodingOnly: String
     let fixedOnly: String
     let referenceSingleton: String
@@ -108,6 +109,25 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
             try bytes(expected.referenceEmpty))
         XCTAssertEqual(try ProgramWireBuilderV3().visiblePairSeparationHard(0x01020304,
             left: 0x10203040, right: .max, minimum: -0.0, maximum: 0.75).finish(), try bytes(expected.visiblePairSeparation))
+    }
+
+    func testBackdropToneMatchesSharedWireAndFollowsTheObservedSurface() throws {
+        let curve: [[Double]] = [[0, 1], [1, 0]]
+        let builder = try graph(ProgramWireBuilderV3().colorTarget(21, anchor: [68, 68, 68],
+            options: ProgramWireColorOptionsV3(appearance: 61), backdropTone: curve), contrast: false)
+        let wire = try builder.compose([21]).finish()
+        XCTAssertEqual(wire, try bytes(fixtureV3().backdropTone))
+        let before = try builder.finish()
+        XCTAssertThrowsError(try builder.colorTarget(22, anchor: [1, 2, 3], options: .init(), backdropTone: curve))
+        XCTAssertThrowsError(try builder.colorTarget(22, anchor: [1, 2, 3], options: contextual(), backdropTone: curve))
+        XCTAssertEqual(try builder.finish(), before)
+        let runtime = try compileProgramWire(bytes: wire, streamId: 1)
+        for (index, gray) in [UInt8(0), 255, 0].enumerated() {
+            let frame = try runtime.updateObserved(revision: UInt64(index + 1), scenarioIds: [1],
+                surfaces: Data(repeating: gray, count: 3), surfaceCount: 1)
+            XCTAssertEqual(frame.state(), "ready")
+            XCTAssertEqual(try frame.outputRgb(index: 0), Data(repeating: 255 - gray, count: 3))
+        }
     }
 
     func testCompositionUsesIndependentVectorsAndUnchangedAssignmentFieldGrammar() throws {

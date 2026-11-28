@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-audit"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "hex",
  "labcolors-core",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-conformance"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "labcolors-core",
  "serde",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "criterion",
  "pretty_assertions",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-evaluate-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "labcolors-core",
  "serde",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-ffi"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "labcolors-core",
  "serde_json",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-transport-cli"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "labcolors-core",
  "serde",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "labcolors-wasm"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

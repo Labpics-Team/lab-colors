@@ -240,11 +240,16 @@ impl ColorIdentityDomainV1 {
     }
 }
 
-/// Клиентская функция preferred Oklab L от Oklab L наблюдаемого input-порта.
-/// Она не задаёт структуру интерфейса, число уровней или названия режимов.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToneSourceV1<T> {
+    Input(T),
+    Backdrop,
+}
+
+/// Map the lightness of the declared context to the preferred visible lightness.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ToneCurveV1 {
-    input: u32,
+    source: ToneSourceV1<u32>,
     stops: Vec<[f64; 2]>,
 }
 
@@ -256,12 +261,19 @@ impl ToneCurveV1 {
         stops.try_reserve_exact(self.stops.len())?;
         stops.extend_from_slice(&self.stops);
         Ok(Self {
-            input: self.input,
+            source: self.source,
             stops,
         })
     }
 
-    pub(crate) fn new(input: u32, mut stops: Vec<[f64; 2]>) -> Result<Self, ColorIntentErrorV1> {
+    pub(crate) fn new(input: u32, stops: Vec<[f64; 2]>) -> Result<Self, ColorIntentErrorV1> {
+        Self::with_source(ToneSourceV1::Input(input), stops)
+    }
+
+    pub(crate) fn with_source(
+        source: ToneSourceV1<u32>,
+        mut stops: Vec<[f64; 2]>,
+    ) -> Result<Self, ColorIntentErrorV1> {
         if stops.len() < 2 {
             return Err(ColorIntentErrorV1::InvalidCurve);
         }
@@ -284,11 +296,11 @@ impl ToneCurveV1 {
         {
             return Err(ColorIntentErrorV1::InvalidCurve);
         }
-        Ok(Self { input, stops })
+        Ok(Self { source, stops })
     }
 
-    pub(crate) const fn input(&self) -> u32 {
-        self.input
+    pub(crate) const fn source(&self) -> ToneSourceV1<u32> {
+        self.source
     }
 
     pub(crate) fn stops(&self) -> &[[f64; 2]] {
@@ -576,7 +588,7 @@ mod tests {
             first.preferred_color(neutral, light).bytes()[0]
                 < second.preferred_color(neutral, light).bytes()[0]
         );
-        assert_eq!(first.input(), 7);
+        assert_eq!(first.source(), ToneSourceV1::Input(7));
         assert_eq!(first.stops().len(), 2);
         Ok(())
     }

@@ -474,11 +474,11 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
                 .map_err(|_| ProgramCompileError::ResourceExhausted)?;
             inputs.extend_from_slice(&visible.inputs);
             target.appearance_inputs = inputs.into_boxed_slice();
-            if target.declaration.reference_appearance {
+            if target.declaration.reference_appearance || target.backdrop_curve().is_some() {
                 visible.backdrop(index, appearance, &mut |source| marked.mark(source))?;
             }
         }
-        if let Some(input) = target.tone_input {
+        if let Some(ToneSourceV1::Input(input)) = target.tone_input {
             visible.input(input);
         }
         marked.collect(&selected, &mut members);
@@ -544,6 +544,22 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             }
         }
     }
+    // A moving tone is an objective on a tuple, not a fixed scalar anchor
+    // in a legacy ordered assignment. Old wire programs never carry this tag.
+    for group in &groups {
+        if !matches!(
+            group.mode,
+            ProgramSelectionModeV1::JointPointV1 | ProgramSelectionModeV1::JointReferencePeersV1
+        ) && group
+            .targets
+            .iter()
+            .any(|&index| selection.targets[index].backdrop_curve().is_some())
+        {
+            return Err(ProgramCompileError::InvalidComputedAssignment(
+                ComputedAdmissionErrorV1::InvalidColorIntent,
+            ));
+        }
+    }
     let mut fixed = Vec::new();
     fixed
         .try_reserve_exact(constraint_members.len())
@@ -606,11 +622,11 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 .and_then(|v| v.appearance)
             {
                 visible.visible(index, appearance, &mut |_| {})?;
-                if target.declaration.reference_appearance {
+                if target.declaration.reference_appearance || target.backdrop_curve().is_some() {
                     visible.backdrop(index, appearance, &mut |_| {})?;
                 }
             }
-            if let Some(input) = target.tone_input {
+            if let Some(ToneSourceV1::Input(input)) = target.tone_input {
                 visible.input(input);
             }
         }
@@ -641,7 +657,7 @@ pub(in crate::program_session) fn compile_components<E: ProgramConstraintEvaluat
                 scratch.scan(index, [appearance])?;
                 visible.declared_inputs(scratch);
             }
-            if let Some(input) = target.tone_input {
+            if let Some(ToneSourceV1::Input(input)) = target.tone_input {
                 visible.input(input);
             }
         }

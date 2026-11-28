@@ -108,6 +108,12 @@ Builder принадлежит одному вызывающему контек�
 | `referenceAppearance` | ID occurrence с исходным видом на объявленной опорной поверхности; не совмещается с `appearance`. |
 | `tone` | `ProgramWireToneV3(from, curve)`: предпочтительная светлота относительно входной поверхности. Кривая содержит минимум две пары, начинается с входа `0`, заканчивается `1`; входы строго возрастают, обе координаты в `0..1`. |
 
+Для кривой от видимой подложки используйте
+`colorTarget(id, anchor, options, backdropTone = curve)` с `compose` или
+`composeReference`. В `options` укажите `appearance` или `referenceAppearance`
+и оставьте `tone` пустым. Выбор одной и той же кривой для вложенных слоёв
+связывает её с фактическим фоном каждого слоя.
+
 `pointOccurrence(id, paint, surface)` связывает краску с поверхностью.
 `occurrenceSurface` позволяет использовать результат слоя как следующую
 поверхность. `visibleSeparationHard(id, occurrence, minimum, maximum)` задаёт

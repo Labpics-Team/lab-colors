@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::appearance::SourceOverCertificateV1;
-use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1};
+use crate::color_intent::{ColorIdentityDomainV1, ToneCurveV1, ToneSourceV1};
 use crate::program_wire::{ProgramSelectionComponentV1, ProgramSelectionModeV1};
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -405,7 +405,7 @@ struct CompiledComputedTargetV1 {
     reference_backdrop: Option<Srgb8>,
     appearance: Option<CompiledOccurrenceSlotV1>,
     appearance_inputs: Box<[usize]>,
-    tone_input: Option<usize>,
+    tone_input: Option<ToneSourceV1<usize>>,
     opaque: bool,
 }
 
@@ -414,7 +414,7 @@ struct CompiledComputedTargetV1 {
 enum CompiledPreferredIntentV1<'a> {
     Point {
         anchor: PreferredPointAnchorV1,
-        tone: Option<(&'a ToneCurveV1, usize)>,
+        tone: Option<(&'a ToneCurveV1, ToneSourceV1<usize>)>,
     },
     ImplicitReference,
 }
@@ -432,6 +432,16 @@ struct EffectiveColorIntentV1<'a> {
 }
 
 impl CompiledComputedTargetV1 {
+    fn backdrop_curve(&self) -> Option<&ToneCurveV1> {
+        match self.preferred_intent() {
+            CompiledPreferredIntentV1::Point {
+                tone: Some((curve, ToneSourceV1::Backdrop)),
+                ..
+            } => Some(curve),
+            _ => None,
+        }
+    }
+
     fn preferred_intent(&self) -> CompiledPreferredIntentV1<'_> {
         let tone = self
             .declaration
@@ -995,10 +1005,23 @@ pub(super) fn compile_selection(
                 .intent
                 .as_ref()
                 .and_then(|v| v.tone.as_ref())
-                .map(|tone| {
-                    graph
-                        .surface_input_index(SurfaceInputPortId::new(tone.input()))
-                        .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput))
+                .map(|tone| match tone.source() {
+                    ToneSourceV1::Input(port) => graph
+                        .surface_input_index(SurfaceInputPortId::new(port))
+                        .map(ToneSourceV1::Input)
+                        .ok_or(invalid(ComputedAdmissionErrorV1::MissingToneInput)),
+                    ToneSourceV1::Backdrop
+                        if declaration
+                            .intent
+                            .as_ref()
+                            .and_then(|intent| intent.appearance)
+                            .is_some() =>
+                    {
+                        Ok(ToneSourceV1::Backdrop)
+                    }
+                    ToneSourceV1::Backdrop => {
+                        Err(invalid(ComputedAdmissionErrorV1::MissingColorAppearance))
+                    }
                 })
                 .transpose()?,
             opaque: true,

@@ -340,6 +340,17 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
     }
 
     @discardableResult public func colorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3 = ProgramWireColorOptionsV3()) throws -> Self {
+        try appendColorTarget(id, anchor: anchor, options: options, backdropTone: nil)
+    }
+
+    /// Кривая от видимой подложки occurrence в options.appearance или options.referenceAppearance.
+    @discardableResult public func colorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3,
+                                               backdropTone: [[Double]]) throws -> Self {
+        try appendColorTarget(id, anchor: anchor, options: options, backdropTone: backdropTone)
+    }
+
+    private func appendColorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3,
+                                   backdropTone: [[Double]]?) throws -> Self {
         try append(1) { b in
             b.u32(id); b.u8(4); try b.rgb(anchor)
             b.u8(options.domain == .neutral ? 1 : 0)
@@ -355,16 +366,21 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
                 throw ProgramWireError.invalidDeclaration("appearance and referenceAppearance are mutually exclusive")
             }
             b.u8(options.referenceAppearance != nil ? 2 : options.appearance != nil ? 1 : 0)
-            if let appearance = options.referenceAppearance ?? options.appearance { b.u32(appearance) }
-            b.u8(options.tone == nil ? 0 : 1)
-            if let tone = options.tone {
-                guard tone.curve.count >= 2 else { throw ProgramWireError.invalidDeclaration("tone requires two or more stops") }
-                b.u32(tone.from); b.u32(try boundedCount(tone.curve.count))
+            let appearance = options.referenceAppearance ?? options.appearance
+            if let appearance { b.u32(appearance) }
+            if backdropTone != nil && (appearance == nil || options.tone != nil) {
+                throw ProgramWireError.invalidDeclaration("backdrop tone requires an appearance and only one tone source")
+            }
+            b.u8(backdropTone != nil ? 2 : options.tone == nil ? 0 : 1)
+            if let tone = options.tone { b.u32(tone.from) }
+            if let curve = backdropTone ?? options.tone?.curve {
+                guard curve.count >= 2 else { throw ProgramWireError.invalidDeclaration("tone requires two or more stops") }
+                b.u32(try boundedCount(curve.count))
                 var previous: Double?
-                for (index, point) in tone.curve.enumerated() {
+                for (index, point) in curve.enumerated() {
                     guard point.count == 2 else { throw ProgramWireError.invalidDeclaration("tone stop requires two coordinates") }
                     let x = try bounded(point[0], maximum: 1), y = try bounded(point[1], maximum: 1)
-                    guard (index != 0 || x == 0), (index != tone.curve.count - 1 || x == 1),
+                    guard (index != 0 || x == 0), (index != curve.count - 1 || x == 1),
                           previous.map({ x > $0 }) ?? true else {
                         throw ProgramWireError.invalidDeclaration("tone inputs must increase from 0 to 1")
                     }

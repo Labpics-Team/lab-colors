@@ -266,6 +266,18 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
     }, contrast = false).apply {
         visibleSeparationHard(81u, 61u, 0.05, 0.8)
     }.assignment(listOf(21u)).finish()
+    val inverseTone = listOf(0.0 to 1.0, 1.0 to 0.0)
+    val backdropTone = graph(ProgramWireBuilderV3().apply {
+        colorTarget(21u, rgb(68, 68, 68), ProgramWireColorOptionsV3(appearance = 61u), backdropTone = inverseTone)
+    }, contrast = false).compose(listOf(21u)).finish()
+    compileProgramWire(backdropTone, 1u).use { runtime ->
+        for ((revision, gray) in listOf(0, 255, 0).withIndex()) {
+            runtime.updateObserved(revision.toULong() + 1uL, listOf(1u), rgb(gray, gray, gray), 1u).use { frame ->
+                check(frame.state() == "ready")
+                bytesEqual(ByteArray(3) { (255 - gray).toByte() }, frame.outputRgb(0u))
+            }
+        }
+    }
     val fixed = graph(ProgramWireBuilderV3().apply {
         source(11u, rgb(0, 0, 0)); fixedTarget(21u, 11u)
     }).assignment(emptyList()).finish()
@@ -296,7 +308,7 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         bytesEqual(ProgramWireBuilderV3().assignment(members, ProgramWireAssignmentOptionsV3(inputs)).finish(), composition)
     }
     for ((name, actual) in mapOf("computedBox" to box, "computedGray" to gray,
-        "contextual" to contextual, "fixedOnly" to fixed, "encodingOnly" to encodingOnly,
+        "contextual" to contextual, "backdropTone" to backdropTone, "fixedOnly" to fixed, "encodingOnly" to encodingOnly,
         "visiblePairSeparation" to ProgramWireBuilderV3().visiblePairSeparationHard(0x01020304u,
             0x10203040u, UInt.MAX_VALUE, -0.0, 0.75).finish(),
         "referenceSingleton" to referenceProgram(false), "referenceHierarchy" to referenceProgram(true),
@@ -312,6 +324,8 @@ fun verifyProgramAuthoringV3(fixtures: Map<String, String>) {
         bytesEqual(before, builder.finish())
     }
     rejects { builder.colorTarget(2u, rgb(1, 2)) }
+    rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(), backdropTone = inverseTone) }
+    rejects { builder.colorTarget(2u, rgb(1, 2, 3), contextualOptions(), backdropTone = inverseTone) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(maxChange = Double.NaN)) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(maxChange = 2.01)) }
     rejects { builder.colorTarget(2u, rgb(1, 2, 3), ProgramWireColorOptionsV3(appearance = 0u, referenceAppearance = 0u)) }

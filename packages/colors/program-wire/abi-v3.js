@@ -45,9 +45,17 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
     payload.f64Bits(delta);
     payload.u8(referenceAppearance !== undefined ? 2 : appearance === undefined ? 0 : 1);
     if (visible !== undefined) payload.u32(u32Value(visible, "color appearance"));
-    payload.u8(tone === undefined ? 0 : 1);
-    if (tone !== undefined) {
-      const from = u32Value(inputProperty(tone, "from", "tone"), "tone input");
+    if (tone === undefined) {
+      payload.u8(0);
+    } else {
+      const from = inputProperty(tone, "from", "tone");
+      if (from === undefined) {
+        if (visible === undefined) invalid("backdrop tone requires an appearance occurrence");
+        payload.u8(2);
+      } else {
+        payload.u8(1);
+        payload.u32(u32Value(from, "tone input"));
+      }
       const curve = candidateList(inputProperty(tone, "curve", "tone"), "tone curve")
         .map((point) => {
           if (inputArrayLength(point, "tone point") !== 2) invalid("tone point must contain two numbers");
@@ -57,7 +65,6 @@ export class ProgramWireBuilderV3 extends ProgramWireBuilderV1 {
         || curve.some((point, index) => index > 0 && point[0] <= curve[index - 1][0])) {
         invalid("tone curve must span 0..1 with increasing input coordinates");
       }
-      payload.u32(from);
       payload.u32(curve.length);
       for (const point of curve) for (const value of point) payload.f64Bits(value);
     }

@@ -187,6 +187,8 @@ pub(crate) struct CompletionUseToneEvidenceV1 {
     pub(crate) occurrence: Option<OccurrenceId>,
     /// Global observation ordinals corresponding to `per_case_bits` in order.
     pub(crate) cases: Range<usize>,
+    /// Only input-driven tones have one value independent of the paint tuple.
+    /// For a backdrop curve each tuple carries its own preferred bounds.
     pub(crate) per_case_bits: Box<[Option<u64>]>,
 }
 
@@ -602,7 +604,7 @@ impl ReferenceCompletionStorageV1 {
                     .ok_or(Error::<E>::MissingFiniteObservation)?;
                 let tone = match selection.targets[usage.target].preferred_intent() {
                     CompiledPreferredIntentV1::Point {
-                        tone: Some((curve, input)),
+                        tone: Some((curve, ToneSourceV1::Input(input))),
                         ..
                     } => Some(curve.preferred_lightness(inputs[input].srgb8())),
                     _ => None,
@@ -669,7 +671,7 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                 super::point_search::tests::refreshed_point_case(selection.targets[target].id);
                 let mut point = anchor;
                 if let CompiledPreferredIntentV1::Point {
-                    tone: Some((curve, input)),
+                    tone: Some((curve, ToneSourceV1::Input(input))),
                     ..
                 } = selection.targets[target].preferred_intent()
                 {
@@ -783,6 +785,9 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
     ) -> Result<(), Error<E>> {
         primary.clear();
         source_profile.clear();
+        let CompiledTargetSelectionV1::Computed(selection) = &self.epoch.target_selection else {
+            return Err(Error::<E>::RequiresComputedTargets);
+        };
         primary
             .try_reserve(component.point_variable_count())
             .map_err(|_| Error::<E>::ResourceExhausted)?;
@@ -846,18 +851,31 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                     }
                     continue;
                 }
+                let mut preferred = *usage
+                    .local_preferred
+                    .get(local_case)
+                    .ok_or(Error::<E>::InvalidUse)?;
                 let visible_rgb = if let Some(slot) = usage.slot {
-                    view.occurrence_at(slot)
-                        .ok_or(Error::<E>::InvalidUse)?
-                        .visible?
+                    let appearance = view.occurrence_at(slot).ok_or(Error::<E>::InvalidUse)?;
+                    if let Some(curve) = selection.targets[target].backdrop_curve() {
+                        let precision = match measurement {
+                            PointMeasurementV1::Profile(precision) => precision,
+                            PointMeasurementV1::RegionWitness => {
+                                PointMeasurementPrecisionV1::Screened
+                            }
+                        };
+                        let ground = precision.oklab(
+                            &mut usage.point_lab_cache,
+                            &mut self.scratch.point_transforms,
+                            appearance.backdrop?,
+                        )?;
+                        preferred[0] = ground[0].map_tone(curve)?;
+                    }
+                    appearance.visible?
                 } else {
                     let (lo, hi) = bounds(local);
                     CertifiedRgbV1::from_encoded_bounds(lo, hi)?
                 };
-                let preferred = *usage
-                    .local_preferred
-                    .get(local_case)
-                    .ok_or(Error::<E>::InvalidUse)?;
                 let loss = match measurement {
                     PointMeasurementV1::RegionWitness => {
                         visible_rgb.region_loss_witness(preferred)?
@@ -971,7 +989,14 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedReferenceCompletionV1<'_, '_, E
                                 None,
                             )
                         };
-                        let preferred = usage.preferred.get(case - case_start).copied();
+                        let mut preferred = usage.preferred.get(case - case_start).copied();
+                        if let (Some(point), Some(curve)) = (
+                            &mut preferred,
+                            selection.targets[usage.target].backdrop_curve(),
+                        ) {
+                            point[0] =
+                                backdrop_lab.ok_or(Error::<E>::InvalidUse)?[0].map_tone(curve)?;
+                        }
                         let distance = preferred
                             .map(|point| source_distance_squared(visible_lab, point))
                             .transpose()?;

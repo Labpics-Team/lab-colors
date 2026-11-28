@@ -88,6 +88,9 @@ if frame.state() == "ready" {
 
 `ProgramWireColorIdentityV3` задаёт необязательные hue/chroma/lightness-границы,
 `ProgramWireToneV3` — кривую предпочтительной светлоты от входной поверхности.
+Для кривой от видимой подложки используйте
+`colorTarget(_:anchor:options:backdropTone:)` с `compose` или `composeReference`.
+В `options` укажите `appearance` или `referenceAppearance` и оставьте `tone` пустым.
 Пропущенные настройки сохраняют пакетные дефолты Core. `computedTarget`
 отдельно принимает явный RGB-box или серую ось, а `visibleSeparationHard`
 ограничивает расстояние Oklab от итогового цвета до его подложки.
