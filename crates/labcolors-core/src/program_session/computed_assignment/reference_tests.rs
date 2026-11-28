@@ -219,6 +219,26 @@ fn compile_reference_composition(
     p.compile().expect("reference composition compiles")
 }
 
+pub(super) fn white_backdrop_tone_peer() -> CompiledProgram<Wcag22Srgb8V1> {
+    let mut p = hierarchy();
+    let mut white = color(20, 15, 255, 1);
+    let TargetIntentV1::Computed(value) = &mut white.intent else {
+        unreachable!()
+    };
+    value.intent.as_mut().unwrap().tone = Some(
+        ToneCurveV1::with_source(ToneSourceV1::Backdrop, vec![[0.0, 0.0], [1.0, 1.0]])
+            .expect("identity lightness curve"),
+    );
+    p.targets[1] = white;
+    // Keep both uses in one component; either half of the tone's domain is feasible.
+    p.constraints.hard = vec![ConstraintInvocation::pair_separation(
+        ConstraintId::new(30),
+        DirectedRelationV1::try_new(OccurrenceId::new(5), vec![OccurrenceId::new(15)]).unwrap(),
+        VisibleSeparationBoundsV1::new(0.0, 2.0).unwrap(),
+    )];
+    compile_reference_composition(p, false)
+}
+
 fn mixed_repeated_children(duplicate: bool, distinct_requirement: bool) -> Program<Wcag22Srgb8V1> {
     let mut p = singleton(Srgb8::new([32; 3]), 255, 0.75);
     p.surfaces.push(Surface::FromOccurrence {

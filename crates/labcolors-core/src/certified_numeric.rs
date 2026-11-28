@@ -513,6 +513,10 @@ impl CertifiedScalarV1 {
         [self.lo.to_bits(), self.hi.to_bits()]
     }
 
+    pub(crate) fn lower_f64(self) -> Result<f64, NumericUncertaintyV1> {
+        to_f64(self.lo, DOWN)
+    }
+
     /// Directed subtraction and directed storage keep this an upper bound
     /// after materialization as binary64. It may be negative for a proven gain.
     pub(crate) fn upper_difference(self, baseline: Self) -> Result<f64, NumericUncertaintyV1> {

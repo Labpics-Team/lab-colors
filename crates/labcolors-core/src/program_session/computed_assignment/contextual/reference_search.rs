@@ -1136,7 +1136,14 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
             return Ok(false);
         }
         let peers = self.peers.as_mut().expect("joint reference component");
-        Ok(!peers.lower_profile(&self.context, bounds, domain_at)?)
+        Ok(!peers.lower_profile(
+            &self.context,
+            bounds
+                .appearance
+                .as_deref()
+                .expect("reference bounds capture"),
+            domain_at,
+        )?)
     }
 
     // Subdivide the product of source domains, keeping all other domains
