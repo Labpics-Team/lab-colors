@@ -767,6 +767,147 @@ fn reference_peers_tone_selects_the_nearest_feasible_surface_across_polarities()
 }
 
 #[test]
+fn independent_chromatic_reference_minima_keep_the_coupled_solution() {
+    use crate::color_intent::reference_transport::{ReferenceTransportV1, polarity};
+    let domain = AssignmentDomainV1::Cube {
+        lower: [64, 74, 84],
+        upper: [68, 78, 88],
+    };
+    let anchors = [Srgb8::new([66, 76, 86]), Srgb8::new([67, 77, 87])];
+    let cases = [160, 200];
+    let points: Vec<_> = (0..domain.cardinality().expect("finite cube"))
+        .map(|i| domain.value(i))
+        .collect();
+    let reference = Srgb8::new([255; 3]);
+    // Every source in this cube is darker than both backdrops. Hence the
+    // physical direction and its capacity are constant for each preference.
+    let losses = anchors.map(|anchor| {
+        let model = ReferenceTransportV1::new(anchor, reference);
+        points
+            .iter()
+            .map(|&rgb| {
+                let visible = cases
+                    .into_iter()
+                    .map(|gray| {
+                        let backdrop = Srgb8::new([gray; 3]);
+                        squared_distance(lab(rgb), model.lab_for(backdrop, polarity(rgb, backdrop)))
+                    })
+                    .fold(0.0, f64::max);
+                (visible, squared_distance(lab(rgb), lab(anchor)))
+            })
+            .collect::<Vec<_>>()
+    });
+    for minimum in [0.0, 0.005] {
+        let mut optimum: Option<[f64; 4]> = None;
+        for (i, &left) in points.iter().enumerate() {
+            for (j, &right) in points.iter().enumerate() {
+                if squared_distance(lab(left), lab(right)).sqrt() < minimum {
+                    continue;
+                }
+                let (a, x) = losses[0][i];
+                let (b, y) = losses[1][j];
+                let profile = [a.max(b), a.min(b), x.max(y), x.min(y)];
+                if optimum.is_none_or(|best| profile < best) {
+                    optimum = Some(profile)
+                }
+            }
+        }
+        let mut original_order = None;
+        for reverse in [false, true] {
+            let run = |ordinary: bool| {
+                let mut p = hierarchy();
+                for (index, &anchor) in anchors.iter().enumerate() {
+                    let TargetIntentV1::Computed(target) = &mut p.targets[index].intent else {
+                        unreachable!()
+                    };
+                    target.anchor = anchor;
+                    target.domain = domain;
+                    target.intent.as_mut().expect("use").identity = ColorIdentityDomainV1::new(
+                        anchor,
+                        false,
+                        IdentityOptionsV1 {
+                            hue_deviation: Some(180.0),
+                            chroma: Some([0.0, 0.5]),
+                            lightness: None,
+                        },
+                    )
+                    .expect("identity");
+                }
+                p.constraints.hard = vec![ConstraintInvocation::pair_separation(
+                    ConstraintId::new(30),
+                    DirectedRelationV1::try_new(OccurrenceId::new(5), vec![OccurrenceId::new(15)])
+                        .expect("distinct"),
+                    VisibleSeparationBoundsV1::new(minimum, 2.0).expect("separation"),
+                )];
+                let mut owner = compile_reference_composition(p, reverse);
+                if ordinary {
+                    let epoch = Shared::get_mut(&mut owner.owner_generation).expect("unique owner");
+                    let CompiledTargetSelectionV1::Computed(selection) =
+                        &mut epoch.target_selection
+                    else {
+                        unreachable!()
+                    };
+                    for target in &mut selection.targets {
+                        target.independent_backdrop = false
+                    }
+                }
+                let mut session = owner
+                    .instantiate(ObservationStreamId::new(8))
+                    .expect("session");
+                let mut observed = cases;
+                if reverse {
+                    observed.reverse()
+                }
+                session
+                    .prepare_update(gray_cases(1, &observed))
+                    .expect("observation")
+                    .commit();
+                let frame = session
+                    .state()
+                    .current_verified()
+                    .expect("feasible")
+                    .computed_for_test();
+                let values = std::array::from_fn::<_, 2, _>(|i| {
+                    frame.arena.storage.outputs[i].paint.source()
+                });
+                assert_eq!(frame.optimality(), ComputedOptimalityV1::Unfinished);
+                (values, frame.search)
+            };
+            let (tuple, search) = run(false);
+            let (coupled, full_search) = run(true);
+            assert_eq!(tuple, coupled);
+            let [i, j] = tuple.map(|color| {
+                points
+                    .iter()
+                    .position(|&candidate| candidate == color)
+                    .expect("in cube")
+            });
+            let (a, x) = losses[0][i];
+            let (b, y) = losses[1][j];
+            assert_eq!(
+                Some([a.max(b), a.min(b), x.max(y), x.min(y)]),
+                optimum,
+                "minimum={minimum}, tuple={tuple:?}, search={search:?}, full={full_search:?}"
+            );
+            if minimum == 0.0 {
+                assert_eq!(tuple[0], tuple[1]);
+                assert!(search.visited < full_search.visited);
+            } else {
+                assert_ne!(tuple[0], tuple[1]);
+                assert_eq!(
+                    search, full_search,
+                    "rejected minima preserve the full search"
+                );
+            }
+            if let Some(previous) = original_order {
+                assert_eq!(tuple, previous)
+            }
+            original_order = Some(tuple);
+        }
+    }
+}
+
+#[test]
 fn reference_peers_nested_materials_match_exhaustive_tuple_profiles() {
     use crate::color_intent::reference_transport::{
         ReferenceTransportV1, contrast_ratio, polarity,

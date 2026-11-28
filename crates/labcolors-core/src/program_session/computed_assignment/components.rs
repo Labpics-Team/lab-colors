@@ -475,7 +475,12 @@ pub(in crate::program_session) fn partition_components<E: ProgramConstraintEvalu
             inputs.extend_from_slice(&visible.inputs);
             target.appearance_inputs = inputs.into_boxed_slice();
             if target.declaration.reference_appearance {
-                visible.backdrop(index, appearance, &mut |source| marked.mark(source))?;
+                let mut independent = true;
+                visible.backdrop(index, appearance, &mut |source| {
+                    independent &= selected[source].is_none();
+                    marked.mark(source);
+                })?;
+                target.independent_backdrop = independent;
             }
         }
         if let Some(input) = target.tone_input {

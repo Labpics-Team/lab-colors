@@ -646,6 +646,13 @@ fn sort_profile<E: ProgramConstraintEvaluatorSetV1>(
 }
 
 impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
+    fn has_point_terms(&self, component: &ComputedComponentV1) -> bool {
+        component
+            .targets
+            .iter()
+            .any(|&target| self.scratch.uses[target].point_anchor.is_some())
+    }
+
     pub(super) fn refresh_point_component(
         &mut self,
         component: &ComputedComponentV1,
@@ -805,6 +812,18 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                     self.scratch.source_labs[target],
                 )?);
             }
+        }
+        // Transport measures its visible loss on emitted RGB8. In a component
+        // with only transport terms this profile contains only source distances
+        // (computed above); no continuous visible color enters the comparison.
+        if !self.has_point_terms(component) {
+            if !cases.is_empty() {
+                primary.resize(
+                    component.point_variable_count(),
+                    CertifiedScalarV1::exact(0.0)?,
+                );
+            }
+            return Ok(());
         }
         let authored = self.scratch.bindings.paint_inputs_canonical();
         let mut paints = self.epoch.graph.prepare_certified_surface_cases(
