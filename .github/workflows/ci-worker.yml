@@ -48,7 +48,7 @@ jobs:
           version = tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["rust-version"]
           print("version=" + version + (".0" if version.count(".") == 1 else ""))
           PYTHON
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
           cache: false
@@ -56,7 +56,7 @@ jobs:
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: cargo check on declared MSRV
         run: |
           cargo check --workspace --all-targets --locked
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           components: clippy, rustfmt
           cache: false
@@ -78,7 +78,7 @@ jobs:
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: cargo fmt --check
         run: cargo fmt --all --check
       - name: cargo clippy
@@ -92,14 +92,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: cargo doc
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: staged Program is absent from the resolved public API
@@ -224,14 +224,14 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: AUTH-01 semantic mutation gate
         env:
           CARGO_INCREMENTAL: '1'
@@ -267,18 +267,18 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: PR and merge-queue distribution input contracts
         if: ${{ matrix.lane == 'default' }}
         run: python3 scripts/test_ci_merge_group.py
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         if: ${{ matrix.lane == 'default' }}
         with:
           node-version: '22'
@@ -493,7 +493,7 @@ jobs:
           fetch-depth: 0
           # PR проверяет свой head; очередь — всю будущую комбинацию.
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
@@ -524,11 +524,11 @@ jobs:
               root = os.environ["GITHUB_WORKSPACE"]
               print(f"workspace={root} -> {os.path.relpath(os.environ['CARGO_TARGET_DIR'], root)}", file=output)
           PY
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: transport-distribution
           workspaces: ${{ steps.cargo.outputs.workspace }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
@@ -608,7 +608,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
@@ -639,11 +639,11 @@ jobs:
               root = os.environ["GITHUB_WORKSPACE"]
               print(f"workspace={root} -> {os.path.relpath(os.environ['CARGO_TARGET_DIR'], root)}", file=output)
           PY
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: evaluate-distribution
           workspaces: ${{ steps.cargo.outputs.workspace }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           package-manager-cache: false
           node-version: ${{ env.NODE_TOOLCHAIN }}
@@ -717,14 +717,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30
         with:
           cache: false
           rustflags: ""
       - name: Carry the selected Rust environment into every build root
         shell: bash
         run: python3 scripts/ci/rust_environment.py
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: install cargo-audit
         # cargo-audit 0.22+ понимает RUSTSEC с CVSS v4.
         run: |
