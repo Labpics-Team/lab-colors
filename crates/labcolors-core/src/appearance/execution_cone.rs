@@ -2,11 +2,12 @@
 //! expands their dependency closure without retaining duplicate prefixes.
 
 use super::*;
+use std::sync::Weak;
 
 #[derive(Debug)]
 pub(crate) struct CompiledAppearanceConeV1 {
     pub(super) graph_instance: Arc<()>,
-    roots: Box<[CompiledOccurrenceSlotV1]>,
+    roots: Arc<Vec<CompiledOccurrenceSlotV1>>,
 }
 
 impl CompiledAppearanceConeV1 {
@@ -68,7 +69,7 @@ impl<'graph> AppearanceConeCompilerV1<'graph> {
         }
         Ok(CompiledAppearanceConeV1 {
             graph_instance: self.graph.instance.clone(),
-            roots: roots.into_boxed_slice(),
+            roots: Arc::new(roots),
         })
     }
 }
@@ -137,6 +138,7 @@ impl AppearanceExecutionOrderV1 {
 
 #[derive(Debug)]
 pub(super) struct AppearanceConeWorkspaceV1 {
+    prepared_roots: Weak<Vec<CompiledOccurrenceSlotV1>>,
     pub(super) paint_seen: Vec<bool>,
     pub(super) surface_seen: Vec<bool>,
     pub(super) occurrence_seen: Vec<bool>,
@@ -148,6 +150,7 @@ pub(super) struct AppearanceConeWorkspaceV1 {
 impl AppearanceConeWorkspaceV1 {
     pub(super) fn new(shape: AppearanceWorkspaceShape) -> Result<Self, BindingError> {
         Ok(Self {
+            prepared_roots: Weak::new(),
             paint_seen: slots(shape.paints, false)?,
             surface_seen: slots(shape.surfaces, false)?,
             occurrence_seen: slots(shape.occurrences, false)?,
@@ -191,9 +194,14 @@ impl AppearanceConeWorkspaceV1 {
         graph: &CompiledAppearanceGraph,
         cone: &CompiledAppearanceConeV1,
     ) {
+        // The immutable root allocation identifies this cone and its graph.
+        // A weak reference prevents address reuse without keeping the graph alive.
+        if self.prepared_roots.as_ptr() == Arc::as_ptr(&cone.roots) {
+            return;
+        }
         self.clear();
         let program = graph.program();
-        for root in &cone.roots {
+        for root in cone.roots.iter() {
             let mut node = RenderNode::Occurrence(root.index);
             loop {
                 node = match node {
@@ -233,6 +241,7 @@ impl AppearanceConeWorkspaceV1 {
             RenderNode::Occurrence(index) => graph.execution_order.occurrence_rank[index],
         });
         self.occurrences.sort_unstable();
+        self.prepared_roots = Arc::downgrade(&cone.roots);
     }
 }
 
@@ -260,8 +269,8 @@ impl CompiledAppearanceGraph {
         }
     }
 
-    /// Roots and bindings retain their graph identity. Every scoped pass builds
-    /// fresh membership in the already allocated workspace and hides other slots.
+    /// Only graph topology can be reused. Every pass reads the current paints
+    /// and opacity bindings, and exposes just this cone's occurrences.
     pub(crate) fn prepare_scoped_surface_cases<'program, 'bindings, 'workspace>(
         &'program self,
         cone: &'program CompiledAppearanceConeV1,

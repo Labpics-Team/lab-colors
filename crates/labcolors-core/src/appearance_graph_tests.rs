@@ -2248,6 +2248,26 @@ fn scoped_physical_views_reject_foreign_cones_and_hide_untouched_slots() -> Resu
     assert!(local.surface_rgb(DERIVED_SURFACE).is_none());
     assert_eq!(local.occurrences().count(), 1);
 
+    let next_source = [20, 60, 105];
+    let next_backdrop = [30, 35, 50];
+    let new_bindings = graph
+        .admit_bindings(&AppearanceBindings::new(
+            vec![(SOURCE, opaque(next_source))],
+            vec![(CONTEXT, Srgb8::new(next_backdrop))],
+            vec![],
+        ))
+        .map_err(|error| format!("updated bindings: {error:?}"))?;
+    let mut pass = graph
+        .prepare_scoped_surface_cases(&cone, &new_bindings, &mut workspace)
+        .map_err(|error| format!("repeat scope: {error:?}"))?;
+    let view = pass.evaluate_surface_inputs_canonical(|_| Srgb8::new(next_backdrop));
+    let current = view
+        .occurrence(FILL_OCCURRENCE)
+        .ok_or("updated occurrence")?;
+    assert_eq!(current.visible(), next_source);
+    assert_eq!(current.certificate().backdrop_rgb(), next_backdrop);
+    assert!(view.occurrence(OTHER_OCCURRENCE).is_none());
+
     let other = terminal_chain()
         .compile()
         .map_err(|error| format!("foreign compile: {error:?}"))?;
