@@ -412,7 +412,9 @@ impl<'a> ContextV1<'a> {
                 let mut rgb = target.effective_anchor();
                 let mut preferred_lab = target.anchor_lab;
                 if let Some(intent) = target.effective_intent() {
-                    if let (Some(curve), Some(input)) = (&intent.tone, target.tone_input) {
+                    if let (Some(curve), Some(ToneSourceV1::Input(input))) =
+                        (&intent.tone, target.tone_input)
+                    {
                         let source = if !target.declaration.reference_appearance
                             && intent.identity.neutral()
                         {

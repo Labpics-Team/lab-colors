@@ -86,6 +86,11 @@ impl<E: ProgramConstraintEvaluatorSetV1> PreparedPointSelectionV1<'_, '_, E> {
                         source(target)?
                     };
                     if whole_domain {
+                        // Constancy of the visible color alone does not prove
+                        // constancy of a target coupled to a variable backdrop.
+                        if selection.targets[target].backdrop_curve().is_some() {
+                            return Ok(false);
+                        }
                         // A singleton enclosure over the full source box
                         // proves the color invariant. Non-singleton equal
                         // intervals cannot authorize this conclusion.

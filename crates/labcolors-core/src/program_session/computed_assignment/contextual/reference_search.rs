@@ -368,7 +368,10 @@ impl<'a, 'p, 'program, 'scratch, E: ProgramConstraintEvaluatorSetV1>
         let model = self.models[target].ok_or(())?;
         if !self.capacity_enabled(target) {
             let mut result = model.reference_lab();
-            result[0] = self.context.preferred[case * self.context.targets.len() + target][0];
+            result[0] = self.context.targets[target].backdrop_curve().map_or_else(
+                || self.context.preferred[case * self.context.targets.len() + target][0],
+                |curve| curve.preferred_lightness(backdrop),
+            );
             return Ok(result);
         }
         let key = (target, backdrop, direction);
@@ -1595,7 +1598,10 @@ fn reports(
             let actual_contrast = contrast_ratio(appearance.visible, appearance.backdrop);
             let mut preferred = model.lab_for(appearance.backdrop, direction);
             if !capacity_enabled {
-                preferred[0] = context.preferred[case_index * count + target][0];
+                preferred[0] = compiled.backdrop_curve().map_or_else(
+                    || context.preferred[case_index * count + target][0],
+                    |curve| curve.preferred_lightness(appearance.backdrop),
+                );
             }
             cases.push(ProgramReferenceCaseV1 {
                 case_index,
@@ -1813,6 +1819,58 @@ pub(in crate::program_session::computed_assignment) fn select_component<
         }
         repair_order.sort_unstable();
         let mut opposite_siblings = cloned(&repair_order).map_err(allocation)?;
+        let moving_tone = search
+            .context
+            .targets
+            .iter()
+            .any(|target| target.backdrop_curve().is_some());
+        if moving_tone {
+            // Build one proposal along the physical dependencies. When the
+            // reference polarity clips, try its attainable opposite locally.
+            // The candidate still goes through the joint objective and all constraints.
+            let case = search.context.local_cases.order[0];
+            proposal.copy_from_slice(&authored);
+            apply_targets::<E>(search.context.targets, runtime, &proposal)?;
+            for &(_, target) in &repair_order {
+                let compiled = &search.context.targets[target];
+                let (backdrop, alpha) = physical_context(
+                    compiled,
+                    search.context.physical,
+                    runtime,
+                    epoch,
+                    scenarios,
+                    case,
+                )?;
+                let backdrop = Srgb8::new(backdrop);
+                let desired = if let Some(curve) = compiled.backdrop_curve() {
+                    curve.preferred_color(compiled.effective_anchor(), backdrop)
+                } else if let Some(model) =
+                    search.models[target].filter(|_| compiled.tone_input.is_none())
+                {
+                    let side = model.reference_polarity();
+                    let mut aim = model.target_for(backdrop, side);
+                    let other = model.target_for(backdrop, from_sign(-sign(side)));
+                    if (other.raw_luminance - other.clipped_luminance).abs()
+                        < (aim.raw_luminance - aim.clipped_luminance).abs()
+                    {
+                        aim = other;
+                    }
+                    color_at_lightness(compiled.effective_anchor(), aim.lab[0].clamp(0.0, 1.0))
+                } else {
+                    search.context.preferred_rgb[case * count + target]
+                };
+                let source = inverse_hint(desired, backdrop.bytes(), alpha);
+                proposal[target] = source;
+                runtime
+                    .bindings
+                    .overwrite_paint_input_at(
+                        compiled.binding,
+                        EncodedPointPaintValueV1::opaque(source),
+                    )
+                    .map_err(map_program_execution_binding_error)?;
+            }
+            search.assess_tuple(runtime, epoch, scenarios, &mut proposal, arena)?;
+        }
         for siblings in opposite_siblings.chunk_by_mut(|left, right| left.0 == right.0) {
             siblings.reverse();
         }

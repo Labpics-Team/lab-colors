@@ -357,6 +357,50 @@ impl CertifiedScalarV1 {
         }
     }
 
+    /// Image of a clamped piecewise-linear curve over this enclosure. A turn
+    /// inside the interval can be more extreme than either interpolated end.
+    pub(crate) fn map_tone(
+        self,
+        curve: &crate::color_intent::ToneCurveV1,
+    ) -> Result<Self, NumericUncertaintyV1> {
+        let stops = curve.stops();
+        let endpoint = |x: Quad| -> Result<Self, NumericUncertaintyV1> {
+            if x <= Quad::ZERO {
+                return Self::exact(stops[0][1]);
+            }
+            if x >= Quad::from_u128(1).value {
+                return Self::exact(stops[stops.len() - 1][1]);
+            }
+            // Directed conversion is used only to locate an adjacent segment.
+            // Comparing its knot in Quad below resolves the boundary exactly.
+            let lower_x = to_f64(x, DOWN)?;
+            let upper = stops.partition_point(|stop| stop[0] <= lower_x);
+            let [x0, y0] = stops[upper - 1];
+            if x == lift(x0)? {
+                return Self::exact(y0);
+            }
+            let [x1, y1] = stops[upper];
+            let left = Self::exact(x0)?;
+            let t = Self::point(x).sub(left)?.div(Self::exact(x1)?.sub(left)?)?;
+            Self::exact(y0)?.add(t.mul(Self::exact(y1)?.sub(Self::exact(y0)?)?)?)
+        };
+        let left = endpoint(self.lo)?;
+        if self.lo == self.hi {
+            return Ok(left);
+        }
+        let mut result = left.hull(endpoint(self.hi)?);
+        let start = to_f64(self.lo, DOWN)?;
+        let end = to_f64(self.hi, UP)?;
+        let interior = stops.partition_point(|stop| stop[0] <= start)
+            ..stops.partition_point(|stop| stop[0] < end);
+        if !interior.is_empty() {
+            for stop in &stops[interior] {
+                result = result.hull(Self::exact(stop[1])?);
+            }
+        }
+        Ok(result)
+    }
+
     /// Integer powers preserve signed input and the dependence of x*x.
     pub(crate) fn pow(self, mut power: u32) -> Result<Self, NumericUncertaintyV1> {
         let mut value = Self::exact(1.0)?;

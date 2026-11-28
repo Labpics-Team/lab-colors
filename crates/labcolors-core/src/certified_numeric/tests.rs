@@ -11,6 +11,39 @@ fn interval(lo: f64, hi: f64) -> CertifiedScalarV1 {
     }
 }
 
+#[test]
+fn backdrop_tone_encloses_interior_reversals_and_clamps_at_both_ends()
+-> Result<(), NumericUncertaintyV1> {
+    use crate::color_intent::{ToneCurveV1, ToneSourceV1};
+    let curve = ToneCurveV1::with_source(
+        ToneSourceV1::Backdrop,
+        vec![[0.0, 0.5], [0.25, 1.0], [0.75, 0.0], [1.0, 0.5]],
+    )
+    .expect("valid dyadic curve");
+    for (lo, hi, minimum, maximum) in [
+        (-0.25, 0.125, 0.5, 0.75),
+        (0.125, 0.875, 0.0, 1.0),
+        (0.375, 0.625, 0.25, 0.75),
+        (0.875, 1.25, 0.25, 0.5),
+        (0.25, 0.25, 1.0, 1.0),
+        (0.75, 0.75, 0.0, 0.0),
+    ] {
+        assert_eq!(
+            interval(lo, hi).map_tone(&curve)?.bounds(),
+            interval(minimum, maximum).bounds()
+        );
+    }
+    // One binary128 ULP on either side of a binary64 knot.
+    let knot = lift(0.25)?.to_bits();
+    let narrow = CertifiedScalarV1 {
+        lo: Quad::from_bits(knot - 1),
+        hi: Quad::from_bits(knot + 1),
+    };
+    let range = narrow.map_tone(&curve)?;
+    assert!(range.lo < lift(1.0)? && range.hi >= lift(1.0)?);
+    Ok(())
+}
+
 fn rgb(value: [f64; 3]) -> CertifiedRgbV1 {
     CertifiedRgbV1::from_encoded(value).expect("fixture channels in the encoded sRGB domain")
 }
