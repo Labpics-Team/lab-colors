@@ -391,11 +391,11 @@
       "sha256": "d940f9cf443970ff34e6ed4280d5b00c2aef10b85a0818e609bf21302fcb17d4"
     },
     {
-      "bytes": 45086,
+      "bytes": 45317,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "618eb9416961427e7245002b83eb2390ac9942ee1024ef1027b11232501ff511"
+      "sha256": "591be029d5bd910513bb836f1c9ffedf983fd6e02b4e01b7010e727ae47c0bb4"
     },
     {
       "bytes": 44658,
@@ -403,6 +403,27 @@
       "path": "scripts/test_verify_clean_set_receipt.py",
       "role": "verifier_tests",
       "sha256": "c2d8fa8e1cb07215b65733c454202dca6709d20e6eedbd5eb0503e646c64b9cc"
+    },
+    {
+      "bytes": 10542,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/wcag22/kernel.rs",
+      "role": "wcag22_kernel_source",
+      "sha256": "5032a7616d4a7030c8c3e147b604f6f232aaac4d11beddeac81adb95df8b1de1"
+    },
+    {
+      "bytes": 30851,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/wcag22/q55_data.rs",
+      "role": "wcag22_luminance_table_source",
+      "sha256": "af4d23d6b70c45ce6efa839e7dda4bb0a61f6aae43cb805af6fa9b29e6c3bae2"
+    },
+    {
+      "bytes": 17223,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/wcag22.rs",
+      "role": "wcag22_measurement_source",
+      "sha256": "d650a5ed46fd0d2a361582ca94c7ef44107cc2eb7dd3d8cb9cfbebc3810a4d40"
     }
   ],
   "excluded_claims": [
