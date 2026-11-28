@@ -50,6 +50,17 @@ test("reference declarations match independent native wire vectors", () => {
   assert.equal(hex(new ProgramWireBuilderV3().assignment([], { reference: [] })), fixture.referenceEmpty);
 });
 
+test("backdrop tone uses tag 2 and carries only the curve after the occurrence", () => {
+  const curve = [[0, 1], [1, 0]];
+  const wire = graph(new ProgramWireBuilderV3().colorTarget(21, [68, 68, 68],
+    { appearance: 61, tone: { curve } }), false).compose([21]);
+  assert.equal(hex(wire), fixture.backdropTone);
+  const empty = new ProgramWireBuilderV3();
+  const before = empty.finish();
+  assert.throws(() => empty.colorTarget(21, [0, 103, 244], { tone: { curve } }), /requires an appearance occurrence/);
+  assert.deepEqual(empty.finish(), before);
+});
+
 test("composition uses distinct tags with the unchanged assignment field grammar", () => {
   const targets = [0x01020304, 0xffffffff, 0];
   const reference = [[0x10203040, [1, 128, 255]], [0xffffffff, [254, 129, 0]]];

@@ -148,7 +148,8 @@ function usePolicy(value = {}, owner) {
   let copiedTone;
   if (tone !== undefined) {
     allowedKeys(tone, ["from", "curve"], `${path}.tone`);
-    const from = inputSurface(read(tone, "from", path), owner, `${path}.tone.from`);
+    const input = read(tone, "from", `${path}.tone.from`);
+    const from = input === undefined ? undefined : inputSurface(input, owner, `${path}.tone.from`);
     const curve = array(read(tone, "curve", path), `${path}.tone.curve`, 2, MAX_SECTION_ENTRIES_V1)
       .map((point, i) => Object.freeze(array(point, `${path}.tone.curve[${i}]`, 2, 2)
         .map((coordinate, j) => number(coordinate, `${path}.tone.curve[${i}][${j}]`, 0, 1))));

@@ -15,6 +15,48 @@ const contrast = (value, background) => {
   return (Math.max(visible, backdrop) + 0.05) / (Math.min(visible, backdrop) + 0.05);
 };
 
+test("one backdrop curve alternates light layers and raises successive dark layers", async () => {
+  const c = colors(), canvas = c.surface("canvas");
+  const layer = c.role("layer", "#eeeeee");
+  const policy = { tone: { curve: [[0, 0.14], [0.60, 0.74], [0.94, 1], [0.96, 1], [1, 0.95]] } };
+  const sheet = layer.on(canvas, policy), panel = layer.on(sheet, policy), card = layer.on(panel, policy);
+  const program = await c.compile({ sheet, panel, card });
+  try {
+    const light = program.resolve({ canvas: "#ffffff" });
+    assert.equal(light.state, "ready");
+    assert.deepEqual(light.values.sheet.rgb, [238, 238, 238]);
+    assert.deepEqual(light.values.panel.rgb, [255, 255, 255]);
+    assert.deepEqual(light.values.card.rgb, light.values.sheet.rgb);
+    const dark = program.resolve({ canvas: "#161616" });
+    assert.equal(dark.state, "ready");
+    const [first, second, third] = ["sheet", "panel", "card"].map((key) => dark.values[key].rgb[0]);
+    assert.ok(22 < first && first < second && second < third, JSON.stringify(dark.values));
+    assert.deepEqual(program.resolve({ canvas: "#ffffff" }).values, light.values);
+  } finally { program.dispose(); }
+});
+
+test("backdrop tone follows the composed parent while explicit tone follows its input", async () => {
+  const c = colors({ reference: { canvas: "#ffffff" } }), canvas = c.surface("canvas");
+  const material = c.fixed("veil", "#ffffff").on(canvas, { opacity: 0.5 });
+  const role = c.role("layer", "#ffffff");
+  const curve = [[0, 0], [1, 1]];
+  const local = role.on(material, { tone: { curve } });
+  const external = role.on(material, { tone: { from: canvas, curve } });
+  const program = await c.compile({ local, external });
+  try {
+    const dark = program.resolve({ canvas: "#000000" });
+    assert.equal(dark.state, "ready");
+    const [gray, green, blue] = dark.values.local.rgb;
+    assert.ok(gray === 127 || gray === 128, JSON.stringify(dark.values.local));
+    assert.deepEqual([green, blue], [gray, gray]);
+    assert.deepEqual(dark.values.external.rgb, [0, 0, 0]);
+    const light = program.resolve({ canvas: "#ffffff" });
+    assert.equal(light.state, "ready");
+    assert.deepEqual(light.values.local.rgb, [255, 255, 255]);
+    assert.deepEqual(light.values.local.rgb, light.values.external.rgb);
+  } finally { program.dispose(); }
+});
+
 test("declared surface tone survives inferred text contrast across nested themes", async () => {
   const c = colors({ reference: { canvas: "#ffffff" } }), canvas = c.surface("canvas");
   const tone = (dark, light) => ({ from: canvas, curve: [[0, dark], [0.25, dark], [1, light]] });

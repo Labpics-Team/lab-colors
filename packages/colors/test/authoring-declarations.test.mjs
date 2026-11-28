@@ -95,6 +95,12 @@ test("references from another declaration and fabricated references are rejected
   }
   assert.throws(() => role.on(surface, { tone: { from: b.surface("tone"), curve: [[0, 0.1], [1, 0.9]] } }),
     (error) => error.code === "color_foreign_reference");
+  const panel = role.on(surface);
+  assert.doesNotThrow(() => role.on(panel, { tone: { curve: [[0, 0.1], [1, 0.9]] } }));
+  for (const from of [panel, null]) {
+    assert.throws(() => role.on(panel, { tone: { from, curve: [[0, 0.1], [1, 0.9]] } }),
+      { code: "color_foreign_reference", path: "role.on.policy.tone.from" });
+  }
 });
 
 test("an explicitly fixed source rejects an adaptation preference", () => {
@@ -103,6 +109,8 @@ test("an explicitly fixed source rejects an adaptation preference", () => {
   assert.doesNotThrow(() => fixed.on(canvas, { opacity: 0.8 }));
   assert.throws(() => fixed.on(canvas, { tone: { from: canvas, curve: [[0, 0.1], [1, 0.9]] } }),
     (error) => error.code === "color_invalid_definition" && error.path === "role.on.policy.tone");
+  assert.throws(() => fixed.on(canvas, { tone: { curve: [[0, 0.1], [1, 0.9]] } }),
+    { code: "color_invalid_definition", path: "role.on.policy.tone" });
 });
 
 test("malformed physical policies fail before compilation", () => {

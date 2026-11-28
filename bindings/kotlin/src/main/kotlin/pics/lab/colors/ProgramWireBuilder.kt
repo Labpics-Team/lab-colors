@@ -233,7 +233,8 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         if (lower > upper) throw ProgramWireException.InvalidDeclaration("$name bounds must be increasing")
         out.f64(lower); out.f64(upper)
     }
-    internal fun colorTargetV3(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3) = v3Entry(1) { out ->
+    internal fun colorTargetV3(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3,
+                               backdropTone: List<Pair<Double, Double>>?) = v3Entry(1) { out ->
         val identity = options.identity
         val hue = identity?.maxHueDeviation
         val chroma = identity?.chroma
@@ -254,12 +255,16 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         val visible = referenceAppearance ?: appearance
         if (visible != null) out.u32(visible)
         val tone = options.tone
-        out.u8(if (tone != null) 1 else 0)
-        if (tone != null) {
-            val curve = tone.curve
+        if (backdropTone != null && (visible == null || tone != null)) {
+            throw ProgramWireException.InvalidDeclaration("backdrop tone requires an appearance and only one tone source")
+        }
+        out.u8(if (backdropTone != null) 2 else if (tone != null) 1 else 0)
+        if (tone != null) out.u32(tone.from)
+        val curve = backdropTone ?: tone?.curve
+        if (curve != null) {
             val size = count(curve.size).toInt()
             if (size < 2) throw ProgramWireException.InvalidDeclaration("tone curve requires at least two points")
-            out.u32(tone.from); out.u32(size.toUInt())
+            out.u32(size.toUInt())
             var previous = -1.0
             for (index in 0 until size) {
                 val point = curve[index]
@@ -376,7 +381,13 @@ class ProgramWireBuilderV2 : ProgramWireBuilderV1(2) {
 /** LCPW v3 передаёт Core характер цвета и контекст; выбор и композиция принадлежат Core. */
 class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
     fun colorTarget(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3 = ProgramWireColorOptionsV3()): ProgramWireBuilderV3 {
-        colorTargetV3(id, anchor, options)
+        colorTargetV3(id, anchor, options, null)
+        return this
+    }
+    /** Кривая от видимой подложки occurrence в options.appearance или options.referenceAppearance. */
+    fun colorTarget(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3,
+                    backdropTone: List<Pair<Double, Double>>): ProgramWireBuilderV3 {
+        colorTargetV3(id, anchor, options, backdropTone)
         return this
     }
     fun pointOccurrence(id: UInt, paint: UInt, surface: UInt): ProgramWireBuilderV3 {

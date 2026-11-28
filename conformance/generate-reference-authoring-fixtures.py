@@ -51,6 +51,20 @@ def composition(targets, reference=None):
     return encode(sections)
 
 
+def backdrop_tone():
+    sections = [[] for _ in range(14)]
+    # Color target 21: appearance 61, backdrop tone (tag 2), L -> 1 - L.
+    sections[1].append(u32(21) + bytes([4, 68, 68, 68, 0, 0]) + struct.pack("<d", 2.0)
+                       + bytes([1]) + u32(61) + bytes([2]) + u32(2) + struct.pack("<dddd", 0, 1, 1, 0))
+    sections[3].append(bytes([5, 0]) + u32(1) + u32(21))
+    sections[4].append(u32(31))
+    sections[6].append(u32(41) + bytes([1]) + u32(21))
+    sections[7].append(u32(51) + bytes([1]) + u32(31))
+    sections[8].append(u32(61) + u32(41) + u32(51) + struct.pack("<ddB", 0.0, 0.0, 0))
+    sections[13].append(u32(91) + u32(41))
+    return encode(sections)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="compare committed vectors without rewriting them")
@@ -75,6 +89,7 @@ if __name__ == "__main__":
     pair = [[] for _ in range(14)]
     pair[11].append(struct.pack("<IBIIdd", 0x01020304, 14, 0x10203040, 0xFFFFFFFF, 0.0, 0.75))
     fixture["visiblePairSeparation"] = encode(pair).hex()
+    fixture["backdropTone"] = backdrop_tone().hex()
     if arguments.check:
         if original != fixture:
             raise SystemExit("reference-authoring vectors differ; regenerate with this script")

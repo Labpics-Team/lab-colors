@@ -20,7 +20,8 @@ export interface ProgramWireColorOptionsV3 {
   readonly appearance?: number;
   /** Anchor и identity относятся к source; visible-опору и maxChange Core выводит из reference occurrence. */
   readonly referenceAppearance?: number;
-  readonly tone?: Readonly<{from: number; curve: readonly (readonly [number, number])[]}>;
+  /** Без from читает подложку occurrence, указанного в appearance или referenceAppearance. */
+  readonly tone?: Readonly<{from?: number; curve: readonly (readonly [number, number])[]}>;
 }
 
 export interface ProgramWireAssignmentOptionsV3 {

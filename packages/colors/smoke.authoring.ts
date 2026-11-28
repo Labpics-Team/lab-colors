@@ -19,7 +19,7 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   // @ts-expect-error a fixed source cannot use a tone adaptation curve.
   fixed.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   // @ts-expect-error a fixed use retains its fixed role's policy contract.
-  fixedUse.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  fixedUse.role.on(canvas, { tone: { curve: [[0, 0.2], [1, 0.95]] } });
   const generalRole: ColorRole = fixed;
   const generalUse: ColorUse = generalRole.on(canvas, fixedPolicy);
   // @ts-expect-error annotating a fixed role as a general role does not enable adaptation.
@@ -28,7 +28,7 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   generalUse.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
   const placeRole = (role: ColorRole) => role.on(canvas, { contrast: "wcag22-ui", opacity: 0.8 });
   placeRole(accent); placeRole(fixed);
-  pane.role.on(canvas, { tone: { from: canvas, curve: [[0, 0.2], [1, 0.95]] } });
+  pane.role.on(fill, { tone: { curve: [[0, 0.2], [1, 0.95]] } });
   const program: ColorProgram<"fill" | "label" | "pane"> = await c.compile({ fill, label, pane });
   const encoded = c.encode({ fill, label, pane });
   const outputName: "fill" | "label" | "pane" = encoded.outputs[0].name;
@@ -117,7 +117,7 @@ async function contextualProgram(element: HTMLElement): Promise<void> {
   c.compile({ accent });
   // @ts-expect-error a role is not a background occurrence.
   accent.on(neutral);
-  // @ts-expect-error tone follows an explicit input, not a resolved paint.
+  // @ts-expect-error an explicit from must name an external input.
   accent.on(canvas, { tone: { from: fill, curve: [[0, 0.2], [1, 0.95]] } });
   // @ts-expect-error custom scalars are not a universal quality score.
   accent.on(canvas, { cleanliness: 0.8 });
