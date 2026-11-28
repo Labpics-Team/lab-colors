@@ -209,11 +209,11 @@
       "sha256": "2804dd46fa892d71d1ada308422eedcb72e5ee1e054d1fd56c9e9f40f498204b"
     },
     {
-      "bytes": 94197,
+      "bytes": 94150,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search.rs",
       "role": "program_computed_reference_search_source",
-      "sha256": "529f05001525a64ab776c6ebd2e7aff59b88662031af9451246cd95b4d4ce86a"
+      "sha256": "b34752423ca1d8eb9f4d2d01ae844bc3b5ee239fe97fcbe7625c4d9e11e69d28"
     },
     {
       "bytes": 9446,
@@ -272,11 +272,11 @@
       "sha256": "4e06f29e40fa678e44e209006a180daeeccf6d6c8bf0c83225011f66d59a4d08"
     },
     {
-      "bytes": 24462,
+      "bytes": 24741,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search/peers.rs",
       "role": "program_reference_peers_source",
-      "sha256": "90965c9676b08e85b0a4e6d055ee426169130edb0218af245d0bab56ccbff86a"
+      "sha256": "9eb75396207a14bb68e93fa457725c3110933aeaa13a21dd09d5415652db8e0e"
     },
     {
       "bytes": 12920,
@@ -326,6 +326,13 @@
       "path": "crates/labcolors-core/src/program_wire/field.rs",
       "role": "program_wire_field_source",
       "sha256": "4b3e52a1db91436e216e14a28ce97a2c1bfb6e3f17f5ecdef8c1856007522a47"
+    },
+    {
+      "bytes": 27253,
+      "license": "MIT",
+      "path": "crates/labcolors-core/src/color_intent/reference_transport.rs",
+      "role": "reference_transport_source",
+      "sha256": "f2247354816df1b9548c24bf180c72cb2e62d19077213238bf3d1d737cfc04bb"
     },
     {
       "bytes": 11280,
@@ -384,11 +391,11 @@
       "sha256": "d940f9cf443970ff34e6ed4280d5b00c2aef10b85a0818e609bf21302fcb17d4"
     },
     {
-      "bytes": 44987,
+      "bytes": 45086,
       "license": "MIT",
       "path": "scripts/verify_clean_set_receipt.py",
       "role": "verifier_source",
-      "sha256": "3eb8612b059191bfecea0ea394613d4eea99c937c72059d8cff4593ecb7b6f8f"
+      "sha256": "618eb9416961427e7245002b83eb2390ac9942ee1024ef1027b11232501ff511"
     },
     {
       "bytes": 44658,
