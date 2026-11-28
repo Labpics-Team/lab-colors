@@ -8,9 +8,10 @@
 ## Одна декларация для браузера и native
 
 Если цвета объявлены в JavaScript, тот же граф можно включить в приложение на
-Swift или Kotlin. Во время сборки вызовите `c.encode(outputs)`. Для reference-программ нужен Lab Colors native 0.9.0 или новее. Метод синхронно
-возвращает программу для совместимой версии Rust Core. Загрузка WASM для этого
-шага не требуется.
+Swift или Kotlin. Во время сборки вызовите `c.encode(outputs)`. Метод синхронно
+возвращает байты программы без загрузки WASM. Для reference-программы нужен
+Lab Colors native 0.9.0 или новее. Для `tone: { curve }` от видимой подложки
+нужны npm 1.9.0 и native 0.10.0 или новее.
 
 ```js
 const { bytes, inputs, outputs } = c.encode({ fill, label, caption: label });
