@@ -655,17 +655,26 @@ fn traversal_ranks_the_visible_backdrop_ahead_of_the_authored_source() {
         component.mode,
         ProgramSelectionModeV1::JointReferencePeersV1
     );
-    let mut session = owner.instantiate(ObservationStreamId::new(8)).unwrap();
-    session.prepare_update(update(1, 0)).unwrap().commit();
+    let mut session = owner
+        .instantiate(ObservationStreamId::new(8))
+        .expect("compiled reference composition instantiates");
+    session
+        .prepare_update(update(1, 0))
+        .expect("first observed update prepares")
+        .commit();
     let crate::observation::ObservationHeadViewV1::Observed(observation) = session.raw_head()
     else {
         unreachable!()
     };
-    let scenarios = NonEmptyScenarioSetV1::from_admitted(observation).unwrap();
-    let context = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios).unwrap();
+    let scenarios =
+        NonEmptyScenarioSetV1::from_admitted(observation).expect("observed scenario is present");
+    let context = ContextV1::new::<Wcag22Srgb8V1>(selection, Some(component), scenarios)
+        .expect("reference component admits the scenario");
     let mut scratch = ReferenceCompletionScratchV1::empty(epoch);
-    let mut prepared = prepare_selection(epoch, observation, &mut scratch).unwrap();
-    let mut peers = PeerProfiles::new(&context, component, &mut prepared).unwrap();
+    let mut prepared =
+        prepare_selection(epoch, observation, &mut scratch).expect("reference selection prepares");
+    let mut peers = PeerProfiles::new(&context, component, &mut prepared)
+        .expect("peer preference profiles exist");
     peers.prepare(&context, &[AppearancePointV1::default(); 2]);
 
     let mut priority = |lower, upper| {
@@ -687,7 +696,7 @@ fn traversal_ranks_the_visible_backdrop_ahead_of_the_authored_source() {
         assert!(
             !peers
                 .lower_profile(&context, &points, |i| domains[i])
-                .unwrap()
+                .expect("region is admissible")
         );
         peers.current_profile()[0]
     };

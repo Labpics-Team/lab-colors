@@ -272,11 +272,11 @@
       "sha256": "4e06f29e40fa678e44e209006a180daeeccf6d6c8bf0c83225011f66d59a4d08"
     },
     {
-      "bytes": 27818,
+      "bytes": 28129,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program_session/computed_assignment/contextual/reference_search/peers.rs",
       "role": "program_reference_peers_source",
-      "sha256": "75e870adce791c4dc9d642d6586dd3f07a3e826e141d75c0aaf8f4cf2e5b7d9d"
+      "sha256": "231e2b14fc38f617c87806386b8f643abf65a5e7ada3087f28066bb2cfb4af2c"
     },
     {
       "bytes": 12920,
