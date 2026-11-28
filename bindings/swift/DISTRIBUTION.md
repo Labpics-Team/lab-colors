@@ -91,6 +91,10 @@ if frame.state() == "ready" {
 Для кривой от видимой подложки используйте
 `colorTarget(_:anchor:options:backdropTone:)` с `compose` или `composeReference`.
 В `options` укажите `appearance` или `referenceAppearance` и оставьте `tone` пустым.
+Пары для `colorTarget(_:anchor:options:tone:from:)` принимают `.lightness(0.5)`
+и `.swatch([244, 244, 244])` на обеих осях. Без `from` кривая читает
+подложку, с `from` — указанный внешний вход. Core вычисляет Oklab L образцов
+при компиляции.
 Пропущенные настройки сохраняют пакетные дефолты Core. `computedTarget`
 отдельно принимает явный RGB-box или серую ось, а `visibleSeparationHard`
 ограничивает расстояние Oklab от итогового цвета до его подложки.

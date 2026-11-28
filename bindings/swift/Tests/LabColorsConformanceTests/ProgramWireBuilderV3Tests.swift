@@ -7,6 +7,8 @@ private struct AuthoringV3Fixture: Decodable {
     let computedBox: String
     let computedGray: String
     let contextual: String
+    let sampledBackdropTone: String
+    let sampledInputTone: String
     let backdropTone: String
     let encodingOnly: String
     let fixedOnly: String
@@ -127,6 +129,28 @@ final class ProgramWireBuilderV3Tests: XCTestCase {
                 surfaces: Data(repeating: gray, count: 3), surfaceCount: 1)
             XCTAssertEqual(frame.state(), "ready")
             XCTAssertEqual(try frame.outputRgb(index: 0), Data(repeating: 255 - gray, count: 3))
+        }
+    }
+
+    func testSwatchToneProjectsBothAxesInCore() throws {
+        let curve: [(ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3)] = [
+            (.lightness(0), .swatch([255, 255, 255])), (.swatch([255, 0, 0]), .swatch([34, 34, 34])),
+            (.swatch([255, 255, 255]), .lightness(0)),
+        ]
+        let expected = try fixtureV3()
+        let cases: [(UInt32?, String)] = [(nil, expected.sampledBackdropTone), (31, expected.sampledInputTone)]
+        for (from, fixture) in cases {
+            let wire = try graph(ProgramWireBuilderV3().colorTarget(21, anchor: [68, 68, 68],
+                options: .init(appearance: 61), tone: curve, from: from), contrast: false).compose([21]).finish()
+            XCTAssertEqual(wire, try bytes(fixture))
+            let runtime = try compileProgramWire(bytes: wire, streamId: 1)
+            let samples: [([UInt8], UInt8)] = [([0, 0, 0], 255), ([255, 0, 0], 34), ([255, 255, 255], 0), ([255, 0, 0], 34)]
+            for (index, sample) in samples.enumerated() {
+                let frame = try runtime.updateObserved(revision: UInt64(index + 1), scenarioIds: [1],
+                    surfaces: Data(sample.0), surfaceCount: 1)
+                XCTAssertEqual(frame.state(), "ready")
+                XCTAssertEqual(try frame.outputRgb(index: 0), Data(repeating: sample.1, count: 3))
+            }
         }
     }
 

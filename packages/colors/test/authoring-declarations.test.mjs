@@ -113,6 +113,23 @@ test("an explicitly fixed source rejects an adaptation preference", () => {
     { code: "color_invalid_definition", path: "role.on.policy.tone" });
 });
 
+test("tone swatches encode without WASM and capture the caller's RGB channels", () => {
+  const c = colors(), canvas = c.surface("canvas"), layer = c.role("layer", "#444444");
+  const red = [255, 0, 0], white = [255, 255, 255];
+  const use = layer.on(canvas, { tone: { curve: [[0, white], [red, "#222222"], ["#ffffff", 0]] } });
+  const original = c.encode({ use }).bytes;
+  red.fill(1);
+  white.fill(0);
+  assert.deepEqual(c.encode({ use }).bytes, original);
+  const copy = colors(), otherCanvas = copy.surface("canvas");
+  const same = copy.role("layer", "#444444").on(otherCanvas,
+    { tone: { curve: [[0, "#ffffff"], ["#ff0000", [34, 34, 34]], [[255, 255, 255], 0]] } });
+  assert.deepEqual(copy.encode({ use: same }).bytes, original);
+  for (const bad of ["#fff", "#ffffff80", [0, 1], [0, 1, 2, 3], [0, -1, 0]]) {
+    assert.throws(() => layer.on(canvas, { tone: { curve: [[0, bad], [1, 1]] } }), ColorAuthoringError);
+  }
+});
+
 test("malformed physical policies fail before compilation", () => {
   const c = colors(), canvas = c.surface("canvas"), role = c.role("role", "#c45f35");
   const curves = [[], [[0, 0.1]], [[0.1, 0.1], [1, 0.9]], [[0, 0.1], [0, 0.8], [1, 0.9]], [[0, 0.1], [1, Number.NaN]]];

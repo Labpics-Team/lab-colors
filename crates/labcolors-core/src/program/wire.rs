@@ -158,6 +158,20 @@ impl<'a> WireReader<'a> {
         Ok(Srgb8::new(self.read_bytes::<3>()?))
     }
 
+    fn read_tone_coordinate(&mut self, swatch: bool) -> Result<f64, ProgramWireErrorV1> {
+        if !swatch {
+            return self.read_f64_bits();
+        }
+        let rgb = self.read_rgb()?;
+        Ok(match rgb.bytes() {
+            [0, 0, 0] => 0.0,
+            // The white end of the authored axis is exactly one. Decimal Oklab
+            // matrix coefficients can put its numerical projection just below it.
+            [255, 255, 255] => 1.0,
+            _ => crate::color_intent::oklab(rgb)[0],
+        })
+    }
+
     fn read_count(&mut self) -> Result<u32, ProgramWireErrorV1> {
         let count = self.read_u32()?;
         if count > MAX_SECTION_ENTRIES_V1 {
@@ -385,8 +399,11 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                 };
                 let tone = match reader.read_u8()? {
                     0 => None,
-                    source_tag @ (1 | 2) => {
-                        let input = if source_tag == 1 {
+                    // Port and backdrop curves use tags 1 and 2. Tags 3 and 4
+                    // add a two-bit mask per stop for sRGB8 coordinates.
+                    source_tag @ 1..=4 => {
+                        let sampled = source_tag >= 3;
+                        let input = if matches!(source_tag, 1 | 3) {
                             Some(reader.read_u32()?)
                         } else {
                             None
@@ -401,8 +418,20 @@ fn decode_body(reader: &mut WireReader<'_>, version: u16) -> Result<DraftV1, Pro
                                 section: reader.section,
                             }
                         })?;
+                        let mut has_swatch = false;
                         for _ in 0..count {
-                            stops.push([reader.read_f64_bits()?, reader.read_f64_bits()?]);
+                            let kinds = if sampled { reader.read_u8()? } else { 0 };
+                            if kinds > 3 {
+                                return Err(reader.declaration_error(entry_offset));
+                            }
+                            has_swatch |= kinds != 0;
+                            stops.push([
+                                reader.read_tone_coordinate(kinds & 1 != 0)?,
+                                reader.read_tone_coordinate(kinds & 2 != 0)?,
+                            ]);
+                        }
+                        if sampled && !has_swatch {
+                            return Err(reader.declaration_error(entry_offset));
                         }
                         Some(
                             match input {
@@ -1114,6 +1143,40 @@ mod tests {
             }
             Err(other) => panic!("expected targets declaration refusal, got {other:?}"),
             Ok(_) => panic!("expected targets declaration refusal, got Ok"),
+        }
+    }
+
+    #[test]
+    fn sampled_tone_requires_known_coordinate_kinds_and_at_least_one_swatch() {
+        for first_mask in [0, 4] {
+            let mut wire = WireBuilder::new();
+            wire.u32(0)
+                .u32(1) // no sources, one color target
+                .u32(21)
+                .u8(4)
+                .rgb([68; 3])
+                .u8(0)
+                .u8(0)
+                .f64_bits(2.0)
+                .u8(1)
+                .u32(61) // appearance
+                .u8(4)
+                .u32(2) // sampled backdrop curve
+                .u8(first_mask)
+                .f64_bits(0.0)
+                .f64_bits(1.0)
+                .u8(0)
+                .f64_bits(1.0)
+                .f64_bits(0.0);
+            let mut bytes = wire.seal();
+            bytes[4..6].copy_from_slice(&PROGRAM_WIRE_VERSION_V3.to_le_bytes());
+            assert!(matches!(
+                decode_program_wire(&bytes),
+                Err(ProgramWireErrorV1::InvalidDeclaration {
+                    section: WireSectionV1::Targets,
+                    ..
+                })
+            ));
         }
     }
 

@@ -51,11 +51,10 @@ def composition(targets, reference=None):
     return encode(sections)
 
 
-def backdrop_tone():
+def tone_program(tone):
     sections = [[] for _ in range(14)]
-    # Color target 21: appearance 61, backdrop tone (tag 2), L -> 1 - L.
     sections[1].append(u32(21) + bytes([4, 68, 68, 68, 0, 0]) + struct.pack("<d", 2.0)
-                       + bytes([1]) + u32(61) + bytes([2]) + u32(2) + struct.pack("<dddd", 0, 1, 1, 0))
+                       + bytes([1]) + u32(61) + tone)
     sections[3].append(bytes([5, 0]) + u32(1) + u32(21))
     sections[4].append(u32(31))
     sections[6].append(u32(41) + bytes([1]) + u32(21))
@@ -89,7 +88,12 @@ if __name__ == "__main__":
     pair = [[] for _ in range(14)]
     pair[11].append(struct.pack("<IBIIdd", 0x01020304, 14, 0x10203040, 0xFFFFFFFF, 0.0, 0.75))
     fixture["visiblePairSeparation"] = encode(pair).hex()
-    fixture["backdropTone"] = backdrop_tone().hex()
+    fixture["backdropTone"] = tone_program(bytes([2]) + u32(2) + struct.pack("<dddd", 0, 1, 1, 0)).hex()
+    # Three mixed knots: 0 -> white, red -> gray 34, white -> 0.
+    knots = (u32(3) + struct.pack("<Bd3B", 2, 0, 255, 255, 255)
+             + bytes([3, 255, 0, 0, 34, 34, 34]) + struct.pack("<4Bd", 1, 255, 255, 255, 0))
+    fixture["sampledBackdropTone"] = tone_program(bytes([4]) + knots).hex()
+    fixture["sampledInputTone"] = tone_program(bytes([3]) + u32(31) + knots).hex()
     if arguments.check:
         if original != fixture:
             raise SystemExit("reference-authoring vectors differ; regenerate with this script")

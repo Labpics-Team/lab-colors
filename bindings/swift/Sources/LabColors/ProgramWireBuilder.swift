@@ -287,6 +287,15 @@ public struct ProgramWireToneV3 {
     public let curve: [[Double]]
     public init(from: UInt32, curve: [[Double]]) { self.from = from; self.curve = curve }
 }
+public enum ProgramWireToneCoordinateV3 {
+    case lightness(Double)
+    case swatch([UInt8])
+
+    fileprivate var isSwatch: Bool {
+        if case .swatch = self { return true }
+        return false
+    }
+}
 
 public struct ProgramWireColorOptionsV3 {
     public let domain: ProgramWireColorDomainV3
@@ -350,7 +359,9 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
     }
 
     private func appendColorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3,
-                                   backdropTone: [[Double]]?) throws -> Self {
+                                   backdropTone: [[Double]]?,
+                                   coordinates: [(ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3)]? = nil,
+                                   from: UInt32? = nil) throws -> Self {
         try append(1) { b in
             b.u32(id); b.u8(4); try b.rgb(anchor)
             b.u8(options.domain == .neutral ? 1 : 0)
@@ -368,6 +379,36 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
             b.u8(options.referenceAppearance != nil ? 2 : options.appearance != nil ? 1 : 0)
             let appearance = options.referenceAppearance ?? options.appearance
             if let appearance { b.u32(appearance) }
+            if let coordinates {
+                guard options.tone == nil, from != nil || appearance != nil else {
+                    throw ProgramWireError.invalidDeclaration("declare one tone source and an appearance for backdrop tone")
+                }
+                guard coordinates.count >= 2 else { throw ProgramWireError.invalidDeclaration("tone requires two or more stops") }
+                let count = try boundedCount(coordinates.count)
+                let sampled = coordinates.contains { $0.0.isSwatch || $0.1.isSwatch }
+                let numericInputs = coordinates.allSatisfy { !$0.0.isSwatch }
+                b.u8((from == nil ? 2 : 1) + (sampled ? 2 : 0))
+                if let from { b.u32(from) }
+                b.u32(count)
+                var previous: Double = -1
+                for (i, point) in coordinates.enumerated() {
+                    if numericInputs, case let .lightness(x) = point.0 {
+                        guard x > previous, i != 0 || x == 0, i != coordinates.count - 1 || x == 1 else {
+                            throw ProgramWireError.invalidDeclaration("tone inputs must increase from 0 to 1")
+                        }
+                        previous = x
+                    }
+                    if sampled { b.u8((point.0.isSwatch ? 1 : 0) | (point.1.isSwatch ? 2 : 0)) }
+                    func write(_ coordinate: ProgramWireToneCoordinateV3) throws {
+                        switch coordinate {
+                        case .lightness(let value): b.f64(try bounded(value, maximum: 1))
+                        case .swatch(let rgb): try b.rgb(rgb)
+                        }
+                    }
+                    try write(point.0); try write(point.1)
+                }
+                return
+            }
             if backdropTone != nil && (appearance == nil || options.tone != nil) {
                 throw ProgramWireError.invalidDeclaration("backdrop tone requires an appearance and only one tone source")
             }
@@ -389,6 +430,13 @@ public final class ProgramWireBuilderV3: ProgramWireBuilderV1 {
             }
         }
         return self
+    }
+
+    /// Координата кривой задаётся Oklab L или образцом sRGB8, который проектирует Core.
+    @discardableResult public func colorTarget(_ id: UInt32, anchor: [UInt8], options: ProgramWireColorOptionsV3,
+                                               tone: [(ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3)],
+                                               from: UInt32? = nil) throws -> Self {
+        try appendColorTarget(id, anchor: anchor, options: options, backdropTone: nil, coordinates: tone, from: from)
     }
 
     @discardableResult public func pointOccurrence(_ id: UInt32, paint: UInt32, surface: UInt32) throws -> Self {

@@ -307,11 +307,11 @@
       "sha256": "16dc63743c9d2e822c83203233a75960621c426c1f6863610f5195be7072e067"
     },
     {
-      "bytes": 91531,
+      "bytes": 94031,
       "license": "MIT",
       "path": "crates/labcolors-core/src/program/wire.rs",
       "role": "program_wire_decoder_source",
-      "sha256": "d9dd676f539bfb705cce0026a0215cb7fe7a425cba6d7792b002602196283385"
+      "sha256": "300297df3dc9bca3a3af272de076ddd0350b49859f09f074cbabf8fe1530b42e"
     },
     {
       "bytes": 97185,

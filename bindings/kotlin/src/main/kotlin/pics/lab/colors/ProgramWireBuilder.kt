@@ -23,6 +23,10 @@ data class ProgramWireColorIdentityV3(
     val lightness: Pair<Double, Double>? = null,
 )
 data class ProgramWireToneV3(val from: UInt, val curve: List<Pair<Double, Double>>)
+sealed interface ProgramWireToneCoordinateV3 {
+    data class Lightness(val value: Double) : ProgramWireToneCoordinateV3
+    class Swatch(val rgb: ByteArray) : ProgramWireToneCoordinateV3
+}
 data class ProgramWireColorOptionsV3(
     val domain: ProgramWireColorDomainV3 = ProgramWireColorDomainV3.SRGB,
     val identity: ProgramWireColorIdentityV3? = null,
@@ -233,8 +237,40 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         if (lower > upper) throw ProgramWireException.InvalidDeclaration("$name bounds must be increasing")
         out.f64(lower); out.f64(upper)
     }
+    private fun writeToneCoordinates(out: WireBytes, from: UInt?,
+                                     points: List<Pair<ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3>>) {
+        val size = count(points.size).toInt()
+        if (size < 2) throw ProgramWireException.InvalidDeclaration("tone curve requires at least two points")
+        val sampled = points.any { it.first is ProgramWireToneCoordinateV3.Swatch || it.second is ProgramWireToneCoordinateV3.Swatch }
+        val numericInputs = points.all { it.first is ProgramWireToneCoordinateV3.Lightness }
+        out.u8((if (from == null) 2 else 1) + (if (sampled) 2 else 0))
+        if (from != null) out.u32(from)
+        out.u32(size.toUInt())
+        fun write(coordinate: ProgramWireToneCoordinateV3) {
+            when (coordinate) {
+                is ProgramWireToneCoordinateV3.Lightness -> out.f64(bounded(coordinate.value, 1.0, "tone coordinate"))
+                is ProgramWireToneCoordinateV3.Swatch -> out.rgb(coordinate.rgb)
+            }
+        }
+        var previous = -1.0
+        for ((index, point) in points.withIndex()) {
+            val (x, y) = point
+            if (numericInputs && x is ProgramWireToneCoordinateV3.Lightness) {
+                if (x.value <= previous || (index == 0 && x.value != 0.0) || (index == size - 1 && x.value != 1.0)) {
+                    throw ProgramWireException.InvalidDeclaration("tone inputs must increase from 0 to 1")
+                }
+                previous = x.value
+            }
+            if (sampled) out.u8((if (x is ProgramWireToneCoordinateV3.Swatch) 1 else 0) or
+                (if (y is ProgramWireToneCoordinateV3.Swatch) 2 else 0))
+            write(x); write(y)
+        }
+    }
+
     internal fun colorTargetV3(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3,
-                               backdropTone: List<Pair<Double, Double>>?) = v3Entry(1) { out ->
+                               backdropTone: List<Pair<Double, Double>>?,
+                               coordinates: List<Pair<ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3>>? = null,
+                               from: UInt? = null) = v3Entry(1) { out ->
         val identity = options.identity
         val hue = identity?.maxHueDeviation
         val chroma = identity?.chroma
@@ -255,6 +291,13 @@ open class ProgramWireBuilderV1 internal constructor(private val wireVersion: In
         val visible = referenceAppearance ?: appearance
         if (visible != null) out.u32(visible)
         val tone = options.tone
+        if (coordinates != null) {
+            if (tone != null || (from == null && visible == null)) {
+                throw ProgramWireException.InvalidDeclaration("declare one tone source and an appearance for backdrop tone")
+            }
+            writeToneCoordinates(out, from, coordinates)
+            return@v3Entry
+        }
         if (backdropTone != null && (visible == null || tone != null)) {
             throw ProgramWireException.InvalidDeclaration("backdrop tone requires an appearance and only one tone source")
         }
@@ -388,6 +431,13 @@ class ProgramWireBuilderV3 : ProgramWireBuilderV1(3) {
     fun colorTarget(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3,
                     backdropTone: List<Pair<Double, Double>>): ProgramWireBuilderV3 {
         colorTargetV3(id, anchor, options, backdropTone)
+        return this
+    }
+    /** Координата кривой задаётся Oklab L или образцом sRGB8, который проектирует Core. */
+    fun colorTarget(id: UInt, anchor: ByteArray, options: ProgramWireColorOptionsV3,
+                    tone: List<Pair<ProgramWireToneCoordinateV3, ProgramWireToneCoordinateV3>>,
+                    from: UInt? = null): ProgramWireBuilderV3 {
+        colorTargetV3(id, anchor, options, null, tone, from)
         return this
     }
     fun pointOccurrence(id: UInt, paint: UInt, surface: UInt): ProgramWireBuilderV3 {

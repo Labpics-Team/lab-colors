@@ -61,6 +61,15 @@ test("backdrop tone uses tag 2 and carries only the curve after the occurrence",
   assert.deepEqual(empty.finish(), before);
 });
 
+test("mixed tone coordinates match both independent source encodings", () => {
+  const points = [[0, [255, 255, 255]], [[255, 0, 0], [34, 34, 34]], [[255, 255, 255], 0]];
+  for (const [from, expected] of [[undefined, fixture.sampledBackdropTone], [31, fixture.sampledInputTone]]) {
+    const wire = graph(new ProgramWireBuilderV3().colorTarget(21, [68, 68, 68],
+      { appearance: 61, tone: { from, curve: points } }), false).compose([21]);
+    assert.equal(hex(wire), expected);
+  }
+});
+
 test("composition uses distinct tags with the unchanged assignment field grammar", () => {
   const targets = [0x01020304, 0xffffffff, 0];
   const reference = [[0x10203040, [1, 128, 255]], [0xffffffff, [254, 129, 0]]];
