@@ -374,3 +374,61 @@ fn dependents_of_returns_none_for_invalid_index() {
     assert!(plan.dependents_of(NodeIndexV1::new(1)).is_some());
     assert!(plan.dependents_of(NodeIndexV1::new(99)).is_none());
 }
+
+#[test]
+fn reverse_adjacency_preserves_topological_predecessor_order() {
+    // Canonical node order is different from the Kahn traversal order.
+    let plan = CompiledDependencyPlanV1::compile(&[3, 2, 1, 0], &[(0, 2), (3, 0), (1, 2)]).unwrap();
+    let raw: Vec<_> = plan
+        .dependents_of(NodeIndexV1::new(2))
+        .unwrap()
+        .iter()
+        .map(|n| n.raw())
+        .collect();
+    assert_eq!(raw, [1, 0]);
+    assert!(plan.dependencies_of(NodeIndexV1::new(u32::MAX)).is_none());
+    assert!(plan.dependents_of(NodeIndexV1::new(u32::MAX)).is_none());
+}
+
+#[test]
+fn duplicate_edges_report_first_canonical_pair() {
+    assert_eq!(
+        CompiledDependencyPlanV1::compile(&[10, 20, 30], &[(20, 30), (10, 30), (20, 30), (10, 30)]),
+        Err(CompileErrorV1::DuplicateEdge { from: 10, to: 30 })
+    );
+}
+
+#[test]
+fn sparse_and_dense_cones_match_reachability_and_leave_scratch_tail_alone() {
+    let n = 257;
+    let ids: Vec<_> = (0..n).collect();
+    let edges: Vec<_> = (1..n).map(|i| (i, i - 1)).collect();
+    let plan = CompiledDependencyPlanV1::compile(&ids, &edges).unwrap();
+    let mut visited = vec![true; n as usize + 3];
+    let mut stack = vec![NodeIndexV1::new(42)];
+    for first in [0, 256, 200, 1, 255, 128] {
+        let changed = [
+            NodeIndexV1::new(first),
+            NodeIndexV1::new(first),
+            NodeIndexV1::new(u32::MAX),
+        ];
+        let actual = plan
+            .affected_nodes_with_scratch(&changed, &mut visited, &mut stack)
+            .unwrap();
+        assert_eq!(
+            actual.iter().map(|n| n.raw()).collect::<Vec<_>>(),
+            (first..n).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            &visited[..n as usize],
+            &(0..n).map(|i| i >= first).collect::<Vec<_>>()
+        );
+        assert_eq!(&visited[n as usize..], &[true; 3]);
+        assert!(stack.is_empty());
+    }
+    assert!(
+        plan.affected_nodes_with_scratch(&[], &mut visited, &mut stack)
+            .unwrap()
+            .is_empty()
+    );
+}
